@@ -6155,6 +6155,115 @@ mod tests {
         assert!(linked.exists(), "tag-only orphan must survive safe removal");
     }
 
+    /// A clean detached checkout with a live session registered in it.
+    fn orphan_with_live_session() -> (tempfile::TempDir, std::path::PathBuf, Arc<AppState>) {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "agent-1");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "agent-1",
+            &linked.to_string_lossy(),
+        );
+        state
+            .session_maps
+            .sessions
+            .get("agent-1")
+            .unwrap()
+            .lock()
+            .display_name = Some("Claude: refactor".to_string());
+        (repo, linked, state)
+    }
+
+    // Catches: a clean detached checkout reported safe (and auto-removed) while
+    // an agent session is still working inside it.
+    #[tokio::test]
+    async fn orphan_cleanup_assessment_names_live_sessions_and_is_not_safe() {
+        let (repo, linked, state) = orphan_with_live_session();
+
+        let response = build_router(state, false, true)
+            .oneshot(get_localhost(&format!(
+                "/repo/orphan-cleanup-assessment?repoPath={}",
+                repo.path().display()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        assert_eq!(rows[0]["safe"], false);
+        assert!(
+            rows[0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Claude: refactor")
+        );
+        assert_eq!(rows[0]["live_sessions"][0]["session_id"], "agent-1");
+    }
+
+    // Catches: the agent/MCP "remove" answer and the safe-only HTTP removal
+    // skipping the session registry that the assessment consults.
+    #[tokio::test]
+    async fn orphan_cleanup_answer_and_safe_removal_refuse_a_live_session() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let pending = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/repo/orphan-cleanup/begin",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "paths": [linked.display().to_string()]
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::OK);
+
+        let answer = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "orphan_cleanup_answer",
+                "path": repo.path().display().to_string(),
+                "decision": "remove"
+            }),
+        )
+        .await;
+        assert!(
+            answer["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("Claude") || error.contains("live session")),
+            "{answer}"
+        );
+
+        let removal = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": true
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(removal.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists(), "a checkout with a live session must survive");
+    }
+
     #[tokio::test]
     async fn orphan_cleanup_answer_accepts_clean_branch_reachable_worktree() {
         let repo = create_temp_git_repo();

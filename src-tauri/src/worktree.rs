@@ -86,6 +86,35 @@ pub(crate) struct WorktreeLiveSession {
     pub name: String,
 }
 
+/// Sessions of the registry whose cwd is inside `checkout`. The one source of
+/// "who is working in this checkout" for every removal guard.
+pub(crate) fn live_sessions_in(state: &AppState, checkout: &Path) -> Vec<WorktreeLiveSession> {
+    let root = checkout
+        .canonicalize()
+        .unwrap_or_else(|_| checkout.to_path_buf());
+    let mut live_sessions = Vec::new();
+    for entry in &state.session_maps.sessions {
+        let session = entry.value().lock();
+        let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
+            session
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.path.clone())
+        });
+        if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
+            live_sessions.push(WorktreeLiveSession {
+                session_id: entry.key().clone(),
+                name: session
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| entry.key().clone()),
+            });
+        }
+    }
+    live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    live_sessions
+}
+
 pub(crate) fn inspect_worktree_removal(
     state: &AppState,
     repo_path: &Path,
@@ -113,31 +142,10 @@ pub(crate) fn inspect_worktree_removal(
                     .count()
             })
     });
-    let mut live_sessions = Vec::new();
-    if let Some(worktree_path) = &worktree_path {
-        let root = worktree_path
-            .canonicalize()
-            .unwrap_or_else(|_| worktree_path.clone());
-        for entry in &state.session_maps.sessions {
-            let session = entry.value().lock();
-            let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
-                session
-                    .worktree
-                    .as_ref()
-                    .map(|worktree| worktree.path.clone())
-            });
-            if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
-                live_sessions.push(WorktreeLiveSession {
-                    session_id: entry.key().clone(),
-                    name: session
-                        .display_name
-                        .clone()
-                        .unwrap_or_else(|| entry.key().clone()),
-                });
-            }
-        }
-        live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-    }
+    let live_sessions = worktree_path
+        .as_deref()
+        .map(|path| live_sessions_in(state, path))
+        .unwrap_or_default();
     let mut warnings = Vec::new();
     match lifecycle.commit_status {
         WorkspaceCommitStatus::InSync => {
@@ -524,7 +532,7 @@ pub(crate) fn remove_orphan_worktree(
 ) -> Result<(), String> {
     validate_worktree_path(&repo_path, &worktree_path)?;
     if safe_only.unwrap_or(false) {
-        tuic_git::worktree::orphan_cleanup_safety(&repo_path, &worktree_path)?;
+        orphan_cleanup_safety_with_sessions(&state, &repo_path, &worktree_path)?;
     }
 
     let base_repo = PathBuf::from(&repo_path);
@@ -1118,13 +1126,85 @@ pub(crate) async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<Str
     .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn assess_orphan_cleanup(
+/// A detached checkout's removal verdict, plus the sessions working in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct OrphanCleanupReview {
+    #[serde(flatten)]
+    pub assessment: tuic_git::worktree::OrphanCleanupAssessment,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub live_sessions: Vec<WorktreeLiveSession>,
+}
+
+fn live_session_reason(sessions: &[WorktreeLiveSession]) -> String {
+    let names: Vec<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
+    format!("live session: {}", names.join(", "))
+}
+
+/// Git safety plus the session registry: an orphan checkout a session still
+/// works in is never safe to remove without a human review. A checkout that
+/// is already gone holds no work, so its stale sessions do not block.
+pub(crate) fn orphan_cleanup_safety_with_sessions(
+    state: &AppState,
+    repo_path: &str,
+    worktree_path: &str,
+) -> Result<(), String> {
+    tuic_git::worktree::orphan_cleanup_safety(repo_path, worktree_path)?;
+    let path = Path::new(worktree_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let live = live_sessions_in(state, path);
+    if live.is_empty() {
+        Ok(())
+    } else {
+        Err(live_session_reason(&live))
+    }
+}
+
+pub(crate) fn assess_orphan_cleanup_with_sessions(
+    state: &AppState,
+    repo_path: &str,
+) -> Result<Vec<OrphanCleanupReview>, String> {
+    Ok(tuic_git::worktree::assess_orphan_worktrees(repo_path)?
+        .into_iter()
+        .map(|mut assessment| {
+            let live_sessions = if Path::new(&assessment.path).exists() {
+                live_sessions_in(state, Path::new(&assessment.path))
+            } else {
+                Vec::new()
+            };
+            if !live_sessions.is_empty() {
+                assessment.safe = false;
+                let live = live_session_reason(&live_sessions);
+                assessment.reason = Some(match assessment.reason.take() {
+                    Some(reason) => format!("{reason}; {live}"),
+                    None => live,
+                });
+            }
+            OrphanCleanupReview {
+                assessment,
+                live_sessions,
+            }
+        })
+        .collect())
+}
+
+pub(crate) async fn assess_orphan_cleanup_internal(
+    state: Arc<AppState>,
     repo_path: String,
-) -> Result<Vec<tuic_git::worktree::OrphanCleanupAssessment>, String> {
-    tokio::task::spawn_blocking(move || tuic_git::worktree::assess_orphan_worktrees(&repo_path))
+) -> Result<Vec<OrphanCleanupReview>, String> {
+    tokio::task::spawn_blocking(move || assess_orphan_cleanup_with_sessions(&state, &repo_path))
         .await
         .map_err(|error| format!("orphan cleanup assessment task failed: {error}"))?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn assess_orphan_cleanup(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+) -> Result<Vec<OrphanCleanupReview>, String> {
+    assess_orphan_cleanup_internal(state.inner().clone(), repo_path).await
 }
 
 #[derive(Clone)]
@@ -1169,7 +1249,7 @@ pub(crate) fn answer_orphan_cleanup_internal(
         .clone();
     if remove {
         for path in &pending {
-            tuic_git::worktree::orphan_cleanup_safety(repo_path, path)?;
+            orphan_cleanup_safety_with_sessions(state, repo_path, path)?;
         }
     }
     let mut current = state
