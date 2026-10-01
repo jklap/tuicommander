@@ -659,50 +659,6 @@ export const BranchItem: Component<{
 							{props.branch.branchName}
 						</span>
 					</Show>
-					{/* Rich: spend the spare room on what the compact row leaves to tooltips. */}
-					<Show when={rich() && !props.branch.isShell}>
-						<Show when={pr()}>
-							{(p) => (
-								<span class={s.branchRichLine} title={p().title}>
-									#{p().number} {p().title}
-								</span>
-							)}
-						</Show>
-						<span class={s.branchRichMeta}>
-							<Show when={facts().commitAge}>
-								{(age) => (
-									<span class={s.richChip} title={t("sidebar.lastCommit", "Last commit")}>
-										{age()}
-									</span>
-								)}
-							</Show>
-							<Show when={facts().sync}>
-								{(sync) => (
-									<span class={s.richChip} title={t("sidebar.aheadBehind", "Ahead / behind upstream")}>
-										{sync()}
-									</span>
-								)}
-							</Show>
-							<StatsBadge
-								additions={props.branch.additions}
-								deletions={props.branch.deletions}
-								dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
-								onClick={props.onShowChanges ? showChanges : undefined}
-							/>
-							<Show when={facts().dirtyFiles > 0}>
-								<span class={cx(s.richChip, s.richChipWarn)} title={t("sidebar.dirtyFiles", "Uncommitted files")}>
-									{facts().dirtyFiles} {t("sidebar.dirty", "dirty")}
-								</span>
-							</Show>
-							<Show when={facts().state}>
-								{(state) => (
-									<span class={cx(s.richChip, state() === "merged" ? s.richChipMerged : s.richChipWarn)}>
-										{state() === "merged" ? t("sidebar.merged", "Merged") : t("sidebar.stale", "Stale")}
-									</span>
-								)}
-							</Show>
-						</span>
-					</Show>
 				</div>
 				{/* The badge answers one question — what would removing this workspace
 				    lose? A main checkout is never removed here, so it gets no badge at
@@ -863,6 +819,54 @@ export const BranchItem: Component<{
 				<span class={s.branchShortcut} style={{ display: props.shortcutIndex !== undefined ? undefined : "none" }}>
 					{props.shortcutIndex !== undefined ? keyFor(`switch-branch-${props.shortcutIndex}`) : ""}
 				</span>
+				{/* Rich: a full-width block under the name line, spending the spare room on what
+				    the compact row leaves to tooltips. */}
+				<Show when={rich() && !props.branch.isShell}>
+					<span class={s.branchBreak} aria-hidden="true" />
+					<div class={s.branchRichDetail}>
+						<Show when={pr()}>
+							{(p) => (
+								<span class={s.branchRichLine} title={p().title}>
+									{p().title}
+								</span>
+							)}
+						</Show>
+						<span class={s.branchRichMeta}>
+							<Show when={facts().commitAge}>
+								{(age) => (
+									<span class={s.richChip} title={t("sidebar.lastCommit", "Last commit")}>
+										{age()}
+									</span>
+								)}
+							</Show>
+							<Show when={facts().sync}>
+								{(sync) => (
+									<span class={s.richChip} title={t("sidebar.aheadBehind", "Ahead / behind upstream")}>
+										{sync()}
+									</span>
+								)}
+							</Show>
+							<StatsBadge
+								additions={props.branch.additions}
+								deletions={props.branch.deletions}
+								dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
+								onClick={props.onShowChanges ? showChanges : undefined}
+							/>
+							<Show when={facts().dirtyFiles > 0}>
+								<span class={cx(s.richChip, s.richChipWarn)} title={t("sidebar.dirtyFiles", "Uncommitted files")}>
+									{facts().dirtyFiles} {t("sidebar.dirty", "dirty")}
+								</span>
+							</Show>
+							<Show when={facts().state}>
+								{(state) => (
+									<span class={cx(s.richChip, state() === "merged" ? s.richChipMerged : s.richChipWarn)}>
+										{state() === "merged" ? t("sidebar.merged", "Merged") : t("sidebar.stale", "Stale")}
+									</span>
+								)}
+							</Show>
+						</span>
+					</div>
+				</Show>
 				<ContextMenu
 					items={contextMenuItems()}
 					x={ctxMenu.position().x}
