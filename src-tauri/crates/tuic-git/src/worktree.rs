@@ -8280,6 +8280,23 @@ branch refs/heads/feat
         assert_eq!(rev_at(&repo, &query.archive_ref).unwrap(), query.tip);
     }
 
+    /// Catches a branch filter that lists checkouts of other branches: those
+    /// paths feed removal and archive decisions.
+    #[test]
+    fn worktree_paths_list_only_checkouts_of_the_queried_branch_1327() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt_a = add_worktree(&repo, "alpha-1327");
+        let wt_b = add_worktree(&repo, "beta-1327");
+        for (branch, own) in [("alpha-1327", &wt_a), ("beta-1327", &wt_b)] {
+            let query = branch_integration_with_pr(&repo, branch, |_, _, _| false).unwrap();
+            assert_eq!(
+                query.worktree_paths,
+                vec![own.to_string_lossy().to_string()]
+            );
+        }
+    }
+
     #[test]
     fn branch_panel_and_safe_ui_delete_use_squash_proof_1295() {
         let (_temp, repo, wt) = integration_1295_fixture(true, false);
