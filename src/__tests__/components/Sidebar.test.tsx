@@ -97,6 +97,7 @@ vi.mock("../../stores/repoSettings", () => ({
 vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		get: mockTerminalsGet,
+		getIds: vi.fn((): string[] => []),
 		isBusy: vi.fn(() => false),
 		isWorking: vi.fn(() => false),
 		onRemove: vi.fn(() => () => {}),
