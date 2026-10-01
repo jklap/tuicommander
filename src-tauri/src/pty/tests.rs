@@ -20310,3 +20310,55 @@ fn critic_mini_interrupt_beats_status_tokens() {
         AgentScreenActivity::Working
     );
 }
+
+#[test]
+fn critic3_mini_usage_number_boundaries_are_ready() {
+    // Catches: the usage/percent parser rejecting a boundary of the observed
+    // `<n>[.<n>][K|M|B] (<n>%)` shape (zero, no suffix, 100% and over), which would
+    // stall the queue drain for that session.
+    for usage in ["0 (0%)", "999K (100%)", "1.2M (80%)", "3B (150%)", "950 (1%)"] {
+        let row = format!(" BUILD  {usage} \u{00B7} ctrl+p cmd");
+        assert_eq!(
+            detect_opencode_screen_activity(&critic_mini_rows(&row)),
+            AgentScreenActivity::Ready,
+            "row {row:?}"
+        );
+    }
+}
+
+#[test]
+fn critic3_mini_malformed_usage_or_extra_tokens_are_unknown() {
+    // Catches: a loosened usage/percent check or a tail wildcard that lets a malformed
+    // number or a stray token ride on `ctrl+p cmd` and read Ready on a live turn.
+    for row in [
+        " BUILD  1.2.3K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  .5K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  5.K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  52.9KM (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  52.9K (%) \u{00B7} ctrl+p cmd",
+        " BUILD  52.9K (26.5%) \u{00B7} ctrl+p cmd",
+        " BUILD  ctrl+p cmd extra",
+        " BUILD  extra ctrl+p cmd",
+        " BUILD  ctrl+p",
+    ] {
+        assert_eq!(
+            detect_opencode_screen_activity(&critic_mini_rows(row)),
+            AgentScreenActivity::Unknown,
+            "row {row:?}"
+        );
+    }
+}
+
+#[test]
+fn critic3_mini_working_row_with_unusual_agent_label_is_working() {
+    // Catches: the label gate running before the interrupt/bar check, so a live turn of
+    // an agent whose name has a dot (`MY.AGENT`) reads Unknown instead of Working and
+    // the queue can be typed into the turn once the screen goes quiet.
+    assert_eq!(
+        detect_opencode_screen_activity(&critic_mini_rows(
+            " MY.AGENT  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0} esc interrupt"
+        )),
+        AgentScreenActivity::Working
+    );
+}
