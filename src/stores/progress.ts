@@ -128,6 +128,12 @@ export function createProgressStore() {
 	// answered with one red block per repository that no longer existed.
 	const [arrivedSinceOpen, setArrivedSinceOpen] = createSignal(0);
 	const visitedScopes = new Set<string | null>();
+	// The rich sidebar's own copy of each project's flow. Kept apart from
+	// `flows` because the dialog scopes that one to a terminal and guards it
+	// against the dialog's selection; the sidebar always wants the whole project.
+	const [sidebarFlows, setSidebarFlows] = createStore<Record<string, ProgressFlow>>({});
+	const sidebarFlowFetchedAt = new Map<string, number>();
+	const SIDEBAR_FLOW_MIN_GAP_MS = 5000;
 
 	function ensure(project: string): void {
 		if (state.projects[project]) return;
@@ -178,6 +184,20 @@ export function createProgressStore() {
 		} catch (error) {
 			if (requestedProject() !== project || selectedPtyId() !== ptyId) return;
 			setState("flows", project, { loading: false, error: messageOf(error) });
+		}
+	}
+
+	/// Reads the existing `progress_flow` command for the rich sidebar's subagent
+	/// lines. Rows of one repo ask together, so asks closer than the gap collapse.
+	async function refreshSidebarFlow(project: string): Promise<void> {
+		const last = sidebarFlowFetchedAt.get(project) ?? 0;
+		if (Date.now() - last < SIDEBAR_FLOW_MIN_GAP_MS) return;
+		sidebarFlowFetchedAt.set(project, Date.now());
+		try {
+			const flow = await invoke<ProgressFlow>("progress_flow", { project, input: {} });
+			setSidebarFlows(project, reconcile(flow));
+		} catch {
+			// Keep the last flow: a failed read must not blank the subagent lines.
 		}
 	}
 
@@ -327,6 +347,8 @@ export function createProgressStore() {
 			if (next === "flow" && project) void refreshFlow(project);
 		},
 		refreshFlow,
+		sidebarFlow: (project: string): ProgressFlow | undefined => sidebarFlows[project],
+		refreshSidebarFlow,
 		fetchFlowDetail: (detail: FlowDetailRef) =>
 			invoke<{ text: string }>("progress_flow_detail", { input: detail }).then((result) => result.text),
 		open,
@@ -342,6 +364,8 @@ export function createProgressStore() {
 			batch(() => {
 				setState("projects", reconcile({}));
 				setState("flows", reconcile({}));
+				setSidebarFlows(reconcile({}));
+				sidebarFlowFetchedAt.clear();
 				setView("list");
 				setDialogVisible(false);
 				setRequestedProject(null);

@@ -346,4 +346,35 @@ describe("progressStore", () => {
 		expect(await store.deleteEntries("/repo", [1])).toBe(false);
 		expect(store.state.projects["/repo"].error).toBe("database is locked");
 	});
+
+	describe("sidebar flow", () => {
+		const flow = { project: "/repo", participants: [], events: [], truncated: false };
+
+		// Catches: every branch row of one repo issuing its own progress_flow call.
+		it("collapses asks closer than the minimum gap into one backend read", async () => {
+			invokeMock.mockResolvedValue(flow);
+			const { createProgressStore } = await import("../../stores/progress");
+			const store = createProgressStore();
+			await Promise.all([store.refreshSidebarFlow("/repo"), store.refreshSidebarFlow("/repo")]);
+			expect(invokeMock).toHaveBeenCalledTimes(1);
+			expect(invokeMock).toHaveBeenCalledWith("progress_flow", { project: "/repo", input: {} });
+			expect(store.sidebarFlow("/repo")).toEqual(flow);
+		});
+
+		// Catches: a failed read blanking the subagent lines that were already on screen.
+		it("keeps the last flow when a read fails", async () => {
+			vi.useFakeTimers();
+			try {
+				invokeMock.mockResolvedValueOnce(flow).mockRejectedValueOnce(new Error("boom"));
+				const { createProgressStore } = await import("../../stores/progress");
+				const store = createProgressStore();
+				await store.refreshSidebarFlow("/repo");
+				vi.advanceTimersByTime(6000);
+				await store.refreshSidebarFlow("/repo");
+				expect(store.sidebarFlow("/repo")).toEqual(flow);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+	});
 });

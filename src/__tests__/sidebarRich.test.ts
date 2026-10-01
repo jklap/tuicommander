@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { agentFacts, branchFacts, compactAge, repoFacts, STALE_AFTER_DAYS } from "../utils/sidebarRich";
+import type { ProgressFlow } from "../stores/progress";
+import { agentFacts, branchFacts, compactAge, repoFacts, STALE_AFTER_DAYS, subagentRows } from "../utils/sidebarRich";
 
 // Each case names the plausible bug it catches (#1334-b659).
 
@@ -78,5 +79,54 @@ describe("repoFacts / compactAge", () => {
 	// Catches: a clock skew (future timestamp) rendering a negative age.
 	it("clamps future timestamps to under a minute", () => {
 		expect(compactAge(NOW + 60_000, NOW)).toBe("<1m");
+	});
+});
+
+describe("subagentRows", () => {
+	const part = (agent: string, state: "running" | "done", pty = "s1") => ({
+		id: `${pty}/${agent}`,
+		kind: "subagent" as const,
+		title: agent,
+		state,
+		parent: pty,
+		toolCalls: 2,
+		ptyId: pty,
+		agentId: agent,
+	});
+	const flow = (participants: ProgressFlow["participants"], events: ProgressFlow["events"] = []): ProgressFlow => ({
+		project: "/r",
+		participants,
+		events,
+		truncated: false,
+	});
+
+	// Catches: returned subagents listed above the ones still working.
+	it("puts running subagents first", () => {
+		const rows = subagentRows(flow([part("a", "done"), part("b", "running")]), "s1", NOW);
+		expect(rows.map((r) => r.id)).toEqual(["s1/b", "s1/a"]);
+	});
+
+	// Catches: terminal columns and other sessions' subagents leaking into the list.
+	it("keeps only subagents of the given session", () => {
+		const terminal = { ...part("t", "running"), kind: "terminal" as const };
+		const rows = subagentRows(flow([terminal, part("a", "running", "s2"), part("b", "running")]), "s1", NOW);
+		expect(rows.map((r) => r.id)).toEqual(["s1/b"]);
+	});
+
+	// Catches: the age of a returned subagent still counting from its spawn.
+	it("ages a running subagent from its spawn and a returned one from its return", () => {
+		const events = [
+			{ id: "s1/a:spawn", kind: "subagent_spawn" as const, from: "s1", summary: "", atMs: NOW - 60 * 60_000 },
+			{ id: "s1/b:spawn", kind: "subagent_spawn" as const, from: "s1", summary: "", atMs: NOW - 10 * 60_000 },
+			{ id: "s1/b:return", kind: "subagent_return" as const, from: "s1/b", summary: "", atMs: NOW - 2 * 60_000 },
+		];
+		const rows = subagentRows(flow([part("a", "running"), part("b", "done")], events), "s1", NOW);
+		expect(rows.map((r) => r.age)).toEqual(["1h", "2m"]);
+	});
+
+	// Catches: a crash or phantom rows when no flow was fetched or the terminal has no session yet.
+	it("returns nothing without a flow or a session", () => {
+		expect(subagentRows(undefined, "s1", NOW)).toEqual([]);
+		expect(subagentRows(flow([part("a", "running")]), null, NOW)).toEqual([]);
 	});
 });
