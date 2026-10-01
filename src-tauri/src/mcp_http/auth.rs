@@ -480,9 +480,11 @@ fn safe_next(next: Option<&str>) -> String {
 
 fn login_redirect(uri: &axum::http::Uri) -> Response {
     // Percent-encode everything but unreserved characters and `/`, so the path
-    // travels as one query value.
+    // and its query (a share-target link is `/mobile?shared=<key>`) travel as one
+    // query value. `safe_next` still vets it after login.
     let mut encoded = String::new();
-    for byte in uri.path().bytes() {
+    let target = uri.path_and_query().map_or(uri.path(), |pq| pq.as_str());
+    for byte in target.bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
                 encoded.push(byte as char)

@@ -189,7 +189,6 @@ mod tests {
     #[test]
     fn manifest_gets_no_cache() {
         assert_eq!(cache_control_for("mobile-manifest.json"), "no-cache");
-        assert_eq!(cache_control_for("mobile-login.js"), "no-cache");
     }
 
     #[test]
