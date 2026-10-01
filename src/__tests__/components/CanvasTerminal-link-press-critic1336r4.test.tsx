@@ -80,21 +80,25 @@ describe("CanvasTerminal link context menu, critic 1336 round 4", () => {
 	beforeEach(async () => {
 		onOpen.mockClear();
 		invoke.mockReset();
-		invoke.mockImplementation(async (cmd: string, args: { candidate?: string; candidates?: string[]; col?: number }) => {
-			if (cmd === "terminal_hyperlink_span") {
-				const col = args.col ?? -1;
-				if (col >= 6 && col < 9) return [6, 9, "other.md"];
-				await new Promise((r) => setTimeout(r, SLOW_MS));
+		invoke.mockImplementation(
+			async (cmd: string, args: { candidate?: string; candidates?: string[]; col?: number }) => {
+				if (cmd === "terminal_hyperlink_span") {
+					const col = args.col ?? -1;
+					if (col >= 6 && col < 9) return [6, 9, "other.md"];
+					await new Promise((r) => setTimeout(r, SLOW_MS));
+					return null;
+				}
+				if (cmd === "terminal_get_row_text") return ROW0.trimEnd();
+				if (cmd === "terminal_get_logical_line") return [0, ROW0.trimEnd()];
+				const resolve = (c: string) =>
+					c.startsWith("followups") || c.startsWith("other")
+						? { absolute_path: `/cwd/${c}`, is_directory: false }
+						: null;
+				if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
+				if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
 				return null;
-			}
-			if (cmd === "terminal_get_row_text") return ROW0.trimEnd();
-			if (cmd === "terminal_get_logical_line") return [0, ROW0.trimEnd()];
-			const resolve = (c: string) =>
-				c.startsWith("followups") || c.startsWith("other") ? { absolute_path: `/cwd/${c}`, is_directory: false } : null;
-			if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
-			if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
-			return null;
-		});
+			},
+		);
 		frameSink.current = null;
 		Object.defineProperty(document, "fonts", {
 			configurable: true,
@@ -122,9 +126,23 @@ describe("CanvasTerminal link context menu, critic 1336 round 4", () => {
 			y: 0,
 			toJSON: () => ({}),
 		});
-		vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
-		vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
-		const view = render(() => <CanvasTerminal sessionId="link-1336r4" terminalId="link-1336r4" onOpenFilePath={onOpen} />);
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				observe() {}
+				disconnect() {}
+			},
+		);
+		vi.stubGlobal(
+			"IntersectionObserver",
+			class {
+				observe() {}
+				disconnect() {}
+			},
+		);
+		const view = render(() => (
+			<CanvasTerminal sessionId="link-1336r4" terminalId="link-1336r4" onOpenFilePath={onOpen} />
+		));
 		unmount = view.unmount;
 		await waitFor(() => expect(frameSink.current).not.toBeNull());
 		(frameSink.current as ((data: ArrayBuffer) => void) | null)?.(frame(ROW0));
