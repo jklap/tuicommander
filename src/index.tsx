@@ -5,6 +5,7 @@ import App from "./App";
 import { CrashScreen } from "./components/CrashScreen/CrashScreen";
 import { initDebugGlobals } from "./debugGlobals";
 import { appLogger } from "./stores/appLogger";
+import { handleExternalLinkClick } from "./utils/externalLinkClick";
 import { startFrontendHeartbeat } from "./utils/frontendHeartbeat";
 import "./global.css";
 import "./styles.css";
@@ -78,19 +79,7 @@ document.addEventListener("drop", (e) => {
 import("./stores/dragDrop").then(({ initDragDrop }) => initDragDrop());
 
 // Intercept external link clicks and open them in the system browser.
-// Without this, Tauri shows a scary "WARNING: This link could potentially be
-// dangerous" navigation confirmation dialog.
-document.addEventListener("click", (e) => {
-	const anchor = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
-	if (!anchor) return;
-	const href = anchor.href;
-	if (!href) return;
-	// Only intercept http/https links (not internal anchors, javascript:, etc.)
-	if (href.startsWith("http://") || href.startsWith("https://")) {
-		e.preventDefault();
-		import("./utils/openUrl").then(({ handleOpenUrl }) => handleOpenUrl(href));
-	}
-});
+document.addEventListener("click", handleExternalLinkClick);
 
 if (import.meta.env.DEV) {
 	import("./dev/simulator");
