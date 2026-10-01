@@ -4409,3 +4409,11 @@ or credential is touched.
 ## Click on an underlined relative path (1336-7755)
 
 - [ ] After a desktop rebuild, in a Claude session (and once in a plain shell with `echo docs/x.md`) click an underlined relative path, then read the app log for `link click:` lines (debug level). A click that opens the file logs `link click: opening`; a dead click logs which step ended it (`not opened` with claimed/detail/hasRange, `lookup went stale`, `nothing resolved`, or `does not cover`). Also click an OSC 8 link whose text is no path and hover it first: it opens (press claimed from the hover probe, #1336 fix). Browser mode could not reproduce the dead click; only the desktop can.
+
+## Compose image paste and toolbar marker (1350-a1e6, 1351-69e0)
+
+- [ ] After the next desktop rebuild, paste a screenshot (Cmd+Shift+Ctrl+4) and an image file copied from Finder into Compose: both attach an `[image: ...]` tag, in paste order. Paste plain text: it pastes as text. In auto density mode the toolbar button shows only the letter, no blue marker.
+
+## Question reminder (1354-00ed)
+
+- [ ] After the next desktop rebuild, leave an agent question unanswered for 2 minutes in a background tab: one sound and one OS notification. With the question tab active and the window focused: sound only. With notifications disabled: nothing.
