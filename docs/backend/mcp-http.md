@@ -1774,6 +1774,7 @@ When remote access is enabled:
 - Password stored as bcrypt hash in config
 - Session token, relay token, and VAPID private key stored in the OS keyring-backed credential vault
 - Applied to all endpoints
+- Mobile app: unauthenticated page navigations redirect to `/mobile/login`, which posts to `POST /auth/login` (same rate limit and bcrypt admission as Basic); cookie is sliding, 30 days by default — see `docs/api/http-api.md` "Authentication"
 
 When MCP-only (localhost):
 - No authentication required

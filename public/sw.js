@@ -50,11 +50,15 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        // Cache mobile.html on successful navigation for offline use
+        // Cache mobile.html on successful navigation for offline use. Only
+        // the app shell: the login page (story 1359) would otherwise replace
+        // the shell, and offline the app would open on a form that cannot
+        // log in. `response.ok` already keeps a 401 or a redirect out.
         if (response.ok) {
           const url = new URL(event.request.url);
-          if (url.pathname === "/mobile" || url.pathname === "/mobile.html"
-              || url.pathname.startsWith("/mobile/")) {
+          if (url.pathname !== "/mobile/login"
+              && (url.pathname === "/mobile" || url.pathname === "/mobile.html"
+                  || url.pathname.startsWith("/mobile/"))) {
             const clone = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put("/mobile.html", clone));
           }
