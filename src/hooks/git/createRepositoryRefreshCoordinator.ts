@@ -576,11 +576,11 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	// Orphans the user chose to "Keep" this session — don't nag about them again
 	// on every subsequent refresh/poll. Session-scoped (re-detected on next launch). (#65)
 	const keptOrphans = new Set<string>();
-	/** Remove one orphan, then close its terminals. The backend verdict comes first: a session
+	/** Remove one orphan, then close its terminals. Resolves with how many terminals could not be closed. The backend verdict comes first: a session
 	 *  that started after the assessment makes the backend refuse, and its terminal must survive.
 	 *  A review-confirmed entry carries the session ids the user saw; the backend refuses if
 	 *  another one appeared since. */
-	const removeOrphan = async (repoPath: string, entry: OrphanAssessment) => {
+	const removeOrphan = async (repoPath: string, entry: OrphanAssessment): Promise<number> => {
 		if (entry.safe) {
 			await deps.repo.removeOrphanWorktree(repoPath, entry.path, true);
 		} else {
@@ -590,9 +590,16 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		// The checkout is gone: a terminal that will not close must not turn that into a failed removal.
 		try {
 			await deps.closeTerminalsInWorktree(entry.path);
+			return 0;
 		} catch (err) {
 			appLogger.warn("git", `Removed orphan worktree ${entry.path} but could not close its terminals`, err);
+			return err instanceof AggregateError ? err.errors.length : 1;
 		}
+	};
+	const reportOrphanRemoval = (removed: number, unclosedTerminals: number) => {
+		if (removed === 0) return;
+		const unclosed = unclosedTerminals > 0 ? `; ${unclosedTerminals} terminal(s) could not be closed` : "";
+		deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)${unclosed}`);
 	};
 	const handleOrphanCleanup = async (repoPath: string) => {
 		const orphanCleanup = repoSettingsStore.getEffective(repoPath)?.orphanCleanup ?? "ask";
@@ -612,19 +619,20 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		if (orphanCleanup === "on") {
 			// Auto-remove only the worktrees the backend classified as safe.
 			let removed = 0;
+			let unclosed = 0;
 			await Promise.allSettled(
 				assessments
 					.filter((entry) => entry.safe)
 					.map(async (entry) => {
 						try {
-							await removeOrphan(repoPath, entry);
+							unclosed += await removeOrphan(repoPath, entry);
 							removed++;
 						} catch (err) {
 							appLogger.warn("git", `Failed to auto-remove orphan worktree ${entry.path}`, err);
 						}
 					}),
 			);
-			if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
+			reportOrphanRemoval(removed, unclosed);
 			reviewable = assessments.filter((entry) => (entry.live_sessions?.length ?? 0) > 0);
 		}
 
@@ -688,17 +696,18 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		}
 
 		let removed = 0;
+		let unclosed = 0;
 		await Promise.allSettled(
 			pending.map(async (entry) => {
 				try {
-					await removeOrphan(repoPath, entry);
+					unclosed += await removeOrphan(repoPath, entry);
 					removed++;
 				} catch (err) {
 					appLogger.warn("git", `Failed to remove orphan worktree ${entry.path}`, err);
 				}
 			}),
 		);
-		if (removed > 0) deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)`);
+		reportOrphanRemoval(removed, unclosed);
 	};
 
 	/** Archive all merged linked worktrees when the autoArchiveMerged setting is enabled. */
