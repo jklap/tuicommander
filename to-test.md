@@ -4417,3 +4417,7 @@ or credential is touched.
 ## Question reminder (1354-00ed)
 
 - [ ] After the next desktop rebuild, leave an agent question unanswered for 2 minutes in a background tab: one sound and one OS notification. With the question tab active and the window focused: sound only. With notifications disabled: nothing.
+
+## PR panel (1345-fb71 .. 1349-7546)
+
+- [ ] After the next desktop rebuild, on a repo with open PRs: a PR transition (CI failed, ready, merged) gives one OS notification and its click opens the PR; Merge sends the head the panel showed; a PR with unresolved review threads shows the bot/human split and is not Ready; Update branch on a BEHIND PR, Close PR with confirmation, age marker and Copy reference work on their own row only. Then approve plan steps S1-S5.
