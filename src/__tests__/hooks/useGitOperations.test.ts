@@ -4629,4 +4629,130 @@ describe("useGitOperations", () => {
 			expect(getFocusForRepo("/repo")).toBeNull();
 		});
 	});
+
+	describe("orphan sweep status tally (critic-1188r5)", () => {
+		const live = (path: string) => ({
+			path,
+			safe: false,
+			live_sessions: [{ session_id: `s-${path}`, name: "agent" }],
+		});
+		const askOps = (confirm: () => Promise<boolean>) =>
+			useGitOperations({
+				repo: mockRepo,
+				pty: mockPty,
+				dialogs: { ...mockDialogs, confirmOrphanCleanup: vi.fn(confirm) },
+				closeTerminal: mockCloseTerminal,
+				createNewTerminal: mockCreateNewTerminal,
+				setStatusInfo: mockSetStatusInfo,
+				getDefaultFontSize: () => 14,
+				getMaxTabNameLength: () => 25,
+			});
+		const orphanStatuses = () =>
+			mockSetStatusInfo.mock.calls.map((c) => c[0]).filter((m) => typeof m === "string" && m.includes("orphaned"));
+
+		beforeEach(() => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
+			mockRepo.removeOrphanWorktree.mockResolvedValue(undefined);
+			mockCloseTerminal.mockResolvedValue(undefined);
+		});
+
+		// Catches: the Auto sweep and the live review each printing their own line, the second overwriting the first.
+		it("auto removal plus confirmed live review report one summed line", async () => {
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/safe", safe: true }, live("/wt/live")]);
+			terminalsStore.add(makeTerminal({ name: "a", cwd: "/wt/safe" }));
+			terminalsStore.add(makeTerminal({ name: "b", cwd: "/wt/live" }));
+			mockCloseTerminal.mockRejectedValue(new Error("stuck"));
+			const ops = askOps(async () => true);
+			const p = ops.refreshAllBranchStats();
+			await vi.advanceTimersByTimeAsync(0);
+			await p;
+			expect(orphanStatuses()).toEqual(["Removed 2 orphaned worktree(s); 2 terminal(s) could not be closed"]);
+		});
+
+		// Catches: the early `return` on Keep skipping the final status of the already-removed safe orphan.
+		it("auto removal then Keep on the live orphan still reports the safe removal once", async () => {
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/safe", safe: true }, live("/wt/live")]);
+			const ops = askOps(async () => false);
+			const p = ops.refreshAllBranchStats();
+			await vi.advanceTimersByTimeAsync(0);
+			await p;
+			expect(orphanStatuses()).toEqual(["Removed 1 orphaned worktree(s)"]);
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledTimes(1);
+		});
+
+		// Catches: the tally being lost when the dialog throws between the Auto phase and the review phase.
+		it("auto removal then a throwing confirmation dialog still reports the safe removal", async () => {
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/safe", safe: true }, live("/wt/live")]);
+			const ops = askOps(async () => {
+				throw new Error("dialog crashed");
+			});
+			const p = ops.refreshAllBranchStats().catch(() => undefined);
+			await vi.advanceTimersByTimeAsync(0);
+			await p;
+			expect(orphanStatuses()).toEqual(["Removed 1 orphaned worktree(s)"]);
+		});
+
+		// Catches: the duplicate-dialog guard return skipping the status of the Auto phase.
+		it("auto removal is reported even when another dialog already holds the review", async () => {
+			repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
+			repositoriesStore.setWorkspace("/repo2", "main", { worktreePath: "/repo2" });
+			repoSettingsStore.getOrCreate("/repo2", "Repo2");
+			repoSettingsStore.update("/repo2", { orphanCleanup: "on" });
+			mockRepo.assessOrphanCleanup.mockImplementation(async (r: string) => [
+				{ path: `/wt/safe-${r}`, safe: true },
+				live(`/wt/live-${r}`),
+			]);
+			let release!: (v: boolean) => void;
+			const ops = askOps(() => new Promise<boolean>((r) => (release = r)));
+			const p = ops.refreshAllBranchStats();
+			await vi.advanceTimersByTimeAsync(0);
+			release(false);
+			await p;
+			expect(orphanStatuses()).toHaveLength(2);
+		});
+
+		// Catches: a live orphan the backend refuses (new session appeared) counted as removed or its terminals closed.
+		it("a refused live removal is neither counted nor has its terminals closed", async () => {
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/safe", safe: true }, live("/wt/live")]);
+			mockRepo.removeOrphanWorktree.mockImplementation(async (_r: string, path: string) => {
+				if (path === "/wt/live") throw new Error("session appeared");
+			});
+			const liveTerm = terminalsStore.add(makeTerminal({ name: "b", cwd: "/wt/live" }));
+			const ops = askOps(async () => true);
+			const p = ops.refreshAllBranchStats();
+			await vi.advanceTimersByTimeAsync(0);
+			await p;
+			expect(orphanStatuses()).toEqual(["Removed 1 orphaned worktree(s)"]);
+			expect(mockCloseTerminal).not.toHaveBeenCalledWith(liveTerm, true);
+		});
+
+		// Catches: a status line "Removed 0" or stale text when nothing was removed (all fail / Keep only).
+		it("no status when every removal fails or the only orphan is kept", async () => {
+			mockRepo.assessOrphanCleanup.mockResolvedValue([live("/wt/live")]);
+			const keep = askOps(async () => false);
+			let p = keep.refreshAllBranchStats();
+			await vi.advanceTimersByTimeAsync(0);
+			await p;
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/a", safe: true }, { path: "/wt/b", safe: true }]);
+			mockRepo.removeOrphanWorktree.mockRejectedValue(new Error("locked"));
+			p = keep.refreshAllBranchStats();
+			await vi.advanceTimersByTimeAsync(0);
+			await p;
+			expect(orphanStatuses()).toEqual([]);
+		});
+
+		// Catches: the tally leaking across sweeps (module-level counter), so refresh 2 reports refresh 1's removals too.
+		it("a second sweep reports only its own removals", async () => {
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/one", safe: true }]);
+			await gitOps.refreshAllBranchStats();
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/two", safe: true }]);
+			await gitOps.refreshAllBranchStats();
+			expect(orphanStatuses()).toEqual(["Removed 1 orphaned worktree(s)", "Removed 1 orphaned worktree(s)"]);
+		});
+	});
 });
