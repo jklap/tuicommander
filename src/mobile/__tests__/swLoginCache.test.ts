@@ -15,10 +15,18 @@ function loadWorker(response: { ok: boolean; status?: number; type?: string }) {
 		match: async () => undefined,
 		keys: async () => [],
 	};
-	const self = { addEventListener: (name: string, fn: Listener) => { listeners[name] = fn; } };
+	const self = {
+		addEventListener: (name: string, fn: Listener) => {
+			listeners[name] = fn;
+		},
+	};
 	const fetchStub = vi.fn(async () => ({ ...response, clone: () => ({ cloned: true }) }));
 	new Function("self", "caches", "fetch", "clients", "crypto", source)(
-		self, caches, fetchStub, {}, { randomUUID: () => "k" },
+		self,
+		caches,
+		fetchStub,
+		{},
+		{ randomUUID: () => "k" },
 	);
 	return { listeners, put, fetchStub };
 }
@@ -28,7 +36,9 @@ async function navigate(path: string, response: { ok: boolean; status?: number; 
 	let pending: Promise<unknown> | undefined;
 	worker.listeners.fetch({
 		request: { method: "GET", url: `http://tuic.test:9876${path}`, mode: "navigate" },
-		respondWith: (p: Promise<unknown>) => { pending = p; },
+		respondWith: (p: Promise<unknown>) => {
+			pending = p;
+		},
 	});
 	await pending;
 	await new Promise((r) => setTimeout(r, 0));
