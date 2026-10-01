@@ -3932,9 +3932,10 @@ fn detect_opencode_mini_screen_activity(
     const INTERRUPT_HINT: &str = "esc interrupt";
     const BAR_GLYPHS: [char; 2] = ['\u{2B1D}', '\u{25A0}'];
     const BARE_LABELS: [&str; 2] = ["BUILD", "PLAN"];
-    // Narrowest width at which a status row was captured (64 columns, bare ` BUILD`).
-    // At 40 columns the row is absent, so a `BUILD` or `PLAN` line there is tool output.
-    const MIN_STATUS_ROW_COLUMNS: usize = 64;
+    // Narrowest width at which OpenCode 1.18.30 paints the status row: ` BUILD` shows from
+    // 46 columns up (verified at 46..63 in tmux) and is absent at 45 and below, so a
+    // `BUILD` or `PLAN` line on a narrower screen is tool output.
+    const MIN_STATUS_ROW_COLUMNS: usize = 46;
 
     let Some(status) = rows.iter().rev().find(|row| !row.trim().is_empty()) else {
         return AgentScreenActivity::Unknown;
