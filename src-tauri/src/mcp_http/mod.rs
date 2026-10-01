@@ -4327,6 +4327,35 @@ mod tests {
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
     }
 
+    /// The SSH host and agent-key listings disclose machine names and key
+    /// fingerprints. Catches: `tunnel_routes()` being merged outside the
+    /// Basic Auth layer so a public address reads them without credentials.
+    #[tokio::test]
+    async fn ssh_host_disclosure_routes_require_auth_from_a_public_address() {
+        let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
+        let routers = [
+            ("build_router", build_router(test_state(), true, true)),
+            ("build_remote_router", build_remote_router(test_state())),
+        ];
+        for (name, app) in routers {
+            for path in [
+                "/tunnels/ssh-hosts",
+                "/tunnels/ssh-hosts/discovered",
+                "/tunnels/ssh-hosts/status",
+                "/tunnels/agent-keys",
+            ] {
+                let mut req = Request::get(path).body(Body::empty()).unwrap();
+                req.extensions_mut().insert(ConnectInfo(remote));
+                let response = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "{name} {path} must not answer an unauthenticated public address"
+                );
+            }
+        }
+    }
+
     /// A remote client cannot put an `Authorization` header on a WebSocket
     /// upgrade, so it trades Basic Auth for the session token once and then
     /// uses `?token=`. The trade must itself be authenticated: a public address
