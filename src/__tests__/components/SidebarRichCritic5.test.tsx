@@ -251,7 +251,7 @@ describe("rich agent rows: nesting and clicks (critic r5)", () => {
 			}),
 		});
 	};
-	const tabs = (container: HTMLElement, name: string) => container.querySelectorAll(`button[aria-label^="${name}"]`);
+	const tabs = (container: HTMLElement, name: string) => container.querySelectorAll(`button[aria-label="${name}"]`);
 
 	// Catches: two sessions naming each other as parent both filtered out of the top level and
 	// never rendered as children of a root, so both agents vanish from the sidebar.
