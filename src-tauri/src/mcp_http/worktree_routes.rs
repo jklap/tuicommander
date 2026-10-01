@@ -586,6 +586,7 @@ pub(super) async fn merge_pr_via_github_http(
         &body.repo_path,
         body.pr_number,
         &body.merge_method,
+        &body.expected_head_sha,
         &state,
     )
     .await

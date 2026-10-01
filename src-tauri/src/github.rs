@@ -1135,6 +1135,16 @@ async fn poll_one_account(
             let mut statuses: Vec<BranchPrStatus> =
                 nodes.iter().filter_map(parse_pr_node).collect();
             stamp_merge_policy(&mut statuses, repo_json);
+            if let Some((owner, name)) = alias_repo_names.get(alias.as_str()) {
+                settle_truncated_threads(
+                    &state.git_cache.settled_review_threads,
+                    &format!("{}/{owner}", account.host.as_str()),
+                    name,
+                    &mut statuses,
+                    |n| fetch_review_thread_counts(state, account, owner, name, n),
+                )
+                .await;
+            }
 
             if include_merged && statuses.iter().any(|s| s.state == "MERGED") {
                 let branch_tips = local_branch_tips(PathBuf::from(path)).await;
@@ -1182,9 +1192,19 @@ async fn poll_one_account(
                 let Some(paths) = name_to_paths.get(repo_name) else {
                     continue;
                 };
-                let Some(pr) = parse_pr_node(node) else {
+                let Some(mut pr) = parse_pr_node(node) else {
                     continue;
                 };
+                if let Some((owner, name)) = repo_name.split_once('/') {
+                    settle_truncated_threads(
+                        &state.git_cache.settled_review_threads,
+                        &format!("{}/{owner}", account.host.as_str()),
+                        name,
+                        std::slice::from_mut(&mut pr),
+                        |n| fetch_review_thread_counts(state, account, owner, name, n),
+                    )
+                    .await;
+                }
                 for path in paths {
                     let entry = pr_results.entry(path.to_string()).or_default();
                     if !entry.iter().any(|existing| existing.branch == pr.branch) {
@@ -1779,28 +1799,32 @@ fn build_multi_repo_pr_query(
     } else {
         "[OPEN]"
     };
-    let node_fields = r#"number title state url headRefName headRefOid baseRefName isDraft
+    let node_fields = format!(
+        r#"number title state url headRefName headRefOid baseRefName isDraft
         additions deletions mergeable mergeStateStatus reviewDecision
-        viewerLatestReview { state }
+        viewerLatestReview {{ state }}
         createdAt updatedAt
-        author { login }
-        labels(first: 10) { nodes { name color } }
-        commits(last: 1) {
+        author {{ login }}
+        labels(first: 10) {{ nodes {{ name color }} }}
+        {threads}
+        commits(last: 1) {{
           totalCount
-          nodes {
-            commit {
-              statusCheckRollup {
-                contexts(first: 100) {
-                  nodes {
+          nodes {{
+            commit {{
+              statusCheckRollup {{
+                contexts(first: 100) {{
+                  nodes {{
                     __typename
-                    ... on CheckRun { name status conclusion startedAt }
-                    ... on StatusContext { context state createdAt }
-                  }
-                }
-              }
-            }
-          }
-        }"#;
+                    ... on CheckRun {{ name status conclusion startedAt }}
+                    ... on StatusContext {{ context state createdAt }}
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}"#,
+        threads = review_threads_selection()
+    );
 
     let mut aliases: Vec<(String, String)> = Vec::new();
     let mut parts = vec!["query BatchRepoPRs {".to_string()];
@@ -1998,13 +2022,186 @@ pub(crate) async fn get_ci_checks_impl(
     }
 }
 
-/// Merge a PR via GitHub REST API using the specified merge method.
+/// Marker the frontend matches (`isMergeHeadChanged`) to tell "head moved" from other merge failures.
+pub(crate) const MERGE_HEAD_CHANGED: &str = "PR head changed";
+
+/// REST body for the merge call: `sha` pins the merge to the head the user reviewed.
+fn merge_request_body(merge_method: &str, expected_head_sha: &str) -> serde_json::Value {
+    serde_json::json!({ "merge_method": merge_method, "sha": expected_head_sha })
+}
+
+/// Map a failed merge response to an error message. GitHub answers 409
+/// "Head branch was modified" when the pinned `sha` is no longer the PR head;
+/// that must never be retried with the new head (the user has not seen it).
+fn merge_failure_message(status: u16, raw: &str) -> String {
+    if status == 409 && raw.contains("Head branch was modified") {
+        return format!(
+            "{MERGE_HEAD_CHANGED}: new commits were pushed after you reviewed it. Refresh and review before merging."
+        );
+    }
+    format!("GitHub merge failed ({status}): {raw}")
+}
+
+const PR_REVIEW_THREADS_QUERY: &str = r#"
+query PRReviewThreads($owner: String!, $repo: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          isResolved
+          comments(first: 1) { nodes { author { __typename login } } }
+        }
+      }
+    }
+  }
+}
+"#;
+
+/// Pages read for the split (100 threads each). The batch badge stops at 50 threads and says so;
+/// this walks every page so its total can only be higher than the badge, never lower.
+const REVIEW_THREADS_MAX_PAGES: usize = 10;
+
+/// Walk every review-thread page of one PR (up to [`REVIEW_THREADS_MAX_PAGES`]). The bool is
+/// false when the bound ran out before the last page, so the counts are only a lower bound.
+async fn fetch_review_thread_counts(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    owner: &str,
+    repo: &str,
+    pr_number: i64,
+) -> Result<(ReviewThreadCounts, bool), String> {
+    let mut total = ReviewThreadCounts::default();
+    let mut after = serde_json::Value::Null;
+    for _ in 0..REVIEW_THREADS_MAX_PAGES {
+        let variables = serde_json::json!({
+            "owner": owner, "repo": repo, "number": pr_number, "after": after
+        });
+        let data = graphql_with_retry(state, account, PR_REVIEW_THREADS_QUERY, variables, None)
+            .await
+            .map_err(|e| format!("GraphQL review threads query failed: {e}"))?;
+        let threads = &data["repository"]["pullRequest"]["reviewThreads"];
+        let page = count_review_threads(&threads["nodes"]);
+        total.bot += page.bot;
+        total.human += page.human;
+        if threads["pageInfo"]["hasNextPage"].as_bool() != Some(true) {
+            return Ok((total, true));
+        }
+        after = threads["pageInfo"]["endCursor"].clone();
+    }
+    Ok((total, false))
+}
+
+/// A settled walk is trusted at most this long even if `updatedAt` did not move: resolving a
+/// thread is not guaranteed to bump the PR's `updatedAt`.
+const SETTLED_THREADS_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// A failed walk is not retried before this: one poll interval (`BASE_INTERVAL` in
+/// github_poller.rs), so a rate-limited PR does not pay up to 10 failing calls every poll.
+const FAILED_WALK_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The batch poll reads 50 threads per PR. For the PRs that have more, walk the remaining pages
+/// (that PR only) so the badge, the readiness verdict and the Ready notice see the real count;
+/// only a PR still truncated after the bound keeps "N+". A failed walk keeps the lower bound.
+/// A walk is reused while the PR's `updatedAt` and head are unchanged (and for at most
+/// [`SETTLED_THREADS_TTL`]), so an idle PR costs one walk, not one per poll; a failed walk is
+/// remembered for [`FAILED_WALK_RETRY`]. `repo_scope` is `host/owner` so the same owner and repo
+/// on two hosts never share an entry.
+async fn settle_truncated_threads<W, Fut>(
+    cache: &dashmap::DashMap<String, crate::state::SettledReviewThreads>,
+    repo_scope: &str,
+    repo: &str,
+    statuses: &mut [BranchPrStatus],
+    walk: W,
+) where
+    W: Fn(i64) -> Fut,
+    Fut: std::future::Future<Output = Result<(ReviewThreadCounts, bool), String>>,
+{
+    cache.retain(|_, v| v.walked_at.elapsed() < SETTLED_THREADS_TTL);
+    for pr in statuses
+        .iter_mut()
+        .filter(|s| s.unresolved_threads_truncated)
+    {
+        let key = format!("{repo_scope}/{repo}#{}", pr.number);
+        if let Some(hit) = cache.get(&key)
+            && hit.updated_at == pr.updated_at
+            && hit.head_ref_oid == pr.head_ref_oid
+        {
+            if !hit.failed {
+                pr.settle_review_threads(hit.unresolved, hit.complete);
+                continue;
+            }
+            if hit.walked_at.elapsed() < FAILED_WALK_RETRY {
+                continue;
+            }
+        }
+        let outcome = walk(pr.number.into()).await;
+        let (unresolved, complete, failed) = match &outcome {
+            Ok((counts, complete)) => (counts.bot + counts.human, *complete, false),
+            Err(_) => (pr.unresolved_threads, false, true),
+        };
+        cache.insert(
+            key,
+            crate::state::SettledReviewThreads {
+                updated_at: pr.updated_at.clone(),
+                head_ref_oid: pr.head_ref_oid.clone(),
+                unresolved,
+                complete,
+                failed,
+                walked_at: Instant::now(),
+            },
+        );
+        match outcome {
+            Ok(_) => pr.settle_review_threads(unresolved, complete),
+            Err(e) => tracing::warn!(
+                source = "github", pr = pr.number, error = %e,
+                "review thread walk failed; keeping the first-page count"
+            ),
+        }
+    }
+}
+
+/// Unresolved review threads of one PR split by bot vs human. One page costs one GraphQL point,
+/// which is why the split is not part of the batch poll.
+pub(crate) async fn get_pr_review_threads_impl(
+    path: &str,
+    pr_number: i64,
+    state: &AppState,
+) -> Result<ReviewThreadCounts, String> {
+    let repo_path = PathBuf::from(path);
+    let remote_url =
+        get_github_remote_url(&repo_path).ok_or_else(|| "No GitHub remote".to_string())?;
+    let (owner, repo) =
+        parse_remote_url(&remote_url).ok_or_else(|| "Unrecognised GitHub remote".to_string())?;
+    fetch_review_thread_counts(state, &github_com_account(state), &owner, &repo, pr_number)
+        .await
+        .map(|(counts, _)| counts)
+}
+
+/// Unresolved review threads of a PR, bot vs human (Tauri command).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn get_pr_review_threads(
+    path: String,
+    pr_number: i64,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewThreadCounts, String> {
+    let state = state.inner().clone();
+    get_pr_review_threads_impl(&path, pr_number, &state).await
+}
+
+/// Merge a PR via GitHub REST API using the specified merge method, pinned to
+/// `expected_head_sha` (the head the caller displayed).
 pub(crate) async fn merge_pr_github_impl(
     repo_path: &str,
     pr_number: i64,
     merge_method: &str,
+    expected_head_sha: &str,
     state: &AppState,
 ) -> Result<String, String> {
+    if expected_head_sha.trim().is_empty() {
+        return Err("Cannot merge without the head commit the PR was reviewed at".to_string());
+    }
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
 
     let url = crate::github_account::github_rest_url(
@@ -2012,7 +2209,7 @@ pub(crate) async fn merge_pr_github_impl(
         &format!("/repos/{owner}/{repo}/pulls/{pr_number}/merge"),
     );
     crate::github_debug::log_api("PUT", &url, "merge_pr_github_impl");
-    let body = serde_json::json!({ "merge_method": merge_method });
+    let body = merge_request_body(merge_method, expected_head_sha);
 
     let response = send_rest_with_breaker(
         state,
@@ -2040,22 +2237,30 @@ pub(crate) async fn merge_pr_github_impl(
             .as_str()
             .unwrap_or("Unknown error")
             .to_string();
-        Err(format!("GitHub merge failed ({status}): {msg}"))
+        Err(merge_failure_message(status, &msg))
     }
 }
 
 /// Merge a PR via GitHub REST API (Tauri command).
-/// Supports merge_method: "merge", "squash", "rebase".
+/// Supports merge_method: "merge", "squash", "rebase". `expected_head_sha` pins the merge to the reviewed head.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn merge_pr_via_github(
     repo_path: String,
     pr_number: i64,
     merge_method: String,
+    expected_head_sha: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     let state = state.inner().clone();
-    merge_pr_github_impl(&repo_path, pr_number, &merge_method, &state).await
+    merge_pr_github_impl(
+        &repo_path,
+        pr_number,
+        &merge_method,
+        &expected_head_sha,
+        &state,
+    )
+    .await
 }
 
 /// Get CI check details for a PR via GitHub GraphQL API (Story 060).
@@ -2507,6 +2712,125 @@ pub(crate) async fn approve_pr(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     approve_pr_impl(&repo_path, pr_number, &state).await
+}
+
+/// Map a failed update-branch response. GitHub answers 422 when the pinned
+/// `expected_head_sha` no longer matches the PR head.
+fn update_branch_failure_message(status: u16, raw: &str) -> String {
+    if status == 422 && raw.to_lowercase().contains("expected head sha") {
+        return format!(
+            "{MERGE_HEAD_CHANGED}: new commits were pushed after you looked at it. Refresh before updating the branch."
+        );
+    }
+    format!("Failed to update branch ({status}): {raw}")
+}
+
+/// Merge the base branch into a PR branch via the REST update-branch endpoint,
+/// pinned to `expected_head_sha` (the same operation as GraphQL
+/// `updatePullRequestBranch` with `expectedHeadOid`). GitHub answers 202: the
+/// merge commit lands asynchronously, so the caller re-polls.
+pub(crate) async fn update_pr_branch_impl(
+    repo_path: &str,
+    pr_number: i64,
+    expected_head_sha: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    if expected_head_sha.trim().is_empty() {
+        return Err("Cannot update the branch without the head commit the PR showed".to_string());
+    }
+    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+
+    let url = crate::github_account::github_rest_url(
+        &account.host,
+        &format!("/repos/{owner}/{repo}/pulls/{pr_number}/update-branch"),
+    );
+    crate::github_debug::log_api("PUT", &url, "update_pr_branch_impl");
+    let body = serde_json::json!({ "expected_head_sha": expected_head_sha });
+
+    let response = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .put(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body),
+    )
+    .await?;
+
+    let status = response.status().as_u16();
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        let json: serde_json::Value = response.json().await.unwrap_or_default();
+        let msg = json["message"].as_str().unwrap_or("Unknown error");
+        Err(update_branch_failure_message(status, msg))
+    }
+}
+
+/// Update a PR branch (Tauri command).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn update_pr_branch(
+    repo_path: String,
+    pr_number: i64,
+    expected_head_sha: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    update_pr_branch_impl(&repo_path, pr_number, &expected_head_sha, &state).await
+}
+
+/// Close a PR without merging via the REST pulls endpoint.
+pub(crate) async fn close_pr_impl(
+    repo_path: &str,
+    pr_number: i64,
+    state: &AppState,
+) -> Result<(), String> {
+    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+
+    let url = crate::github_account::github_rest_url(
+        &account.host,
+        &format!("/repos/{owner}/{repo}/pulls/{pr_number}"),
+    );
+    crate::github_debug::log_api("PATCH", &url, "close_pr_impl");
+    let body = serde_json::json!({ "state": "closed" });
+
+    let response = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body),
+    )
+    .await?;
+
+    let status = response.status().as_u16();
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        let json: serde_json::Value = response.json().await.unwrap_or_default();
+        let msg = json["message"].as_str().unwrap_or("Unknown error");
+        Err(format!("Failed to close PR ({status}): {msg}"))
+    }
+}
+
+/// Close a PR (Tauri command).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn close_pr(
+    repo_path: String,
+    pr_number: i64,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    close_pr_impl(&repo_path, pr_number, &state).await
 }
 
 /// Fetch the unified diff for a PR via GitHub REST API.
@@ -4096,6 +4420,78 @@ mod tests {
     fn test_friendly_approve_error_other_passthrough() {
         let msg = friendly_approve_error(500, "Internal Server Error");
         assert!(msg.contains("Internal Server Error"));
+    }
+
+    /// Catches: merge body without `sha`, so commits pushed after review get merged.
+    #[test]
+    fn merge_body_pins_the_reviewed_head_sha() {
+        let body = merge_request_body("squash", "abc123");
+        assert_eq!(body["sha"], "abc123");
+        assert_eq!(body["merge_method"], "squash");
+    }
+
+    /// Catches: a head-moved 409 reported as a generic error (or treated as "already merged").
+    #[test]
+    fn merge_409_head_modified_reports_head_changed() {
+        let msg = merge_failure_message(
+            409,
+            "Head branch was modified. Review and try the merge again.",
+        );
+        assert!(msg.starts_with(MERGE_HEAD_CHANGED), "{msg}");
+        assert!(msg.contains("Refresh"));
+    }
+
+    #[test]
+    fn merge_other_failures_keep_status_and_message() {
+        assert_eq!(
+            merge_failure_message(405, "Pull Request is not mergeable"),
+            "GitHub merge failed (405): Pull Request is not mergeable"
+        );
+        // a 409 that is not a head move (e.g. merge conflict) is not "head changed"
+        assert!(!merge_failure_message(409, "Merge conflict").contains(MERGE_HEAD_CHANGED));
+    }
+
+    #[tokio::test]
+    async fn merge_without_expected_head_is_rejected_before_any_request() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let err = merge_pr_github_impl("/nonexistent", 1, "squash", "", &state)
+            .await
+            .expect_err("empty sha must be rejected");
+        assert!(err.contains("head commit"), "{err}");
+    }
+
+    /// Catches: update-branch against a head that moved, reported as a generic 422.
+    #[test]
+    fn update_branch_422_expected_head_reports_head_changed() {
+        let msg = update_branch_failure_message(
+            422,
+            "Validation Failed: expected head sha didn't match current head ref.",
+        );
+        assert!(msg.starts_with(MERGE_HEAD_CHANGED), "{msg}");
+        assert_eq!(
+            update_branch_failure_message(403, "Forbidden"),
+            "Failed to update branch (403): Forbidden"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_branch_without_expected_head_is_rejected_before_any_request() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let err = update_pr_branch_impl("/nonexistent", 1, "", &state)
+            .await
+            .expect_err("empty sha must be rejected");
+        assert!(err.contains("head commit"), "{err}");
+    }
+
+    /// Catches: a whitespace-only sha passing the `is_empty` guard and reaching GitHub as an
+    /// invalid pin (422) instead of being refused before any request.
+    #[tokio::test]
+    async fn merge_with_blank_expected_head_is_rejected_before_any_request() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let err = merge_pr_github_impl("/nonexistent", 1, "squash", "  ", &state)
+            .await
+            .expect_err("blank sha must be rejected");
+        assert!(err.contains("head commit"), "{err}");
     }
 
     #[test]
@@ -6504,5 +6900,483 @@ mod tests {
         mock.assert_async().await;
         assert_eq!(value["number"].as_i64(), Some(42));
         assert_eq!(value["title"].as_str(), Some("Real issue"));
+    }
+}
+
+#[cfg(test)]
+mod critic2_tests {
+    use super::*;
+
+    /// Catches: the single-repo/multi-repo query builder dropping the thread selection
+    /// while the unified builder has it (two verdicts for the same PR).
+    #[test]
+    fn multi_repo_query_selects_review_threads() {
+        let repos = vec![("/r".to_string(), "o".to_string(), "r".to_string())];
+        let (q, _) = build_multi_repo_pr_query(&repos, false);
+        assert!(
+            q.contains("reviewThreads(first: 50)") && q.contains("isResolved"),
+            "{q}"
+        );
+    }
+
+    /// Catches: a real merge conflict on update-branch reported as "head changed"
+    /// (the UI would tell the user to refresh instead of resolving conflicts).
+    #[test]
+    fn update_branch_conflict_is_not_head_changed() {
+        let msg = update_branch_failure_message(422, "merge conflict between base and head");
+        assert!(!msg.contains(MERGE_HEAD_CHANGED), "{msg}");
+        assert!(msg.contains("422"), "{msg}");
+        // Capitalised variant of the real head-moved message is still recognised.
+        let moved =
+            update_branch_failure_message(422, "Expected head sha didn't match current head ref.");
+        assert!(moved.starts_with(MERGE_HEAD_CHANGED), "{moved}");
+    }
+
+    /// Catches: a whitespace-only pin passing the guard and reaching GitHub.
+    #[tokio::test]
+    async fn update_branch_blank_expected_head_is_rejected_before_any_request() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let err = update_pr_branch_impl("/nonexistent", 1, "  \t", &state)
+            .await
+            .expect_err("blank sha must be rejected");
+        assert!(err.contains("head commit"), "{err}");
+    }
+
+    /// Catches: a merge 409 for another reason (not mergeable) classified as head moved,
+    /// or the head-moved 409 matched case-insensitively away from GitHub's exact text.
+    #[test]
+    fn merge_409_variants() {
+        assert!(
+            !merge_failure_message(409, "Pull Request is not mergeable")
+                .contains(MERGE_HEAD_CHANGED)
+        );
+        assert!(
+            merge_failure_message(
+                409,
+                "Head branch was modified. Review and try the merge again."
+            )
+            .starts_with(MERGE_HEAD_CHANGED)
+        );
+        // 422/405 with that phrase is not the pin mismatch GitHub documents (409 only).
+        assert!(
+            !merge_failure_message(405, "Head branch was modified").contains(MERGE_HEAD_CHANGED)
+        );
+    }
+}
+
+#[cfg(test)]
+mod settled_threads_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn truncated_pr(updated_at: &str) -> Vec<BranchPrStatus> {
+        vec![
+            parse_pr_node(&serde_json::json!({
+                "number": 7, "headRefName": "feat/x", "state": "OPEN", "updatedAt": updated_at,
+                "reviewThreads": {"pageInfo": {"hasNextPage": true}, "nodes": []}
+            }))
+            .unwrap(),
+        ]
+    }
+
+    async fn poll(
+        cache: &dashmap::DashMap<String, crate::state::SettledReviewThreads>,
+        walks: &AtomicUsize,
+        updated_at: &str,
+    ) -> BranchPrStatus {
+        let mut statuses = truncated_pr(updated_at);
+        settle_truncated_threads(cache, "o", "r", &mut statuses, |_| async {
+            walks.fetch_add(1, Ordering::SeqCst);
+            Ok((ReviewThreadCounts { bot: 0, human: 3 }, true))
+        })
+        .await;
+        statuses.remove(0)
+    }
+
+    /// Catches: the full thread walk repeating on every poll of an idle PR (up to 10 GraphQL
+    /// calls per poll), and a changed `updatedAt` being served from the stale cache entry.
+    #[tokio::test]
+    async fn unchanged_pr_is_walked_once_and_a_changed_one_again() {
+        let cache = dashmap::DashMap::new();
+        let walks = AtomicUsize::new(0);
+        let first = poll(&cache, &walks, "2026-01-01T00:00:00Z").await;
+        let second = poll(&cache, &walks, "2026-01-01T00:00:00Z").await;
+        assert_eq!(walks.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            (
+                second.unresolved_threads,
+                second.unresolved_threads_truncated
+            ),
+            (3, false)
+        );
+        assert_eq!(first.unresolved_threads, second.unresolved_threads);
+        poll(&cache, &walks, "2026-01-02T00:00:00Z").await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2);
+    }
+}
+
+#[cfg(test)]
+mod settled_threads_critic4_tests {
+    use super::*;
+    use crate::state::SettledReviewThreads;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    type Cache = dashmap::DashMap<String, SettledReviewThreads>;
+
+    fn truncated(number: u32, updated_at: &str, head: &str, first_page: u32) -> BranchPrStatus {
+        let nodes: Vec<_> = (0..first_page)
+            .map(|_| serde_json::json!({"isResolved": false}))
+            .collect();
+        parse_pr_node(&serde_json::json!({
+            "number": number, "headRefName": format!("feat/{number}"), "state": "OPEN",
+            "updatedAt": updated_at, "headRefOid": head,
+            "reviewThreads": {"pageInfo": {"hasNextPage": true}, "nodes": nodes}
+        }))
+        .unwrap()
+    }
+
+    fn walk_ok(
+        walks: &AtomicUsize,
+        human: u32,
+        complete: bool,
+    ) -> impl Fn(i64) -> std::future::Ready<Result<(ReviewThreadCounts, bool), String>> + '_ {
+        move |_| {
+            walks.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Ok((ReviewThreadCounts { bot: 0, human }, complete)))
+        }
+    }
+
+    fn walk_err(
+        walks: &AtomicUsize,
+    ) -> impl Fn(i64) -> std::future::Ready<Result<(ReviewThreadCounts, bool), String>> + '_ {
+        move |_| {
+            walks.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Err("rate limited".to_string()))
+        }
+    }
+
+    fn aged(updated_at: &str, head: &str, unresolved: u32, age_secs: u64) -> SettledReviewThreads {
+        SettledReviewThreads {
+            updated_at: updated_at.into(),
+            head_ref_oid: head.into(),
+            unresolved,
+            complete: true,
+            failed: false,
+            walked_at: Instant::now()
+                .checked_sub(std::time::Duration::from_secs(age_secs))
+                .expect("monotonic clock older than the test offset"),
+        }
+    }
+
+    /// Catches: a failed walk cached as a settled result (pinning the lower bound or a zero
+    /// forever, or reading Ready), and a failed walk re-run on every poll (up to 10 failing calls
+    /// each) instead of once per poll interval.
+    #[tokio::test]
+    async fn failed_walk_keeps_the_lower_bound_and_is_not_retried_within_a_poll_interval() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+        assert!(prs[0].unresolved_threads_truncated);
+        assert_eq!(prs[0].unresolved_threads, 2);
+
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 9, true)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 1, "retry held back");
+        assert!(prs[0].unresolved_threads_truncated, "still the lower bound");
+
+        // After the retry interval the walk runs again and settles.
+        for entry in cache.iter_mut() {
+            let mut entry = entry;
+            entry.walked_at =
+                Instant::now() - FAILED_WALK_RETRY - std::time::Duration::from_secs(1);
+        }
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 9, true)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2);
+        assert!(!prs[0].unresolved_threads_truncated);
+        assert_eq!(prs[0].unresolved_threads, 9);
+    }
+
+    /// Catches: falling back to the previous (now stale) cached count when the re-walk for a
+    /// changed `updatedAt` fails — a verdict from a PR state that no longer exists.
+    #[tokio::test]
+    async fn failed_rewalk_after_update_does_not_serve_the_stale_entry() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_ok(&walks, 0, true)).await;
+        assert_eq!(prs[0].unresolved_threads, 0);
+        assert!(!prs[0].unresolved_threads_truncated);
+
+        let mut prs = vec![truncated(7, "t2", "h1", 1)];
+        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_err(&walks)).await;
+        assert!(
+            prs[0].unresolved_threads_truncated,
+            "must not read as fully counted"
+        );
+        assert_eq!(prs[0].unresolved_threads, 1);
+    }
+
+    /// Catches: the cache keyed on `updatedAt` alone, so a force-push that leaves `updatedAt`
+    /// unchanged keeps serving the walk of the old head.
+    #[tokio::test]
+    async fn new_head_with_same_updated_at_is_walked_again() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_ok(&walks, 1, true)).await;
+        let mut prs = vec![truncated(7, "t1", "h2", 0)];
+        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_ok(&walks, 4, true)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2);
+        assert_eq!(prs[0].unresolved_threads, 4);
+    }
+
+    /// Catches: TTL ignored on a hit (an entry older than 10 min still served although nothing
+    /// moved), and expired entries of PRs that left the poll never being evicted (unbounded growth).
+    #[tokio::test]
+    async fn expired_entry_is_rewalked_and_dead_entries_are_evicted() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        cache.insert("o/r#7".into(), aged("t1", "h1", 1, 601));
+        cache.insert("o/r#99".into(), aged("t1", "h1", 1, 601));
+        cache.insert("o/r#50".into(), aged("t1", "h1", 1, 5));
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_ok(&walks, 6, true)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 1);
+        assert_eq!(prs[0].unresolved_threads, 6);
+        assert!(
+            !cache.contains_key("o/r#99"),
+            "expired entry of an absent PR must be dropped"
+        );
+        assert!(
+            cache.contains_key("o/r#50"),
+            "fresh entry of another PR must survive"
+        );
+    }
+
+    /// Catches: a cache key without the repo or the PR number, so one PR's verdict is served to
+    /// another PR (same number in a sibling repo, or a neighbour PR with identical updatedAt/head).
+    #[tokio::test]
+    async fn entries_do_not_leak_across_repos_or_pr_numbers() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_ok(&walks, 1, true)).await;
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(&cache, "o", "other", &mut prs, walk_ok(&walks, 2, true)).await;
+        assert_eq!(prs[0].unresolved_threads, 2);
+        let mut prs = vec![truncated(8, "t1", "h1", 0)];
+        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_ok(&walks, 3, true)).await;
+        assert_eq!(prs[0].unresolved_threads, 3);
+        assert_eq!(walks.load(Ordering::SeqCst), 3);
+    }
+
+    /// Catches: a PR whose first page already holds every thread paying a walk (or caching an
+    /// entry) on every poll.
+    #[tokio::test]
+    async fn untruncated_pr_is_never_walked_or_cached() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut pr = truncated(7, "t1", "h1", 3);
+        pr.unresolved_threads_truncated = false;
+        let mut prs = vec![pr];
+        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_ok(&walks, 99, true)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 0);
+        assert_eq!(prs[0].unresolved_threads, 3);
+        assert!(cache.is_empty());
+    }
+
+    /// Catches: a cache hit on a walk that ran out of pages dropping the "N+" marker, so a
+    /// 1000-thread PR reads as exactly N and, at 0, as Ready.
+    #[tokio::test]
+    async fn bounded_walk_stays_truncated_on_a_cache_hit() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        for _ in 0..2 {
+            let mut prs = vec![truncated(7, "t1", "h1", 0)];
+            settle_truncated_threads(&cache, "o", "r", &mut prs, walk_ok(&walks, 5, false)).await;
+            assert!(prs[0].unresolved_threads_truncated);
+            assert_eq!(prs[0].unresolved_threads, 5);
+        }
+        assert_eq!(walks.load(Ordering::SeqCst), 1);
+    }
+
+    /// Catches: one PR's failed walk aborting (or poisoning) the walk of the other truncated PRs
+    /// in the same repo batch.
+    #[tokio::test]
+    async fn a_failed_walk_does_not_affect_the_next_pr_in_the_batch() {
+        let cache = Cache::new();
+        let calls = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 0), truncated(8, "t1", "h1", 0)];
+        settle_truncated_threads(&cache, "o", "r", &mut prs, |n| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(if n == 7 {
+                Err("boom".to_string())
+            } else {
+                Ok((ReviewThreadCounts { bot: 1, human: 1 }, true))
+            })
+        })
+        .await;
+        assert!(prs[0].unresolved_threads_truncated);
+        assert!(!prs[1].unresolved_threads_truncated);
+        assert_eq!(prs[1].unresolved_threads, 2);
+        // The failed PR is remembered as failed (no retry within a poll interval), not as settled.
+        assert!(cache.get("o/r#7").unwrap().failed);
+        assert!(!cache.get("o/r#8").unwrap().failed);
+    }
+
+    /// Catches: a cache key without the host, so github.com's acme/api#7 serves a GHE
+    /// acme/api#7 (same owner, repo and number, different server).
+    #[tokio::test]
+    async fn same_repo_on_two_hosts_does_not_share_an_entry() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(
+            &cache,
+            "github.com/o",
+            "r",
+            &mut prs,
+            walk_ok(&walks, 1, true),
+        )
+        .await;
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(
+            &cache,
+            "ghe.corp/o",
+            "r",
+            &mut prs,
+            walk_ok(&walks, 5, true),
+        )
+        .await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2);
+        assert_eq!(prs[0].unresolved_threads, 5);
+    }
+}
+
+#[cfg(test)]
+mod settled_threads_critic5_tests {
+    use super::*;
+    use crate::state::SettledReviewThreads;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    type Cache = dashmap::DashMap<String, SettledReviewThreads>;
+    type WalkResult = std::future::Ready<Result<(ReviewThreadCounts, bool), String>>;
+
+    fn truncated(number: u32, updated_at: &str, head: &str, first_page: u32) -> BranchPrStatus {
+        let nodes: Vec<_> = (0..first_page)
+            .map(|_| serde_json::json!({"isResolved": false}))
+            .collect();
+        parse_pr_node(&serde_json::json!({
+            "number": number, "headRefName": format!("feat/{number}"), "state": "OPEN",
+            "updatedAt": updated_at, "headRefOid": head,
+            "reviewThreads": {"pageInfo": {"hasNextPage": true}, "nodes": nodes}
+        }))
+        .unwrap()
+    }
+
+    fn walk_ok(walks: &AtomicUsize, human: u32) -> impl Fn(i64) -> WalkResult + '_ {
+        move |_| {
+            walks.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Ok((ReviewThreadCounts { bot: 0, human }, true)))
+        }
+    }
+
+    fn walk_err(walks: &AtomicUsize) -> impl Fn(i64) -> WalkResult + '_ {
+        move |_| {
+            walks.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Err("rate limited".to_string()))
+        }
+    }
+
+    fn age_all(cache: &Cache, secs: u64) {
+        for mut entry in cache.iter_mut() {
+            entry.walked_at = Instant::now() - std::time::Duration::from_secs(secs);
+        }
+    }
+
+    /// Catches: a failed-walk entry that suppresses the walk for a new push or a new `updatedAt`
+    /// (negative cache not keyed on the PR version), pinning the stale lower bound for 60 s.
+    #[tokio::test]
+    async fn failed_entry_does_not_block_a_walk_for_a_new_head_or_updated_at() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+
+        let mut prs = vec![truncated(7, "t1", "h2", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 4)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2, "new head walks at once");
+        assert_eq!(prs[0].unresolved_threads, 4);
+
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+        let mut prs = vec![truncated(7, "t2", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 0)).await;
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            2,
+            "new updatedAt walks at once"
+        );
+        assert!(!prs[0].unresolved_threads_truncated);
+    }
+
+    /// Catches: a successful retry leaving `failed` set (or the old entry in place), so a settled
+    /// PR is re-walked on every poll after 60 s, or the entry keeps a stale count.
+    #[tokio::test]
+    async fn successful_retry_replaces_the_failed_entry_and_is_then_reused() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+        age_all(&cache, 61);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 6)).await;
+        assert!(!cache.get("h/o/r#7").unwrap().failed);
+
+        age_all(&cache, 120);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 99)).await;
+        assert_eq!(
+            walks.load(Ordering::SeqCst),
+            2,
+            "settled entry reused after 120 s"
+        );
+        assert_eq!(prs[0].unresolved_threads, 6);
+        assert!(!prs[0].unresolved_threads_truncated);
+    }
+
+    /// Catches: a held-back failed PR losing its "N+" marker (reading as exactly N, or Ready at
+    /// 0) while the retry is suppressed.
+    #[tokio::test]
+    async fn pr_held_back_by_a_failed_walk_stays_truncated_and_never_ready() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+        for _ in 0..3 {
+            let mut prs = vec![truncated(7, "t1", "h1", 0)];
+            settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 0)).await;
+            assert!(prs[0].unresolved_threads_truncated);
+        }
+        assert_eq!(walks.load(Ordering::SeqCst), 1);
+    }
+
+    /// Catches: a failed entry that outlives `SETTLED_THREADS_TTL` or is never purged, so a PR
+    /// whose retry keeps failing is never walked again once the entry is old.
+    #[tokio::test]
+    async fn failed_entry_older_than_the_ttl_is_purged_and_walked_again() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+        age_all(&cache, SETTLED_THREADS_TTL.as_secs() + 1);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 3)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2);
+        assert_eq!(prs[0].unresolved_threads, 3);
     }
 }

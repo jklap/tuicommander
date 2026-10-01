@@ -143,6 +143,12 @@ function createNotificationsStore() {
 			saveConfig(state.config);
 		},
 
+		/** OS notifications for PR transitions (ready, CI failed, changes requested, merged). */
+		setPrNativeNotifications(enabled: boolean): void {
+			setState("config", "pr_native_notifications", enabled);
+			saveConfig(state.config);
+		},
+
 		/** Enable/disable a specific sound */
 		setSoundEnabled(sound: NotificationSound, enabled: boolean): void {
 			setState("config", "sounds", sound, enabled);

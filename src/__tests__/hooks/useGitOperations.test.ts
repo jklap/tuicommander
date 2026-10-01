@@ -1304,6 +1304,8 @@ describe("useGitOperations", () => {
 			merge_commit_allowed: true,
 			squash_merge_allowed: true,
 			rebase_merge_allowed: true,
+			unresolved_threads: 0,
+			unresolved_threads_truncated: false,
 		};
 
 		beforeEach(() => {
@@ -1323,7 +1325,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash");
+			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234");
 			expect(mockRepo.mergeAndArchiveWorktree).not.toHaveBeenCalled();
 			expect(mockRepo.finalizeMergedWorktree).toHaveBeenCalledWith("/repo", "feature/x", "archive");
 		});
@@ -1380,7 +1382,7 @@ describe("useGitOperations", () => {
 
 			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash");
+			expect(mockRepo.mergePrViaGithub).toHaveBeenCalledWith("/repo", 99, "squash", "abc1234");
 		});
 
 		it("re-throws 405 error instead of silently falling back to local merge", async () => {
@@ -1390,6 +1392,16 @@ describe("useGitOperations", () => {
 			await expect(gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive")).rejects.toThrow("405");
 
 			expect(mockRepo.mergeAndArchiveWorktree).not.toHaveBeenCalled();
+		});
+
+		it("does not fall back to a local merge when GitHub says the PR head changed", async () => {
+			// A local merge would include the unreviewed commits the pin refused.
+			mockRepo.mergePrViaGithub.mockRejectedValueOnce(new Error("PR head changed: refresh and review"));
+
+			await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
+
+			expect(mockRepo.mergeAndArchiveWorktree).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("PR head changed"));
 		});
 	});
 

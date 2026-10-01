@@ -1066,10 +1066,10 @@ Removes an orphan worktree by filesystem path. The worktree path is validated ag
 POST /repo/merge-pr
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42, "mergeMethod": "squash" }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "mergeMethod": "squash", "expectedHeadSha": "<head sha the caller reviewed>" }
 ```
 
-Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or `"rebase"`. Returns `{"sha": "..."}` on success.
+Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or `"rebase"`. `expectedHeadSha` is required and is sent to GitHub as `sha`: if the PR head moved since the caller saw it, GitHub answers 409 and the route returns an error starting with `PR head changed`; the caller must refresh and review, never retry with the new head. Returns `{"sha": "..."}` on success.
 
 ### Approve PR
 
@@ -1082,6 +1082,28 @@ Content-Type: application/json
 
 Submits an approving review on a PR via the GitHub API.
 
+### Update PR Branch
+
+```
+POST /repo/update-pr-branch
+Content-Type: application/json
+
+{ "repoPath": "/path/to/repo", "prNumber": 42, "expectedHeadSha": "<head sha the caller saw>" }
+```
+
+Merges the base branch into the PR branch (GitHub update-branch, 202 accepted; the merge commit lands asynchronously). `expectedHeadSha` is required: if the PR head moved, the route returns an error starting with `PR head changed`. Returns `{"ok": true}`.
+
+### Close PR
+
+```
+POST /repo/close-pr
+Content-Type: application/json
+
+{ "repoPath": "/path/to/repo", "prNumber": 42 }
+```
+
+Closes the PR without merging. Returns `{"ok": true}`.
+
 ### CI Checks
 
 ```
@@ -1089,6 +1111,14 @@ GET /repo/ci?path=/path/to/repo
 ```
 
 Returns detailed CI check list.
+
+### Unresolved Review Threads
+
+```
+GET /repo/pr-review-threads?path=/path/to/repo&pr_number=42
+```
+
+Returns `{"bot": N, "human": M}`: unresolved review threads of one PR (first 50), split by the author of the first comment. One GraphQL point per call.
 
 ### PR Diff
 

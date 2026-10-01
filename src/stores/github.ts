@@ -1,5 +1,6 @@
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke, listen } from "../invoke";
+import { notifyPrTransition } from "../services/prNativeNotifications";
 import type { BranchPrStatus, CheckDetail, CheckSummary, GitHubIssue, GitHubStatus } from "../types";
 import { appLogger } from "./appLogger";
 import { isNotificationType, prNotificationsStore } from "./prNotifications";
@@ -294,6 +295,19 @@ function createGitHubStore() {
 			title: t.title,
 			type: t.type,
 		});
+
+		// Transitions are emitted before `github-pr-update`, so the store can still hold the branch's
+		// previous PR: take only the repo base from its URL and address the transitioning PR number.
+		const pr = getPrStatus(t.repo_path, t.branch);
+		if (pr?.url) {
+			notifyPrTransition({
+				repoName: repositoriesStore.get(t.repo_path)?.displayName ?? t.repo_path,
+				prNumber: t.pr_number,
+				title: t.title,
+				type: t.type,
+				url: pr.url.replace(/\/pull\/\d+$/, `/pull/${t.pr_number}`),
+			});
+		}
 
 		if ((t.type === "merged" || t.type === "closed") && prTerminalCallback) {
 			prTerminalCallback(t.repo_path, t.branch, t.pr_number, t.type);
