@@ -1032,3 +1032,364 @@ mod tests {
         );
     }
 }
+
+/// Adversarial cases from the critic of 1357-7d37 (round 1).
+#[cfg(test)]
+mod critic_round1 {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    const VOICE: &str = "it-IT-IsabellaNeural";
+
+    /// What a fake connection does on each `recv`; once the script is empty
+    /// it behaves like a mute service (a read timeout every 10 ms).
+    struct Scripted {
+        frames: VecDeque<Result<Frame>>,
+        sent: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Socket for Scripted {
+        fn send(&mut self, text: String) -> Result<()> {
+            self.sent.lock().unwrap().push(text);
+            Ok(())
+        }
+        fn recv(&mut self) -> Result<Frame> {
+            match self.frames.pop_front() {
+                Some(frame) => frame,
+                None => {
+                    std::thread::sleep(Duration::from_millis(10));
+                    Ok(Frame::Idle)
+                }
+            }
+        }
+    }
+
+    /// A dial whose n-th connection plays `script(n)`; counts the dials.
+    fn dial_with(
+        script: impl Fn(usize) -> Vec<Result<Frame>> + Send + Sync + 'static,
+    ) -> (EdgeSpeech, Arc<AtomicUsize>, Arc<Mutex<Vec<String>>>) {
+        let dials = Arc::new(AtomicUsize::new(0));
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let (d, s) = (Arc::clone(&dials), Arc::clone(&sent));
+        let speech = EdgeSpeech::with_dial(Box::new(move || {
+            let n = d.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(Scripted {
+                frames: script(n).into(),
+                sent: Arc::clone(&s),
+            }))
+        }));
+        (speech, dials, sent)
+    }
+
+    fn audio_frame(body: &[u8]) -> Result<Frame> {
+        let headers = b"X-RequestId:abc\r\nContent-Type:audio/mpeg\r\nX-StreamId:1\r\nPath:audio\r\n";
+        let mut frame = (headers.len() as u16).to_be_bytes().to_vec();
+        frame.extend_from_slice(headers);
+        frame.extend_from_slice(body);
+        Ok(Frame::Binary(frame))
+    }
+
+    fn turn_end() -> Result<Frame> {
+        Ok(Frame::Text(
+            "X-RequestId:abc\r\nPath:turn.end\r\n\r\n{}".to_string(),
+        ))
+    }
+
+    fn unbase64(text: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        let (mut acc, mut bits) = (0u32, 0);
+        for c in text.bytes() {
+            let v = match c {
+                b'A'..=b'Z' => c - b'A',
+                b'a'..=b'z' => c - b'a' + 26,
+                b'0'..=b'9' => c - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                _ => continue,
+            };
+            acc = (acc << 6) | u32::from(v);
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+            }
+        }
+        out
+    }
+
+    /// The MP3 of the recorded stream, parsed here without the code under test.
+    fn recorded_mp3() -> Vec<u8> {
+        let doc: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/edge_stream.json")).unwrap();
+        let mut mp3 = Vec::new();
+        for frame in doc["frames"].as_array().unwrap() {
+            if frame["kind"] != "binary" {
+                continue;
+            }
+            let bytes = unbase64(frame["b64"].as_str().unwrap());
+            let header = usize::from(u16::from_be_bytes([bytes[0], bytes[1]]));
+            if String::from_utf8_lossy(&bytes[2..2 + header]).contains("Path:audio") {
+                mp3.extend_from_slice(&bytes[2 + header..]);
+            }
+        }
+        assert!(mp3.len() > 1000, "fixture lost its audio");
+        mp3
+    }
+
+    fn synth(speech: &EdgeSpeech, text: &str) -> Result<SpeechAudio> {
+        speech.synthesize(text, VOICE, &SpeechCancel::new())
+    }
+
+    #[test]
+    fn a_cut_piece_still_fits_the_service_limit_once_escaped() {
+        // Catches: split_text counting raw bytes while the service limits the
+        // escaped SSML text (~4 KB): apostrophes become 6 bytes, `&` 5.
+        let text = "Dell'uomo & l'altro ".repeat(400);
+        for piece in split_text(&text) {
+            let escaped = escape_xml(piece).len();
+            assert!(escaped <= 4096, "a piece of {escaped} escaped bytes");
+        }
+    }
+
+    #[test]
+    fn xml_noncharacters_never_reach_the_ssml() {
+        // Catches: is_control() as the XML filter; U+FFFE/U+FFFF and lone
+        // control-range code points are not legal XML 1.0 characters.
+        let escaped = escape_xml("a\u{FFFE}b\u{FFFF}c\u{0}d\u{B}e");
+        assert_eq!(escaped, "abcde");
+    }
+
+    #[test]
+    fn markup_in_the_text_cannot_open_a_second_voice() {
+        // Catches: unescaped text closing prosody/voice and selecting another voice.
+        let ssml = ssml_message(VOICE, "</prosody></voice><voice name='en-US-AriaNeural'>hi & bye");
+        assert_eq!(ssml.matches("<voice ").count(), 1, "{ssml}");
+        assert!(ssml.contains("&lt;/prosody&gt;"), "{ssml}");
+        assert!(ssml.contains("hi &amp; bye"), "{ssml}");
+    }
+
+    #[test]
+    fn a_voice_that_could_close_the_attribute_is_refused_before_dialling() {
+        // Catches: a configured voice id reaching `<voice name='…'>` verbatim.
+        let (speech, dials, _) = dial_with(|_| vec![audio_frame(b"x"), turn_end()]);
+        for voice in [
+            "it-IT-A' x='y",
+            "it-IT-A\"",
+            "",
+            "it IT",
+            "it-IT-A\n",
+            "it-IT-Ünï",
+            &"a".repeat(65),
+        ] {
+            let result = speech.synthesize("ciao", voice, &SpeechCancel::new());
+            assert!(
+                matches!(result, Err(SpeechError::UnknownVoice(_))),
+                "{voice:?} -> {result:?}"
+            );
+        }
+        assert_eq!(dials.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_mute_service_is_abandoned_within_a_poll_of_the_cancel() {
+        // Catches: the loop blocking on the socket without looking at the flag.
+        let (speech, _, _) = dial_with(|_| vec![]);
+        let cancel = SpeechCancel::new();
+        let remote = cancel.clone();
+        let start = Instant::now();
+        let trigger = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            remote.cancel();
+        });
+        let result = speech.synthesize("ciao a tutti", VOICE, &cancel);
+        trigger.join().unwrap();
+        assert!(matches!(result, Err(SpeechError::Cancelled)), "{result:?}");
+        assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
+    }
+
+    #[test]
+    fn a_service_that_goes_quiet_after_the_request_fails_at_the_deadline() {
+        // Catches: a half-open connection hanging forever instead of a typed error.
+        let (speech, _, _) = dial_with(|_| vec![audio_frame(b"\xff\xfb")]);
+        let speech = speech.with_timeout(Duration::from_millis(200));
+        let start = Instant::now();
+        let result = synth(&speech, "ciao");
+        assert!(
+            matches!(&result, Err(SpeechError::Failed(m)) if m.contains("in time")),
+            "{result:?}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_cancel_raised_while_dialling_sends_nothing() {
+        // Catches: the request being written to a connection nobody wants.
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let s = Arc::clone(&sent);
+        let cancel = SpeechCancel::new();
+        let remote = cancel.clone();
+        let speech = EdgeSpeech::with_dial(Box::new(move || {
+            remote.cancel();
+            std::thread::sleep(Duration::from_millis(50));
+            Ok(Box::new(Scripted {
+                frames: VecDeque::new(),
+                sent: Arc::clone(&s),
+            }))
+        }));
+        let result = speech.synthesize("ciao", VOICE, &cancel);
+        assert!(matches!(result, Err(SpeechError::Cancelled)), "{result:?}");
+        assert!(sent.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_offline_dial_error_reaches_the_caller_unchanged() {
+        // Catches: the network error being swallowed into silence or a generic message.
+        let speech = EdgeSpeech::with_dial(Box::new(|| {
+            Err(SpeechError::Failed("cannot reach it needs an internet connection".into()))
+        }));
+        let result = synth(&speech, "ciao");
+        assert!(
+            matches!(&result, Err(SpeechError::Failed(m)) if m.contains("internet")),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn audio_past_what_the_text_justifies_is_a_runaway_not_a_hang() {
+        // Catches: the byte budget not being enforced across frames.
+        let over = (budget_seconds("hi") * BYTES_PER_SECOND) as usize + 1;
+        let (speech, _, _) = dial_with(move |_| {
+            (0..4).map(|_| audio_frame(&vec![0u8; over / 3 + 1])).collect()
+        });
+        let result = synth(&speech, "hi");
+        assert!(matches!(result, Err(SpeechError::Runaway { .. })), "{result:?}");
+    }
+
+    #[test]
+    fn malformed_binary_frames_are_a_typed_failure() {
+        // Catches: slicing past the end of a short or lying frame (panic).
+        for frame in [vec![0u8], vec![0, 50, b'x'], vec![0xFF, 0xFF], vec![]] {
+            let bytes = frame.clone();
+            let (speech, _, _) = dial_with(move |_| vec![Ok(Frame::Binary(bytes.clone()))]);
+            let result = synth(&speech, "ciao");
+            assert!(
+                matches!(&result, Err(SpeechError::Failed(m)) if m.contains("malformed")),
+                "{frame:?} -> {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_service_closing_mid_reply_is_a_typed_failure() {
+        // Catches: Closed read as a clean end, returning half a sentence.
+        let (speech, _, _) = dial_with(|_| vec![audio_frame(&recorded_mp3()[..400]), Ok(Frame::Closed)]);
+        let result = synth(&speech, "ciao a tutti quanti");
+        assert!(
+            matches!(&result, Err(SpeechError::Failed(m)) if m.contains("closed")),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn a_reply_with_no_audio_is_an_error_not_silence() {
+        // Catches: turn.end with no audio frames returning Ok(empty) and playing nothing.
+        let (speech, _, _) = dial_with(|_| vec![turn_end()]);
+        assert!(matches!(synth(&speech, "ciao"), Err(SpeechError::Failed(_))));
+    }
+
+    #[test]
+    fn text_with_nothing_to_say_does_not_dial() {
+        // Catches: a network round trip (and a hang offline) for an empty reply.
+        let (speech, dials, _) = dial_with(|_| vec![turn_end()]);
+        assert!(synth(&speech, "   \n ").is_err());
+        assert_eq!(dials.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_stream_cut_mid_frame_never_yields_empty_audio() {
+        // Catches: a truncated MP3 decoding to Ok with zero samples (silence).
+        let mp3 = recorded_mp3();
+        let full = {
+            let m = mp3.clone();
+            let (speech, _, _) = dial_with(move |_| vec![audio_frame(&m), turn_end()]);
+            synth(&speech, "Ciao Boss, il pannello è su main.").expect("the recording decodes")
+        };
+        assert_eq!(full.sample_rate, 24_000);
+        for keep in [mp3.len() / 2 + 1, mp3.len() - 3] {
+            let cut = mp3[..keep].to_vec();
+            let (speech, _, _) = dial_with(move |_| vec![audio_frame(&cut), turn_end()]);
+            match synth(&speech, "Ciao Boss, il pannello è su main.") {
+                Ok(audio) => assert!(
+                    !audio.samples.is_empty() && audio.samples.len() < full.samples.len(),
+                    "{} of {} samples",
+                    audio.samples.len(),
+                    full.samples.len()
+                ),
+                Err(SpeechError::Failed(_)) => {}
+                Err(other) => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn bytes_that_are_not_mp3_are_a_typed_failure() {
+        // Catches: a proxy error page or garbage decoding to Ok or panicking.
+        let (speech, _, _) =
+            dial_with(|_| vec![audio_frame(&[0xABu8; 4000]), turn_end()]);
+        assert!(matches!(synth(&speech, "ciao"), Err(SpeechError::Failed(_))));
+    }
+
+    #[test]
+    fn two_joined_requests_decode_to_both_of_them() {
+        // Catches: the decoder stopping at the second stream's header, so a long
+        // reply is spoken only up to the first 3000 bytes of text.
+        let mp3 = recorded_mp3();
+        let one = {
+            let m = mp3.clone();
+            let (speech, _, _) = dial_with(move |_| vec![audio_frame(&m), turn_end()]);
+            synth(&speech, "ciao").unwrap().samples.len()
+        };
+        let text = "parola ".repeat(600);
+        assert_eq!(split_text(&text).len(), 2);
+        let (speech, dials, _) = dial_with(move |_| vec![audio_frame(&mp3), turn_end()]);
+        let both = synth(&speech, &text).expect("joined").samples.len();
+        assert_eq!(dials.load(Ordering::SeqCst), 2);
+        assert!(both * 100 >= one * 2 * 95, "{both} samples for 2 x {one}");
+    }
+
+    #[test]
+    fn a_failing_second_piece_stops_before_the_third() {
+        // Catches: continuing to dial after a piece failed, and returning the
+        // first pieces' audio as if the reply were whole.
+        let text = "parola ".repeat(1300);
+        assert!(split_text(&text).len() >= 3);
+        let (speech, dials, _) = dial_with(|n| match n {
+            0 => vec![audio_frame(&recorded_mp3()), turn_end()],
+            _ => vec![Ok(Frame::Closed)],
+        });
+        assert!(synth(&speech, &text).is_err());
+        assert_eq!(dials.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn every_language_the_picker_offers_has_a_default_voice() {
+        // Catches: a language selectable in settings (WHISPER_LANGUAGES: en es fr
+        // de it pt nl ja zh ko ru) with no Edge default, so its replies fail with
+        // "No default Microsoft Edge voice" on a fresh install.
+        for code in ["en", "es", "fr", "de", "it", "pt", "nl", "ja", "zh", "ko", "ru"] {
+            assert!(choose_voice(code, "").is_ok(), "{code}");
+        }
+    }
+
+    #[test]
+    fn a_stored_voice_of_another_language_falls_back_for_the_reply() {
+        // Catches: Italian voice reading English after the conversation language changed.
+        assert_eq!(
+            choose_voice("en", "it-IT-IsabellaNeural").unwrap(),
+            "en-US-AriaNeural"
+        );
+        assert_eq!(choose_voice("it", "it-IT-IsabellaNeural").unwrap(), "it-IT-IsabellaNeural");
+    }
+}
