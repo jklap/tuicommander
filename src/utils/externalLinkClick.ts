@@ -9,13 +9,17 @@ import { handleOpenUrl } from "./openUrl";
  * the page is served over http (dev server, browser mode), which would open the
  * app's own origin in the browser for every local link.
  *
- * Markdown links carry `data-tuic-href` and are dispatched by ContentRenderer,
+ * Anchors carrying `data-tuic-href` are dispatched by their own component
+ * (ContentRenderer for Markdown links, the AI Chat transcript for web links),
  * which also opens http(s) targets; handling them here would open them twice.
  */
 export function handleExternalLinkClick(e: MouseEvent): void {
-	const anchor = (e.target as HTMLElement).closest("a[href]");
+	// A click dispatched on the document or a text node has no `closest`.
+	if (!(e.target instanceof Element)) return;
+	const anchor = e.target.closest("a[href]");
 	if (!anchor || anchor.hasAttribute("data-tuic-href")) return;
-	const href = anchor.getAttribute("href");
+	// `anchor.href` used to trim this; the attribute keeps surrounding whitespace.
+	const href = anchor.getAttribute("href")?.trim();
 	if (href && /^https?:\/\//i.test(href)) {
 		e.preventDefault();
 		handleOpenUrl(href);
