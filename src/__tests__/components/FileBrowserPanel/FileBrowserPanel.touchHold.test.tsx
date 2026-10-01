@@ -30,6 +30,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+	vi.unstubAllGlobals();
 	document.body.innerHTML = "";
 	await new Promise((resolve) => setTimeout(resolve, 50));
 });
@@ -62,6 +63,7 @@ describe("FileBrowserPanel touch long press (#1329-a31a, round 2 critic)", () =>
 	// touch) lifting the row and dropping it on the panel root, which is a folder drop
 	// target — moving a nested file out of its folder with no drag at all.
 	it.each(["touch", "pen"])("%s: a hold released in place does not move the file", async (pointerType) => {
+		vi.stubGlobal("matchMedia", () => ({ matches: false }));
 		listing = [entry("a.txt", false, "docs/a.txt")];
 		const row = await mount();
 		const original = document.elementFromPoint;
@@ -69,7 +71,8 @@ describe("FileBrowserPanel touch long press (#1329-a31a, round 2 critic)", () =>
 		try {
 			row("a.txt").dispatchEvent(pointer("pointerdown", pointerType, 1, 50, 50));
 			await sleep(450);
-			document.dispatchEvent(pointer("pointerup", pointerType, 1, 50, 50));
+			document.dispatchEvent(pointer("pointermove", pointerType, 1, 51, 50)); // 1 px jitter
+			document.dispatchEvent(pointer("pointerup", pointerType, 1, 51, 50));
 			await sleep(20);
 		} finally {
 			document.elementFromPoint = original;
