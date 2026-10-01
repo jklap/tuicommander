@@ -1801,6 +1801,102 @@ describe("initApp", () => {
 		});
 	});
 
+	// Regression coverage for the tab-name/accent-color ping-pong: both
+	// listeners must apply the event via terminalsStore's non-echoing
+	// applyBackendRename/applyBackendAccentColor, never a plain update() call
+	// that would re-trigger set_session_name/set_session_accent_color and
+	// bounce back to the backend. See terminals.renameEchoGuard.test.ts for
+	// the store-level half of this same invariant.
+	describe("session-renamed event", () => {
+		function captureSessionRenamed() {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { session_id: string; name: string; is_custom: boolean } }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "session-renamed") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return () => cb;
+		}
+
+		it("applies a backend rename without echoing back to the backend", async () => {
+			const getCb = captureSessionRenamed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const id = terminalsStore.add(makeTerminal({ sessionId: "sess-rename" }));
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-rename", name: "claude · resume", is_custom: false } });
+
+			expect(terminalsStore.get(id)?.name).toBe("claude · resume");
+			expect(terminalsStore.get(id)?.nameIsCustom).toBe(false);
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_name", expect.anything());
+		});
+
+		it("is a no-op for a session with no bound terminal", async () => {
+			const getCb = captureSessionRenamed();
+			const deps = createMockDeps();
+			await initApp(deps);
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-unknown", name: "hello", is_custom: false } });
+
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_name", expect.anything());
+		});
+	});
+
+	describe("session-accent-color-changed event", () => {
+		function captureAccentColorChanged() {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { session_id: string; color?: string | null } }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "session-accent-color-changed") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return () => cb;
+		}
+
+		it("applies a real accent color without echoing back to the backend", async () => {
+			const getCb = captureAccentColorChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const id = terminalsStore.add(makeTerminal({ sessionId: "sess-accent" }));
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-accent", color: "blue" } });
+
+			expect(terminalsStore.get(id)?.accentColor).toBe("blue");
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_accent_color", expect.anything());
+		});
+
+		it("a null color clears it", async () => {
+			const getCb = captureAccentColorChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const id = terminalsStore.add(makeTerminal({ sessionId: "sess-accent-clear" }));
+			terminalsStore.update(id, { accentColor: "blue" }, { echo: false });
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-accent-clear", color: null } });
+
+			expect(terminalsStore.get(id)?.accentColor).toBeNull();
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_accent_color", expect.anything());
+		});
+
+		it("is a no-op for a session with no bound terminal", async () => {
+			const getCb = captureAccentColorChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+			mockRpc.mockClear();
+
+			getCb()!({ payload: { session_id: "sess-unknown", color: "blue" } });
+
+			expect(mockRpc).not.toHaveBeenCalledWith("set_session_accent_color", expect.anything());
+		});
+	});
+
 	it("refreshes all branch stats", async () => {
 		const deps = createMockDeps();
 		await initApp(deps);
@@ -3320,6 +3416,7 @@ describe("initApp", () => {
 			agent_type?: string | null;
 			display_name?: string | null;
 			parent_session?: string | null;
+			is_remote?: boolean | null;
 		};
 		type SessionClosedPayload = { session_id: string; reason: string; agent_type?: string | null };
 
@@ -3395,6 +3492,56 @@ describe("initApp", () => {
 			expect(byPty("plain")?.parentSession).toBeNull();
 		});
 
+		/**
+		 * Regression test for the remote-tab exit race fix: this listener is now
+		 * the sole owner of a remote agent tab's teardown (Terminal.tsx's own
+		 * pty-exit handler explicitly skips its mutations for a remote tab), so it
+		 * must clear agentType itself — otherwise a remote agent tab's agentType
+		 * stays stuck forever once sessionId goes null and polling has nothing
+		 * left to detect against.
+		 */
+		it("clears agentType/resume-banner fields on session-closed for a remote agent tab", async () => {
+			const { getCreated, getClosed } = captureCreatedAndClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCreated()!({ payload: { session_id: "agent-sess-2", cwd: null, agent_type: "claude" } });
+			const termId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "agent-sess-2")!;
+			terminalsStore.update(termId, { pendingResumeCommand: "claude --continue" });
+			terminalsStore.setAwaitingInput(termId, "question");
+
+			getClosed()!({ payload: { session_id: "agent-sess-2", reason: "process_exit", agent_type: "claude" } });
+
+			const terminal = terminalsStore.get(termId);
+			expect(terminal?.agentType).toBeNull();
+			expect(terminal?.pendingResumeCommand).toBeNull();
+			expect(terminal?.sessionId).toBeNull();
+			expect(terminal?.shellState).toBe("exited");
+			expect(terminal?.awaitingInput).toBeNull();
+		});
+
+		/**
+		 * `clearAwaitingInput` previously ran only inside the (pre-existing)
+		 * `hadAgent` conditional spread — a remote PLAIN-SHELL tab (no agent) had
+		 * no path that cleared it at all. This is the branch commit 3's
+		 * unconditional `terminalsStore.clearAwaitingInput(termId)` call actually
+		 * fixes; the agent-tab test above doesn't exercise it since that branch
+		 * was already covered by the old conditional.
+		 */
+		it("clears awaitingInput on session-closed for a remote plain-shell tab (no agent)", async () => {
+			const { getCreated, getClosed } = captureCreatedAndClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCreated()!({ payload: { session_id: "shell-sess-await", cwd: null, agent_type: null } });
+			const termId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "shell-sess-await")!;
+			terminalsStore.setAwaitingInput(termId, "question");
+
+			getClosed()!({ payload: { session_id: "shell-sess-await", reason: "process_exit", agent_type: null } });
+
+			expect(terminalsStore.get(termId)?.awaitingInput).toBeNull();
+		});
+
 		it("auto-removes a remote tab after REMOTE_TAB_AUTOCLOSE_MS when agent_type is absent", async () => {
 			const { getCreated, getClosed } = captureCreatedAndClosed();
 			const deps = createMockDeps();
@@ -3413,6 +3560,37 @@ describe("initApp", () => {
 			// Advance to just past 30s — tab must be gone
 			vi.advanceTimersByTime(20_000);
 			expect(terminalsStore.get(termId)).toBeUndefined();
+		});
+
+		/**
+		 * Coverage gap named in the origin-tracking plan: a non-remote (locally/
+		 * user-created) tab must never enter the auto-close countdown — it's
+		 * managed entirely by Terminal.tsx's own pty-exit handler instead. There
+		 * is no `session-created` payload today that can produce a non-remote
+		 * `isExternallyCreated` terminal, so this seeds one directly in the store.
+		 */
+		it("does nothing for a non-remote tab (no countdown, tab is not removed)", async () => {
+			const { getClosed } = captureCreatedAndClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const termId = terminalsStore.add({
+				sessionId: "local-sess",
+				fontSize: 14,
+				name: "Local Tab",
+				cwd: "/repo",
+				awaitingInput: null,
+				isRemote: false,
+				isExternallyCreated: false,
+			});
+
+			getClosed()!({ payload: { session_id: "local-sess", reason: "process_exit", agent_type: null } });
+
+			// No countdown name change, and the tab survives indefinitely.
+			expect(terminalsStore.get(termId)?.name).toBe("Local Tab");
+			vi.advanceTimersByTime(60_000);
+			expect(terminalsStore.get(termId)).toBeDefined();
+			expect(terminalsStore.get(termId)?.name).toBe("Local Tab");
 		});
 	});
 
@@ -4249,6 +4427,7 @@ describe("initApp", () => {
 			cwd: string | null;
 			agent_type?: string | null;
 			display_name?: string | null;
+			is_remote?: boolean | null;
 		};
 
 		function captureSessionCreated() {
@@ -4345,6 +4524,73 @@ describe("initApp", () => {
 			expect(setActiveSpy).not.toHaveBeenCalled();
 			expect(terminalsStore.state.activeId).toBeNull();
 			setActiveSpy.mockRestore();
+		});
+
+		/** Defaults to isExternallyCreated: true when the payload omits is_remote (backward compat with an older backend). */
+		it("defaults isExternallyCreated to true when the payload omits is_remote", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({ payload: { session_id: "hardcoded-remote", cwd: null, agent_type: null } });
+
+			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "hardcoded-remote");
+			expect(terminalsStore.get(newId!)?.isExternallyCreated).toBe(true);
+		});
+
+		it("honors an explicit is_remote: false from the payload (user-initiated session)", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({
+				payload: { session_id: "user-initiated-sess", cwd: null, agent_type: null, is_remote: false },
+			});
+
+			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "user-initiated-sess");
+			expect(terminalsStore.get(newId!)?.isExternallyCreated).toBe(false);
+		});
+
+		/**
+		 * Fallback-name branches (`useAppInit.ts`'s session-created listener):
+		 * with no `display_name`, the name is `PTY: Session N` only when the
+		 * session is both remote and has no agent_type; otherwise `Session N`.
+		 */
+		it("falls back to 'PTY: Session N' when remote with no display_name and no agent_type", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({ payload: { session_id: "no-name-no-agent", cwd: null, agent_type: null } });
+
+			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "no-name-no-agent");
+			expect(terminalsStore.get(newId!)?.name).toMatch(/^PTY: Session \d+$/);
+		});
+
+		it("falls back to 'Session N' (no PTY prefix) when there is no display_name but an agent_type is set", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({ payload: { session_id: "no-name-with-agent", cwd: null, agent_type: "claude" } });
+
+			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "no-name-with-agent");
+			expect(terminalsStore.get(newId!)?.name).toMatch(/^Session \d+$/);
+		});
+
+		it("falls back to 'Session N' (no PTY prefix) for a non-remote (user-initiated) session with no agent_type", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({
+				payload: { session_id: "user-initiated-no-agent", cwd: null, agent_type: null, is_remote: false },
+			});
+
+			const newId = terminalsStore
+				.getIds()
+				.find((id) => terminalsStore.get(id)?.sessionId === "user-initiated-no-agent");
+			expect(terminalsStore.get(newId!)?.name).toMatch(/^Session \d+$/);
 		});
 
 		it("pins a spawned agent display name against intent and OSC titles", async () => {
