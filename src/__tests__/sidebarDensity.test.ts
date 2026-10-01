@@ -1,6 +1,13 @@
 import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { countSidebarRows, createCoarsePointer, ROOMY_MAX_ROWS, sidebarDensity } from "../utils/sidebarDensity";
+import {
+	countSidebarRows,
+	createCoarsePointer,
+	isSidebarDensityMode,
+	nextSidebarDensityMode,
+	ROOMY_MAX_ROWS,
+	sidebarDensity,
+} from "../utils/sidebarDensity";
 
 // Each case names the plausible bug it catches (#1334-b659).
 
@@ -77,5 +84,30 @@ describe("createCoarsePointer", () => {
 			expect(createCoarsePointer()()).toBe(false);
 			dispose();
 		});
+	});
+});
+
+describe("density mode", () => {
+	// Catches: a forced mode still being overridden by the pointer (touch on a tablet) or the row budget.
+	it("a forced mode wins over the pointer and the row count", () => {
+		expect(sidebarDensity(1, true, "compact")).toBe("compact");
+		expect(sidebarDensity(500, false, "touch")).toBe("touch");
+		expect(sidebarDensity(500, false, "comfortable")).toBe("comfortable");
+		expect(sidebarDensity(1, true, "comfortable")).toBe("comfortable");
+	});
+
+	// Catches: a mode never reachable by clicking, or the cycle not closing back on auto.
+	it("the toggle visits every mode and returns to auto", () => {
+		expect(nextSidebarDensityMode("auto")).toBe("compact");
+		expect(nextSidebarDensityMode("compact")).toBe("comfortable");
+		expect(nextSidebarDensityMode("comfortable")).toBe("touch");
+		expect(nextSidebarDensityMode("touch")).toBe("auto");
+	});
+
+	// Catches: a hand-edited or newer prefs file with an unknown mode putting the sidebar in an undefined state.
+	it("rejects values that are not a mode", () => {
+		expect(isSidebarDensityMode("touch")).toBe(true);
+		expect(isSidebarDensityMode("roomy")).toBe(false);
+		expect(isSidebarDensityMode(undefined)).toBe(false);
 	});
 });

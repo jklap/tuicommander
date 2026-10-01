@@ -20,6 +20,7 @@ import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
 import { getRepoTextColor } from "../../utils/repoColor";
+import type { SidebarDensityMode } from "../../utils/sidebarDensity";
 import { IdeLauncher } from "../IdeLauncher";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { SmartPromptsDropdown } from "../SmartPromptsDropdown/SmartPromptsDropdown";
@@ -45,6 +46,21 @@ function relativeAge(timestamp: number): string {
  * fits comfortably at the 200px minimum sidebar width.
  */
 const FULL_APP_NAME_MIN_SIDEBAR_PX = 254;
+
+const DENSITY_TITLES: Record<SidebarDensityMode, () => string> = {
+	auto: () => t("toolbar.densityAuto", "Sidebar density: auto (by list length and pointer) — click for compact"),
+	compact: () => t("toolbar.densityCompact", "Sidebar density: compact — click for comfortable"),
+	comfortable: () => t("toolbar.densityComfortable", "Sidebar density: comfortable — click for touch"),
+	touch: () => t("toolbar.densityTouch", "Sidebar density: touch — click for auto"),
+};
+
+/** Row-spacing glyph: tighter lines for compact, fewer and heavier for touch. */
+const DENSITY_ICON_PATHS: Record<SidebarDensityMode, string> = {
+	auto: "M2 3.5h12M2 8h12M2 12.5h12",
+	compact: "M2 2.5h12M2 5.5h12M2 8.5h12M2 11.5h12M2 14.5h12",
+	comfortable: "M2 3.5h12M2 8h12M2 12.5h12",
+	touch: "M2 4.5h12M2 11.5h12",
+};
 
 const NOTIFICATION_LABELS: Record<PrNotificationType, { label: string; icon: string; cls: string }> = {
 	merged: { label: "Merged", icon: "\u2714", cls: s.notifMerged },
@@ -374,6 +390,23 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 				</svg>
 				<span class={s.leftSpacer} data-tauri-drag-region />
 				<Show when={uiStore.state.sidebarVisible}>
+					<button
+						class={s.filterToggle}
+						classList={{ [s.filterToggleActive]: uiStore.state.sidebarDensityMode !== "auto" }}
+						onClick={() => uiStore.cycleSidebarDensityMode()}
+						data-testid="sidebar-density-toggle"
+						data-mode={uiStore.state.sidebarDensityMode}
+						title={DENSITY_TITLES[uiStore.state.sidebarDensityMode]()}
+					>
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+							<path
+								d={DENSITY_ICON_PATHS[uiStore.state.sidebarDensityMode]}
+								stroke="currentColor"
+								stroke-width={uiStore.state.sidebarDensityMode === "touch" ? 1.8 : 1.3}
+								stroke-linecap="round"
+							/>
+						</svg>
+					</button>
 					<button
 						class={s.filterToggle}
 						classList={{ [s.filterToggleActive]: uiStore.state.repoFilterActiveOnly }}

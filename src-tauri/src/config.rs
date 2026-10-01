@@ -1248,6 +1248,9 @@ pub(crate) struct UIPrefsConfig {
     /// File browser listing: "flat" or "tree".
     #[serde(default = "default_file_browser_view_mode")]
     pub(crate) file_browser_view_mode: String,
+    /// Sidebar row density: "auto" (by row count and pointer), "compact", "comfortable" or "touch".
+    #[serde(default = "default_sidebar_density")]
+    pub(crate) sidebar_density: String,
     /// Appearance used by the mobile PWA; independent of the desktop terminal theme.
     #[serde(default = "default_mobile_theme")]
     pub(crate) mobile_theme: String,
@@ -1287,6 +1290,10 @@ fn default_file_browser_view_mode() -> String {
     "tree".to_string()
 }
 
+fn default_sidebar_density() -> String {
+    "auto".to_string()
+}
+
 fn default_mobile_theme() -> String {
     "commander".to_string()
 }
@@ -1306,6 +1313,7 @@ impl Default for UIPrefsConfig {
             references_panel_visible: false,
             ai_chat_panel_visible: false,
             file_browser_view_mode: default_file_browser_view_mode(),
+            sidebar_density: default_sidebar_density(),
             mobile_theme: default_mobile_theme(),
             diff_panel_width: default_panel_width(),
             markdown_panel_width: default_panel_width(),
@@ -5061,6 +5069,7 @@ mod tests {
             references_panel_visible: false,
             ai_chat_panel_visible: false,
             file_browser_view_mode: "tree".to_string(),
+            sidebar_density: "touch".to_string(),
             mobile_theme: "vscode-light".to_string(),
             diff_panel_width: 500,
             markdown_panel_width: 450,
@@ -5082,6 +5091,7 @@ mod tests {
         let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &cfg);
         assert!(!loaded.sidebar_visible);
         assert_eq!(loaded.sidebar_width, 300);
+        assert_eq!(loaded.sidebar_density, "touch");
         assert_eq!(loaded.mobile_theme, "vscode-light");
         assert_eq!(loaded.diff_panel_width, 500);
         assert_eq!(loaded.markdown_panel_width, 450);
@@ -5169,6 +5179,16 @@ mod tests {
         assert!(!loaded.ai_chat_panel_visible);
         assert_eq!(loaded.file_browser_view_mode, "tree");
         assert_eq!(UIPrefsConfig::default().file_browser_view_mode, "tree");
+    }
+
+    /// Serde drops unknown keys silently: the density choice must survive the
+    /// round trip, and a prefs file from before it existed must load as "auto".
+    #[test]
+    fn ui_prefs_keep_sidebar_density_and_default_to_auto() {
+        let saved: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_density":"compact"}"#).unwrap();
+        assert_eq!(serde_json::to_value(&saved).unwrap()["sidebar_density"], "compact");
+        let old: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
+        assert_eq!(old.sidebar_density, "auto");
     }
 
     #[test]
