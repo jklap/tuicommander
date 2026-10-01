@@ -20,6 +20,7 @@ import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
 import { getRepoTextColor } from "../../utils/repoColor";
+import type { SidebarDensityMode } from "../../utils/sidebarDensity";
 import { IdeLauncher } from "../IdeLauncher";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { SmartPromptsDropdown } from "../SmartPromptsDropdown/SmartPromptsDropdown";
@@ -45,6 +46,25 @@ function relativeAge(timestamp: number): string {
  * fits comfortably at the 200px minimum sidebar width.
  */
 const FULL_APP_NAME_MIN_SIDEBAR_PX = 254;
+
+const DENSITY_TITLES: Record<SidebarDensityMode, () => string> = {
+	auto: () => t("toolbar.densityAuto", "Sidebar layout: auto (rich for a short list or a finger) — click for compact"),
+	compact: () => t("toolbar.densityCompact", "Sidebar layout: compact — click for rich"),
+	rich: () => t("toolbar.densityRich", "Sidebar layout: rich (details on every row) — click for auto"),
+};
+
+/** Row glyph: five tight lines for compact, a title with a detail line for rich. */
+const DENSITY_LABELS: Record<SidebarDensityMode, () => string> = {
+	auto: () => t("toolbar.densityAutoShort", "A"),
+	compact: () => t("toolbar.densityCompactShort", "C"),
+	rich: () => t("toolbar.densityRichShort", "R"),
+};
+
+const DENSITY_ICON_PATHS: Record<SidebarDensityMode, string> = {
+	auto: "M2 3.5h12M2 8h12M2 12.5h12",
+	compact: "M2 2.5h12M2 5.5h12M2 8.5h12M2 11.5h12M2 14.5h12",
+	rich: "M2 3h12M2 5.5h7M2 10.5h12M2 13h7",
+};
 
 const NOTIFICATION_LABELS: Record<PrNotificationType, { label: string; icon: string; cls: string }> = {
 	merged: { label: "Merged", icon: "\u2714", cls: s.notifMerged },
@@ -374,6 +394,31 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 				</svg>
 				<span class={s.leftSpacer} data-tauri-drag-region />
 				<Show when={uiStore.state.sidebarVisible}>
+					<button
+						class={cx(s.filterToggle, s.densityToggle)}
+						classList={{
+							[s.filterToggleActive]: uiStore.state.sidebarDensityMode !== "auto",
+						}}
+						onClick={() => uiStore.cycleSidebarDensityMode()}
+						data-testid="sidebar-density-toggle"
+						data-mode={uiStore.state.sidebarDensityMode}
+						title={DENSITY_TITLES[uiStore.state.sidebarDensityMode]()}
+						data-tooltip={DENSITY_TITLES[uiStore.state.sidebarDensityMode]()}
+						data-tooltip-pos="bottom"
+					>
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+							<path
+								d={DENSITY_ICON_PATHS[uiStore.state.sidebarDensityMode]}
+								stroke="currentColor"
+								stroke-width="1.3"
+								stroke-linecap="round"
+							/>
+						</svg>
+						{/* The mode is read off the button: title and tooltip do not show on touch. */}
+						<span class={s.densityLabel} data-testid="sidebar-density-label">
+							{DENSITY_LABELS[uiStore.state.sidebarDensityMode]()}
+						</span>
+					</button>
 					<button
 						class={s.filterToggle}
 						classList={{ [s.filterToggleActive]: uiStore.state.repoFilterActiveOnly }}

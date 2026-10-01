@@ -3865,6 +3865,15 @@ fn is_opencode_frame_close_row(row: &str) -> bool {
 /// would read Ready mid-turn — exactly the false idle that lets auto-standby SIGSTOP a live
 /// session. The interrupt hint is checked first so a working screen is never downgraded.
 fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    detect_opencode_screen_activity_at(rows, None)
+}
+
+/// `columns` is the terminal width when the caller knows it; the `--mini` adapter
+/// needs it to tell a status row from tool output on a screen too narrow to paint one.
+fn detect_opencode_screen_activity_at(
+    rows: &[String],
+    columns: Option<usize>,
+) -> AgentScreenActivity {
     const STATUS_BAR_HINT: &str = "ctrl+p commands";
     const INTERRUPT_HINT: &str = "esc interrupt";
 
@@ -3872,7 +3881,7 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
         .iter()
         .rposition(|row| is_opencode_frame_close_row(row))
     else {
-        return AgentScreenActivity::Unknown;
+        return detect_opencode_mini_screen_activity(rows, columns);
     };
     if !rows[..close_idx]
         .iter()
@@ -3892,6 +3901,96 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
     }
 }
 
+/// OpenCode's `--mini` interface, which `agent_hook_launch` adds to every launch,
+/// has no composer frame. Its only fixed element is a status row at the bottom,
+/// captured live on 1.18.30 (replayed from the fixtures, and re-observed in tmux at
+/// 120, 64 and 40 columns):
+///
+/// ```text
+/// fresh:    ` BUILD                                                       ctrl+p cmd`
+/// ready:    ` BUILD                                 52.9K (26%) · ctrl+p cmd`
+/// working:  ` BUILD  ⬝⬝⬝■■■■■ esc interrupt                      ctrl+p cmd`
+/// narrow:   ` BUILD`   /   ` BUILD  ⬝⬝■■■■■■ esc interrupt`
+/// ```
+///
+/// A false Ready feeds standby/SIGSTOP and types the queue into a live turn, so Ready
+/// accepts exactly the observed shapes and nothing wider: an uppercase label followed
+/// by `ctrl+p cmd`, by `<usage> (<n>%) · ctrl+p cmd`, or by nothing for the `BUILD` and
+/// `PLAN` primary agents of the narrow layout. A progress bar glyph or `esc interrupt`
+/// marks a running turn (the bar is painted before its text and the text is cut at
+/// narrow widths). Every other last row, such as tool output opening with an uppercase
+/// word and a number, is Unknown.
+///
+/// DEFERRED (2026-10-01) — forms never observed stay Unknown, which delays the queue
+/// instead of typing into a live turn: a cost token (`$0.12`, a free local model prints
+/// none), a lowercase `k`, a user-defined agent label shown bare at narrow width.
+/// Widen only from a live capture of the form. Below 46 columns OpenCode paints no
+/// status row at all, so screen evidence cannot release the queue there: it drains
+/// only once the pane is widened.
+fn detect_opencode_mini_screen_activity(
+    rows: &[String],
+    columns: Option<usize>,
+) -> AgentScreenActivity {
+    const INTERRUPT_HINT: &str = "esc interrupt";
+    const BAR_GLYPHS: [char; 2] = ['\u{2B1D}', '\u{25A0}'];
+    const BARE_LABELS: [&str; 2] = ["BUILD", "PLAN"];
+    // Narrowest width at which OpenCode 1.18.30 paints the status row: ` BUILD` shows from
+    // 46 columns up (verified at 46..63 in tmux) and is absent at 45 and below, so a
+    // `BUILD` or `PLAN` line on a narrower screen is tool output.
+    const MIN_STATUS_ROW_COLUMNS: usize = 46;
+
+    let Some(status) = rows.iter().rev().find(|row| !row.trim().is_empty()) else {
+        return AgentScreenActivity::Unknown;
+    };
+    // A running turn is recognised before the label gate: the hint and the bar are
+    // distinctive, and an agent name with a dot or space must not read Unknown mid-turn.
+    if status.contains(INTERRUPT_HINT) || status.contains(BAR_GLYPHS) {
+        return AgentScreenActivity::Working;
+    }
+    if columns.is_some_and(|columns| columns < MIN_STATUS_ROW_COLUMNS) {
+        return AgentScreenActivity::Unknown;
+    }
+    let mut tokens = status.split_whitespace();
+    let Some(label) = tokens.next() else {
+        return AgentScreenActivity::Unknown;
+    };
+    let is_label = label.chars().count() >= 2
+        && label.starts_with(|c: char| c.is_ascii_uppercase())
+        && label
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if !is_label {
+        return AgentScreenActivity::Unknown;
+    }
+    // `52.9K`: digits with at most one dot and an optional K/M/B suffix.
+    let is_usage = |token: &str| {
+        let number = token.strip_suffix(['K', 'M', 'B']).unwrap_or(token);
+        number.starts_with(|c: char| c.is_ascii_digit())
+            && number.ends_with(|c: char| c.is_ascii_digit())
+            && number.chars().all(|c| c.is_ascii_digit() || c == '.')
+            && number.matches('.').count() <= 1
+    };
+    // `(26%)`
+    let is_percent = |token: &str| {
+        token
+            .strip_prefix('(')
+            .and_then(|inner| inner.strip_suffix("%)"))
+            .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+    };
+    let rest: Vec<&str> = tokens.collect();
+    let is_status_row = match rest.as_slice() {
+        [] => BARE_LABELS.contains(&label),
+        ["ctrl+p", "cmd"] => true,
+        [usage, percent, "\u{00B7}", "ctrl+p", "cmd"] => is_usage(usage) && is_percent(percent),
+        _ => false,
+    };
+    if is_status_row {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
 /// goose keeps a one-line composer footer at the bottom of the screen and swaps
 /// it for a spinner row while a turn runs. Captured live on goose 1.49.0 at 120
 /// columns (#699-c6e0), the two states are:
@@ -3901,21 +4000,32 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
 /// working:  ◓  Merging memory matrices...  (Ctrl+C to interrupt)
 /// ```
 ///
+/// After Ctrl+C the composer placeholder changes, and `Enter to send` is gone
+/// (#1301-87fd):
+///
+/// ```text
+/// > Interrupted, what should goose work on instead?
+/// ```
+///
 /// Neither generic signal works here. The spinner glyph cycles `◐◓◒`, which
 /// `is_spinner_row` does not recognise, and the message beside it is whimsical
 /// and changes between turns — "Merging memory matrices…" is one of a set, so
 /// matching it would pin the adapter to a string goose is free to reword. What
 /// does not move is the **hint** at each end: `Ctrl+C to interrupt` appears only
-/// while a turn can be interrupted, and `Enter to send` only when the composer
-/// is accepting input.
+/// while a turn can be interrupted, and `Enter to send` (or the post-Ctrl+C
+/// `Interrupted, what should goose work on instead?` placeholder) only when the
+/// composer is accepting input.
 ///
-/// The interrupt hint is tested first so a working screen is never downgraded,
-/// and Ready demands the composer footer rather than merely the absence of a
+/// The lowest hint row wins, so a working screen is never downgraded by a hint
+/// above its spinner, and Ready demands the composer footer rather than merely the absence of a
 /// spinner — a half-painted screen must read Unknown, not idle. A false Ready is
 /// the expensive direction: it is what lets auto-standby SIGSTOP a live turn.
 fn detect_goose_screen_activity(rows: &[String]) -> AgentScreenActivity {
     const INTERRUPT_HINT: &str = "Ctrl+C to interrupt";
-    const COMPOSER_HINT: &str = "Enter to send";
+    const COMPOSER_HINTS: [&str; 2] = [
+        "Enter to send",
+        "Interrupted, what should goose work on instead?",
+    ];
 
     let content_end = rows
         .iter()
@@ -3924,14 +4034,18 @@ fn detect_goose_screen_activity(rows: &[String]) -> AgentScreenActivity {
     let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
     let footer = &rows[chrome_start..content_end];
 
-    if footer.iter().any(|row| row.contains(INTERRUPT_HINT)) {
-        return AgentScreenActivity::Working;
-    }
-    if footer.iter().any(|row| row.contains(COMPOSER_HINT)) {
-        AgentScreenActivity::Ready
-    } else {
-        AgentScreenActivity::Unknown
-    }
+    // The lowest hint row decides: after Ctrl+C the spinner row stays on screen
+    // above the new composer, so the interrupt hint alone is stale there.
+    let lowest_hint = footer.iter().rev().find_map(|row| {
+        if row.contains(INTERRUPT_HINT) {
+            Some(AgentScreenActivity::Working)
+        } else if COMPOSER_HINTS.iter().any(|hint| row.contains(hint)) {
+            Some(AgentScreenActivity::Ready)
+        } else {
+            None
+        }
+    });
+    lowest_hint.unwrap_or(AgentScreenActivity::Unknown)
 }
 
 /// #744-138c: call counter so a test can measure that the reader chunk path
@@ -3948,6 +4062,16 @@ fn screen_classify_calls() -> usize {
 }
 
 fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
+    detect_agent_screen_activity_at(agent_type, rows, None)
+}
+
+/// [`detect_agent_screen_activity`] with the terminal width, for the adapters whose
+/// reading depends on it.
+fn detect_agent_screen_activity_at(
+    agent_type: Option<&str>,
+    rows: &[String],
+    columns: Option<usize>,
+) -> AgentScreenActivity {
     SCREEN_CLASSIFY_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     match agent_type {
         Some("claude") => detect_claude_screen_activity(rows),
@@ -3956,7 +4080,7 @@ fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> Ag
         Some("aider") => detect_aider_screen_activity(rows),
         Some("grok") => detect_grok_screen_activity(rows),
         Some("pi") => detect_pi_screen_activity(rows),
-        Some("opencode") => detect_opencode_screen_activity(rows),
+        Some("opencode") => detect_opencode_screen_activity_at(rows, columns),
         Some("goose") => detect_goose_screen_activity(rows),
         _ => AgentScreenActivity::Unknown,
     }
@@ -3975,7 +4099,14 @@ pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &
         .grid
         .vt_log_buffers
         .get(session_id)
-        .map(|vt| detect_agent_screen_activity(agent_type.as_deref(), &vt.lock().screen_rows()))
+        .map(|vt| {
+            let vt = vt.lock();
+            detect_agent_screen_activity_at(
+                agent_type.as_deref(),
+                &vt.screen_rows(),
+                Some(vt.grid_columns()),
+            )
+        })
         .unwrap_or(AgentScreenActivity::Unknown);
     match activity {
         AgentScreenActivity::Working => "working_screen",
@@ -6201,7 +6332,13 @@ impl ChunkProcessor {
             // BUSY through exactly that case (a frozen spinner, DEC 2026 frame
             // coalescing) is the point of `detect_agent_screen_activity`.
             let screen_activity = screen_ref
-                .map(|rows| detect_agent_screen_activity(agent_type.as_deref(), rows))
+                .map(|rows| {
+                    detect_agent_screen_activity_at(
+                        agent_type.as_deref(),
+                        rows,
+                        Some(vt.grid_columns()),
+                    )
+                })
                 .unwrap_or(AgentScreenActivity::Unknown);
 
             // ONE snapshot per tick, cloned into the retained buffer and handed

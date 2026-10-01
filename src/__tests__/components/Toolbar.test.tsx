@@ -121,6 +121,20 @@ describe("Toolbar", () => {
 		expect(container.querySelector(".toolbar")).not.toBeNull();
 	});
 
+	// Catches: the sidebar layout mode readable only through title/tooltip, which touch never shows.
+	it("prints the sidebar layout mode on the density toggle and cycles it", () => {
+		const { container } = render(() => <Toolbar />);
+		const label = () => container.querySelector("[data-testid='sidebar-density-label']")?.textContent;
+		const toggle = container.querySelector("[data-testid='sidebar-density-toggle']") as HTMLElement;
+		expect(label()).toBe("A");
+		fireEvent.click(toggle);
+		expect(label()).toBe("C");
+		fireEvent.click(toggle);
+		expect(label()).toBe("R");
+		fireEvent.click(toggle);
+		expect(label()).toBe("A");
+	});
+
 	it("renders sidebar toggle button", () => {
 		const { container } = render(() => <Toolbar />);
 		const toggle = container.querySelector(".sidebarToggle");

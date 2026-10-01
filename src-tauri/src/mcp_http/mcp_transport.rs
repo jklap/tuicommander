@@ -1320,9 +1320,9 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "story",
-            "description": "Read and update native plans and stories in the calling managed session's project. Actions are typed; every mutation is checked by the Rust story service. A claim binds to the calling live PTY.",
+            "description": "Read and update native plans and stories in the calling managed session's project. Pass one StoryAction as `input`; the input schema lists every action, field, type and enum. Every mutation is checked by the Rust story service, and a refusal names its cause. A claim binds to the calling live PTY.\n\nAgent actions: create_plan, list_plans, list_plan_sources, add_plan_source, get_plan, plan_state, plan_view, create_story, list_stories, get_story, add_dependency, claim, and transition with check_criterion, uncheck_criterion or submit_review on a story this session claimed. add_dependency on a ready story whose dependency is not done moves it to backlog (it cannot be claimed until the dependency is done).\n\nUser-only (refused for an agent, the user does them in the Plans and Stories dialog): remove_dependency, and transition with start_manual, approve, reject_review, block, unblock or wont_fix.\n\nThis tool reaches only the calling session's own project (another project's plan is refused with `plan does not belong to project`). To read or approve a plan of another project, use the CLI: `tuic story '<action JSON>' --project /abs/project` (see the native-stories user guide).",
             "inputSchema": { "type": "object", "properties": {
-                "input": { "type": "object", "description": "StoryAction object, tagged by action. Examples: {action:'list_plans'}, {action:'get_story',story_id:'...'}, {action:'claim',story_id:'...',expected_revision:1}." }
+                "input": crate::stories::story_action_schema()
             }, "required": ["input"] }
         },
         {
@@ -8638,6 +8638,22 @@ mod tests {
 
         let schema = handle_get_tool_schema(&state, &serde_json::json!({"tool_name": "voice"}));
         assert_eq!(schema["inputSchema"], definition["inputSchema"]);
+    }
+
+    /// Catches: the story tool going back to a bare `input: object` (callers learn field names
+    /// from errors), and its text listing user-only actions as if an agent could run them.
+    #[test]
+    fn story_tool_publishes_its_input_schema_and_marks_user_only_actions() {
+        let definition = native_tool_named("story");
+        let input = &definition["inputSchema"]["properties"]["input"];
+        assert!(
+            input["oneOf"].as_array().is_some_and(|v| v.len() > 10),
+            "the StoryAction variants must be published: {input}"
+        );
+        let description = definition["description"].as_str().unwrap_or_default();
+        assert!(description.contains("User-only"), "{description}");
+        assert!(description.contains("remove_dependency"), "{description}");
+        assert!(description.contains("moves it to backlog"), "{description}");
     }
 
     /// The collapsed path must carry the caller's identity, not just its

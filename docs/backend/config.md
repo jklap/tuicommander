@@ -504,6 +504,7 @@ work starts.
 | `sounds.warning` | `bool` | `true` | Play on warning |
 | `silence_remote_completions` | `bool` | `true` | Suppress the completion chime for HTTP/MCP-created sessions |
 | `toasts_in_bell` | `bool` | `true` | Mirror every toast into the toolbar bell, under a MESSAGES section |
+| `pr_native_notifications` | `bool` | `true` | OS notification for PR ready / CI failed / changes requested / merged transitions |
 
 **Commands:** `load_notification_config()`, `save_notification_config(base, config)`
 
@@ -536,6 +537,7 @@ neither of which involves a model. Nothing reads them back yet.
 | `references_panel_visible` | `bool` | `false` | References panel open |
 | `ai_chat_panel_visible` | `bool` | `false` | AI chat panel open |
 | `file_browser_view_mode` | `String` | `"tree"` | File browser listing: `flat` or `tree` |
+| `sidebar_density` | `String` | `"auto"` | Sidebar layout: `auto` (rich for a short list or a finger), `compact` or `rich` |
 | `mobile_theme` | `String` | `"commander"` | Mobile PWA appearance (`commander` or `vscode-light`), separate from the desktop theme |
 | `diff_panel_width` | `u32` | `400` | Diff panel width in pixels |
 | `markdown_panel_width` | `u32` | `400` | Markdown panel width in pixels |

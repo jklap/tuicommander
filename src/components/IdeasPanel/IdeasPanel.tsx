@@ -1,11 +1,10 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { type Component, createSignal, For, Show } from "solid-js";
 import { t } from "../../i18n";
-import { invoke } from "../../invoke";
-import { appLogger } from "../../stores/appLogger";
 import { generateId, ideasStore } from "../../stores/ideas";
 import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
+import { savePastedImage } from "../../utils/pastedImage";
 import { formatRelativeTime } from "../../utils/time";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
@@ -21,28 +20,6 @@ export interface IdeasPanelProps {
 	 *  Absent when the host cannot queue (no agent session). */
 	onQueueToTerminal?: (text: string) => void;
 	mode?: "inline" | "detached";
-}
-
-const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
-
-/** Map MIME type to file extension */
-function mimeToExtension(mime: string): string {
-	const map: Record<string, string> = {
-		"image/png": "png",
-		"image/jpeg": "jpg",
-		"image/webp": "webp",
-		"image/gif": "gif",
-	};
-	return map[mime] ?? "png";
-}
-
-/** Convert a Blob to a base64 string */
-async function blobToBase64(blob: Blob): Promise<string> {
-	const buffer = await blob.arrayBuffer();
-	const bytes = new Uint8Array(buffer);
-	let binary = "";
-	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary);
 }
 
 /** Extract last path segment as display name */
@@ -86,37 +63,12 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 	const allPendingImages = () => [...editingImages(), ...pendingImages()];
 
 	const handlePaste = async (e: ClipboardEvent) => {
-		const items = e.clipboardData?.items;
-		if (!items) return;
-
-		for (const item of items) {
-			if (ACCEPTED_IMAGE_TYPES.includes(item.type)) {
-				e.preventDefault();
-				const blob = item.getAsFile();
-				if (!blob) continue;
-
-				const ideaId = pendingIdeaId() ?? editingId() ?? generateId();
-				if (!pendingIdeaId() && !editingId()) setPendingIdeaId(ideaId);
-
-				try {
-					const dataBase64 = await blobToBase64(blob);
-					const extension = mimeToExtension(item.type);
-					// `noteId` is the backend argument name and the on-disk asset
-					// directory (`note-images/<id>/`). It keeps the old vocabulary
-					// on purpose — see the boundary note in `stores/ideas.ts`.
-					const savedPath = await invoke<string>("save_note_image", {
-						noteId: ideaId,
-						dataBase64,
-						extension,
-					});
-					setPendingImages((prev) => [...prev, savedPath]);
-				} catch (err) {
-					appLogger.error("store", "Failed to save pasted image", err);
-				}
-				return; // Only handle first image item
-			}
-		}
-		// No image items found — let default text paste proceed
+		const savedPath = await savePastedImage(e, () => {
+			const ideaId = pendingIdeaId() ?? editingId() ?? generateId();
+			if (!pendingIdeaId() && !editingId()) setPendingIdeaId(ideaId);
+			return ideaId;
+		});
+		if (savedPath) setPendingImages((prev) => [...prev, savedPath]);
 	};
 
 	const handleSubmit = () => {

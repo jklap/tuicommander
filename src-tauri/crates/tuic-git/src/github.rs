@@ -206,6 +206,65 @@ pub struct BranchPrStatus {
     pub squash_merge_allowed: bool,
     /// Repo-level: rebase merge allowed
     pub rebase_merge_allowed: bool,
+    /// Unresolved review threads among the first [`REVIEW_THREADS_LIMIT`]. A plain
+    /// `isResolved` selection costs no extra GraphQL points; the bot/human split
+    /// needs a nested connection per thread and is fetched on demand
+    /// (`get_pr_review_threads`).
+    pub unresolved_threads: u32,
+    /// More than [`REVIEW_THREADS_LIMIT`] threads exist, so `unresolved_threads` is a lower
+    /// bound and 0 does not prove "none open" (GitHub cannot filter threads by resolution).
+    /// The poll fetch walks the remaining pages and clears this ([`Self::settle_review_threads`]);
+    /// it stays set only when that walk failed or ran out of pages.
+    pub unresolved_threads_truncated: bool,
+}
+
+impl BranchPrStatus {
+    /// Replace the first-page thread count with the total of a full walk. `complete` is false
+    /// when the walk hit its page bound, so the count stays a lower bound ("N+").
+    pub fn settle_review_threads(&mut self, unresolved: u32, complete: bool) {
+        self.unresolved_threads = unresolved;
+        self.unresolved_threads_truncated = !complete;
+    }
+}
+
+/// Threads inspected per PR in the batch poll.
+pub const REVIEW_THREADS_LIMIT: u32 = 50;
+
+/// GraphQL selection for [`BranchPrStatus::unresolved_threads`], shared by every PR query.
+pub fn review_threads_selection() -> String {
+    format!(
+        "reviewThreads(first: {REVIEW_THREADS_LIMIT}) {{ pageInfo {{ hasNextPage }} nodes {{ isResolved }} }}"
+    )
+}
+
+/// Unresolved review threads split by who opened them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ReviewThreadCounts {
+    pub bot: u32,
+    pub human: u32,
+}
+
+/// Count unresolved threads from `reviewThreads.nodes`, attributing each to the
+/// author of its first comment: GraphQL actor `__typename` "Bot" is a bot (a
+/// `[bot]` login covers apps surfaced as users), everything else is human.
+pub fn count_review_threads(nodes: &serde_json::Value) -> ReviewThreadCounts {
+    let mut counts = ReviewThreadCounts::default();
+    for node in nodes.as_array().into_iter().flatten() {
+        if node["isResolved"].as_bool().unwrap_or(true) {
+            continue;
+        }
+        let author = &node["comments"]["nodes"][0]["author"];
+        let is_bot = author["__typename"].as_str() == Some("Bot")
+            || author["login"]
+                .as_str()
+                .is_some_and(|l| l.ends_with("[bot]"));
+        if is_bot {
+            counts.bot += 1;
+        } else {
+            counts.human += 1;
+        }
+    }
+    counts
 }
 
 /// Classification of a single check node for summary counting.
@@ -331,6 +390,18 @@ pub fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
     let review_decision = v["reviewDecision"].as_str().unwrap_or("").to_string();
     let viewer_did_approve = v["viewerLatestReview"]["state"].as_str() == Some("APPROVED");
     let is_draft = v["isDraft"].as_bool().unwrap_or(false);
+    let unresolved_threads_truncated = v["reviewThreads"]["pageInfo"]["hasNextPage"]
+        .as_bool()
+        .unwrap_or(false);
+    let unresolved_threads = v["reviewThreads"]["nodes"]
+        .as_array()
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter(|n| n["isResolved"].as_bool() == Some(false))
+                .count() as u32
+        })
+        .unwrap_or(0);
 
     let labels = v["labels"]["nodes"]
         .as_array()
@@ -407,6 +478,8 @@ pub fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
         merge_commit_allowed: true,
         squash_merge_allowed: true,
         rebase_merge_allowed: true,
+        unresolved_threads,
+        unresolved_threads_truncated,
     })
 }
 
@@ -620,6 +693,10 @@ pub fn build_multi_repo_issues_query(
 /// Build a batched GraphQL query fetching PRs and (optionally) Issues for all
 /// repos in a single HTTP request.  When `filter_mode` is "disabled" the issues
 /// section is omitted entirely, saving GraphQL points.
+///
+/// DEFERRED (2026-10-01) — no chunking: each repo requests about 6.5k nodes at 40 PRs (4.5k before
+/// `reviewThreads`), so more than ~75 repos in one query would pass GitHub's 500,000 node limit.
+/// Split the repo list into chunks when a user reaches that many repositories.
 pub fn build_unified_batch_query(
     repos: &[(String, String, String)],
     include_merged: bool,
@@ -634,28 +711,32 @@ pub fn build_unified_batch_query(
     };
     // Fetch more items when drafts are hidden so filtering leaves enough valid PRs.
     let pr_first = if hide_drafts { 40 } else { 20 };
-    let pr_node_fields = r#"number title state url headRefName headRefOid baseRefName isDraft
+    let pr_node_fields = format!(
+        r#"number title state url headRefName headRefOid baseRefName isDraft
         additions deletions mergeable mergeStateStatus reviewDecision
-        viewerLatestReview { state }
+        viewerLatestReview {{ state }}
         createdAt updatedAt
-        author { login }
-        labels(first: 10) { nodes { name color } }
-        commits(last: 1) {
+        author {{ login }}
+        labels(first: 10) {{ nodes {{ name color }} }}
+        {threads}
+        commits(last: 1) {{
           totalCount
-          nodes {
-            commit {
-              statusCheckRollup {
-                contexts(first: 100) {
-                  nodes {
+          nodes {{
+            commit {{
+              statusCheckRollup {{
+                contexts(first: 100) {{
+                  nodes {{
                     __typename
-                    ... on CheckRun { name status conclusion startedAt }
-                    ... on StatusContext { context state createdAt }
-                  }
-                }
-              }
-            }
-          }
-        }"#;
+                    ... on CheckRun {{ name status conclusion startedAt }}
+                    ... on StatusContext {{ context state createdAt }}
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}"#,
+        threads = review_threads_selection()
+    );
 
     let include_issues = !matches!(filter_mode, "" | "disabled");
 
@@ -855,6 +936,60 @@ pub fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)
 mod tests {
     use super::*;
 
+    // --- review threads ---
+
+    fn thread(resolved: bool, typename: &str, login: &str) -> serde_json::Value {
+        serde_json::json!({
+            "isResolved": resolved,
+            "comments": {"nodes": [{"author": {"__typename": typename, "login": login}}]}
+        })
+    }
+
+    /// Catches: a blocked PR with open threads reporting no reason, or bot and human
+    /// threads collapsed into one number.
+    #[test]
+    fn review_threads_split_unresolved_by_bot_and_human() {
+        let nodes = serde_json::json!([
+            thread(false, "User", "alice"),
+            thread(false, "User", "bob"),
+            thread(false, "Bot", "quill-reviewer"),
+            thread(false, "User", "copilot-pull-request-reviewer[bot]"),
+            thread(true, "User", "alice"),
+        ]);
+        assert_eq!(
+            count_review_threads(&nodes),
+            ReviewThreadCounts { bot: 2, human: 2 }
+        );
+        assert_eq!(
+            count_review_threads(&serde_json::Value::Null),
+            ReviewThreadCounts::default()
+        );
+    }
+
+    #[test]
+    fn pr_node_counts_unresolved_threads_and_defaults_to_zero() {
+        let mut node = serde_json::json!({
+            "number": 7, "headRefName": "feat/x", "state": "OPEN",
+            "reviewThreads": {"nodes": [{"isResolved": false}, {"isResolved": true}, {"isResolved": false}]}
+        });
+        assert_eq!(parse_pr_node(&node).unwrap().unresolved_threads, 2);
+        node.as_object_mut().unwrap().remove("reviewThreads");
+        assert_eq!(parse_pr_node(&node).unwrap().unresolved_threads, 0);
+    }
+
+    /// Catches: a PR whose first 50 threads are resolved and later ones open reporting a
+    /// clean 0 — the flag says the count is only a lower bound.
+    #[test]
+    fn pr_node_flags_truncated_thread_pages() {
+        let node = serde_json::json!({
+            "number": 7, "headRefName": "feat/x", "state": "OPEN",
+            "reviewThreads": {"pageInfo": {"hasNextPage": true}, "nodes": [{"isResolved": true}]}
+        });
+        let pr = parse_pr_node(&node).unwrap();
+        assert_eq!(pr.unresolved_threads, 0);
+        assert!(pr.unresolved_threads_truncated);
+    }
+
     // --- statusCheckRollup dedup + classification tests ---
 
     #[test]
@@ -990,5 +1125,109 @@ mod tests {
     fn test_ci_log_empty_input() {
         assert_eq!(truncate_ci_logs(""), "");
         assert_eq!(truncate_ci_logs("  \n  "), "");
+    }
+}
+
+#[cfg(test)]
+mod critic2_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Catches: a panic or a miscount when GitHub returns a thread with no comments,
+    /// a deleted (null) author, or a non-user actor type.
+    #[test]
+    fn thread_attribution_survives_missing_and_odd_authors() {
+        let nodes = json!([
+            {"isResolved": false, "comments": {"nodes": []}},
+            {"isResolved": false, "comments": null},
+            {"isResolved": false, "comments": {"nodes": [{"author": null}]}},
+            {"isResolved": false, "comments": {"nodes": [{"author": {"__typename": "Mannequin", "login": "m"}}]}},
+            {"isResolved": false, "comments": {"nodes": [{"author": {"__typename": "Bot", "login": "dependabot"}}]}},
+            {"isResolved": null, "comments": {"nodes": [{"author": {"__typename": "Bot", "login": "x"}}]}},
+        ]);
+        assert_eq!(
+            count_review_threads(&nodes),
+            ReviewThreadCounts { bot: 1, human: 4 }
+        );
+    }
+
+    /// Catches: batch badge count and on-demand split disagreeing on which nodes are
+    /// unresolved (null/missing `isResolved` counted by one and not the other).
+    #[test]
+    fn badge_count_and_split_agree_on_the_same_nodes() {
+        let nodes = json!([
+            {"isResolved": false}, {"isResolved": true}, {"isResolved": null}, {},
+            {"isResolved": false, "comments": {"nodes": [{"author": {"__typename": "Bot", "login": "b"}}]}},
+        ]);
+        let counts = count_review_threads(&nodes);
+        let pr = parse_pr_node(&json!({
+            "number": 1, "headRefName": "f", "state": "OPEN",
+            "reviewThreads": {"nodes": nodes}
+        }))
+        .unwrap();
+        assert_eq!(pr.unresolved_threads, counts.bot + counts.human);
+    }
+
+    /// Catches: `reviewThreads: null` / `nodes: null` (permission-limited or partial
+    /// GraphQL response) failing the whole PR parse instead of counting zero.
+    #[test]
+    fn null_review_threads_parse_as_zero() {
+        for rt in [json!(null), json!({"nodes": null}), json!({"nodes": []})] {
+            let pr = parse_pr_node(&json!({
+                "number": 1, "headRefName": "f", "state": "OPEN", "reviewThreads": rt
+            }))
+            .expect("PR must still parse");
+            assert_eq!(pr.unresolved_threads, 0);
+        }
+    }
+
+    /// Catches: threads selected with a nested connection (5 -> 51 points for 6 repos, measured
+    /// with rateLimit dryRun) or the page flag dropped, in the worst-case query: 6 repos,
+    /// viewer search, drafts hidden. The selection must appear once per repo plus viewerPrs.
+    #[test]
+    fn batch_query_thread_selection_is_flat_and_flags_truncation() {
+        let repos: Vec<(String, String, String)> = (0..6)
+            .map(|i| (format!("/r{i}"), "o".into(), format!("r{i}")))
+            .collect();
+        let (q, _) = build_unified_batch_query(&repos, true, "assigned", "me", true);
+        let selection = review_threads_selection();
+        assert_eq!(q.matches(&selection).count(), 7); // 6 repos + viewerPrs
+        assert!(selection.contains("pageInfo") && selection.contains("isResolved"));
+        assert!(
+            !q.contains("comments("),
+            "no nested comments connection: {q}"
+        );
+    }
+
+    /// Catches: a PR with more than 50 threads, all resolved, staying "Comments" forever: once
+    /// the full walk settles the count, the Ready notice fires.
+    #[test]
+    fn settled_truncated_threads_let_ready_fire() {
+        let open_node = |threads: usize, more: bool| {
+            let nodes: Vec<_> = (0..threads)
+                .map(|_| serde_json::json!({"isResolved": false}))
+                .collect();
+            parse_pr_node(&serde_json::json!({
+                "number": 42, "headRefName": "feat/test", "state": "OPEN",
+                "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+                "reviewDecision": "APPROVED",
+                "reviewThreads": {"pageInfo": {"hasNextPage": more}, "nodes": nodes}
+            }))
+            .unwrap()
+        };
+        let old = open_node(1, false);
+        let mut pr = open_node(0, true);
+        assert!(pr.unresolved_threads_truncated);
+        pr.settle_review_threads(0, true);
+        assert!(!pr.unresolved_threads_truncated);
+        assert!(
+            crate::github_poller::detect_transitions("/repo", &old, &pr)
+                .iter()
+                .any(|x| matches!(x, crate::github_poller::PrTransition::Ready { .. }))
+        );
+        // Walk bound exhausted: still a lower bound, never Ready.
+        let mut capped = open_node(0, true);
+        capped.settle_review_threads(0, false);
+        assert!(capped.unresolved_threads_truncated);
     }
 }

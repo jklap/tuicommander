@@ -129,6 +129,11 @@ export const PR_BADGE_LEGEND: PrLegendEntry[] = [
 		description: "Changes requested",
 		badge: { state: "open", reviewDecision: "CHANGES_REQUESTED" },
 	},
+	{
+		label: "Comments",
+		description: "Unresolved review threads (bot and human)",
+		badge: { state: "open", unresolvedThreads: 1 },
+	},
 	{ label: "Review", description: "Awaiting review", badge: { state: "open", reviewDecision: "REVIEW_REQUIRED" } },
 	{ label: "CI Running", description: "CI in progress (pulsing)", badge: { state: "open", ciPending: 1 } },
 	{ label: "Merged", description: "PR merged", badge: { state: "merged" } },

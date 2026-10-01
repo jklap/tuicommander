@@ -203,6 +203,17 @@ pub(super) struct CreateIssueFromProposalRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct UpdatePrBranchRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    #[serde(rename = "prNumber")]
+    pub pr_number: i64,
+    /// Head commit the user saw; GitHub refuses the update if the PR head moved.
+    #[serde(rename = "expectedHeadSha")]
+    pub expected_head_sha: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct ApprovePrRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
@@ -542,6 +553,10 @@ pub(super) struct RemoveOrphanRequest {
     pub worktree_path: String,
     #[serde(rename = "safeOnly", default)]
     pub safe_only: bool,
+    /// Session ids the user saw when confirming; a live session outside this
+    /// list refuses a `safeOnly` false removal.
+    #[serde(rename = "confirmedSessions", default)]
+    pub confirmed_sessions: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -606,6 +621,9 @@ pub(super) struct MergePrRequest {
     /// "merge", "squash", or "rebase"
     #[serde(rename = "mergeMethod")]
     pub merge_method: String,
+    /// Head commit the user reviewed; GitHub refuses the merge if the PR head moved.
+    #[serde(rename = "expectedHeadSha")]
+    pub expected_head_sha: String,
 }
 
 // --- Recent commits query ---

@@ -1369,6 +1369,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_ci_checks: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/ci?path=${p("path")}&pr_number=${p("prNumber")}` }),
 	},
+	get_pr_review_threads: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/pr-review-threads?path=${p("path")}&pr_number=${p("prNumber")}`,
+		}),
+	},
 	rename_branch: {
 		map: (args) => ({
 			method: "POST",
@@ -1575,7 +1581,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/remove-orphan",
-			body: { repoPath: args.repoPath, worktreePath: args.worktreePath, safeOnly: args.safeOnly ?? false },
+			body: {
+				repoPath: args.repoPath,
+				worktreePath: args.worktreePath,
+				safeOnly: args.safeOnly ?? false,
+				confirmedSessions: args.confirmedSessions ?? [],
+			},
 		}),
 	},
 	run_setup_script: {
@@ -1646,6 +1657,20 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/approve-pr",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber },
+		}),
+	},
+	update_pr_branch: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/update-pr-branch",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, expectedHeadSha: args.expectedHeadSha },
+		}),
+	},
+	close_pr: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/close-pr",
 			body: { repoPath: args.repoPath, prNumber: args.prNumber },
 		}),
 	},
@@ -2036,6 +2061,14 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_tunnel_status: { map: (args) => ({ method: "GET", path: `/tunnels/status/${args.id}` }) },
 	get_tunnel_audit: { map: (args) => ({ method: "GET", path: `/tunnels/audit/${args.id}?limit=${args.limit || 20}` }) },
 	list_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts" }) },
+	list_discovered_ssh_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/discovered" }) },
+	probe_discovered_ssh_host: {
+		map: (args) => ({
+			method: "POST",
+			path: "/tunnels/ssh-hosts/probe",
+			body: { target: args.target, port: args.port ?? null },
+		}),
+	},
 	probe_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/status" }) },
 	list_ssh_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
 
