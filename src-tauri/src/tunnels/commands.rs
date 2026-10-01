@@ -181,19 +181,36 @@ struct ProbeCacheEntry {
 static SSH_PROBE_CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<ProbeCacheEntry>>> =
     std::sync::OnceLock::new();
 
-/// One bulk probe runs at a time; a caller that waited re-reads the cache the
-/// first one filled instead of spawning every ssh again.
-static SSH_BULK_FLIGHT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// What every ssh probe, bulk or single, goes through: one permit pool bounds
+/// the processes running at once, and one slot per host lets concurrent
+/// probes of that host share a single process.
+struct ProbeGate {
+    permits: tokio::sync::Semaphore,
+    hosts: std::sync::Mutex<HashMap<(String, u16), HostSlot>>,
+}
 
-/// Every ssh probe, bulk or single, holds one permit while it runs.
-static SSH_PROBE_PERMITS: tokio::sync::Semaphore =
-    tokio::sync::Semaphore::const_new(SSH_PROBE_CONCURRENCY);
+type HostSlot = Arc<tokio::sync::Mutex<Option<(Instant, HostAuth)>>>;
 
-/// Last single-host result per (target, port); its lock is that host's flight.
-type SingleProbe = std::sync::Arc<tokio::sync::Mutex<Option<(Instant, HostAuth)>>>;
-static SSH_SINGLE_PROBES: std::sync::LazyLock<
-    std::sync::Mutex<HashMap<(String, u16), SingleProbe>>,
-> = std::sync::LazyLock::new(Default::default);
+impl ProbeGate {
+    fn new(max_running: usize) -> Self {
+        Self {
+            permits: tokio::sync::Semaphore::new(max_running),
+            hosts: Default::default(),
+        }
+    }
+
+    fn slot(&self, identity: (String, u16)) -> HostSlot {
+        self.hosts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entry(identity)
+            .or_default()
+            .clone()
+    }
+}
+
+static SSH_PROBE_GATE: std::sync::LazyLock<ProbeGate> =
+    std::sync::LazyLock::new(|| ProbeGate::new(SSH_PROBE_CONCURRENCY));
 
 fn ssh_config_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".ssh").join("config"))
@@ -331,31 +348,38 @@ pub(crate) struct ProbeHostRequest {
 
 /// Probe one discovered entry, identified by (target, port). Only entries the
 /// discovery list itself yields are contacted, never a caller-supplied name.
+/// A manual probe always asks ssh again; it only joins a probe of the same
+/// host that is already running.
 pub(crate) async fn probe_discovered_host(
     target: &str,
     port: Option<u16>,
 ) -> Result<SshHostStatus, String> {
+    let discovered = load_discovered_hosts()?;
+    probe_listed_host(
+        &SSH_PROBE_GATE,
+        discovered.hosts,
+        target,
+        port,
+        FsPath::new("ssh"),
+        SSH_PROBE_TIMEOUT,
+    )
+    .await
+}
+
+async fn probe_listed_host(
+    gate: &ProbeGate,
+    listed: Vec<DiscoveredHost>,
+    target: &str,
+    port: Option<u16>,
+    binary: &FsPath,
+    timeout: Duration,
+) -> Result<SshHostStatus, String> {
     let wanted = (target.to_ascii_lowercase(), port.unwrap_or(22));
-    let host = load_discovered_hosts()?
-        .hosts
+    let host = listed
         .into_iter()
         .find(|host| host.identity() == wanted)
         .ok_or_else(|| "host is not in the discovered list".to_string())?;
-    let flight = SSH_SINGLE_PROBES
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .entry(wanted)
-        .or_default()
-        .clone();
-    let mut last = flight.lock().await;
-    let auth = match *last {
-        Some((at, auth)) if at.elapsed() < SSH_PROBE_CACHE_TTL => auth,
-        _ => {
-            let auth = probe_host_with_binary(&host, FsPath::new("ssh"), SSH_PROBE_TIMEOUT).await;
-            *last = Some((Instant::now(), auth));
-            auth
-        }
-    };
+    let auth = probe_host_gated(gate, &host, binary, timeout).await;
     Ok(status_of(host, auth))
 }
 
@@ -376,32 +400,30 @@ fn status_of(host: DiscoveredHost, auth: HostAuth) -> SshHostStatus {
     }
 }
 
-async fn fresh_statuses(
-    cache: &tokio::sync::Mutex<Option<ProbeCacheEntry>>,
-    hosts: &[DiscoveredHost],
-) -> Option<Vec<SshHostStatus>> {
-    let guard = cache.lock().await;
-    let entry = guard.as_ref()?;
-    (entry.hosts == hosts && entry.stored_at.elapsed() < SSH_PROBE_CACHE_TTL)
-        .then(|| entry.statuses.clone())
-}
-
-/// The cache lock is held only to read and to store, never across `ssh`;
-/// `SSH_BULK_FLIGHT` keeps concurrent callers from probing the same hosts twice.
+/// The cache lock is held only to read and to store, never across `ssh`.
 async fn probe_cached(
     cache: &tokio::sync::Mutex<Option<ProbeCacheEntry>>,
     hosts: Vec<DiscoveredHost>,
     binary: &FsPath,
     timeout: Duration,
 ) -> Result<Vec<SshHostStatus>, String> {
-    if let Some(statuses) = fresh_statuses(cache, &hosts).await {
-        return Ok(statuses);
+    probe_cached_with(&SSH_PROBE_GATE, cache, hosts, binary, timeout).await
+}
+
+async fn probe_cached_with(
+    gate: &ProbeGate,
+    cache: &tokio::sync::Mutex<Option<ProbeCacheEntry>>,
+    hosts: Vec<DiscoveredHost>,
+    binary: &FsPath,
+    timeout: Duration,
+) -> Result<Vec<SshHostStatus>, String> {
+    if let Some(entry) = cache.lock().await.as_ref()
+        && entry.hosts == hosts
+        && entry.stored_at.elapsed() < SSH_PROBE_CACHE_TTL
+    {
+        return Ok(entry.statuses.clone());
     }
-    let _flight = SSH_BULK_FLIGHT.lock().await;
-    if let Some(statuses) = fresh_statuses(cache, &hosts).await {
-        return Ok(statuses);
-    }
-    let statuses = probe_hosts_with_binary(hosts.clone(), binary, timeout).await;
+    let statuses = probe_hosts_with_gate(gate, hosts.clone(), binary, timeout).await;
     *cache.lock().await = Some(ProbeCacheEntry {
         stored_at: Instant::now(),
         hosts,
@@ -410,14 +432,15 @@ async fn probe_cached(
     Ok(statuses)
 }
 
-async fn probe_hosts_with_binary(
+async fn probe_hosts_with_gate(
+    gate: &ProbeGate,
     hosts: Vec<DiscoveredHost>,
     binary: &FsPath,
     timeout: Duration,
 ) -> Vec<SshHostStatus> {
     use futures_util::StreamExt;
     futures_util::stream::iter(hosts.into_iter().map(|host| async move {
-        let auth = probe_host_with_binary(&host, binary, timeout).await;
+        let auth = probe_host_gated(gate, &host, binary, timeout).await;
         status_of(host, auth)
     }))
     .buffer_unordered(SSH_PROBE_CONCURRENCY)
@@ -446,9 +469,31 @@ fn probe_args(host: &str, port: Option<u16>, host_key_policy: &str) -> Vec<Strin
     args
 }
 
+/// Probes that overlap on one host share the result of the first; a probe
+/// that starts after it finished runs ssh again.
+async fn probe_host_gated(
+    gate: &ProbeGate,
+    host: &DiscoveredHost,
+    binary: &FsPath,
+    timeout: Duration,
+) -> HostAuth {
+    let requested = Instant::now();
+    let slot = gate.slot(host.identity());
+    let mut last = slot.lock().await;
+    if let Some((finished, auth)) = *last
+        && finished >= requested
+    {
+        return auth;
+    }
+    let auth = run_probe(gate, host, binary, timeout).await;
+    *last = Some((Instant::now(), auth));
+    auth
+}
+
 /// A known_hosts entry is already trusted, so a changed key must fail rather
 /// than be accepted; a config alias keeps the original `accept-new`.
-async fn probe_host_with_binary(
+async fn run_probe(
+    gate: &ProbeGate,
     host: &DiscoveredHost,
     binary: &FsPath,
     timeout: Duration,
@@ -457,7 +502,7 @@ async fn probe_host_with_binary(
         discovery::HostSource::KnownHosts => "yes",
         discovery::HostSource::Config => "accept-new",
     };
-    let Ok(_permit) = SSH_PROBE_PERMITS.acquire().await else {
+    let Ok(_permit) = gate.permits.acquire().await else {
         return HostAuth::Unreachable;
     };
     let mut command = tokio::process::Command::new(binary);
@@ -562,6 +607,131 @@ mod tests {
         }
     }
 
+    async fn probe_host_with_binary(
+        host: &DiscoveredHost,
+        binary: &FsPath,
+        timeout: Duration,
+    ) -> HostAuth {
+        probe_host_gated(
+            &ProbeGate::new(SSH_PROBE_CONCURRENCY),
+            host,
+            binary,
+            timeout,
+        )
+        .await
+    }
+
+    fn spawn_count(script: &FsPath) -> usize {
+        std::fs::read_to_string(format!("{}.log", script.display()))
+            .map(|log| log.lines().count())
+            .unwrap_or(0)
+    }
+
+    /// Catches: concurrent probes of one host (two clicks, or a bulk probe and
+    /// a click) each spawning their own ssh.
+    #[tokio::test]
+    async fn overlapping_probes_of_one_host_spawn_one_ssh() {
+        let counter = crate::test_support::fake_ssh_script(
+            "ssh-hosts-single-flight",
+            "echo x >> \"$0.log\"; sleep 1; exit 0",
+            "echo x>> \"%~f0.log\"\r\nping -n 3 127.0.0.1 >nul\r\nexit /b 0",
+        );
+        let _ = std::fs::remove_file(format!("{}.log", counter.display()));
+        let gate = ProbeGate::new(SSH_PROBE_CONCURRENCY);
+        let cache = tokio::sync::Mutex::new(None);
+        let listed = vec![config_host("one")];
+        let timeout = Duration::from_secs(5);
+        let (a, b, bulk) = tokio::join!(
+            probe_listed_host(&gate, listed.clone(), "one", None, &counter, timeout),
+            probe_listed_host(&gate, listed.clone(), "ONE", None, &counter, timeout),
+            probe_cached_with(&gate, &cache, listed.clone(), &counter, timeout),
+        );
+        assert_eq!(a.unwrap().auth, HostAuth::Shell);
+        assert_eq!(b.unwrap().auth, HostAuth::Shell);
+        assert_eq!(bulk.unwrap()[0].auth, HostAuth::Shell);
+        assert_eq!(spawn_count(&counter), 1);
+    }
+
+    /// Catches: no ceiling on running ssh processes; the gate's permit count
+    /// must hold across bulk and single probes of different hosts.
+    #[tokio::test]
+    async fn no_more_probes_run_at_once_than_the_gate_allows() {
+        let tracker = crate::test_support::fake_ssh_script(
+            "ssh-hosts-permits",
+            "echo + >> \"$0.log\"; sleep 1; echo - >> \"$0.log\"; exit 0",
+            "echo +>> \"%~f0.log\"\r\nping -n 3 127.0.0.1 >nul\r\necho ->> \"%~f0.log\"\r\nexit /b 0",
+        );
+        let _ = std::fs::remove_file(format!("{}.log", tracker.display()));
+        let gate = ProbeGate::new(2);
+        let listed: Vec<DiscoveredHost> = (0..4).map(|i| config_host(&format!("h{i}"))).collect();
+        let timeout = Duration::from_secs(10);
+        let bulk = probe_hosts_with_gate(&gate, listed[..3].to_vec(), &tracker, timeout);
+        let single = probe_listed_host(&gate, listed.clone(), "h3", None, &tracker, timeout);
+        let (statuses, single) = tokio::join!(bulk, single);
+        assert!(statuses.iter().all(|s| s.auth == HostAuth::Shell));
+        single.unwrap();
+        let (mut running, mut peak) = (0i32, 0i32);
+        for line in std::fs::read_to_string(format!("{}.log", tracker.display()))
+            .unwrap()
+            .lines()
+        {
+            running += if line.trim() == "+" { 1 } else { -1 };
+            peak = peak.max(running);
+        }
+        assert_eq!(
+            spawn_count(&tracker),
+            8,
+            "4 hosts, one start and one end each"
+        );
+        assert_eq!(peak, 2, "peak concurrent ssh processes");
+    }
+
+    /// Catches: a failed probe being replayed from memory, so after the
+    /// network is fixed a manual probe still shows the stale failure.
+    #[tokio::test]
+    async fn a_manual_probe_asks_ssh_again_after_a_failure() {
+        let down = crate::test_support::fake_ssh_script(
+            "ssh-hosts-manual-down",
+            "echo 'ssh: connect to host x port 22: Connection refused' >&2; exit 255",
+            "echo ssh: connect to host x port 22: Connection refused 1>&2& exit /b 255",
+        );
+        let up = crate::test_support::fake_ssh_script("ssh-hosts-manual-up", "exit 0", "exit /b 0");
+        let gate = ProbeGate::new(SSH_PROBE_CONCURRENCY);
+        let listed = vec![config_host("flaky")];
+        let timeout = Duration::from_secs(5);
+        let first = probe_listed_host(&gate, listed.clone(), "flaky", None, &down, timeout)
+            .await
+            .unwrap();
+        let second = probe_listed_host(&gate, listed, "flaky", None, &up, timeout)
+            .await
+            .unwrap();
+        assert_eq!(first.auth, HostAuth::Unreachable);
+        assert_eq!(second.auth, HostAuth::Shell);
+    }
+
+    /// Catches: the single probe contacting a caller-supplied name that the
+    /// discovery list does not contain.
+    #[tokio::test]
+    async fn a_probe_for_an_unlisted_host_spawns_nothing() {
+        let counter = crate::test_support::fake_ssh_script(
+            "ssh-hosts-unlisted",
+            "echo x >> \"$0.log\"; exit 0",
+            "echo x>> \"%~f0.log\"\r\nexit /b 0",
+        );
+        let _ = std::fs::remove_file(format!("{}.log", counter.display()));
+        let gate = ProbeGate::new(SSH_PROBE_CONCURRENCY);
+        let result = probe_listed_host(
+            &gate,
+            vec![config_host("known")],
+            "other",
+            None,
+            &counter,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(spawn_count(&counter), 0);
+    }
     #[test]
     fn ssh_hosts_are_deduplicated_and_wildcards_are_omitted() {
         let dir = tempfile::tempdir().unwrap();
@@ -594,7 +764,6 @@ mod tests {
                 "true",
             ]
         );
-        assert_eq!(SSH_PROBE_CONCURRENCY, 4);
     }
 
     #[tokio::test]

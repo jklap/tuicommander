@@ -106,15 +106,16 @@ pub(crate) fn parse_known_hosts(text: &str) -> KnownHosts {
 }
 
 /// A host that is safe to pass to `ssh` as a destination: non-empty, no
-/// leading `-`, and only letters, digits and `. - _ : %`. That excludes `@` and
+/// leading `-`, and only ASCII letters, digits and `. - _ : %`. That excludes `@` and
 /// `/` (ssh would read `user@host` or an `ssh://` URI), whitespace, brackets,
-/// and control or format characters that fake a look-alike name.
+/// and non-ASCII characters (Cyrillic or full-width look-alikes, format and
+/// control characters) that fake another name.
 pub(crate) fn is_safe_host(host: &str) -> bool {
     !host.is_empty()
         && !host.starts_with('-')
         && host
             .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '%'))
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '%'))
 }
 
 /// `None` when the name is malformed (bad port, unbalanced bracket).
@@ -416,7 +417,12 @@ mod critic_round5_tests {
     /// Cyrillic or full-width look-alike of a trusted name is listed and probed.
     #[test]
     fn non_ascii_look_alike_hosts_are_not_safe() {
-        for host in ["exаmple.com", "ｅxample.com", "host٣.example", "ex\u{200b}ample.com"] {
+        for host in [
+            "exаmple.com",
+            "ｅxample.com",
+            "host٣.example",
+            "ex\u{200b}ample.com",
+        ] {
             assert!(!is_safe_host(host), "look-alike accepted: {host:?}");
         }
     }
@@ -426,10 +432,7 @@ mod critic_round5_tests {
     #[test]
     fn bracketed_ipv6_with_zone_and_port_is_listed() {
         let known = parse_known_hosts("[fe80::1%en0]:2222 ssh-ed25519 AAAA\n");
-        assert_eq!(
-            known.hosts,
-            vec![("fe80::1%en0".to_string(), Some(2222))]
-        );
+        assert_eq!(known.hosts, vec![("fe80::1%en0".to_string(), Some(2222))]);
     }
 
     /// Catches: user@host and ssh:// forms surviving as one token, which ssh
