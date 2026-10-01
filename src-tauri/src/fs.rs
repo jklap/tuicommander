@@ -3534,6 +3534,67 @@ mod tests {
     }
 
     #[test]
+    fn critic_markdown_link_home_prefix_with_doubled_slash_stays_under_home() {
+        // Catches: `Path::join` with an absolute remainder replaces the home
+        // dir, so `~//etc/hosts` resolved to `/etc/hosts` instead of `$HOME/etc/hosts`.
+        let home = TempDir::new().unwrap();
+        fs::create_dir(home.path().join("notes")).unwrap();
+        fs::write(home.path().join("notes/design.md"), "").unwrap();
+        let expected = home
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("notes/design.md")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            matches!(
+                resolve_markdown_link_with_home(
+                    "/repo",
+                    "/repo/review.md",
+                    "~//notes/design.md",
+                    Some(home.path())
+                ),
+                MarkdownLinkTarget::File { absolute_path, .. } if absolute_path == expected
+            ),
+            "~//notes/design.md must resolve inside home"
+        );
+    }
+
+    #[test]
+    fn critic_markdown_link_home_prefix_alone_is_the_home_directory() {
+        // Catches: a bare `~/` treated as a relative path next to the file.
+        let home = TempDir::new().unwrap();
+        let canonical = home.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/", Some(home.path())),
+            MarkdownLinkTarget::File { absolute_path, is_directory: true, .. } if absolute_path == canonical
+        ));
+    }
+
+    #[test]
+    fn critic_markdown_link_bare_tilde_and_unknown_home_stay_relative() {
+        // Catches: `~user/x` or a missing home dir panicking or expanding to the wrong root.
+        let dir = TempDir::new().unwrap();
+        let review = dir.path().join("review.md");
+        fs::write(&review, "").unwrap();
+        for (href, home) in [("~user/x.md", Some(dir.path())), ("~/x.md", None)] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home(
+                        dir.path().to_str().unwrap(),
+                        review.to_str().unwrap(),
+                        href,
+                        home
+                    ),
+                    MarkdownLinkTarget::Missing { .. }
+                ),
+                "{href}"
+            );
+        }
+    }
+
+    #[test]
     fn markdown_link_resolution_blocks_invalid_percent_encoding() {
         for href in ["file%ZZ.md", "file.md#%ZZ", "file%E0.md"] {
             assert!(matches!(
