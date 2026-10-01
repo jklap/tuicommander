@@ -43,10 +43,11 @@ describe("service worker shell cache", () => {
 		expect(writes).toEqual(["/mobile.html"]);
 	});
 
-	// Plausible bug: a cached 401 replaces the shell and the app never leaves it.
-	it("never stores a 401 as the offline shell", async () => {
-		const { navigate, writes } = loadServiceWorker(new Response("no", { status: 401 }));
+	// Plausible bug: a cached refusal replaces the shell and the app never leaves it.
+	it.each([401, 403, 429])("never stores a %i as the offline shell", async (status) => {
+		const { navigate, writes } = loadServiceWorker(new Response("no", { status }));
 		await navigate("/mobile");
+		await navigate("/mobile/session/a");
 		expect(writes).toEqual([]);
 	});
 });

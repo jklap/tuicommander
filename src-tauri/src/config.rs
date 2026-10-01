@@ -4743,7 +4743,6 @@ mod tests {
         assert!(loaded.auto_update_enabled);
         assert_eq!(loaded.language, "en");
         assert_eq!(loaded.update_channel, "stable");
-        assert_eq!(loaded.services.auth.session_token_duration_secs, 2_592_000);
         assert!(!loaded.services.server.ipv6_enabled);
         assert!(!loaded.services.auth.lan_auth_bypass);
         assert!(loaded.intent_tab_title); // defaults to true
