@@ -713,7 +713,15 @@ export async function initApp(deps: AppInitDeps) {
 				// own tab button filtered out of the bar.
 				const background = focus === false;
 
-				if (cmd === "open" && repoPath) {
+				if (cmd === "open" && classifyFile(filePath) === "preview") {
+					// Images, PDFs, media: the preview tab serves them through the asset
+					// protocol, in or out of a repo. The editor cannot read them as UTF-8.
+					editorTabsStore.closeMcpFile(id);
+					mdTabsStore.closeMcpFile(id);
+					mdTabsStore.closeUiTab(id);
+					if (repoPath) mdTabsStore.addHtmlPreview(repoPath, relPath);
+					else mdTabsStore.addHtmlPreview(fallbackRepoPath ?? "", filePath);
+				} else if (cmd === "open" && repoPath) {
 					editorTabsStore.closeMcpFile(id);
 					mdTabsStore.closeUiTab(id);
 					mdTabsStore.addMcpFile(id, repoPath, relPath, pinned, background);
