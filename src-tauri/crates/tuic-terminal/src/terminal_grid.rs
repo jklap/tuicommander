@@ -6649,3 +6649,54 @@ mod reprint_merge_critic_tests {
         assert_eq!(grid.primary_scrollback_count(), before);
     }
 }
+
+/// Round-2 adversarial cases for the "head rows changed since the last frame end" evidence rule (#1264).
+#[cfg(test)]
+mod reprint_merge_evidence_critic_tests {
+    use super::*;
+
+    fn non_empty(grid: &TerminalGrid) -> usize {
+        let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+        rows.extend(grid.screen_text_rows());
+        rows.iter().filter(|r| !r.trim().is_empty()).count()
+    }
+
+    /// Catches: the evidence rule is satisfied by any change in the head rows, so
+    /// new output that merely continues a repeating block (alpha/beta records)
+    /// scrolls the screen, changes the head versus the snapshot, matches the
+    /// periodic history tail and is "merged" away although nothing was reprinted.
+    #[test]
+    fn output_continuing_a_repeating_block_is_not_merged() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..6 {
+            grid.process(b"alpha\r\nbeta\r\n");
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        grid.process(b"alpha\r\n");
+        let before = non_empty(&grid);
+        grid.process(b"\x1b[?2026h\x1b[?2026l");
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "continued output lost rows at the frame end"
+        );
+    }
+
+    /// Catches: an unrelated in-place edit of one head row (status/spinner line)
+    /// that happens to produce text equal to the history tail counts as a repaint.
+    #[test]
+    fn unrelated_head_row_edit_equal_to_history_tail_is_not_merged() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for row in ["Z1", "Z2", "Z3", "A", "B", "A", "C", "Q"] {
+            grid.process(format!("{row}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = non_empty(&grid);
+        grid.process(b"\x1b[?2026h\x1b[2;1HB\x1b[K\x1b[?2026l");
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "an in-place edit deleted history rows"
+        );
+    }
+}
