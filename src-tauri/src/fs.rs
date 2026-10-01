@@ -3565,7 +3565,12 @@ mod tests {
     fn critic_markdown_link_home_prefix_alone_is_the_home_directory() {
         // Catches: a bare `~/` treated as a relative path next to the file.
         let home = TempDir::new().unwrap();
-        let canonical = home.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        let canonical = home
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         assert!(matches!(
             resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/", Some(home.path())),
             MarkdownLinkTarget::File { absolute_path, is_directory: true, .. } if absolute_path == canonical
