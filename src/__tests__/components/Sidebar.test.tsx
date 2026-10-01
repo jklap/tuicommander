@@ -314,6 +314,73 @@ describe("Sidebar", () => {
 		});
 	});
 
+	describe("touch controls (1334-b659)", () => {
+		const originalMatchMedia = window.matchMedia;
+		const touch = (on: boolean) => {
+			window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+				matches: on && query === "(hover: none)",
+				addEventListener: vi.fn(),
+				removeEventListener: vi.fn(),
+			}));
+		};
+		afterEach(() => {
+			window.matchMedia = originalMatchMedia;
+		});
+		const remoteRepo = () => setRepos({ "/repo1": makeRepo({ connectionId: "conn-1" }) });
+
+		// Catches: an offline remote badge that does nothing on touch, where no tooltip explains it.
+		it("remote badge tap opens Remote Machines on touch and does not toggle the repo", () => {
+			touch(true);
+			remoteRepo();
+			const onOpenRemoteMachines = vi.fn();
+			const { container } = render(() => <Sidebar {...defaultProps({ onOpenRemoteMachines })} />);
+			fireEvent.click(container.querySelector(".remoteBadge")!);
+			expect(onOpenRemoteMachines).toHaveBeenCalledTimes(1);
+			expect(mockToggleExpanded).not.toHaveBeenCalled();
+		});
+
+		// Catches: the touch-only behaviour leaking to a hover device, where the badge click keeps toggling the repo.
+		it("remote badge click keeps toggling the repo on a hover device", () => {
+			touch(false);
+			remoteRepo();
+			const onOpenRemoteMachines = vi.fn();
+			const { container } = render(() => <Sidebar {...defaultProps({ onOpenRemoteMachines })} />);
+			fireEvent.click(container.querySelector(".remoteBadge")!);
+			expect(onOpenRemoteMachines).not.toHaveBeenCalled();
+			expect(mockToggleExpanded).toHaveBeenCalledWith("/repo1");
+		});
+
+		// Catches: no way to reach the branch menu on touch (long press fires no contextmenu on iPadOS),
+		// or the ⋯ click also selecting the branch.
+		it("branch ⋯ button opens the branch menu without selecting the branch", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						b: {
+							workspaceId: "b",
+							branchName: "feature/x",
+							isMain: false,
+							worktreePath: "/wt/feature-x",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const onBranchSelect = vi.fn();
+			const { container } = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
+			const row = Array.from(container.querySelectorAll(".branchItem")).find((el) =>
+				el.textContent?.includes("feature/x"),
+			)!;
+			fireEvent.click(row.querySelector(".branchMoreBtn")!);
+			expect(
+				Array.from(container.querySelectorAll(".menu .item")).some((el) => el.textContent?.includes("Copy Path")),
+			).toBe(true);
+			expect(onBranchSelect).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("rich layout", () => {
 		const richBranch = (over: Record<string, unknown> = {}) => ({
 			workspaceId: "feat",

@@ -922,6 +922,19 @@ export const BranchItem: Component<{
 					</div>
 				</Show>
 				<div class={s.branchActions} style={{ display: props.shortcutIndex !== undefined ? "none" : undefined }}>
+					{/* Touch only (CSS): a long press on a row fires no contextmenu on iPadOS
+					    (measured in the simulator, story 1334-b659), so the menu needs a button. */}
+					<button
+						class={s.branchMoreBtn}
+						onClick={(e) => {
+							e.stopPropagation();
+							const rect = e.currentTarget.getBoundingClientRect();
+							ctxMenu.openAt(rect.right - 160, rect.bottom + 4);
+						}}
+						title={t("sidebar.branchOptions", "Branch options")}
+					>
+						⋯
+					</button>
 					<button
 						class={s.branchAddBtn}
 						onClick={(e) => {
@@ -1101,6 +1114,7 @@ export const RepoSection: Component<{
 	onCreateWorktreeFromBranch?: (branchName: string) => void;
 	onMergeAndArchive?: (branchName: string) => void;
 	onSettings: () => void;
+	onOpenRemoteMachines?: () => void;
 	onRemove: () => void;
 	onToggle: () => void;
 	onToggleCollapsed: () => void;
@@ -1336,6 +1350,12 @@ export const RepoSection: Component<{
 							class={cx(s.remoteBadge, remoteBadgeStatusClass())}
 							data-tooltip={remoteBadgeTitle()}
 							data-tooltip-pos="bottom"
+							onClick={(e) => {
+								// Touch has no tooltip, so the badge itself is the way to the fix.
+								if (!window.matchMedia?.("(hover: none)").matches) return;
+								e.stopPropagation();
+								props.onOpenRemoteMachines?.();
+							}}
 						>
 							{remoteBadgeLabel()}
 						</span>
