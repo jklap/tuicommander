@@ -279,6 +279,11 @@ function createMdTabsStore() {
 
 		/** Open a native Markdown tab using the MCP id, independent of its file path. */
 		addMcpFile(mcpUiId: string, repoPath: string, filePath: string, pinned: boolean, background: boolean): string {
+			// An id that last showed an image still owns its preview tab; drop it.
+			const stale = Object.values(base.state.tabs).find(
+				(tab) => tab.type === "html-preview" && tab.mcpUiId === mcpUiId,
+			);
+			if (stale) base.remove(stale.id);
 			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "file" && tab.mcpUiId === mcpUiId);
 			const id = existing?.id ?? base._nextId("md");
 			const tab: FileTab = {
@@ -634,7 +639,13 @@ function createMdTabsStore() {
 		},
 
 		/** Add a preview tab owned by an MCP ui id (never shared with a user-opened preview of the same file). */
-		addMcpHtmlPreview(mcpUiId: string, repoPath: string, filePath: string, background: boolean): string {
+		addMcpHtmlPreview(
+			mcpUiId: string,
+			repoPath: string,
+			filePath: string,
+			pinned: boolean,
+			background: boolean,
+		): string {
 			const id = base._nextId("md");
 			const fileName = pathBasename(filePath) || filePath;
 			const tab: HtmlPreviewTab = {
@@ -647,6 +658,7 @@ function createMdTabsStore() {
 				fileName,
 				branchKey: branchKeyFor(repoPath),
 				fsRoot: repoPath,
+				pinned,
 			};
 			return background ? base._addTabBackground(tab) : base._addTab(tab);
 		},
