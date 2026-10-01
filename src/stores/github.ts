@@ -3,6 +3,7 @@ import { invoke, listen } from "../invoke";
 import type { BranchPrStatus, CheckDetail, CheckSummary, GitHubIssue, GitHubStatus } from "../types";
 import { appLogger } from "./appLogger";
 import { isNotificationType, prNotificationsStore } from "./prNotifications";
+import { notifyPrTransition } from "../services/prNativeNotifications";
 import { repositoriesStore } from "./repositories";
 import { settingsStore } from "./settings";
 
@@ -294,6 +295,18 @@ function createGitHubStore() {
 			title: t.title,
 			type: t.type,
 		});
+
+		// Transitions are emitted before `github-pr-update`, so the store still holds this PR's row.
+		const pr = getPrStatus(t.repo_path, t.branch);
+		if (pr?.url) {
+			notifyPrTransition({
+				repoName: repositoriesStore.get(t.repo_path)?.displayName ?? t.repo_path,
+				prNumber: t.pr_number,
+				title: t.title,
+				type: t.type,
+				url: pr.url,
+			});
+		}
 
 		if ((t.type === "merged" || t.type === "closed") && prTerminalCallback) {
 			prTerminalCallback(t.repo_path, t.branch, t.pr_number, t.type);

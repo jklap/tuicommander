@@ -1194,6 +1194,10 @@ pub(crate) struct NotificationConfig {
     /// toasts stay transient — they appear, they fade, they leave no trace.
     #[serde(default = "default_true")]
     pub(crate) toasts_in_bell: bool,
+    /// OS notification when a PR becomes ready, fails CI, gets changes requested
+    /// or is merged. The bell alone is invisible while another app has focus.
+    #[serde(default = "default_true")]
+    pub(crate) pr_native_notifications: bool,
 }
 
 fn default_true() -> bool {
@@ -1213,6 +1217,7 @@ impl Default for NotificationConfig {
             audio_device: None,
             silence_remote_completions: true,
             toasts_in_bell: true,
+            pr_native_notifications: true,
         }
     }
 }
@@ -5013,6 +5018,7 @@ mod tests {
             audio_device: Some("Test Speaker".to_string()),
             silence_remote_completions: true,
             toasts_in_bell: false,
+            pr_native_notifications: false,
         };
         let loaded: NotificationConfig = round_trip_in_dir(dir.path(), "notifications.json", &cfg);
         assert!(!loaded.enabled);
@@ -5023,6 +5029,15 @@ mod tests {
         assert_eq!(loaded.audio_device.as_deref(), Some("Test Speaker"));
         assert!(loaded.silence_remote_completions);
         assert!(!loaded.toasts_in_bell);
+        assert!(!loaded.pr_native_notifications);
+    }
+
+    /// A config written before the setting existed keeps PR notifications on.
+    #[test]
+    fn pr_native_notifications_defaults_on() {
+        let legacy: NotificationConfig =
+            serde_json::from_str(r#"{"enabled":true,"volume":0.5}"#).unwrap();
+        assert!(legacy.pr_native_notifications);
     }
 
     /// A user who never saw the setting keeps the mirroring, so nothing a toast

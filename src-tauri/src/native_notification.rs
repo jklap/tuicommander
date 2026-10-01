@@ -14,6 +14,10 @@ pub(crate) enum NativeNoticeTarget {
     AiChat {
         id: String,
     },
+    /// A PR transition notice; clicking opens `url` in the browser.
+    Pr {
+        url: String,
+    },
 }
 
 #[cfg(target_os = "macos")]
@@ -127,5 +131,15 @@ mod tests {
         assert_eq!(json, r#"{"kind":"aichat","id":"c1:p1"}"#);
         let back: NativeNoticeTarget = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, NativeNoticeTarget::AiChat { id } if id == "c1:p1"));
+    }
+
+    /// The frontend emits and matches kind "pr"; a rename here would silently drop the click route.
+    #[test]
+    fn pr_target_uses_the_pr_kind_on_the_wire() {
+        let json = serde_json::to_string(&NativeNoticeTarget::Pr {
+            url: "https://github.com/o/r/pull/1".into(),
+        })
+        .unwrap();
+        assert_eq!(json, r#"{"kind":"pr","url":"https://github.com/o/r/pull/1"}"#);
     }
 }
