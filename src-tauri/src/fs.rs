@@ -1987,7 +1987,9 @@ pub enum MarkdownLinkTarget {
         open_path: String,
         is_directory: bool,
         same_document: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
         anchor: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         line: Option<usize>,
     },
     Missing {
@@ -2280,6 +2282,33 @@ mod tests {
         };
         let wire = serde_json::to_value(&batch).unwrap();
         assert_eq!(wire["search_id"], "cs-7");
+    }
+
+    /// The frontend takes the Markdown-viewer branch only when `line` is absent;
+    /// a serialised `null` once sent every .md link to the text editor.
+    #[test]
+    fn markdown_file_link_omits_absent_anchor_and_line() {
+        let target = MarkdownLinkTarget::File {
+            absolute_path: "/r/a.md".into(),
+            open_path: "a.md".into(),
+            is_directory: false,
+            same_document: false,
+            anchor: None,
+            line: None,
+        };
+        let wire = serde_json::to_value(&target).unwrap();
+        assert!(wire.get("anchor").is_none() && wire.get("line").is_none());
+        let with = MarkdownLinkTarget::File {
+            absolute_path: "/r/a.md".into(),
+            open_path: "a.md".into(),
+            is_directory: false,
+            same_document: false,
+            anchor: Some("x".into()),
+            line: Some(3),
+        };
+        let wire = serde_json::to_value(&with).unwrap();
+        assert_eq!(wire["anchor"], "x");
+        assert_eq!(wire["line"], 3);
     }
 
     /// IPC and HTTP are two transports for one backend, and the browser store
