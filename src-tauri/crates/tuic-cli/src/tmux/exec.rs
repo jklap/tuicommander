@@ -1310,6 +1310,101 @@ mod ipc_backend_pane_id_url_encoding_tests {
         assert_eq!(result, Ok("s1".to_string()));
     }
 
+    /// The JSON body only (everything after the blank line ending the
+    /// headers). `capture_request` reads the whole small request in one
+    /// `read`, so the body is present in the captured bytes.
+    fn request_body(raw: &str) -> &str {
+        raw.split_once("\r\n\r\n")
+            .map(|(_, b)| b)
+            .unwrap_or_default()
+    }
+
+    /// Runs `call` with `$TUIC_SESSION` set to a sentinel, restoring it after,
+    /// so the body tests below can prove the shim does NOT forward the calling
+    /// terminal's own id today (ambient `TUIC_SESSION` is routinely set when
+    /// `cargo test` runs from a real TUIC terminal).
+    fn with_tuic_session<T>(value: &str, f: impl FnOnce() -> T) -> T {
+        let saved = std::env::var("TUIC_SESSION").ok();
+        unsafe { std::env::set_var("TUIC_SESSION", value) };
+        let out = f();
+        match saved {
+            Some(v) => unsafe { std::env::set_var("TUIC_SESSION", v) },
+            None => unsafe { std::env::remove_var("TUIC_SESSION") },
+        }
+        out
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn create_tmux_pane_posts_exactly_label_window_id_and_cwd_and_no_origin_session() {
+        // CHARACTERIZATION of today's split-window wire body. A planned
+        // change adds the calling terminal's `TUIC_SESSION` as the pane's
+        // lead; when that lands this test must be updated deliberately.
+        let (raw, result) = with_tuic_session("sentinel-lead-session", || {
+            capture_request(|| IpcBackend.create_tmux_pane("claude-swarm-7", "@0", Some("/repo")))
+        });
+        assert_eq!(request_line(&raw), "POST /tmux/panes HTTP/1.1");
+        let body: serde_json::Value = serde_json::from_str(request_body(&raw)).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "label": "claude-swarm-7", "window_id": "@0", "cwd": "/repo"
+            })
+        );
+        assert!(
+            !raw.contains("sentinel-lead-session"),
+            "TUIC_SESSION is not read or forwarded by the tmux shim today"
+        );
+        // The mock answers `{"ok":true,"tuic_session_id":"s1"}`; the trait
+        // returns the parsed JSON object untouched.
+        assert_eq!(result.unwrap()["tuic_session_id"], "s1");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn create_tmux_pane_with_no_cwd_posts_an_explicit_null() {
+        let (raw, _) = capture_request(|| IpcBackend.create_tmux_pane("default", "@3", None));
+        let body: serde_json::Value = serde_json::from_str(request_body(&raw)).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({ "label": "default", "window_id": "@3", "cwd": null })
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn materialize_pane_posts_only_cwd_in_the_body_and_the_label_in_the_query() {
+        let (raw, _) = with_tuic_session("sentinel-lead-session", || {
+            capture_request(|| IpcBackend.materialize_pane("claude-swarm-7", "%2", Some("/repo")))
+        });
+        assert_eq!(
+            request_line(&raw),
+            "POST /tmux/panes/%252/materialize?label=claude-swarm-7 HTTP/1.1"
+        );
+        let body: serde_json::Value = serde_json::from_str(request_body(&raw)).unwrap();
+        assert_eq!(body, serde_json::json!({ "cwd": "/repo" }));
+        assert!(!raw.contains("sentinel-lead-session"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn create_tmux_window_and_session_post_bodies_carry_no_origin_session() {
+        let (raw, _) = with_tuic_session("sentinel-lead-session", || {
+            capture_request(|| {
+                IpcBackend.create_tmux_window("claude-swarm-7", "$0", Some("w"), Some("/repo"))
+            })
+        });
+        assert_eq!(request_line(&raw), "POST /tmux/windows HTTP/1.1");
+        let body: serde_json::Value = serde_json::from_str(request_body(&raw)).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "label": "claude-swarm-7", "session_id": "$0", "name": "w", "cwd": "/repo"
+            })
+        );
+        assert!(!raw.contains("sentinel-lead-session"));
+    }
+
     #[test]
     #[serial_test::serial]
     fn rename_pane_percent_encodes_a_two_digit_pane_id() {
