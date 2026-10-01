@@ -79,6 +79,47 @@ describe("TerminalTabView progress bar", () => {
 	});
 });
 
+describe("TerminalTabView isExternallyCreated badge/class", () => {
+	afterEach(() => {
+		for (const id of Object.keys(terminalsStore.state.terminals)) terminalsStore.remove(id);
+	});
+
+	it("shows the 'PTY · ' prefix only when isExternallyCreated and agentType are both set", () => {
+		const id = addTerminal({ isExternallyCreated: true, agentType: "claude" });
+		const { container } = renderTab(id);
+		const tabName = container.querySelector(`[data-tab-id="${id}"] .tabName`) ?? container.querySelector(".tabName");
+		expect(tabName?.textContent).toContain("PTY ·");
+	});
+
+	it("does not show the 'PTY · ' prefix when isExternallyCreated is true but there is no agentType", () => {
+		const id = addTerminal({ isExternallyCreated: true, agentType: null });
+		const { container } = renderTab(id);
+		const tabName = container.querySelector(".tabName");
+		expect(tabName?.textContent).not.toContain("PTY ·");
+	});
+
+	it("does not show the 'PTY · ' prefix for a non-remote tab even with an agentType", () => {
+		const id = addTerminal({ isExternallyCreated: false, agentType: "claude" });
+		const { container } = renderTab(id);
+		const tabName = container.querySelector(".tabName");
+		expect(tabName?.textContent).not.toContain("PTY ·");
+	});
+
+	it("applies the remoteTab class when isExternallyCreated is true", () => {
+		const id = addTerminal({ isExternallyCreated: true });
+		const { container } = renderTab(id);
+		const tab = container.querySelector(`[data-tab-id="${id}"]`) as HTMLElement;
+		expect(Array.from(tab.classList).some((c) => c.toLowerCase().includes("remotetab"))).toBe(true);
+	});
+
+	it("does not apply the remoteTab class when isExternallyCreated is false", () => {
+		const id = addTerminal({ isExternallyCreated: false });
+		const { container } = renderTab(id);
+		const tab = container.querySelector(`[data-tab-id="${id}"]`) as HTMLElement;
+		expect(Array.from(tab.classList).some((c) => c.toLowerCase().includes("remotetab"))).toBe(false);
+	});
+});
+
 describe("TerminalTabView busy/idle dot", () => {
 	afterEach(() => {
 		for (const id of Object.keys(terminalsStore.state.terminals)) terminalsStore.remove(id);

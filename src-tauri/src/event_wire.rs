@@ -49,8 +49,6 @@ pub(crate) fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::McpToast { .. } => "mcp-toast",
         AppEvent::McpConfirm { .. } => "mcp-confirm",
         AppEvent::McpConfirmResolved { .. } => "mcp-confirm-resolved",
-        AppEvent::AgentWrapPrompt { .. } => "agent-wrap-prompt",
-        AppEvent::AgentWrapPromptResolved { .. } => "agent-wrap-prompt-resolved",
         AppEvent::AcpNotice(_) => "acp-notice",
         AppEvent::SettingsChanged(_) => "settings-changed",
         AppEvent::ProviderQuotaChanged(_) => "provider-quota-changed",
@@ -131,6 +129,7 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
             agent_type,
             display_name,
             parent_session,
+            is_remote,
         } => {
             serde_json::json!({
                 "session_id": session_id,
@@ -139,6 +138,7 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "agent_type": agent_type,
                 "display_name": display_name,
                 "parent_session": parent_session,
+                "is_remote": is_remote,
             })
         }
         AppEvent::SessionClosed {
@@ -315,23 +315,6 @@ pub(crate) fn event_payload(event: &AppEvent) -> serde_json::Value {
             confirmed,
         } => {
             serde_json::json!({ "request_id": request_id, "confirmed": confirmed })
-        }
-        AppEvent::AgentWrapPrompt {
-            request_id,
-            agent_type,
-        } => {
-            serde_json::json!({ "request_id": request_id, "agent_type": agent_type })
-        }
-        AppEvent::AgentWrapPromptResolved {
-            request_id,
-            agent_type,
-            decision,
-        } => {
-            serde_json::json!({
-                "request_id": request_id,
-                "agent_type": agent_type,
-                "decision": decision,
-            })
         }
         // Forwarded whole: the notice IS the payload, in the same camelCase the
         // `/acp` routes use, so a client needs no per-transport translation.
@@ -830,6 +813,11 @@ mod tests {
             // (`dictation-download-progress` has a real arm, so it is not here).
             "dictation-backend-info",
             "dictation-partial",
+            // Remote-machine repository refresh (remoteRepositorySync.ts) — produced only
+            // by `remote_mirror.rs`'s `republish` for a connected remote machine and
+            // delivered to the desktop window through the RemoteMirrored forwarding
+            // allowlist (`WINDOW_MIRRORABLE_EVENTS`), never from a local AppEvent arm.
+            "remote-repo-changed",
             // Content search streaming (fs.rs) — deliberately desktop-only: the
             // HTTP route computes the same result and returns it in the
             // response body instead of streaming.
