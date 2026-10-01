@@ -1,4 +1,4 @@
-import { type Component, createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, type JSX, onCleanup, Show } from "solid-js";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
@@ -364,6 +364,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	// are on this branch. A child whose parent is elsewhere stays a top-level row.
 	const topLevel = () => (rich() ? props.terminalIds.filter((id) => parentOf(id) === null) : props.terminalIds);
 	const childrenOf = (id: string) => (rich() ? props.terminalIds.filter((other) => parentOf(other) === id) : []);
+	onCleanup(progressStore.holdSidebarFlow(props.repoPath));
 	// Subagents come from the project flow: ask for it while rich shows an agent,
 	// again on every busy flip and every minute.
 	createEffect(() => {

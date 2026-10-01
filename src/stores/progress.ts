@@ -139,6 +139,9 @@ export function createProgressStore() {
 	// Responses are applied only if no reset and no newer request happened since they were sent.
 	let sidebarFlowEpoch = 0;
 	const sidebarFlowSeq = new Map<string, number>();
+	const sidebarFlowApplied = new Map<string, number>();
+	// Rows showing the flow of a project; the trailing refresh is cancelled when the last one leaves.
+	const sidebarFlowHolds = new Map<string, number>();
 
 	function ensure(project: string): void {
 		if (state.projects[project]) return;
@@ -215,11 +218,30 @@ export function createProgressStore() {
 		sidebarFlowSeq.set(project, seq);
 		try {
 			const flow = await invoke<ProgressFlow>("progress_flow", { project, input: {} });
-			if (epoch !== sidebarFlowEpoch || sidebarFlowSeq.get(project) !== seq) return;
+			// Drop only a response older than one already applied: a newer read that failed
+			// must not discard an older valid one.
+			if (epoch !== sidebarFlowEpoch || seq < (sidebarFlowApplied.get(project) ?? 0)) return;
+			sidebarFlowApplied.set(project, seq);
 			setSidebarFlows(project, reconcile(flow));
 		} catch {
 			// Keep the last flow: a failed read must not blank the subagent lines.
 		}
+	}
+
+	/// Registers a row that shows `project`'s flow. The returned release cancels the
+	/// pending trailing refresh once no row is left.
+	function holdSidebarFlow(project: string): () => void {
+		sidebarFlowHolds.set(project, (sidebarFlowHolds.get(project) ?? 0) + 1);
+		return () => {
+			const left = (sidebarFlowHolds.get(project) ?? 1) - 1;
+			if (left > 0) {
+				sidebarFlowHolds.set(project, left);
+				return;
+			}
+			sidebarFlowHolds.delete(project);
+			clearTimeout(sidebarFlowTrailing.get(project));
+			sidebarFlowTrailing.delete(project);
+		};
 	}
 
 	/// Refresh whichever view is showing. The list stays the source of the
@@ -370,6 +392,7 @@ export function createProgressStore() {
 		refreshFlow,
 		sidebarFlow: (project: string): ProgressFlow | undefined => sidebarFlows[project],
 		refreshSidebarFlow,
+		holdSidebarFlow,
 		fetchFlowDetail: (detail: FlowDetailRef) =>
 			invoke<{ text: string }>("progress_flow_detail", { input: detail }).then((result) => result.text),
 		open,
@@ -389,6 +412,8 @@ export function createProgressStore() {
 				sidebarFlowFetchedAt.clear();
 				sidebarFlowEpoch++;
 				sidebarFlowSeq.clear();
+				sidebarFlowApplied.clear();
+				sidebarFlowHolds.clear();
 				for (const timer of sidebarFlowTrailing.values()) clearTimeout(timer);
 				sidebarFlowTrailing.clear();
 				setView("list");
