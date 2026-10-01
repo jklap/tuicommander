@@ -2144,11 +2144,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}[];
 				const allLinks = [...validFiles, ...urlMatches];
 				links = allLinks.length > 0 ? allLinks : null;
-				if (linkCache.size > 200) {
-					const oldest = linkCache.keys().next().value;
-					if (oldest !== undefined) linkCache.delete(oldest);
+				// A file that did not resolve may be written a moment later (the tool
+				// call line prints before the file exists). Caching that miss would keep
+				// the name dead on click after the 3 s re-verification underlines it.
+				if (validFiles.length === fileMatches.length) {
+					if (linkCache.size > 200) {
+						const oldest = linkCache.keys().next().value;
+						if (oldest !== undefined) linkCache.delete(oldest);
+					}
+					linkCache.set(cacheKey, links);
 				}
-				linkCache.set(cacheKey, links);
 			}
 		}
 
