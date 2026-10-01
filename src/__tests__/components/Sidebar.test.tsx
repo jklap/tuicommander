@@ -247,6 +247,55 @@ describe("Sidebar", () => {
 		});
 	});
 
+	describe("density attribute", () => {
+		const manyBranches = (n: number) =>
+			Object.fromEntries(
+				Array.from({ length: n }, (_, i) => [
+					`w${i}`,
+					{
+						workspaceId: `w${i}`,
+						branchName: `b${i}`,
+						isMain: i === 0,
+						worktreePath: null,
+						terminals: [],
+						additions: 0,
+						deletions: 0,
+					},
+				]),
+			);
+		const aside = (container: HTMLElement) => container.querySelector("aside#sidebar") as HTMLElement;
+		const originalMatchMedia = window.matchMedia;
+		afterEach(() => {
+			window.matchMedia = originalMatchMedia;
+		});
+
+		// Catches: the density never reaching the <aside> the CSS keys on (derived but not wired).
+		it("puts a short list on the aside as comfortable", () => {
+			setRepos({ "/repo1": makeRepo({ workspaces: manyBranches(3) }) });
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(aside(container).dataset.density).toBe("comfortable");
+		});
+
+		// Catches: a long list still getting the roomy rows (row budget not read from the layout).
+		it("puts a long list on the aside as compact", () => {
+			setRepos({ "/repo1": makeRepo({ workspaces: manyBranches(20) }) });
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(aside(container).dataset.density).toBe("compact");
+		});
+
+		// Catches: a coarse pointer ignored by the component (only the pure function handles it).
+		it("puts touch on the aside for a coarse pointer", () => {
+			window.matchMedia = vi.fn().mockReturnValue({
+				matches: true,
+				addEventListener: vi.fn(),
+				removeEventListener: vi.fn(),
+			});
+			setRepos({ "/repo1": makeRepo({ workspaces: manyBranches(20) }) });
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(aside(container).dataset.density).toBe("touch");
+		});
+	});
+
 	describe("footer buttons", () => {
 		it("calls onAddRepo when footer Add Repository button is clicked", () => {
 			const onAddRepo = vi.fn();

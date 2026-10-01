@@ -5,35 +5,64 @@ import {
 	createCoarsePointer,
 	isSidebarDensityMode,
 	nextSidebarDensityMode,
-	ROOMY_MAX_ROWS,
+	type SidebarDensityMode,
 	sidebarDensity,
 } from "../utils/sidebarDensity";
 
 // Each case names the plausible bug it catches (#1334-b659).
 
-const repo = (branches: number, o: { expanded?: boolean; collapsed?: boolean } = {}) => ({
+const repo = (
+	branches: number,
+	o: { expanded?: boolean; collapsed?: boolean; terminalsPerBranch?: number; tabsCollapsed?: boolean } = {},
+) => ({
 	expanded: o.expanded ?? true,
 	collapsed: o.collapsed ?? false,
-	workspaces: Object.fromEntries(Array.from({ length: branches }, (_, i) => [`w${i}`, {}])),
+	workspaces: Object.fromEntries(
+		Array.from({ length: branches }, (_, i) => [
+			`w${i}`,
+			{
+				terminals: Array.from({ length: o.terminalsPerBranch ?? 0 }, (_, t) => `t${t}`),
+				tabsCollapsed: o.tabsCollapsed,
+			},
+		]),
+	),
 });
 
 describe("countSidebarRows", () => {
 	// Catches: counting only repos, so one repo with 40 branches looks "few" and gets taller rows.
 	it("counts branch rows of an expanded repo", () => {
-		expect(countSidebarRows([repo(40)])).toBe(41);
+		expect(countSidebarRows([repo(40)], true)).toBe(41);
 	});
 
 	// Catches: counting hidden branches, which keeps a list of folded repos compact forever.
 	it("ignores branches of an unexpanded or collapsed repo", () => {
-		expect(countSidebarRows([repo(9, { expanded: false }), repo(9, { collapsed: true })])).toBe(2);
+		expect(countSidebarRows([repo(9, { expanded: false }), repo(9, { collapsed: true })], true)).toBe(2);
+	});
+});
+
+describe("countSidebarRows terminal tabs", () => {
+	// Catches: ignoring the tab rows nested under a branch, so one repo with 20 agents counts as 2 rows.
+	it("counts one row per terminal of a branch whose tab list is shown", () => {
+		expect(countSidebarRows([repo(1, { terminalsPerBranch: 20 })], true)).toBe(22);
+	});
+
+	// Catches: counting tab rows that are not rendered because the tab tree setting is off.
+	it("ignores terminals when the tab tree is disabled", () => {
+		expect(countSidebarRows([repo(1, { terminalsPerBranch: 20 })], false)).toBe(2);
+	});
+
+	// Catches: counting the tabs of a branch the user collapsed.
+	it("ignores terminals of a branch with collapsed tabs", () => {
+		expect(countSidebarRows([repo(1, { terminalsPerBranch: 20, tabsCollapsed: true })], true)).toBe(2);
 	});
 });
 
 describe("sidebarDensity", () => {
 	// Catches: off-by-one at the threshold (< instead of <=).
-	it("is comfortable up to ROOMY_MAX_ROWS and compact above", () => {
-		expect(sidebarDensity(ROOMY_MAX_ROWS, false)).toBe("comfortable");
-		expect(sidebarDensity(ROOMY_MAX_ROWS + 1, false)).toBe("compact");
+	// The 16 is the 768px-tablet budget (16 rows x 30px); a change must be deliberate.
+	it("is comfortable up to 16 rows and compact above", () => {
+		expect(sidebarDensity(16, false)).toBe("comfortable");
+		expect(sidebarDensity(17, false)).toBe("compact");
 	});
 
 	// Catches: a tablet with many repos falling back to 22px rows (targets below 44px).
@@ -98,10 +127,13 @@ describe("density mode", () => {
 
 	// Catches: a mode never reachable by clicking, or the cycle not closing back on auto.
 	it("the toggle visits every mode and returns to auto", () => {
-		expect(nextSidebarDensityMode("auto")).toBe("compact");
-		expect(nextSidebarDensityMode("compact")).toBe("comfortable");
-		expect(nextSidebarDensityMode("comfortable")).toBe("touch");
-		expect(nextSidebarDensityMode("touch")).toBe("auto");
+		const visited: string[] = [];
+		let mode: SidebarDensityMode = "auto";
+		for (let i = 0; i < 4; i++) {
+			mode = nextSidebarDensityMode(mode);
+			visited.push(mode);
+		}
+		expect(visited).toEqual(["compact", "comfortable", "touch", "auto"]);
 	});
 
 	// Catches: a hand-edited or newer prefs file with an unknown mode putting the sidebar in an undefined state.
