@@ -719,8 +719,8 @@ export async function initApp(deps: AppInitDeps) {
 					editorTabsStore.closeMcpFile(id);
 					mdTabsStore.closeMcpFile(id);
 					mdTabsStore.closeUiTab(id);
-					if (repoPath) mdTabsStore.addMcpHtmlPreview(id, repoPath, relPath, background);
-					else mdTabsStore.addMcpHtmlPreview(id, fallbackRepoPath ?? "", filePath, background);
+					if (repoPath) mdTabsStore.addMcpHtmlPreview(id, repoPath, relPath, pinned, background);
+					else mdTabsStore.addMcpHtmlPreview(id, fallbackRepoPath ?? "", filePath, pinned, background);
 				} else if (cmd === "open" && repoPath) {
 					editorTabsStore.closeMcpFile(id);
 					mdTabsStore.closeUiTab(id);
