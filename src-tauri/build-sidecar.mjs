@@ -28,6 +28,15 @@ const sidecars = [
   { pkg: "tuic-cli", bin: "tuic", crate: "crates/tuic-cli" },
 ];
 
+// An empty or non-executable sidecar is a placeholder: shipping it gives an
+// app whose bundled CLI or bridge cannot start (#1325-394f).
+function assertRealSidecar(sidecarPath) {
+  const { size, mode } = statSync(sidecarPath);
+  if (size === 0 || (process.platform !== "win32" && (mode & 0o111) === 0)) {
+    throw new Error(`Sidecar is a placeholder (empty or not executable): ${sidecarPath}`);
+  }
+}
+
 function replaceSidecar(sidecarPath, writeStaged) {
   const staged = `${sidecarPath}.update.${randomUUID()}`;
   try {
@@ -80,6 +89,7 @@ for (const { pkg, bin, crate: cratePath } of sidecars) {
       const sidecarSize = existsSync(sidecarPath) ? statSync(sidecarPath).size : 0;
       const releaseSize = statSync(releaseBin).size;
       if (sidecarSize === releaseSize) {
+        assertRealSidecar(sidecarPath);
         console.log(`Sidecar up to date: ${sidecarName} (skipped)`);
         continue;
       }
@@ -92,6 +102,7 @@ for (const { pkg, bin, crate: cratePath } of sidecars) {
   });
 
   replaceSidecar(sidecarPath, (staged) => copyFileSync(releaseBin, staged));
+  assertRealSidecar(sidecarPath);
 
   console.log(`Sidecar built: ${sidecarName}`);
 }

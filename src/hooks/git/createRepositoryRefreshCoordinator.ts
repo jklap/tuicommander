@@ -360,7 +360,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 						// directory is probed after the loop (concurrently). (#1317)
 						probeCandidates.push({
 							branchName,
-							worktreePath: branchState.worktreePath,
+							worktreePath: linkedPath,
 							terminals: branchState.terminals,
 						});
 					} else {

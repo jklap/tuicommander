@@ -981,6 +981,15 @@
   }
 }
 
+/* No hover on touch: the actions (+ with its long-press agent list) stay visible. */
+@media (hover: none) {
+  .branchActions {
+    max-width: 44px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .branchAddBtn,
 .branchRemoveBtn {
   width: 20px;
@@ -999,6 +1008,11 @@
 .branchAddBtn {
   background: var(--accent);
   color: var(--text-on-accent);
+  /* Long press opens the agent list: no text selection, iOS callout or pan. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .branchAddBtn:hover {
