@@ -3000,10 +3000,9 @@ impl ChunkProcessor {
                             // — the same "unanswered evidence counts as work"
                             // philosophy `has_pending_background_probe` already
                             // uses for the OS-heuristic path.
-                            const KNOWN_TERMINAL_STATUSES: &[&str] = &["completed", "failed"];
                             let decoded = percent_decode_osc_payload(&payload);
                             let running = decoded.split(',').any(|status| {
-                                !status.is_empty() && !KNOWN_TERMINAL_STATUSES.contains(&status)
+                                !status.is_empty() && !KNOWN_TERMINAL_BG_STATUSES.contains(&status)
                             });
                             if let Some(turn_epoch) = state
                                 .session_maps
@@ -3016,6 +3015,32 @@ impl ChunkProcessor {
                                 silence
                                     .lock()
                                     .set_declared_background_work(running, turn_epoch);
+                            }
+                        }
+                        "bgtasksummary" => {
+                            // Sent by `tuic-hook` right after `bgtasks` in the same
+                            // Stop/StopFailure fire: the same `background_tasks`
+                            // array grouped as `type/status[*N]` items. Lets us tell
+                            // an Agent Teams teammate (which Claude Code keeps
+                            // listing as `running` in every Stop payload, idle or
+                            // not, until it is shut down) from real background
+                            // work. Refines the `bgtasks` declaration just written;
+                            // ignored if none is in place for this turn (see
+                            // `SilenceState::set_declared_task_summary`). An older
+                            // hook never sends it and keeps today's behavior.
+                            let summary =
+                                parse_bg_task_summary(&percent_decode_osc_payload(&payload));
+                            if let Some(turn_epoch) = state
+                                .session_maps
+                                .session_states
+                                .get(session_id)
+                                .map(|s| s.turn_epoch)
+                                && let Some(silence) =
+                                    state.session_maps.silence_states.get(session_id)
+                            {
+                                silence
+                                    .lock()
+                                    .set_declared_task_summary(summary, turn_epoch);
                             }
                         }
                         "userwrap" => {
