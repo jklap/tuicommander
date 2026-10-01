@@ -6490,3 +6490,132 @@ mod tests {
         );
     }
 }
+
+/// Adversarial cases for the post-resize reprint merge (#1264).
+#[cfg(test)]
+mod reprint_merge_critic_tests {
+    use super::*;
+
+    const IDLE_FRAME: &[u8] = b"\x1b[?2026h\x1b[?2026l";
+
+    fn all_rows(grid: &TerminalGrid) -> Vec<String> {
+        let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+        rows.extend(grid.screen_text_rows());
+        rows
+    }
+
+    fn non_empty(grid: &TerminalGrid) -> usize {
+        all_rows(grid).iter().filter(|r| !r.trim().is_empty()).count()
+    }
+
+    /// Scenario shared by the cases below: 6x20 grid holding L01..L10, shrunk to
+    /// 4 rows, so history ends L06,L07 and the screen starts L08.
+    fn shrunk_numbered_grid() -> TerminalGrid {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for i in 1..=10 {
+            grid.process(format!("L{i:02}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        grid
+    }
+
+    /// The program's repaint: home, then the last rows, inside one sync frame.
+    const REPAINT: &[u8] = b"\x1b[?2026h\x1b[HL06\x1b[K\r\nL07\x1b[K\r\nL08\x1b[K\r\nL09\x1b[K\x1b[?2026l";
+
+    /// Catches: the merge fires on any frame end after a shrink whose history
+    /// tail happens to equal the screen head, with no repaint having happened.
+    /// A program that legitimately printed the same block twice (separators,
+    /// repeated `alpha/beta` records) loses real history rows.
+    #[test]
+    fn repeated_block_survives_an_idle_sync_frame_after_shrink() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..6 {
+            grid.process(b"alpha\r\nbeta\r\n");
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = non_empty(&grid);
+        grid.process(IDLE_FRAME);
+        assert_eq!(non_empty(&grid), before, "an empty sync frame deleted printed rows");
+    }
+
+    /// Catches: same as above for a run of identical separator rows.
+    #[test]
+    fn identical_separator_rows_survive_an_idle_sync_frame_after_shrink() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..12 {
+            grid.process(b"--------------------\r\n");
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = non_empty(&grid);
+        grid.process(IDLE_FRAME);
+        assert_eq!(non_empty(&grid), before, "an empty sync frame deleted separator rows");
+    }
+
+    /// Catches: the merge drops history rows but leaves `display_offset`
+    /// unchanged, so a user scrolled up (the #1264 situation) sees the view jump
+    /// by the dropped row count.
+    #[test]
+    fn scrolled_up_view_does_not_jump_when_rows_are_merged() {
+        let mut grid = shrunk_numbered_grid();
+        grid.scroll(4);
+        let d = grid.display_offset();
+        let top_before = grid.row_to_text(Line(-(d as i32))).unwrap();
+        grid.process(REPAINT);
+        assert_eq!(grid.scrollback_count(), 5, "scenario must merge L06,L07");
+        let d = grid.display_offset();
+        let top_after = grid.row_to_text(Line(-(d as i32))).unwrap();
+        assert_eq!(top_after, top_before, "viewport top row changed under a scrolled-up user");
+    }
+
+    /// Catches: the frame-end carry mishandles a FRAME_END split across chunks,
+    /// so the merge result depends on chunk boundaries.
+    #[test]
+    fn merge_result_does_not_depend_on_chunk_boundaries() {
+        let mut whole = shrunk_numbered_grid();
+        whole.process(REPAINT);
+        let expected = all_rows(&whole);
+        for chunk in 1..=REPAINT.len() {
+            let mut grid = shrunk_numbered_grid();
+            for piece in REPAINT.chunks(chunk) {
+                grid.process(piece);
+            }
+            assert_eq!(all_rows(&grid), expected, "chunk size {chunk}");
+        }
+    }
+
+    /// Catches: the rewind of `total_scrolled` breaks the eviction-stable base
+    /// (`total_scrolled - history_size`) the frontend keys rows by, when the
+    /// scrollback cap is already evicting.
+    #[test]
+    fn merge_keeps_the_eviction_base_when_the_cap_is_full() {
+        let mut grid = TerminalGrid::new(6, 20, 3);
+        for i in 1..=10 {
+            grid.process(format!("L{i:02}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let base = grid.screen_origin() - grid.scrollback_count();
+        grid.process(REPAINT);
+        assert_eq!(
+            grid.screen_origin() - grid.scrollback_count(),
+            base,
+            "evicted-row base moved"
+        );
+    }
+
+    /// Catches: a merge on the alternate screen, or a resize made on it, arms
+    /// the merge and eats primary history after the program exits.
+    #[test]
+    fn alt_screen_resize_never_merges_primary_history() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..12 {
+            grid.process(b"--------------------\r\n");
+        }
+        grid.process(b"\x1b[?1049h");
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = grid.primary_scrollback_count();
+        grid.process(IDLE_FRAME);
+        grid.process(b"\x1b[?1049l");
+        grid.process(IDLE_FRAME);
+        assert_eq!(grid.primary_scrollback_count(), before);
+    }
+}
