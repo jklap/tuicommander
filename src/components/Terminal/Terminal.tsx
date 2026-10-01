@@ -86,6 +86,7 @@ type BackendSessionState = {
 	agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
 	awaiting_input?: boolean;
 	question_confident?: boolean;
+	question_text?: string;
 	background_work?: boolean;
 	queued_commands?: number;
 };
@@ -678,6 +679,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						queuedCommands: state.queued_commands ?? 0,
 						awaitingInput: state.awaiting_input === true ? "question" : null,
 						awaitingInputConfident: state.question_confident === true,
+						awaitingInputText: state.awaiting_input === true ? (state.question_text ?? null) : null,
 						...(state.shell_state ? { shellState: state.shell_state } : {}),
 					});
 					if (wasAwaiting !== isAwaiting) {

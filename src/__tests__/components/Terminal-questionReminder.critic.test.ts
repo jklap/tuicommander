@@ -2,8 +2,8 @@ import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTerminal } from "../helpers/store";
 
-const playQuestion = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock("../../stores/notifications", () => ({ notificationsStore: { playQuestion } }));
+const playQuestionReminder = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("../../stores/notifications", () => ({ notificationsStore: { playQuestionReminder } }));
 
 describe("trackQuestionReminder (critic)", () => {
 	let store: typeof import("../../stores/terminals").terminalsStore;
@@ -14,8 +14,8 @@ describe("trackQuestionReminder (critic)", () => {
 	beforeEach(async () => {
 		vi.useFakeTimers();
 		vi.resetModules();
-		playQuestion.mockReset();
-		playQuestion.mockResolvedValue(undefined);
+		playQuestionReminder.mockReset();
+		playQuestionReminder.mockResolvedValue(undefined);
 		store = (await import("../../stores/terminals")).terminalsStore;
 		mod = await import("../../components/Terminal/questionReminder");
 		createRoot((d) => {
@@ -39,7 +39,7 @@ describe("trackQuestionReminder (critic)", () => {
 		}
 		store.setAwaitingInput(id, "question", true);
 		vi.advanceTimersByTime(mod.QUESTION_REMINDER_MS * 3);
-		expect(playQuestion).toHaveBeenCalledTimes(1);
+		expect(playQuestionReminder).toHaveBeenCalledTimes(1);
 		expect(vi.getTimerCount()).toBe(0);
 	});
 
@@ -48,7 +48,7 @@ describe("trackQuestionReminder (critic)", () => {
 		vi.advanceTimersByTime(mod.QUESTION_REMINDER_MS - 1000);
 		store.setAwaitingInput(id, "question", true);
 		vi.advanceTimersByTime(1000);
-		expect(playQuestion).toHaveBeenCalledTimes(1);
+		expect(playQuestionReminder).toHaveBeenCalledTimes(1);
 	});
 
 	it("remounting the Terminal while the question is pending does not postpone the reminder (bug: age measured from mount, not from the question)", () => {
@@ -60,7 +60,7 @@ describe("trackQuestionReminder (critic)", () => {
 			mod.trackQuestionReminder(id);
 		});
 		vi.advanceTimersByTime(20_000);
-		expect(playQuestion).toHaveBeenCalledTimes(1);
+		expect(playQuestionReminder).toHaveBeenCalledTimes(1);
 	});
 
 	it("a terminal removed and a different one added never receives the old reminder (bug: reminder keyed on stale id lookup)", () => {
@@ -68,7 +68,7 @@ describe("trackQuestionReminder (critic)", () => {
 		store.remove(id);
 		const other = store.add(makeTerminal());
 		vi.advanceTimersByTime(mod.QUESTION_REMINDER_MS * 2);
-		expect(playQuestion).not.toHaveBeenCalledWith(other);
-		expect(playQuestion).not.toHaveBeenCalled();
+		expect(playQuestionReminder).not.toHaveBeenCalledWith(other);
+		expect(playQuestionReminder).not.toHaveBeenCalled();
 	});
 });
