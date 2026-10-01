@@ -3385,6 +3385,714 @@ fn transcript_dump_turn_end_detector_requires_both_glyph_and_marker() {
     ));
 }
 
+fn feed_tuic_verb(
+    state: &crate::state::AppState,
+    session_id: &str,
+    silence: &Arc<Mutex<SilenceState>>,
+    verb: &str,
+    payload: &str,
+) {
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk(
+        &format!("\x1b]7770;{verb}={payload}\x07"),
+        silence,
+        session_id,
+        state,
+    );
+}
+
+#[test]
+fn parse_bg_task_summary_splits_teammates_from_other_running_work() {
+    let cases: &[(&str, u32, u32)] = &[
+        // (decoded payload, non_teammate_running, teammate_running)
+        ("", 0, 0),
+        ("teammate/running", 0, 1),
+        ("teammate/running*3", 0, 3),
+        ("shell/running", 1, 0),
+        ("shell/running*2,subagent/running", 3, 0),
+        ("teammate/running*2,shell/running", 1, 2),
+        ("teammate/completed,shell/failed", 0, 0),
+        ("teammate/pending", 0, 1),
+        ("/running", 1, 0),
+        ("running", 1, 0),
+        ("teammate/running*x", 0, 1),
+        ("teammate/running*0", 0, 0),
+        ("teammate/,shell/", 0, 0),
+        ("monitor/running,workflow/running,MCP task/running", 3, 0),
+    ];
+    for (payload, other, mates) in cases {
+        let got = parse_bg_task_summary(payload);
+        assert_eq!(
+            (got.non_teammate_running, got.teammate_running),
+            (*other, *mates),
+            "payload {payload:?}"
+        );
+    }
+}
+
+#[test]
+fn bgtasksummary_makes_an_idle_teammate_stop_counting_but_keeps_other_work() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-bgsummary-teammate";
+    let silence = bgtasks_test_session(&state, session_id);
+
+    // Only a teammate is declared running.
+    feed_bgtasks(&state, session_id, &silence, "running");
+    feed_tuic_verb(
+        &state,
+        session_id,
+        &silence,
+        "bgtasksummary",
+        "teammate%2Frunning",
+    );
+    {
+        let sl = silence.lock();
+        assert!(
+            sl.declared_background_work_for_epoch(0),
+            "conservative read counts it"
+        );
+        assert!(
+            !sl.declared_background_work_for_epoch_with(0, |_| false),
+            "idle teammate"
+        );
+        assert!(
+            sl.declared_background_work_for_epoch_with(0, |_| true),
+            "busy teammate"
+        );
+    }
+
+    // Real background work alongside the teammate holds it regardless.
+    feed_bgtasks(&state, session_id, &silence, "running%2Crunning");
+    feed_tuic_verb(
+        &state,
+        session_id,
+        &silence,
+        "bgtasksummary",
+        "teammate%2Frunning%2Cshell%2Frunning",
+    );
+    assert!(
+        silence
+            .lock()
+            .declared_background_work_for_epoch_with(0, |_| false)
+    );
+}
+
+#[test]
+fn bgtasksummary_is_lazy_about_the_teammate_check() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-lazy");
+    feed_bgtasks(&state, "test-bgsummary-lazy", &silence, "running");
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-lazy",
+        &silence,
+        "bgtasksummary",
+        "shell%2Frunning",
+    );
+    // Non-teammate work is decisive, so the closure must never run (it would read
+    // other sessions' state while a SilenceState lock is held).
+    assert!(
+        silence
+            .lock()
+            .declared_background_work_for_epoch_with(0, |_| {
+                panic!("teammate check must not run when non-teammate work is declared")
+            })
+    );
+}
+
+#[test]
+fn bgtasksummary_is_authoritative_for_its_fire_and_repairs_a_truncated_bgtasks() {
+    // `bgtasks` joins every status and is cut at the OSC payload cap, so with a long
+    // list of finished tasks a late `running` is lost and `bgtasks` reads
+    // all-terminal. The grouped summary is bounded and must repair that.
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-repair");
+    feed_bgtasks(&state, "test-bgsummary-repair", &silence, "completed");
+    assert!(!silence.lock().declared_background_work_for_epoch(0));
+
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-repair",
+        &silence,
+        "bgtasksummary",
+        "shell%2Fcompleted%2A200%2Cteammate%2Frunning",
+    );
+    let sl = silence.lock();
+    assert!(
+        sl.declared_background_work_for_epoch(0),
+        "a running task the truncated bgtasks lost must still be declared"
+    );
+    assert_eq!(
+        sl.declared_task_summary_for_epoch(0),
+        Some(DeclaredTaskSummary {
+            non_teammate_running: 0,
+            teammate_running: 1
+        })
+    );
+}
+
+#[test]
+fn bgtasksummary_reporting_nothing_running_clears_an_overreported_declaration() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-clear");
+    feed_bgtasks(&state, "test-bgsummary-clear", &silence, "running");
+    assert!(silence.lock().declared_background_work_for_epoch(0));
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-clear",
+        &silence,
+        "bgtasksummary",
+        "shell%2Fcompleted%2Cteammate%2Fcompleted",
+    );
+    assert!(!silence.lock().declared_background_work_for_epoch(0));
+    // An empty summary (field present, no entries) says nothing is outstanding.
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-clear",
+        &silence,
+        "bgtasksummary",
+        "",
+    );
+    assert!(!silence.lock().declared_background_work_for_epoch(0));
+}
+
+#[test]
+fn bgtasksummary_is_stamped_with_the_sessions_current_turn_epoch() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-epoch");
+    state
+        .session_maps
+        .session_states
+        .get_mut("test-bgsummary-epoch")
+        .unwrap()
+        .turn_epoch = 4;
+    feed_bgtasks(&state, "test-bgsummary-epoch", &silence, "completed");
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-epoch",
+        &silence,
+        "bgtasksummary",
+        "shell%2Frunning",
+    );
+    let sl = silence.lock();
+    assert!(sl.declared_background_work_for_epoch(4));
+    assert!(
+        !sl.declared_background_work_for_epoch(5),
+        "self-expires on a new turn"
+    );
+}
+
+#[test]
+fn bgtasksummary_without_a_bgtasks_observation_for_this_epoch_is_ignored() {
+    // Orphan: nothing recorded yet.
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-orphan");
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-orphan",
+        &silence,
+        "bgtasksummary",
+        "shell%2Frunning",
+    );
+    {
+        let sl = silence.lock();
+        assert!(!sl.declared_background_work_for_epoch(0));
+        assert!(sl.declared_task_summary_for_epoch(0).is_none());
+    }
+
+    // Epoch race: the two verbs of one hook fire are dispatched separately, and a new
+    // prompt can land between them (bumping the epoch and wiping the observation). The
+    // late summary must not stamp the NEW turn with the previous turn's data.
+    let mut sl = SilenceState::new();
+    sl.set_declared_background_work(false, 3);
+    sl.reset_declared_background_work();
+    sl.set_declared_task_summary(
+        DeclaredTaskSummary {
+            non_teammate_running: 1,
+            teammate_running: 0,
+        },
+        4,
+    );
+    assert!(!sl.declared_background_work_for_epoch(4));
+    assert!(sl.declared_task_summary_for_epoch(4).is_none());
+
+    // ...and one for an older epoch than the recorded observation is ignored too.
+    sl.set_declared_background_work(true, 5);
+    sl.set_declared_task_summary(
+        DeclaredTaskSummary {
+            non_teammate_running: 0,
+            teammate_running: 0,
+        },
+        4,
+    );
+    assert!(
+        sl.declared_background_work_for_epoch(5),
+        "a summary for another epoch must not clear this epoch's declaration"
+    );
+}
+
+#[test]
+fn a_new_bgtasks_without_a_summary_falls_back_to_counting_every_running_task() {
+    // Mixed-version safety: an older hook sends only `bgtasks`. A leftover summary
+    // from an earlier fire must not keep hiding a teammate that is now the only
+    // information we have.
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-fallback");
+    feed_bgtasks(&state, "test-bgsummary-fallback", &silence, "running");
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-fallback",
+        &silence,
+        "bgtasksummary",
+        "teammate%2Frunning",
+    );
+    assert!(
+        !silence
+            .lock()
+            .declared_background_work_for_epoch_with(0, |_| false)
+    );
+
+    feed_bgtasks(&state, "test-bgsummary-fallback", &silence, "running");
+    assert!(
+        silence
+            .lock()
+            .declared_background_work_for_epoch_with(0, |_| false),
+        "no fresh summary -> legacy behavior, every running task counts"
+    );
+}
+
+#[test]
+fn reset_declared_background_work_also_drops_the_summary() {
+    let mut sl = SilenceState::new();
+    sl.set_declared_background_work(true, 3);
+    sl.set_declared_task_summary(
+        DeclaredTaskSummary {
+            non_teammate_running: 0,
+            teammate_running: 2,
+        },
+        3,
+    );
+    assert!(sl.declared_task_summary_for_epoch(3).is_some());
+    assert!(
+        sl.declared_task_summary_for_epoch(4).is_none(),
+        "stale epoch"
+    );
+    sl.reset_declared_background_work();
+    assert!(sl.declared_task_summary_for_epoch(3).is_none());
+    assert!(!sl.declared_background_work_for_epoch(3));
+}
+
+// --- explain: declared background work breakdown and swarm linkage ---
+
+/// Lead `lead` (claude, idle shell) declaring `teammate_running` teammates,
+/// with one linked teammate terminal `mate` in the given shell state.
+fn explain_lead_with_teammate(
+    state: &crate::state::AppState,
+    lead: &str,
+    mate: &str,
+    mate_shell: u8,
+    non_teammate_running: u32,
+    teammate_running: u32,
+) {
+    let silence = bgtasks_test_session(state, lead);
+    state
+        .session_maps
+        .session_states
+        .get_mut(lead)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    {
+        let mut sl = silence.lock();
+        sl.set_declared_background_work(true, 0);
+        sl.set_declared_task_summary(
+            DeclaredTaskSummary {
+                non_teammate_running,
+                teammate_running,
+            },
+            0,
+        );
+    }
+    state
+        .session_maps
+        .session_states
+        .insert(mate.into(), crate::state::SessionState::default());
+    state
+        .session_maps
+        .shell_states
+        .insert(mate.into(), std::sync::atomic::AtomicU8::new(mate_shell));
+    // Every real terminal has a SilenceState, and `explain` requires one.
+    state.session_maps.silence_states.insert(
+        mate.into(),
+        std::sync::Arc::new(parking_lot::Mutex::new(SilenceState::new())),
+    );
+    crate::mcp_http::tmux_routes::link_teammate_for_test(state, "explain-swarm", lead, mate);
+}
+
+#[test]
+fn explain_an_idle_teammate_is_declared_but_does_not_count() {
+    // The shape of the stuck "Agent is busy" tab: a raw declaration that applies to
+    // the current turn, yet nothing is actually working.
+    let state = crate::state::tests_support::make_test_app_state();
+    explain_lead_with_teammate(
+        &state,
+        "explain-lead-idle",
+        "explain-mate-idle",
+        SHELL_IDLE,
+        0,
+        1,
+    );
+
+    let explain = explain_session_state_impl(&state, "explain-lead-idle").expect("explain");
+    let flag = &explain.epoch_flags.declared_background_work;
+    assert!(flag.flag.declared);
+    assert!(
+        flag.flag.applies_now,
+        "raw declaration still applies to this turn"
+    );
+    assert_eq!(flag.breakdown_source, "summary");
+    assert_eq!(flag.teammate_running, Some(1));
+    assert_eq!(flag.non_teammate_running, Some(0));
+    assert!(!flag.teammates_busy);
+    assert_eq!(
+        flag.unlinked_teammates,
+        Some(0),
+        "every declared teammate is linked"
+    );
+    assert!(
+        !flag.counts_now,
+        "an idle teammate must not hold the lead working"
+    );
+    assert!(flag.age_ms.is_some());
+    assert_eq!(
+        flag.counts_now, explain.visible.declared_background_work,
+        "counts_now is exactly what the state ladder used"
+    );
+
+    let swarm = explain
+        .swarm
+        .expect("a lead with a teammate reports its swarm");
+    assert_eq!(swarm.lead_session_id, None);
+    assert_eq!(swarm.teammates.len(), 1);
+    assert_eq!(swarm.teammates[0].session_id, "explain-mate-idle");
+    assert_eq!(swarm.teammates[0].shell_state, Some("idle"));
+    assert!(!swarm.teammates[0].busy);
+}
+
+#[test]
+fn explain_a_busy_teammate_counts_and_matches_the_visible_state() {
+    let state = crate::state::tests_support::make_test_app_state();
+    explain_lead_with_teammate(
+        &state,
+        "explain-lead-busy",
+        "explain-mate-busy",
+        SHELL_BUSY,
+        0,
+        1,
+    );
+
+    let explain = explain_session_state_impl(&state, "explain-lead-busy").expect("explain");
+    let flag = &explain.epoch_flags.declared_background_work;
+    assert!(flag.teammates_busy);
+    assert!(flag.counts_now);
+    assert_eq!(flag.counts_now, explain.visible.declared_background_work);
+    assert_eq!(explain.visible.agent_state_rung, "background_work");
+    assert_eq!(
+        explain.swarm.unwrap().teammates[0].shell_state,
+        Some("busy")
+    );
+}
+
+#[test]
+fn explain_on_a_teammate_reports_its_lead() {
+    let state = crate::state::tests_support::make_test_app_state();
+    explain_lead_with_teammate(
+        &state,
+        "explain-lead-of",
+        "explain-mate-of",
+        SHELL_IDLE,
+        0,
+        1,
+    );
+
+    let explain = explain_session_state_impl(&state, "explain-mate-of").expect("explain");
+    let swarm = explain.swarm.expect("a teammate reports its lead");
+    assert_eq!(swarm.lead_session_id.as_deref(), Some("explain-lead-of"));
+    assert!(swarm.teammates.is_empty());
+}
+
+#[test]
+fn explain_without_a_breakdown_reports_statuses_only_and_counts_everything() {
+    // An older `tuic-hook` sends only `bgtasks`: every running task counts, and the
+    // payload says so instead of implying a teammate split that was never received.
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "explain-legacy");
+    state
+        .session_maps
+        .session_states
+        .get_mut("explain-legacy")
+        .unwrap()
+        .agent_type = Some("claude".into());
+    silence.lock().set_declared_background_work(true, 0);
+
+    let explain = explain_session_state_impl(&state, "explain-legacy").expect("explain");
+    let flag = &explain.epoch_flags.declared_background_work;
+    assert_eq!(flag.breakdown_source, "statuses_only");
+    assert_eq!(flag.teammate_running, None);
+    assert_eq!(flag.non_teammate_running, None);
+    assert!(flag.counts_now);
+    assert!(
+        explain.swarm.is_none(),
+        "no linkage recorded -> no swarm section"
+    );
+}
+
+#[test]
+fn explain_with_no_declaration_reports_none() {
+    let state = crate::state::tests_support::make_test_app_state();
+    bgtasks_test_session(&state, "explain-none");
+    let explain = explain_session_state_impl(&state, "explain-none").expect("explain");
+    let flag = &explain.epoch_flags.declared_background_work;
+    assert!(!flag.flag.declared);
+    assert_eq!(flag.breakdown_source, "none");
+    assert_eq!(flag.age_ms, None);
+    assert!(!flag.counts_now);
+}
+
+#[test]
+fn explain_serializes_the_declared_work_keys_the_old_shape_had_plus_the_new_ones() {
+    let state = crate::state::tests_support::make_test_app_state();
+    explain_lead_with_teammate(&state, "explain-ser", "explain-mate-ser", SHELL_IDLE, 1, 2);
+    let v =
+        serde_json::to_value(explain_session_state_impl(&state, "explain-ser").unwrap()).unwrap();
+    let w = &v["epoch_flags"]["declared_background_work"];
+    // Pre-existing keys, flattened, must stay where consumers read them.
+    assert_eq!(w["declared"], true);
+    assert_eq!(w["declared_turn_epoch"], 0);
+    assert_eq!(w["applies_now"], true);
+    // New keys.
+    assert_eq!(w["breakdown_source"], "summary");
+    assert_eq!(w["non_teammate_running"], 1);
+    assert_eq!(w["teammate_running"], 2);
+    assert_eq!(w["teammates_busy"], false);
+    assert_eq!(w["unlinked_teammates"], 1, "two declared, one linked pane");
+    assert_eq!(w["counts_now"], true, "real background work still counts");
+    assert_eq!(v["swarm"]["teammates"][0]["session_id"], "explain-mate-ser");
+}
+
+#[test]
+fn explain_declared_teammates_no_linked_pane_accounts_for_are_reported_and_count() {
+    // Two teammates declared running but only one has a linked pane (and it is idle):
+    // the other cannot be shown idle, so the declaration counts — and the payload says
+    // why, instead of leaving `counts_now: true` unexplained next to an idle teammate.
+    let state = crate::state::tests_support::make_test_app_state();
+    explain_lead_with_teammate(
+        &state,
+        "explain-unlinked",
+        "explain-mate-un",
+        SHELL_IDLE,
+        0,
+        2,
+    );
+
+    let explain = explain_session_state_impl(&state, "explain-unlinked").expect("explain");
+    let flag = &explain.epoch_flags.declared_background_work;
+    assert_eq!(flag.teammate_running, Some(2));
+    assert_eq!(flag.unlinked_teammates, Some(1));
+    assert!(!flag.teammates_busy, "the one linked teammate is idle");
+    assert!(
+        flag.counts_now,
+        "the unaccounted-for teammate keeps the lead working (fail-safe)"
+    );
+    assert_eq!(flag.counts_now, explain.visible.declared_background_work);
+    assert!(
+        flag.consistent_with_visible,
+        "no concurrent flip, so the capture is not torn"
+    );
+}
+
+// --- teammate-aware declared-work read: the three pty.rs consumers ---
+
+/// A Claude lead whose `Stop` declared `declared_teammates` teammates running,
+/// with (optionally) one linked teammate terminal in `mate_shell`. The lead has a
+/// parent so the parent-idle notification path has somewhere to deliver.
+fn teammate_gate_fixture(
+    state: &crate::state::AppState,
+    lead: &str,
+    parent: &str,
+    lead_shell: u8,
+    declared_teammates: u32,
+    linked_mate_shell: Option<u8>,
+) -> Arc<Mutex<SilenceState>> {
+    state
+        .session_maps
+        .session_parent
+        .insert(lead.to_string(), parent.to_string());
+    state.agent_inbox.entry(parent.to_string()).or_default();
+    state.session_maps.session_states.insert(
+        lead.to_string(),
+        crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            turn_epoch: 0,
+            ..Default::default()
+        },
+    );
+    state.session_maps.shell_states.insert(
+        lead.to_string(),
+        std::sync::atomic::AtomicU8::new(lead_shell),
+    );
+    let mut silence = SilenceState::new();
+    silence.set_declared_background_work(true, 0);
+    silence.set_declared_task_summary(
+        DeclaredTaskSummary {
+            non_teammate_running: 0,
+            teammate_running: declared_teammates,
+        },
+        0,
+    );
+    let silence = Arc::new(Mutex::new(silence));
+    state
+        .session_maps
+        .silence_states
+        .insert(lead.to_string(), silence.clone());
+    if let Some(shell) = linked_mate_shell {
+        let mate = format!("{lead}-mate");
+        state
+            .session_maps
+            .shell_states
+            .insert(mate.clone(), std::sync::atomic::AtomicU8::new(shell));
+        crate::mcp_http::tmux_routes::link_teammate_for_test(
+            state,
+            &format!("gate-{lead}"),
+            lead,
+            &mate,
+        );
+    }
+    silence
+}
+
+#[test]
+fn an_idle_teammate_does_not_defer_the_leads_parent_idle_notification() {
+    let state = crate::state::tests_support::make_test_app_state();
+    teammate_gate_fixture(
+        &state,
+        "lead-pi-idle",
+        "parent-pi-idle",
+        SHELL_BUSY,
+        1,
+        Some(SHELL_IDLE),
+    );
+    assert!(try_shell_transition(
+        &state,
+        "lead-pi-idle",
+        SHELL_BUSY,
+        SHELL_IDLE,
+        true
+    ));
+    assert_eq!(
+        state.agent_inbox.get("parent-pi-idle").unwrap().len(),
+        1,
+        "only an idle teammate is declared: the lead's idle edge must be reported"
+    );
+}
+
+#[test]
+fn a_busy_or_unlinked_teammate_defers_the_leads_parent_idle_notification() {
+    for (name, declared, mate) in [
+        ("busy", 1, Some(SHELL_BUSY)),
+        ("unlinked", 1, None),
+        ("surplus", 2, Some(SHELL_IDLE)),
+    ] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let lead = format!("lead-pi-{name}");
+        let parent = format!("parent-pi-{name}");
+        teammate_gate_fixture(&state, &lead, &parent, SHELL_BUSY, declared, mate);
+        assert!(try_shell_transition(
+            &state, &lead, SHELL_BUSY, SHELL_IDLE, true
+        ));
+        assert_eq!(
+            state.agent_inbox.get(&parent).unwrap().len(),
+            0,
+            "{name}: a teammate that may still be working must defer the idle report"
+        );
+    }
+}
+
+#[test]
+fn an_idle_teammate_does_not_defer_suggest_publication_but_a_busy_or_unlinked_one_does() {
+    let publish = |name: &str, declared: u32, mate: Option<u8>| -> (bool, usize) {
+        let state = crate::state::tests_support::make_test_app_state();
+        let lead = format!("lead-sg-{name}");
+        let parent = format!("parent-sg-{name}");
+        let silence = teammate_gate_fixture(&state, &lead, &parent, SHELL_IDLE, declared, mate);
+        silence
+            .lock()
+            .mark_suggest_candidate(vec!["Review result".to_string()], 0);
+        let emitted = emit_pending_suggest_if_idle(&state, &silence, &lead);
+        (emitted, state.agent_inbox.get(&parent).unwrap().len())
+    };
+    assert_eq!(publish("idle", 1, Some(SHELL_IDLE)), (true, 1));
+    assert_eq!(publish("busy", 1, Some(SHELL_BUSY)), (false, 0));
+    assert_eq!(publish("unlinked", 1, None), (false, 0));
+    assert_eq!(publish("surplus", 2, Some(SHELL_IDLE)), (false, 0));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_idle_teammate_does_not_block_standby_but_a_busy_or_unlinked_one_does() {
+    let blocks = |name: &str, declared: u32, mate: Option<u8>| -> (bool, bool) {
+        let state = crate::state::tests_support::make_test_app_state();
+        let lead = format!("lead-sb-{name}");
+        let silence = teammate_gate_fixture(
+            &state,
+            &lead,
+            &format!("parent-sb-{name}"),
+            SHELL_IDLE,
+            declared,
+            mate,
+        );
+        let guard = silence.lock();
+        let locked = background_activity_blocks_standby_with_silence(&state, &lead, Some(&guard));
+        drop(guard);
+        // The self-locking variant must agree with the already-locked one.
+        (background_activity_blocks_standby(&state, &lead), locked)
+    };
+    assert_eq!(blocks("idle", 1, Some(SHELL_IDLE)), (false, false));
+    assert_eq!(blocks("busy", 1, Some(SHELL_BUSY)), (true, true));
+    assert_eq!(blocks("unlinked", 1, None), (true, true));
+    assert_eq!(blocks("surplus", 2, Some(SHELL_IDLE)), (true, true));
+}
+
+#[test]
+fn explain_a_closed_teammate_is_not_listed_and_does_not_account_for_a_declared_one() {
+    // Lead declares one teammate running; that teammate's terminal has since closed but
+    // its pane is still in the lazily reconciled topology. It must not vouch (U2): the
+    // lead keeps reading working until its next Stop refreshes the list, and the payload
+    // shows it as an unaccounted-for teammate instead of a linked idle one.
+    let state = crate::state::tests_support::make_test_app_state();
+    explain_lead_with_teammate(
+        &state,
+        "explain-lead-closed",
+        "explain-mate-closed",
+        SHELL_IDLE,
+        0,
+        1,
+    );
+    state
+        .session_maps
+        .shell_states
+        .remove("explain-mate-closed");
+
+    let explain = explain_session_state_impl(&state, "explain-lead-closed").expect("explain");
+    let flag = &explain.epoch_flags.declared_background_work;
+    assert!(
+        explain.swarm.is_none(),
+        "the closed terminal is not a linked teammate"
+    );
+    assert_eq!(flag.unlinked_teammates, Some(1));
+    assert!(flag.counts_now);
+    assert!(flag.consistent_with_visible);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn async_spawn_wrapper_does_not_block_the_runtime_worker() {
     let started = std::time::Instant::now();
