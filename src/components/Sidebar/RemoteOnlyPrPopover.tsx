@@ -159,7 +159,7 @@ export const RemoteOnlyPrPopover: Component<{
 			const preferred =
 				repoSettingsStore.getEffective(props.repoPath)?.prMergeStrategy ?? repoDefaultsStore.state.prMergeStrategy;
 			const startMethod = effectiveMergeMethod(pr, preferred);
-			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod);
+			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid);
 			// Persist the working method so future merges use it directly
 			if (usedMethod !== preferred) {
 				const repo = repositoriesStore.get(props.repoPath);

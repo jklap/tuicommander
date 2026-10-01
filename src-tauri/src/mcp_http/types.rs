@@ -610,6 +610,9 @@ pub(super) struct MergePrRequest {
     /// "merge", "squash", or "rebase"
     #[serde(rename = "mergeMethod")]
     pub merge_method: String,
+    /// Head commit the user reviewed; GitHub refuses the merge if the PR head moved.
+    #[serde(rename = "expectedHeadSha")]
+    pub expected_head_sha: String,
 }
 
 // --- Recent commits query ---

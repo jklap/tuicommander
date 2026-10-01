@@ -73,7 +73,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 				repoSettingsStore.getEffectiveField(props.repoPath, "prMergeStrategy") ??
 				repoDefaultsStore.state.prMergeStrategy;
 			const startMethod = effectiveMergeMethod(pr, preferred);
-			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod);
+			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod, pr.head_ref_oid);
 			if (usedMethod !== preferred) {
 				const repo = repositoriesStore.get(props.repoPath);
 				repoSettingsStore.getOrCreate(props.repoPath, repo?.displayName ?? props.repoPath);

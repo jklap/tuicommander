@@ -70,7 +70,7 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `approve_pr` | `(repo_path: String, pr_number: i64) -> ()` | Submit approving review via the REST reviews endpoint |
 | `get_all_pr_statuses` | `(paths: Vec<String>, include_merged: bool) -> HashMap<String, Vec<BranchPrStatus>>` | Batch PR status across many repos in one GraphQL call |
 | `get_pr_diff` | `(repo_path: String, pr_number: i64) -> String` | Get PR diff content; falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
-| `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String) -> String` | Merge PR via GitHub API |
+| `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String, expected_head_sha: String) -> String` | Merge PR via GitHub API, pinned to the reviewed head (409 → `PR head changed`) |
 | `fetch_ci_failure_logs` | `(repo_path: String, branch: String, check_url?: String, head_sha?: String) -> String` | Fetch failure logs for the local branch head during auto-heal or for a selected check at the PR head SHA |
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
 

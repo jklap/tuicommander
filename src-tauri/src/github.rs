@@ -1998,13 +1998,38 @@ pub(crate) async fn get_ci_checks_impl(
     }
 }
 
-/// Merge a PR via GitHub REST API using the specified merge method.
+/// Marker the frontend matches (`isMergeHeadChanged`) to tell "head moved" from other merge failures.
+pub(crate) const MERGE_HEAD_CHANGED: &str = "PR head changed";
+
+/// REST body for the merge call: `sha` pins the merge to the head the user reviewed.
+fn merge_request_body(merge_method: &str, expected_head_sha: &str) -> serde_json::Value {
+    serde_json::json!({ "merge_method": merge_method, "sha": expected_head_sha })
+}
+
+/// Map a failed merge response to an error message. GitHub answers 409
+/// "Head branch was modified" when the pinned `sha` is no longer the PR head;
+/// that must never be retried with the new head (the user has not seen it).
+fn merge_failure_message(status: u16, raw: &str) -> String {
+    if status == 409 && raw.contains("Head branch was modified") {
+        return format!(
+            "{MERGE_HEAD_CHANGED}: new commits were pushed after you reviewed it. Refresh and review before merging."
+        );
+    }
+    format!("GitHub merge failed ({status}): {raw}")
+}
+
+/// Merge a PR via GitHub REST API using the specified merge method, pinned to
+/// `expected_head_sha` (the head the caller displayed).
 pub(crate) async fn merge_pr_github_impl(
     repo_path: &str,
     pr_number: i64,
     merge_method: &str,
+    expected_head_sha: &str,
     state: &AppState,
 ) -> Result<String, String> {
+    if expected_head_sha.is_empty() {
+        return Err("Cannot merge without the head commit the PR was reviewed at".to_string());
+    }
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
 
     let url = crate::github_account::github_rest_url(
@@ -2012,7 +2037,7 @@ pub(crate) async fn merge_pr_github_impl(
         &format!("/repos/{owner}/{repo}/pulls/{pr_number}/merge"),
     );
     crate::github_debug::log_api("PUT", &url, "merge_pr_github_impl");
-    let body = serde_json::json!({ "merge_method": merge_method });
+    let body = merge_request_body(merge_method, expected_head_sha);
 
     let response = send_rest_with_breaker(
         state,
@@ -2040,22 +2065,23 @@ pub(crate) async fn merge_pr_github_impl(
             .as_str()
             .unwrap_or("Unknown error")
             .to_string();
-        Err(format!("GitHub merge failed ({status}): {msg}"))
+        Err(merge_failure_message(status, &msg))
     }
 }
 
 /// Merge a PR via GitHub REST API (Tauri command).
-/// Supports merge_method: "merge", "squash", "rebase".
+/// Supports merge_method: "merge", "squash", "rebase". `expected_head_sha` pins the merge to the reviewed head.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn merge_pr_via_github(
     repo_path: String,
     pr_number: i64,
     merge_method: String,
+    expected_head_sha: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     let state = state.inner().clone();
-    merge_pr_github_impl(&repo_path, pr_number, &merge_method, &state).await
+    merge_pr_github_impl(&repo_path, pr_number, &merge_method, &expected_head_sha, &state).await
 }
 
 /// Get CI check details for a PR via GitHub GraphQL API (Story 060).
@@ -4096,6 +4122,44 @@ mod tests {
     fn test_friendly_approve_error_other_passthrough() {
         let msg = friendly_approve_error(500, "Internal Server Error");
         assert!(msg.contains("Internal Server Error"));
+    }
+
+    /// Catches: merge body without `sha`, so commits pushed after review get merged.
+    #[test]
+    fn merge_body_pins_the_reviewed_head_sha() {
+        let body = merge_request_body("squash", "abc123");
+        assert_eq!(body["sha"], "abc123");
+        assert_eq!(body["merge_method"], "squash");
+    }
+
+    /// Catches: a head-moved 409 reported as a generic error (or treated as "already merged").
+    #[test]
+    fn merge_409_head_modified_reports_head_changed() {
+        let msg = merge_failure_message(
+            409,
+            "Head branch was modified. Review and try the merge again.",
+        );
+        assert!(msg.starts_with(MERGE_HEAD_CHANGED), "{msg}");
+        assert!(msg.contains("Refresh"));
+    }
+
+    #[test]
+    fn merge_other_failures_keep_status_and_message() {
+        assert_eq!(
+            merge_failure_message(405, "Pull Request is not mergeable"),
+            "GitHub merge failed (405): Pull Request is not mergeable"
+        );
+        // a 409 that is not a head move (e.g. merge conflict) is not "head changed"
+        assert!(!merge_failure_message(409, "Merge conflict").contains(MERGE_HEAD_CHANGED));
+    }
+
+    #[tokio::test]
+    async fn merge_without_expected_head_is_rejected_before_any_request() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let err = merge_pr_github_impl("/nonexistent", 1, "squash", "", &state)
+            .await
+            .expect_err("empty sha must be rejected");
+        assert!(err.contains("head commit"), "{err}");
     }
 
     #[test]

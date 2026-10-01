@@ -1066,10 +1066,10 @@ Removes an orphan worktree by filesystem path. The worktree path is validated ag
 POST /repo/merge-pr
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42, "mergeMethod": "squash" }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "mergeMethod": "squash", "expectedHeadSha": "<head sha the caller reviewed>" }
 ```
 
-Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or `"rebase"`. Returns `{"sha": "..."}` on success.
+Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or `"rebase"`. `expectedHeadSha` is required and is sent to GitHub as `sha`: if the PR head moved since the caller saw it, GitHub answers 409 and the route returns an error starting with `PR head changed`; the caller must refresh and review, never retry with the new head. Returns `{"sha": "..."}` on success.
 
 ### Approve PR
 

@@ -119,7 +119,12 @@ export interface GitOperationsDeps {
 			safeOnly?: boolean,
 			confirmedSessions?: string[],
 		) => Promise<void>;
-		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
+		mergePrViaGithub: (
+			repoPath: string,
+			prNumber: number,
+			mergeMethod: string,
+			expectedHeadSha: string,
+		) => Promise<string>;
 		getWorkspaceLifecycle: (
 			repoPath: string,
 			workspaceId: string,
