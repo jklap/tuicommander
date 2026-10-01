@@ -1987,7 +1987,9 @@ pub enum MarkdownLinkTarget {
         open_path: String,
         is_directory: bool,
         same_document: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
         anchor: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         line: Option<usize>,
     },
     Missing {
@@ -2280,6 +2282,33 @@ mod tests {
         };
         let wire = serde_json::to_value(&batch).unwrap();
         assert_eq!(wire["search_id"], "cs-7");
+    }
+
+    /// The frontend takes the Markdown-viewer branch only when `line` is absent;
+    /// a serialised `null` once sent every .md link to the text editor.
+    #[test]
+    fn markdown_file_link_omits_absent_anchor_and_line() {
+        let target = MarkdownLinkTarget::File {
+            absolute_path: "/r/a.md".into(),
+            open_path: "a.md".into(),
+            is_directory: false,
+            same_document: false,
+            anchor: None,
+            line: None,
+        };
+        let wire = serde_json::to_value(&target).unwrap();
+        assert!(wire.get("anchor").is_none() && wire.get("line").is_none());
+        let with = MarkdownLinkTarget::File {
+            absolute_path: "/r/a.md".into(),
+            open_path: "a.md".into(),
+            is_directory: false,
+            same_document: false,
+            anchor: Some("x".into()),
+            line: Some(3),
+        };
+        let wire = serde_json::to_value(&with).unwrap();
+        assert_eq!(wire["anchor"], "x");
+        assert_eq!(wire["line"], 3);
     }
 
     /// IPC and HTTP are two transports for one backend, and the browser store
@@ -3462,6 +3491,40 @@ mod tests {
                 "{href}"
             );
         }
+    }
+
+    /// Wire contract through the real resolver: an .md link without anchor or line
+    /// must reach the frontend with neither key (a `null` line routes to the editor).
+    #[test]
+    fn resolved_markdown_links_serialize_without_null_anchor_or_line() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("review.md"), "").unwrap();
+        fs::write(dir.path().join("next.md"), "").unwrap();
+        let root = dir.path().to_string_lossy();
+        let absolute = dir.path().join("next.md").to_string_lossy().into_owned();
+        for href in ["next.md", "./next.md", absolute.as_str(), "next.md#"] {
+            let wire =
+                serde_json::to_value(resolve_markdown_link_impl(&root, "review.md", href)).unwrap();
+            assert_eq!(wire["kind"], "file", "{href}");
+            assert!(wire.get("line").is_none(), "{href}: {wire}");
+            assert!(wire.get("anchor").is_none(), "{href}: {wire}");
+        }
+        let wire = serde_json::to_value(resolve_markdown_link_impl(
+            &root,
+            "review.md",
+            "next.md#intro",
+        ))
+        .unwrap();
+        assert_eq!(wire["anchor"], "intro");
+        assert!(wire.get("line").is_none());
+        let wire =
+            serde_json::to_value(resolve_markdown_link_impl(&root, "review.md", "next.md#L9"))
+                .unwrap();
+        assert_eq!(wire["line"], 9);
+        assert!(
+            wire.get("anchor").is_none(),
+            "an L-anchor is a line, not a heading: {wire}"
+        );
     }
 
     #[test]

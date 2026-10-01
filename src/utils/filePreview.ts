@@ -57,11 +57,13 @@ export function openFileAction(
 	filePath: string,
 	repoPath: string,
 	fsRoot?: string,
-	line?: number,
+	// The backend serialises an absent line as JSON null; treat it like undefined.
+	line?: number | null,
 	onEditorTab?: (tabId: string) => void,
 	col?: number,
 ): void {
-	if (line === undefined) {
+	const hasLine = line != null;
+	if (!hasLine) {
 		const handler = filePreviewRegistry.getHandler(filePath);
 		if (handler) {
 			handler.onOpen({ filePath, repoPath, fsRoot: fsRoot || repoPath });
@@ -72,12 +74,15 @@ export function openFileAction(
 	// Each store deactivates the other panes when it activates a tab
 	// (tabManager.activatePaneExclusively), so no hand-rolled setActive(null) here.
 	const target = classifyFile(filePath);
-	if (target === "markdown" && line === undefined) {
+	if (target === "markdown" && !hasLine) {
 		mdTabsStore.add(repoPath, filePath, fsRoot);
-	} else if (target === "preview" && line === undefined) {
+	} else if (target === "preview" && !hasLine) {
 		mdTabsStore.addHtmlPreview(repoPath, filePath, fsRoot);
 	} else {
-		const tabId = editorTabsStore.add(repoPath, filePath, line, { fsRoot: fsRoot || repoPath, initialCol: col });
+		const tabId = editorTabsStore.add(repoPath, filePath, line ?? undefined, {
+			fsRoot: fsRoot || repoPath,
+			initialCol: col,
+		});
 		onEditorTab?.(tabId);
 	}
 }
