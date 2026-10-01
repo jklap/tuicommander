@@ -134,6 +134,10 @@ When any branch has a PR event that needs attention, a bell icon with a count ba
 - **Click the dismiss (x) button** on an item — Dismiss that single notification
 - **Click "Dismiss All"** — Clear all notifications at once
 
+### OS Notifications
+
+While TUICommander is in the background, **ready**, **CI failed**, **changes requested** and **merged** transitions also raise an operating-system notification showing `repo #number: title`. On macOS, clicking it opens the PR on GitHub. The same event delivered twice within two minutes notifies once. Turn it off in **Settings > Notifications > Pull Requests**.
+
 ### PR Badge on Sidebar Branches
 
 Click the colored PR status badge on any branch in the sidebar to open the PR detail popover directly.

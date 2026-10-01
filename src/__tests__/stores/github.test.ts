@@ -40,6 +40,7 @@ describe("githubStore", () => {
 			repositoriesStore: {
 				getPaths: mockGetPaths,
 				getActivePaths: mockGetPaths,
+				get: () => ({ displayName: "Repo" }),
 			},
 		}));
 
@@ -376,6 +377,30 @@ describe("githubStore", () => {
 				expect(issues[0].title).toBe("Bug");
 
 				store.stopPolling();
+			});
+		});
+
+		it("sends an OS notification for a ready transition of a known PR", async () => {
+			// Production path: github-transition event -> store -> native notice.
+			const notify = vi.fn();
+			vi.doMock("../../services/prNativeNotifications", () => ({ notifyPrTransition: notify }));
+			vi.resetModules();
+			const s = (await import("../../stores/github")).githubStore;
+			await testInScopeAsync(async () => {
+				s.updateRepoData("/repo1", [makePrStatus()]);
+				s.startPolling();
+				await vi.advanceTimersByTimeAsync(0);
+				emitEvent("github-transition", {
+					type: "ready",
+					repo_path: "/repo1",
+					branch: "feature/x",
+					pr_number: 42,
+					title: "Add feature",
+				});
+				expect(notify).toHaveBeenCalledWith(
+					expect.objectContaining({ prNumber: 42, title: "Add feature", type: "ready", url: "https://github.com/org/repo/pull/42" }),
+				);
+				s.stopPolling();
 			});
 		});
 
