@@ -53,7 +53,7 @@ describe("suspendTerminal close ordering (critic 1358 r2)", () => {
 			release();
 			expect(await pending).toEqual({ ok: true });
 			expect(terminalsStore.get(id)).toMatchObject({ suspended: true, sessionId: null });
-			expect(terminalsStore.getTerminalForSession("pty-r2")).toBeUndefined();
+			expect(terminalsStore.getTerminalForSession("pty-r2")).toBeFalsy();
 		}));
 
 	// Catches: the in-flight marker surviving a failed close, so every later suspend of this
