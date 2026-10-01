@@ -3503,18 +3503,28 @@ mod tests {
         let root = dir.path().to_string_lossy();
         let absolute = dir.path().join("next.md").to_string_lossy().into_owned();
         for href in ["next.md", "./next.md", absolute.as_str(), "next.md#"] {
-            let wire = serde_json::to_value(resolve_markdown_link_impl(&root, "review.md", href)).unwrap();
+            let wire =
+                serde_json::to_value(resolve_markdown_link_impl(&root, "review.md", href)).unwrap();
             assert_eq!(wire["kind"], "file", "{href}");
             assert!(wire.get("line").is_none(), "{href}: {wire}");
             assert!(wire.get("anchor").is_none(), "{href}: {wire}");
         }
-        let wire =
-            serde_json::to_value(resolve_markdown_link_impl(&root, "review.md", "next.md#intro")).unwrap();
+        let wire = serde_json::to_value(resolve_markdown_link_impl(
+            &root,
+            "review.md",
+            "next.md#intro",
+        ))
+        .unwrap();
         assert_eq!(wire["anchor"], "intro");
         assert!(wire.get("line").is_none());
-        let wire = serde_json::to_value(resolve_markdown_link_impl(&root, "review.md", "next.md#L9")).unwrap();
+        let wire =
+            serde_json::to_value(resolve_markdown_link_impl(&root, "review.md", "next.md#L9"))
+                .unwrap();
         assert_eq!(wire["line"], 9);
-        assert!(wire.get("anchor").is_none(), "an L-anchor is a line, not a heading: {wire}");
+        assert!(
+            wire.get("anchor").is_none(),
+            "an L-anchor is a line, not a heading: {wire}"
+        );
     }
 
     #[test]
