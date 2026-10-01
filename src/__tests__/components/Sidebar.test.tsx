@@ -146,6 +146,7 @@ vi.mock("../../components/PrDetailPopover/PrDetailPopover", () => ({
 
 import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection";
 import { Sidebar } from "../../components/Sidebar/Sidebar";
+import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
@@ -398,6 +399,118 @@ describe("Sidebar", () => {
 			const detail = container.querySelector(".branchTabDetail")?.textContent ?? "";
 			expect(detail).toContain("Needs input");
 			expect(detail).toContain("Refactor the sidebar");
+		});
+
+		describe("subagents and child sessions", () => {
+			const term = (id: string, over: Record<string, unknown> = {}) => ({
+				id,
+				name: id,
+				sessionId: `s-${id}`,
+				tuicSession: `tuic-${id}`,
+				shellState: "busy",
+				unseen: false,
+				awaitingInput: null,
+				agentIntent: null,
+				currentTask: null,
+				lastPrompt: null,
+				agentType: "claude",
+				parentSession: null,
+				...over,
+			});
+			const sub = (n: number, state = "running") => ({
+				id: `s-t1/a${n}`,
+				kind: "subagent",
+				title: `Sub task ${n}`,
+				state,
+				parent: "s-t1",
+				toolCalls: n * 3,
+				ptyId: "s-t1",
+				agentId: `a${n}`,
+			});
+			const flowOf = (subs: ReturnType<typeof sub>[]) => ({
+				project: "/repo1",
+				participants: subs,
+				events: subs.map((p) => ({
+					id: `${p.id}:${p.state === "running" ? "spawn" : "return"}`,
+					kind: p.state === "running" ? "subagent_spawn" : "subagent_return",
+					from: "s-t1",
+					summary: "",
+					atMs: Date.now() - 5 * 60_000,
+				})),
+				truncated: false,
+			});
+			const setup = (terms: Record<string, unknown>, subs: ReturnType<typeof sub>[], ids = Object.keys(terms)) => {
+				mockTerminalsGet.mockImplementation((id: string) => terms[id] ?? null);
+				vi.spyOn(progressStore, "sidebarFlow").mockReturnValue(flowOf(subs) as never);
+				vi.spyOn(progressStore, "refreshSidebarFlow").mockResolvedValue();
+				settingsStore.setTabTreeEnabled(true);
+				withBranch(richBranch({ terminals: ids }));
+				return render(() => <Sidebar {...defaultProps()} />);
+			};
+			afterEach(() => vi.restoreAllMocks());
+
+			// Catches: subagents missing from the rich agent row (Boss: "non ci sono i subagents").
+			it("lists each subagent with state, title, tool calls and age", () => {
+				const { container } = setup({ t1: term("t1") }, [sub(1), sub(2, "done")]);
+				const rows = [...container.querySelectorAll(".subagentRow")].map((r) => r.textContent ?? "");
+				expect(rows).toHaveLength(2);
+				expect(rows[0]).toContain("Running");
+				expect(rows[0]).toContain("Sub task 1");
+				expect(rows[0]).toContain("3 calls");
+				expect(rows[0]).toContain("5m");
+				expect(rows[1]).toContain("Returned");
+			});
+
+			// Catches: a long subagent list pushing every other row off screen.
+			it("folds more than three subagents into a count and expands on click", () => {
+				const { container } = setup({ t1: term("t1") }, [sub(1), sub(2), sub(3), sub(4)]);
+				expect(container.querySelectorAll(".subagentRow")).toHaveLength(0);
+				const fold = container.querySelector(".subagentFold") as HTMLElement;
+				expect(fold.textContent).toBe("4 subagents");
+				fireEvent.click(fold);
+				expect(container.querySelectorAll(".subagentRow")).toHaveLength(4);
+			});
+
+			// Catches: three subagents folding, one past the stated threshold.
+			it("shows exactly three subagents unfolded", () => {
+				const { container } = setup({ t1: term("t1") }, [sub(1), sub(2), sub(3)]);
+				expect(container.querySelectorAll(".subagentRow")).toHaveLength(3);
+			});
+
+			// Catches: another agent's subagents printed under this one.
+			it("prints only the subagents of its own session", () => {
+				const { container } = setup({ t1: term("t1"), t2: term("t2") }, [sub(1)]);
+				expect(container.querySelectorAll(".subagentRow")).toHaveLength(1);
+			});
+
+			// Catches: a TUIC child session shown only as a tag icon, or twice (top level and nested).
+			it("nests a child session under its parent agent row, once", () => {
+				const { container } = setup({ t1: term("t1"), t2: term("t2", { parentSession: "tuic-t1" }) }, []);
+				const items = [...container.querySelectorAll(".branchTabItem")];
+				expect(items).toHaveLength(2);
+				expect(items[0].classList.contains("branchTabNested")).toBe(false);
+				expect(items[1].classList.contains("branchTabNested")).toBe(true);
+			});
+
+			// Catches: a child whose parent is on another branch vanishing from the list.
+			it("keeps a child top level when its parent is not on the branch", () => {
+				const { container } = setup({ t2: term("t2", { parentSession: "tuic-gone" }) }, []);
+				const item = container.querySelector(".branchTabItem") as HTMLElement;
+				expect(item.classList.contains("branchTabNested")).toBe(false);
+			});
+
+			// Catches: compact mode changed by round 6.
+			it("leaves compact mode without subagent lines or nesting", () => {
+				uiStore.cycleSidebarDensityMode();
+				try {
+					const { container } = setup({ t1: term("t1"), t2: term("t2", { parentSession: "tuic-t1" }) }, [sub(1)]);
+					expect(container.querySelectorAll(".subagentRow")).toHaveLength(0);
+					expect(container.querySelectorAll(".branchTabNested")).toHaveLength(0);
+				} finally {
+					uiStore.cycleSidebarDensityMode();
+					uiStore.cycleSidebarDensityMode();
+				}
+			});
 		});
 	});
 

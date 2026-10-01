@@ -135,6 +135,41 @@
   row-gap: 1px;
 }
 
+.branchTabItem.branchTabNested {
+  margin-left: 14px;
+  width: calc(100% - 14px);
+}
+
+.subagentList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 7px 2px 26px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+}
+
+.subagentRow {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.subagentMeta {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.subagentFold {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
 .branchTabDetail {
   flex-basis: 100%;
   display: flex;
@@ -1145,22 +1180,23 @@
     max-width: 84px;
   }
 
-  /* Always-visible 36px buttons would leave the name 8 characters on a phone-width
-     row. In rich mode they drop to the detail line, which wraps to make room. */
+  /* Rich rows wrap: the buttons stay on the name line, where only the branch
+     name gives way, and the break pushes the detail block (PR title, chips) to
+     its own full-width line. They shrink to 28px so the name keeps its room. */
   .sidebar[data-density="rich"] .branchBreak {
     display: block;
-    order: 1;
     flex: 0 0 100%;
     height: 0;
   }
 
-  .sidebar[data-density="rich"] .branchRichDetail {
-    order: 2;
-    flex: 1 1 0;
+  .sidebar[data-density="rich"] .branchActions {
+    flex-shrink: 0;
   }
 
-  .sidebar[data-density="rich"] .branchActions {
-    order: 3;
+  .sidebar[data-density="rich"] .branchAddBtn,
+  .sidebar[data-density="rich"] .branchRemoveBtn {
+    width: 28px;
+    height: 28px;
   }
 }
 

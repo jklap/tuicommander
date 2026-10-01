@@ -1,4 +1,5 @@
 import { type Accessor, createSignal, onCleanup } from "solid-js";
+import type { ProgressFlow } from "../stores/progress";
 
 /**
  * Facts the rich sidebar prints under a row. Everything here is a pure read of
@@ -114,4 +115,39 @@ export function createMinuteClock(): Accessor<number> {
 	const timer = setInterval(() => setNow(Date.now()), MINUTE);
 	onCleanup(() => clearInterval(timer));
 	return now;
+}
+
+/** More subagents than this collapse into one "N subagents" line. */
+export const SUBAGENT_COLLAPSE_AFTER = 3;
+
+export interface SubagentRow {
+	id: string;
+	title: string;
+	running: boolean;
+	toolCalls: number;
+	/** Compact age: since spawn while running, since the return once done. */
+	age: string;
+}
+
+/**
+ * The in-session subagents of the agent running in PTY session `sessionId`,
+ * running ones first. Age comes from the flow's spawn and return events; a
+ * subagent with neither has none.
+ */
+export function subagentRows(flow: ProgressFlow | undefined, sessionId: string | null, nowMs: number): SubagentRow[] {
+	if (!flow || !sessionId) return [];
+	const at = new Map(flow.events.map((e) => [e.id, e.atMs]));
+	const rows = flow.participants
+		.filter((p) => p.kind === "subagent" && p.ptyId === sessionId)
+		.map((p) => {
+			const running = p.state === "running";
+			return {
+				id: p.id,
+				title: p.title,
+				running,
+				toolCalls: p.toolCalls,
+				age: compactAge(at.get(`${p.id}:${running ? "spawn" : "return"}`), nowMs),
+			};
+		});
+	return [...rows.filter((r) => r.running), ...rows.filter((r) => !r.running)];
 }

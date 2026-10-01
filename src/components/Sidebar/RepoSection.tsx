@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
@@ -14,6 +14,7 @@ export { effectiveMergeMethod };
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
+import { progressStore } from "../../stores/progress";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { repoSettingsStore } from "../../stores/repoSettings";
@@ -34,6 +35,9 @@ import {
 	compactAge as compactActivityAge,
 	createMinuteClock,
 	repoFacts,
+	SUBAGENT_COLLAPSE_AFTER,
+	type SubagentRow,
+	subagentRows,
 } from "../../utils/sidebarRich";
 import { terminalVisualState } from "../../utils/terminalVisualState";
 import type { ContextMenuItem } from "../ContextMenu";
@@ -244,101 +248,178 @@ function agentRow(term: TerminalState) {
 	);
 }
 
+/** Rich: the live subagents of one agent row; more than a few fold into a count. */
+const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
+	const [open, setOpen] = createSignal(false);
+	const folded = () => props.rows.length > SUBAGENT_COLLAPSE_AFTER && !open();
+	return (
+		<Show when={props.rows.length > 0}>
+			<div class={s.subagentList}>
+				<Show
+					when={!folded()}
+					fallback={
+						<button class={s.subagentFold} onClick={() => setOpen(true)} aria-expanded="false">
+							{t("sidebar.subagentCount", "{count} subagents", { count: String(props.rows.length) })}
+						</button>
+					}
+				>
+					<For each={props.rows}>
+						{(row) => (
+							<div class={s.subagentRow} title={row.title}>
+								<span class={cx(s.branchTabState, row.running && s.branchTabState_working)}>
+									{row.running ? t("sidebar.subagentRunning", "Running") : t("sidebar.subagentDone", "Returned")}
+								</span>
+								<span class={s.branchTabLine}>{row.title}</span>
+								<span class={s.subagentMeta}>
+									{t("sidebar.subagentCalls", "{count} calls", { count: String(row.toolCalls) })}
+									{row.age ? ` · ${row.age}` : ""}
+								</span>
+							</div>
+						)}
+					</For>
+					<Show when={props.rows.length > SUBAGENT_COLLAPSE_AFTER}>
+						<button class={s.subagentFold} onClick={() => setOpen(false)} aria-expanded="true">
+							{t("sidebar.subagentCollapse", "Collapse")}
+						</button>
+					</Show>
+				</Show>
+			</div>
+		</Show>
+	);
+};
+
 /** Collapsible activity card for the terminals attached to a branch. */
-const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
+const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (props) => {
 	const now = createMinuteClock();
 	const density = useSidebarDensity();
 	const rich = () => density() === "rich";
+	const parentOf = (id: string) => {
+		const parent = terminalsStore.get(id)?.parentSession;
+		if (!parent) return null;
+		return (
+			props.terminalIds.find((other) => {
+				const t = terminalsStore.get(other);
+				return other !== id && t && (t.sessionId === parent || t.tuicSession === parent);
+			}) ?? null
+		);
+	};
+	// Rich nests a TUIC child session under the agent that spawned it, when both
+	// are on this branch. A child whose parent is elsewhere stays a top-level row.
+	const topLevel = () => (rich() ? props.terminalIds.filter((id) => parentOf(id) === null) : props.terminalIds);
+	const childrenOf = (id: string) => (rich() ? props.terminalIds.filter((other) => parentOf(other) === id) : []);
+	// Subagents come from the project flow: ask for it while rich shows an agent,
+	// again on every busy flip and every minute.
+	createEffect(() => {
+		now();
+		if (!rich()) return;
+		const live = props.terminalIds.some((id) => {
+			terminalsStore.isBusy(id);
+			return terminalsStore.get(id)?.agentType;
+		});
+		if (live) void progressStore.refreshSidebarFlow(props.repoPath);
+	});
+	const subagents = (term: TerminalState) =>
+		subagentRows(progressStore.sidebarFlow(props.repoPath), term.sessionId, now());
+	const renderTab = (id: string, nested: boolean): JSX.Element => {
+		const term = () => terminalsStore.get(id);
+		const isActive = () => terminalsStore.state.activeId === id;
+		// The row shows the tab title, as the tab bar does; what the agent is
+		// doing goes in the tooltip.
+		const activity = () => term()?.name ?? null;
+		const detail = () => {
+			const t = term();
+			return t ? (t.agentIntent ?? displayTask(t.currentTask, t.agentType) ?? t.lastPrompt) : null;
+		};
+		const accessibleLabel = () => {
+			const t = term();
+			if (!t) return undefined;
+			const d = detail();
+			return d ? `${t.name}: ${d}` : t.name;
+		};
+		const dotClass = () => {
+			const t = term();
+			if (!t) return s.branchTabDot;
+			const visual = terminalVisualState({
+				error: t.awaitingInput === "error",
+				question: t.awaitingInput === "question",
+				busy: (t.sessionId != null && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isBusy(id),
+				unseen: t.unseen,
+				idle: t.shellState === "idle",
+			});
+			const visualClass = {
+				error: s.branchTabDotError,
+				question: s.branchTabDotQuestion,
+				busy: s.branchTabDotBusy,
+				unseen: s.branchTabDotUnseen,
+				idle: s.branchTabDotIdle,
+				default: undefined,
+			}[visual];
+			return cx(s.branchTabDot, visualClass);
+		};
+
+		return (
+			<Show when={term()}>
+				{(t) => (
+					<>
+						<button
+							class={cx(
+								s.branchTabItem,
+								isActive() && s.active,
+								rich() && s.branchTabItemRich,
+								nested && s.branchTabNested,
+							)}
+							onClick={() => navigateToTerminal(id)}
+							title={accessibleLabel()}
+							aria-label={accessibleLabel()}
+						>
+							<span class={dotClass()} aria-hidden="true" />
+							<Show
+								when={t().agentType}
+								fallback={
+									<span class={s.branchAgentIcon} aria-hidden="true">
+										<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+											<path d="M1 3l5 5-5 5h2l5-5-5-5H1zm7 9h7v2H8v-2z" />
+										</svg>
+									</span>
+								}
+							>
+								{(agent) => (
+									<span class={s.branchAgentIcon} aria-hidden="true">
+										<AgentIcon agent={agent()} size={14} />
+									</span>
+								)}
+							</Show>
+							<Show when={activity()}>{(label) => <span class={s.branchAgentActivity}>{label()}</span>}</Show>
+							<Show when={terminalsStore.getSubAgentTag(id)}>
+								{(parent) => (
+									<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
+								)}
+							</Show>
+							<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, now())}</span>
+							{/* Rich: what the agent is doing, in words, under the tab title. */}
+							<Show when={rich() ? agentRow(t()) : null}>
+								{(facts) => (
+									<span class={s.branchTabDetail}>
+										<span class={cx(s.branchTabState, s[`branchTabState_${facts().state}`])}>
+											{AGENT_STATE_LABEL[facts().state]()}
+										</span>
+										<Show when={facts().line}>{(line) => <span class={s.branchTabLine}>{line()}</span>}</Show>
+									</span>
+								)}
+							</Show>
+						</button>
+						<Show when={rich()}>
+							<SubagentList rows={subagents(t())} />
+							<For each={childrenOf(id)}>{(child) => renderTab(child, true)}</For>
+						</Show>
+					</>
+				)}
+			</Show>
+		);
+	};
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
-			<For each={props.terminalIds}>
-				{(id) => {
-					const term = () => terminalsStore.get(id);
-					const isActive = () => terminalsStore.state.activeId === id;
-					// The row shows the tab title, as the tab bar does; what the agent is
-					// doing goes in the tooltip.
-					const activity = () => term()?.name ?? null;
-					const detail = () => {
-						const t = term();
-						return t ? (t.agentIntent ?? displayTask(t.currentTask, t.agentType) ?? t.lastPrompt) : null;
-					};
-					const accessibleLabel = () => {
-						const t = term();
-						if (!t) return undefined;
-						const d = detail();
-						return d ? `${t.name}: ${d}` : t.name;
-					};
-					const dotClass = () => {
-						const t = term();
-						if (!t) return s.branchTabDot;
-						const visual = terminalVisualState({
-							error: t.awaitingInput === "error",
-							question: t.awaitingInput === "question",
-							busy: (t.sessionId != null && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isBusy(id),
-							unseen: t.unseen,
-							idle: t.shellState === "idle",
-						});
-						const visualClass = {
-							error: s.branchTabDotError,
-							question: s.branchTabDotQuestion,
-							busy: s.branchTabDotBusy,
-							unseen: s.branchTabDotUnseen,
-							idle: s.branchTabDotIdle,
-							default: undefined,
-						}[visual];
-						return cx(s.branchTabDot, visualClass);
-					};
-
-					return (
-						<Show when={term()}>
-							{(t) => (
-								<button
-									class={cx(s.branchTabItem, isActive() && s.active, rich() && s.branchTabItemRich)}
-									onClick={() => navigateToTerminal(id)}
-									title={accessibleLabel()}
-									aria-label={accessibleLabel()}
-								>
-									<span class={dotClass()} aria-hidden="true" />
-									<Show
-										when={t().agentType}
-										fallback={
-											<span class={s.branchAgentIcon} aria-hidden="true">
-												<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
-													<path d="M1 3l5 5-5 5h2l5-5-5-5H1zm7 9h7v2H8v-2z" />
-												</svg>
-											</span>
-										}
-									>
-										{(agent) => (
-											<span class={s.branchAgentIcon} aria-hidden="true">
-												<AgentIcon agent={agent()} size={14} />
-											</span>
-										)}
-									</Show>
-									<Show when={activity()}>{(label) => <span class={s.branchAgentActivity}>{label()}</span>}</Show>
-									<Show when={terminalsStore.getSubAgentTag(id)}>
-										{(parent) => (
-											<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
-										)}
-									</Show>
-									<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, now())}</span>
-									{/* Rich: what the agent is doing, in words, under the tab title. */}
-									<Show when={rich() ? agentRow(t()) : null}>
-										{(facts) => (
-											<span class={s.branchTabDetail}>
-												<span class={cx(s.branchTabState, s[`branchTabState_${facts().state}`])}>
-													{AGENT_STATE_LABEL[facts().state]()}
-												</span>
-												<Show when={facts().line}>{(line) => <span class={s.branchTabLine}>{line()}</span>}</Show>
-											</span>
-										)}
-									</Show>
-								</button>
-							)}
-						</Show>
-					);
-				}}
-			</For>
+			<For each={topLevel()}>{(id) => renderTab(id, false)}</For>
 		</div>
 	);
 };
@@ -1281,7 +1362,7 @@ export const RepoSection: Component<{
 									githubBaseUrl={githubBaseUrl()}
 								/>
 								<Show when={!branch.tabsCollapsed && getBranchTabsAvailable(branch)}>
-									<BranchTabList terminalIds={branch.terminals} />
+									<BranchTabList terminalIds={branch.terminals} repoPath={props.repo.path} />
 								</Show>
 							</div>
 						)}
