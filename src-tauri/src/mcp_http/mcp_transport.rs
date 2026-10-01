@@ -667,7 +667,7 @@ fn retire_repaired_phantom_identity(
                 .into_iter()
                 .map(|message| {
                     let message_id = message.id.clone();
-                    let message_timestamp = state.push_agent_inbox(repaired, message);
+                    let message_timestamp = state.store_agent_inbox(repaired, message);
                     (message_id, message_timestamp)
                 })
                 .collect(),
@@ -2454,6 +2454,8 @@ pub(super) async fn handle_session_submit(
         BeginSubmission::Response(response) => return response,
         BeginSubmission::Started(started) => started,
     };
+    // The coordinator answers a BLOCKED child through the terminal.
+    state.blocked_children.remove(&started.session_id);
     apply_pty_description(state, &started.session_id, pty_description);
 
     let deadline =
@@ -3285,7 +3287,13 @@ fn handle_session(
             // Uses the same tombstone path as the Tauri close_pty command so
             // post-mortem MCP reads keep returning final output + exit code.
             // Idempotent: returns ok even if session was already tombstoned.
-            let existed = crate::pty::close_pty_core(state, session_id, false).is_some()
+            let reason = if args.get("reason").and_then(|v| v.as_str()) == Some(IDLE_CLOSE_REASON) {
+                IDLE_CLOSE_REASON
+            } else {
+                "close_requested"
+            };
+            let existed = crate::pty::close_pty_core_with_reason(state, session_id, false, reason)
+                .is_some()
                 || state.grid.vt_log_buffers.contains_key(session_id);
             if existed {
                 // Notify frontend and SSE consumers so the tab is removed from
@@ -3484,10 +3492,13 @@ fn handle_session(
 }
 
 /// Use the same close path as `session action=close`, including frontend events.
+/// Logged as the close cause when the idle sweep, not a client, closes a session.
+const IDLE_CLOSE_REASON: &str = "idle_close";
+
 pub(crate) fn close_idle_managed_session(state: &Arc<AppState>, session_id: &str) {
     let result = handle_session(
         state,
-        &serde_json::json!({"action": "close", "session_id": session_id}),
+        &serde_json::json!({"action": "close", "session_id": session_id, "reason": IDLE_CLOSE_REASON}),
         None,
     );
     if result.get("error").is_some() {
@@ -10085,6 +10096,22 @@ mod tests {
         call.await.unwrap()
     }
 
+    /// Catches: the coordinator answering a BLOCKED child with `session action=submit`
+    /// (tuic-say) leaving the idle-close hold in place, so the child resumes, finishes
+    /// without mailing and is then never closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_submit_to_a_blocked_child_releases_its_idle_close_hold() {
+        let state = test_state();
+        let session_id = "submit-blocked";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+        state.blocked_children.insert(session_id.to_string());
+
+        submit_with_child_movement(&state, session_id, "the box is back", &bytes).await;
+
+        assert!(!state.blocked_children.contains(session_id));
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn session_submit_returns_acknowledged_receipt_in_the_same_call() {
@@ -13107,6 +13134,61 @@ mod tests {
             carried,
             "mail buffered under the phantom must survive the repair"
         );
+    }
+
+    /// Catches: the identity handoff replaying a child's old BLOCKED mail through the
+    /// hold-tracking push, which re-sets a hold the parent already released by
+    /// answering, so the child is kept open for ever.
+    #[cfg(unix)]
+    #[test]
+    fn repairing_an_identity_does_not_resurrect_a_released_blocked_hold() {
+        let state = test_state();
+        let mcp = "mcp-replay-hold";
+        insert_managed_test_session(&state, "pty-replay-hold", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-replay-hold");
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+        state.orchestrator_peers.insert(TEST_UUID_B.to_string());
+        state
+            .session_maps
+            .session_parent
+            .insert("blocked-child".to_string(), TEST_UUID_B.to_string());
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "msg-blocked".to_string(),
+                from_tuic_session: "blocked-child".to_string(),
+                from_name: "child".to_string(),
+                content: "BLOCKED: box down".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+        assert!(state.blocked_children.contains("blocked-child"));
+        // The parent answered through the terminal.
+        state.blocked_children.remove("blocked-child");
+
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_A, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+
+        assert!(
+            state
+                .agent_inbox
+                .get(TEST_UUID_A)
+                .is_some_and(|inbox| inbox.iter().any(|m| m.id == "msg-blocked")),
+            "the old mail must still be carried over"
+        );
+        assert!(!state.blocked_children.contains("blocked-child"));
     }
 
     /// A caller that reconnects and registers a NEW uuid arrives with no implicit
