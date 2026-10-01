@@ -127,6 +127,10 @@ A button in the sidebar footer shows all parked repos with a count badge. Click 
 
 Click **Unpark** on any repo in the parked repos popover. It returns to the main sidebar list.
 
+## Density
+
+The **density icon** in the toolbar (left of the filter icon) cycles the sidebar through four modes; the choice is saved. **Auto** (grey icon) gives rows more room when the list is short (16 rows or fewer) and 44 px touch targets when the primary pointer is a finger. **Compact**, **Comfortable** and **Touch** (accent icon) force the 22 px, 30 px and 44 px rows.
+
 ## Active-Only Filter
 
 When you have many repos open, hide the ones you aren't using right now.

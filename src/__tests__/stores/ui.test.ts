@@ -94,6 +94,36 @@ describe("uiStore", () => {
 		});
 	});
 
+	describe("sidebar density", () => {
+		// Catches: the toggle changing the view but not the saved prefs, so the choice is lost on restart.
+		it("cycles auto, compact, comfortable, touch and saves each choice", () => {
+			testInScope(() => {
+				expect(store.state.sidebarDensityMode).toBe("auto");
+				store.cycleSidebarDensityMode();
+				expect(store.state.sidebarDensityMode).toBe("compact");
+				flushPersist();
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					base: expect.anything(),
+					config: expect.objectContaining({ sidebar_density: "compact" }),
+				});
+				store.cycleSidebarDensityMode();
+				expect(store.state.sidebarDensityMode).toBe("comfortable");
+			});
+		});
+
+		// Catches: hydrate ignoring the saved mode, or accepting a junk value.
+		it("restores a saved mode and ignores an unknown one", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce({ sidebar_density: "touch" });
+				await store.hydrate();
+				expect(store.state.sidebarDensityMode).toBe("touch");
+				mockInvoke.mockResolvedValueOnce({ sidebar_density: "huge" });
+				await store.hydrate();
+				expect(store.state.sidebarDensityMode).toBe("touch");
+			});
+		});
+	});
+
 	describe("sidebar", () => {
 		it("defaults to visible", () => {
 			testInScope(() => {

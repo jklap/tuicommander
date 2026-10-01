@@ -536,6 +536,7 @@ neither of which involves a model. Nothing reads them back yet.
 | `references_panel_visible` | `bool` | `false` | References panel open |
 | `ai_chat_panel_visible` | `bool` | `false` | AI chat panel open |
 | `file_browser_view_mode` | `String` | `"tree"` | File browser listing: `flat` or `tree` |
+| `sidebar_density` | `String` | `"auto"` | Sidebar row density: `auto` (by row count and pointer type), `compact`, `comfortable` or `touch` |
 | `mobile_theme` | `String` | `"commander"` | Mobile PWA appearance (`commander` or `vscode-light`), separate from the desktop theme |
 | `diff_panel_width` | `u32` | `400` | Diff panel width in pixels |
 | `markdown_panel_width` | `u32` | `400` | Markdown panel width in pixels |

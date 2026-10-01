@@ -313,6 +313,10 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Sidebar footer button opens a popover showing all parked repos
 - Unpark a repo from the popover to restore it to the main list
 
+### 2.7a Sidebar Density
+- Toolbar icon (left of the filter icon) cycles auto, compact, comfortable and touch; the mode is saved in UI prefs (`sidebar_density`)
+- Auto: rows 30 px when the list has 16 rows or fewer, 44 px touch targets on a coarse pointer, 22 px otherwise
+
 ### 2.8 Active-Only Filter
 - Toggled from the filter icon in the toolbar (next to the sidebar collapse button); the icon turns accent-colored while engaged
 - When on, the sidebar shows only repositories that have at least one open terminal — empty groups are dropped entirely (no orphaned headers)
