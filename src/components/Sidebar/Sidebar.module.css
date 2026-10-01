@@ -1195,9 +1195,25 @@
     display: flex;
   }
 
-  /* Rich rows wrap: the buttons stay on the name line, where only the branch
-     name gives way, and the break pushes the detail block (PR title, chips) to
-     its own full-width line. They shrink to 28px so the name keeps its room. */
+  /* Rich rows wrap, and the branch name is the row's identifier: it keeps line 1
+     (name, PR badge) to itself and the PR title keeps line 2. The detail block
+     dissolves into the row so the buttons can sit at the right end of the meta
+     line (line 3) — or of the first line when the row has no detail (shell rows). */
+  .sidebar[data-density="rich"] .branchRichDetail {
+    display: contents;
+  }
+
+  .sidebar[data-density="rich"] .branchRichLine {
+    flex: 0 0 calc(100% - var(--row-icon) - var(--row-gap));
+    margin-left: calc(var(--row-icon) + var(--row-gap));
+  }
+
+  .sidebar[data-density="rich"] .branchRichMeta {
+    flex: 1 1 0;
+    min-width: 0;
+    margin-left: calc(var(--row-icon) + var(--row-gap));
+  }
+
   .sidebar[data-density="rich"] .branchBreak {
     display: block;
     flex: 0 0 100%;
@@ -1205,9 +1221,12 @@
   }
 
   .sidebar[data-density="rich"] .branchActions {
+    order: 1;
+    margin-left: auto;
     flex-shrink: 0;
   }
 
+  .sidebar[data-density="rich"] .branchMoreBtn,
   .sidebar[data-density="rich"] .branchAddBtn,
   .sidebar[data-density="rich"] .branchRemoveBtn {
     width: 28px;
