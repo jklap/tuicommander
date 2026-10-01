@@ -99,10 +99,7 @@ fn split_host_port(name: &str) -> (String, Option<u16>) {
 }
 
 fn dedupe_key(host: &str, port: Option<u16>) -> (String, u16) {
-    (
-        host.to_ascii_lowercase(),
-        port.unwrap_or(DEFAULT_SSH_PORT),
-    )
+    (host.to_ascii_lowercase(), port.unwrap_or(DEFAULT_SSH_PORT))
 }
 
 /// Config aliases first, then known_hosts names whose resolved (host, port)

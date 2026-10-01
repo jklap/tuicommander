@@ -306,8 +306,7 @@ async fn probe_hosts_with_binary(
 ) -> Vec<SshHostStatus> {
     use futures_util::StreamExt;
     futures_util::stream::iter(hosts.into_iter().map(|host| async move {
-        let auth =
-            probe_host_with_binary(&host.host, host.probe_port(), binary, timeout).await;
+        let auth = probe_host_with_binary(&host.host, host.probe_port(), binary, timeout).await;
         SshHostStatus {
             host: host.host,
             port: host.port,
