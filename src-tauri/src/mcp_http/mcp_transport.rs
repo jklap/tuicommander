@@ -1320,9 +1320,30 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "story",
-            "description": "Read and update native plans and stories in the calling managed session's project. Pass one StoryAction as `input`; the input schema lists every action, field, type and enum. Every mutation is checked by the Rust story service, and a refusal names its cause. A claim binds to the calling live PTY.\n\nAgent actions: create_plan, list_plans, list_plan_sources, add_plan_source, get_plan, plan_state, plan_view, create_story, list_stories, get_story, add_dependency, claim, and transition with check_criterion, uncheck_criterion or submit_review on a story this session claimed. add_dependency on a ready story whose dependency is not done moves it to backlog (it cannot be claimed until the dependency is done).\n\nUser-only (refused for an agent, the user does them in the Plans and Stories dialog): remove_dependency, and transition with start_manual, approve, reject_review, block, unblock or wont_fix.\n\nThis tool reaches only the calling session's own project (another project's plan is refused with `plan does not belong to project`). To read or approve a plan of another project, use the CLI: `tuic story '<action JSON>' --project /abs/project` (see the native-stories user guide).",
+            "description": "Read and update native plans and stories in the calling managed session's project. Pass one StoryAction as `input`; the input schema lists every action, field, type and enum. Every mutation is checked by the Rust story service, and a refusal names its cause. A claim binds to the calling live PTY.\n\nAgent actions: create_plan, list_plans, list_plan_sources, add_plan_source, get_plan, plan_state, plan_view, create_story, list_stories, get_story, transition_history (a story's recorded transitions), add_dependency, claim, and transition with check_criterion, uncheck_criterion or submit_review on a story this session claimed, and transition with approve on a story claimed by a different session (the implementer cannot approve its own story). add_dependency on a ready story moves it to backlog (it cannot be claimed until the dependency is done) when the dependency is not done, and also when it is done but has no integration receipt in a workflow-owned plan.\n\nUser-only (refused for an agent, the user does them in the Plans and Stories dialog): remove_dependency, and transition with start_manual, reject_review, block, unblock or wont_fix.\n\nThis tool reaches only the calling session's own project (another project's plan is refused with `plan does not belong to project`). To read or approve a plan of another project, use the CLI: `tuic story '<action JSON>' --project /abs/project` (see the native-stories user guide).",
             "inputSchema": { "type": "object", "properties": {
                 "input": crate::stories::story_action_schema()
+            }, "required": ["input"] }
+        },
+        {
+            "name": "workflow_story_create",
+            "description": "Create a native story once from a plan run. Only the active bound coordinator may call this. A stable proposalKey prevents duplicate stories after retries; a reused key with different story data is rejected.",
+            "inputSchema": { "type": "object", "properties": {
+                "input": { "type": "object", "description": "{runId,proposalKey,story:NewStory}. The story must use the run's planId and a plan_step origin." }
+            }, "required": ["input"] }
+        },
+        {
+            "name": "workflow_report",
+            "description": "Submit a typed outcome for the workflow attempt bound to this live managed agent session. A report is idempotent for its attempt and does not itself advance the story status.",
+            "inputSchema": { "type": "object", "properties": {
+                "input": { "type": "object", "description": "AttemptReport with contractVersion, runId, storyId, storyRevision, attemptId, generation, outcome (completed|failed|needs_input|interrupted), summary, criterionResults [{index,satisfied,evidence}], and evidence [string]. needs_input requires inputRequest {question,options}; a completed reviewer report requires review {decision,artifactDigest,findings:[{criterionIndex,severity,summary,evidence}]} ." }
+            }, "required": ["input"] }
+        },
+        {
+            "name": "workflow_launch",
+            "description": "Launch a pinned workflow agent attempt in a known isolated worktree. The backend renders and hashes the role prompt, reserves the spawn effect, starts the managed agent, and binds its session to the attempt. A story worker may be launched only by this run's active coordinator.",
+            "inputSchema": { "type": "object", "properties": {
+                "input": { "type": "object", "description": "{runId,attemptId,worktreePath,agentType,skills:[{name,location,available}],feedback?}. The caller must be a live managed session in the run's project." }
             }, "required": ["input"] }
         },
         {
@@ -2094,6 +2115,31 @@ async fn handle_mcp_tool_call_with_context(
             let args = args.clone();
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_story(&state, &args, sid.as_deref())).await
+        }
+        "workflow_story_create" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || {
+                handle_workflow_story_create(&state, &args, sid.as_deref())
+            })
+            .await
+        }
+        "workflow_report" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || handle_workflow_report(&state, &args, sid.as_deref()))
+                .await
+        }
+        "workflow_launch" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || {
+                handle_workflow_launch(&state, addr, &args, sid.as_deref())
+            })
+            .await
         }
         "progress" => handle_progress(state, args, mcp_session_id).await,
         "ui" => handle_ui_unified(state, addr, args, mcp_session_id).await,
@@ -6290,6 +6336,457 @@ fn handle_story(
         action,
         Some(&pty),
     ))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkflowStoryCreateInput {
+    run_id: String,
+    proposal_key: String,
+    story: crate::stories::NewStory,
+}
+
+fn handle_workflow_story_create(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let Some(pty) = resolve_mcp_origin_pty(state, mcp_session_id) else {
+        return serde_json::json!({"error": "workflow story creation requires a bound live managed session"});
+    };
+    let Some(project) = crate::progress::project_for_session(state, &pty) else {
+        return serde_json::json!({"error": "calling session has no registered project"});
+    };
+    let input: WorkflowStoryCreateInput = match serde_json::from_value(args["input"].clone()) {
+        Ok(input) => input,
+        Err(error) => {
+            return serde_json::json!({"error": format!("invalid workflow story proposal: {error}")});
+        }
+    };
+    let result = (|| -> Result<serde_json::Value, String> {
+        let owner = crate::progress::resolve_owning_project(Some(&project))?;
+        let store = crate::workflows::RunStore::open()?;
+        let before = store.snapshot(&input.run_id)?;
+        if before.project != owner.to_string_lossy() {
+            return Err("workflow run does not belong to calling session's project".into());
+        }
+        let story = store.create_story_from_coordinator(
+            &input.run_id,
+            &pty,
+            &input.proposal_key,
+            input.story,
+        )?;
+        let after = store.snapshot(&input.run_id)?;
+        if after.sequence > before.sequence {
+            crate::workflows::emit_run_changed(state, &after.project, &after.id, after.sequence);
+        }
+        Ok(serde_json::json!({"story": story, "runId": after.id, "sequence": after.sequence}))
+    })();
+    result.unwrap_or_else(|error| serde_json::json!({"error": error}))
+}
+
+fn handle_workflow_report(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let Some(pty) = resolve_mcp_origin_pty(state, mcp_session_id) else {
+        return serde_json::json!({"error": "workflow report requires a bound live managed session"});
+    };
+    let Some(project) = crate::progress::project_for_session(state, &pty) else {
+        return serde_json::json!({"error": "calling session has no registered project"});
+    };
+    let report: crate::workflows::AttemptReport =
+        match serde_json::from_value(args["input"].clone()) {
+            Ok(value) => value,
+            Err(error) => {
+                return serde_json::json!({"error": format!("invalid workflow report: {error}")});
+            }
+        };
+    let store = match crate::workflows::RunStore::open() {
+        Ok(store) => store,
+        Err(error) => return serde_json::json!({"error": error}),
+    };
+    let snapshot = match store.snapshot(&report.run_id) {
+        Ok(snapshot) => snapshot,
+        Err(error) => return serde_json::json!({"error": error}),
+    };
+    let owner = match crate::progress::resolve_owning_project(Some(&project)) {
+        Ok(owner) => owner,
+        Err(error) => return serde_json::json!({"error": error}),
+    };
+    if snapshot.project != owner.to_string_lossy() {
+        return serde_json::json!({"error": "workflow run does not belong to calling session's project"});
+    }
+    let reported_story_id = report.story_id.clone();
+    match store.report_bound_agent(report, &pty) {
+        Ok(receipt) => {
+            if receipt.sequence > snapshot.sequence {
+                crate::workflows::emit_run_changed(
+                    state,
+                    &receipt.snapshot.project,
+                    &receipt.snapshot.id,
+                    receipt.sequence,
+                );
+            }
+            if receipt.sequence > snapshot.sequence
+                && reported_story_id != snapshot.plan_id
+                && matches!(
+                    &receipt.event.kind,
+                    crate::workflows::RunEventKind::AttemptReported { .. }
+                )
+            {
+                if let Ok(Some(coordinator_session)) =
+                    crate::workflows::active_coordinator_session(&receipt.snapshot)
+                {
+                    if let Ok(Some(peer)) = state.resolve_peer_ref_checked(&coordinator_session) {
+                        queue_workflow_coordinator_wake(
+                            state,
+                            &peer,
+                            &pty,
+                            &receipt.snapshot.id,
+                            &reported_story_id,
+                            receipt.sequence,
+                        );
+                    }
+                }
+            }
+            to_json_or_error(receipt)
+        }
+        Err(error) => serde_json::json!({"error": error}),
+    }
+}
+
+/// Inbox mail is a cursor into the durable run log, never a second result record.
+fn queue_workflow_coordinator_wake(
+    state: &AppState,
+    recipient: &str,
+    reporter: &str,
+    run_id: &str,
+    story_id: &str,
+    sequence: i64,
+) -> bool {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let message = crate::state::AgentMessage {
+        id: format!("workflow-event:{run_id}:{sequence}"),
+        from_tuic_session: reporter.to_owned(),
+        from_name: "workflow".into(),
+        content: serde_json::json!({
+            "type": "workflow_event",
+            "runId": run_id,
+            "storyId": story_id,
+            "sequence": sequence,
+        })
+        .to_string(),
+        timestamp: now_ms,
+        delivered_via_channel: false,
+    };
+    let message_id = message.id.clone();
+    let timestamp = {
+        let _guard = PEER_IDENTITY_BIND_LOCK.lock();
+        if !state.peer_agents.contains_key(recipient) {
+            return false;
+        }
+        state.push_agent_inbox(recipient, message)
+    };
+    if crate::pty::route_registered_orchestrator_mail(state, recipient, &message_id, timestamp)
+        .is_none()
+    {
+        let live_pty = state.live_pty_for_peer(recipient);
+        if state.assign_agent_delivery(recipient, &message_id, live_pty.is_some())
+            == crate::state::AgentDeliveryAssignment::Terminal
+        {
+            if let Some(session_id) = live_pty {
+                let outcome = crate::pty::deliver_notice_to_managed_pty(
+                    state,
+                    &session_id,
+                    crate::pty::PEER_MAIL_WAKE,
+                );
+                crate::pty::settle_terminal_delivery(state, recipient, &message_id, outcome);
+            }
+        }
+    }
+    true
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkflowLaunchInput {
+    run_id: String,
+    attempt_id: String,
+    worktree_path: String,
+    agent_type: String,
+    #[serde(default)]
+    skills: Vec<crate::workflows::SkillReference>,
+    feedback: Option<String>,
+}
+
+fn handle_workflow_launch(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let input: WorkflowLaunchInput = match serde_json::from_value(args["input"].clone()) {
+        Ok(input) => input,
+        Err(error) => {
+            return serde_json::json!({"error": format!("invalid workflow launch: {error}")});
+        }
+    };
+    launch_workflow_agent(state, addr, mcp_session_id, input)
+        .unwrap_or_else(|error| serde_json::json!({"error": error}))
+}
+
+fn launch_workflow_agent(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    mcp_session_id: Option<&str>,
+    input: WorkflowLaunchInput,
+) -> Result<serde_json::Value, String> {
+    if !addr.ip().is_loopback() {
+        return Err("workflow agent launch is restricted to localhost".into());
+    }
+    let caller = resolve_mcp_origin_pty(state, mcp_session_id)
+        .ok_or("workflow launch requires a bound live managed session")?;
+    let project = crate::progress::project_for_session(state, &caller)
+        .ok_or("calling session has no registered project")?;
+    let owner = crate::progress::resolve_owning_project(Some(&project))?
+        .to_string_lossy()
+        .to_string();
+    if input.agent_type.trim().is_empty() || input.agent_type.len() > 128 {
+        return Err("invalid workflow agent type".into());
+    }
+    let worktree = std::path::Path::new(&input.worktree_path)
+        .canonicalize()
+        .map_err(|error| format!("resolve workflow worktree: {error}"))?;
+    let worktree = worktree.to_string_lossy().to_string();
+    if worktree == owner {
+        return Err("workflow agents require an isolated worktree".into());
+    }
+    crate::worktree::validate_worktree_path(&owner, &worktree)?;
+    let caller_cwd = state
+        .session_maps
+        .sessions
+        .get(&caller)
+        .and_then(|session| session.lock().cwd.clone())
+        .ok_or("calling session has no working directory")?;
+    let caller_cwd = std::path::Path::new(&caller_cwd)
+        .canonicalize()
+        .map_err(|error| format!("resolve calling worktree: {error}"))?;
+    let store = crate::workflows::RunStore::open()?;
+    let run = store.snapshot(&input.run_id)?;
+    if run.project != owner {
+        return Err("workflow run does not belong to calling session's project".into());
+    }
+    if run.status != crate::workflows::RunStatus::Running {
+        return Err("workflow run is not running".into());
+    }
+    let attempt = run
+        .attempts
+        .iter()
+        .find(|attempt| attempt.id == input.attempt_id)
+        .ok_or("workflow attempt not found")?;
+    if attempt.state != crate::workflows::AttemptState::Running {
+        return Err("workflow attempt is not running".into());
+    }
+    if attempt.story_id != run.plan_id
+        && crate::workflows::active_coordinator_session(&run)?.as_deref() != Some(&caller)
+    {
+        return Err("only this run's active coordinator may launch a story worker".into());
+    }
+    if attempt.story_id == run.plan_id && !caller_cwd.starts_with(std::path::Path::new(&worktree)) {
+        return Err("workflow plan launch must use the caller's isolated worktree".into());
+    }
+    if let Some(binding) = &attempt.agent {
+        return Ok(serde_json::json!({
+            "runId": run.id,
+            "attemptId": attempt.id,
+            "session_id": binding.session_id,
+            "task_id": binding.task_id,
+            "already_bound": true,
+        }));
+    }
+    let package = if attempt.story_id == run.plan_id {
+        let plan = crate::stories::StoryStore::open()?.get_plan(&run.plan_id)?;
+        let definition = crate::workflows::WorkflowStore::open()?
+            .get_published(&run.definition_id, run.definition_revision)?;
+        let stories = crate::stories::StoryStore::open()?.list_stories(&run.plan_id)?;
+        let plan_text = read_plan_text_for_prompt(&worktree, &plan.source)?;
+        crate::workflows::render_plan_prompt(
+            &run,
+            &plan,
+            attempt,
+            &definition,
+            &stories,
+            &[],
+            run.sequence,
+            &plan_text,
+            &input.skills,
+        )?
+    } else {
+        let story = crate::stories::StoryStore::open()?.get_story(&attempt.story_id)?;
+        let definition = crate::workflows::WorkflowStore::open()?
+            .get_published(&run.story_definition_id, run.story_definition_revision)?;
+        crate::workflows::render_story_prompt(
+            &run,
+            &story,
+            attempt,
+            &definition,
+            &input.skills,
+            input.feedback.as_deref(),
+        )?
+    };
+    let effect_key = format!("spawn:{}", attempt.id);
+    if run.effects.iter().any(|effect| effect.key == effect_key) {
+        return Err("spawn intent already exists; reconcile before retrying".into());
+    }
+    if attempt.story_id != run.plan_id {
+        let assignment = store.command(
+            &run.id,
+            &format!("assign-worktree:{}", attempt.story_id),
+            crate::workflows::RunCommand::AssignWorktree {
+                story_id: attempt.story_id.clone(),
+                path: worktree.clone(),
+            },
+        )?;
+        if assignment.sequence > run.sequence {
+            crate::workflows::emit_run_changed(state, &run.project, &run.id, assignment.sequence);
+        }
+    }
+    let reserved = store.command(
+        &run.id,
+        &format!("spawn-intent:{}", attempt.id),
+        crate::workflows::RunCommand::ReserveEffect {
+            key: effect_key,
+            kind: crate::workflows::EffectKind::SpawnAgent,
+        },
+    )?;
+    crate::workflows::emit_run_changed(state, &run.project, &run.id, reserved.sequence);
+    let crate::workflows::RunEventKind::EffectReserved { effect } = &reserved.event.kind else {
+        return Err("workflow state changed before spawn; retry after refreshing".into());
+    };
+    // The reservation and external spawn cannot share a database transaction.
+    // Avoid starting the process when a cancellation already won the race.
+    if store.snapshot(&run.id)?.status != crate::workflows::RunStatus::Running {
+        // No external action happened, so a paused run can close the intent.
+        // Cancellation has already marked outstanding intents uncertain.
+        if store.snapshot(&run.id)?.status == crate::workflows::RunStatus::Paused {
+            if let Ok(failed) = store.command(
+                &run.id,
+                &format!("spawn-aborted:{}", attempt.id),
+                crate::workflows::RunCommand::MarkEffect {
+                    effect_id: effect.id.clone(),
+                    succeeded: false,
+                },
+            ) {
+                crate::workflows::emit_run_changed(state, &run.project, &run.id, failed.sequence);
+            }
+        }
+        return Err("workflow stopped before agent spawn".into());
+    }
+    let spawn_args = serde_json::json!({
+        "action": "spawn",
+        "agent_type": input.agent_type,
+        "name": format!("Workflow {:?}", package.role),
+        "prompt": package.prompt,
+        "cwd": worktree,
+    });
+    let spawned = handle_agent_with_parent_cwd(state, addr, &spawn_args, mcp_session_id, None);
+    if let Some(error) = spawned.get("error").and_then(serde_json::Value::as_str) {
+        if let Ok(failed) = store.command(
+            &run.id,
+            &format!("spawn-failed:{}", attempt.id),
+            crate::workflows::RunCommand::MarkEffect {
+                effect_id: effect.id.clone(),
+                succeeded: false,
+            },
+        ) {
+            crate::workflows::emit_run_changed(state, &run.project, &run.id, failed.sequence);
+        }
+        return Err(error.to_owned());
+    }
+    let Some(session_id) = spawned["session_id"].as_str() else {
+        let _ = store.reconcile(&run.id);
+        return Err(
+            "managed spawn returned no session id; workflow paused for reconciliation".into(),
+        );
+    };
+    let binding = crate::workflows::AgentBinding {
+        session_id: session_id.into(),
+        task_id: spawned["task_id"].as_str().map(str::to_owned),
+        effect_id: effect.id.clone(),
+        prompt_contract_version: package.contract_version,
+        prompt_sha256: package.prompt_sha256,
+        audit_preview: package.audit_preview,
+    };
+    let bound = match store.bind_agent(&run.id, &attempt.id, binding) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            // Cancellation can still win while the managed process starts.
+            // Stop the unbound child; its intent remains uncertain in the run
+            // snapshot so an operator can see what happened.
+            let killed = handle_session(
+                state,
+                &serde_json::json!({"action": "kill", "session_id": session_id}),
+                mcp_session_id,
+            );
+            let _ = store.reconcile(&run.id);
+            return Err(format!(
+                "managed agent started but attempt binding failed: {error}; child termination: {killed}"
+            ));
+        }
+    };
+    crate::workflows::emit_run_changed(state, &run.project, &run.id, bound.sequence);
+    if !state.session_maps.sessions.contains_key(session_id) {
+        for changed in store.interrupt_agent_session(session_id)? {
+            crate::workflows::emit_run_changed(
+                state,
+                &changed.project,
+                &changed.id,
+                changed.sequence,
+            );
+        }
+    }
+    Ok(serde_json::json!({
+        "runId": run.id,
+        "attemptId": attempt.id,
+        "session_id": session_id,
+        "task_id": spawned["task_id"],
+        "sequence": bound.sequence,
+    }))
+}
+
+fn read_plan_text_for_prompt(project: &str, source: &str) -> Result<String, String> {
+    let relative = std::path::Path::new(source);
+    if relative.as_os_str().is_empty()
+        || !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return Ok(String::new());
+    }
+    let path = std::path::Path::new(project).join(relative);
+    if !path.is_file() {
+        return Ok(String::new());
+    }
+    let resolved = path
+        .canonicalize()
+        .map_err(|error| format!("resolve plan source: {error}"))?;
+    if !resolved.starts_with(project) {
+        return Err("plan source escapes the project".into());
+    }
+    if resolved
+        .metadata()
+        .map_err(|error| format!("inspect plan source: {error}"))?
+        .len()
+        > 16_000
+    {
+        return Err("plan source exceeds prompt size limit".into());
+    }
+    std::fs::read_to_string(&resolved).map_err(|error| format!("read plan source: {error}"))
 }
 
 async fn handle_progress(
@@ -17281,6 +17778,9 @@ mod tests {
                 "remote",
                 "repo",
                 "story",
+                "workflow_story_create",
+                "workflow_report",
+                "workflow_launch",
                 "progress",
                 "ui",
                 "plugin_dev_guide",
@@ -17382,6 +17882,66 @@ mod tests {
             titles,
             ["Bound plan"],
             "the caller's tab project scopes the list"
+        );
+    }
+
+    #[test]
+    fn workflow_tools_refuse_an_unbound_caller() {
+        let state = test_state();
+        let create = handle_workflow_story_create(&state, &serde_json::json!({"input": {}}), None);
+        assert_eq!(
+            create["error"],
+            "workflow story creation requires a bound live managed session"
+        );
+        let report = handle_workflow_report(&state, &serde_json::json!({"input": {}}), None);
+        assert_eq!(
+            report["error"],
+            "workflow report requires a bound live managed session"
+        );
+        let launch = handle_workflow_launch(
+            &state,
+            "127.0.0.1:0".parse().unwrap(),
+            &serde_json::json!({"input": {
+                "runId": "run",
+                "attemptId": "attempt",
+                "worktreePath": "/tmp/worktree",
+                "agentType": "claude"
+            }}),
+            None,
+        );
+        assert_eq!(
+            launch["error"],
+            "workflow launch requires a bound live managed session"
+        );
+    }
+
+    #[test]
+    fn workflow_coordinator_wake_buffers_only_a_durable_event_cursor() {
+        let state = test_state();
+        assert!(!queue_workflow_coordinator_wake(
+            &state,
+            TEST_UUID_A,
+            "worker-pty",
+            "run-1",
+            "story-1",
+            6,
+        ));
+        register_peer(&state, TEST_UUID_A, "coordinator", "mcp-coordinator");
+        assert!(queue_workflow_coordinator_wake(
+            &state,
+            TEST_UUID_A,
+            "worker-pty",
+            "run-1",
+            "story-1",
+            7,
+        ));
+        let inbox = state.agent_inbox.get(TEST_UUID_A).unwrap();
+        assert_eq!(inbox.len(), 1);
+        let message = &inbox[0];
+        assert_eq!(message.from_tuic_session, "worker-pty");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&message.content).unwrap(),
+            serde_json::json!({"type": "workflow_event", "runId": "run-1", "storyId": "story-1", "sequence": 7})
         );
     }
 
@@ -25429,5 +25989,57 @@ mod tests {
             None,
         );
         assert!(result.get("ok").is_none(), "got {result}");
+    }
+}
+
+#[cfg(test)]
+mod critic_story_tool_text {
+    use super::*;
+
+    /// Catches: a StoryAction variant (transition_history) published in the input schema but
+    /// missing from the tool text, so an agent never learns it may call it.
+    #[test]
+    fn story_tool_text_names_every_published_action() {
+        let definition = native_tool_definitions()
+            .as_array()
+            .expect("definitions")
+            .iter()
+            .find(|tool| tool["name"] == "story")
+            .expect("story tool")
+            .clone();
+        let description = definition["description"].as_str().unwrap_or_default();
+        let variants = definition["inputSchema"]["properties"]["input"]["oneOf"]
+            .as_array()
+            .expect("oneOf");
+        let mut missing = Vec::new();
+        for variant in variants {
+            let action = &variant["properties"]["action"];
+            let name = action["const"]
+                .as_str()
+                .or_else(|| action["enum"][0].as_str())
+                .expect("action tag");
+            if !description.contains(name) {
+                missing.push(name.to_string());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "actions absent from the tool text: {missing:?}"
+        );
+    }
+
+    /// Catches: the dependency sentence promising demotion only for a not-done dependency while
+    /// a Done dependency without a receipt also demotes in a workflow-owned plan.
+    #[test]
+    fn story_tool_text_mentions_the_receipt_condition_for_dependencies() {
+        let definition = native_tool_definitions()
+            .as_array()
+            .expect("definitions")
+            .iter()
+            .find(|tool| tool["name"] == "story")
+            .expect("story tool")
+            .clone();
+        let description = definition["description"].as_str().unwrap_or_default();
+        assert!(description.contains("receipt"), "{description}");
     }
 }

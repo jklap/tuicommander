@@ -488,6 +488,15 @@ The project-scoped plan and story dialog creates manual plans and stories, prese
 
 The dialog probes `story_capabilities` before loading. A missing capability receives the restart message; action failures retain their own error details.
 
+The project-scoped Plans and Stories dialog supports manual plan/story actions
+and a separate Run history view. Run history reads persisted run snapshots and
+ordered events through `workflow_run_action`; `workflowRunSignals` is a wake hint
+that causes a cursor-based read, so missed or duplicate notifications cannot
+replace the backend's durable sequence. The view pages events and stays usable
+without starting a workflow.
+The review view offers Approve in both the desktop app and browser. The backend
+rejects approval from the managed session that claimed the story.
+
 ### ProgressDialog (`ProgressDialog/`)
 
 The whole Progress UI: one newest-first list for the active PTY by default,

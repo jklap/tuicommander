@@ -20,6 +20,7 @@ import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
+import { workflowRunSignals } from "../stores/workflowRunSignals";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, rpc, subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
@@ -390,11 +391,15 @@ export async function initApp(deps: AppInitDeps) {
 	// historical notifications. Boot reads nothing: the journal is queried when
 	// the dialog opens, for the one project it shows.
 	subscribeEvents(
-		{ "progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload) },
+		{
+			"progress-recorded": (payload) => progressStore.presentLive(payload as ProgressRecordedPayload),
+			"workflow-run-changed": (payload) => workflowRunSignals.accept(payload),
+		},
 		{
 			onResync: () => {
 				const project = progressStore.requestedProject();
 				if (progressStore.dialogVisible() && project) void progressStore.refreshProject(project);
+				workflowRunSignals.resync();
 			},
 		},
 	).catch((err) => appLogger.error("app", "Failed to register progress-recorded listener", err));
