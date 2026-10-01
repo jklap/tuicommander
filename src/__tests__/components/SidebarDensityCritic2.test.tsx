@@ -1,7 +1,5 @@
-import { readFileSync } from "node:fs";
-import { fireEvent, render } from "@solidjs/testing-library";
+import { render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockInvoke } from "../mocks/tauri";
 
 const {
 	mockToggleExpanded,
@@ -146,7 +144,6 @@ import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection"
 import { Sidebar } from "../../components/Sidebar/Sidebar";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
-import { uiStore } from "../../stores/ui";
 
 /** Helper to create default no-op props for Sidebar */
 function defaultProps(overrides: Partial<Parameters<typeof Sidebar>[0]> = {}) {
