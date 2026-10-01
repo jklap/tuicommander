@@ -30,14 +30,19 @@ export interface DensityRepoShape {
 /**
  * Rows the sidebar would render: one header per repo, one row per branch when the
  * repo is open, and one row per terminal tab under a branch whose tab list is shown
- * (`tabTreeEnabled` on and the branch not collapsed).
+ * (`tabTreeEnabled` on and the branch not collapsed). Every open repo also renders
+ * the sidebar plugin panels, `pluginRowsPerRepo` rows in all.
  */
-export function countSidebarRows(repos: readonly DensityRepoShape[], tabTreeEnabled: boolean): number {
+export function countSidebarRows(
+	repos: readonly DensityRepoShape[],
+	tabTreeEnabled: boolean,
+	pluginRowsPerRepo = 0,
+): number {
 	return repos.reduce((n, r) => {
 		if (!r.expanded || r.collapsed) return n + 1;
 		const branches = Object.values(r.workspaces);
 		const tabs = tabTreeEnabled ? branches.reduce((t, w) => t + (w.tabsCollapsed ? 0 : w.terminals.length), 0) : 0;
-		return n + 1 + branches.length + tabs;
+		return n + 1 + branches.length + tabs + pluginRowsPerRepo;
 	}, 0);
 }
 

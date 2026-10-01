@@ -146,6 +146,7 @@ import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection"
 import { Sidebar } from "../../components/Sidebar/Sidebar";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
+import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { uiStore } from "../../stores/ui";
 
 /** Helper to create default no-op props for Sidebar */
@@ -281,6 +282,19 @@ describe("Sidebar", () => {
 			setRepos({ "/repo1": makeRepo({ workspaces: manyBranches(20) }) });
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			expect(aside(container).dataset.density).toBe("compact");
+		});
+
+		// Catches: plugin panel rows (rendered under every open repo) left out of the row budget.
+		it("counts an expanded plugin panel with many items toward the budget", () => {
+			const handle = sidebarPluginStore.registerPanel("density-test", { id: "p", label: "Panel", collapsed: false });
+			handle.setItems(Array.from({ length: 20 }, (_, i) => ({ id: `i${i}`, label: `item ${i}` })));
+			try {
+				setRepos({ "/repo1": makeRepo({ workspaces: manyBranches(3) }) });
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				expect(aside(container).dataset.density).toBe("compact");
+			} finally {
+				sidebarPluginStore.clearPlugin("density-test");
+			}
 		});
 
 		// Catches: a coarse pointer ignored by the component (only the pure function handles it).
