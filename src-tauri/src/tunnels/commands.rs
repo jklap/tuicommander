@@ -953,3 +953,198 @@ mod critic_r3_tests {
         assert_eq!(runs, 1, "ssh spawned {runs} times for one host");
     }
 }
+
+#[cfg(test)]
+mod critic_round6_tests {
+    use super::*;
+
+    fn host(name: &str, port: Option<u16>, source: discovery::HostSource) -> DiscoveredHost {
+        DiscoveredHost {
+            host: name.to_string(),
+            target: name.to_string(),
+            user: None,
+            port,
+            source,
+        }
+    }
+
+    fn config_host(name: &str) -> DiscoveredHost {
+        host(name, None, discovery::HostSource::Config)
+    }
+
+    fn counting_script(name: &str, sleep_secs: u32) -> PathBuf {
+        let script = crate::test_support::fake_ssh_script(
+            name,
+            &format!("echo x >> \"$0.log\"; sleep {sleep_secs}; exit 0"),
+            &format!(
+                "echo x>> \"%~f0.log\"\r\nping -n {} 127.0.0.1 >nul\r\nexit /b 0",
+                sleep_secs + 1
+            ),
+        );
+        let _ = std::fs::remove_file(format!("{}.log", script.display()));
+        script
+    }
+
+    fn spawns(script: &FsPath) -> usize {
+        std::fs::read_to_string(format!("{}.log", script.display()))
+            .map(|log| log.lines().count())
+            .unwrap_or(0)
+    }
+
+    /// Catches: the manual probe reading the bulk cache again, so a click on
+    /// "Probe" replays a failure the bulk list cached up to a minute ago.
+    #[tokio::test]
+    async fn a_manual_probe_ignores_a_fresh_bulk_cache_entry() {
+        let down = crate::test_support::fake_ssh_script(
+            "ssh-r6-cache-down",
+            "echo 'ssh: connect to host x port 22: Connection refused' >&2; exit 255",
+            "echo ssh: connect to host x port 22: Connection refused 1>&2& exit /b 255",
+        );
+        let up = counting_script("ssh-r6-cache-up", 0);
+        let gate = ProbeGate::new(SSH_PROBE_CONCURRENCY);
+        let cache = tokio::sync::Mutex::new(None);
+        let listed = vec![config_host("cached")];
+        let timeout = Duration::from_secs(5);
+        let bulk = probe_cached_with(&gate, &cache, listed.clone(), &down, timeout)
+            .await
+            .unwrap();
+        assert_eq!(bulk[0].auth, HostAuth::Unreachable);
+        let manual = probe_listed_host(&gate, listed, "cached", None, &up, timeout)
+            .await
+            .unwrap();
+        assert_eq!(manual.auth, HostAuth::Shell);
+        assert_eq!(spawns(&up), 1);
+    }
+
+    /// Catches: the per-host slot replaying a finished probe to a bulk probe
+    /// that started later, so the list shows a result older than its request.
+    #[tokio::test]
+    async fn a_bulk_probe_started_after_a_manual_one_finished_asks_ssh_again() {
+        let up = crate::test_support::fake_ssh_script("ssh-r6-after-up", "exit 0", "exit /b 0");
+        let down = crate::test_support::fake_ssh_script(
+            "ssh-r6-after-down",
+            "echo 'ssh: connect to host x port 22: Connection refused' >&2; exit 255",
+            "echo ssh: connect to host x port 22: Connection refused 1>&2& exit /b 255",
+        );
+        let gate = ProbeGate::new(SSH_PROBE_CONCURRENCY);
+        let listed = vec![config_host("later")];
+        let timeout = Duration::from_secs(5);
+        let manual = probe_listed_host(&gate, listed.clone(), "later", None, &up, timeout)
+            .await
+            .unwrap();
+        assert_eq!(manual.auth, HostAuth::Shell);
+        let bulk = probe_hosts_with_gate(&gate, listed, &down, timeout).await;
+        assert_eq!(bulk[0].auth, HostAuth::Unreachable);
+    }
+
+    /// Catches: the single-flight slot keyed by target alone, so two ports of
+    /// one machine share one ssh and one of them reports the other's result.
+    #[tokio::test]
+    async fn probes_of_one_target_on_different_ports_each_spawn_ssh() {
+        let counter = counting_script("ssh-r6-ports", 1);
+        let gate = ProbeGate::new(SSH_PROBE_CONCURRENCY);
+        let listed = vec![
+            host("box", Some(22), discovery::HostSource::KnownHosts),
+            host("box", Some(2222), discovery::HostSource::KnownHosts),
+        ];
+        let timeout = Duration::from_secs(5);
+        let (a, b) = tokio::join!(
+            probe_listed_host(&gate, listed.clone(), "box", Some(22), &counter, timeout),
+            probe_listed_host(&gate, listed.clone(), "box", Some(2222), &counter, timeout),
+        );
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(spawns(&counter), 2);
+    }
+
+    /// Catches: a request name compared to a mixed-case listed target without
+    /// lowercasing both sides, so "Prod.Example.com" is rejected as unlisted.
+    #[tokio::test]
+    async fn a_mixed_case_listed_target_is_found_by_any_case_variant() {
+        let up = crate::test_support::fake_ssh_script("ssh-r6-case", "exit 0", "exit /b 0");
+        let gate = ProbeGate::new(SSH_PROBE_CONCURRENCY);
+        let listed = vec![host(
+            "Prod.Example.com",
+            None,
+            discovery::HostSource::KnownHosts,
+        )];
+        for variant in ["Prod.Example.com", "prod.example.com", "PROD.EXAMPLE.COM"] {
+            let status = probe_listed_host(
+                &gate,
+                listed.clone(),
+                variant,
+                Some(22),
+                &up,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{variant} not found: {error}"));
+            assert_eq!(status.auth, HostAuth::Shell);
+        }
+    }
+
+    /// Catches: a probe cancelled mid-flight (client disconnect) leaving the
+    /// gate's only permit or the host slot held, so every later probe hangs.
+    #[tokio::test]
+    async fn a_cancelled_probe_leaves_the_gate_and_the_host_slot_usable() {
+        let counter = counting_script("ssh-r6-cancel", 1);
+        let gate = ProbeGate::new(1);
+        let listed = vec![config_host("dropped")];
+        let timeout = Duration::from_secs(5);
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(200),
+            probe_listed_host(&gate, listed.clone(), "dropped", None, &counter, timeout),
+        )
+        .await;
+        assert!(cancelled.is_err(), "the probe was meant to still run");
+        let next = tokio::time::timeout(
+            Duration::from_secs(4),
+            probe_listed_host(&gate, listed, "dropped", None, &counter, timeout),
+        )
+        .await
+        .expect("a cancelled probe left a permit or the host slot held")
+        .unwrap();
+        assert_eq!(next.auth, HostAuth::Shell);
+    }
+
+    /// Catches: the permit surviving a timed-out probe, so with every permit
+    /// taken by hung hosts no other host is ever probed again.
+    #[tokio::test]
+    async fn a_timed_out_probe_releases_its_permit_to_the_next_host() {
+        let script = crate::test_support::fake_ssh_script(
+            "ssh-r6-timeout-permit",
+            "case \"$*\" in *slow*) sleep 3;; esac; exit 0",
+            "echo %* | findstr slow >nul\r\nif not errorlevel 1 ping -n 4 127.0.0.1 >nul\r\nexit /b 0",
+        );
+        let gate = ProbeGate::new(1);
+        let listed = vec![config_host("slow"), config_host("fast")];
+        let timeout = Duration::from_millis(300);
+        let statuses = tokio::time::timeout(
+            Duration::from_secs(5),
+            probe_hosts_with_gate(&gate, listed, &script, timeout),
+        )
+        .await
+        .expect("the permit of a timed-out probe was never released");
+        let auth = |name: &str| statuses.iter().find(|s| s.host == name).unwrap().auth;
+        assert_eq!(auth("slow"), HostAuth::Unreachable);
+        assert_eq!(auth("fast"), HostAuth::Shell);
+    }
+
+    /// Catches: single-flight applying only between a bulk and a single probe,
+    /// so two overlapping bulk probes (two panels, a retry) spawn every host twice.
+    #[tokio::test]
+    async fn two_overlapping_bulk_probes_spawn_each_host_once() {
+        let counter = counting_script("ssh-r6-two-bulks", 1);
+        let gate = ProbeGate::new(2);
+        let listed: Vec<DiscoveredHost> = (0..6).map(|i| config_host(&format!("b{i}"))).collect();
+        let (cache_a, cache_b) = (tokio::sync::Mutex::new(None), tokio::sync::Mutex::new(None));
+        let timeout = Duration::from_secs(10);
+        let (a, b) = tokio::join!(
+            probe_cached_with(&gate, &cache_a, listed.clone(), &counter, timeout),
+            probe_cached_with(&gate, &cache_b, listed.clone(), &counter, timeout),
+        );
+        assert!(a.unwrap().iter().all(|s| s.auth == HostAuth::Shell));
+        assert!(b.unwrap().iter().all(|s| s.auth == HostAuth::Shell));
+        assert_eq!(spawns(&counter), 6);
+    }
+}
