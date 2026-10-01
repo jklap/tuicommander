@@ -502,6 +502,19 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/abc/resume");
 		});
 
+		it("maps session_suspend_response to POST /mcp/suspend-response", () => {
+			const result = mapCommandToHttp("session_suspend_response", {
+				requestId: "r1",
+				ok: false,
+				reason: "agent working",
+			});
+			expect(result).toMatchObject({
+				method: "POST",
+				path: "/mcp/suspend-response",
+				body: { request_id: "r1", ok: false, reason: "agent working" },
+			});
+		});
+
 		it("maps close_pty to DELETE /sessions/{id}", () => {
 			const result = mapCommandToHttp("close_pty", { sessionId: "abc", cleanupWorktree: false });
 			expect(result.method).toBe("DELETE");
@@ -621,6 +634,7 @@ describe("transport", () => {
 				["get_speech_status", { utterance: "7" }, "GET", "/dictation/speech/status?utterance=7"],
 				// The language is a Whisper code, as for every other speech command.
 				["get_speech_voices", { language: "it" }, "GET", "/dictation/speech/voices?language=it"],
+				["get_edge_voices", { language: "it" }, "GET", "/dictation/speech/edge-voices?language=it"],
 				["start_dictation", {}, "POST", "/dictation/start"],
 				["stop_dictation_and_transcribe", {}, "POST", "/dictation/stop"],
 				["get_correction_map", {}, "GET", "/dictation/corrections"],

@@ -67,11 +67,23 @@ mod dictation_config {
         #[serde(default = "default_earcons")]
         pub hands_free_earcons: bool,
         /// A speech engine the user supplies, as argv rather than a shell line.
-        /// Empty means the bundled engine. See
+        /// Used when `speech_engine` is `external`. See
         /// [`crate::dictation::speech::external`](crate::dictation::speech::external) for the
         /// markers and for what it means that this runs as the user.
         #[serde(default)]
         pub speech_command: Vec<String>,
+        /// The engine that speaks replies: `edge` (Microsoft Edge neural voices,
+        /// the default), `pocket` (the bundled Pocket TTS) or `external` (the
+        /// command in `speech_command`). Empty means "not chosen yet": a read
+        /// answers it from what the installation already holds, see
+        /// `dictation::commands::legacy_speech_engine`.
+        #[serde(default)]
+        pub speech_engine: String,
+        /// The Edge voice, such as `it-IT-IsabellaNeural`. Empty means the
+        /// language's default. A voice that does not speak the conversation's
+        /// language is replaced by that default for the reply.
+        #[serde(default)]
+        pub speech_edge_voice: String,
         /// Which of the language's voices to speak with. Empty means the first one
         /// it ships, which is what a configuration written before this setting
         /// existed says. Ignored by a user-supplied engine, which names its own
@@ -197,6 +209,8 @@ mod dictation_config {
                 hands_free_start_notice: String::new(),
                 hands_free_earcons: default_earcons(),
                 speech_command: Vec::new(),
+                speech_engine: String::new(),
+                speech_edge_voice: String::new(),
                 speech_voice: String::new(),
                 speech_volume_db: default_speech_volume_db(),
                 speech_levelling: default_speech_levelling(),
@@ -3968,8 +3982,14 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
         repo_defaults: RepoDefaultsConfig::default(),
         agents: AgentsConfig::default(),
         github_accounts: crate::github_account::GitHubAccountRegistry::default(),
+        // `speech_engine` is empty in the struct so a file without it can be
+        // told apart from a choice (`dictation::commands`); a brand-new install
+        // loads it as "edge", and the settings panel compares against that.
         #[cfg(feature = "desktop")]
-        dictation: DictationConfig::default(),
+        dictation: DictationConfig {
+            speech_engine: "edge".to_string(),
+            ..DictationConfig::default()
+        },
     }
 }
 
@@ -8719,7 +8739,13 @@ mod tests {
         #[cfg(feature = "desktop")]
         assert_eq!(
             serde_json::to_value(&defaults.dictation).unwrap(),
-            serde_json::to_value(crate::dictation::commands::DictationConfig::default()).unwrap()
+            // The one deliberate difference: a fresh install resolves the engine
+            // to Edge, and the settings panel compares against that.
+            serde_json::to_value(crate::dictation::commands::DictationConfig {
+                speech_engine: "edge".to_string(),
+                ..Default::default()
+            })
+            .unwrap()
         );
     }
 

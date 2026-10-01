@@ -551,6 +551,18 @@ fn mcp_confirm_response(state: State<'_, Arc<AppState>>, request_id: String, con
     crate::mcp_http::resolve_mcp_confirm(&state, &request_id, confirmed);
 }
 
+/// The tab's verdict on a `session action=suspend` request.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn session_suspend_response(
+    state: State<'_, Arc<AppState>>,
+    request_id: String,
+    ok: bool,
+    reason: Option<String>,
+) {
+    crate::mcp_http::mcp_transport::resolve_session_suspend(&state, &request_id, ok, reason);
+}
+
 /// One IPv4 address found on a network interface.
 #[derive(serde::Serialize)]
 struct LocalIpEntry {
@@ -2129,6 +2141,7 @@ pub fn run() {
             dictation::commands::cancel_speech_download,
             dictation::commands::delete_speech_asset,
             dictation::commands::get_speech_voices,
+            dictation::commands::get_edge_voices,
             dictation::commands::import_speech_voice,
             dictation::commands::delete_speech_voice,
             dictation::commands::preview_speech_voice,
@@ -2280,6 +2293,7 @@ pub fn run() {
             terminal_grid_commands::set_terminal_theme_colors,
             screenshot_response,
             mcp_confirm_response,
+            session_suspend_response,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,

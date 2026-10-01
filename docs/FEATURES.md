@@ -244,6 +244,18 @@ Idle, unfocused terminals are suspended to stop them consuming CPU and battery. 
 - **Pause badge** — suspended tabs show a pause indicator in the tab bar
 - **Event** — `session-standby` (`{ session_id, standby }`) emitted on stop/wake
 - **Settings** — Settings > General > Power Management > Auto-Standby Timeout (default 5 min; `0` disables)
+- **Not Suspend** — standby only `SIGSTOP`s the process group and keeps its memory; [Suspend Tab](#121a-suspend-tab) ends the process
+
+### 1.21a Suspend Tab
+
+A terminal tab can be suspended from its context menu (**Suspend Tab**) or with MCP `session action=suspend`. The PTY and its agent end, so memory and CPU are released, while the tab stays restorable exactly like a tab after a TUICommander restart.
+
+- **Kept on the tab** — cwd, worktree, alias, `tuic_session`, agent type, agent session id and launch command. The tab shows a `zz` badge and a **Suspended** notice with a **Resume** button.
+- **Resume** — the **Resume** button or **Resume Tab** menu entry opens a new PTY with the same cwd and, for an agent tab, types the command `verifyAndBuildResumeCommand` builds, the function the restart-restore path uses. A plain shell tab reopens a shell. The command is typed automatically at the first idle prompt, with no restart banner: clicking Resume is the confirmation, and the banner would ask for a second click.
+- **Persistence** — `suspended` is stored in the tab's `savedTerminals` record, so a restart restores the tab suspended (a plain shell tab too) and never resumes it by itself.
+- **Refusals** — the tab is not suspended while the agent is working (`working`/`starting` or background work), a question awaits input, compose commands are queued, or a plain shell is busy. An agent tab whose session cannot be resumed is refused. MCP returns `Cannot suspend: <reason>` before any event is emitted, and also for a session that already exited.
+- **MCP verdict** — `session action=suspend` waits (up to 20 s) for the tab's answer and returns `{ok:true}` or `Cannot suspend: <reason>` when the tab refuses. With no UI attached (a headless `tuic-remote` with no open client) it returns an error instead of reporting success.
+- **Event** — `session-suspend-requested` (`{ session_id, request_id }`) from MCP `session action=suspend`; the UI owns the tab and performs the suspend
 
 ---
 
@@ -1216,7 +1228,10 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - **Auto-send** — Enable in Settings > Voice to automatically submit (press Enter) after transcription completes.
 - Spoken-reply voice, hands-free activation phrase and hold-back delay — see 9.11.
 
-### 9.7 Speech Assets
+### 9.7 Speech Engines and Assets
+- **Microsoft Edge voices are the default engine.** No download; the voice list comes from the service, filtered by the dictation language, with a Listen button, and the chosen voice persists. It needs the internet and sends the reply text to Microsoft's speech service (stated in the settings). Offline or a service error shows a clear message in the Voice section, never silence or a hang; a cancelled or over-budget reply stops promptly.
+- **Expert > Speech engine** switches to Pocket TTS (local) or an external command. A fresh install gets Edge; an installation with a chosen Pocket voice, the Pocket runtime on disk or a configured speech command keeps that engine. Echo cancellation, hush, volume, levelling and the voice choice apply to all engines.
+- The rest of this section describes the Pocket engine's assets.
 - Spoken replies need two downloads beside the Whisper models: a **language bundle** (ONNX graphs, tokenizer, voice — about 130 MB, French about 390 MB) and **ONNX Runtime** itself (42 MB). Neither ships with the app.
 - Bundled languages: English, French, German, Italian, Portuguese and Spanish, each with the voice Kyutai lists as native to it (alba, estelle, juergen, giovanni, rafael, lola). French exists upstream only as the larger 24-layer model.
 - The catalogue is an **allowlist compiled into the binary**, not a fetched manifest: every file is pinned to an immutable upstream revision and to a sha256, and a download whose bytes do not match that hash is refused instead of installed.

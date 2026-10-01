@@ -245,6 +245,14 @@ pub enum AppEvent {
         name: String,
         is_custom: bool,
     },
+    /// An MCP client asked for a tab to be suspended (`session action=suspend`).
+    /// The tab, its agent identity and its resume path live in the frontend, so it
+    /// performs the suspend; the backend has already refused a busy session.
+    #[serde(rename = "session-suspend-requested")]
+    SessionSuspendRequested {
+        session_id: String,
+        request_id: String,
+    },
     /// Orchestrator-supplied description of the work currently assigned to a PTY.
     #[serde(rename = "pty-description-changed")]
     PtyDescriptionChanged {
@@ -524,6 +532,7 @@ impl AppEvent {
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
+            | AppEvent::SessionSuspendRequested { session_id, .. }
             | AppEvent::TermAliasAssigned { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
@@ -2197,6 +2206,10 @@ pub struct AppState {
     /// Pending screenshot requests: request_id → oneshot sender for base64 image data.
     /// Populated by MCP `ui(action=screenshot)`, consumed by `screenshot_response` command.
     pub(crate) screenshot_responses: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
+    /// Pending suspend requests: request_id → oneshot sender for the tab's verdict
+    /// (`Ok(())` suspended, `Err(reason)` refused). Populated by MCP `session action=suspend`,
+    /// consumed by `session_suspend_response`.
+    pub(crate) suspend_responses: DashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>,
     /// Pending confirmation requests: request_id → oneshot sender for the human's answer.
     /// Populated by MCP `ui(action=confirm)`, consumed by `mcp_confirm_response`.
     ///
@@ -2299,6 +2312,23 @@ impl AppState {
             );
         }
         true
+    }
+
+    /// Ask the UI to suspend the tab that owns this session. Dual-emitted like a
+    /// rename: Tauri listeners on desktop, the event bus for browser/SSE clients.
+    /// The tab answers through `resolve_session_suspend` with `request_id`.
+    pub(crate) fn request_session_suspend(&self, session_id: &str, request_id: &str) {
+        self.emit_pty_event(AppEvent::SessionSuspendRequested {
+            session_id: session_id.to_string(),
+            request_id: request_id.to_string(),
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "session-suspend-requested",
+                serde_json::json!({ "session_id": session_id, "request_id": request_id }),
+            );
+        }
     }
 
     /// Set or clear the orchestrator-owned description shown above a PTY.
@@ -3389,6 +3419,7 @@ impl AppState {
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
+            suspend_responses: DashMap::new(),
             confirm_responses: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
@@ -4448,6 +4479,7 @@ impl AppState {
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
             AppEvent::SessionRenamed { .. } => {}
+            AppEvent::SessionSuspendRequested { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
@@ -8030,6 +8062,90 @@ mod tests {
             .silence_states
             .insert("s1".to_string(), Arc::new(parking_lot::Mutex::new(silence)));
         s
+    }
+
+    fn session_created(session_id: &str, agent_type: &str) -> AppEvent {
+        AppEvent::SessionCreated {
+            session_id: session_id.to_string(),
+            cwd: None,
+            agent_type: Some(agent_type.to_string()),
+            display_name: None,
+            parent_session: None,
+        }
+    }
+
+    /// Catches: SessionCreated building the row without `last_activity_ms` or
+    /// `agent_type` (new-entry path), or not refreshing them on a row that a
+    /// PtyParsed event created first (existing-entry path).
+    #[test]
+    fn session_created_stamps_activity_time_and_agent_type_on_new_and_existing_rows() {
+        let state = Arc::new(make_test_app_state());
+
+        AppState::apply_event_to_session_state(&state, &session_created("fresh", "claude"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("fresh")
+            .unwrap()
+            .clone();
+        assert!(row.last_activity_ms > 0, "new row lost its activity time");
+        assert_eq!(row.agent_type.as_deref(), Some("claude"));
+
+        state
+            .session_maps
+            .session_states
+            .insert("existing".to_string(), SessionState::default());
+        AppState::apply_event_to_session_state(&state, &session_created("existing", "codex"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("existing")
+            .unwrap()
+            .clone();
+        assert!(
+            row.last_activity_ms > 0,
+            "existing row kept a zero activity time"
+        );
+        assert_eq!(row.agent_type.as_deref(), Some("codex"));
+    }
+
+    /// Catches: `event_type == "question" && epoch_matches` turned into `||`, so a
+    /// question from a previous turn still records awaiting evidence on the
+    /// session's SilenceState even though its own state update is rejected.
+    #[test]
+    fn stale_epoch_question_records_no_awaiting_evidence() {
+        let state = fresh_state();
+        let stale = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "old?", "_turn_epoch": 99 }),
+        );
+        let row = apply(&state, &stale);
+        assert!(!row.awaiting_input, "a stale question parked the session");
+        assert_eq!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank(),
+            None,
+            "a stale question recorded awaiting evidence"
+        );
+
+        let current = make_parsed("question", serde_json::json!({ "prompt_text": "now?" }));
+        assert!(apply(&state, &current).awaiting_input);
+        assert!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank()
+                .is_some(),
+            "a current question must record awaiting evidence"
+        );
     }
 
     #[test]
