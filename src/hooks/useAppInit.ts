@@ -113,7 +113,6 @@ export interface AppInitDeps {
 					agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
 					awaiting_input?: boolean;
 					question_confident?: boolean;
-					question_text?: string;
 					agent_type?: string | null;
 					agent_intent?: string | null;
 					last_prompt?: string | null;
@@ -932,7 +931,6 @@ export async function initApp(deps: AppInitDeps) {
 				agentState: session.state?.agent_state ?? null,
 				awaitingInput: session.state?.awaiting_input === true ? "question" : null,
 				awaitingInputConfident: session.state?.question_confident === true,
-				awaitingInputText: session.state?.awaiting_input === true ? (session.state?.question_text ?? null) : null,
 				backgroundWork: session.state?.background_work ?? false,
 				lastActivityAt: session.state?.last_activity_ms ?? null,
 			});

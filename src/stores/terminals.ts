@@ -69,7 +69,6 @@ export interface TerminalData {
 	repoPath: string | null;
 	awaitingInput: AwaitingInputType;
 	awaitingInputConfident: boolean; // High-confidence detection — don't clear on idle→busy
-	awaitingInputText: string | null; // Text of the pending question; a change means a different question
 	activity: boolean;
 	unseen: boolean; // Terminal completed work while user wasn't viewing it
 	progress: number | null; // OSC 9;4 progress (0-100), null when inactive
@@ -146,7 +145,6 @@ type TerminalCreateData = Omit<
 	| "suggestedActions"
 	| "suggestDismissed"
 	| "awaitingInputConfident"
-	| "awaitingInputText"
 	| "commandBlocks"
 	| "activeBlock"
 	| "lastCommandExecAt"
@@ -458,7 +456,6 @@ function createTerminalsStore() {
 				suggestedActions: null,
 				suggestDismissed: false,
 				awaitingInputConfident: false,
-				awaitingInputText: null,
 				commandBlocks: [],
 				activeBlock: null,
 				lastCommandExecAt: null,
@@ -512,7 +509,6 @@ function createTerminalsStore() {
 				suggestedActions: null,
 				suggestDismissed: false,
 				awaitingInputConfident: false,
-				awaitingInputText: null,
 				commandBlocks: [],
 				activeBlock: null,
 				lastCommandExecAt: null,
@@ -851,7 +847,6 @@ function createTerminalsStore() {
 			batch(() => {
 				setState("terminals", id, "awaitingInput", type);
 				setState("terminals", id, "awaitingInputConfident", confident);
-				setState("terminals", id, "awaitingInputText", null);
 			});
 		},
 

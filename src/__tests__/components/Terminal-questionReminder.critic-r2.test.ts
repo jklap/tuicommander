@@ -10,8 +10,7 @@ vi.mock("../../stores/appLogger", () => ({
 	appLogger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }));
 
-const ask = (id: string, text: string | null) =>
-	terminalsStore.update(id, { awaitingInput: "question", awaitingInputText: text });
+const ask = (id: string) => terminalsStore.update(id, { awaitingInput: "question" });
 
 describe("question reminder — critic round 2", () => {
 	beforeEach(() => {
@@ -20,28 +19,16 @@ describe("question reminder — critic round 2", () => {
 	});
 	afterEach(() => vi.useRealTimers());
 
-	it("a snapshot that omits question_text then sends an empty one is still one question", () => {
-		// Catches: null and "" keyed differently, restarting the timer when the backend
-		// switches between omitting and sending an empty question_text.
-		const id = terminalsStore.add(makeTerminal());
-		trackQuestionReminder(id);
-		ask(id, null);
-		vi.advanceTimersByTime(60_000);
-		ask(id, "");
-		vi.advanceTimersByTime(QUESTION_REMINDER_MS - 60_000);
-		expect(remind).toHaveBeenCalledTimes(1);
-	});
-
 	it("re-applying the same snapshot after the reminder fired does not remind again", () => {
 		// Catches: applySessionState writing awaitingInput/text again (same values) being
 		// treated as a new question, so the reminder repeats every 120 s.
 		const id = terminalsStore.add(makeTerminal());
 		trackQuestionReminder(id);
-		ask(id, "Proceed?");
+		ask(id);
 		vi.advanceTimersByTime(QUESTION_REMINDER_MS);
 		expect(remind).toHaveBeenCalledTimes(1);
-		ask(id, "Proceed?");
-		terminalsStore.update(id, { awaitingInput: "question", awaitingInputText: "Proceed?", agentState: "working" });
+		ask(id);
+		terminalsStore.update(id, { awaitingInput: "question", agentState: "working" });
 		vi.advanceTimersByTime(10 * QUESTION_REMINDER_MS);
 		expect(remind).toHaveBeenCalledTimes(1);
 	});
@@ -50,7 +37,7 @@ describe("question reminder — critic round 2", () => {
 		// Catches: question set and text set landing as two effect runs, double-arming.
 		const id = terminalsStore.add(makeTerminal());
 		trackQuestionReminder(id);
-		ask(id, "Pick one");
+		ask(id);
 		vi.advanceTimersByTime(QUESTION_REMINDER_MS * 3);
 		expect(remind).toHaveBeenCalledTimes(1);
 		expect(remind).toHaveBeenCalledWith(id);
@@ -61,7 +48,7 @@ describe("question reminder — critic round 2", () => {
 		// after the terminal moved to awaitingInput "error".
 		const id = terminalsStore.add(makeTerminal());
 		trackQuestionReminder(id);
-		ask(id, "Proceed?");
+		ask(id);
 		vi.advanceTimersByTime(30_000);
 		terminalsStore.update(id, { awaitingInput: "error" });
 		vi.advanceTimersByTime(QUESTION_REMINDER_MS * 2);
@@ -72,7 +59,7 @@ describe("question reminder — critic round 2", () => {
 		// Catches: clearAwaitingInput not resetting the text and the tracker still firing.
 		const id = terminalsStore.add(makeTerminal());
 		trackQuestionReminder(id);
-		ask(id, "Proceed?");
+		ask(id);
 		vi.advanceTimersByTime(30_000);
 		terminalsStore.clearAwaitingInput(id);
 		vi.advanceTimersByTime(QUESTION_REMINDER_MS * 2);
@@ -83,7 +70,7 @@ describe("question reminder — critic round 2", () => {
 		// Catches: tracker outliving the terminal and notifying a closed session.
 		const id = terminalsStore.add(makeTerminal());
 		trackQuestionReminder(id);
-		ask(id, "Proceed?");
+		ask(id);
 		vi.advanceTimersByTime(60_000);
 		terminalsStore.remove(id);
 		vi.advanceTimersByTime(QUESTION_REMINDER_MS * 2);
@@ -97,7 +84,7 @@ describe("question reminder — critic round 2", () => {
 		const id = terminalsStore.add(makeTerminal());
 		trackQuestionReminder(id);
 		for (let t = 0; t < 10 * 60_000; t += 30_000) {
-			ask(id, (t / 30_000) % 2 === 0 ? "Enter to select · ↑/↓ to navigate" : "Allow Bash(rm -rf)?");
+			ask(id);
 			vi.advanceTimersByTime(30_000);
 		}
 		expect(remind).toHaveBeenCalled();
