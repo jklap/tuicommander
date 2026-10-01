@@ -66,16 +66,16 @@ describe("countSidebarRows plugin panels", () => {
 
 describe("sidebarDensity", () => {
 	// Catches: off-by-one at the threshold (< instead of <=).
-	// The 16 is the 768px-tablet budget (16 rows x 30px); a change must be deliberate.
-	it("is comfortable up to 16 rows and compact above", () => {
-		expect(sidebarDensity(16, false)).toBe("comfortable");
-		expect(sidebarDensity(17, false)).toBe("compact");
+	// The 12 is the 768px-tablet budget (12 rich rows x ~48px); a change must be deliberate.
+	it("is rich up to 12 rows and compact above", () => {
+		expect(sidebarDensity(12, false)).toBe("rich");
+		expect(sidebarDensity(13, false)).toBe("compact");
 	});
 
-	// Catches: a tablet with many repos falling back to 22px rows (targets below 44px).
-	it("is touch on a coarse pointer whatever the row count", () => {
-		expect(sidebarDensity(1, true)).toBe("touch");
-		expect(sidebarDensity(500, true)).toBe("touch");
+	// Catches: a tablet with many repos falling back to one-line compact rows (targets below 44px).
+	it("is rich on a coarse pointer whatever the row count", () => {
+		expect(sidebarDensity(1, true)).toBe("rich");
+		expect(sidebarDensity(500, true)).toBe("rich");
 	});
 });
 
@@ -127,25 +127,26 @@ describe("density mode", () => {
 	// Catches: a forced mode still being overridden by the pointer (touch on a tablet) or the row budget.
 	it("a forced mode wins over the pointer and the row count", () => {
 		expect(sidebarDensity(1, true, "compact")).toBe("compact");
-		expect(sidebarDensity(500, false, "touch")).toBe("touch");
-		expect(sidebarDensity(500, false, "comfortable")).toBe("comfortable");
-		expect(sidebarDensity(1, true, "comfortable")).toBe("comfortable");
+		expect(sidebarDensity(500, false, "compact")).toBe("compact");
+		expect(sidebarDensity(500, false, "rich")).toBe("rich");
+		expect(sidebarDensity(1, true, "rich")).toBe("rich");
 	});
 
 	// Catches: a mode never reachable by clicking, or the cycle not closing back on auto.
 	it("the toggle visits every mode and returns to auto", () => {
 		const visited: string[] = [];
 		let mode: SidebarDensityMode = "auto";
-		for (let i = 0; i < 4; i++) {
+		for (let i = 0; i < 3; i++) {
 			mode = nextSidebarDensityMode(mode);
 			visited.push(mode);
 		}
-		expect(visited).toEqual(["compact", "comfortable", "touch", "auto"]);
+		expect(visited).toEqual(["compact", "rich", "auto"]);
 	});
 
 	// Catches: a hand-edited or newer prefs file with an unknown mode putting the sidebar in an undefined state.
 	it("rejects values that are not a mode", () => {
-		expect(isSidebarDensityMode("touch")).toBe(true);
+		expect(isSidebarDensityMode("rich")).toBe(true);
+		expect(isSidebarDensityMode("touch")).toBe(false);
 		expect(isSidebarDensityMode("roomy")).toBe(false);
 		expect(isSidebarDensityMode(undefined)).toBe(false);
 	});

@@ -127,9 +127,9 @@ A button in the sidebar footer shows all parked repos with a count badge. Click 
 
 Click **Unpark** on any repo in the parked repos popover. It returns to the main sidebar list.
 
-## Density
+## Compact and rich layout
 
-The **density icon** in the toolbar (left of the filter icon) cycles the sidebar through four modes; the choice is saved. **Auto** (grey icon) gives rows more room when the list is short (16 rows or fewer) and 44 px touch targets when the primary pointer is a finger. **Compact**, **Comfortable** and **Touch** (accent icon) force the 22 px, 30 px and 44 px rows.
+The **layout icon** in the toolbar (left of the filter icon) cycles the sidebar through three modes; the choice is saved. **Compact** is the one-line rows. **Rich** adds detail lines: under a branch the PR number and title, the last-commit age, ahead/behind, diff stats, dirty files and merged or stale; under an agent its state and what it is doing; under a repository its current branch, open PRs, worktrees and the age of the last remote poll. **Auto** (grey icon) shows rich when the list is short (12 rows or fewer) or the primary pointer is a finger (44 px targets), compact otherwise.
 
 ## Active-Only Filter
 

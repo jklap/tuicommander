@@ -1,25 +1,26 @@
-import { type Accessor, createSignal, onCleanup } from "solid-js";
+import { type Accessor, createContext, createSignal, onCleanup, useContext } from "solid-js";
 
-export type SidebarDensity = "compact" | "comfortable" | "touch";
+/** `compact` is the classic one-line rows; `rich` spends spare room on detail lines. */
+export type SidebarDensity = "compact" | "rich";
 
 /** The user's choice: `auto` derives the density, the others force it. */
 export type SidebarDensityMode = "auto" | SidebarDensity;
 
-const MODE_CYCLE: readonly SidebarDensityMode[] = ["auto", "compact", "comfortable", "touch"];
+const MODE_CYCLE: readonly SidebarDensityMode[] = ["auto", "compact", "rich"];
 
 export const isSidebarDensityMode = (v: unknown): v is SidebarDensityMode =>
 	MODE_CYCLE.includes(v as SidebarDensityMode);
 
-/** Next mode of the toolbar toggle: auto, compact, comfortable, touch, then auto again. */
+/** Next mode of the toolbar toggle: auto, compact, rich, then auto again. */
 export const nextSidebarDensityMode = (m: SidebarDensityMode): SidebarDensityMode =>
 	MODE_CYCLE[(MODE_CYCLE.indexOf(m) + 1) % MODE_CYCLE.length];
 
 /**
  * Below this many sidebar rows (repo headers + visible branch rows) the list is
- * short enough to breathe: 16 rows at the comfortable 30px still fit a 768px
- * tablet viewport without scrolling.
+ * short enough to give each row two or three lines: 12 rich rows at about 48px
+ * still fit a 768px tablet viewport without scrolling.
  */
-export const ROOMY_MAX_ROWS = 16;
+export const ROOMY_MAX_ROWS = 12;
 
 export interface DensityRepoShape {
 	collapsed: boolean;
@@ -47,9 +48,9 @@ export function countSidebarRows(
 }
 
 /**
- * Touch wins over row count: a finger needs 44px targets (Apple HIG) however
- * many repos there are. Otherwise a short list is given more room. A forced
- * mode wins over both.
+ * A finger always gets the rich layout (its rows carry the 44px targets, see the
+ * pointer media query in Sidebar.module.css), however many repos there are.
+ * Otherwise a short list is shown rich and a long one compact. A forced mode wins.
  */
 export function sidebarDensity(
 	rowCount: number,
@@ -57,8 +58,8 @@ export function sidebarDensity(
 	mode: SidebarDensityMode = "auto",
 ): SidebarDensity {
 	if (mode !== "auto") return mode;
-	if (coarsePointer) return "touch";
-	return rowCount <= ROOMY_MAX_ROWS ? "comfortable" : "compact";
+	if (coarsePointer) return "rich";
+	return rowCount <= ROOMY_MAX_ROWS ? "rich" : "compact";
 }
 
 const COARSE_QUERY = "(pointer: coarse)";
@@ -74,3 +75,8 @@ export function createCoarsePointer(): Accessor<boolean> {
 	}
 	return coarse;
 }
+
+/** The density the enclosing sidebar resolved; rows read it instead of taking a prop per level. */
+const COMPACT: Accessor<SidebarDensity> = () => "compact";
+export const SidebarDensityContext = createContext<Accessor<SidebarDensity>>(COMPACT);
+export const useSidebarDensity = (): Accessor<SidebarDensity> => useContext(SidebarDensityContext) ?? COMPACT;

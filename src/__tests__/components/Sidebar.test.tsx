@@ -121,6 +121,8 @@ vi.mock("../../stores/github", () => ({
 		getRemoteOnlyPrs: vi.fn(() => []),
 		getRepoIssues: vi.fn(() => []),
 		getAllOpenPrs: vi.fn(() => []),
+		getRemoteStatus: vi.fn(() => null),
+		getLastPolled: vi.fn(() => 0),
 		state: { viewerLogin: null, issuesLoading: false, circuitBreakerOpen: false },
 	},
 }));
@@ -271,10 +273,10 @@ describe("Sidebar", () => {
 		});
 
 		// Catches: the density never reaching the <aside> the CSS keys on (derived but not wired).
-		it("puts a short list on the aside as comfortable", () => {
+		it("puts a short list on the aside as rich", () => {
 			setRepos({ "/repo1": makeRepo({ workspaces: manyBranches(3) }) });
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			expect(aside(container).dataset.density).toBe("comfortable");
+			expect(aside(container).dataset.density).toBe("rich");
 		});
 
 		// Catches: a long list still getting the roomy rows (row budget not read from the layout).
@@ -298,7 +300,7 @@ describe("Sidebar", () => {
 		});
 
 		// Catches: a coarse pointer ignored by the component (only the pure function handles it).
-		it("puts touch on the aside for a coarse pointer", () => {
+		it("puts rich on the aside for a coarse pointer", () => {
 			window.matchMedia = vi.fn().mockReturnValue({
 				matches: true,
 				addEventListener: vi.fn(),
@@ -306,7 +308,96 @@ describe("Sidebar", () => {
 			});
 			setRepos({ "/repo1": makeRepo({ workspaces: manyBranches(20) }) });
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			expect(aside(container).dataset.density).toBe("touch");
+			expect(aside(container).dataset.density).toBe("rich");
+		});
+	});
+
+	describe("rich layout", () => {
+		const richBranch = (over: Record<string, unknown> = {}) => ({
+			workspaceId: "feat",
+			branchName: "feat",
+			isMain: false,
+			worktreePath: "/wt/feat",
+			terminals: [],
+			additions: 12,
+			deletions: 3,
+			isMerged: false,
+			lastCommitTs: Math.floor(Date.now() / 1000) - 3 * 3600,
+			lifecycleStatus: { dirtyFiles: 4, commitStatus: "unmerged", removalSafety: "destructive" },
+			...over,
+		});
+		const withBranch = (b: Record<string, unknown>) => setRepos({ "/repo1": makeRepo({ workspaces: { feat: b } }) });
+
+		// Catches: the rich row printing nothing beyond the name (the bare list Boss rejected).
+		it("prints PR title, commit age, diff stats and dirty count under the branch name", () => {
+			mockGetPrStatus.mockReturnValue({ state: "OPEN", number: 77, title: "Add the thing", url: "u" });
+			withBranch(richBranch());
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const row = container.querySelector(".branchItem") as HTMLElement;
+			expect(row.querySelector(".branchRichLine")?.textContent).toBe("#77 Add the thing");
+			const meta = row.querySelector(".branchRichMeta")?.textContent ?? "";
+			expect(meta).toContain("3h");
+			expect(meta).toContain("+12");
+			expect(meta).toContain("4 dirty");
+		});
+
+		// Catches: a rich-only detail line leaking into the compact sidebar.
+		it("keeps the compact row free of detail lines", () => {
+			uiStore.cycleSidebarDensityMode(); // auto -> compact
+			try {
+				withBranch(richBranch());
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				expect(container.querySelector(".branchRichMeta")).toBeNull();
+				expect(container.querySelector("[data-testid='repo-rich-meta']")).toBeNull();
+			} finally {
+				uiStore.cycleSidebarDensityMode();
+				uiStore.cycleSidebarDensityMode();
+			}
+		});
+
+		// Catches: the stats badge duplicated (in the stack and in the meta line) or dropped in rich mode.
+		it("shows the diff stats exactly once", () => {
+			withBranch(richBranch());
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelectorAll(".branchStats").length).toBe(1);
+			expect(container.querySelector(".branchBadgeStack .branchStats")).toBeNull();
+		});
+
+		// Catches: a merged branch with old commits flagged stale, or a merged branch not flagged at all.
+		it("marks a merged branch as merged", () => {
+			withBranch(richBranch({ isMerged: true, lifecycleStatus: undefined }));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelector(".branchRichMeta")?.textContent).toContain("Merged");
+		});
+
+		// Catches: the repo header facts missing (branch, open PRs, worktrees).
+		it("prints current branch, open PR count and worktree count under the repo header", () => {
+			withBranch(richBranch());
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const meta = container.querySelector("[data-testid='repo-rich-meta']")?.textContent ?? "";
+			expect(meta).toContain("0 open PRs");
+			expect(meta).toContain("1 worktrees");
+		});
+
+		// Catches: the agent row showing only a dot and a title, hiding what the agent is doing or asking.
+		it("prints the agent state and its intent under the tab title", () => {
+			mockTerminalsGet.mockImplementation(() => ({
+				id: "t1",
+				name: "claude",
+				shellState: "busy",
+				unseen: false,
+				awaitingInput: "question",
+				agentIntent: "Refactor the sidebar",
+				currentTask: null,
+				lastPrompt: null,
+				agentType: "claude",
+			}));
+			settingsStore.setTabTreeEnabled(true);
+			withBranch(richBranch({ terminals: ["t1"] }));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const detail = container.querySelector(".branchTabDetail")?.textContent ?? "";
+			expect(detail).toContain("Needs input");
+			expect(detail).toContain("Refactor the sidebar");
 		});
 	});
 
@@ -1167,6 +1258,13 @@ describe("Sidebar", () => {
 	});
 
 	describe("branch badges", () => {
+		// The compact row carries these badges; the rich layout moves them into detail lines.
+		beforeEach(() => uiStore.cycleSidebarDensityMode());
+		afterEach(() => {
+			uiStore.cycleSidebarDensityMode();
+			uiStore.cycleSidebarDensityMode();
+		});
+
 		it("shows StatsBadge with additions and deletions", () => {
 			setRepos({
 				"/repo1": makeRepo({

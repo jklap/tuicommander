@@ -157,6 +157,11 @@ function createGitHubStore() {
 		return state.repos[path]?.remoteStatus ?? state.checkoutStatus[path] ?? null;
 	}
 
+	/** Milliseconds of the last remote poll of a repo; 0 when it was never polled */
+	function getLastPolled(repoPath: string): number {
+		return state.repos[repoPath]?.lastPolled ?? 0;
+	}
+
 	/** Get issues for a repo */
 	function getRepoIssues(repoPath: string): GitHubIssue[] {
 		return state.repos[repoPath]?.issues ?? [];
@@ -366,6 +371,7 @@ function createGitHubStore() {
 		getRemoteOnlyPrs,
 		getAllOpenPrs,
 		getRemoteStatus,
+		getLastPolled,
 		setRemoteStatus,
 		getRepoIssues,
 		setIssueFilter,
