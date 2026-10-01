@@ -20225,14 +20225,24 @@ async fn queued_command_does_not_drain_when_the_captured_mini_screen_is_not_read
 }
 
 fn critic_mini_rows(last: &str) -> Vec<String> {
-    vec!["some tool output".to_string(), String::new(), last.to_string()]
+    vec![
+        "some tool output".to_string(),
+        String::new(),
+        last.to_string(),
+    ]
 }
 
 #[test]
 fn critic_mini_numeric_tool_output_with_uppercase_word_is_not_ready() {
     // Catches: an `ERROR 404` / `FAIL 2 (50%)` / `DONE 100%` last row passes the
     // "uppercase label + numeric tokens" rule and reads Ready on a live turn.
-    for row in ["ERROR 404", "FAIL 2 (50%)", "DONE 100%", "TOTAL 1,234.56", "HTTP 200"] {
+    for row in [
+        "ERROR 404",
+        "FAIL 2 (50%)",
+        "DONE 100%",
+        "TOTAL 1,234.56",
+        "HTTP 200",
+    ] {
         assert_eq!(
             detect_opencode_screen_activity(&critic_mini_rows(row)),
             AgentScreenActivity::Unknown,
@@ -20252,12 +20262,12 @@ fn critic_mini_bare_tool_word_build_percent_is_not_ready() {
 
 #[test]
 fn critic_mini_real_ready_forms_are_ready() {
-    // Catches: a usage form the whole-row rule rejects, stalling the drain forever.
+    // Catches: an observed idle form the whole-row rule rejects, stalling the drain
+    // forever. Every row is a shape captured live from OpenCode 1.18.30 --mini: the fresh
+    // session (no usage yet), the wide idle row with context usage, and the narrow label.
     for row in [
-        " BUILD                                 52.9K (26%) · ctrl+p cmd",
-        " BUILD  950 (1%) · $0.12 · ctrl+p cmd",
-        " PLAN  1.2M (80%) · $1,234.56 · ctrl+p cmd",
-        " BUILD  52.9K (26%)",
+        " BUILD                                 52.9K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD                                                       ctrl+p cmd",
         " BUILD",
     ] {
         assert_eq!(
@@ -20269,33 +20279,23 @@ fn critic_mini_real_ready_forms_are_ready() {
 }
 
 #[test]
-fn critic_mini_narrow_custom_agent_label_alone_is_ready() {
-    // Catches: only BUILD/PLAN are accepted bare, so a narrow terminal with any other
-    // agent (EXPLORE, GENERAL, a user agent) is Unknown for the whole session.
-    assert_eq!(
-        detect_opencode_screen_activity(&critic_mini_rows(" EXPLORE")),
-        AgentScreenActivity::Ready
-    );
-}
-
-#[test]
-fn critic_mini_multi_word_agent_label_with_usage_is_ready() {
-    // Catches: a two-word agent label ("CODE REVIEW") makes every row Unknown.
-    assert_eq!(
-        detect_opencode_screen_activity(&critic_mini_rows(
-            " CODE REVIEW  52.9K (26%) · ctrl+p cmd"
-        )),
-        AgentScreenActivity::Ready
-    );
-}
-
-#[test]
-fn critic_mini_lowercase_k_usage_is_ready() {
-    // Catches: token suffix check is uppercase-only, so `52.9k` stalls the drain.
-    assert_eq!(
-        detect_opencode_screen_activity(&critic_mini_rows(" BUILD  52.9k (26%) · ctrl+p cmd")),
-        AgentScreenActivity::Ready
-    );
+fn critic_mini_unobserved_forms_stay_unknown() {
+    // Catches: widening the status-row shape for forms nobody captured. A false Ready
+    // stops a live turn; a false Unknown only delays the queue. Not seen live: a cost
+    // token, a lowercase `k`, a user agent label bare or two words, usage without hints.
+    for row in [
+        " BUILD  950 (1%) \u{00B7} $0.12 \u{00B7} ctrl+p cmd",
+        " BUILD  52.9k (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  52.9K (26%)",
+        " EXPLORE",
+        " CODE REVIEW  52.9K (26%) \u{00B7} ctrl+p cmd",
+    ] {
+        assert_eq!(
+            detect_opencode_screen_activity(&critic_mini_rows(row)),
+            AgentScreenActivity::Unknown,
+            "row {row:?}"
+        );
+    }
 }
 
 #[test]

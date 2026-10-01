@@ -3893,22 +3893,29 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
 }
 
 /// OpenCode's `--mini` interface, which `agent_hook_launch` adds to every launch,
-/// has no composer frame. Its only fixed element is a status row at the bottom, captured live on
-/// 1.18.30 at 120 and 64 columns:
+/// has no composer frame. Its only fixed element is a status row at the bottom,
+/// captured live on 1.18.30 (replayed from the fixtures, and re-observed in tmux at
+/// 120, 64 and 40 columns):
 ///
 /// ```text
+/// fresh:    ` BUILD                                                       ctrl+p cmd`
 /// ready:    ` BUILD                                 52.9K (26%) · ctrl+p cmd`
 /// working:  ` BUILD  ⬝⬝⬝■■■■■ esc interrupt                      ctrl+p cmd`
 /// narrow:   ` BUILD`   /   ` BUILD  ⬝⬝■■■■■■ esc interrupt`
 /// ```
 ///
-/// The `ctrl+p cmd` hint is dropped below roughly 80 columns, so it cannot anchor
-/// Ready. A false Ready feeds standby/SIGSTOP and types the queue into a live turn,
-/// so Ready needs the whole last painted row to be a status row: an uppercase label
-/// followed only by usage and hint tokens, or the bare `BUILD`/`PLAN` label of the
-/// narrow layout. A progress bar glyph or `esc interrupt` marks a running turn
-/// (the bar is painted before its text and the text is cut at narrow widths).
-/// Any other last row, such as tool output opening with an uppercase word, is Unknown.
+/// A false Ready feeds standby/SIGSTOP and types the queue into a live turn, so Ready
+/// accepts exactly the observed shapes and nothing wider: an uppercase label followed
+/// by `ctrl+p cmd`, by `<usage> (<n>%) · ctrl+p cmd`, or by nothing for the `BUILD` and
+/// `PLAN` primary agents of the narrow layout. A progress bar glyph or `esc interrupt`
+/// marks a running turn (the bar is painted before its text and the text is cut at
+/// narrow widths). Every other last row, such as tool output opening with an uppercase
+/// word and a number, is Unknown.
+///
+/// DEFERRED (2026-10-01) — forms never observed stay Unknown, which delays the queue
+/// instead of typing into a live turn: a cost token (`$0.12`, a free local model prints
+/// none), a lowercase `k`, a user-defined agent label shown bare at narrow width.
+/// Widen only from a live capture of the form.
 fn detect_opencode_mini_screen_activity(rows: &[String]) -> AgentScreenActivity {
     const INTERRUPT_HINT: &str = "esc interrupt";
     const BAR_GLYPHS: [char; 2] = ['\u{2B1D}', '\u{25A0}'];
@@ -3932,16 +3939,28 @@ fn detect_opencode_mini_screen_activity(rows: &[String]) -> AgentScreenActivity 
     if status.contains(INTERRUPT_HINT) || status.contains(BAR_GLYPHS) {
         return AgentScreenActivity::Working;
     }
-    let is_status_token = |token: &str| {
-        matches!(token, "\u{00B7}" | "ctrl+p" | "cmd")
-            || token.chars().all(|c| {
-                c.is_ascii_digit()
-                    || matches!(c, '.' | ',' | '%' | '(' | ')' | '$' | 'K' | 'M' | 'B')
-            })
+    // `52.9K`: digits with at most one dot and an optional K/M/B suffix.
+    let is_usage = |token: &str| {
+        let number = token.strip_suffix(['K', 'M', 'B']).unwrap_or(token);
+        number.starts_with(|c: char| c.is_ascii_digit())
+            && number.ends_with(|c: char| c.is_ascii_digit())
+            && number.chars().all(|c| c.is_ascii_digit() || c == '.')
+            && number.matches('.').count() <= 1
+    };
+    // `(26%)`
+    let is_percent = |token: &str| {
+        token
+            .strip_prefix('(')
+            .and_then(|inner| inner.strip_suffix("%)"))
+            .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
     };
     let rest: Vec<&str> = tokens.collect();
-    let is_status_row = rest.iter().all(|token| is_status_token(token))
-        && (!rest.is_empty() || BARE_LABELS.contains(&label));
+    let is_status_row = match rest.as_slice() {
+        [] => BARE_LABELS.contains(&label),
+        ["ctrl+p", "cmd"] => true,
+        [usage, percent, "\u{00B7}", "ctrl+p", "cmd"] => is_usage(usage) && is_percent(percent),
+        _ => false,
+    };
     if is_status_row {
         AgentScreenActivity::Ready
     } else {
