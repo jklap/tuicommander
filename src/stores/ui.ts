@@ -58,7 +58,7 @@ interface UIStoreState {
 	// Sidebar width
 	sidebarWidth: number;
 
-	/** Sidebar row density: auto (by row count and pointer), compact, comfortable or touch (forced). Persisted. */
+	/** Sidebar row density: auto (rich for a short list or a coarse pointer), compact or rich (forced). Persisted. */
 	sidebarDensityMode: SidebarDensityMode;
 
 	// Panel visibility

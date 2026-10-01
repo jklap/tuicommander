@@ -33,8 +33,10 @@ import {
 	agentFacts,
 	branchFacts,
 	compactAge as compactActivityAge,
+	countWorktrees,
 	createMinuteClock,
 	repoFacts,
+	STALE_AFTER_DAYS,
 	SUBAGENT_COLLAPSE_AFTER,
 	type SubagentRow,
 	subagentRows,
@@ -49,7 +51,7 @@ import b from "../shared/branch.module.css";
 import { AgentIcon } from "../ui/AgentIcon";
 import { ChevronIcon } from "../ui/ChevronIcon";
 import { SubAgentIcon } from "../ui/SubAgentIcon";
-import { PrStateBadge } from "./PrStateBadge";
+import { PR_STATE_LABELS, PrStateBadge, prBadgeKind } from "./PrStateBadge";
 import s from "./Sidebar.module.css";
 import { SidebarPluginSection } from "./SidebarPluginSection";
 
@@ -178,7 +180,7 @@ export const UnmergedMarker: Component = () => (
 	<span
 		class={s.branchUnmergedMarker}
 		aria-label="Unmerged commits"
-		data-tooltip="Branch has commits not merged into the default branch. Merge before deleting the branch."
+		data-tooltip={UNMERGED_TOOLTIP}
 		data-tooltip-pos="bottom"
 		data-tooltip-align="right"
 		tabIndex={0}
@@ -227,6 +229,42 @@ function getBranchTabsAvailable(branch: WorkspaceState): boolean {
 	return settingsStore.state.tabTreeEnabled && branch.terminals.length > 0;
 }
 
+type LifecycleStatus = NonNullable<WorkspaceState["lifecycleStatus"]>;
+
+const UNMERGED_TOOLTIP = "Branch has commits not merged into the default branch. Merge before deleting the branch.";
+
+/**
+ * What removing this workspace would lose, in words. Compact puts the whole
+ * sentence on one badge; rich splits it over the dirty chip (`dirty`) and the
+ * commit-verdict chip (`commit`) so each chip explains only itself.
+ */
+function lifecycleTooltip(status: LifecycleStatus, part?: "dirty" | "commit"): string {
+	if (status.commitStatus === "unknown") {
+		const explanation =
+			"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked.";
+		return status.error ? `${explanation} ${status.error}` : explanation;
+	}
+	const lost = status.dirtyFiles ?? 0;
+	if (lost > 0 && part !== "commit") {
+		return `${lost} uncommitted file${lost === 1 ? "" : "s"} (staged, unstaged or untracked) would be discarded by removing this workspace.`;
+	}
+	const commitState =
+		status.commitStatus === "merged"
+			? "HEAD is merged"
+			: status.commitStatus === "in_sync"
+				? "HEAD is the default branch tip — no commits of its own"
+				: status.commitStatus === "pushed_unmerged"
+					? "Not merged, but all commits are pushed to the remote branch"
+					: "Branch has commits not merged into the default branch";
+	const removal =
+		status.commitStatus === "unmerged"
+			? "merge before deleting the branch"
+			: status.removalSafety === "safe"
+				? "safe to remove"
+				: "destructive confirmation required";
+	return `${lost > 0 ? "" : "Clean working tree; "}${commitState}; ${removal}`;
+}
+
 const AGENT_STATE_LABEL = {
 	working: () => t("sidebar.agentWorking", "Working"),
 	idle: () => t("sidebar.agentIdle", "Idle"),
@@ -246,6 +284,12 @@ function agentRow(term: TerminalState) {
 		},
 		displayTask(term.currentTask, term.agentType),
 	);
+}
+
+/** Compact has no room for the agent's state word and line; they ride the row's tooltip. */
+function agentTooltip(term: TerminalState): string {
+	const facts = agentRow(term);
+	return facts.line ? `${AGENT_STATE_LABEL[facts.state]()}: ${facts.line}` : AGENT_STATE_LABEL[facts.state]();
 }
 
 /** Rich: the live subagents of one agent row; more than a few fold into a count. */
@@ -290,9 +334,11 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 
 /** Collapsible activity card for the terminals attached to a branch. */
 const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (props) => {
-	const now = createMinuteClock();
 	const density = useSidebarDensity();
 	const rich = () => density() === "rich";
+	// Only rich ticks; compact reads the age once per render, as it always did.
+	const now = createMinuteClock(rich);
+	const clock = () => (rich() ? now() : Date.now());
 	const parentOf = (id: string) => {
 		const parent = terminalsStore.get(id)?.parentSession;
 		if (!parent) return null;
@@ -319,7 +365,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 		if (live) void progressStore.refreshSidebarFlow(props.repoPath);
 	});
 	const subagents = (term: TerminalState) =>
-		subagentRows(progressStore.sidebarFlow(props.repoPath), term.sessionId, now());
+		subagentRows(progressStore.sidebarFlow(props.repoPath), term.sessionId, clock());
 	const renderTab = (id: string, nested: boolean): JSX.Element => {
 		const term = () => terminalsStore.get(id);
 		const isActive = () => terminalsStore.state.activeId === id;
@@ -371,6 +417,8 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 							onClick={() => navigateToTerminal(id)}
 							title={accessibleLabel()}
 							aria-label={accessibleLabel()}
+							data-tooltip={!rich() ? agentTooltip(t()) : undefined}
+							data-tooltip-pos="bottom"
 						>
 							<span class={dotClass()} aria-hidden="true" />
 							<Show
@@ -395,7 +443,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 									<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
 								)}
 							</Show>
-							<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, now())}</span>
+							<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, clock())}</span>
 							{/* Rich: what the agent is doing, in words, under the tab title. */}
 							<Show when={rich() ? agentRow(t()) : null}>
 								{(facts) => (
@@ -474,7 +522,7 @@ export const BranchItem: Component<{
 	const hasDiff = () => props.branch.additions > 0 || props.branch.deletions > 0;
 	const density = useSidebarDensity();
 	const rich = () => density() === "rich";
-	const now = createMinuteClock();
+	const now = createMinuteClock(rich);
 	// Ahead/behind is against the upstream: the stores hold nothing against the base branch.
 	const remote = createMemo(() => {
 		const status = githubStore.getRemoteStatus(props.branch.worktreePath ?? props.repoPath);
@@ -491,10 +539,43 @@ export const BranchItem: Component<{
 				dirtyFiles: props.branch.lifecycleStatus?.dirtyFiles,
 				isMerged: props.branch.isMerged,
 				commitStatus: props.branch.lifecycleStatus?.commitStatus,
+				isMain: props.branch.isMain,
 			},
-			now(),
+			// Compact prints no age, so its tooltip reads the clock once instead of subscribing.
+			rich() ? now() : Date.now(),
 		),
 	);
+	// The state word the compact badge keeps in its tooltip, which touch cannot read.
+	const prStateLabel = (p: NonNullable<ReturnType<typeof pr>>) =>
+		PR_STATE_LABELS[
+			prBadgeKind({
+				state: p.state,
+				isDraft: p.is_draft,
+				mergeable: p.mergeable,
+				conflictState: p.conflict_state,
+				reviewDecision: p.review_decision,
+				ciFailed: checks()?.failed,
+				ciPending: checks()?.pending,
+			})
+		];
+	const lifecycle = () => props.branch.lifecycleStatus;
+	const tipFor = (part: "dirty" | "commit") => {
+		const status = lifecycle();
+		return status ? lifecycleTooltip(status, part) : undefined;
+	};
+	const staleTooltip = () =>
+		t("sidebar.staleHint", "Stale: no commit for more than {days} days and not merged", {
+			days: String(STALE_AFTER_DAYS),
+		});
+	// Compact has no room for these facts; they ride the branch name's tooltip.
+	const factsTooltip = () =>
+		[
+			facts().commitAge && `${t("sidebar.lastCommit", "Last commit")}: ${facts().commitAge}`,
+			facts().sync && `${t("sidebar.aheadBehind", "Ahead / behind upstream")}: ${facts().sync}`,
+			facts().state === "stale" && staleTooltip(),
+		]
+			.filter(Boolean)
+			.join(" · ");
 	// Select this branch/worktree first so the Git panel targets it (it follows
 	// activeWorktreePath), then open the changes tab — otherwise a chip would
 	// show the active branch's diff instead of this row's.
@@ -730,7 +811,13 @@ export const BranchItem: Component<{
 					</span>
 				</Show>
 				<div class={s.branchContent}>
-					<span class={s.branchName} onDblClick={handleDoubleClick} title={rowTitle()}>
+					<span
+						class={s.branchName}
+						onDblClick={handleDoubleClick}
+						title={rowTitle()}
+						data-tooltip={!rich() ? factsTooltip() || undefined : undefined}
+						data-tooltip-pos="bottom"
+					>
 						{branchLabel() ?? props.branch.branchName}
 					</span>
 					{/* When a custom label replaces the main line, retain the branch
@@ -767,31 +854,7 @@ export const BranchItem: Component<{
 						};
 						// Only the dirty count points at a diff; commit verdicts have none to show.
 						const opensChanges = () => !!props.onShowChanges && status().commitStatus !== "unknown" && lostFiles() > 0;
-						const tooltip = () => {
-							if (status().commitStatus === "unknown") {
-								const explanation =
-									"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked.";
-								return status().error ? `${explanation} ${status().error}` : explanation;
-							}
-							if (lostFiles() > 0) {
-								return `${lostFiles()} uncommitted file${lostFiles() === 1 ? "" : "s"} (staged, unstaged or untracked) would be discarded by removing this workspace.`;
-							}
-							const commitState =
-								status().commitStatus === "merged"
-									? "HEAD is merged"
-									: status().commitStatus === "in_sync"
-										? "HEAD is the default branch tip — no commits of its own"
-										: status().commitStatus === "pushed_unmerged"
-											? "Not merged, but all commits are pushed to the remote branch"
-											: "Branch has commits not merged into the default branch";
-							const removal =
-								status().commitStatus === "unmerged"
-									? "merge before deleting the branch"
-									: status().removalSafety === "safe"
-										? "safe to remove"
-										: "destructive confirmation required";
-							return `Clean working tree; ${commitState}; ${removal}`;
-						};
+						const tooltip = () => lifecycleTooltip(status());
 						return (
 							<Show when={label()}>
 								<span
@@ -813,9 +876,13 @@ export const BranchItem: Component<{
 						);
 					}}
 				</Show>
-				<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged" || pr() || (!rich() && hasDiff())}>
+				<Show
+					when={
+						(!rich() && props.branch.lifecycleStatus?.commitStatus === "unmerged") || pr() || (!rich() && hasDiff())
+					}
+				>
 					<div class={s.branchBadgeStack}>
-						<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged"}>
+						<Show when={!rich() && props.branch.lifecycleStatus?.commitStatus === "unmerged"}>
 							<UnmergedMarker />
 						</Show>
 						<Show when={pr()}>
@@ -908,6 +975,7 @@ export const BranchItem: Component<{
 						<Show when={pr()}>
 							{(p) => (
 								<span class={s.branchRichLine} title={p().title}>
+									<Show when={prStateLabel(p())}>{(label) => <span class={s.branchRichPrState}>{label()} </span>}</Show>
 									{p().title}
 								</span>
 							)}
@@ -915,14 +983,22 @@ export const BranchItem: Component<{
 						<span class={s.branchRichMeta}>
 							<Show when={facts().commitAge}>
 								{(age) => (
-									<span class={s.richChip} title={t("sidebar.lastCommit", "Last commit")}>
+									<span
+										class={s.richChip}
+										data-tooltip={t("sidebar.lastCommit", "Last commit")}
+										data-tooltip-pos="bottom"
+									>
 										{age()}
 									</span>
 								)}
 							</Show>
 							<Show when={facts().sync}>
 								{(sync) => (
-									<span class={s.richChip} title={t("sidebar.aheadBehind", "Ahead / behind upstream")}>
+									<span
+										class={s.richChip}
+										data-tooltip={t("sidebar.aheadBehind", "Ahead / behind upstream")}
+										data-tooltip-pos="bottom"
+									>
 										{sync()}
 									</span>
 								)}
@@ -934,16 +1010,47 @@ export const BranchItem: Component<{
 								onClick={props.onShowChanges ? showChanges : undefined}
 							/>
 							<Show when={facts().dirtyFiles > 0}>
-								<span class={cx(s.richChip, s.richChipWarn)} title={t("sidebar.dirtyFiles", "Uncommitted files")}>
+								<span
+									class={cx(s.richChip, s.richChipWarn)}
+									data-tooltip={tipFor("dirty")}
+									data-tooltip-pos="bottom"
+									role={props.onShowChanges ? "button" : undefined}
+									tabIndex={props.onShowChanges ? 0 : undefined}
+									onClick={props.onShowChanges ? showChanges : undefined}
+									onKeyDown={props.onShowChanges ? onClickKeyDown(showChanges) : undefined}
+									style={props.onShowChanges ? { cursor: "pointer" } : undefined}
+								>
 									{facts().dirtyFiles} {t("sidebar.dirty", "dirty")}
 								</span>
 							</Show>
 							<Show when={facts().state}>
-								{(state) => (
-									<span class={cx(s.richChip, state() === "merged" ? s.richChipMerged : s.richChipWarn)}>
-										{state() === "merged" ? t("sidebar.merged", "Merged") : t("sidebar.stale", "Stale")}
-									</span>
-								)}
+								{(state) => {
+									const risky = () =>
+										state() === "unknown" ||
+										(state() === "merged" && !!lifecycle() && lifecycle()?.removalSafety !== "safe");
+									return (
+										<span
+											class={cx(
+												s.richChip,
+												state() === "merged" && !risky() ? s.richChipMerged : s.richChipWarn,
+												risky() && s.richChipRisk,
+											)}
+											data-tooltip={state() === "stale" ? staleTooltip() : tipFor("commit")}
+											data-tooltip-pos="bottom"
+										>
+											{state() === "unknown"
+												? t("sidebar.unknown", "Unknown")
+												: state() === "merged"
+													? t("sidebar.merged", "Merged")
+													: t("sidebar.stale", "Stale")}
+										</span>
+									);
+								}}
+							</Show>
+							<Show when={!props.branch.isMain && lifecycle()?.commitStatus === "unmerged"}>
+								<span class={s.richChip} data-tooltip={UNMERGED_TOOLTIP} data-tooltip-pos="bottom">
+									{t("sidebar.unmerged", "unmerged")}
+								</span>
 							</Show>
 						</span>
 					</div>
@@ -1026,7 +1133,7 @@ export const RepoSection: Component<{
 
 	const branches = createMemo(() => Object.values(props.repo.workspaces));
 	const density = useSidebarDensity();
-	const now = createMinuteClock();
+	const now = createMinuteClock(() => density() === "rich");
 	// Header facts for the rich layout. "Synced" is the last GitHub/remote poll:
 	// the stores keep no timestamp for a plain `git fetch`.
 	const richRepoFacts = createMemo(() =>
@@ -1036,7 +1143,10 @@ export const RepoSection: Component<{
 					? (props.repo.workspaces[props.repo.activeWorkspaceId]?.branchName ?? null)
 					: null,
 				openPrs: githubStore.getAllOpenPrs(props.repo.path).length,
-				worktrees: branches().filter((w) => w.worktreePath && w.worktreePath !== props.repo.path).length,
+				worktrees: countWorktrees(
+					props.repo.path,
+					branches().map((w) => w.worktreePath),
+				),
 				polledAt: githubStore.getLastPolled(props.repo.path),
 			},
 			now(),
@@ -1222,7 +1332,11 @@ export const RepoSection: Component<{
 						{props.repo.displayName}
 					</span>
 					<Show when={props.repo.connectionId}>
-						<span class={cx(s.remoteBadge, remoteBadgeStatusClass())} title={remoteBadgeTitle()}>
+						<span
+							class={cx(s.remoteBadge, remoteBadgeStatusClass())}
+							data-tooltip={remoteBadgeTitle()}
+							data-tooltip-pos="bottom"
+						>
 							{remoteBadgeLabel()}
 						</span>
 					</Show>
@@ -1295,14 +1409,22 @@ export const RepoSection: Component<{
 				<div class={s.repoRichMeta} data-testid="repo-rich-meta">
 					<Show when={richRepoFacts().currentBranch}>{(name) => <span class={s.richChip}>⎇ {name()}</span>}</Show>
 					<span class={s.richChip}>
-						{richRepoFacts().openPrs} {t("sidebar.openPrs", "open PRs")}
+						{richRepoFacts().openPrs}{" "}
+						{richRepoFacts().openPrs === 1 ? t("sidebar.openPrOne", "open PR") : t("sidebar.openPrs", "open PRs")}
 					</span>
 					<span class={s.richChip}>
-						{richRepoFacts().worktrees} {t("sidebar.worktrees", "worktrees")}
+						{richRepoFacts().worktrees}{" "}
+						{richRepoFacts().worktrees === 1
+							? t("sidebar.worktreeOne", "worktree")
+							: t("sidebar.worktrees", "worktrees")}
 					</span>
 					<Show when={richRepoFacts().syncedAge}>
 						{(age) => (
-							<span class={s.richChip} title={t("sidebar.lastPoll", "Last remote poll")}>
+							<span
+								class={s.richChip}
+								data-tooltip={t("sidebar.lastPoll", "Last remote poll")}
+								data-tooltip-pos="bottom"
+							>
 								{t("sidebar.synced", "synced")} {age()}
 							</span>
 						)}

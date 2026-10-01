@@ -5,6 +5,7 @@ import {
 	createCoarsePointer,
 	isSidebarDensityMode,
 	nextSidebarDensityMode,
+	roomyMaxRows,
 	type SidebarDensityMode,
 	sidebarDensity,
 } from "../utils/sidebarDensity";
@@ -149,5 +150,20 @@ describe("density mode", () => {
 		expect(isSidebarDensityMode("touch")).toBe(false);
 		expect(isSidebarDensityMode("roomy")).toBe(false);
 		expect(isSidebarDensityMode(undefined)).toBe(false);
+	});
+});
+
+describe("roomyMaxRows", () => {
+	// Catches: a row budget that ignores the window, so a tall window stays compact and a short one overflows.
+	it("scales with the viewport height and never goes negative", () => {
+		expect(roomyMaxRows(768)).toBe(12);
+		expect(roomyMaxRows(900)).toBe(15);
+		expect(roomyMaxRows(50)).toBe(0);
+	});
+
+	// Catches: the explicit budget being ignored by the auto rule.
+	it("takes the budget from the caller", () => {
+		expect(sidebarDensity(15, false, "auto", roomyMaxRows(900))).toBe("rich");
+		expect(sidebarDensity(16, false, "auto", roomyMaxRows(900))).toBe("compact");
 	});
 });

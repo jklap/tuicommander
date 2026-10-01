@@ -16,11 +16,24 @@ export const nextSidebarDensityMode = (m: SidebarDensityMode): SidebarDensityMod
 	MODE_CYCLE[(MODE_CYCLE.indexOf(m) + 1) % MODE_CYCLE.length];
 
 /**
- * Below this many sidebar rows (repo headers + visible branch rows) the list is
- * short enough to give each row two or three lines: 12 rich rows at about 48px
- * still fit a 768px tablet viewport without scrolling.
+ * Measured on the desktop build in rich mode (window 900px high): a branch row
+ * with its detail line is 50-52px (67px when it carries a PR title), an agent
+ * row 45px, a repo header with its meta line 45px. 52px is the budget per row.
  */
-export const ROOMY_MAX_ROWS = 12;
+export const RICH_ROW_PX = 52;
+
+/**
+ * Viewport height the sidebar list does not get: toolbar, git quick actions and
+ * footer. Measured: a 900px window leaves a 804px list.
+ */
+export const SIDEBAR_CHROME_PX = 96;
+
+/** Rich rows that fit a viewport of this height without scrolling. */
+export const roomyMaxRows = (viewportPx: number): number =>
+	Math.max(0, Math.floor((viewportPx - SIDEBAR_CHROME_PX) / RICH_ROW_PX));
+
+/** The viewport a 768px tablet gives: (768 - 96) / 52 rich rows. */
+export const ROOMY_MAX_ROWS = roomyMaxRows(768);
 
 export interface DensityRepoShape {
 	collapsed: boolean;
@@ -56,10 +69,11 @@ export function sidebarDensity(
 	rowCount: number,
 	coarsePointer: boolean,
 	mode: SidebarDensityMode = "auto",
+	maxRows: number = ROOMY_MAX_ROWS,
 ): SidebarDensity {
 	if (mode !== "auto") return mode;
 	if (coarsePointer) return "rich";
-	return rowCount <= ROOMY_MAX_ROWS ? "rich" : "compact";
+	return rowCount <= maxRows ? "rich" : "compact";
 }
 
 const COARSE_QUERY = "(pointer: coarse)";
@@ -74,6 +88,16 @@ export function createCoarsePointer(): Accessor<boolean> {
 		onCleanup(() => mql.removeEventListener?.("change", onChange));
 	}
 	return coarse;
+}
+
+/** Live `window.innerHeight`, so the auto budget follows a resized window. */
+export function createViewportHeight(): Accessor<number> {
+	if (typeof window === "undefined") return () => 768;
+	const [height, setHeight] = createSignal(window.innerHeight);
+	const onResize = () => setHeight(window.innerHeight);
+	window.addEventListener("resize", onResize);
+	onCleanup(() => window.removeEventListener("resize", onResize));
+	return height;
 }
 
 /** The density the enclosing sidebar resolved; rows read it instead of taking a prop per level. */

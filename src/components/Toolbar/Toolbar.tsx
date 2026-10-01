@@ -54,6 +54,12 @@ const DENSITY_TITLES: Record<SidebarDensityMode, () => string> = {
 };
 
 /** Row glyph: five tight lines for compact, a title with a detail line for rich. */
+const DENSITY_LABELS: Record<SidebarDensityMode, () => string> = {
+	auto: () => t("toolbar.densityAutoShort", "A"),
+	compact: () => t("toolbar.densityCompactShort", "C"),
+	rich: () => t("toolbar.densityRichShort", "R"),
+};
+
 const DENSITY_ICON_PATHS: Record<SidebarDensityMode, string> = {
 	auto: "M2 3.5h12M2 8h12M2 12.5h12",
 	compact: "M2 2.5h12M2 5.5h12M2 8.5h12M2 11.5h12M2 14.5h12",
@@ -389,12 +395,17 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 				<span class={s.leftSpacer} data-tauri-drag-region />
 				<Show when={uiStore.state.sidebarVisible}>
 					<button
-						class={s.filterToggle}
-						classList={{ [s.filterToggleActive]: uiStore.state.sidebarDensityMode !== "auto" }}
+						class={cx(s.filterToggle, s.densityToggle)}
+						classList={{
+							[s.filterToggleActive]: uiStore.state.sidebarDensityMode !== "auto",
+							[s.densityToggleAuto]: uiStore.state.sidebarDensityMode === "auto",
+						}}
 						onClick={() => uiStore.cycleSidebarDensityMode()}
 						data-testid="sidebar-density-toggle"
 						data-mode={uiStore.state.sidebarDensityMode}
 						title={DENSITY_TITLES[uiStore.state.sidebarDensityMode]()}
+						data-tooltip={DENSITY_TITLES[uiStore.state.sidebarDensityMode]()}
+						data-tooltip-pos="bottom"
 					>
 						<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
 							<path
@@ -404,6 +415,10 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 								stroke-linecap="round"
 							/>
 						</svg>
+						{/* The mode is read off the button: title and tooltip do not show on touch. */}
+						<span class={s.densityLabel} data-testid="sidebar-density-label">
+							{DENSITY_LABELS[uiStore.state.sidebarDensityMode]()}
+						</span>
 					</button>
 					<button
 						class={s.filterToggle}

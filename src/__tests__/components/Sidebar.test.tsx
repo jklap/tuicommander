@@ -146,6 +146,7 @@ vi.mock("../../components/PrDetailPopover/PrDetailPopover", () => ({
 
 import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection";
 import { Sidebar } from "../../components/Sidebar/Sidebar";
+import { githubStore } from "../../stores/github";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
@@ -377,7 +378,8 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const meta = container.querySelector("[data-testid='repo-rich-meta']")?.textContent ?? "";
 			expect(meta).toContain("0 open PRs");
-			expect(meta).toContain("1 worktrees");
+			expect(meta).toContain("1 worktree");
+			expect(meta).not.toContain("1 worktrees");
 		});
 
 		// Catches: the agent row showing only a dot and a title, hiding what the agent is doing or asking.
@@ -399,6 +401,119 @@ describe("Sidebar", () => {
 			const detail = container.querySelector(".branchTabDetail")?.textContent ?? "";
 			expect(detail).toContain("Needs input");
 			expect(detail).toContain("Refactor the sidebar");
+		});
+
+		const OLD_TS = () => Math.floor(Date.now() / 1000) - 90 * 86_400;
+		const chips = (c: HTMLElement) => c.querySelector(".branchRichMeta")?.textContent ?? "";
+
+		// Catches: main flagged Stale in rich because the facts never learn it is a main checkout.
+		it("never marks a main branch stale, merged, dirty or unknown", () => {
+			withBranch(
+				richBranch({
+					isMain: true,
+					isMerged: true,
+					lastCommitTs: OLD_TS(),
+					lifecycleStatus: { dirtyFiles: 4, commitStatus: "unknown", removalSafety: "destructive" },
+				}),
+			);
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const meta = chips(container);
+			expect(meta).not.toMatch(/Stale|Merged|Unknown|dirty/);
+		});
+
+		// Catches: the lifecycle "unknown" verdict (removal blocked) vanishing in rich.
+		it("shows the Unknown chip with the removal-blocked explanation", () => {
+			withBranch(
+				richBranch({
+					lifecycleStatus: { dirtyFiles: 0, commitStatus: "unknown", removalSafety: "destructive", error: "boom" },
+				}),
+			);
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const chip = [...container.querySelectorAll(".richChip")].find((c) => c.textContent === "Unknown") as HTMLElement;
+			expect(chip).toBeTruthy();
+			expect(chip.getAttribute("data-tooltip")).toContain("removal is blocked");
+			expect(chip.getAttribute("data-tooltip")).toContain("boom");
+		});
+
+		// Catches: rich chips explaining themselves through title=, which touch and WKWebView never show.
+		it("explains the Stale and dirty chips through data-tooltip", () => {
+			withBranch(richBranch({ lastCommitTs: OLD_TS() }));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const all = [...container.querySelectorAll(".branchRichMeta .richChip")];
+			const stale = all.find((c) => c.textContent === "Stale");
+			expect(stale?.getAttribute("data-tooltip")).toContain("30 days");
+			const dirty = all.find((c) => c.textContent?.includes("dirty"));
+			expect(dirty?.getAttribute("data-tooltip")).toContain("4 uncommitted files");
+			expect(container.querySelector(".branchRichMeta [title]")).toBeNull();
+		});
+
+		// Catches: the rich dirty count being a dead span while the compact chip opens Changes.
+		it("opens the Changes tab from the dirty chip", () => {
+			const open = vi.spyOn(uiStore, "openGitPanelOnTab").mockImplementation(() => {});
+			withBranch(richBranch());
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const dirty = [...container.querySelectorAll(".richChip")].find((c) =>
+				c.textContent?.includes("dirty"),
+			) as HTMLElement;
+			fireEvent.click(dirty);
+			expect(open).toHaveBeenCalledWith("changes");
+			open.mockRestore();
+		});
+
+		// Catches: touch users unable to read the PR state, which compact keeps in a tooltip.
+		it("prints the PR state word before the PR title", () => {
+			mockGetPrStatus.mockReturnValue({ state: "OPEN", number: 77, title: "Add the thing", url: "u", is_draft: true });
+			withBranch(richBranch());
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelector(".branchRichLine")?.textContent).toBe("Draft Add the thing");
+		});
+
+		// Catches: the unmerged marker and the ahead/behind chip sharing one up-arrow glyph in a rich row.
+		it("spells unmerged out and drops the arrow marker in rich", () => {
+			withBranch(
+				richBranch({ lifecycleStatus: { dirtyFiles: 0, commitStatus: "unmerged", removalSafety: "destructive" } }),
+			);
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(chips(container)).toContain("unmerged");
+			expect(container.querySelector(".branchUnmergedMarker")).toBeNull();
+		});
+
+		// Catches: compact losing what rich shows (age, stale rule) with no other way to read it on desktop.
+		it("carries the rich-only branch facts on the compact name tooltip", () => {
+			uiStore.cycleSidebarDensityMode();
+			try {
+				withBranch(richBranch({ lastCommitTs: OLD_TS() }));
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				const tip = container.querySelector(".branchName")?.getAttribute("data-tooltip") ?? "";
+				expect(tip).toContain("Last commit: 90d");
+				expect(tip).toContain("Stale");
+			} finally {
+				uiStore.cycleSidebarDensityMode();
+				uiStore.cycleSidebarDensityMode();
+			}
+		});
+
+		// Catches: "1 open PRs" and "1 worktrees".
+		it("uses the singular for one worktree and one open PR", () => {
+			vi.spyOn(githubStore, "getAllOpenPrs").mockReturnValue([{ number: 1 }] as never);
+			withBranch(richBranch());
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const meta = container.querySelector("[data-testid='repo-rich-meta']")?.textContent ?? "";
+			expect(meta).toContain("1 open PR");
+			expect(meta).not.toContain("open PRs");
+		});
+
+		// Catches: the main checkout counted as a worktree when its path differs by a trailing slash.
+		it("does not count the main checkout when its path has a trailing slash", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: richBranch({ workspaceId: "main", branchName: "main", isMain: true, worktreePath: "/repo1/" }),
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			expect(container.querySelector("[data-testid='repo-rich-meta']")?.textContent).toContain("0 worktrees");
 		});
 
 		describe("subagents and child sessions", () => {
