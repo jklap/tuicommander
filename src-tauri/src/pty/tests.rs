@@ -21419,31 +21419,84 @@ fn bgtasksummary_is_lazy_about_the_teammate_check() {
 }
 
 #[test]
-fn bgtasksummary_without_a_declaration_is_ignored() {
+fn bgtasksummary_is_authoritative_for_its_fire_and_repairs_a_truncated_bgtasks() {
+    // `bgtasks` joins every status and is cut at the OSC payload cap, so with a long
+    // list of finished tasks a late `running` is lost and `bgtasks` reads
+    // all-terminal. The grouped summary is bounded and must repair that.
     let state = crate::state::tests_support::make_test_app_state();
-    let silence = bgtasks_test_session(&state, "test-bgsummary-orphan");
+    let silence = bgtasks_test_session(&state, "test-bgsummary-repair");
+    feed_bgtasks(&state, "test-bgsummary-repair", &silence, "completed");
+    assert!(!silence.lock().declared_background_work_for_epoch(0));
+
     feed_tuic_verb(
         &state,
-        "test-bgsummary-orphan",
+        "test-bgsummary-repair",
+        &silence,
+        "bgtasksummary",
+        "shell%2Fcompleted%2A200%2Cteammate%2Frunning",
+    );
+    let sl = silence.lock();
+    assert!(
+        sl.declared_background_work_for_epoch(0),
+        "a running task the truncated bgtasks lost must still be declared"
+    );
+    assert_eq!(
+        sl.declared_task_summary_for_epoch(0),
+        Some(DeclaredTaskSummary {
+            non_teammate_running: 0,
+            teammate_running: 1
+        })
+    );
+}
+
+#[test]
+fn bgtasksummary_reporting_nothing_running_clears_an_overreported_declaration() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-clear");
+    feed_bgtasks(&state, "test-bgsummary-clear", &silence, "running");
+    assert!(silence.lock().declared_background_work_for_epoch(0));
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-clear",
+        &silence,
+        "bgtasksummary",
+        "shell%2Fcompleted%2Cteammate%2Fcompleted",
+    );
+    assert!(!silence.lock().declared_background_work_for_epoch(0));
+    // An empty summary (field present, no entries) says nothing is outstanding.
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-clear",
+        &silence,
+        "bgtasksummary",
+        "",
+    );
+    assert!(!silence.lock().declared_background_work_for_epoch(0));
+}
+
+#[test]
+fn bgtasksummary_is_stamped_with_the_sessions_current_turn_epoch() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-epoch");
+    state
+        .session_maps
+        .session_states
+        .get_mut("test-bgsummary-epoch")
+        .unwrap()
+        .turn_epoch = 4;
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-epoch",
         &silence,
         "bgtasksummary",
         "shell%2Frunning",
     );
     let sl = silence.lock();
-    assert!(!sl.declared_background_work_for_epoch(0));
-    assert!(sl.declared_task_summary_for_epoch(0).is_none());
-
-    // A summary cannot resurrect a cleared declaration either.
-    drop(sl);
-    feed_bgtasks(&state, "test-bgsummary-orphan", &silence, "completed");
-    feed_tuic_verb(
-        &state,
-        "test-bgsummary-orphan",
-        &silence,
-        "bgtasksummary",
-        "shell%2Frunning",
+    assert!(sl.declared_background_work_for_epoch(4));
+    assert!(
+        !sl.declared_background_work_for_epoch(5),
+        "self-expires on a new turn"
     );
-    assert!(!silence.lock().declared_background_work_for_epoch(0));
 }
 
 #[test]
