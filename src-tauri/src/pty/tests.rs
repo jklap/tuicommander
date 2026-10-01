@@ -20356,7 +20356,7 @@ fn critic3_mini_malformed_usage_or_extra_tokens_are_unknown() {
     }
 }
 
-/// Below the narrowest width at which the status row was captured (64 columns) the
+/// Below the narrowest width at which OpenCode paints the status row (46 columns) the
 /// row is absent (observed at 40), so a bare `BUILD` last line is tool output.
 /// Catches: the width never reaching the adapter, so assistant text that happens to end
 /// on `BUILD` or `PLAN` reads Ready mid-turn on a narrow pane.
@@ -20374,7 +20374,7 @@ fn opencode_mini_bare_label_below_the_narrowest_observed_width_is_tool_output() 
     assert_eq!(
         detect_agent_screen_activity_at(Some("opencode"), &rows, Some(64)),
         AgentScreenActivity::Ready,
-        "the 64-column capture paints exactly this row"
+        "the 64-column capture paints exactly this row, and so does every width from 46"
     );
 }
 
