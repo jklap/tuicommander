@@ -347,6 +347,61 @@ describe("ActivityDashboard", () => {
 		});
 	});
 
+	describe("store-backed rows / declared background work", () => {
+		const added: string[] = [];
+		const addTerm = (name: string, patch: Parameters<typeof terminalsStore.update>[1] = {}) => {
+			const id = terminalsStore.add({ name, sessionId: null, fontSize: 14, cwd: null, awaitingInput: null });
+			terminalsStore.update(id, { agentType: "claude", agentState: "idle", shellState: "idle", ...patch });
+			added.push(id);
+			return id;
+		};
+
+		afterEach(() => {
+			for (const id of added.splice(0)) terminalsStore.remove(id);
+		});
+
+		it("renders an idle-shell terminal with declared background work as a Working (non-idle) row", () => {
+			const id = addTerm("declared", { declaredBackgroundWork: true });
+			render(() => <ActivityDashboard embedded />);
+
+			const el = rowFor(id);
+			expect(el).not.toBeNull();
+			expect(el?.className).not.toContain("idleRow");
+			expect(el?.textContent).toContain("Working");
+		});
+
+		it("renders the same terminal as an Idle row when declaredBackgroundWork is false", () => {
+			const id = addTerm("plain");
+			render(() => <ActivityDashboard embedded />);
+
+			const el = rowFor(id);
+			expect(el?.className).toContain("idleRow");
+			expect(el?.textContent).toContain("Idle");
+			expect(el?.textContent).not.toContain("Working");
+		});
+
+		it("orders a declared-work terminal above a plain idle one regardless of insertion order", () => {
+			const idleId = addTerm("plain idle");
+			const declaredId = addTerm("declared", { declaredBackgroundWork: true });
+			render(() => <ActivityDashboard embedded />);
+
+			const ids = rowEls().map((el) => el.getAttribute("data-term-id"));
+			expect(ids).toEqual([declaredId, idleId]);
+		});
+
+		it("reacts live when declaredBackgroundWork is set and later cleared", () => {
+			const id = addTerm("toggle");
+			render(() => <ActivityDashboard embedded />);
+			expect(rowFor(id)?.className).toContain("idleRow");
+
+			terminalsStore.update(id, { declaredBackgroundWork: true });
+			expect(rowFor(id)?.className).not.toContain("idleRow");
+
+			terminalsStore.update(id, { declaredBackgroundWork: false });
+			expect(rowFor(id)?.className).toContain("idleRow");
+		});
+	});
+
 	describe("sub-row precedence", () => {
 		it("renders currentTask", () => {
 			render(() => <ActivityDashboard embedded terminals={() => [row({ currentTask: "Running migration" })]} />);
