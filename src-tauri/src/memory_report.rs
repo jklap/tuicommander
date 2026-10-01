@@ -575,3 +575,101 @@ mod tests {
         assert_eq!(fp, None);
     }
 }
+
+#[cfg(all(test, target_os = "macos"))]
+mod census_critic_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn small_allocations_do_not_register_as_large_blocks() {
+        // Catches: enumerating with MALLOC_PTR_REGION_RANGE_TYPE (2) instead of
+        // MALLOC_PTR_IN_USE_RANGE_TYPE (1). The region type reports every 8 MiB
+        // small-allocator region whole, so 128 MiB of 4 KiB blocks reads as
+        // ~16 "large blocks" that are not blocks at all.
+        let (_, before) = large_malloc_blocks().expect("zones enumerable");
+        let small: Vec<Vec<u8>> = (0..32 * 1024).map(|_| vec![7u8; 4096]).collect();
+        let (_, after) = large_malloc_blocks().expect("zones enumerable");
+        std::hint::black_box(&small);
+        let delta = after.saturating_sub(before);
+        assert!(
+            delta < 32 * MIB,
+            "128 MiB of 4 KiB allocations added {delta} bytes to the large-block census"
+        );
+    }
+
+    #[test]
+    fn the_census_sees_exactly_the_large_blocks_that_were_added() {
+        // Catches: a recorder that double-counts a block (several zones, or both
+        // in-use and region callbacks) or drops the size.
+        let (c0, b0) = large_malloc_blocks().unwrap();
+        let blocks: Vec<Vec<u8>> = (0..3).map(|_| vec![1u8; 16 * MIB as usize]).collect();
+        let (c1, b1) = large_malloc_blocks().unwrap();
+        std::hint::black_box(&blocks);
+        assert!(c1 >= c0 + 3, "count {c0} -> {c1}");
+        assert!(b1 >= b0 + 48 * MIB, "bytes {b0} -> {b1}");
+        assert!(
+            b1 <= b0 + 48 * MIB + 16 * MIB,
+            "overcount: bytes {b0} -> {b1}"
+        );
+    }
+
+    #[test]
+    fn concurrent_census_walks_and_an_allocating_thread_do_not_deadlock() {
+        // Catches: a zone lock held while something in the walk allocates, or two
+        // walks taking zone locks in conflicting order. The harness bound is a
+        // channel timeout so a deadlock fails instead of hanging the suite.
+        let stop = Arc::new(AtomicBool::new(false));
+        let allocator = {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                let mut keep: Vec<Vec<u8>> = Vec::new();
+                let mut i = 0usize;
+                while !stop.load(Ordering::Relaxed) {
+                    let n = match i % 4 {
+                        0 => 64,
+                        1 => 4096,
+                        2 => 200 * 1024,
+                        _ => 9 * MIB as usize,
+                    };
+                    keep.push(vec![1u8; n]);
+                    if keep.len() > 64 {
+                        keep.drain(..32);
+                    }
+                    i += 1;
+                }
+            })
+        };
+        let (tx, rx) = mpsc::channel();
+        let walkers: Vec<_> = (0..2)
+            .map(|_| {
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..25 {
+                        if large_malloc_blocks().is_none() {
+                            let _ = tx.send(false);
+                            return;
+                        }
+                    }
+                    let _ = tx.send(true);
+                })
+            })
+            .collect();
+        for _ in 0..2 {
+            let ok = rx
+                .recv_timeout(Duration::from_secs(120))
+                .expect("a census walk never returned: deadlock between walks and malloc");
+            assert!(ok, "a walk returned None under concurrent allocation");
+        }
+        stop.store(true, Ordering::Relaxed);
+        for w in walkers {
+            w.join().unwrap();
+        }
+        allocator.join().unwrap();
+    }
+}
