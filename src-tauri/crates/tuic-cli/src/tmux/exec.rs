@@ -104,6 +104,15 @@ fn env_repo_cwd() -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// The calling terminal's own `TUIC_SESSION` — the Claude Code lead whose Agent
+/// Teams swarm the pane being created belongs to. This shim is exec'd inside
+/// the lead's PTY, so the lead's env is inherited. Sent so the server can tie a
+/// teammate's terminal back to its lead (a teammate's own hooks carry no parent
+/// reference). `None` for any process not spawned through TUICommander.
+fn env_origin_session() -> Option<String> {
+    std::env::var("TUIC_SESSION").ok().filter(|v| !v.is_empty())
+}
+
 /// The first pane's `cwd` found anywhere under the given session, or `None`
 /// if the session has no panes with a recorded cwd yet. Used by `new-window`
 /// to inherit the swarm's already-established cwd instead of independently
@@ -350,7 +359,10 @@ impl TuicBackend for IpcBackend {
         window_id: &str,
         cwd: Option<&str>,
     ) -> Result<Value, String> {
-        let body = serde_json::json!({ "label": label, "window_id": window_id, "cwd": cwd });
+        let body = serde_json::json!({
+            "label": label, "window_id": window_id, "cwd": cwd,
+            "origin_session_id": env_origin_session(),
+        });
         let resp = crate::ipc::post("/tmux/panes", &body.to_string()).map_err(|e| e.to_string())?;
         if !resp.is_success() {
             return Err(format!("Failed to create tmux pane: {}", resp.body));
@@ -364,7 +376,7 @@ impl TuicBackend for IpcBackend {
         pane_id: &str,
         cwd: Option<&str>,
     ) -> Result<String, String> {
-        let body = serde_json::json!({ "cwd": cwd });
+        let body = serde_json::json!({ "cwd": cwd, "origin_session_id": env_origin_session() });
         // The server-side handler blocks for its own shell-readiness gate,
         // bounded at `SHELL_READINESS_TIMEOUT_MS` (5s, `mcp_transport.rs`) — the
         // default 3s client socket timeout is shorter than that, so a
@@ -1334,12 +1346,22 @@ mod ipc_backend_pane_id_url_encoding_tests {
         out
     }
 
+    /// Runs `f` with `TUIC_SESSION` unset (restoring it afterwards).
+    fn without_tuic_session<T>(f: impl FnOnce() -> T) -> T {
+        let saved = std::env::var("TUIC_SESSION").ok();
+        unsafe { std::env::remove_var("TUIC_SESSION") };
+        let out = f();
+        if let Some(v) = saved {
+            unsafe { std::env::set_var("TUIC_SESSION", v) };
+        }
+        out
+    }
+
     #[test]
     #[serial_test::serial]
-    fn create_tmux_pane_posts_exactly_label_window_id_and_cwd_and_no_origin_session() {
-        // CHARACTERIZATION of today's split-window wire body. A planned
-        // change adds the calling terminal's `TUIC_SESSION` as the pane's
-        // lead; when that lands this test must be updated deliberately.
+    fn create_tmux_pane_posts_label_window_id_cwd_and_the_callers_origin_session() {
+        // The shim runs inside the lead's PTY; its own `TUIC_SESSION` is sent so
+        // the server can tie the teammate's terminal back to its lead.
         let (raw, result) = with_tuic_session("sentinel-lead-session", || {
             capture_request(|| IpcBackend.create_tmux_pane("claude-swarm-7", "@0", Some("/repo")))
         });
@@ -1348,12 +1370,9 @@ mod ipc_backend_pane_id_url_encoding_tests {
         assert_eq!(
             body,
             serde_json::json!({
-                "label": "claude-swarm-7", "window_id": "@0", "cwd": "/repo"
+                "label": "claude-swarm-7", "window_id": "@0", "cwd": "/repo",
+                "origin_session_id": "sentinel-lead-session"
             })
-        );
-        assert!(
-            !raw.contains("sentinel-lead-session"),
-            "TUIC_SESSION is not read or forwarded by the tmux shim today"
         );
         // The mock answers `{"ok":true,"tuic_session_id":"s1"}`; the trait
         // returns the parsed JSON object untouched.
@@ -1362,18 +1381,32 @@ mod ipc_backend_pane_id_url_encoding_tests {
 
     #[test]
     #[serial_test::serial]
-    fn create_tmux_pane_with_no_cwd_posts_an_explicit_null() {
-        let (raw, _) = capture_request(|| IpcBackend.create_tmux_pane("default", "@3", None));
+    fn create_tmux_pane_with_no_cwd_and_no_tuic_session_posts_explicit_nulls() {
+        let (raw, _) = without_tuic_session(|| {
+            capture_request(|| IpcBackend.create_tmux_pane("default", "@3", None))
+        });
         let body: serde_json::Value = serde_json::from_str(request_body(&raw)).unwrap();
         assert_eq!(
             body,
-            serde_json::json!({ "label": "default", "window_id": "@3", "cwd": null })
+            serde_json::json!({
+                "label": "default", "window_id": "@3", "cwd": null, "origin_session_id": null
+            })
         );
     }
 
     #[test]
     #[serial_test::serial]
-    fn materialize_pane_posts_only_cwd_in_the_body_and_the_label_in_the_query() {
+    fn an_empty_tuic_session_is_sent_as_null_not_as_an_empty_string() {
+        let (raw, _) = with_tuic_session("", || {
+            capture_request(|| IpcBackend.create_tmux_pane("default", "@3", Some("/r")))
+        });
+        let body: serde_json::Value = serde_json::from_str(request_body(&raw)).unwrap();
+        assert_eq!(body["origin_session_id"], serde_json::Value::Null);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn materialize_pane_posts_cwd_and_origin_in_the_body_and_the_label_in_the_query() {
         let (raw, _) = with_tuic_session("sentinel-lead-session", || {
             capture_request(|| IpcBackend.materialize_pane("claude-swarm-7", "%2", Some("/repo")))
         });
@@ -1382,8 +1415,10 @@ mod ipc_backend_pane_id_url_encoding_tests {
             "POST /tmux/panes/%252/materialize?label=claude-swarm-7 HTTP/1.1"
         );
         let body: serde_json::Value = serde_json::from_str(request_body(&raw)).unwrap();
-        assert_eq!(body, serde_json::json!({ "cwd": "/repo" }));
-        assert!(!raw.contains("sentinel-lead-session"));
+        assert_eq!(
+            body,
+            serde_json::json!({ "cwd": "/repo", "origin_session_id": "sentinel-lead-session" })
+        );
     }
 
     #[test]
