@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * A left press on an underlined path while the app reports the mouse (Claude
  * Code fullscreen). The contract is the user's: the underlined name opens when
- * clicked, every other press still belongs to the app.
+ * clicked, every other press still belongs to the app. The last case is the same
+ * contract without mouse reporting (Claude with the alternate screen disabled).
  */
 
 const { invoke, frameSink } = vi.hoisted(() => ({
@@ -41,14 +42,16 @@ const ROW0 = "  followups.md  plain words";
 /** `followups.md` occupies columns 2-13 of row 0. */
 const NAME_COL = 5;
 const OTHER_COL = 20;
+/** Names a tool call prints before the file it writes exists. */
+const LATE_ROW = "  later.txt  plain words";
 
-/** A full screen whose row 0 is ROW0, with mouse reporting (SGR, button-event tracking) on. */
-function frame(): ArrayBuffer {
+/** A full screen whose row 0 is `row0`, with mouse reporting (SGR, button-event tracking) on unless `mouseMode` is 0. */
+function frame(row0 = ROW0, mouseMode = 2): ArrayBuffer {
 	const buffer = new ArrayBuffer(HEADER_SIZE + ROWS * (4 + COLS * CELL_SIZE));
 	const view = new DataView(buffer);
 	view.setUint16(0, ROWS, true);
 	view.setUint8(6, 1);
-	view.setUint8(17, (2 << 3) | 0x20);
+	view.setUint8(17, mouseMode === 0 ? 0 : (mouseMode << 3) | 0x20);
 	view.setUint16(18, ROWS, true);
 	view.setUint16(20, COLS, true);
 	let offset = HEADER_SIZE;
@@ -56,7 +59,7 @@ function frame(): ArrayBuffer {
 		view.setUint16(offset, r, true);
 		view.setUint16(offset + 2, COLS, true);
 		offset += 4;
-		for (const char of (r === 0 ? ROW0 : "").padEnd(COLS, " ")) {
+		for (const char of (r === 0 ? row0 : "").padEnd(COLS, " ")) {
 			view.setUint32(offset, char.codePointAt(0) ?? 0, true);
 			offset += CELL_SIZE;
 		}
@@ -83,17 +86,23 @@ const ptyWrites = () =>
 
 describe("CanvasTerminal link press under mouse reporting", () => {
 	const onOpen = vi.fn();
+	let screenRow0 = ROW0;
+	let lateFileExists = false;
 	let canvas: Element;
 	let unmount: () => void;
 
 	beforeEach(async () => {
 		onOpen.mockClear();
 		invoke.mockReset();
+		screenRow0 = ROW0;
+		lateFileExists = false;
 		invoke.mockImplementation(async (cmd: string, args: { candidate?: string; candidates?: string[] }) => {
-			if (cmd === "terminal_get_row_text") return ROW0.trimEnd();
-			if (cmd === "terminal_get_logical_line") return [0, ROW0.trimEnd()];
+			if (cmd === "terminal_get_row_text") return screenRow0.trimEnd();
+			if (cmd === "terminal_get_logical_line") return [0, screenRow0.trimEnd()];
 			const resolve = (c: string) =>
-				c.startsWith("followups") ? { absolute_path: `/cwd/${c}`, is_directory: false } : null;
+				c.startsWith("followups") || (c.startsWith("later") && lateFileExists)
+					? { absolute_path: `/cwd/${c}`, is_directory: false }
+					: null;
 			if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
 			if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
 			return null;
@@ -211,5 +220,30 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 		click(canvas, NAME_COL, NAME_COL, { shiftKey: true });
 		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined));
 		expect(ptyWrites()).toEqual([]);
+	});
+
+	// Catches: a hover probe made before the file exists caching "no link" for that row text forever,
+	// so the name underlined by the 3 s re-verification does nothing on click (#1330).
+	it("opens a name whose file appeared after the pointer first hovered it, without mouse reporting", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			screenRow0 = LATE_ROW;
+			const send = frameSink.current as ((data: ArrayBuffer) => void) | null;
+			send?.(frame(LATE_ROW, 0));
+			await waitFor(() => expect(invoke.mock.calls.map(([c]) => c)).toContain("resolve_terminal_paths"));
+			// Hover while the file is missing: the probe resolves nothing.
+			fire(document.body, "mousemove", NAME_COL);
+			await waitFor(() => expect(invoke.mock.calls.map(([c]) => c)).toContain("resolve_terminal_path"));
+			lateFileExists = true;
+			vi.setSystemTime(Date.now() + 4_000);
+			// A new frame schedules the re-verification that underlines the name.
+			send?.(frame(LATE_ROW, 0));
+			await waitFor(() => expect(invoke.mock.calls.filter(([c]) => c === "resolve_terminal_paths")).toHaveLength(2));
+			await new Promise((r) => setTimeout(r, 50));
+			click(canvas, NAME_COL, NAME_COL);
+			await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/later.txt", undefined, undefined));
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
