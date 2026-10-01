@@ -122,6 +122,7 @@ import type {
 	AcpConnectionSnapshot,
 	AcpSessionConfigOption,
 } from "../../types/acp";
+import { handleExternalLinkClick } from "../../utils/externalLinkClick";
 
 const ROOT = "/repo/tuicommander";
 /** Where every chat runs: the whole workspace, never one repository. */
@@ -668,6 +669,27 @@ describe("AIChatPanel: transcript actions", () => {
 		await settle();
 		expect(mockOpenUrl).toHaveBeenCalledWith("https://example.com/help");
 		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
+	});
+
+	// Catches: the transcript's own onClick and the document-level handler both opening the same web link.
+	it("opens a web link in a user message exactly once when the document handler is installed", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		document.addEventListener("click", handleExternalLinkClick);
+		try {
+			const { container } = await renderPanel();
+			await settle();
+			feed({ kind: "promptSent", text: "Open https://example.com/help" });
+			await settle();
+			container.querySelector<HTMLAnchorElement>(".userMsg a")?.click();
+			await settle();
+			expect(mockOpenUrl).toHaveBeenCalledTimes(1);
+		} finally {
+			document.removeEventListener("click", handleExternalLinkClick);
+		}
 	});
 
 	it("keeps a failed file lookup inside the panel without opening a path", async () => {
