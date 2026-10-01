@@ -127,6 +127,22 @@ A button in the sidebar footer shows all parked repos with a count badge. Click 
 
 Click **Unpark** on any repo in the parked repos popover. It returns to the main sidebar list.
 
+## Compact and rich layout
+
+The **layout button** in the toolbar (left of the filter icon) cycles the sidebar through three modes and prints the current one on itself: **A** (auto, outlined), **C** (compact), **R** (rich). The choice is saved.
+
+**Compact** is the one-line rows. **Rich** adds detail lines:
+
+- **Branch:** the PR state word and title; last-commit age; ahead/behind of the upstream (`↑2 ↓1`); diff stats; `N dirty` (click opens Changes); `Merged`, `Stale` (no commit for 30 days, not merged), `Unknown` (removal blocked, status could not be read) and `unmerged`. Each chip explains itself in a tooltip, with the same removal-safety text compact shows. A main checkout never shows stale, merged, dirty or unknown.
+- **Agent:** its state (Working, Idle, Needs input, Error) and what it is doing; its in-session subagents, one line each with state, title, tool calls and age (more than three fold into "N subagents", click to expand); TUIC child sessions nest under their parent agent.
+- **Repository:** current branch, open PRs, worktrees and the age of the last remote poll.
+
+Compact carries the same facts in tooltips: the branch name's tooltip has the commit age, ahead/behind and the stale rule; an agent row's tooltip has its state and line. Subagents and nesting exist only in rich.
+
+**Auto** shows rich when the list fits the window or the primary pointer is a finger (touch targets), compact otherwise. The fit is measured: a rich row is about 52 px, and the window gives the list its height minus 96 px of toolbar and footer, so a 768 px window fits 12 rows and a 900 px window 15. On touch, the + and × buttons stay on the branch name line (28 px) so the PR title keeps the full width of the line below.
+
+Subagent lines come from the existing `progress_flow` command, read at most every 5 seconds per repository, only in rich.
+
 ## Active-Only Filter
 
 When you have many repos open, hide the ones you aren't using right now.
