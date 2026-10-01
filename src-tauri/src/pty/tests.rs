@@ -27614,6 +27614,10 @@ fn explain_declared_teammates_no_linked_pane_accounts_for_are_reported_and_count
         "the unaccounted-for teammate keeps the lead working (fail-safe)"
     );
     assert_eq!(flag.counts_now, explain.visible.declared_background_work);
+    assert!(
+        flag.consistent_with_visible,
+        "no concurrent flip, so the capture is not torn"
+    );
 }
 
 // --- teammate-aware declared-work read: the three pty.rs consumers ---
@@ -27766,4 +27770,35 @@ fn an_idle_teammate_does_not_block_standby_but_a_busy_or_unlinked_one_does() {
     assert_eq!(blocks("busy", 1, Some(SHELL_BUSY)), (true, true));
     assert_eq!(blocks("unlinked", 1, None), (true, true));
     assert_eq!(blocks("surplus", 2, Some(SHELL_IDLE)), (true, true));
+}
+
+#[test]
+fn explain_a_closed_teammate_is_not_listed_and_does_not_account_for_a_declared_one() {
+    // Lead declares one teammate running; that teammate's terminal has since closed but
+    // its pane is still in the lazily reconciled topology. It must not vouch (U2): the
+    // lead keeps reading working until its next Stop refreshes the list, and the payload
+    // shows it as an unaccounted-for teammate instead of a linked idle one.
+    let state = crate::state::tests_support::make_test_app_state();
+    explain_lead_with_teammate(
+        &state,
+        "explain-lead-closed",
+        "explain-mate-closed",
+        SHELL_IDLE,
+        0,
+        1,
+    );
+    state
+        .session_maps
+        .shell_states
+        .remove("explain-mate-closed");
+
+    let explain = explain_session_state_impl(&state, "explain-lead-closed").expect("explain");
+    let flag = &explain.epoch_flags.declared_background_work;
+    assert!(
+        explain.swarm.is_none(),
+        "the closed terminal is not a linked teammate"
+    );
+    assert_eq!(flag.unlinked_teammates, Some(1));
+    assert!(flag.counts_now);
+    assert!(flag.consistent_with_visible);
 }

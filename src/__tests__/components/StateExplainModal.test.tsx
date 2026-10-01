@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
 import "../mocks/tauri";
@@ -237,5 +238,110 @@ describe("StateExplainModal", () => {
 		const { getByTitle } = render(() => <StateExplainModal {...props} />);
 		fireEvent.click(getByTitle("Close"));
 		expect(props.onClose).toHaveBeenCalledTimes(1);
+	});
+
+	describe("declared background work and swarm sections", () => {
+		const DECLARED = {
+			declared: true,
+			declared_turn_epoch: 3,
+			applies_now: true,
+			age_ms: 125_000,
+			breakdown_source: "summary" as const,
+			non_teammate_running: 0,
+			teammate_running: 2,
+			teammates_busy: false,
+			unlinked_teammates: 1,
+			consistent_with_visible: true,
+			counts_now: true,
+		};
+		const withDeclared = (over: Partial<typeof DECLARED> = {}, swarm: SessionStateExplain["swarm"] = null) => ({
+			...EXPLAIN,
+			epoch_flags: { declared_background_work: { ...DECLARED, ...over } },
+			swarm,
+		});
+
+		it("renders the breakdown, age and the unlinked-teammate warning", async () => {
+			mockInvoke.mockResolvedValue(withDeclared());
+			const { container, getByText } = render(() => <StateExplainModal {...baseProps()} />);
+			await waitFor(() => expect(getByText("Declared background work")).not.toBeNull());
+			const text = container.textContent ?? "";
+			expect(text).toContain("holds the session working");
+			expect(text).toContain("125.0s ago");
+			expect(text).toContain("summary");
+			expect(text).toContain("no linked pane accounts for them");
+			expect(text).not.toContain("Captured mid-change");
+		});
+
+		it("says so when the capture was torn (counts_now disagrees with the visible value)", async () => {
+			mockInvoke.mockResolvedValue(withDeclared({ consistent_with_visible: false }));
+			const { container } = render(() => <StateExplainModal {...baseProps()} />);
+			await waitFor(() => expect(container.textContent).toContain("Captured mid-change"));
+		});
+
+		it("shows an idle-teammate declaration as not holding the session working", async () => {
+			mockInvoke.mockResolvedValue(
+				withDeclared({ counts_now: false, unlinked_teammates: 0, teammates_busy: false, teammate_running: 1 }),
+			);
+			const { container } = render(() => <StateExplainModal {...baseProps()} />);
+			await waitFor(() => expect(container.textContent).toContain("does not hold it working"));
+			expect(container.textContent).not.toContain("no linked pane accounts for them");
+		});
+
+		it("omits the section when nothing is declared, and tolerates a backend that predates the fields", async () => {
+			mockInvoke.mockResolvedValue(withDeclared({ declared: false, counts_now: false }));
+			const first = render(() => <StateExplainModal {...baseProps()} />);
+			await waitFor(() => expect(first.container.textContent).toContain("Evidence"));
+			expect(first.container.textContent).not.toContain("Declared background work");
+			cleanup();
+
+			mockInvoke.mockResolvedValue(EXPLAIN); // no epoch_flags, no swarm
+			const second = render(() => <StateExplainModal {...baseProps()} />);
+			await waitFor(() => expect(second.container.textContent).toContain("Evidence"));
+			expect(second.container.textContent).not.toContain("Declared background work");
+			expect(second.container.textContent).not.toContain("Swarm");
+		});
+
+		it("renders the lead and each teammate, showing a closed terminal as closed", async () => {
+			mockInvoke.mockResolvedValue(
+				withDeclared(
+					{},
+					{
+						lead_session_id: "leadleadlead",
+						teammates: [
+							{ session_id: "aaaa1111-x", shell_state: "busy", busy: true },
+							{ session_id: "bbbb2222-x", shell_state: null, busy: false },
+						],
+					},
+				),
+			);
+			const { container, getByText } = render(() => <StateExplainModal {...baseProps()} />);
+			await waitFor(() => expect(getByText("Swarm")).not.toBeNull());
+			const text = container.textContent ?? "";
+			expect(text).toContain("leadlead");
+			expect(text).toContain("teammate aaaa1111");
+			expect(text).toContain("busy");
+			expect(text).toContain("teammate bbbb2222");
+			expect(text).toContain("closed");
+		});
+	});
+
+	it("updates the mismatch banner when the badge inputs change while the modal is open", async () => {
+		// Regression: `disagrees()` used to run once inside the render callback, so a
+		// flag flipping after load updated the badge row but never the banner.
+		const [shell, setShell] = createSignal<string | null>("busy");
+		const [agent, setAgent] = createSignal<string | null>("working");
+		const { container } = render(() => (
+			<StateExplainModal {...baseProps()} shellState={shell()} agentState={agent()} />
+		));
+		await waitFor(() => expect(container.textContent).toContain("Evidence"));
+		expect(container.textContent).not.toContain("disagrees with backend");
+
+		setShell("idle");
+		setAgent("idle");
+		await waitFor(() => expect(container.textContent).toContain("disagrees with backend"));
+
+		setShell("busy");
+		setAgent("working");
+		await waitFor(() => expect(container.textContent).not.toContain("disagrees with backend"));
 	});
 });

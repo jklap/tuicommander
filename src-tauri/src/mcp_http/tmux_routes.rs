@@ -334,9 +334,20 @@ fn validated_origin(live: &HashSet<String>, origin: Option<&str>) -> Option<Stri
         .map(str::to_string)
 }
 
-/// TUIC session ids of the live teammate panes whose lead is `lead_session_id`,
-/// across every tmux server label. Reads only the topology (no session or
-/// silence locks), so it is safe to call while holding a `SilenceState` guard.
+/// TUIC session ids of the live teammate terminals whose pane names `lead_session_id`
+/// as its lead, across every tmux server label. Reads only the topology and the
+/// shell-state map (no session or silence locks), so it is safe to call while
+/// holding a `SilenceState` guard.
+///
+/// Liveness is `shell_states` membership (created with the session, removed on
+/// close). The topology is only reconciled lazily inside route handlers, so a
+/// closed teammate's pane otherwise keeps its `tuic_session_id`; counting it as a
+/// linked teammate would let a corpse satisfy the fail-safe's "declared <= linked"
+/// check after Claude had already dropped that teammate from the lead's list,
+/// masking a genuinely unaccounted-for one. The cost of excluding it: until the
+/// lead's next `Stop` refreshes its list, a just-closed teammate still counts as
+/// declared-but-unlinked, i.e. the lead keeps reading working (the old behavior,
+/// self-correcting) rather than idle.
 pub(crate) fn teammate_session_ids(state: &AppState, lead_session_id: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     state
@@ -358,6 +369,7 @@ pub(crate) fn teammate_session_ids(state: &AppState, lead_session_id: &str) -> V
         // represented by two pane entries (a split-window/respawn-pane race) must
         // not count twice and mask a genuinely unaccounted-for teammate.
         .filter(|id| seen.insert(id.clone()))
+        .filter(|id| state.session_maps.shell_states.contains_key(id))
         .collect()
 }
 
@@ -2930,6 +2942,12 @@ mod tests {
     #[test]
     fn teammate_session_ids_counts_a_terminal_once_even_if_two_panes_reference_it() {
         let state = super::super::tests::test_state();
+        for live in ["mate-dup", "mate-other", "mate-y"] {
+            state
+                .session_maps
+                .shell_states
+                .insert(live.to_string(), std::sync::atomic::AtomicU8::new(0));
+        }
         link_teammate_for_test(&state, "dup-a", "lead-x", "mate-dup");
         link_teammate_for_test(&state, "dup-b", "lead-x", "mate-dup");
         link_teammate_for_test(&state, "dup-c", "lead-x", "mate-other");
@@ -2941,6 +2959,32 @@ mod tests {
         link_teammate_for_test(&state, "only-dup-b", "lead-y", "mate-y");
         assert_eq!(teammate_session_ids(&state, "lead-y").len(), 1);
         assert!(state.lead_teammates_may_be_working("lead-y", 2));
+    }
+
+    #[test]
+    fn a_closed_teammate_terminal_is_not_a_linked_teammate_but_still_names_its_lead() {
+        let state = super::super::tests::test_state();
+        link_teammate_for_test(&state, "closed-a", "lead-c", "mate-alive");
+        link_teammate_for_test(&state, "closed-b", "lead-c", "mate-closed");
+        state.session_maps.shell_states.insert(
+            "mate-alive".to_string(),
+            std::sync::atomic::AtomicU8::new(0),
+        );
+        // "mate-closed" has no shell_states entry: its session was torn down but its
+        // pane is still in the (lazily reconciled) topology.
+        assert_eq!(
+            teammate_session_ids(&state, "lead-c"),
+            vec!["mate-alive".to_string()]
+        );
+        // The reverse lookup must still resolve a closed teammate so the lead is
+        // republished when the teammate's row disappears.
+        assert_eq!(
+            lead_of_teammate(&state, "mate-closed").as_deref(),
+            Some("lead-c")
+        );
+        // Two declared, one live linked, one closed: the closed one no longer vouches,
+        // so the fail-safe still sees an unaccounted-for teammate.
+        assert!(state.lead_teammates_may_be_working("lead-c", 2));
     }
 
     #[test]
