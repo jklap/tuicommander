@@ -1104,3 +1104,69 @@ mod tests {
         assert_eq!(truncate_ci_logs("  \n  "), "");
     }
 }
+
+#[cfg(test)]
+mod critic2_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Catches: a panic or a miscount when GitHub returns a thread with no comments,
+    /// a deleted (null) author, or a non-user actor type.
+    #[test]
+    fn thread_attribution_survives_missing_and_odd_authors() {
+        let nodes = json!([
+            {"isResolved": false, "comments": {"nodes": []}},
+            {"isResolved": false, "comments": null},
+            {"isResolved": false, "comments": {"nodes": [{"author": null}]}},
+            {"isResolved": false, "comments": {"nodes": [{"author": {"__typename": "Mannequin", "login": "m"}}]}},
+            {"isResolved": false, "comments": {"nodes": [{"author": {"__typename": "Bot", "login": "dependabot"}}]}},
+            {"isResolved": null, "comments": {"nodes": [{"author": {"__typename": "Bot", "login": "x"}}]}},
+        ]);
+        assert_eq!(
+            count_review_threads(&nodes),
+            ReviewThreadCounts { bot: 1, human: 4 }
+        );
+    }
+
+    /// Catches: batch badge count and on-demand split disagreeing on which nodes are
+    /// unresolved (null/missing `isResolved` counted by one and not the other).
+    #[test]
+    fn badge_count_and_split_agree_on_the_same_nodes() {
+        let nodes = json!([
+            {"isResolved": false}, {"isResolved": true}, {"isResolved": null}, {},
+            {"isResolved": false, "comments": {"nodes": [{"author": {"__typename": "Bot", "login": "b"}}]}},
+        ]);
+        let counts = count_review_threads(&nodes);
+        let pr = parse_pr_node(&json!({
+            "number": 1, "headRefName": "f", "state": "OPEN",
+            "reviewThreads": {"nodes": nodes}
+        }))
+        .unwrap();
+        assert_eq!(pr.unresolved_threads, counts.bot + counts.human);
+    }
+
+    /// Catches: `reviewThreads: null` / `nodes: null` (permission-limited or partial
+    /// GraphQL response) failing the whole PR parse instead of counting zero.
+    #[test]
+    fn null_review_threads_parse_as_zero() {
+        for rt in [json!(null), json!({"nodes": null}), json!({"nodes": []})] {
+            let pr = parse_pr_node(&json!({
+                "number": 1, "headRefName": "f", "state": "OPEN", "reviewThreads": rt
+            }))
+            .expect("PR must still parse");
+            assert_eq!(pr.unresolved_threads, 0);
+        }
+    }
+
+    /// Catches: threads selected with a nested connection (poll cost x10) in the
+    /// worst-case query: 6 repos, viewer search, drafts hidden.
+    #[test]
+    fn worst_case_batch_query_has_no_nested_thread_connection() {
+        let repos: Vec<(String, String, String)> = (0..6)
+            .map(|i| (format!("/r{i}"), "o".into(), format!("r{i}")))
+            .collect();
+        let (q, _) = build_unified_batch_query(&repos, true, "assigned", "me", true);
+        assert_eq!(q.matches("reviewThreads(first: 50)").count(), 7); // 6 repos + viewerPrs
+        assert!(!q.contains("comments(first"));
+    }
+}

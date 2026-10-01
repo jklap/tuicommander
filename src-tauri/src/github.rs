@@ -6788,3 +6788,50 @@ mod tests {
         assert_eq!(value["title"].as_str(), Some("Real issue"));
     }
 }
+
+#[cfg(test)]
+mod critic2_tests {
+    use super::*;
+
+    /// Catches: the single-repo/multi-repo query builder dropping the thread selection
+    /// while the unified builder has it (two verdicts for the same PR).
+    #[test]
+    fn multi_repo_query_selects_review_threads() {
+        let repos = vec![("/r".to_string(), "o".to_string(), "r".to_string())];
+        let (q, _) = build_multi_repo_pr_query(&repos, false);
+        assert!(q.contains("reviewThreads(first: 50) { nodes { isResolved } }"), "{q}");
+    }
+
+    /// Catches: a real merge conflict on update-branch reported as "head changed"
+    /// (the UI would tell the user to refresh instead of resolving conflicts).
+    #[test]
+    fn update_branch_conflict_is_not_head_changed() {
+        let msg = update_branch_failure_message(422, "merge conflict between base and head");
+        assert!(!msg.contains(MERGE_HEAD_CHANGED), "{msg}");
+        assert!(msg.contains("422"), "{msg}");
+        // Capitalised variant of the real head-moved message is still recognised.
+        let moved = update_branch_failure_message(422, "Expected head sha didn't match current head ref.");
+        assert!(moved.starts_with(MERGE_HEAD_CHANGED), "{moved}");
+    }
+
+    /// Catches: a whitespace-only pin passing the guard and reaching GitHub.
+    #[tokio::test]
+    async fn update_branch_blank_expected_head_is_rejected_before_any_request() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let err = update_pr_branch_impl("/nonexistent", 1, "  \t", &state)
+            .await
+            .expect_err("blank sha must be rejected");
+        assert!(err.contains("head commit"), "{err}");
+    }
+
+    /// Catches: a merge 409 for another reason (not mergeable) classified as head moved,
+    /// or the head-moved 409 matched case-insensitively away from GitHub's exact text.
+    #[test]
+    fn merge_409_variants() {
+        assert!(!merge_failure_message(409, "Pull Request is not mergeable").contains(MERGE_HEAD_CHANGED));
+        assert!(merge_failure_message(409, "Head branch was modified. Review and try the merge again.")
+            .starts_with(MERGE_HEAD_CHANGED));
+        // 422/405 with that phrase is not the pin mismatch GitHub documents (409 only).
+        assert!(!merge_failure_message(405, "Head branch was modified").contains(MERGE_HEAD_CHANGED));
+    }
+}
