@@ -49,8 +49,8 @@ describe("savePastedImage (critic 1350)", () => {
 		expect(invoke).toHaveBeenCalledWith("save_note_image", expect.objectContaining({ noteId: "n1", extension: "png" }));
 	});
 
-	it("finds an image behind a text item in a mixed clipboard — catches stopping at the first item", async () => {
-		const e = pasteEvent([textItem(), imageItem("image/gif")]);
+	it("finds an image behind a non-plain-text item in a mixed clipboard — catches stopping at the first item", async () => {
+		const e = pasteEvent([{ kind: "string", type: "text/html", getAsFile: () => null }, imageItem("image/gif")]);
 		const out = await savePastedImage(e, () => "n1");
 		expect(out).toBe("/saved/a.png");
 		expect(invoke).toHaveBeenCalledWith("save_note_image", expect.objectContaining({ extension: "gif" }));

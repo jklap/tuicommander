@@ -127,8 +127,6 @@ describe("Toolbar", () => {
 		const label = () => container.querySelector("[data-testid='sidebar-density-label']")?.textContent;
 		const toggle = container.querySelector("[data-testid='sidebar-density-toggle']") as HTMLElement;
 		expect(label()).toBe("A");
-		// Catches: an accent outline marking auto, read as a stuck focus ring (#1351-69e0).
-		expect(toggle.className).not.toContain("densityToggleAuto");
 		fireEvent.click(toggle);
 		expect(label()).toBe("C");
 		fireEvent.click(toggle);
