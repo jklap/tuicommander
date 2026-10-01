@@ -246,6 +246,9 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 				emptyMessage={emptyMessage()}
 				onSuggestion={(text) => void chat.send(text)}
 				onOpenFile={(href) => void openFile(href)}
+				onNoticeAction={(action) => {
+					if (action.kind === "open_result") void openFile(action.path);
+				}}
 				onClear={() => {
 					const session = chat.sessionId();
 					if (session) acpTranscript.clear(session);
