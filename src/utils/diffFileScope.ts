@@ -47,9 +47,14 @@ export function globToRegExp(pattern: string): RegExp {
 	for (let i = 0; i < body.length; i++) {
 		const c = body[i];
 		if (c === "*" && body[i + 1] === "*") {
-			re += ".*";
-			i++;
-			if (body[i + 1] === "/") i++;
+			// `**/` is zero or more WHOLE segments, so `**/gen.ts` must not match `xgen.ts`.
+			if (body[i + 2] === "/") {
+				re += "(?:.*/)?";
+				i += 2;
+			} else {
+				re += ".*";
+				i++;
+			}
 		} else if (c === "*") re += "[^/]*";
 		else if (c === "?") re += "[^/]";
 		else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
@@ -57,16 +62,33 @@ export function globToRegExp(pattern: string): RegExp {
 	return new RegExp(anchored ? `^${re}$` : `(^|/)${re}$`);
 }
 
-/** Patterns marked `linguist-generated` (set, or `=true`) in a .gitattributes file. */
+/** Patterns that set `linguist-generated` (set, or `=true`), in file order. A later line that
+ *  unsets it (`-linguist-generated`, `=false`) is kept as `!pattern` so that, as in gitattributes,
+ *  the LAST matching line wins. Gitattributes patterns cannot start with `!`, so the prefix is
+ *  unambiguous. An unset line with nothing before it to override is dropped. */
 export function parseLinguistGenerated(gitattributes: string): string[] {
 	const patterns: string[] = [];
 	for (const raw of gitattributes.split("\n")) {
 		const line = raw.trim();
 		if (!line || line.startsWith("#")) continue;
 		const [pattern, ...attrs] = line.split(/\s+/);
-		if (attrs.some((a) => a === "linguist-generated" || a === "linguist-generated=true")) patterns.push(pattern);
+		// The last token naming the attribute decides for that line.
+		const decisive = attrs.filter((a) => /^-?linguist-generated(=.*)?$/.test(a)).pop();
+		if (!decisive) continue;
+		if (decisive === "linguist-generated" || decisive === "linguist-generated=true") patterns.push(pattern);
+		else if (patterns.length > 0) patterns.push(`!${pattern}`);
 	}
 	return patterns;
+}
+
+/** Last matching line wins; `!pattern` entries come from parseLinguistGenerated. */
+function isLinguistGenerated(path: string, patterns: string[]): boolean {
+	let generated = false;
+	for (const p of patterns) {
+		const negated = p.startsWith("!");
+		if (globToRegExp(negated ? p.slice(1) : p).test(path)) generated = !negated;
+	}
+	return generated;
 }
 
 /** Why a file starts collapsed in the PR diff, or null when it should be read. */
@@ -74,7 +96,7 @@ export function classifyDiffFile(path: string, generatedPatterns: string[] = [])
 	const base = path.slice(path.lastIndexOf("/") + 1);
 	if (LOCKFILES.has(base)) return "lockfile";
 	if (GENERATED_DIRS.test(path) || GENERATED.some((r) => r.test(path))) return "generated";
-	if (generatedPatterns.some((p) => globToRegExp(p).test(path))) return "generated";
+	if (isLinguistGenerated(path, generatedPatterns)) return "generated";
 	if (TESTS.some((r) => r.test(path))) return "test";
 	return null;
 }
