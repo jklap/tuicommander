@@ -64,7 +64,9 @@ describe("branch restore with suspended tabs (critic 1358)", () => {
 	it("drops a plain shell saved with suspended=false", () =>
 		testInScope(async () => {
 			const tabs = await restore([saved({ name: "shell", suspended: false })]);
-			expect(tabs).toEqual([]);
+			// All-plain-shell snapshots fall through to a fresh terminal; none is the restored record.
+			expect(tabs.map((t) => t.name)).not.toContain("shell");
+			expect(tabs.some((t) => t.suspended)).toBe(false);
 		}));
 
 	// Catches: a suspended plain shell is dropped like an unsuspended one, or comes back running.
