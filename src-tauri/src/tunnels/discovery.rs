@@ -227,3 +227,58 @@ ok.example,!neg.example ssh-rsa AAAA
         assert_eq!(merged.hosts[1].probe_port(), Some(2222));
     }
 }
+
+#[cfg(test)]
+mod hostile_input_tests {
+    use super::*;
+
+    /// Catches: the `-` option guard running on the raw token, so a bracketed
+    /// `[-oProxyCommand=…]:22` passes it and later reaches `ssh` as an option.
+    #[test]
+    fn bracketed_name_starting_with_dash_is_not_listed() {
+        let known = parse_known_hosts("[-oProxyCommand=touch$IFS/x]:22 ssh-ed25519 AAAA\n[-oFoo] ssh-rsa AAAA\n");
+        assert!(
+            known.hosts.iter().all(|(h, _)| !h.starts_with('-')),
+            "option-shaped host listed: {:?}",
+            known.hosts
+        );
+    }
+
+    /// Catches: tab separators and CRLF endings leaking `\r` into the host name.
+    #[test]
+    fn tab_separated_crlf_lines_yield_clean_host_names() {
+        let known = parse_known_hosts("a.example\tssh-ed25519\tAAAA\r\n[b.example]:2200\tssh-rsa\tBBBB\r\n");
+        assert_eq!(
+            known.hosts,
+            vec![("a.example".to_string(), None), ("b.example".to_string(), Some(2200))]
+        );
+    }
+
+    /// Catches: an indented marker line being listed as a host.
+    #[test]
+    fn indented_marker_and_hashed_lines_are_handled() {
+        let known = parse_known_hosts("   @revoked gone.example ssh-rsa AAAA\n\t|1|c2FsdA==|aGFzaA== ssh-rsa AAAA\n");
+        assert!(known.hosts.is_empty());
+        assert_eq!(known.hashed_count, 1);
+    }
+
+    /// Catches: a config alias and a known_hosts name that resolve to different
+    /// machines sharing the same (host, port) identity, so the UI matches the
+    /// probe result of one entry onto the other (statuses carry no source).
+    #[test]
+    fn listed_entries_have_distinct_host_port_identities() {
+        let config = vec![ConfigHost {
+            alias: "db".into(),
+            hostname: Some("10.0.0.9".into()),
+            user: None,
+            port: None,
+        }];
+        let merged = merge_discovered(config, parse_known_hosts("db ssh-ed25519 AAAA\n"));
+        let mut ids: Vec<(String, Option<u16>)> =
+            merged.hosts.iter().map(|h| (h.host.clone(), h.port)).collect();
+        let total = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), total, "ambiguous entries: {:?}", merged.hosts);
+    }
+}

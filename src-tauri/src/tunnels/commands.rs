@@ -533,3 +533,17 @@ mod tests {
         assert_eq!(second, first, "fresh cache must skip the second process");
     }
 }
+
+#[cfg(test)]
+mod hostile_probe_tests {
+    use super::*;
+
+    /// Catches: a host name starting with `-` (from an ssh config alias) being
+    /// passed to `ssh` as an option because no `--` precedes it.
+    #[test]
+    fn probe_args_cannot_let_a_host_become_an_option() {
+        let args = probe_args("-oProxyCommand=evil", None);
+        let host_at = args.iter().position(|a| a == "-oProxyCommand=evil").unwrap();
+        assert_eq!(args[host_at - 1], "--", "host must follow `--`: {args:?}");
+    }
+}
