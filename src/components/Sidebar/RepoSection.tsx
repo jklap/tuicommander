@@ -5,6 +5,7 @@ import { githubStore } from "../../stores/github";
 import type { GitOpKind, RepositoryState, WorkspaceState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { writeClipboard } from "../../utils/clipboard";
 import { _resetMergedActivityAccum, activePrStatus } from "../../utils/mergedPrGrace";
 import { effectiveMergeMethod } from "../../utils/prMerge";
@@ -382,6 +383,19 @@ export const BranchItem: Component<{
 		}
 	};
 
+	// The chevron must not call onSelect (see comment above handleRowClick) — but a
+	// terminal that was session-created before this branch's worktree registration
+	// landed gets parked in the Global Workspace (`assignSessionToRepoBranch`) and
+	// previously stayed parked, invisible, until the user happened to select this
+	// branch (whose onSelect path runs its own adoption scan). Re-running ownership
+	// resolution here is NOT a selection/spawn side effect — it only corrects which
+	// branch a terminal's id already belongs to, so expanding the list is enough to
+	// self-heal it.
+	const toggleBranchTabs = () => {
+		reconcileTerminalOwnership();
+		repositoriesStore.toggleWorkspaceTabsExpanded(props.repoPath, props.branch.workspaceId);
+	};
+
 	const handleCopyPath = async () => {
 		const path = props.branch.worktreePath;
 		if (path) {
@@ -717,11 +731,11 @@ export const BranchItem: Component<{
 						aria-expanded={props.branch.tabsExpanded ?? false}
 						onClick={(e) => {
 							e.stopPropagation();
-							repositoriesStore.toggleWorkspaceTabsExpanded(props.repoPath, props.branch.workspaceId);
+							toggleBranchTabs();
 						}}
 						onKeyDown={onClickKeyDown((e) => {
 							e.stopPropagation();
-							repositoriesStore.toggleWorkspaceTabsExpanded(props.repoPath, props.branch.workspaceId);
+							toggleBranchTabs();
 						})}
 					>
 						›
