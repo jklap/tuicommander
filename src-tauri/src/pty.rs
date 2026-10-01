@@ -3158,17 +3158,27 @@ impl SilenceState {
     /// That matters because the joined-status `bgtasks` payload is cut at the OSC
     /// payload cap, so a long task list can lose a late `running` entry and have
     /// written an all-terminal declaration; the bounded summary repairs that
-    /// instead of being ignored. (It can equally clear a declaration `bgtasks`
-    /// over-reported. A process that can print this verb could already forge
-    /// `bgtasks` with the same effect, so this adds no capability.)
+    /// (and can equally clear a declaration `bgtasks` over-reported). A process
+    /// that can print this verb could already forge `bgtasks` with the same effect.
+    ///
+    /// Only applies when a `bgtasks` observation for THIS turn epoch is already
+    /// recorded — including one that said "nothing running", which is exactly the
+    /// truncated case. The two arms each read the live epoch separately, so a new
+    /// prompt landing between the two verbs of one fire bumps the epoch and
+    /// `reset_declared_background_work` wipes the observation; without this guard
+    /// the summary would then stamp the NEW turn with the previous turn's data.
     pub(crate) fn set_declared_task_summary(
         &mut self,
         summary: DeclaredTaskSummary,
         turn_epoch: u64,
     ) {
+        if self.declared_background_work_at.is_none()
+            || self.declared_background_work_turn_epoch != turn_epoch
+        {
+            return;
+        }
         self.declared_background_work =
             summary.non_teammate_running > 0 || summary.teammate_running > 0;
-        self.declared_background_work_turn_epoch = turn_epoch;
         self.declared_background_work_at = Some(std::time::Instant::now());
         self.declared_task_summary = Some(summary);
     }
