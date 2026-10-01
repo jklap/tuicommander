@@ -4,6 +4,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repoDefaultsStore } from "../../stores/repoDefaults";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { type GitOpKind, type RepositoryState, repositoriesStore } from "../../stores/repositories";
+import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
 
@@ -433,6 +434,11 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		// Freeze-investigation: split the structural batch into body (our
 		// setState loop) vs reactive flush (dependent effects/memos waking).
+		// Tracks worktrees this refresh registers for the first time, so a terminal
+		// parked in the Global Workspace (`assignSessionToRepoBranch`, because this
+		// worktree wasn't known yet when its session arrived) can be walked home the
+		// moment it becomes known — see the `reconcileTerminalOwnership()` call below.
+		const newlyRegisteredWorkspaceIds: string[] = [];
 		timeBatch(`git.refreshBatch:${repoPath}`, (markBodyEnd) =>
 			batch(() => {
 				// Guard against race: if a branch was present before our async ops
@@ -448,6 +454,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 						});
 						continue;
 					}
+					if (!liveRepo?.workspaces[workspaceId]) newlyRegisteredWorkspaceIds.push(workspaceId);
 					// `mergedSet` holds BRANCH names, so it is queried with the
 					// record's branch — never the key, which is a workspace id and
 					// only equals the branch under the identity migration.
@@ -477,6 +484,14 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		const updatedRepo = repositoriesStore.get(repoPath);
 		if (!updatedRepo) return;
+
+		// A newly-registered worktree may already own one or more terminals that
+		// arrived (session-created) before this refresh landed and were parked in
+		// the Global Workspace for lack of a known owner. Re-run ownership
+		// resolution now so they're re-homed immediately, instead of staying
+		// parked until the user happens to select this branch (which runs its own,
+		// narrower adoption scan in `createBranchSelectionCoordinator.ts`).
+		if (newlyRegisteredWorkspaceIds.length > 0) reconcileTerminalOwnership();
 
 		// Side effects that only need structure data — run before Phase 2
 		await handleAutoArchiveMerged(repoPath, updatedRepo.workspaces);
