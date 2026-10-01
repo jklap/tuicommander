@@ -240,6 +240,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	};
 	const STALE = Symbol("stale link lookup");
 	let hoveredLink: HoveredLink | null = null;
+	/** What the hovered link underlined when the probe resolved it; see pressSpanAt. */
+	let hoveredSignature = "";
 	const detectedLinks = linkController.detectedSpans;
 	// Spans of links that span soft-wrapped rows (web + file://), keyed by row.
 	// scanRowForLinks() merges these each time it rebuilds a row's dashed-underline
@@ -273,7 +275,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const linkPress = createLinkPressTracker();
 	async function openLinkAt(row: number, col: number) {
 		const link = await resolveLinkAt(row, col, () => !alive);
-		if (link && link !== STALE && linkCovers(link, row, col)) openLink(link);
+		if (link === STALE) {
+			appLogger.debug("terminal", "link click: lookup went stale", { row, col });
+		} else if (!link) {
+			appLogger.debug("terminal", "link click: nothing resolved under the pointer", { row, col });
+		} else if (!linkCovers(link, row, col)) {
+			appLogger.debug("terminal", "link click: resolved link does not cover the pointer", { row, col, link });
+		} else {
+			appLogger.debug("terminal", "link click: opening", { row, col, path: link.path });
+			openLink(link);
+		}
 	}
 	/** What a span underlines on screen right now; "" when there is none. */
 	function underlinedText(row: number, span: { colStart: number; colEnd: number } | undefined): string {
@@ -285,8 +296,24 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			utf16Starts[Math.min(span.colEnd, decoded.count)],
 		);
 	}
+	/**
+	 * The span a press at the cell belongs to: the dashed underline, or the link the hover
+	 * probe resolved under the pointer (OSC 8 text, a path wrapped over rows) that the
+	 * dashed underline does not cover. The hover is what showed the pointer cursor.
+	 */
+	function pressSpanAt(row: number, col: number): { colStart: number; colEnd: number } | undefined {
+		const underlined = spanAt(detectedLinks.get(row), col);
+		if (underlined || !hoveredLink || !linkCovers(hoveredLink, row, col)) return underlined;
+		// An in-place redraw leaves the hover standing; it only counts while it underlines what it did.
+		if (hoverSignature(hoveredLink) !== hoveredSignature) return undefined;
+		return (hoveredLink.spans ?? [hoveredLink]).find((sp) => sp.row === row && col >= sp.colStart && col < sp.colEnd);
+	}
+	/** The text each span of the link covers on screen now. */
+	function hoverSignature(link: HoveredLink): string {
+		return (link.spans ?? [link]).map((sp) => `${sp.row}:${underlinedText(sp.row, sp)}`).join("\n");
+	}
 	function underlinedTextAt(row: number, col: number): string {
-		return underlinedText(row, spanAt(detectedLinks.get(row), col));
+		return underlinedText(row, pressSpanAt(row, col));
 	}
 
 	const copyLink = (link: LinkTarget) => {
@@ -2011,6 +2038,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const found = await resolveLinkAt(row, col, () => !linkController.isCurrent(gen));
 		if (found === STALE) return;
 		hoveredLink = found;
+		hoveredSignature = found ? hoverSignature(found) : "";
 		canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
 		if (currentFrame) {
 			const m = metrics();
@@ -2821,11 +2849,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		/** Buttons this canvas reported down, so their release is owed to the app. */
 		const reportedDown = new Set<number>();
 
+		/** Bumped by every press and every context menu request; a menu lookup older than the counter is stale. */
+		let pressSeq = 0;
+
 		bindings.listen(canvasRef, "mousedown", (e: MouseEvent) => {
+			pressSeq++;
 			keyInputRef.focus({ preventScroll: true });
 			{
 				const at = canvasToGrid(e);
-				const span = spanAt(detectedLinks.get(at.row), at.col);
+				const span = pressSpanAt(at.row, at.col);
 				linkPress.begin(e.button, at.row, span, underlinedText(at.row, span));
 			}
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
@@ -2838,7 +2870,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				// right-button mousedown suppresses the contextmenu event, so over a link
 				// we neither forward nor preventDefault: the app loses this one press,
 				// but the link works — UI-first (see #57). Shift bypasses reporting.
-				if (linkClaimsPress(e.button, isOverSpan(detectedLinks.get(pos.row), pos.col))) {
+				if (linkClaimsPress(e.button, pressSpanAt(pos.row, pos.col) !== undefined)) {
 					// A leftover Shift-drag selection would make the click bail as a drag.
 					if (linkPress.isClaimed() && selection.hasRange()) {
 						selection.clear();
@@ -3078,22 +3110,39 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const at = canvasToGrid(e);
 			const claimed = linkPress.release(at.row, at.col, underlinedTextAt(at.row, at.col));
 			// The first click of a double-click already opened it.
-			if (!claimed || e.detail > 1 || selection.hasRange()) return;
+			if (!claimed || e.detail > 1 || selection.hasRange()) {
+				// Only a click on something the user sees as a link is worth a line.
+				if (claimed || isOverSpan(detectedLinks.get(at.row), at.col)) {
+					appLogger.debug("terminal", "link click: not opened", {
+						row: at.row,
+						col: at.col,
+						claimed: claimed !== null,
+						detail: e.detail,
+						hasRange: selection.hasRange(),
+					});
+				}
+				return;
+			}
 			void openLinkAt(at.row, at.col);
 		});
 
 		// Right-click on a detected link → context menu (Open / Copy link).
 		// Only when the click lands on a link span; elsewhere the default is left alone.
 		bindings.listen(canvasRef, "contextmenu", async (e: MouseEvent) => {
+			// Any menu request retires a pending lookup, also one off every link (Menu key, Shift+F10).
+			const seq = ++pressSeq;
 			const pos = canvasToGrid(e);
-			if (!isOverSpan(detectedLinks.get(pos.row), pos.col)) return;
+			if (!pressSpanAt(pos.row, pos.col)) return;
 			e.preventDefault();
 			// Stop the App-level terminal context menu (#terminal-panes onContextMenu)
 			// from also opening and covering our Open/Copy-link menu.
 			e.stopPropagation();
-			await checkLinksAtRow(pos.row, pos.col);
-			if (!hoveredLink) return;
-			setLinkMenuTarget({ path: hoveredLink.path, line: hoveredLink.line, col: hoveredLink.col });
+			// Suppression is synchronous; the target is resolved again here, so a link whose
+			// hyperlink changed or vanished under the same text opens what is there now, or no menu.
+			// The lookup's own answer, never the shared hover: a newer probe for another cell owns that.
+			const link = await resolveLinkAt(pos.row, pos.col, () => !alive || pressSeq !== seq);
+			if (!link || link === STALE || !linkCovers(link, pos.row, pos.col)) return;
+			setLinkMenuTarget({ path: link.path, line: link.line, col: link.col });
 			linkMenu.openAt(e.clientX, e.clientY);
 		});
 
