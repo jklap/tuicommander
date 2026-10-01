@@ -482,15 +482,20 @@ pub(super) async fn remove_orphan_worktree_http(
     let safe_only = body.safe_only;
     let confirmed_sessions = body.confirmed_sessions.clone();
     let guard_state = state.clone();
+    // A refused guard is the caller's to act on (400); a removal that fails
+    // after the guard keeps its old mapping.
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::validate_worktree_path(&repo_path, &worktree_path)?;
-        crate::worktree::orphan_removal_guard(
-            &guard_state,
-            &repo_path,
-            &worktree_path,
-            safe_only,
-            &confirmed_sessions,
-        )?;
+        crate::worktree::validate_worktree_path(&repo_path, &worktree_path)
+            .and_then(|()| {
+                crate::worktree::orphan_removal_guard(
+                    &guard_state,
+                    &repo_path,
+                    &worktree_path,
+                    safe_only,
+                    &confirmed_sessions,
+                )
+            })
+            .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
         let worktree = crate::state::WorktreeInfo {
             name: std::path::Path::new(&worktree_path)
                 .file_name()
@@ -500,7 +505,14 @@ pub(super) async fn remove_orphan_worktree_http(
             branch: None,
             base_repo: std::path::PathBuf::from(&repo_path),
         };
-        tuic_git::worktree::remove_orphan_worktree_internal(&worktree)
+        tuic_git::worktree::remove_orphan_worktree_internal(&worktree).map_err(|error| {
+            let status = if safe_only {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, error)
+        })
     })
     .await;
     match result {
@@ -508,12 +520,9 @@ pub(super) async fn remove_orphan_worktree_http(
             state.invalidate_repo_caches(&body.repo_path);
             (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
         }
-        Ok(Err(e)) if safe_only => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
-        )
-            .into_response(),
-        Ok(Err(e)) => err_500(&e),
+        Ok(Err((status, error))) => {
+            (status, Json(serde_json::json!({"error": error}))).into_response()
+        }
         Err(e) => err_500(&format!("task panic: {e}")),
     }
 }
