@@ -217,6 +217,43 @@ pub(crate) fn maps(state: &Arc<AppState>) -> Vec<MapReport> {
     out
 }
 
+/// Holders that keep memory outside `AppState` and mostly outside the malloc
+/// heap, so neither `maps` nor `malloc_bytes_in_use` can show them. Reported
+/// apart from `accounted_bytes`: adding them there would break the comparison
+/// with the heap.
+#[cfg(feature = "desktop")]
+pub(crate) fn model_holders(dictation: &crate::dictation::DictationState) -> Vec<MapReport> {
+    use crate::dictation::model;
+    if dictation.transcriber_arc.lock().is_none() {
+        return Vec::new();
+    }
+    // The weights are read whole into memory, so the file size is the holder's
+    // size (measured 2026-09-29: 1548.7 MiB mapped against a 1549.3 MiB file).
+    let bytes = dictation
+        .active_model
+        .lock()
+        .as_deref()
+        .and_then(model::WhisperModel::from_name)
+        .and_then(|m| std::fs::metadata(model::model_path(m)).ok())
+        .map_or(0, |meta| meta.len() as usize);
+    vec![MapReport::measured("dictation.whisper_model", 1, bytes)]
+}
+
+/// [`model_holders`] for the running app; empty where there is no dictation.
+fn holders(state: &Arc<AppState>) -> Vec<MapReport> {
+    #[cfg(feature = "desktop")]
+    {
+        use tauri::Manager;
+        if let Some(app) = state.app_handle.read().as_ref()
+            && let Some(dictation) = app.try_state::<crate::dictation::DictationState>()
+        {
+            return model_holders(&dictation);
+        }
+    }
+    let _ = state;
+    Vec::new()
+}
+
 /// The whole report, as the endpoint returns it.
 pub(crate) fn report(state: &Arc<AppState>) -> serde_json::Value {
     let maps = maps(state);
@@ -234,6 +271,9 @@ pub(crate) fn report(state: &Arc<AppState>) -> serde_json::Value {
         "malloc_blocks_in_use": blocks,
         "malloc_bytes_in_use": heap_bytes,
         "maps": maps,
+        // Memory held outside `maps` and outside the malloc heap (a loaded
+        // model). Not part of `accounted_bytes`, which is compared to the heap.
+        "holders": holders(state),
     })
 }
 
@@ -249,6 +289,52 @@ mod tests {
             maps.iter().all(|m| m.entries == 0),
             "a fresh AppState holds nothing: {maps:?}"
         );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn a_loaded_whisper_model_is_named_with_its_size_and_an_unloaded_one_is_absent() {
+        // 2026-09-29: a 1.5 GiB model was resident and no report row named it;
+        // 652 MB of the heap and all of the model were unexplained.
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let model = tuic_dictation::model::WhisperModel::from_name("large-v3-turbo").unwrap();
+        std::fs::create_dir_all(tuic_dictation::model::models_dir()).unwrap();
+        std::fs::write(tuic_dictation::model::model_path(model), vec![0u8; 4096]).unwrap();
+
+        let dictation = crate::dictation::DictationState::new();
+        assert!(model_holders(&dictation).is_empty(), "nothing loaded yet");
+
+        dictation.install_transcriber_locked(
+            &mut dictation.transcriber_arc.lock(),
+            &mut dictation.active_model.lock(),
+            Arc::new(NoopTranscriber),
+            "large-v3-turbo",
+        );
+        let holders = model_holders(&dictation);
+        assert_eq!(holders.len(), 1, "{holders:?}");
+        assert_eq!(holders[0].name, "dictation.whisper_model");
+        assert_eq!(holders[0].entries, 1);
+        assert_eq!(holders[0].bytes, Some(4096), "the size of the loaded file");
+    }
+
+    #[cfg(feature = "desktop")]
+    struct NoopTranscriber;
+
+    #[cfg(feature = "desktop")]
+    impl crate::dictation::transcribe::Transcriber for NoopTranscriber {
+        fn transcribe(
+            &self,
+            _audio: &[f32],
+            _language: Option<&str>,
+            _gates: crate::dictation::transcribe::VoiceGates,
+        ) -> Result<crate::dictation::transcribe::TranscribeResult, String> {
+            Ok(crate::dictation::transcribe::TranscribeResult {
+                text: String::new(),
+                skip_reason: None,
+                language: None,
+            })
+        }
     }
 
     #[test]

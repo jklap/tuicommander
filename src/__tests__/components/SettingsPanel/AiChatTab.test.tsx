@@ -4,6 +4,7 @@ import "../../mocks/tauri";
 
 import { AiChatTab } from "../../../components/SettingsPanel/tabs/AiChatTab";
 import type { EgoCliClient } from "../../../services/egoCli";
+import { HttpRpcError } from "../../../transport";
 import type { EgoCliError, EgoProvider, EgoProviders } from "../../../types/ego";
 
 /** The projection `ego_cli.rs` sends, with only the parts a case cares about. */
@@ -204,6 +205,49 @@ describe("AiChatTab", () => {
 		expect(screen.queryByText(/Name the ego binary/)).toBeNull();
 	});
 
+	// Catches: isEgoCliError rejecting the HttpRpcError transport.ts throws, so the browser falls back to the raw error string.
+	it("shows the designed message when the HTTP transport carries a notConfigured error", async () => {
+		const body = JSON.stringify(failure({ code: "notConfigured", message: "no ego executable is configured" }));
+		const client = fakeClient({
+			providers: async () => {
+				throw new HttpRpcError("ego_providers", 409, body);
+			},
+		});
+
+		render(() => <AiChatTab client={client} />);
+
+		expect(await screen.findByText(/Name the ego binary in Settings → General/)).toBeTruthy();
+		expect(screen.queryByText(/HttpRpcError/)).toBeNull();
+	});
+
+	// Catches: the launchFailed branch missing the OS text when the failure arrives over HTTP.
+	it("shows the launch failure and the OS text when the HTTP transport carries launchFailed", async () => {
+		const body = JSON.stringify(failure({ code: "launchFailed", message: "no such file or directory (os error 2)" }));
+		const client = fakeClient({
+			providers: async () => {
+				throw new HttpRpcError("ego_providers", 424, body);
+			},
+		});
+
+		render(() => <AiChatTab client={client} />);
+
+		expect(await screen.findByText(/could not be started\. Check the path in Settings → General/)).toBeTruthy();
+		expect(screen.getByText(/os error 2/)).toBeTruthy();
+	});
+
+	// Catches: an unrelated HTTP failure (no ego body) being dressed up as an ego refusal.
+	it("keeps the raw error for an HTTP failure whose body is not an ego error", async () => {
+		const client = fakeClient({
+			providers: async () => {
+				throw new HttpRpcError("ego_providers", 500, "boom");
+			},
+		});
+
+		render(() => <AiChatTab client={client} />);
+
+		expect(await screen.findByText(/RPC ego_providers failed: 500 boom/)).toBeTruthy();
+	});
+
 	it("reports a failure with what ego printed", async () => {
 		const client = fakeClient({
 			providers: async () => {
@@ -277,6 +321,77 @@ describe("AiChatTab", () => {
 
 		expect(await screen.findByText(/the window has gone away/)).toBeTruthy();
 		expect(screen.queryByText(/Name the ego binary/)).toBeNull();
+	});
+});
+
+describe("AiChatTab — interactive login", () => {
+	function twoProviders() {
+		return fakeClient({
+			providers: async () =>
+				snapshot([
+					provider("anthropic", [], { state: "missing" }),
+					provider("kimi-coding", [], { state: "stored", detail: "" }),
+				]),
+		});
+	}
+
+	it("offers a Login action for each provider, named after it", async () => {
+		render(() => <AiChatTab client={twoProviders()} startLogin={vi.fn()} />);
+
+		expect(await screen.findByRole("button", { name: "Login to anthropic" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Login to kimi-coding" })).toBeTruthy();
+	});
+
+	it("starts the login for the clicked provider only, then leaves Settings for the terminal", async () => {
+		const startLogin = vi.fn();
+		const onClose = vi.fn();
+		render(() => <AiChatTab client={twoProviders()} startLogin={startLogin} onClose={onClose} />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Login to kimi-coding" }));
+
+		expect(startLogin).toHaveBeenCalledTimes(1);
+		expect(startLogin.mock.calls[0][0]).toBe("kimi-coding");
+		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+
+	it("asks ego doctor again when the login command has exited, without reaching the network", async () => {
+		const refreshes: boolean[] = [];
+		const client = fakeClient({
+			providers: async (refresh: boolean) => {
+				refreshes.push(refresh);
+				return snapshot([provider("anthropic", [], { state: "missing" })]);
+			},
+		});
+		let finished = () => {};
+		render(() => (
+			<AiChatTab
+				client={client}
+				startLogin={(_provider, onExit) => {
+					finished = onExit;
+					return "term-1";
+				}}
+			/>
+		));
+		fireEvent.click(await screen.findByRole("button", { name: "Login to anthropic" }));
+		expect(refreshes).toEqual([false]);
+
+		finished();
+		await Promise.resolve();
+
+		expect(refreshes).toEqual([false, false]);
+	});
+
+	it("says why nothing started when the login cannot be opened", async () => {
+		const onClose = vi.fn();
+		const startLogin = vi.fn(() => {
+			throw new Error("The ego executable is not configured (Settings → General).");
+		});
+		render(() => <AiChatTab client={twoProviders()} startLogin={startLogin} onClose={onClose} />);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Login to anthropic" }));
+
+		expect(await screen.findByText(/ego executable is not configured/)).toBeTruthy();
+		expect(onClose).not.toHaveBeenCalled();
 	});
 });
 

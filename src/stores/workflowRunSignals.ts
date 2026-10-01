@@ -17,8 +17,16 @@ export const workflowRunSignals = {
 		const { payload, repo_path: project } = wake;
 		if (typeof payload !== "object" || payload === null || !("runId" in payload) || !("sequence" in payload)) return;
 		const { runId, sequence } = payload;
-		if (typeof project !== "string" || !project || typeof runId !== "string" || !runId ||
-			typeof sequence !== "number" || !Number.isSafeInteger(sequence) || sequence < 1) return;
+		if (
+			typeof project !== "string" ||
+			!project ||
+			typeof runId !== "string" ||
+			!runId ||
+			typeof sequence !== "number" ||
+			!Number.isSafeInteger(sequence) ||
+			sequence < 1
+		)
+			return;
 		const runKey = key(project, runId);
 		setSequences((current) => ({ ...current, [runKey]: Math.max(current[runKey] ?? 0, sequence) }));
 	},

@@ -33,6 +33,8 @@ import e from "../shared/editor-header.module.css";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
 import { ContentRenderer } from "../ui/ContentRenderer";
 import { CommentOverlay } from "./CommentOverlay";
+import { LiveMarkdownEditor } from "./LiveMarkdownEditor";
+import { liveModeSupported } from "./liveMarkdown";
 import s from "./MarkdownTab.module.css";
 
 export interface MarkdownTabProps {
@@ -65,8 +67,8 @@ type MarkdownLinkTarget =
 			open_path: string;
 			is_directory: boolean;
 			same_document: boolean;
-			anchor?: string;
-			line?: number;
+			anchor?: string | null;
+			line?: number | null;
 	  }
 	| { kind: "missing"; path: string }
 	| { kind: "blocked"; reason: string };
@@ -96,6 +98,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const [overviewFractions, setOverviewFractions] = createSignal<number[]>([]);
 	const [selectedAgentSession, setSelectedAgentSession] = createSignal("");
 	const [sendingChanges, setSendingChanges] = createSignal(false);
+	// True once this tab wrote the file (checkbox, tweak, live edit) and no agent has been told yet.
+	const [editedSinceSend, setEditedSinceSend] = createSignal(false);
 	const [scrollEl, setScrollEl] = createSignal<HTMLElement>();
 	const repo = useRepository();
 	const pty = usePty();
@@ -358,7 +362,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				toastsStore.add("Could not open link", resolved.reason, "error");
 				return;
 			}
-			if (resolved.anchor && resolved.same_document && resolved.line === undefined) {
+			if (resolved.anchor && resolved.same_document && resolved.line == null) {
 				scrollToHeading(resolved.anchor);
 				return;
 			}
@@ -400,6 +404,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				return false;
 			}
 			setContent(updatedContent);
+			setEditedSinceSend(true);
 			return true;
 		} catch (err) {
 			appLogger.error("app", "writeTweakedSource: write failed", err);
@@ -478,6 +483,15 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		}
 	};
 
+	const [liveMode, setLiveMode] = createSignal(false);
+	const [liveDirty, setLiveDirty] = createSignal(false);
+	const liveAvailable = () => props.tab.type === "file" && liveModeSupported(content());
+	const toggleLive = () => {
+		if (liveMode() && liveDirty() && !window.confirm(t("markdownTab.liveDiscard", "Discard unsaved changes?"))) return;
+		setLiveDirty(false);
+		setLiveMode(!liveMode());
+	};
+
 	const handleEdit = () => {
 		const tab = props.tab;
 		if (tab.type === "file") {
@@ -512,6 +526,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	};
 
 	const reviewComments = createMemo(() => parseTweakComments(content()));
+	const hasReviewChanges = () => reviewComments().length > 0 || editedSinceSend();
 	const reviewAgents = createMemo(() => {
 		const tab = props.tab;
 		if (tab.type !== "file") return [];
@@ -534,14 +549,17 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		const sessionId = selectedAgentSession();
 		const path = fullPath()?.replace(/[\r\n\0]/g, "");
 		const count = reviewComments().length;
-		if (!sessionId || !path || count === 0 || sendingChanges()) return;
+		if (!sessionId || !path || !hasReviewChanges() || sendingChanges()) return;
 		setSendingChanges(true);
 		try {
 			const noun = count === 1 ? "comment" : "comments";
+			const tweaks = count > 0 ? `apply the ${count} embedded tweak review ${noun}, ` : "";
+			const cleanup = count > 0 ? "remove each resolved tweak marker, and leave" : "and leave";
 			const outcome = await pty.enqueueCommand(
 				sessionId,
-				`Open ${path}, re-read the whole file: apply the ${count} embedded tweak review ${noun}, treat every other change since your last write (checkbox toggles, edited text) as the user's answer, remove each resolved tweak marker, and leave unrelated files unchanged.`,
+				`Open ${path}, re-read the whole file: ${tweaks}treat every other change since your last write (checkbox toggles, edited text) as the user's answer, ${cleanup} unrelated files unchanged.`,
 			);
+			setEditedSinceSend(false);
 			const terminalId = terminalsStore.findBySessionId(sessionId);
 			if (terminalId) terminalsStore.update(terminalId, { queuedCommands: outcome.queued });
 			toastsStore.add(
@@ -585,6 +603,23 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 						</svg>
 						{t("markdownTab.editBtn", "Edit")}
 					</button>
+					<button
+						class={e.btn}
+						classList={{ [e.active]: liveMode() }}
+						disabled={!liveMode() && !liveAvailable()}
+						onClick={toggleLive}
+						title={
+							liveAvailable() || liveMode()
+								? t("markdownTab.live", "Live edit: click a block to edit its source")
+								: t(
+										"markdownTab.liveUnavailable",
+										"Live edit needs LF or CRLF line endings throughout and a file under 500 KB",
+									)
+						}
+					>
+						{t("markdownTab.liveBtn", "Live")}
+						<Show when={liveDirty()}> ●</Show>
+					</button>
 					<Show when={(props.tab as FileTab).repoPath}>
 						<button
 							class={e.btn}
@@ -608,7 +643,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 							{t("markdownTab.diffBtn", "Diff")}
 						</button>
 					</Show>
-					<Show when={reviewComments().length > 0}>
+					<Show when={hasReviewChanges()}>
 						<div class={s.agentActions}>
 							<label class={s.agentLabel} for={`review-agent-${props.tab.id}`}>
 								{t("markdownTab.agentLabel", "Agent")}
@@ -654,37 +689,60 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				matchCount={matchCount()}
 			/>
 
-			<div class={s.content} ref={(el) => setScrollEl(el)}>
-				<Show when={searchVisible()}>
-					<DomSearchOverview scrollEl={scrollEl} fractions={overviewFractions} />
-				</Show>
-				<ContentRenderer
+			<Show
+				when={liveMode()}
+				fallback={
+					<div class={s.content} ref={(el) => setScrollEl(el)}>
+						<Show when={searchVisible()}>
+							<DomSearchOverview scrollEl={scrollEl} fractions={overviewFractions} />
+						</Show>
+						<ContentRenderer
+							content={content()}
+							commentableBlocks={props.tab.type === "file"}
+							baseDir={baseDir()}
+							onLinkClick={props.tab.type === "file" ? (href) => void handleMdLink(href) : undefined}
+							onCheckboxToggle={(idx, mark, col) => {
+								void handleCheckboxToggle(idx, mark, col);
+							}}
+							contentRef={(el) => {
+								contentRef = el;
+								setOverlayContentEl(el);
+							}}
+							fontSize={props.tab.fontSize}
+							emptyMessage={
+								loading()
+									? t("markdownTab.loading", "Loading...")
+									: error()
+										? `${t("markdownTab.error", "Error:")} ${error()}`
+										: t("markdownTab.noContent", "No content")
+							}
+						/>
+					</div>
+				}
+			>
+				<LiveMarkdownEditor
 					content={content()}
-					commentableBlocks={props.tab.type === "file"}
+					onSave={writeTweakedSource}
+					readDisk={() => {
+						const ft = props.tab as FileTab;
+						return readFileContent(ft.fsRoot || ft.repoPath, ft.filePath);
+					}}
+					onDirtyChange={setLiveDirty}
 					baseDir={baseDir()}
 					onLinkClick={props.tab.type === "file" ? (href) => void handleMdLink(href) : undefined}
-					onCheckboxToggle={(idx, mark, col) => {
-						void handleCheckboxToggle(idx, mark, col);
-					}}
-					contentRef={(el) => {
-						contentRef = el;
-						setOverlayContentEl(el);
-					}}
 					fontSize={props.tab.fontSize}
-					emptyMessage={
-						loading()
-							? t("markdownTab.loading", "Loading...")
-							: error()
-								? `${t("markdownTab.error", "Error:")} ${error()}`
-								: t("markdownTab.noContent", "No content")
-					}
 				/>
-			</div>
+			</Show>
 
 			{/* Mount CommentOverlay ONLY for the active file tab — otherwise every
           open markdown tab would attach its own selectionchange listener and
           they'd all fire on every cursor move across the app. */}
-			<Show when={props.tab.type === "file" && mdTabsStore.state.activeId === props.tab.id && overlayContentEl()} keyed>
+			<Show
+				when={
+					!liveMode() && props.tab.type === "file" && mdTabsStore.state.activeId === props.tab.id && overlayContentEl()
+				}
+				keyed
+			>
 				{(el) => (
 					<CommentOverlay
 						contentRef={el}

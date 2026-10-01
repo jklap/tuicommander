@@ -128,6 +128,7 @@ beforeEach(() => {
 // The view-mode toggle persists prefs on a 500 ms debounce; let that timer fire
 // before teardown so it does not leak into the next test file.
 afterEach(async () => {
+	vi.unstubAllGlobals();
 	setBrowserMode(false);
 	uiStore.setFileBrowserViewMode("flat");
 	await new Promise((resolve) => setTimeout(resolve, 600));
@@ -501,5 +502,137 @@ describe("FileBrowserPanel create file", () => {
 		await waitFor(() =>
 			expect(mockInvoke).toHaveBeenCalledWith("write_file", { repoPath: "/repo", file: ".env", content: "" }),
 		);
+	});
+});
+
+describe("FileBrowserPanel external root (#1207-efd4)", () => {
+	afterEach(() => uiStore.setFileBrowserExternalRoot(null));
+
+	it("returns to the active repository when the repository changes", async () => {
+		listings.set("/repoA|.", [file("a.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		listings.set("/repoB|.", [file("b.txt")]);
+
+		const [repoPath, setRepoPath] = createSignal("/repoA");
+		const { queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath={repoPath()} onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("a.txt")).not.toBeNull());
+
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+
+		setRepoPath("/repoB");
+		await waitFor(() => expect(queryByText("b.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBeNull();
+		expect(queryByText("outside.txt")).toBeNull();
+	});
+
+	it("returns to the active worktree when only the worktree changes", async () => {
+		listings.set("/repo/wt1|.", [file("one.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		listings.set("/repo/wt2|.", [file("two.txt")]);
+
+		const [fsRoot, setFsRoot] = createSignal("/repo/wt1");
+		const { queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" fsRoot={fsRoot()} onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("one.txt")).not.toBeNull());
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+
+		setFsRoot("/repo/wt2");
+		await waitFor(() => expect(queryByText("two.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBeNull();
+	});
+
+	it("shows the external path with a control that returns to the repository", async () => {
+		listings.set("/repo|.", [file("in-repo.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		const { queryByText, getByTitle } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("in-repo.txt")).not.toBeNull());
+		expect(document.querySelector('[data-testid="external-root-banner"]')).toBeNull();
+
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+		expect(document.querySelector('[data-testid="external-root-banner"]')?.textContent).toContain("/outside");
+
+		fireEvent.click(getByTitle("Back to the active repository"));
+		await waitFor(() => expect(queryByText("in-repo.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBeNull();
+	});
+
+	it("keeps the external folder while the repository stays the same", async () => {
+		listings.set("/repo|.", [file("in-repo.txt")]);
+		listings.set("/outside|.", [file("outside.txt")]);
+		const { queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("in-repo.txt")).not.toBeNull());
+		uiStore.setFileBrowserExternalRoot("/outside");
+		await waitFor(() => expect(queryByText("outside.txt")).not.toBeNull());
+		expect(uiStore.state.fileBrowserExternalRoot).toBe("/outside");
+	});
+});
+
+describe("FileBrowserPanel pointer drag (#1329-a31a)", () => {
+	const pointer = (type: string, pointerType: string, x: number, y: number) =>
+		new PointerEvent(type, {
+			bubbles: true,
+			cancelable: true,
+			button: 0,
+			pointerId: 1,
+			pointerType,
+			clientX: x,
+			clientY: y,
+		});
+
+	const renameCalls = () => mockInvoke.mock.calls.filter(([cmd]) => cmd === "rename_path");
+
+	/** Press on `file`, optionally hold, move past the drag threshold and release over the `dir` row. */
+	const dragFileOntoDir = async (pointerType: string, holdMs = 0) => {
+		listings.set("/repo|.", [dir("docs"), file("a.txt")]);
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("a.txt")).not.toBeNull());
+		const rows = Array.from(container.querySelectorAll(".entry")) as HTMLElement[];
+		const fileRow = rows.find((r) => r.textContent?.includes("a.txt")) as HTMLElement;
+		const dirRow = rows.find((r) => r.dataset.dropTarget === "folder") as HTMLElement;
+		const original = document.elementFromPoint;
+		document.elementFromPoint = () => dirRow;
+		try {
+			fileRow.dispatchEvent(pointer("pointerdown", pointerType, 50, 50));
+			if (holdMs) await new Promise((resolve) => setTimeout(resolve, holdMs));
+			document.dispatchEvent(pointer("pointermove", pointerType, 50, 20));
+			document.dispatchEvent(pointer("pointerup", pointerType, 50, 10));
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		} finally {
+			document.elementFromPoint = original;
+		}
+	};
+
+	// Catches: a swipe that outruns pointercancel dropping the file onto a folder
+	// (an irreversible move started by a scroll gesture).
+	it.each(["touch", "pen"])("never moves a file when a %s swipe ends over a folder", async (pointerType) => {
+		vi.stubGlobal("matchMedia", () => ({ matches: false }));
+		await dragFileOntoDir(pointerType);
+		expect(renameCalls()).toHaveLength(0);
+	});
+
+	// Catches: removing touch file move instead of arming it with a long press.
+	it("moves a file when a touch long press is dragged onto a folder", async () => {
+		await dragFileOntoDir("touch", 450);
+		expect(renameCalls()).toHaveLength(1);
+		expect(renameCalls()[0][1]).toMatchObject({ from: "a.txt", to: "docs/a.txt" });
+	});
+
+	// Guards the mouse path: drag and drop must keep moving files.
+	it("still moves a file when a mouse drag ends over a folder", async () => {
+		await dragFileOntoDir("mouse");
+		expect(renameCalls()).toHaveLength(1);
+		expect(renameCalls()[0][1]).toMatchObject({ from: "a.txt", to: "docs/a.txt" });
 	});
 });

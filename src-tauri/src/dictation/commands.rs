@@ -1434,8 +1434,12 @@ fn ensure_transcriber(
             None => tracing::info!(source = "dictation", "{loading}"),
         }
         let t = transcribe::WhisperTranscriber::load(&model::model_path(whisper_model))?;
-        *transcriber_arc_lock = Some(Arc::new(t));
-        *active_model_lock = Some(whisper_model.name().to_string());
+        dictation.install_transcriber_locked(
+            &mut transcriber_arc_lock,
+            &mut active_model_lock,
+            Arc::new(t),
+            whisper_model.name(),
+        );
         let loaded = format!("Model loaded (backend: {})", transcribe::backend_label());
         match app {
             Some(app) => app_logger::log_via_handle(app, "info", "dictation", &loaded),
@@ -2481,6 +2485,12 @@ fn dictation_config_from_value(value: serde_json::Value) -> DictationConfig {
             &object,
             "speech_levelling",
             defaults.speech_levelling,
+            &mut recovered,
+        ),
+        model_idle_unload_minutes: recovered_field(
+            &object,
+            "model_idle_unload_minutes",
+            defaults.model_idle_unload_minutes,
             &mut recovered,
         ),
         recovered_from_corruption: recovered,
@@ -3578,6 +3588,26 @@ mod tests {
         let fresh = DictationConfig::default();
         assert_eq!(config.speech_volume_db, fresh.speech_volume_db);
         assert_eq!(config.speech_levelling, fresh.speech_levelling);
+    }
+
+    #[test]
+    fn a_fresh_config_frees_the_model_after_twenty_idle_minutes() {
+        assert_eq!(DictationConfig::default().model_idle_unload_minutes, 20);
+        let stored = serde_json::json!({"enabled": true, "hotkey": "F5"});
+        assert_eq!(
+            dictation_config_from_value(stored).model_idle_unload_minutes,
+            20,
+            "a config written before the knob existed takes the default"
+        );
+    }
+
+    #[test]
+    fn an_explicit_zero_keeps_the_model_loaded_and_survives_a_read() {
+        let stored = serde_json::json!({"model_idle_unload_minutes": 0});
+        assert_eq!(
+            dictation_config_from_value(stored).model_idle_unload_minutes,
+            0
+        );
     }
 
     /// A hand-edited config can carry any number; the stage only accepts the

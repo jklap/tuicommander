@@ -877,6 +877,14 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
         .route("/audit/{id}", get(commands::get_tunnel_audit))
         .route("/ssh-hosts", get(commands::list_ssh_config_hosts))
         .route(
+            "/ssh-hosts/discovered",
+            get(commands::list_discovered_ssh_hosts_http),
+        )
+        .route(
+            "/ssh-hosts/probe",
+            post(commands::probe_discovered_host_http),
+        )
+        .route(
             "/ssh-hosts/status",
             get(commands::probe_ssh_config_hosts_http),
         )
@@ -1526,6 +1534,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/repo/github", get(github_routes::repo_github_status))
         .route("/repo/prs", get(github_routes::repo_pr_statuses))
         .route("/repo/ci", get(github_routes::repo_ci_checks))
+        .route(
+            "/repo/pr-review-threads",
+            get(github_routes::repo_pr_review_threads),
+        )
         .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
         .route("/repo/merged-prs", get(github_routes::repo_merged_prs))
         .route(
@@ -1546,6 +1558,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(github_routes::repo_conflict_assist),
         )
         .route("/repo/approve-pr", post(github_routes::repo_approve_pr))
+        .route(
+            "/repo/update-pr-branch",
+            post(github_routes::repo_update_pr_branch),
+        )
+        .route("/repo/close-pr", post(github_routes::repo_close_pr))
         .route("/repo/create-pr", post(github_routes::repo_create_pr))
         .route("/repo/create-issue", post(github_routes::repo_create_issue))
         .route(
@@ -3836,6 +3853,7 @@ mod tests {
             "/terminal/theme-colors",
             "/system/local-ip",
             "/system/home-directory",
+            "/acp/workspace",
             "/acp/connections",
             "/acp/connections/x",
             "/acp/connections/x/reconnect",
@@ -4425,6 +4443,41 @@ mod tests {
                 .is_some_and(|message| message.contains("was added concurrently"))
         );
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
+    }
+
+    /// The SSH host and agent-key listings disclose machine names and key
+    /// fingerprints. Catches: `tunnel_routes()` being merged outside the
+    /// Basic Auth layer so a public address reads them without credentials.
+    #[tokio::test]
+    async fn ssh_host_disclosure_routes_require_auth_from_a_public_address() {
+        let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
+        let routers = [
+            ("build_router", build_router(test_state(), true, true)),
+            ("build_remote_router", build_remote_router(test_state())),
+        ];
+        for (name, app) in routers {
+            for (method, path) in [
+                ("GET", "/tunnels/ssh-hosts"),
+                ("GET", "/tunnels/ssh-hosts/discovered"),
+                ("GET", "/tunnels/ssh-hosts/status"),
+                ("POST", "/tunnels/ssh-hosts/probe"),
+                ("GET", "/tunnels/agent-keys"),
+            ] {
+                let mut req = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap();
+                req.extensions_mut().insert(ConnectInfo(remote));
+                let response = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "{name} {path} must not answer an unauthenticated public address"
+                );
+            }
+        }
     }
 
     /// A remote client cannot put an `Authorization` header on a WebSocket
@@ -6257,6 +6310,234 @@ mod tests {
             .unwrap();
         assert_eq!(removal.status(), StatusCode::BAD_REQUEST);
         assert!(linked.exists(), "tag-only orphan must survive safe removal");
+    }
+
+    /// A clean detached checkout with a live session registered in it.
+    fn orphan_with_live_session() -> (tempfile::TempDir, std::path::PathBuf, Arc<AppState>) {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "agent-1");
+        crate::state::tests_support::set_session_cwd(&state, "agent-1", &linked.to_string_lossy());
+        state
+            .session_maps
+            .sessions
+            .get("agent-1")
+            .unwrap()
+            .lock()
+            .display_name = Some("Claude: refactor".to_string());
+        (repo, linked, state)
+    }
+
+    // Catches: a clean detached checkout reported safe (and auto-removed) while
+    // an agent session is still working inside it.
+    #[tokio::test]
+    async fn orphan_cleanup_assessment_names_live_sessions_and_is_not_safe() {
+        let (repo, linked, state) = orphan_with_live_session();
+
+        let response = build_router(state, false, true)
+            .oneshot(get_localhost(&format!(
+                "/repo/orphan-cleanup-assessment?repoPath={}",
+                repo.path().display()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        assert_eq!(rows[0]["safe"], false);
+        assert!(
+            rows[0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Claude: refactor")
+        );
+        assert_eq!(rows[0]["live_sessions"][0]["session_id"], "agent-1");
+    }
+
+    // Catches: the agent/MCP "remove" answer and the safe-only HTTP removal
+    // skipping the session registry that the assessment consults.
+    #[tokio::test]
+    async fn orphan_cleanup_answer_and_safe_removal_refuse_a_live_session() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let pending = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/repo/orphan-cleanup/begin",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "paths": [linked.display().to_string()]
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::OK);
+
+        let answer = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "orphan_cleanup_answer",
+                "path": repo.path().display().to_string(),
+                "decision": "remove"
+            }),
+        )
+        .await;
+        assert!(
+            answer["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("Claude") || error.contains("live session")),
+            "{answer}"
+        );
+
+        let removal = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": true
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(removal.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            linked.exists(),
+            "a checkout with a live session must survive"
+        );
+    }
+
+    // Catches: a confirmed (safeOnly=false) removal ignoring a session that
+    // started after the user reviewed the dialog, or refusing the sessions the
+    // user did see.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_refuses_only_sessions_the_user_did_not_see() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let remove = |sessions: serde_json::Value| {
+            mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": sessions,
+                }),
+            )
+        };
+
+        let unreviewed = build_router(state.clone(), false, true)
+            .oneshot(remove(serde_json::json!([])))
+            .await
+            .unwrap();
+        assert_eq!(unreviewed.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+
+        crate::state::tests_support::insert_dummy_session(&state, "agent-late");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "agent-late",
+            &linked.to_string_lossy(),
+        );
+        let late = build_router(state.clone(), false, true)
+            .oneshot(remove(serde_json::json!(["agent-1"])))
+            .await
+            .unwrap();
+        assert_eq!(late.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+
+        let reviewed = build_router(state, false, true)
+            .oneshot(remove(serde_json::json!(["agent-1", "agent-late"])))
+            .await
+            .unwrap();
+        assert_eq!(reviewed.status(), StatusCode::OK);
+        assert!(!linked.exists());
+    }
+
+    // Catches: a client that predates `confirmedSessions` (field absent) being treated as
+    // having reviewed every session, so its removal closes a live checkout.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_without_the_session_field_refuses_a_live_checkout() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+    }
+
+    // Catches: an id list that names sessions which do not (or no longer) live in the checkout
+    // blocking a removal that has no live session at all.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_ignores_stale_confirmed_ids() {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": ["gone-1"],
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!linked.exists());
+    }
+
+    // Catches: a path outside the repo's worktree list being refused as a server error (500)
+    // instead of 400 on the confirmed (safeOnly=false) path.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_of_an_unregistered_path_is_a_400() {
+        let (repo, _linked, state) = orphan_with_live_session();
+        let stranger = tempfile::tempdir().unwrap();
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": stranger.path().display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": [],
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(stranger.path().exists());
     }
 
     #[tokio::test]

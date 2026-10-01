@@ -2,18 +2,25 @@ use super::{
     NewPlan, NewStory, Plan, PlanSource, PlanState, PlanView, Story, StoryCommand, StoryStore,
     StoryTransition,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// One call of the story tool. Field names are snake_case here, camelCase inside `input`.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum StoryAction {
+    /// Create a plan record for a plan file (`source` is its repo-relative path).
     CreatePlan {
         title: String,
         source: String,
     },
+    /// List the plans of the calling session's project.
     ListPlans,
+    /// List the plan files found in the project that can become plans.
     ListPlanSources,
+    /// Create the plan for a plan file, deriving its title; returns the existing plan if there is one.
     AddPlanSource {
+        /// Repo-relative path from list_plan_sources.
         source: String,
     },
     GetPlan {
@@ -37,25 +44,51 @@ pub enum StoryAction {
     TransitionHistory {
         story_id: String,
     },
+    /// Make `story_id` depend on `dependency_id` (same plan, story in backlog or ready). If the
+    /// dependency is not done, a ready story moves to backlog and cannot be claimed until it is.
     AddDependency {
         story_id: String,
         dependency_id: String,
+        /// The story's current `revision`.
         expected_revision: i64,
     },
+    /// User only: an agent session is refused. Removes a cancelled (wont_fix) dependency.
     RemoveDependency {
         story_id: String,
         dependency_id: String,
+        /// The story's current `revision`.
         expected_revision: i64,
     },
+    /// Claim a ready story for the calling live session; moves it to in_progress.
     Claim {
         story_id: String,
+        /// The story's current `revision`.
         expected_revision: i64,
     },
+    /// Apply a status command. Agents may only use check_criterion, uncheck_criterion and
+    /// submit_review on their own claimed story, and approve on a story claimed by a different
+    /// session; every other command is user only.
     Transition {
         story_id: String,
+        /// The story's current `revision`.
         expected_revision: i64,
         command: StoryCommand,
     },
+}
+
+/// JSON Schema of [`StoryAction`], generated from the type so the published tool input cannot
+/// drift from what the handler deserializes. Sub-schemas are inlined: the schema is embedded
+/// under `input`, where a root-relative `$ref` would not resolve.
+pub fn story_action_schema() -> serde_json::Value {
+    let generator = schemars::generate::SchemaSettings::draft2020_12()
+        .with(|settings| settings.inline_subschemas = true)
+        .into_generator();
+    let mut schema =
+        serde_json::to_value(generator.into_root_schema_for::<StoryAction>()).unwrap_or_default();
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("$schema");
+    }
+    schema
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -421,5 +454,182 @@ mod tests {
             ),
             Err(_)
         ));
+    }
+
+    fn story_of(reply: StoryReply) -> Story {
+        let StoryReply::Story(story) = reply else {
+            panic!("expected story");
+        };
+        story
+    }
+
+    /// Two stories in one plan; the second is ready until it gains a dependency.
+    fn two_stories(project: &str) -> (Story, Story) {
+        let StoryReply::Plan(plan) = story_action(
+            project,
+            StoryAction::CreatePlan {
+                title: "Plan".into(),
+                source: "plans/feature.md".into(),
+            },
+            None,
+        )
+        .expect("plan") else {
+            panic!("expected plan");
+        };
+        let create = |title: &str| {
+            story_of(
+                story_action(
+                    project,
+                    StoryAction::CreateStory {
+                        input: NewStory {
+                            plan_id: plan.id.clone(),
+                            title: title.into(),
+                            criteria: vec!["Done".into()],
+                            priority: 1,
+                            origin: StoryOrigin::Native,
+                            file_scope: vec![],
+                        },
+                    },
+                    None,
+                )
+                .expect("story"),
+            )
+        };
+        (create("First"), create("Second"))
+    }
+
+    /// Catches: add_dependency silently moving a ready story to backlog, and a claim refusal
+    /// ("story is not ready") that leaves the agent to guess which dependency blocks it.
+    #[test]
+    fn claim_refusal_names_the_unmet_dependency_after_add_dependency_demotes_the_story() {
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir().expect("project");
+        let project = repo.path().to_str().expect("project path");
+        let (first, second) = two_stories(project);
+        assert_eq!(second.status, super::super::StoryStatus::Ready);
+
+        let demoted = story_of(
+            story_action(
+                project,
+                StoryAction::AddDependency {
+                    story_id: second.id.clone(),
+                    dependency_id: first.id.clone(),
+                    expected_revision: second.revision,
+                },
+                Some("pty-1"),
+            )
+            .expect("add dependency"),
+        );
+        assert_eq!(demoted.status, super::super::StoryStatus::Backlog);
+
+        let error = story_action(
+            project,
+            StoryAction::Claim {
+                story_id: second.id,
+                expected_revision: demoted.revision,
+            },
+            Some("pty-1"),
+        )
+        .expect_err("claim of a backlog story is refused");
+        assert!(error.contains(&first.id), "{error}");
+        assert!(error.contains("backlog"), "{error}");
+    }
+
+    /// Catches: user-only refusals that do not say the action is user-only or which command
+    /// was refused, so an agent retries instead of asking the user.
+    #[test]
+    fn agent_refusals_for_user_only_actions_name_the_action() {
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir().expect("project");
+        let project = repo.path().to_str().expect("project path");
+        let (first, second) = two_stories(project);
+
+        let removal = story_action(
+            project,
+            StoryAction::RemoveDependency {
+                story_id: second.id,
+                dependency_id: first.id.clone(),
+                expected_revision: 1,
+            },
+            Some("pty-1"),
+        )
+        .expect_err("agent removal is refused");
+        assert!(removal.contains("remove_dependency"), "{removal}");
+        assert!(removal.contains("user-only"), "{removal}");
+
+        for (command, name) in [
+            (StoryCommand::Block, "block"),
+            (StoryCommand::RejectReview, "reject_review"),
+            (StoryCommand::StartManual, "start_manual"),
+        ] {
+            let refusal = story_action(
+                project,
+                StoryAction::Transition {
+                    story_id: first.id.clone(),
+                    expected_revision: first.revision,
+                    command,
+                },
+                Some("pty-1"),
+            )
+            .expect_err("agent refusal");
+            assert!(refusal.contains(name), "{refusal}");
+            assert!(refusal.contains("user-only"), "{refusal}");
+        }
+
+        // Approve is not user-only: a reviewer session may approve a story it did not claim,
+        // but the implementer is refused with the cause named.
+        let claimed = story_of(
+            story_action(
+                project,
+                StoryAction::Claim {
+                    story_id: first.id.clone(),
+                    expected_revision: first.revision,
+                },
+                Some("pty-1"),
+            )
+            .expect("claim"),
+        );
+        let approval = story_action(
+            project,
+            StoryAction::Transition {
+                story_id: claimed.id,
+                expected_revision: claimed.revision,
+                command: StoryCommand::Approve,
+            },
+            Some("pty-1"),
+        )
+        .expect_err("implementer approval is refused");
+        assert!(approval.contains("implementer"), "{approval}");
+    }
+
+    /// Catches: a schema that stays `{"type":"object"}` (fields learned one error at a time),
+    /// and root-relative `$ref`s that no longer resolve once the schema is nested under `input`.
+    #[test]
+    fn published_schema_describes_create_story_without_references() {
+        let schema = story_action_schema();
+        let text = schema.to_string();
+        assert!(
+            !text.contains("$ref"),
+            "sub-schemas must be inlined: {text}"
+        );
+        let create = schema["oneOf"]
+            .as_array()
+            .expect("one schema per action")
+            .iter()
+            .find(|variant| variant["properties"]["action"]["const"] == "create_story")
+            .expect("create_story is published");
+        let input = &create["properties"]["input"];
+        assert_eq!(input["properties"]["priority"]["minimum"], 1);
+        assert_eq!(input["properties"]["priority"]["maximum"], 3);
+        assert!(input["properties"]["planId"].is_object(), "{input}");
+        assert!(input["properties"]["fileScope"].is_object(), "{input}");
+        assert!(
+            input["properties"]["origin"]
+                .to_string()
+                .contains("plan_step"),
+            "the origin tag shape must be published: {input}"
+        );
     }
 }

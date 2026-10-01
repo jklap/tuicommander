@@ -24,6 +24,7 @@ import { type AcpTranscriptEntry, acpTranscript } from "../../stores/acpTranscri
 import { aiChatTabs } from "../../stores/aiChatTabs";
 import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
+import { toastsStore } from "../../stores/toasts";
 import type {
 	AcpAttachmentSnapshot,
 	AcpClientError,
@@ -46,7 +47,7 @@ let binding: { connectionId: AcpConnectionId; sessionId: AcpSessionId | null } |
 /** The start in flight, so a second send while ego launches waits for it. */
 let starting: Promise<Started | null> | null = null;
 
-/** Where every chat runs, resolved once from the home directory. */
+/** Where every chat runs, asked of the backend once. */
 let workspaceRoot: Promise<string> | null = null;
 
 /** Tabs are one list for the app, not one per repository. */
@@ -76,17 +77,13 @@ export function resetAcpChatBindings(): void {
 	refused.clear();
 }
 
-/** `~/Gits`, the root every chat session runs in. */
+/** The root every chat session runs in, as the backend resolves it from the
+ *  `ai_chat_workspace` setting. */
 function chatRoot(): Promise<string> {
-	workspaceRoot ??= invoke<string>("get_home_directory")
-		.then((home) => {
-			const separator = home.includes("\\") && !home.includes("/") ? "\\" : "/";
-			return `${home.replace(/[/\\]+$/, "")}${separator}Gits`;
-		})
-		.catch((failure: unknown) => {
-			workspaceRoot = null;
-			throw failure;
-		});
+	workspaceRoot ??= invoke<string>("acp_workspace_root").catch((failure: unknown) => {
+		workspaceRoot = null;
+		throw failure;
+	});
 	return workspaceRoot;
 }
 
@@ -154,6 +151,21 @@ export function createAcpChat(
 			cursor = page.nextCursor || undefined;
 		} while (cursor);
 		setListedSessions(rows.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")));
+	}
+
+	/** Show a tab or listed session. Only one not already attached needs a
+	 *  replay, and only while ego runs: before that, the first message loads it. */
+	async function selectSession(session: AcpSessionId): Promise<void> {
+		if (session === sessionId()) return;
+		const id = connectionId();
+		const target = root();
+		if (id && target && !acpStore.attachment(id, session)) {
+			if (!(await replay("loading conversation", id, session, target, true))) return;
+		}
+		if (binding) binding.sessionId = session;
+		aiChatTabs.add(TABS, session);
+		setSessionId(session);
+		await guard("saving conversation", () => remember(session));
 	}
 
 	/** Run one action, holding what it refused rather than throwing at the panel. */
@@ -426,7 +438,16 @@ export function createAcpChat(
 		async compact(): Promise<void> {
 			const current = pair();
 			if (!current) return;
-			await guard("compacting the conversation", () => client.compact(current.id, current.session));
+			const compacted = await guard("compacting the conversation", () => client.compact(current.id, current.session));
+			if (compacted === null) return;
+			// ego continues the conversation in a new session. Without opening it the
+			// button appeared to do nothing: the source tab stayed exactly as it was.
+			if (compacted.publication.kind === "not_published") {
+				setError(`Compaction was not published: ${compacted.publication.diagnostic}`);
+				return;
+			}
+			toastsStore.add("Conversation compacted", "Continuing in the compacted conversation", "info");
+			await selectSession(compacted.targetSessionId);
 		},
 
 		async setOption(configId: string, value: AcpSessionConfigOptionValue): Promise<void> {
@@ -473,20 +494,7 @@ export function createAcpChat(
 			if (connection()?.capabilities?.list) await guard("listing conversations", () => refreshSessions(id, target));
 		},
 
-		/** Show a tab or listed session. Only one not already attached needs a
-		 *  replay, and only while ego runs: before that, the first message loads it. */
-		async selectSession(session: AcpSessionId): Promise<void> {
-			if (session === sessionId()) return;
-			const id = connectionId();
-			const target = root();
-			if (id && target && !acpStore.attachment(id, session)) {
-				if (!(await replay("loading conversation", id, session, target, true))) return;
-			}
-			if (binding) binding.sessionId = session;
-			aiChatTabs.add(TABS, session);
-			setSessionId(session);
-			await guard("saving conversation", () => remember(session));
-		},
+		selectSession,
 
 		/**
 		 * Replace the process and pick the conversation back up.

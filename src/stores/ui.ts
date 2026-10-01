@@ -2,6 +2,7 @@ import { batch } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
+import { isSidebarDensityMode, nextSidebarDensityMode, type SidebarDensityMode } from "../utils/sidebarDensity";
 import { appLogger } from "./appLogger";
 
 const LEGACY_SIDEBAR_VISIBLE_KEY = "tui-commander-sidebar-visible";
@@ -57,6 +58,9 @@ interface UIStoreState {
 	// Sidebar width
 	sidebarWidth: number;
 
+	/** Sidebar row density: auto (rich for a short list or a coarse pointer), compact or rich (forced). Persisted. */
+	sidebarDensityMode: SidebarDensityMode;
+
 	// Panel visibility
 	markdownPanelVisible: boolean;
 	ideasPanelVisible: boolean;
@@ -66,6 +70,8 @@ interface UIStoreState {
 	outlinePanelVisible: boolean;
 	referencesPanelVisible: boolean;
 	aiChatPanelVisible: boolean;
+	/** Rendered width of the docked AI Chat panel; 0 when closed or detached. Not persisted. */
+	aiChatPanelMeasuredWidth: number;
 	detachedPanels: Record<string, string>;
 
 	/** Collapsed state of the GitHub panel sections, keyed by section id
@@ -123,6 +129,7 @@ function createUIStore() {
 		focusMode: false,
 		repoFilterActiveOnly: false,
 		sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+		sidebarDensityMode: "auto" as SidebarDensityMode,
 		markdownPanelVisible: false,
 		ideasPanelVisible: false,
 		fileBrowserPanelVisible: false,
@@ -130,6 +137,7 @@ function createUIStore() {
 		outlinePanelVisible: false,
 		referencesPanelVisible: false,
 		aiChatPanelVisible: false,
+		aiChatPanelMeasuredWidth: 0,
 		detachedPanels: {} as Record<string, string>,
 		githubSectionCollapsed: {} as Record<string, boolean>,
 		gitPanelRequestedTab: null,
@@ -189,6 +197,7 @@ function createUIStore() {
 			.save({
 				sidebar_visible: state.sidebarVisible,
 				sidebar_width: state.sidebarWidth,
+				sidebar_density: state.sidebarDensityMode,
 				...panelVisibility,
 				settings_nav_width: state.settingsNavWidth,
 				settings_expert_mode: state.settingsExpertMode,
@@ -235,6 +244,7 @@ function createUIStore() {
 					{
 						sidebar_visible?: boolean;
 						sidebar_width?: number;
+						sidebar_density?: string;
 						settings_nav_width?: number;
 						settings_expert_mode?: boolean;
 						diff_view_mode?: string;
@@ -250,6 +260,9 @@ function createUIStore() {
 					}
 					if (loaded.sidebar_width !== undefined) {
 						setState("sidebarWidth", clampWidth(loaded.sidebar_width));
+					}
+					if (isSidebarDensityMode(loaded.sidebar_density)) {
+						setState("sidebarDensityMode", loaded.sidebar_density);
 					}
 					for (const { stateKey, backendKey } of exclusivePanelPrefs) {
 						const value = loaded[backendKey];
@@ -283,6 +296,12 @@ function createUIStore() {
 			} catch (err) {
 				appLogger.debug("store", "Failed to hydrate UI prefs", err);
 			}
+		},
+
+		// Sidebar density
+		cycleSidebarDensityMode(): void {
+			setState("sidebarDensityMode", nextSidebarDensityMode);
+			saveUIPrefs();
 		},
 
 		// Diff view mode
@@ -394,6 +413,10 @@ function createUIStore() {
 
 		toggleAiChatPanel(): void {
 			setExclusivePanel("aiChatPanelVisible", !state.aiChatPanelVisible);
+		},
+
+		setAiChatPanelMeasuredWidth(width: number): void {
+			setState("aiChatPanelMeasuredWidth", width);
 		},
 
 		setAiChatPanelVisible(visible: boolean): void {

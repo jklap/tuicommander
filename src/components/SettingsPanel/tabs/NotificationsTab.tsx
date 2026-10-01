@@ -285,6 +285,24 @@ export const NotificationsTab: Component = () => {
 					)}
 				</p>
 			</div>
+
+			<div class={s.group}>
+				<label>{t("notifications.label.prNotifications", "Pull Requests")}</label>
+				<div class={s.toggle}>
+					<input
+						type="checkbox"
+						checked={notificationsStore.state.config.pr_native_notifications}
+						onChange={(e) => notificationsStore.setPrNativeNotifications(e.currentTarget.checked)}
+					/>
+					<span>{t("notifications.toggle.prNative", "OS notification for PR changes")}</span>
+				</div>
+				<p class={s.hint} style={{ "margin-top": "6px" }}>
+					{t(
+						"notifications.hint.prNative",
+						"Notify when a PR becomes ready to merge, fails CI, gets changes requested or is merged, while TUICommander is in the background. Clicking the notification opens the PR on GitHub.",
+					)}
+				</p>
+			</div>
 		</div>
 	);
 };

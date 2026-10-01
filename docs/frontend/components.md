@@ -508,6 +508,8 @@ and no export — Progress is a thing you glance at, so it is a dialog and not a
 panel that competes with the terminal for width.
 The toolbar bell always includes Terminal Progress, regardless of unread count.
 The command palette and `Cmd/Ctrl+Shift+P` open the same dialog.
+On macOS, clicking a native `done` or `blocked` notification opens this dialog
+for the notification's project and source terminal, even if another project is active.
 
 Opening asks the shared journal once, for the selected PTY or project. The old panel
 fanned out across every registered repository and answered with one red

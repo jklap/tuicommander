@@ -103,7 +103,7 @@ Global defaults apply to all repos. Per-repo overrides take precedence when set.
 | **PR merge strategy** | Merge / Squash / Rebase | Merge |
 | **After merge** | Archive / Delete / Ask | Archive |
 
-In Ask mode, a dialog containing only clean orphaned worktrees removes them after the countdown; **Keep** or Escape cancels it. Dirty or untracked files and commits unreachable from every branch disable the countdown and appear with a reason. Auto-remove also skips these unsafe worktrees. An agent can answer the open dialog through MCP `repo action=orphan_cleanup_answer path=<repo> decision=remove|keep`; removal is checked again by the backend before it proceeds. Orphan cleanup reports the number of worktrees actually removed. If a removal fails, the worktree remains for a later cleanup attempt.
+In Ask mode, a dialog containing only clean orphaned worktrees removes them after the countdown; **Keep** or Escape cancels it. Dirty or untracked files, commits unreachable from every branch, and live sessions inside the checkout disable the countdown and appear with a reason (a live session is named). Auto-remove skips these unsafe worktrees, except that a worktree with a live session is held for the same review dialog. An agent can answer the open dialog through MCP `repo action=orphan_cleanup_answer path=<repo> decision=remove|keep`; removal is checked again by the backend before it proceeds. Orphan cleanup reports the number of worktrees actually removed. If a removal fails, the worktree remains for a later cleanup attempt.
 
 ### Per-Repository Overrides (Settings → Repository → Worktree)
 
@@ -126,6 +126,14 @@ The merge uses `--no-edit` for a clean fast-forward or merge commit. If conflict
 Before manual removal, the confirmation distinguishes a branch with no commits of its own from one whose commits were merged. It names live terminal sessions and counts uncommitted and untracked files. Confirming still allows removal; review the warnings before proceeding. Automatic PR-close deletion keeps a worktree with live sessions or local changes and logs why it was skipped.
 
 Both **Archive** and **Delete** remove the worktree, so one-click cleanup asks before merging when the worktree is not known to be clean or has a live terminal session. The confirmation names the sessions and what happens to the files: archived files travel to `__archived/`, deleted files do not come back. If the check itself cannot run, cleanup stops. Post-merge cleanup uses the same review before moving or deleting the checkout.
+
+A branch can be integrated even when its original commits are absent from
+main: squash merges and rebased copies change commit IDs. TUICommander checks
+patches, the result of a virtual merge, and revised copies with matching
+subjects. MCP exposes the reason with `repo branch_integration` or
+`repo branch_integrations`. A content-based result still needs a recovery ref
+at `refs/archive/<branch>` pointing to the current tip before safe branch
+deletion; incomplete or uncertain changes remain protected.
 
 The automatic sweep never asks. It archives only a branch whose own commits are merged, when the worktree is clean and has no live sessions. It keeps other worktrees and names the reason in the status line.
 

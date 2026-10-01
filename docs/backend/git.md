@@ -229,8 +229,8 @@ either mode uses the captured OID in a compare-and-delete operation. If proof
 fails or the branch moves, removal reports a warning and keeps the ref. For
 branch deletion, it checks the default branch's ancestry. A clean branch
 whose commits were squash- or rebase-merged can also pass when `git cherry`
-reports no unique patches. A branch with an unmerged merge commit is refused:
-`git cherry` does not compare changes made by merge resolution. The removal
+reports no unique patches. `git cherry` and context-free twin comparisons do not cover merge resolution
+changes; a virtual no-op merge can cover the final tree instead. The removal
 result names the matching rule.
 
 The checked-out main worktree branch is another integration target: if it
@@ -238,6 +238,18 @@ contains the candidate tip, removal records `integration_ancestry` even when
 the remote default branch is behind. Otherwise, a merged GitHub PR can prove
 a squash merge when its fetched head contains the local tip. Open or closed
 unmerged PRs, mismatched heads, and unavailable API data never prove deletion.
+MCP `branch_integrations` and `branch_integration`, the branch panel's merged
+set, and workspace lifecycle share `classify_branch_merge` in `tuic-git`.
+The classifier also recognises clean virtual merges whose tree equals the
+default target, and exact same-subject twin patches with unchanged added and
+removed lines. A squash message is corroborating evidence only. The
+`content_superset` heuristic requires an exact-tip archive before deletion;
+worktree removal rechecks it after the archive hook. Safe branch-panel
+deletion uses this classifier and compare-and-delete instead of Git's
+upstream-dependent `branch -d`. Explicit force deletion retains `branch -D`.
+See [the fixture provenance](branch-integration-fixtures.md) for audit cases,
+thresholds and known limits.
+
 Keeping the branch skips branch-deletion proof while retaining dirty-work,
 submodule, operation, and lock checks.
 

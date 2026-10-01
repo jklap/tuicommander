@@ -83,19 +83,22 @@ pub(super) fn save_story(
     Ok(())
 }
 
-pub(super) fn dependencies_integrated(
+/// Dependencies that block `story`: not Done yet, or, once a workflow run owns the plan, Done
+/// without a current integration receipt.
+pub(super) fn unmet_dependencies(
     conn: &Connection,
     story: &Story,
     story_db: &Path,
-) -> Result<bool, String> {
+) -> Result<Vec<String>, String> {
     if story.dependencies.is_empty() {
-        return Ok(true);
+        return Ok(Vec::new());
     }
     let run_db = story_db
         .parent()
         .ok_or("story store has no parent directory")?
         .join("workflow_runs.sqlite3");
     let requires_receipt = crate::workflows::plan_has_workflow_run_in(&run_db, &story.plan_id)?;
+    let mut unmet = Vec::new();
     for id in &story.dependencies {
         let dependency = read_story(conn, id)?;
         if dependency.status != StoryStatus::Done
@@ -106,10 +109,18 @@ pub(super) fn dependencies_integrated(
                     dependency.revision,
                 )?)
         {
-            return Ok(false);
+            unmet.push(id.clone());
         }
     }
-    Ok(true)
+    Ok(unmet)
+}
+
+pub(super) fn dependencies_integrated(
+    conn: &Connection,
+    story: &Story,
+    story_db: &Path,
+) -> Result<bool, String> {
+    Ok(unmet_dependencies(conn, story, story_db)?.is_empty())
 }
 
 pub(super) fn reconcile_ready(

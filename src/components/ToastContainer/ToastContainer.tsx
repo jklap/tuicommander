@@ -3,6 +3,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { type Toast, toastsStore } from "../../stores/toasts";
+import { uiStore } from "../../stores/ui";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { pathBasename } from "../../utils/pathUtils";
 import { type RepoAction, ToastList } from "./ToastList";
@@ -66,5 +67,12 @@ function toastRepoAction(toast: Toast): RepoAction | null {
 }
 
 export const ToastContainer: Component = () => {
-	return <ToastList onDismiss={dismiss} repoName={toastRepoName} repoAction={toastRepoAction} />;
+	return (
+		<ToastList
+			onDismiss={dismiss}
+			repoName={toastRepoName}
+			repoAction={toastRepoAction}
+			rightInset={uiStore.state.aiChatPanelMeasuredWidth}
+		/>
+	);
 };

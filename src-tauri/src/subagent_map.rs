@@ -86,6 +86,29 @@ pub(crate) struct Row {
     /// the subagent answered. When it is the last row, the subagent has
     /// finished.
     pub reply: bool,
+    /// The row calls `SubagentHandback`, the tool a subagent reports through
+    /// when Claude Code delivers its final report that way: the call's id and
+    /// the report text. No `end_turn` row follows it.
+    pub handback: Option<Handback>,
+    /// `tool_use_id` of every `tool_result` block the row carries.
+    pub result_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Handback {
+    pub id: String,
+    pub message: String,
+}
+
+/// The tool Claude Code gives a subagent to hand its report back through.
+const HANDBACK_TOOL: &str = "SubagentHandback";
+
+fn block_type(b: &serde_json::Value) -> Option<&str> {
+    b.get("type").and_then(|t| t.as_str())
+}
+
+fn name_of(b: &serde_json::Value) -> &str {
+    b.get("name").and_then(|n| n.as_str()).unwrap_or("tool")
 }
 
 /// Parse one JSONL row.
@@ -98,18 +121,38 @@ pub(crate) fn parse_row(line: &str) -> Option<Row> {
     let row: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
     let at_ms = row_timestamp(&row)?;
     let message = row.get("message")?;
-    let tool = match message.get("content")? {
-        serde_json::Value::Array(blocks) => blocks.iter().find_map(|b| {
-            (b.get("type").and_then(|t| t.as_str()) == Some("tool_use")).then(|| {
-                truncate_chars(
-                    b.get("name").and_then(|n| n.as_str()).unwrap_or("tool"),
-                    MAX_LABEL_CHARS,
-                )
-            })
-        }),
-        serde_json::Value::String(_) => None,
+    let blocks: &[serde_json::Value] = match message.get("content")? {
+        serde_json::Value::Array(blocks) => blocks,
+        serde_json::Value::String(_) => &[],
         _ => return None,
     };
+    // The handback is the report, not work: it is neither counted as a tool
+    // call nor does it make the row a tool-calling one.
+    let handback = blocks.iter().find_map(|b| {
+        (block_type(b) == Some("tool_use") && name_of(b) == HANDBACK_TOOL).then(|| Handback {
+            id: b
+                .get("id")
+                .and_then(|i| i.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+            message: b
+                .get("input")
+                .and_then(|i| i.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+        })
+    });
+    let tool = blocks.iter().find_map(|b| {
+        (block_type(b) == Some("tool_use") && name_of(b) != HANDBACK_TOOL)
+            .then(|| truncate_chars(name_of(b), MAX_LABEL_CHARS))
+    });
+    let result_ids = blocks
+        .iter()
+        .filter(|b| block_type(b) == Some("tool_result"))
+        .filter_map(|b| b.get("tool_use_id").and_then(|i| i.as_str()))
+        .map(str::to_owned)
+        .collect();
     let assistant = message.get("role").and_then(|r| r.as_str()) == Some("assistant");
     // Claude Code writes one row per content block, and every row but the last
     // of a turn carries a null `stop_reason` (measured over 40 transcripts:
@@ -123,8 +166,10 @@ pub(crate) fn parse_row(line: &str) -> Option<Row> {
     let has_text = row_text_of(message).is_some_and(|t| !t.trim().is_empty());
     Some(Row {
         at_ms,
-        reply: assistant && tool.is_none() && ends_turn && has_text,
+        reply: assistant && tool.is_none() && handback.is_none() && ends_turn && has_text,
         tool,
+        handback,
+        result_ids,
     })
 }
 
@@ -178,7 +223,7 @@ pub(crate) struct LaneSummary {
     pub other_tools: u32,
     pub started_at_ms: Option<i64>,
     pub ended_at_ms: Option<i64>,
-    /// The last row read was a reply. The lane's own last row is the only
+    /// The last row read was a reply or a `SubagentHandback` call or result. The lane's own last row is the only
     /// evidence a subagent finished: the parent's tool_result acknowledges the
     /// spawn for 691 of 795 sampled calls and never carries the report.
     pub finished: bool,
@@ -188,6 +233,9 @@ pub(crate) struct LaneSummary {
     /// Decoded text of the newest reply: the subagent's report once it has
     /// finished. Tool results are never kept — only what the subagent wrote.
     pub last_reply: String,
+    /// Id of the `SubagentHandback` call, so its `tool_result` row — the last
+    /// row of a handback transcript — is told from any other tool's result.
+    handback_id: Option<String>,
 }
 
 impl LaneSummary {
@@ -204,8 +252,19 @@ impl LaneSummary {
             self.rows += 1;
             self.started_at_ms.get_or_insert(row.at_ms);
             self.ended_at_ms = Some(row.at_ms);
-            self.finished = row.reply;
-            if row.reply
+            // A handback call is the report, and its result closes the
+            // lane: Claude writes no `end_turn` row after either. A row after
+            // them (a withheld report) reopens it through the next line.
+            let handed_back = row.handback.is_some()
+                || self
+                    .handback_id
+                    .as_ref()
+                    .is_some_and(|id| row.result_ids.contains(id));
+            self.finished = row.reply || handed_back;
+            if let Some(handback) = row.handback {
+                self.last_reply = redact_and_cap(&handback.message);
+                self.handback_id = Some(handback.id);
+            } else if row.reply
                 && let Some(reply) = row_text(line)
             {
                 self.last_reply = reply;
@@ -1721,6 +1780,44 @@ mod tests {
         ));
         assert!(s.finished, "an end_turn text row is the report");
         assert_eq!(s.last_reply, "All done.");
+    }
+
+    /// A subagent that reports through the `SubagentHandback` tool (Claude
+    /// Code's own tool: `{message}` in, a `tool_result` back) ends with that
+    /// call and its result, never an `end_turn` text row. Ignoring them left
+    /// every such subagent "running" (story 1298). A result of another tool
+    /// must still not finish the lane. Row shapes follow the tool's input
+    /// schema and the standard Anthropic `tool_use`/`tool_result` blocks.
+    #[test]
+    fn subagent_map_handback_call_and_result_finish_the_subagent() {
+        let mut s = LaneSummary::default();
+        s.absorb(&assistant(
+            "2026-09-21T10:00:00Z",
+            Some("tool_use"),
+            serde_json::json!([{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]),
+        ));
+        let other_result = r#"{"timestamp":"2026-09-21T10:00:01Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}"#;
+        s.absorb(&format!("{other_result}\n"));
+        assert!(!s.finished, "another tool's result is not a handback");
+        s.absorb(&assistant(
+            "2026-09-21T10:00:02Z",
+            Some("tool_use"),
+            serde_json::json!([{"type": "tool_use", "id": "hb", "name": "SubagentHandback",
+                "input": {"message": "Report: two findings."}}]),
+        ));
+        assert!(s.finished, "the handback call is the report");
+        assert_eq!(s.last_reply, "Report: two findings.");
+        assert_eq!(s.tool_calls(), 1, "the handback is not a tool call");
+        let result = r#"{"timestamp":"2026-09-21T10:00:03Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"hb","content":"delivered"}]}}"#;
+        s.absorb(&format!("{result}\n"));
+        assert!(s.finished, "the handback's result is the last row");
+        assert_eq!(s.ended_at_ms, iso_to_ms("2026-09-21T10:00:03Z"));
+        s.absorb(&assistant(
+            "2026-09-21T10:00:04Z",
+            Some("tool_use"),
+            serde_json::json!([{"type": "tool_use", "id": "t2", "name": "Read", "input": {}}]),
+        ));
+        assert!(!s.finished, "a withheld report lets the subagent work on");
     }
 
     fn finished_lane(dir: &Path, id: &str, at_s: u32, running: bool) {

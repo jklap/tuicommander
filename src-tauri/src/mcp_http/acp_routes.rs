@@ -44,6 +44,7 @@ use crate::acp_commands;
 /// router so a phone drives ego exactly as the desktop app does.
 pub(super) fn acp_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/workspace", get(workspace_root))
         .route("/connections", post(connect))
         .route(
             "/connections/{connection_id}",
@@ -276,6 +277,10 @@ async fn one_shot_prompt(
         return resp.into_response();
     }
     answer(crate::acp::oneshot::run_prompt(&state, body.root, body.prompt).await)
+}
+
+async fn workspace_root(State(state): State<Arc<AppState>>) -> Response {
+    answer(acp_commands::workspace_root(&state).await)
 }
 
 async fn connection_snapshot(
@@ -861,6 +866,43 @@ mod tests {
             };
             assert_eq!(status, wanted, "{method} {path}");
         }
+    }
+
+    /// Catches: the browser transport answering with a client-composed root, or
+    /// hiding the refusal that names the setting.
+    #[tokio::test]
+    async fn the_workspace_route_answers_from_the_hosts_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::tests::test_state();
+        let app = super::super::shared_routes().with_state(state.clone());
+
+        state.config.write().ai_chat_workspace = dir.path().to_string_lossy().into_owned();
+        let resp = app
+            .clone()
+            .oneshot(request("GET", "/acp/workspace", None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let root: String = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            std::path::PathBuf::from(root),
+            std::fs::canonicalize(dir.path()).unwrap()
+        );
+
+        state.config.write().ai_chat_workspace = "relative".to_string();
+        let resp = app
+            .oneshot(request("GET", "/acp/workspace", None))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: AcpClientError = serde_json::from_slice(&bytes).unwrap();
+        assert!(error.message.contains("ai_chat_workspace"));
     }
 
     /// A body that names an MCP server is refused, not quietly stripped.

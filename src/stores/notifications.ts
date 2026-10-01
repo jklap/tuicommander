@@ -6,14 +6,16 @@ import {
 	type NotificationSound,
 	notificationManager,
 } from "../notifications";
+import { showNativeNotice } from "../services/nativeNotifications";
 import { isTauri } from "../transport";
 import { createConfigDeltaWriter } from "../utils/configDeltaWriter";
 import { appLogger } from "./appLogger";
 import { setToastBellMirrorResolver } from "./toasts";
-import { uiStore } from "./ui";
 
 interface PlayOptions {
 	terminalId?: string;
+	/** A repeat of an earlier notice: the OS notice also goes out in a focused window unless the user is looking at this terminal, and is off with notifications or this sound disabled. */
+	reminder?: boolean;
 }
 
 const OS_NOTIFICATION_TITLES: Record<NotificationSound, string> = {
@@ -24,39 +26,6 @@ const OS_NOTIFICATION_TITLES: Record<NotificationSound, string> = {
 	info: "Info",
 	attention: "Agent needs you",
 };
-
-let osNotificationPermission: NotificationPermission | null = null;
-
-async function ensureNotificationPermission(): Promise<boolean> {
-	if (!("Notification" in window)) return false;
-	if (osNotificationPermission === null) {
-		osNotificationPermission = Notification.permission;
-	}
-	if (osNotificationPermission === "granted") return true;
-	if (osNotificationPermission === "denied") return false;
-	osNotificationPermission = await Notification.requestPermission();
-	return osNotificationPermission === "granted";
-}
-
-function sendOsNotification(sound: NotificationSound, terminalId: string, tabName: string): void {
-	const n = new Notification(OS_NOTIFICATION_TITLES[sound], {
-		body: tabName,
-		silent: true,
-	});
-	n.onclick = () => {
-		n.close();
-		if (isTauri()) {
-			import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
-				getCurrentWindow().setFocus();
-			});
-		} else {
-			window.focus();
-		}
-		import("../utils/navigateToTerminal").then(({ navigateToTerminal }) => {
-			navigateToTerminal(terminalId);
-		});
-	};
-}
 
 const LEGACY_STORAGE_KEY = "tui-commander-notifications";
 const notificationWriter = createConfigDeltaWriter<NotificationConfig>("save_notification_config");
@@ -86,7 +55,7 @@ interface NotificationsState {
 function createNotificationsStore() {
 	const defaults = copyDefaults();
 	notificationManager.updateConfig(defaults);
-	const acpNotifications = new Map<string, Notification | null>();
+	const notifiedAcpInteractions = new Set<string>();
 
 	const [state, setState] = createStore<NotificationsState>({
 		config: defaults,
@@ -95,33 +64,20 @@ function createNotificationsStore() {
 	});
 
 	const actions = {
-		/** Keep one desktop notification per pending ACP question until it settles. */
-		syncAcpAttention(interactions: { id: string; kind: "permission" | "elicitation" }[], panelHidden: boolean): void {
+		/** Send one native notice per pending ACP question; a notice still in flight is dropped once the question settles. */
+		syncAcpAttention(interactions: { id: string; kind: "permission" | "elicitation" }[]): void {
 			const pending = new Set(interactions.map((interaction) => interaction.id));
-			for (const [id, notification] of acpNotifications) {
-				if (pending.has(id)) continue;
-				notification?.close();
-				acpNotifications.delete(id);
-			}
-			if (!panelHidden || !isTauri()) return;
+			for (const id of notifiedAcpInteractions) if (!pending.has(id)) notifiedAcpInteractions.delete(id);
 			for (const interaction of interactions) {
-				if (acpNotifications.has(interaction.id)) continue;
-				acpNotifications.set(interaction.id, null);
-				void ensureNotificationPermission()
-					.then((allowed) => {
-						if (!allowed || !acpNotifications.has(interaction.id)) return;
-						const notification = new Notification("AI Chat needs input", {
-							body: interaction.kind === "permission" ? "Permission requested" : "Form requested",
-							silent: true,
-						});
-						acpNotifications.set(interaction.id, notification);
-						notification.onclick = () => {
-							notification.close();
-							void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().setFocus());
-							uiStore.setAiChatPanelVisible(true);
-						};
-					})
-					.catch((error) => appLogger.debug("ai-chat", "Could not show ACP notification", error));
+				if (notifiedAcpInteractions.has(interaction.id)) continue;
+				notifiedAcpInteractions.add(interaction.id);
+				void showNativeNotice({
+					title: "AI Chat needs input",
+					body: interaction.kind === "permission" ? "Permission requested" : "Form requested",
+					key: `acp:${interaction.id}`,
+					target: { kind: "aichat", id: interaction.id },
+					isCurrent: () => notifiedAcpInteractions.has(interaction.id),
+				}).catch((error: unknown) => appLogger.warn("ai-chat", "Could not show ACP notification", error));
 			}
 		},
 		/** Load config from Rust backend; migrate from localStorage on first run */
@@ -187,6 +143,12 @@ function createNotificationsStore() {
 			saveConfig(state.config);
 		},
 
+		/** OS notifications for PR transitions (ready, CI failed, changes requested, merged). */
+		setPrNativeNotifications(enabled: boolean): void {
+			setState("config", "pr_native_notifications", enabled);
+			saveConfig(state.config);
+		},
+
 		/** Enable/disable a specific sound */
 		setSoundEnabled(sound: NotificationSound, enabled: boolean): void {
 			setState("config", "sounds", sound, enabled);
@@ -204,24 +166,37 @@ function createNotificationsStore() {
 					.join(" <- ") ?? "unknown";
 			appLogger.debug("app", `[Notification.Play] sound=${sound} focused=${document.hasFocus()} caller=${caller}`);
 			await notificationManager.play(sound);
-			if (!document.hasFocus()) {
-				actions.incrementBadge();
-				if (opts?.terminalId) {
-					ensureNotificationPermission().then((ok) => {
-						if (!ok) return;
-						import("./terminals").then(({ terminalsStore }) => {
-							const term = terminalsStore.get(opts.terminalId!);
-							const tabName = term?.name ?? opts.terminalId!;
-							sendOsNotification(sound, opts.terminalId!, tabName);
+			const unfocused = !document.hasFocus();
+			if (unfocused) actions.incrementBadge();
+			if (opts?.terminalId && (unfocused || (opts.reminder && actions.isSoundEnabled(sound)))) {
+				const terminalId = opts.terminalId;
+				void import("./terminals")
+					.then(({ terminalsStore }) => {
+						const isViewed = () =>
+							document.hasFocus() &&
+							terminalsStore.state.activeId === terminalId &&
+							!terminalsStore.isDetached(terminalId);
+						if (opts.reminder && isViewed()) return;
+						return showNativeNotice({
+							title: OS_NOTIFICATION_TITLES[sound],
+							body: terminalsStore.get(terminalId)?.name ?? terminalId,
+							key: `${opts.reminder ? "reminder:" : ""}${sound}:${terminalId}`,
+							target: { kind: "terminal", id: terminalId },
+							...(opts.reminder ? { ignoreFocus: true, isCurrent: () => !isViewed() } : {}),
 						});
-					});
-				}
+					})
+					.catch((error: unknown) => appLogger.warn("app", "Could not show terminal notification", error));
 			}
 		},
 
 		/** Play question notification */
 		async playQuestion(terminalId?: string): Promise<void> {
 			await actions.play("question", { terminalId });
+		},
+
+		/** Repeat the question notification for a question left unanswered */
+		async playQuestionReminder(terminalId: string): Promise<void> {
+			await actions.play("question", { terminalId, reminder: true });
 		},
 
 		/** Play error notification */

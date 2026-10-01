@@ -42,7 +42,7 @@ export const MdTabContent: Component<{ tab: MdTabData; onClose: () => void; visi
 					return <PluginPanel tab={tab} onClose={props.onClose} visible={props.visible} />;
 				if (tab.type === "pr-diff") {
 					const pr = tab as PrDiffTabData;
-					return <PrDiffTab prNumber={pr.prNumber} prTitle={pr.prTitle} diff={pr.diff} />;
+					return <PrDiffTab prNumber={pr.prNumber} prTitle={pr.prTitle} diff={pr.diff} repoPath={pr.repoPath} />;
 				}
 				if (tab.type === "html-preview") return <HtmlPreviewTab tab={tab} onClose={props.onClose} />;
 				return <MarkdownTab tab={tab} onClose={props.onClose} />;

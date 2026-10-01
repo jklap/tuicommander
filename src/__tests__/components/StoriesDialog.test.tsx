@@ -368,27 +368,32 @@ describe("StoriesDialog", () => {
 		await screen.findByText("All cancelled");
 	});
 
-
 	it("offers browser approval and sends the selected transition", async () => {
 		const environment = globalThis as Record<string, unknown>;
 		const priorShim = environment.__TAURI_SHIM__;
 		environment.__TAURI_SHIM__ = true;
 		try {
-		vi.mocked(invoke).mockImplementation(async (_command, args) => {
-			if (_command === "story_capabilities") return true;
-			const action = (args as { action: { action: string } }).action;
-			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "plan_view") return { type: "plan_view", value: { stories: [{ ...story, status: "review" }], state: "active", wontFixCount: 0, allCancelled: false } };
-			if (action.action === "transition") return { type: "story", value: { ...story, status: "done" } };
-			throw new Error(`unexpected action ${action.action}`);
-		});
-		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
-		await screen.findByRole("heading", { name: "Implement API" });
-		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-		await waitFor(() => expect(invoke).toHaveBeenCalledWith("story_action_command", {
-			project: "/repo",
-			action: { action: "transition", story_id: "s1", expected_revision: 1, command: "approve" },
-		}));
+			vi.mocked(invoke).mockImplementation(async (_command, args) => {
+				if (_command === "story_capabilities") return true;
+				const action = (args as { action: { action: string } }).action;
+				if (action.action === "list_plans") return { type: "plans", value: [plan] };
+				if (action.action === "plan_view")
+					return {
+						type: "plan_view",
+						value: { stories: [{ ...story, status: "review" }], state: "active", wontFixCount: 0, allCancelled: false },
+					};
+				if (action.action === "transition") return { type: "story", value: { ...story, status: "done" } };
+				throw new Error(`unexpected action ${action.action}`);
+			});
+			render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
+			await screen.findByRole("heading", { name: "Implement API" });
+			fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+			await waitFor(() =>
+				expect(invoke).toHaveBeenCalledWith("story_action_command", {
+					project: "/repo",
+					action: { action: "transition", story_id: "s1", expected_revision: 1, command: "approve" },
+				}),
+			);
 		} finally {
 			environment.__TAURI_SHIM__ = priorShim;
 		}
@@ -399,30 +404,44 @@ describe("StoriesDialog", () => {
 			if (_command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "plan_view") return { type: "plan_view", value: { stories: [{ ...story, status: "review" }], state: "active", wontFixCount: 0, allCancelled: false } };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [{ ...story, status: "review" }], state: "active", wontFixCount: 0, allCancelled: false },
+				};
 			if (action.action === "transition") return { type: "story", value: { ...story, status: "review" } };
 			throw new Error(`unexpected action ${action.action}`);
 		});
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByRole("heading", { name: "Implement API" });
 		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-		await waitFor(() => expect(invoke).toHaveBeenCalledWith("story_action_command", {
-			project: "/repo",
-			action: { action: "transition", story_id: "s1", expected_revision: 1, command: "approve" },
-		}));
-		await waitFor(() => expect((screen.getByRole("button", { name: "Request changes" }) as HTMLButtonElement).disabled).toBe(false));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("story_action_command", {
+				project: "/repo",
+				action: { action: "transition", story_id: "s1", expected_revision: 1, command: "approve" },
+			}),
+		);
+		await waitFor(() =>
+			expect((screen.getByRole("button", { name: "Request changes" }) as HTMLButtonElement).disabled).toBe(false),
+		);
 		fireEvent.click(screen.getByRole("button", { name: "Request changes" }));
-		await waitFor(() => expect(invoke).toHaveBeenCalledWith("story_action_command", {
-			project: "/repo",
-			action: { action: "transition", story_id: "s1", expected_revision: 1, command: "reject_review" },
-		}));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("story_action_command", {
+				project: "/repo",
+				action: { action: "transition", story_id: "s1", expected_revision: 1, command: "reject_review" },
+			}),
+		);
 	});
-
 
 	it("opens the persisted run timeline for the selected plan", async () => {
 		const run = {
-			id: "r1", planId: "p1", status: "paused", sequence: 4, startedMs: 1_000,
-			stories: [{ storyId: "s1", accepted: false }], attempts: [],
+			id: "r1",
+			planId: "p1",
+			status: "paused",
+			sequence: 4,
+			startedMs: 1_000,
+			stories: [{ storyId: "s1", accepted: false }],
+			attempts: [],
 		};
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
 			if (command === "story_capabilities") return true;
@@ -430,16 +449,26 @@ describe("StoriesDialog", () => {
 			if (command === "workflow_run_action") {
 				if (action.action === "list_plan_runs") return { type: "runs", value: [run] };
 				if (action.action === "get") return { type: "snapshot", value: run };
-				if (action.action === "events") return { type: "events", value: action.after_sequence === 4
-					? [] : action.after_sequence === 3
-					? [{ sequence: 4, atMs: 1_200, kind: { type: "resumed" } }]
-					: [
-						{ sequence: 1, atMs: 1_000, kind: { type: "started" } },
-						{ sequence: 3, atMs: 1_100, kind: { type: "paused" } },
-					] };
+				if (action.action === "events")
+					return {
+						type: "events",
+						value:
+							action.after_sequence === 4
+								? []
+								: action.after_sequence === 3
+									? [{ sequence: 4, atMs: 1_200, kind: { type: "resumed" } }]
+									: [
+											{ sequence: 1, atMs: 1_000, kind: { type: "started" } },
+											{ sequence: 3, atMs: 1_100, kind: { type: "paused" } },
+										],
+					};
 			}
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "plan_view") return { type: "plan_view", value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false } };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false },
+				};
 			throw new Error(`unexpected action ${action.action}`);
 		});
 		render(() => <StoriesDialog project="/repo/worktree" onClose={() => {}} />);
@@ -449,25 +478,53 @@ describe("StoriesDialog", () => {
 		await screen.findByText("started");
 		expect(screen.getAllByText("paused").length).toBeGreaterThan(0);
 		expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
-			project: "/repo/worktree", action: { action: "list_plan_runs", plan_id: "p1", limit: 20 },
+			project: "/repo/worktree",
+			action: { action: "list_plan_runs", plan_id: "p1", limit: 20 },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "Load more events" }));
 		await screen.findByText("resumed");
 		expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
-			project: "/repo/worktree", action: { action: "events", run_id: "r1", after_sequence: 3, limit: 100 },
+			project: "/repo/worktree",
+			action: { action: "events", run_id: "r1", after_sequence: 3, limit: 100 },
 		});
-		const reads = vi.mocked(invoke).mock.calls.filter(([command, args]) => command === "workflow_run_action" && (args as { action: { action: string } }).action.action === "get").length;
+		const reads = vi
+			.mocked(invoke)
+			.mock.calls.filter(
+				([command, args]) =>
+					command === "workflow_run_action" && (args as { action: { action: string } }).action.action === "get",
+			).length;
 		workflowRunSignals.accept({ repo_path: "/repo", payload: { runId: "r1", sequence: 5 } });
-		await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([command, args]) => command === "workflow_run_action" && (args as { action: { action: string } }).action.action === "get").length).toBeGreaterThan(reads));
+		await waitFor(() =>
+			expect(
+				vi
+					.mocked(invoke)
+					.mock.calls.filter(
+						([command, args]) =>
+							command === "workflow_run_action" && (args as { action: { action: string } }).action.action === "get",
+					).length,
+			).toBeGreaterThan(reads),
+		);
 	});
 
 	it("records a human answer to a paused workflow request", async () => {
 		const run = {
-			id: "r1", planId: "p1", status: "paused", sequence: 4, startedMs: 1_000,
+			id: "r1",
+			planId: "p1",
+			status: "paused",
+			sequence: 4,
+			startedMs: 1_000,
 			stories: [{ storyId: "s1", accepted: false }],
-			attempts: [{ id: "a1", storyId: "s1", nodeId: "implement", state: "reported",
-				outcome: "needs_input", inputAnswer: null,
-				report: { inputRequest: { question: "Use A or B?", options: ["A", "B"] } } }],
+			attempts: [
+				{
+					id: "a1",
+					storyId: "s1",
+					nodeId: "implement",
+					state: "reported",
+					outcome: "needs_input",
+					inputAnswer: null,
+					report: { inputRequest: { question: "Use A or B?", options: ["A", "B"] } },
+				},
+			],
 		};
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
 			if (command === "story_capabilities") return true;
@@ -479,7 +536,11 @@ describe("StoriesDialog", () => {
 				if (action.action === "command") return { type: "receipt", value: { snapshot: run } };
 			}
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "plan_view") return { type: "plan_view", value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false } };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false },
+				};
 			throw new Error(`unexpected action ${action.action}`);
 		});
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
@@ -488,23 +549,39 @@ describe("StoriesDialog", () => {
 		await screen.findByText("Use A or B?");
 		fireEvent.input(screen.getByRole("textbox", { name: "Answer" }), { target: { value: "A" } });
 		fireEvent.click(screen.getByRole("button", { name: "Record answer" }));
-		await waitFor(() => expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
-			project: "/repo", action: {
-				action: "command", run_id: "r1", expected_sequence: 4,
-				command_id: expect.any(String),
-				command: { action: "answer_input", attempt_id: "a1", answer: "A" },
-			},
-		}));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+				project: "/repo",
+				action: {
+					action: "command",
+					run_id: "r1",
+					expected_sequence: 4,
+					command_id: expect.any(String),
+					command: { action: "answer_input", attempt_id: "a1", answer: "A" },
+				},
+			}),
+		);
 	});
-
 
 	it("resumes a paused run after the answer is recorded", async () => {
 		const run = {
-			id: "r1", planId: "p1", status: "paused", sequence: 5, startedMs: 1_000,
+			id: "r1",
+			planId: "p1",
+			status: "paused",
+			sequence: 5,
+			startedMs: 1_000,
 			stories: [{ storyId: "s1", accepted: false }],
-			attempts: [{ id: "a1", storyId: "s1", nodeId: "implement", state: "reported",
-				outcome: "needs_input", inputAnswer: "A",
-				report: { inputRequest: { question: "Use A or B?", options: [] } } }],
+			attempts: [
+				{
+					id: "a1",
+					storyId: "s1",
+					nodeId: "implement",
+					state: "reported",
+					outcome: "needs_input",
+					inputAnswer: "A",
+					report: { inputRequest: { question: "Use A or B?", options: [] } },
+				},
+			],
 		};
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
 			if (command === "story_capabilities") return true;
@@ -513,36 +590,67 @@ describe("StoriesDialog", () => {
 				if (action.action === "list_plan_runs") return { type: "runs", value: [run] };
 				if (action.action === "get") return { type: "snapshot", value: run };
 				if (action.action === "events") return { type: "events", value: [] };
-				if (action.action === "command") return { type: "receipt", value: { snapshot: { ...run, status: "running", sequence: 6 } } };
+				if (action.action === "command")
+					return { type: "receipt", value: { snapshot: { ...run, status: "running", sequence: 6 } } };
 			}
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "plan_view") return { type: "plan_view", value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false } };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false },
+				};
 			throw new Error(`unexpected action ${action.action}`);
 		});
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
 		await screen.findByRole("heading", { name: "Implement API" });
 		fireEvent.click(screen.getByRole("button", { name: "Run history" }));
 		fireEvent.click(await screen.findByRole("button", { name: "Resume run" }));
-		await waitFor(() => expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
-			project: "/repo", action: {
-				action: "command", run_id: "r1", expected_sequence: 5,
-				command_id: expect.any(String), command: { action: "resume" },
-			},
-		}));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("workflow_run_action", {
+				project: "/repo",
+				action: {
+					action: "command",
+					run_id: "r1",
+					expected_sequence: 5,
+					command_id: expect.any(String),
+					command: { action: "resume" },
+				},
+			}),
+		);
 	});
-
 
 	it("opens the project workflow designer", async () => {
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
 			if (command === "story_capabilities") return true;
 			const action = (args as { action: { action: string } }).action;
-			if (command === "workflow_definition_action" && action.action === "list_drafts") return { type: "drafts", value: [{
-				id: "f1", project: "/repo", name: "Story delivery", kind: "story",
-				graph: { nodes: [{ id: "start", kind: { type: "start" } }, { id: "end", kind: { type: "end" } }], edges: [] },
-				draftRevision: 1, latestPublishedRevision: 1, builtinKey: "story_delivery",
-			}] };
+			if (command === "workflow_definition_action" && action.action === "list_drafts")
+				return {
+					type: "drafts",
+					value: [
+						{
+							id: "f1",
+							project: "/repo",
+							name: "Story delivery",
+							kind: "story",
+							graph: {
+								nodes: [
+									{ id: "start", kind: { type: "start" } },
+									{ id: "end", kind: { type: "end" } },
+								],
+								edges: [],
+							},
+							draftRevision: 1,
+							latestPublishedRevision: 1,
+							builtinKey: "story_delivery",
+						},
+					],
+				};
 			if (action.action === "list_plans") return { type: "plans", value: [plan] };
-			if (action.action === "plan_view") return { type: "plan_view", value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false } };
+			if (action.action === "plan_view")
+				return {
+					type: "plan_view",
+					value: { stories: [story], state: "active", wontFixCount: 0, allCancelled: false },
+				};
 			throw new Error(`unexpected action ${action.action}`);
 		});
 		render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
@@ -550,7 +658,8 @@ describe("StoriesDialog", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Designer" }));
 		await screen.findByRole("heading", { name: "Workflow designer" });
 		expect(invoke).toHaveBeenCalledWith("workflow_definition_action", {
-			project: "/repo", action: { action: "list_drafts" },
+			project: "/repo",
+			action: { action: "list_drafts" },
 		});
 	});
 });

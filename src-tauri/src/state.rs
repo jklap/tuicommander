@@ -1087,6 +1087,9 @@ pub struct OutputRingBuffer {
     write_pos: usize,
     /// Total bytes ever written (monotonic). Consumers use this to detect missed data.
     pub total_written: u64,
+    /// Caller-computed secrets of the whole ring, valid while `total_written`
+    /// is unchanged.
+    secret_cache: Option<(u64, Vec<String>)>,
 }
 
 impl OutputRingBuffer {
@@ -1096,7 +1099,21 @@ impl OutputRingBuffer {
             capacity,
             write_pos: 0,
             total_written: 0,
+            secret_cache: None,
         }
+    }
+
+    /// `compute()` for the ring's current content, recomputed only after a
+    /// write: polling agents read far more often than the ring changes.
+    pub fn cached_secrets(&mut self, compute: impl FnOnce() -> Vec<String>) -> Vec<String> {
+        if let Some((written, secrets)) = &self.secret_cache
+            && *written == self.total_written
+        {
+            return secrets.clone();
+        }
+        let secrets = compute();
+        self.secret_cache = Some((self.total_written, secrets.clone()));
+        secrets
     }
 
     /// Bytes this ring holds. The buffer is allocated full at construction, so
@@ -2091,6 +2108,10 @@ pub struct AppState {
     pub peer_agents: DashMap<String, PeerAgent>,
     /// Explicit opt-out for managed children; removed with the PTY.
     pub(crate) keep_open_sessions: DashSet<String>,
+    /// Managed children whose last mail to their parent starts with BLOCKED and
+    /// that nothing has mailed since. Kept outside the bounded inboxes so
+    /// overflow cannot drop the hold; removed by the idle sweep with the PTY.
+    pub(crate) blocked_children: DashSet<String>,
     /// Message inbox per agent (tuic_session → VecDeque<AgentMessage>).
     /// Capped at AGENT_INBOX_CAPACITY messages per agent. Matching lifecycle
     /// notices coalesce; other messages evict FIFO at capacity.
@@ -2346,7 +2367,43 @@ impl AppState {
     /// Buffer a message into `recipient`'s bounded inbox. Replace an older
     /// lifecycle notice for the same child and kind, except question waits;
     /// otherwise evict FIFO at capacity.
-    pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
+    /// Mail from its parent ends a child's BLOCKED hold; the child's own BLOCKED mail to
+    /// its parent starts one. Lifecycle notices are TUIC's, not either party's.
+    fn track_blocked_hold(&self, recipient: &str, msg: &AgentMessage) {
+        if msg.id.starts_with(LIFECYCLE_MSG_ID_PREFIX) {
+            return;
+        }
+        if self
+            .session_maps
+            .session_parent
+            .get(recipient)
+            .is_some_and(|parent| parent.value() == &msg.from_tuic_session)
+        {
+            self.blocked_children.remove(recipient);
+        }
+        let to_parent = self
+            .session_maps
+            .session_parent
+            .get(&msg.from_tuic_session)
+            .is_some_and(|parent| parent.value() == recipient);
+        if !to_parent {
+            return;
+        }
+        if msg.content.trim_start().starts_with("BLOCKED") {
+            self.blocked_children.insert(msg.from_tuic_session.clone());
+        } else {
+            self.blocked_children.remove(&msg.from_tuic_session);
+        }
+    }
+
+    pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) -> u64 {
+        self.track_blocked_hold(recipient, &msg);
+        self.store_agent_inbox(recipient, msg)
+    }
+
+    /// `push_agent_inbox` without touching BLOCKED holds, for replaying mail that
+    /// was already seen once (identity handoff).
+    pub(crate) fn store_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
         let gate_entry = self
             .active_agent_waiters
             .entry(recipient.to_string())
@@ -3305,6 +3362,7 @@ impl AppState {
             relay: RelayState::new(),
             peer_agents: DashMap::new(),
             keep_open_sessions: DashSet::new(),
+            blocked_children: DashSet::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
@@ -3755,6 +3813,18 @@ pub(crate) fn build_git_cache<T: Send + Sync + 'static>(
         .build()
 }
 
+/// A full review-thread walk of one PR, valid for the PR state it was taken at.
+#[derive(Clone)]
+pub(crate) struct SettledReviewThreads {
+    pub(crate) updated_at: String,
+    pub(crate) head_ref_oid: String,
+    pub(crate) unresolved: u32,
+    pub(crate) complete: bool,
+    /// The walk failed: the entry only stops a re-walk on every poll, it carries no count.
+    pub(crate) failed: bool,
+    pub(crate) walked_at: Instant,
+}
+
 /// TTL caches for git and GitHub query results, keyed by repo path.
 pub(crate) struct GitCacheState {
     pub(crate) repo_info: GitCache<crate::git::RepoInfo>,
@@ -3770,6 +3840,10 @@ pub(crate) struct GitCacheState {
     /// Excluded from batch queries until the cooldown expires (1 hour).
     /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
+    /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
+    /// "host/owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
+    /// are unchanged and it is younger than `SETTLED_THREADS_TTL`.
+    pub(crate) settled_review_threads: DashMap<String, SettledReviewThreads>,
     /// Count of entries evicted by TTL expiry (watcher-miss observability).
     /// Shared across all git caches; surfaced in the cpu_watchdog snapshot.
     pub(crate) ttl_fallbacks: Arc<AtomicU64>,
@@ -3787,6 +3861,7 @@ impl GitCacheState {
             git_panel_context: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
+            settled_review_threads: DashMap::new(),
             ttl_fallbacks,
         }
     }
@@ -8206,6 +8281,9 @@ mod tests {
             )
             .unwrap();
         }
+        // The nextest `fixture-bins-unix`/`-windows` setup scripts
+        // (`.config/nextest.toml`) build this [[bin]] once before the run
+        // starts; `cargo nextest run --lib` never builds it on its own.
         let executable = std::env::current_exe()
             .unwrap()
             .parent()
@@ -10509,6 +10587,8 @@ mod tests {
                 },
                 cols: 0,
                 chrome: false,
+                wrapped: false,
+                partial: false,
             })
             .collect()
     }
@@ -10908,6 +10988,8 @@ mod tests {
             ],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         assert_eq!(line.text(), "hello world");
     }
@@ -10955,6 +11037,8 @@ mod tests {
             ],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         let json = serde_json::to_value(&line).unwrap();
         let spans = json["spans"].as_array().unwrap();
@@ -10977,6 +11061,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "normal output");
@@ -10991,6 +11077,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -11008,6 +11096,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -11032,6 +11122,8 @@ mod tests {
                 }],
                 cols: 0,
                 chrome: false,
+                wrapped: false,
+                partial: false,
             };
             line.strip_structural_tokens();
             assert!(
@@ -11053,6 +11145,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "TUICommander v1.7.7 is connected. ");
@@ -11067,6 +11161,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "The intent: of this code is clear");
@@ -11082,6 +11178,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(line.spans.is_empty(), "indented suggest should be stripped");
@@ -11096,6 +11194,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(line.spans.is_empty(), "indented intent should be stripped");
@@ -11111,6 +11211,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -11128,6 +11230,8 @@ mod tests {
             }],
             cols: 0,
             chrome: false,
+            wrapped: false,
+            partial: false,
         };
         line.strip_structural_tokens();
         assert!(

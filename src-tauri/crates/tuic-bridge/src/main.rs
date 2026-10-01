@@ -296,6 +296,12 @@ fn tuic_session_header_line(tuic_session: Option<&str>) -> String {
     }
 }
 
+/// HTTP header naming the bridge process, logged by the server on initialize so
+/// a reconnect storm can be traced to the process that caused it.
+fn client_pid_header_line(pid: u32) -> String {
+    format!("x-tuic-client-pid: {pid}\r\n")
+}
+
 /// Project the protocol version carried by a stdio request into the HTTP
 /// transport header. Only the MCP date-revision grammar is reflected so an
 /// untrusted downstream string can never inject another header.
@@ -375,6 +381,7 @@ async fn post_mcp(
     // Assert our PTY identity so the server auto-binds swarm identity without an
     // explicit `agent register` round-trip. Read once, cached at startup.
     headers.push_str(&tuic_session_header_line(TUIC_SESSION_ENV.as_deref()));
+    headers.push_str(&client_pid_header_line(std::process::id()));
     headers.push_str("\r\n");
 
     stream
@@ -974,7 +981,8 @@ mod tests {
     #[cfg(unix)]
     use super::{BridgeState, dispatch_loop, proxy_request};
     use super::{
-        read_http_response, request_protocol_version, response_timeout, tuic_session_header_line,
+        client_pid_header_line, read_http_response, request_protocol_version, response_timeout,
+        tuic_session_header_line,
     };
     #[cfg(unix)]
     use std::path::PathBuf;
@@ -1190,8 +1198,7 @@ mod tests {
     }
 
     /// The regression: a long request must not hold the reader hostage. Two slow
-    /// (300ms) calls sent back-to-back finish in roughly one slow window, and the
-    /// server sees both open at once.
+    /// (300ms) calls sent back-to-back are seen open at once by the server.
     #[cfg(unix)]
     #[tokio::test]
     async fn concurrent_requests_are_not_serialized() {
@@ -1204,19 +1211,16 @@ mod tests {
         tx.send(call("slow_other")).unwrap();
         drop(tx);
 
-        let started = std::time::Instant::now();
         dispatch_loop(state, rx).await;
-        let elapsed = started.elapsed();
 
+        // Overlap is asserted through the mock's in-flight counter, not through
+        // elapsed time: a wall-clock bound fails on a loaded box (597ms observed
+        // under nextest -j 6) while proving nothing the counter does not.
         assert_eq!(stats.tool_calls.load(Ordering::SeqCst), 2);
         assert_eq!(
             stats.max_in_flight.load(Ordering::SeqCst),
             2,
             "both requests must be in flight together — serialized dispatch is the bug"
-        );
-        assert!(
-            elapsed < std::time::Duration::from_millis(550),
-            "two 300ms calls took {elapsed:?}: they ran back-to-back, not concurrently"
         );
     }
 
@@ -1234,14 +1238,15 @@ mod tests {
         tx.send(call("repo")).unwrap();
         drop(tx);
 
-        let started = std::time::Instant::now();
         dispatch_loop(state, rx).await;
 
+        // The fast call never sleeps, so it is in flight alongside the slow one
+        // only if it was dispatched while the slow call was still pending.
         assert_eq!(stats.tool_calls.load(Ordering::SeqCst), 2);
-        assert_eq!(stats.max_in_flight.load(Ordering::SeqCst), 2);
-        assert!(
-            started.elapsed() < std::time::Duration::from_millis(650),
-            "the fast call inherited the slow call's latency"
+        assert_eq!(
+            stats.max_in_flight.load(Ordering::SeqCst),
+            2,
+            "the fast call waited for the slow call instead of overlapping it"
         );
     }
 
@@ -1379,6 +1384,13 @@ mod tests {
              name, or TUIC serves it the wrong tool surface: {}",
             bodies[1]
         );
+    }
+
+    /// Catches: a reconnect storm that cannot be traced to a process because the
+    /// bridge never says which pid opened the connection.
+    #[test]
+    fn the_bridge_names_its_process_to_the_server() {
+        assert_eq!(client_pid_header_line(4242), "x-tuic-client-pid: 4242\r\n");
     }
 
     #[test]

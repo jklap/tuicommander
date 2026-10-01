@@ -1,3 +1,4 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -31,22 +32,35 @@ pub enum PlanState {
     Done,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// Where a story came from: `{"type":"native"}`, `{"type":"plan_step","step":"..."}` or `{"type":"git_hub_issue","number":123}`.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StoryOrigin {
     Native,
-    PlanStep { step: String },
-    GitHubIssue { number: u64 },
+    PlanStep {
+        /// The plan step this story implements.
+        step: String,
+    },
+    GitHubIssue {
+        /// The GitHub issue number.
+        number: u64,
+    },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// A new story. Field names are camelCase.
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NewStory {
+    /// Id of the plan that owns the story (from create_plan or list_plans).
     pub plan_id: String,
     pub title: String,
+    /// Acceptance criteria, 1 to 100 entries.
     pub criteria: Vec<String>,
+    /// 1 (highest), 2 or 3.
+    #[schemars(range(min = 1, max = 3))]
     pub priority: u8,
     pub origin: StoryOrigin,
+    /// Repo-relative paths the story may touch; may be empty.
     pub file_scope: Vec<String>,
 }
 
@@ -110,17 +124,28 @@ pub struct PlanView {
     pub all_cancelled: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// A status command. Unit commands are plain strings (`"submit_review"`); the criterion commands
+/// carry a zero-based index (`{"check_criterion":0}`).
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StoryCommand {
+    /// User only. Ready -> in_progress without a session claim.
     StartManual,
+    /// Agent: only on a story it claimed, while in_progress.
     CheckCriterion(usize),
+    /// Agent: only on a story it claimed, while in_progress.
     UncheckCriterion(usize),
+    /// Agent: only on a story it claimed, with every criterion checked. Moves it to review.
     SubmitReview,
+    /// User only. Review -> done; dependants whose dependencies are all done become ready.
     Approve,
+    /// User only. Review -> in_progress (claimed) or ready.
     RejectReview,
+    /// User only.
     Block,
+    /// User only. Blocked -> ready, or backlog while a dependency is unfinished.
     Unblock,
+    /// User only. Cancels the story.
     WontFix,
 }
 

@@ -133,10 +133,10 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_dictation_status: { map: () => ({ method: "GET", path: "/dictation/status" }) },
 	get_model_info: { map: () => ({ method: "GET", path: "/dictation/models" }) },
 	download_whisper_model: {
-		map: (args) => ({ method: "POST", path: "/dictation/models/download", body: { model: args.model_name } }),
+		map: (args) => ({ method: "POST", path: "/dictation/models/download", body: { model: args.modelName } }),
 	},
 	delete_whisper_model: {
-		map: (args) => ({ method: "POST", path: "/dictation/models/delete", body: { model: args.model_name } }),
+		map: (args) => ({ method: "POST", path: "/dictation/models/delete", body: { model: args.modelName } }),
 	},
 	get_speech_assets: { map: () => ({ method: "GET", path: "/dictation/speech/assets" }) },
 	download_speech_asset: {
@@ -274,6 +274,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// The bodies carry exactly the arguments the Tauri command takes, because
 	// the client's refusals are computed in Rust and must be identical on both
 	// transports — a body that dropped a field would move a decision here.
+	acp_workspace_root: {
+		map: () => ({ method: "GET", path: "/acp/workspace" }),
+	},
 	acp_connect: {
 		map: (args) => ({ method: "POST", path: "/acp/connections", body: { root: args.root } }),
 	},
@@ -1380,6 +1383,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_ci_checks: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/ci?path=${p("path")}&pr_number=${p("prNumber")}` }),
 	},
+	get_pr_review_threads: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/pr-review-threads?path=${p("path")}&pr_number=${p("prNumber")}`,
+		}),
+	},
 	rename_branch: {
 		map: (args) => ({
 			method: "POST",
@@ -1576,13 +1585,22 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (_args, p) => ({ method: "GET", path: `/repo/orphan-cleanup/pending?repoPath=${p("repoPath")}` }),
 	},
 	clear_orphan_cleanup: {
-		map: (args) => ({ method: "POST", path: "/repo/orphan-cleanup/clear", body: { repoPath: args.repoPath } }),
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/orphan-cleanup/clear",
+			body: { repoPath: args.repoPath, kept: args.kept },
+		}),
 	},
 	remove_orphan_worktree: {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/remove-orphan",
-			body: { repoPath: args.repoPath, worktreePath: args.worktreePath, safeOnly: args.safeOnly ?? false },
+			body: {
+				repoPath: args.repoPath,
+				worktreePath: args.worktreePath,
+				safeOnly: args.safeOnly ?? false,
+				confirmedSessions: args.confirmedSessions ?? [],
+			},
 		}),
 	},
 	run_setup_script: {
@@ -1653,6 +1671,20 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/approve-pr",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber },
+		}),
+	},
+	update_pr_branch: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/update-pr-branch",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, expectedHeadSha: args.expectedHeadSha },
+		}),
+	},
+	close_pr: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/close-pr",
 			body: { repoPath: args.repoPath, prNumber: args.prNumber },
 		}),
 	},
@@ -2043,6 +2075,14 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_tunnel_status: { map: (args) => ({ method: "GET", path: `/tunnels/status/${args.id}` }) },
 	get_tunnel_audit: { map: (args) => ({ method: "GET", path: `/tunnels/audit/${args.id}?limit=${args.limit || 20}` }) },
 	list_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts" }) },
+	list_discovered_ssh_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/discovered" }) },
+	probe_discovered_ssh_host: {
+		map: (args) => ({
+			method: "POST",
+			path: "/tunnels/ssh-hosts/probe",
+			body: { target: args.target, port: args.port ?? null },
+		}),
+	},
 	probe_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts/status" }) },
 	list_ssh_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
 
@@ -2226,6 +2266,7 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"close_panel_window",
 	"focus_panel_window",
 	"focus_main_window",
+	"show_native_notification",
 	// Native drag-and-drop (WKWebView/OS drag) — no browser equivalent.
 	"start_native_drag",
 	// Native file pickers (NSOpenPanel/NSSavePanel and their peers) — the host's
@@ -2600,24 +2641,18 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 	}
 	const url = withRemoteToken(buildHttpUrl(mapping.path, baseUrl), connectionId);
 
-	const controller = new AbortController();
-	const timeoutId = setTimeout(() => controller.abort(), 30_000);
-
+	// No client-side deadline: Tauri invoke() has none, and a fixed cap here cut
+	// backend calls that own a longer deadline (ego initialize: 60 s) with
+	// "signal is aborted" instead of the backend's own message.
 	const init: RequestInit = {
 		method: mapping.method,
 		headers: { "Content-Type": "application/json" },
-		signal: controller.signal,
 	};
 	if (mapping.body !== undefined) {
 		init.body = JSON.stringify(mapping.body);
 	}
 
-	let resp: Response;
-	try {
-		resp = await fetch(url, init);
-	} finally {
-		clearTimeout(timeoutId);
-	}
+	const resp = await fetch(url, init);
 	if (!resp.ok) {
 		if (resp.status === 404 && mapping.notFoundAsNull) {
 			return null as T;

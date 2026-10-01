@@ -640,10 +640,10 @@ describe("transport", () => {
 			});
 
 			it.each([
-				["download_whisper_model", { model_name: "small" }, "POST", "/dictation/models/download", { model: "small" }],
-				["delete_whisper_model", { model_name: "small" }, "POST", "/dictation/models/delete", { model: "small" }],
+				["download_whisper_model", { modelName: "small" }, "POST", "/dictation/models/download", { model: "small" }],
+				["delete_whisper_model", { modelName: "small" }, "POST", "/dictation/models/delete", { model: "small" }],
 				// The wire key is `asset` on both transports, unlike the whisper
-				// pair above where the IPC parameter is `model_name` and the body
+				// pair above where the IPC argument is `modelName` and the body
 				// key is `model`. Keeping them the same here is deliberate: the
 				// mismatch above is a wart nobody should copy.
 				[
@@ -830,6 +830,21 @@ describe("transport", () => {
 			expect(mapCommandToHttp("probe_ssh_config_hosts", {})).toMatchObject({
 				method: "GET",
 				path: "/tunnels/ssh-hosts/status",
+			});
+		});
+
+		it("maps the discovered SSH hosts listing", () => {
+			expect(mapCommandToHttp("list_discovered_ssh_hosts", {})).toMatchObject({
+				method: "GET",
+				path: "/tunnels/ssh-hosts/discovered",
+			});
+		});
+
+		it("maps the per-host SSH probe to a POST with the identity in the body", () => {
+			expect(mapCommandToHttp("probe_discovered_ssh_host", { target: "10.0.0.5", port: 2222 })).toMatchObject({
+				method: "POST",
+				path: "/tunnels/ssh-hosts/probe",
+				body: { target: "10.0.0.5", port: 2222 },
 			});
 		});
 
@@ -2026,6 +2041,7 @@ describe("transport", () => {
 		// than derived from the mappers: a test that rebuilt the path the same
 		// way the code does would agree with any typo.
 		it.each([
+			["acp_workspace_root", {}, "GET", "/acp/workspace", undefined],
 			["acp_connect", { root: "/repo" }, "POST", "/acp/connections", { root: "/repo" }],
 			["acp_connection_snapshot", { connectionId: CONNECTION }, "GET", `/acp/connections/${CONNECTION}`, undefined],
 			["acp_disconnect", { connectionId: CONNECTION }, "DELETE", `/acp/connections/${CONNECTION}`, undefined],
@@ -2417,6 +2433,31 @@ describe("transport", () => {
 				expect.stringContaining("/sessions"),
 				expect.objectContaining({ method: "GET" }),
 			);
+		});
+
+		// Catches: a fixed client-side AbortController (was 30 s) shorter than a backend
+		// deadline such as ego's 60 s initialize, surfacing "signal is aborted" instead of the backend message.
+		it("does not abort a request before the backend answers, however long it takes", async () => {
+			vi.useFakeTimers();
+			try {
+				const { rpc } = await import("../transport");
+				let signal: AbortSignal | undefined;
+				globalThis.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+					signal = init.signal ?? undefined;
+					return new Promise((resolve) => {
+						setTimeout(() => resolve(jsonResponse('{"ok":true}')), 90_000);
+					});
+				});
+
+				const pending = rpc<{ ok: boolean }>("list_active_sessions");
+				await vi.advanceTimersByTimeAsync(89_000);
+
+				expect(signal?.aborted ?? false).toBe(false);
+				await vi.advanceTimersByTimeAsync(2_000);
+				await expect(pending).resolves.toEqual({ ok: true });
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("sends the selected Claude profile root when verifying a browser resume", async () => {
