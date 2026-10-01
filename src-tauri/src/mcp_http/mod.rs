@@ -6263,6 +6263,52 @@ mod tests {
         );
     }
 
+    // Catches: a confirmed (safeOnly=false) removal ignoring a session that
+    // started after the user reviewed the dialog, or refusing the sessions the
+    // user did see.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_refuses_only_sessions_the_user_did_not_see() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let remove = |sessions: serde_json::Value| {
+            mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": sessions,
+                }),
+            )
+        };
+
+        let unreviewed = build_router(state.clone(), false, true)
+            .oneshot(remove(serde_json::json!([])))
+            .await
+            .unwrap();
+        assert_eq!(unreviewed.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+
+        crate::state::tests_support::insert_dummy_session(&state, "agent-late");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "agent-late",
+            &linked.to_string_lossy(),
+        );
+        let late = build_router(state.clone(), false, true)
+            .oneshot(remove(serde_json::json!(["agent-1"])))
+            .await
+            .unwrap();
+        assert_eq!(late.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+
+        let reviewed = build_router(state, false, true)
+            .oneshot(remove(serde_json::json!(["agent-1", "agent-late"])))
+            .await
+            .unwrap();
+        assert_eq!(reviewed.status(), StatusCode::OK);
+        assert!(!linked.exists());
+    }
+
     #[tokio::test]
     async fn orphan_cleanup_answer_accepts_clean_branch_reachable_worktree() {
         let repo = create_temp_git_repo();

@@ -53,7 +53,12 @@ interface RepositoryRefreshCoordinatorDeps {
 		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
 		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
 		clearOrphanCleanup: (repoPath: string, kept: boolean) => Promise<void>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string, safeOnly?: boolean) => Promise<void>;
+		removeOrphanWorktree: (
+			repoPath: string,
+			worktreePath: string,
+			safeOnly?: boolean,
+			confirmedSessions?: string[],
+		) => Promise<void>;
 		getWorkspaceLifecycle: (
 			repoPath: string,
 			workspaceId: string,
@@ -571,6 +576,19 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	// Orphans the user chose to "Keep" this session — don't nag about them again
 	// on every subsequent refresh/poll. Session-scoped (re-detected on next launch). (#65)
 	const keptOrphans = new Set<string>();
+	/** Remove one orphan, then close its terminals. The backend verdict comes first: a session
+	 *  that started after the assessment makes the backend refuse, and its terminal must survive.
+	 *  A review-confirmed entry carries the session ids the user saw; the backend refuses if
+	 *  another one appeared since. */
+	const removeOrphan = async (repoPath: string, entry: OrphanAssessment) => {
+		if (entry.safe) {
+			await deps.repo.removeOrphanWorktree(repoPath, entry.path, true);
+		} else {
+			const seen = (entry.live_sessions ?? []).map((session) => session.session_id);
+			await deps.repo.removeOrphanWorktree(repoPath, entry.path, false, seen);
+		}
+		await deps.closeTerminalsInWorktree(entry.path);
+	};
 	const handleOrphanCleanup = async (repoPath: string) => {
 		const orphanCleanup = repoSettingsStore.getEffective(repoPath)?.orphanCleanup ?? "ask";
 		if (orphanCleanup === "off") return;
@@ -592,13 +610,12 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			await Promise.allSettled(
 				assessments
 					.filter((entry) => entry.safe)
-					.map(async ({ path: wtPath }) => {
+					.map(async (entry) => {
 						try {
-							await deps.closeTerminalsInWorktree(wtPath);
-							await deps.repo.removeOrphanWorktree(repoPath, wtPath, true);
+							await removeOrphan(repoPath, entry);
 							removed++;
 						} catch (err) {
-							appLogger.warn("git", `Failed to auto-remove orphan worktree ${wtPath}`, err);
+							appLogger.warn("git", `Failed to auto-remove orphan worktree ${entry.path}`, err);
 						}
 					}),
 			);
@@ -667,13 +684,12 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		let removed = 0;
 		await Promise.allSettled(
-			pending.map(async ({ path: wtPath, safe }) => {
+			pending.map(async (entry) => {
 				try {
-					await deps.closeTerminalsInWorktree(wtPath);
-					await deps.repo.removeOrphanWorktree(repoPath, wtPath, safe);
+					await removeOrphan(repoPath, entry);
 					removed++;
 				} catch (err) {
-					appLogger.warn("git", `Failed to remove orphan worktree ${wtPath}`, err);
+					appLogger.warn("git", `Failed to remove orphan worktree ${entry.path}`, err);
 				}
 			}),
 		);

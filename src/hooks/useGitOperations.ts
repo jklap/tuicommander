@@ -113,7 +113,12 @@ export interface GitOperationsDeps {
 		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
 		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
 		clearOrphanCleanup: (repoPath: string, kept: boolean) => Promise<void>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string, safeOnly?: boolean) => Promise<void>;
+		removeOrphanWorktree: (
+			repoPath: string,
+			worktreePath: string,
+			safeOnly?: boolean,
+			confirmedSessions?: string[],
+		) => Promise<void>;
 		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
 		getWorkspaceLifecycle: (
 			repoPath: string,

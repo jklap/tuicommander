@@ -1058,7 +1058,7 @@ Content-Type: application/json
 { "repoPath": "/path/to/repo", "worktreePath": "/path/to/worktree", "safeOnly": true }
 ```
 
-Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list. `safeOnly` is optional; when true, the server rechecks clean status, branch reachability and live sessions immediately before removal and refuses a checkout a session still works in. With `safeOnly` false the caller has confirmed the removal from the assessment.
+Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list. `safeOnly` is optional; when true, the server rechecks clean status, branch reachability and live sessions immediately before removal and refuses a checkout a session still works in. With `safeOnly` false the caller has confirmed the removal from the assessment: `confirmedSessions` (default `[]`) lists the `live_sessions` ids it showed, and the server refuses when a live session outside that list works in the checkout.
 
 ### Merge PR via GitHub
 
