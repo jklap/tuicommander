@@ -868,4 +868,69 @@ mod tests {
             "the parent replied, the hold must be released"
         );
     }
+
+    // ---- critic-1319 round 2: lifecycle of the blocked_children set ----
+
+    /// Catches: the hold surviving the child's PTY. The set is only swept by the idle
+    /// sweep, so a session re-created under the same durable id before the next sweep
+    /// inherits a stale BLOCKED hold and is never closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn closing_a_blocked_child_drops_its_hold_before_the_id_is_reused() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        assert!(state.blocked_children.contains("c"));
+        crate::pty::close_pty_core(&state, "c", false);
+        critic_child(&state, "c", temp.path());
+        critic_sweep_to_maturity(&state);
+        assert!(
+            !state.session_maps.sessions.contains_key("c"),
+            "a new session under a reused id inherited the dead session's BLOCKED hold"
+        );
+    }
+
+    /// Catches: any non-lifecycle mail to the child releasing the hold. A sibling's
+    /// chatter is not the parent answering; once the child has read it, the child is
+    /// still blocked on its parent and must stay open.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mail_from_a_sibling_does_not_release_the_blocked_hold() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state.push_agent_inbox("c", critic_mail("s1", "sibling", "fyi", 20));
+        state.agent_read_cursor.insert("c".into(), 20);
+        critic_sweep_to_maturity(&state);
+        assert!(
+            state.session_maps.sessions.contains_key("c"),
+            "a sibling's mail released a hold that only the parent can end"
+        );
+    }
+
+    /// Catches: the parent answering through the PTY (session submit / tuic-say) instead
+    /// of `agent send`. That path never reaches push_agent_inbox, so the hold is never
+    /// released: the child resumes, finishes without mailing, and is kept open for ever.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn input_typed_into_the_child_after_blocked_releases_the_hold() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let temp = critic_temp();
+        let _config = crate::config::set_config_dir_override(temp.path().join("config"));
+        critic_child(&state, "c", temp.path());
+        state.push_agent_inbox("parent", critic_mail("m1", "c", "BLOCKED: box down", 10));
+        state
+            .session_maps
+            .last_input_ms
+            .insert("c".into(), std::sync::atomic::AtomicU64::new(20));
+        critic_sweep_to_maturity(&state);
+        assert!(
+            !state.session_maps.sessions.contains_key("c"),
+            "the parent answered through the terminal; the hold must not outlive that"
+        );
+    }
 }
