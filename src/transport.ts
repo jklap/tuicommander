@@ -537,6 +537,14 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { request_id: args.requestId, confirmed: args.confirmed },
 		}),
 	},
+	// The tab's verdict on `session action=suspend`; the MCP call waits for it.
+	session_suspend_response: {
+		map: (args) => ({
+			method: "POST",
+			path: "/mcp/suspend-response",
+			body: { request_id: args.requestId, ok: args.ok, reason: args.reason ?? null },
+		}),
+	},
 	get_session_foreground_process: {
 		map: (args) => ({
 			method: "GET",

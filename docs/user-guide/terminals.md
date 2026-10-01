@@ -43,6 +43,15 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 - Last 10 closed tabs are remembered with their name, font size, and working directory
 - Reopened tabs start a fresh shell session in the original directory
 
+### Suspending a Tab
+
+**Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby only pauses an idle process, which keeps its memory, and wakes it when you focus the tab. A suspended tab holds no process at all.
+
+- **Resume** — click **Resume** in the tab, or right-click → **Resume Tab**. A new session opens in the same folder. An agent tab runs the same resume command a tab gets after a TUICommander restart, so the agent continues its conversation. A plain shell tab opens a fresh shell.
+- **Restart** — a suspended tab stays suspended after TUICommander restarts; it is never resumed automatically.
+- **Refused while busy** — Suspend is disabled while the agent is working, a question waits for your answer, commands are queued, or a command runs in a plain shell, so no turn is cut. An agent tab with no resumable session is refused too.
+- **MCP** — `session action=suspend session_id=<id>` does the same for a tab another agent wants to park, under the same refusals.
+
 ## Tab Management
 
 ### Tab Names
