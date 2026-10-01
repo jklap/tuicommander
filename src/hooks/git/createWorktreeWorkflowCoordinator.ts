@@ -238,6 +238,10 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 			if (pr && pr.state === "OPEN") {
 				const preferred = repoSettingsStore.getEffective(repoPath)?.prMergeStrategy ?? "merge";
 				const method = effectiveMergeMethod(pr, preferred);
+				// No head sha means no pin: refuse here instead of falling back to a local merge of unreviewed commits.
+				if (!pr.head_ref_oid?.trim()) {
+					throw new Error("PR head changed: the PR head commit is unknown. Refresh and review before merging.");
+				}
 				try {
 					await deps.repo.mergePrViaGithub(repoPath, pr.number, method, pr.head_ref_oid);
 				} catch (githubErr) {

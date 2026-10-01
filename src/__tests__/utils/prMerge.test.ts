@@ -86,6 +86,22 @@ describe("mergeWithFallback", () => {
 		expect(mockInvoke.mock.calls[2][1]).toMatchObject({ mergeMethod: "rebase" });
 	});
 
+	it("sends the reviewed head sha on every attempt of the 405 fallback", async () => {
+		// Catches: the pin applied to the first attempt only, so a fallback merge lands unreviewed commits.
+		mockInvoke
+			.mockRejectedValueOnce(new Error("405 Method Not Allowed"))
+			.mockRejectedValueOnce(new Error("405 Method Not Allowed"))
+			.mockResolvedValueOnce(undefined);
+
+		await mergeWithFallback("/repo", 7, "squash", "reviewed-sha");
+
+		expect(mockInvoke.mock.calls.map(([, args]) => args.expectedHeadSha)).toEqual([
+			"reviewed-sha",
+			"reviewed-sha",
+			"reviewed-sha",
+		]);
+	});
+
 	it("throws the last 405 error after all methods are exhausted", async () => {
 		const err1 = new Error("405 squash not allowed");
 		const err2 = new Error("405 merge not allowed");
