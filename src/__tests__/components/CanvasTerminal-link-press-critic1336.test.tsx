@@ -247,7 +247,7 @@ describe("CanvasTerminal link press, critic 1336", () => {
 
 	// Catches: a right press claimed from the app over a hover-only link while the context menu
 	// (which needs a dashed span) never opens: the app loses the press and the user gets nothing.
-	it("does not swallow a right press over a hover-only link whose menu cannot open", async () => {
+	it("opens the link menu and suppresses the default one for a right press over a hover-only link", async () => {
 		await hoverOsc8();
 		fire(canvas, "mousedown", OSC8_COL, { button: 2, buttons: 2 });
 		const ctx = new MouseEvent("contextmenu", {
@@ -259,7 +259,8 @@ describe("CanvasTerminal link press, critic 1336", () => {
 		});
 		canvas.dispatchEvent(ctx);
 		await new Promise((r) => setTimeout(r, 100));
-		expect(ptyWrites().length > 0 || ctx.defaultPrevented).toBe(true);
+		expect(ctx.defaultPrevented).toBe(true);
+		await waitFor(() => expect(document.body.textContent ?? "").toContain("Copy link"));
 	});
 
 	// Catches: a path wrapped over two rows, hovered, being dead on click under mouse reporting

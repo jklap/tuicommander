@@ -243,15 +243,15 @@ describe("CanvasTerminal link press, critic 1336 round 2", () => {
 		await waitFor(() => expect(document.body.textContent ?? "").toContain("Copy link"));
 	});
 
-	// Catches: a hover claim that outlives its link (target gone, same text) making the right press
-	// swallow the app's default menu and show none: preventDefault with no menu.
-	it("does not suppress the default menu when the claimed link no longer resolves", async () => {
+	// Catches: a hover claim that outlives its link (target gone, same text) opening a menu for
+	// the stale target. The default menu is suppressed synchronously, so no menu is the outcome.
+	it("shows no link menu when the claimed link no longer resolves", async () => {
 		await hoverOsc8();
 		osc8Active = false;
 		const ev = contextMenu(OSC8_COL);
 		await new Promise((r) => setTimeout(r, 100));
-		const menuShown = (document.body.textContent ?? "").includes("Copy link");
-		expect(menuShown || !ev.defaultPrevented).toBe(true);
+		expect(ev.defaultPrevented).toBe(true);
+		expect(document.body.textContent ?? "").not.toContain("Copy link");
 	});
 
 	// Catches: a click on text whose hyperlink target changed (same visible text) opening the
