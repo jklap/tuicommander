@@ -82,17 +82,7 @@ describe("trackQuestionReminder", () => {
 		expect(playQuestionReminder).toHaveBeenCalledTimes(1);
 	});
 
-	it("a different question without a clear in between restarts the timer (bug: multi-question wizard counted from the first question)", () => {
-		store.update(id, { awaitingInput: "question", awaitingInputText: "Q1" });
-		vi.advanceTimersByTime(QUESTION_REMINDER_MS - 1000);
-		store.update(id, { awaitingInputText: "Q2" });
-		vi.advanceTimersByTime(QUESTION_REMINDER_MS - 1);
-		expect(playQuestionReminder).not.toHaveBeenCalled();
-		vi.advanceTimersByTime(1);
-		expect(playQuestionReminder).toHaveBeenCalledTimes(1);
-	});
-
-	it("a new question restarts the timer from zero", () => {
+	it("answering one question and being asked the next restarts the timer (user input clears awaiting; multi-question wizard)", () => {
 		store.setAwaitingInput(id, "question", true);
 		vi.advanceTimersByTime(QUESTION_REMINDER_MS - 1000);
 		store.clearAwaitingInput(id);

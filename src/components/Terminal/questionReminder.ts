@@ -9,12 +9,13 @@ export const QUESTION_REMINDER_MS = 120_000;
 const trackers = new Set<string>();
 
 /**
- * Re-notify once when a terminal has been awaiting the same question for QUESTION_REMINDER_MS.
+ * Re-notify once when a terminal has been awaiting input for QUESTION_REMINDER_MS.
  * The tracker is owned by the terminal's id, not by the calling component, so a remount
  * keeps the original start time and two components mounting one id cannot double-fire.
- * It ends when the terminal leaves the store. Any change of awaitingInput or of the
- * question text (answer, agent resuming, error, a different question) restarts or
- * cancels the timer, so it fires at most once per question.
+ * It ends when the terminal leaves the store. The timer starts on the awaiting false->true
+ * edge and is cancelled by any clear: user input clears awaitingInput (Terminal.tsx user-input),
+ * so answering one sub-question of a wizard and being asked the next restarts it. A question
+ * whose text flips while awaiting stays one question. At most one reminder per question.
  * Idempotent: safe to call from every mount of the terminal.
  */
 export function trackQuestionReminder(id: string): void {
@@ -22,7 +23,7 @@ export function trackQuestionReminder(id: string): void {
 	trackers.add(id);
 	createRoot((dispose) => {
 		let timer: ReturnType<typeof setTimeout> | undefined;
-		let key: string | null = null;
+		let pending = false;
 		let since = 0;
 		const stop = () => {
 			clearTimeout(timer);
@@ -37,10 +38,10 @@ export function trackQuestionReminder(id: string): void {
 				dispose();
 				return;
 			}
-			const pending = term.awaitingInput === "question" ? (term.awaitingInputText ?? "") : null;
-			if (pending !== key) since = Date.now();
-			key = pending;
-			if (pending === null) return;
+			const awaiting = term.awaitingInput === "question";
+			if (awaiting && !pending) since = Date.now();
+			pending = awaiting;
+			if (!awaiting) return;
 			timer = setTimeout(
 				() => {
 					timer = undefined;

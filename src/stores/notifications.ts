@@ -14,7 +14,7 @@ import { setToastBellMirrorResolver } from "./toasts";
 
 interface PlayOptions {
 	terminalId?: string;
-	/** A repeat of an earlier notice: the OS notice also goes out in a focused window unless the user is looking at this terminal. */
+	/** A repeat of an earlier notice: the OS notice also goes out in a focused window unless the user is looking at this terminal, and is off with notifications or this sound disabled. */
 	reminder?: boolean;
 }
 
@@ -162,7 +162,7 @@ function createNotificationsStore() {
 			await notificationManager.play(sound);
 			const unfocused = !document.hasFocus();
 			if (unfocused) actions.incrementBadge();
-			if (opts?.terminalId && (unfocused || opts.reminder)) {
+			if (opts?.terminalId && (unfocused || (opts.reminder && actions.isSoundEnabled(sound)))) {
 				const terminalId = opts.terminalId;
 				void import("./terminals")
 					.then(({ terminalsStore }) => {

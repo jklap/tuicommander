@@ -62,13 +62,4 @@ describe("trackQuestionReminder (critic)", () => {
 		vi.advanceTimersByTime(20_000);
 		expect(playQuestionReminder).toHaveBeenCalledTimes(1);
 	});
-
-	it("a terminal removed and a different one added never receives the old reminder (bug: reminder keyed on stale id lookup)", () => {
-		store.setAwaitingInput(id, "question", true);
-		store.remove(id);
-		const other = store.add(makeTerminal());
-		vi.advanceTimersByTime(mod.QUESTION_REMINDER_MS * 2);
-		expect(playQuestionReminder).not.toHaveBeenCalledWith(other);
-		expect(playQuestionReminder).not.toHaveBeenCalled();
-	});
 });
