@@ -96,6 +96,8 @@ vi.mock("../../stores/repositories", () => ({
 
 vi.mock("../../stores/repoSettings", () => ({
 	repoSettingsStore: {
+		// Read by `syncScopeForActiveRepo` after a sidebar terminal click.
+		state: { settings: {} },
 		get: vi.fn(() => undefined),
 		getEffective: vi.fn(() => undefined),
 		getEffectiveField: vi.fn(() => undefined),
@@ -107,6 +109,7 @@ vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
 		get: mockTerminalsGet,
 		getSubAgentTag: mockGetSubAgentTag,
+		getIds: vi.fn((): string[] => []),
 		isBusy: vi.fn(() => false),
 		isWorking: vi.fn(() => false),
 		onRemove: vi.fn(() => () => {}),
