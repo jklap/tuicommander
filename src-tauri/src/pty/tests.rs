@@ -27094,3 +27094,197 @@ fn transcript_dump_turn_end_detector_requires_both_glyph_and_marker() {
         "\u{273B} Churned for 1s \u{b7} done 1:54 AM"
     ));
 }
+
+fn feed_tuic_verb(
+    state: &crate::state::AppState,
+    session_id: &str,
+    silence: &Arc<Mutex<SilenceState>>,
+    verb: &str,
+    payload: &str,
+) {
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk(
+        &format!("\x1b]7770;{verb}={payload}\x07"),
+        silence,
+        session_id,
+        state,
+    );
+}
+
+#[test]
+fn parse_bg_task_summary_splits_teammates_from_other_running_work() {
+    let cases: &[(&str, u32, u32)] = &[
+        // (decoded payload, non_teammate_running, teammate_running)
+        ("", 0, 0),
+        ("teammate/running", 0, 1),
+        ("teammate/running*3", 0, 3),
+        ("shell/running", 1, 0),
+        ("shell/running*2,subagent/running", 3, 0),
+        ("teammate/running*2,shell/running", 1, 2),
+        ("teammate/completed,shell/failed", 0, 0),
+        ("teammate/pending", 0, 1),
+        ("/running", 1, 0),
+        ("running", 1, 0),
+        ("teammate/running*x", 0, 1),
+        ("teammate/running*0", 0, 0),
+        ("teammate/,shell/", 0, 0),
+        ("monitor/running,workflow/running,MCP task/running", 3, 0),
+    ];
+    for (payload, other, mates) in cases {
+        let got = parse_bg_task_summary(payload);
+        assert_eq!(
+            (got.non_teammate_running, got.teammate_running),
+            (*other, *mates),
+            "payload {payload:?}"
+        );
+    }
+}
+
+#[test]
+fn bgtasksummary_makes_an_idle_teammate_stop_counting_but_keeps_other_work() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-bgsummary-teammate";
+    let silence = bgtasks_test_session(&state, session_id);
+
+    // Only a teammate is declared running.
+    feed_bgtasks(&state, session_id, &silence, "running");
+    feed_tuic_verb(
+        &state,
+        session_id,
+        &silence,
+        "bgtasksummary",
+        "teammate%2Frunning",
+    );
+    {
+        let sl = silence.lock();
+        assert!(
+            sl.declared_background_work_for_epoch(0),
+            "conservative read counts it"
+        );
+        assert!(
+            !sl.declared_background_work_for_epoch_with(0, || false),
+            "idle teammate"
+        );
+        assert!(
+            sl.declared_background_work_for_epoch_with(0, || true),
+            "busy teammate"
+        );
+    }
+
+    // Real background work alongside the teammate holds it regardless.
+    feed_bgtasks(&state, session_id, &silence, "running%2Crunning");
+    feed_tuic_verb(
+        &state,
+        session_id,
+        &silence,
+        "bgtasksummary",
+        "teammate%2Frunning%2Cshell%2Frunning",
+    );
+    assert!(
+        silence
+            .lock()
+            .declared_background_work_for_epoch_with(0, || false)
+    );
+}
+
+#[test]
+fn bgtasksummary_is_lazy_about_the_teammate_check() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-lazy");
+    feed_bgtasks(&state, "test-bgsummary-lazy", &silence, "running");
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-lazy",
+        &silence,
+        "bgtasksummary",
+        "shell%2Frunning",
+    );
+    // Non-teammate work is decisive, so the closure must never run (it would read
+    // other sessions' state while a SilenceState lock is held).
+    assert!(
+        silence
+            .lock()
+            .declared_background_work_for_epoch_with(0, || {
+                panic!("teammate check must not run when non-teammate work is declared")
+            })
+    );
+}
+
+#[test]
+fn bgtasksummary_without_a_declaration_is_ignored() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-orphan");
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-orphan",
+        &silence,
+        "bgtasksummary",
+        "shell%2Frunning",
+    );
+    let sl = silence.lock();
+    assert!(!sl.declared_background_work_for_epoch(0));
+    assert!(sl.declared_task_summary_for_epoch(0).is_none());
+
+    // A summary cannot resurrect a cleared declaration either.
+    drop(sl);
+    feed_bgtasks(&state, "test-bgsummary-orphan", &silence, "completed");
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-orphan",
+        &silence,
+        "bgtasksummary",
+        "shell%2Frunning",
+    );
+    assert!(!silence.lock().declared_background_work_for_epoch(0));
+}
+
+#[test]
+fn a_new_bgtasks_without_a_summary_falls_back_to_counting_every_running_task() {
+    // Mixed-version safety: an older hook sends only `bgtasks`. A leftover summary
+    // from an earlier fire must not keep hiding a teammate that is now the only
+    // information we have.
+    let state = crate::state::tests_support::make_test_app_state();
+    let silence = bgtasks_test_session(&state, "test-bgsummary-fallback");
+    feed_bgtasks(&state, "test-bgsummary-fallback", &silence, "running");
+    feed_tuic_verb(
+        &state,
+        "test-bgsummary-fallback",
+        &silence,
+        "bgtasksummary",
+        "teammate%2Frunning",
+    );
+    assert!(
+        !silence
+            .lock()
+            .declared_background_work_for_epoch_with(0, || false)
+    );
+
+    feed_bgtasks(&state, "test-bgsummary-fallback", &silence, "running");
+    assert!(
+        silence
+            .lock()
+            .declared_background_work_for_epoch_with(0, || false),
+        "no fresh summary -> legacy behavior, every running task counts"
+    );
+}
+
+#[test]
+fn reset_declared_background_work_also_drops_the_summary() {
+    let mut sl = SilenceState::new();
+    sl.set_declared_background_work(true, 3);
+    sl.set_declared_task_summary(
+        DeclaredTaskSummary {
+            non_teammate_running: 0,
+            teammate_running: 2,
+        },
+        3,
+    );
+    assert!(sl.declared_task_summary_for_epoch(3).is_some());
+    assert!(
+        sl.declared_task_summary_for_epoch(4).is_none(),
+        "stale epoch"
+    );
+    sl.reset_declared_background_work();
+    assert!(sl.declared_task_summary_for_epoch(3).is_none());
+    assert!(!sl.declared_background_work_for_epoch(3));
+}
