@@ -20581,7 +20581,13 @@ fn critic5_mini_bare_label_gate_is_exact_at_45_46_47() {
 /// (a bare non-primary label or a truncated usage row reading Ready mid-turn).
 #[test]
 fn critic5_mini_narrow_non_status_rows_stay_unknown_at_46() {
-    for row in [" BUILD 52.9K", " BUILD 52.9K (26%)", " REVIEW", " BUILD  ctrl+p", " Build"] {
+    for row in [
+        " BUILD 52.9K",
+        " BUILD 52.9K (26%)",
+        " REVIEW",
+        " BUILD  ctrl+p",
+        " Build",
+    ] {
         let rows = vec![row.to_string()];
         assert_eq!(
             detect_agent_screen_activity_at(Some("opencode"), &rows, Some(46)),
