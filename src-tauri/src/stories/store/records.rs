@@ -83,13 +83,18 @@ pub(super) fn save_story(
     Ok(())
 }
 
-pub(super) fn dependencies_done(conn: &Connection, story: &Story) -> Result<bool, String> {
+pub(super) fn unmet_dependencies(conn: &Connection, story: &Story) -> Result<Vec<String>, String> {
+    let mut unmet = Vec::new();
     for id in &story.dependencies {
         if read_story(conn, id)?.status != StoryStatus::Done {
-            return Ok(false);
+            unmet.push(id.clone());
         }
     }
-    Ok(true)
+    Ok(unmet)
+}
+
+pub(super) fn dependencies_done(conn: &Connection, story: &Story) -> Result<bool, String> {
+    Ok(unmet_dependencies(conn, story)?.is_empty())
 }
 
 pub(super) fn promote_ready(tx: &Transaction<'_>, plan_id: &str) -> Result<(), String> {

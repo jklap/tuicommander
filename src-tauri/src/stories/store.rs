@@ -311,7 +311,19 @@ impl StoryStore {
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
         if story.status != StoryStatus::Ready {
-            return Err("story is not ready".into());
+            let unmet = unmet_dependencies(&tx, &story)?;
+            return Err(if unmet.is_empty() {
+                format!(
+                    "story is not ready (status: {}); only a ready story can be claimed",
+                    story.status.as_str()
+                )
+            } else {
+                format!(
+                    "story is not ready (status: {}): unmet dependencies {}; claim it after they are done",
+                    story.status.as_str(),
+                    unmet.join(", ")
+                )
+            });
         }
         story.status = StoryStatus::InProgress;
         story.claim_session = Some(session.into());
