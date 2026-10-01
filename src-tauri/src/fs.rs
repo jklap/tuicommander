@@ -3509,7 +3509,10 @@ mod tests {
         let canonical = home.path().canonicalize().unwrap();
         let expected = canonical.join("notes/design.md");
         let expected = expected.to_string_lossy();
-        for (href, line) in [("~/notes/design.md", None), ("~/notes/design.md:7", Some(7))] {
+        for (href, line) in [
+            ("~/notes/design.md", None),
+            ("~/notes/design.md:7", Some(7)),
+        ] {
             assert!(
                 matches!(
                     resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(home.path())),
@@ -3520,7 +3523,12 @@ mod tests {
             );
         }
         assert!(matches!(
-            resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/notes/gone.md", Some(home.path())),
+            resolve_markdown_link_with_home(
+                "/repo",
+                "/repo/review.md",
+                "~/notes/gone.md",
+                Some(home.path())
+            ),
             MarkdownLinkTarget::Missing { .. }
         ));
     }
