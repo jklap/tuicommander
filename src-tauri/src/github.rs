@@ -1136,7 +1136,14 @@ async fn poll_one_account(
                 nodes.iter().filter_map(parse_pr_node).collect();
             stamp_merge_policy(&mut statuses, repo_json);
             if let Some((owner, name)) = alias_repo_names.get(alias.as_str()) {
-                settle_truncated_threads(state, account, owner, name, &mut statuses).await;
+                settle_truncated_threads(
+                    &state.git_cache.settled_review_threads,
+                    owner,
+                    name,
+                    &mut statuses,
+                    |n| fetch_review_thread_counts(state, account, owner, name, n),
+                )
+                .await;
             }
 
             if include_merged && statuses.iter().any(|s| s.state == "MERGED") {
@@ -1190,11 +1197,11 @@ async fn poll_one_account(
                 };
                 if let Some((owner, name)) = repo_name.split_once('/') {
                     settle_truncated_threads(
-                        state,
-                        account,
+                        &state.git_cache.settled_review_threads,
                         owner,
                         name,
                         std::slice::from_mut(&mut pr),
+                        |n| fetch_review_thread_counts(state, account, owner, name, n),
                     )
                     .await;
                 }
@@ -2085,22 +2092,53 @@ async fn fetch_review_thread_counts(
     Ok((total, false))
 }
 
+/// A settled walk is trusted at most this long even if `updatedAt` did not move: resolving a
+/// thread is not guaranteed to bump the PR's `updatedAt`.
+const SETTLED_THREADS_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// The batch poll reads 50 threads per PR. For the PRs that have more, walk the remaining pages
 /// (that PR only) so the badge, the readiness verdict and the Ready notice see the real count;
 /// only a PR still truncated after the bound keeps "N+". A failed walk keeps the lower bound.
-async fn settle_truncated_threads(
-    state: &AppState,
-    account: &crate::github_account::GitHubAccount,
+/// A walk is reused while the PR's `updatedAt` and head are unchanged (and for at most
+/// [`SETTLED_THREADS_TTL`]), so an idle PR costs one walk, not one per poll.
+async fn settle_truncated_threads<W, Fut>(
+    cache: &dashmap::DashMap<String, crate::state::SettledReviewThreads>,
     owner: &str,
     repo: &str,
     statuses: &mut [BranchPrStatus],
-) {
+    walk: W,
+) where
+    W: Fn(i64) -> Fut,
+    Fut: std::future::Future<Output = Result<(ReviewThreadCounts, bool), String>>,
+{
+    cache.retain(|_, v| v.walked_at.elapsed() < SETTLED_THREADS_TTL);
     for pr in statuses
         .iter_mut()
         .filter(|s| s.unresolved_threads_truncated)
     {
-        match fetch_review_thread_counts(state, account, owner, repo, pr.number.into()).await {
-            Ok((counts, complete)) => pr.settle_review_threads(counts.bot + counts.human, complete),
+        let key = format!("{owner}/{repo}#{}", pr.number);
+        if let Some(hit) = cache.get(&key)
+            && hit.updated_at == pr.updated_at
+            && hit.head_ref_oid == pr.head_ref_oid
+        {
+            pr.settle_review_threads(hit.unresolved, hit.complete);
+            continue;
+        }
+        match walk(pr.number.into()).await {
+            Ok((counts, complete)) => {
+                let unresolved = counts.bot + counts.human;
+                cache.insert(
+                    key,
+                    crate::state::SettledReviewThreads {
+                        updated_at: pr.updated_at.clone(),
+                        head_ref_oid: pr.head_ref_oid.clone(),
+                        unresolved,
+                        complete,
+                        walked_at: Instant::now(),
+                    },
+                );
+                pr.settle_review_threads(unresolved, complete);
+            }
             Err(e) => tracing::warn!(
                 source = "github", pr = pr.number, error = %e,
                 "review thread walk failed; keeping the first-page count"
@@ -6909,5 +6947,56 @@ mod critic2_tests {
         assert!(
             !merge_failure_message(405, "Head branch was modified").contains(MERGE_HEAD_CHANGED)
         );
+    }
+}
+
+#[cfg(test)]
+mod settled_threads_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn truncated_pr(updated_at: &str) -> Vec<BranchPrStatus> {
+        vec![
+            parse_pr_node(&serde_json::json!({
+                "number": 7, "headRefName": "feat/x", "state": "OPEN", "updatedAt": updated_at,
+                "reviewThreads": {"pageInfo": {"hasNextPage": true}, "nodes": []}
+            }))
+            .unwrap(),
+        ]
+    }
+
+    async fn poll(
+        cache: &dashmap::DashMap<String, crate::state::SettledReviewThreads>,
+        walks: &AtomicUsize,
+        updated_at: &str,
+    ) -> BranchPrStatus {
+        let mut statuses = truncated_pr(updated_at);
+        settle_truncated_threads(cache, "o", "r", &mut statuses, |_| async {
+            walks.fetch_add(1, Ordering::SeqCst);
+            Ok((ReviewThreadCounts { bot: 0, human: 3 }, true))
+        })
+        .await;
+        statuses.remove(0)
+    }
+
+    /// Catches: the full thread walk repeating on every poll of an idle PR (up to 10 GraphQL
+    /// calls per poll), and a changed `updatedAt` being served from the stale cache entry.
+    #[tokio::test]
+    async fn unchanged_pr_is_walked_once_and_a_changed_one_again() {
+        let cache = dashmap::DashMap::new();
+        let walks = AtomicUsize::new(0);
+        let first = poll(&cache, &walks, "2026-01-01T00:00:00Z").await;
+        let second = poll(&cache, &walks, "2026-01-01T00:00:00Z").await;
+        assert_eq!(walks.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            (
+                second.unresolved_threads,
+                second.unresolved_threads_truncated
+            ),
+            (3, false)
+        );
+        assert_eq!(first.unresolved_threads, second.unresolved_threads);
+        poll(&cache, &walks, "2026-01-02T00:00:00Z").await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2);
     }
 }
