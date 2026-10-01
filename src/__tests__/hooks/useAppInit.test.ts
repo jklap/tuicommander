@@ -270,7 +270,14 @@ describe("initApp", () => {
 		}) as unknown as typeof listen);
 		await initApp(createMockDeps());
 		uiTabCallback!({
-			payload: { id: "page", title: "Page", html: "", pinned: true, url: "tuic://open//Users/boss/Gits/.tmp/p.html", focus: true },
+			payload: {
+				id: "page",
+				title: "Page",
+				html: "",
+				pinned: true,
+				url: "tuic://open//Users/boss/Gits/.tmp/p.html",
+				focus: true,
+			},
 		});
 		expect(Object.values(mdTabsStore.state.tabs).some((t) => t.type === "html-preview")).toBe(false);
 	});
