@@ -14,6 +14,8 @@ import { setToastBellMirrorResolver } from "./toasts";
 
 interface PlayOptions {
 	terminalId?: string;
+	/** A repeat of an earlier notice: the OS notice also goes out in a focused window unless the user is looking at this terminal, and is off with notifications or this sound disabled. */
+	reminder?: boolean;
 }
 
 const OS_NOTIFICATION_TITLES: Record<NotificationSound, string> = {
@@ -164,28 +166,37 @@ function createNotificationsStore() {
 					.join(" <- ") ?? "unknown";
 			appLogger.debug("app", `[Notification.Play] sound=${sound} focused=${document.hasFocus()} caller=${caller}`);
 			await notificationManager.play(sound);
-			if (!document.hasFocus()) {
-				actions.incrementBadge();
-				if (opts?.terminalId) {
-					void import("./terminals")
-						.then(({ terminalsStore }) => {
-							const term = terminalsStore.get(opts.terminalId!);
-							const tabName = term?.name ?? opts.terminalId!;
-							return showNativeNotice({
-								title: OS_NOTIFICATION_TITLES[sound],
-								body: tabName,
-								key: `${sound}:${opts.terminalId}`,
-								target: { kind: "terminal", id: opts.terminalId! },
-							});
-						})
-						.catch((error: unknown) => appLogger.warn("app", "Could not show terminal notification", error));
-				}
+			const unfocused = !document.hasFocus();
+			if (unfocused) actions.incrementBadge();
+			if (opts?.terminalId && (unfocused || (opts.reminder && actions.isSoundEnabled(sound)))) {
+				const terminalId = opts.terminalId;
+				void import("./terminals")
+					.then(({ terminalsStore }) => {
+						const isViewed = () =>
+							document.hasFocus() &&
+							terminalsStore.state.activeId === terminalId &&
+							!terminalsStore.isDetached(terminalId);
+						if (opts.reminder && isViewed()) return;
+						return showNativeNotice({
+							title: OS_NOTIFICATION_TITLES[sound],
+							body: terminalsStore.get(terminalId)?.name ?? terminalId,
+							key: `${opts.reminder ? "reminder:" : ""}${sound}:${terminalId}`,
+							target: { kind: "terminal", id: terminalId },
+							...(opts.reminder ? { ignoreFocus: true, isCurrent: () => !isViewed() } : {}),
+						});
+					})
+					.catch((error: unknown) => appLogger.warn("app", "Could not show terminal notification", error));
 			}
 		},
 
 		/** Play question notification */
 		async playQuestion(terminalId?: string): Promise<void> {
 			await actions.play("question", { terminalId });
+		},
+
+		/** Repeat the question notification for a question left unanswered */
+		async playQuestionReminder(terminalId: string): Promise<void> {
+			await actions.play("question", { terminalId, reminder: true });
 		},
 
 		/** Play error notification */

@@ -559,6 +559,38 @@ describe("MarkdownTab agent review actions", () => {
 		await new Promise((resolve) => setTimeout(resolve, 550));
 	});
 
+	it("opens a relative .md link in the markdown viewer when the backend sends anchor:null,line:null", async () => {
+		// Real wire shape of Rust MarkdownLinkTarget::File before skip_serializing_if (story 1352).
+		fileContent = "[next](./next.md)";
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "resolve_markdown_link"
+					? {
+							kind: "file",
+							absolute_path: "/repo/docs/next.md",
+							open_path: "docs/next.md",
+							is_directory: false,
+							same_document: false,
+							anchor: null,
+							line: null,
+						}
+					: fileContent,
+			),
+		);
+		const tabId = mdTabsStore.add("/repo", "docs/review.md");
+		const { container } = render(() => <MarkdownTab tab={mdTabsStore.get(tabId) as FileTab} />);
+		const link = await waitFor(() => {
+			const element = container.querySelector("a");
+			if (!element) throw new Error("Markdown link not rendered yet");
+			return element;
+		});
+		const editor = vi.spyOn(editorTabsStore, "add").mockReturnValue("opened");
+		const md = vi.spyOn(mdTabsStore, "add");
+		fireEvent.click(link);
+		await waitFor(() => expect(md).toHaveBeenCalledWith("/repo", "docs/next.md", "/repo"));
+		expect(editor).not.toHaveBeenCalled();
+	});
+
 	it("opens a relative path outside the filesystem root", async () => {
 		fileContent = "[escape](../../secret.rs)";
 		mockInvoke.mockImplementation((command: string) =>
