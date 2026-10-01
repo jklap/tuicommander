@@ -16124,6 +16124,12 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
     // The emulator answers the capture's own terminal queries through the
     // writer during replay; only what is written after that is the queue drain.
     let replayed = bytes.lock().unwrap().len();
+    // Production satisfies the foreground probe from a process snapshot that
+    // shows nothing left under the agent; the test has no process tree.
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.background_probe_satisfied_turn_epoch = Some(session.turn_epoch);
+    }
     {
         let mut silence = silence.lock();
         let settled = std::time::Instant::now() - std::time::Duration::from_secs(60);
