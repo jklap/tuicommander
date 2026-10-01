@@ -294,8 +294,18 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			utf16Starts[Math.min(span.colEnd, decoded.count)],
 		);
 	}
+	/**
+	 * The span a press at the cell belongs to: the dashed underline, or the link the hover
+	 * probe resolved under the pointer (OSC 8 text, a path wrapped over rows) that the
+	 * dashed underline does not cover. The hover is what showed the pointer cursor.
+	 */
+	function pressSpanAt(row: number, col: number): { colStart: number; colEnd: number } | undefined {
+		const underlined = spanAt(detectedLinks.get(row), col);
+		if (underlined || !hoveredLink || !linkCovers(hoveredLink, row, col)) return underlined;
+		return (hoveredLink.spans ?? [hoveredLink]).find((sp) => sp.row === row && col >= sp.colStart && col < sp.colEnd);
+	}
 	function underlinedTextAt(row: number, col: number): string {
-		return underlinedText(row, spanAt(detectedLinks.get(row), col));
+		return underlinedText(row, pressSpanAt(row, col));
 	}
 
 	const copyLink = (link: LinkTarget) => {
@@ -2834,7 +2844,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			keyInputRef.focus({ preventScroll: true });
 			{
 				const at = canvasToGrid(e);
-				const span = spanAt(detectedLinks.get(at.row), at.col);
+				const span = pressSpanAt(at.row, at.col);
 				linkPress.begin(e.button, at.row, span, underlinedText(at.row, span));
 			}
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
@@ -2847,7 +2857,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				// right-button mousedown suppresses the contextmenu event, so over a link
 				// we neither forward nor preventDefault: the app loses this one press,
 				// but the link works — UI-first (see #57). Shift bypasses reporting.
-				if (linkClaimsPress(e.button, isOverSpan(detectedLinks.get(pos.row), pos.col))) {
+				if (linkClaimsPress(e.button, pressSpanAt(pos.row, pos.col) !== undefined)) {
 					// A leftover Shift-drag selection would make the click bail as a drag.
 					if (linkPress.isClaimed() && selection.hasRange()) {
 						selection.clear();

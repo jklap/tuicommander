@@ -4405,3 +4405,7 @@ or credential is touched.
 
 - [ ] After Boss restarts `make dev` or rebuilds the release, query `repo action=branch_integrations` and `repo action=branch_integration` on throwaway fixtures and confirm the new proof fields are available. Check that an integrated squash branch appears in the branch panel and sidebar, and a content-based proof requires an archive of the current tip before safe deletion. Automated real-Git lifecycle, MCP and deletion checks passed; the installed process has not been restarted to load this Rust change.
 - [ ] After a manual `make dev` restart, call `repo action=progress_list` with no input on the live tuicommander journal (2400+ entries). The first page has 8 entries and is under 16384 B (was 17545 B with 10 entries, 2026-09-30). Story 1088-4783 GREEN criterion.
+
+## Click on an underlined relative path (1336-7755)
+
+- [ ] After a desktop rebuild, in a Claude session (and once in a plain shell with `echo docs/x.md`) click an underlined relative path, then read the app log for `link click:` lines (debug level). A click that opens the file logs `link click: opening`; a dead click logs which step ended it (`not opened` with claimed/detail/hasRange, `lookup went stale`, `nothing resolved`, or `does not cover`). Also click an OSC 8 link whose text is no path and hover it first: it opens (press claimed from the hover probe, #1336 fix). Browser mode could not reproduce the dead click; only the desktop can.

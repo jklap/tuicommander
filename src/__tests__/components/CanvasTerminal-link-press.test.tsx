@@ -42,6 +42,9 @@ const ROW0 = "  followups.md  plain words";
 /** `followups.md` occupies columns 2-13 of row 0. */
 const NAME_COL = 5;
 const OTHER_COL = 20;
+/** Tagged by the app as an OSC 8 hyperlink to `followups.md`; the text itself is no path. Columns 6-8. */
+const OSC8_ROW = "  see doc  plain words";
+const OSC8_COL = 7;
 /** Names a tool call prints before the file it writes exists. */
 const LATE_ROW = "  later.txt  plain words";
 
@@ -88,6 +91,7 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 	const onOpen = vi.fn();
 	let screenRow0 = ROW0;
 	let lateFileExists = false;
+	let osc8Active = false;
 	let canvas: Element;
 	let unmount: () => void;
 
@@ -96,17 +100,24 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 		invoke.mockReset();
 		screenRow0 = ROW0;
 		lateFileExists = false;
-		invoke.mockImplementation(async (cmd: string, args: { candidate?: string; candidates?: string[] }) => {
-			if (cmd === "terminal_get_row_text") return screenRow0.trimEnd();
-			if (cmd === "terminal_get_logical_line") return [0, screenRow0.trimEnd()];
-			const resolve = (c: string) =>
-				c.startsWith("followups") || (c.startsWith("later") && lateFileExists)
-					? { absolute_path: `/cwd/${c}`, is_directory: false }
-					: null;
-			if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
-			if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
-			return null;
-		});
+		osc8Active = false;
+		invoke.mockImplementation(
+			async (cmd: string, args: { candidate?: string; candidates?: string[]; col?: number }) => {
+				if (cmd === "terminal_hyperlink_span") {
+					const col = args.col ?? -1;
+					return osc8Active && col >= 6 && col < 9 ? [6, 9, "followups.md"] : null;
+				}
+				if (cmd === "terminal_get_row_text") return screenRow0.trimEnd();
+				if (cmd === "terminal_get_logical_line") return [0, screenRow0.trimEnd()];
+				const resolve = (c: string) =>
+					c.startsWith("followups") || (c.startsWith("later") && lateFileExists)
+						? { absolute_path: `/cwd/${c}`, is_directory: false }
+						: null;
+				if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
+				if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
+				return null;
+			},
+		);
 		frameSink.current = null;
 		Object.defineProperty(document, "fonts", {
 			configurable: true,
@@ -245,5 +256,36 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	// Catches: 1324 requiring an underlined span at the press, which killed links the hover probe
+	// resolves but the dashed underline never covers (OSC 8 over non-path text).
+	it.each([
+		["without mouse reporting", 0],
+		["under mouse reporting", 2],
+	])("opens an OSC 8 link over non-path text hovered before the click, %s", async (_name, mouseMode) => {
+		osc8Active = true;
+		screenRow0 = OSC8_ROW;
+		(frameSink.current as ((data: ArrayBuffer) => void) | null)?.(frame(OSC8_ROW, mouseMode));
+		await new Promise((r) => setTimeout(r, 20));
+		fire(document.body, "mousemove", OSC8_COL);
+		await waitFor(() => expect(canvas.getAttribute("style") ?? "").toContain("pointer"));
+		click(canvas, OSC8_COL, OSC8_COL);
+		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined));
+		expect(ptyWrites()).toEqual([]);
+	});
+
+	// Catches: the hover fallback claiming a press over plain text that was never a link.
+	it("does not open or swallow a press on plain text next to an OSC 8 link", async () => {
+		osc8Active = true;
+		screenRow0 = OSC8_ROW;
+		(frameSink.current as ((data: ArrayBuffer) => void) | null)?.(frame(OSC8_ROW, 2));
+		await new Promise((r) => setTimeout(r, 20));
+		fire(document.body, "mousemove", OSC8_COL);
+		await waitFor(() => expect(canvas.getAttribute("style") ?? "").toContain("pointer"));
+		click(canvas, OTHER_COL, OTHER_COL);
+		await new Promise((r) => setTimeout(r, 100));
+		expect(onOpen).not.toHaveBeenCalled();
+		expect(ptyWrites().length).toBeGreaterThan(0);
 	});
 });
