@@ -685,7 +685,11 @@ impl RunStore {
         let integrated: Vec<_> = snapshot
             .stories
             .iter()
-            .filter_map(|item| item.integration_receipt.as_ref().map(|receipt| (item, receipt)))
+            .filter_map(|item| {
+                item.integration_receipt
+                    .as_ref()
+                    .map(|receipt| (item, receipt))
+            })
             .collect();
         if integrated.is_empty() {
             return Err("run has no story integration to recertify".into());
@@ -955,6 +959,17 @@ pub(crate) fn plan_has_workflow_run_in(db_path: &Path, plan_id: &str) -> Result<
     }
     let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| format!("open workflow run store: {error}"))?;
+    // A store file without the schema holds no run; only `RunStore::open_at` creates it.
+    let has_table: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_runs')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("read workflow run schema: {error}"))?;
+    if !has_table {
+        return Ok(false);
+    }
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM workflow_runs WHERE plan_id=?1)",
         [plan_id],
@@ -1029,17 +1044,20 @@ pub(super) fn receipt_current(
                         && check.tree == tree
                 })
         });
-    let current_recertification = snapshot.canonical_recertification.as_ref().is_some_and(|item| {
-        item.canonical_ref == current_ref
-            && item.commit == head
-            && item.tree == tree
-            && item.post_checks.iter().all(|check| {
-                check.exit_code == 0
-                    && check.ref_name == current_ref
-                    && check.commit == head
-                    && check.tree == tree
-            })
-    });
+    let current_recertification = snapshot
+        .canonical_recertification
+        .as_ref()
+        .is_some_and(|item| {
+            item.canonical_ref == current_ref
+                && item.commit == head
+                && item.tree == tree
+                && item.post_checks.iter().all(|check| {
+                    check.exit_code == 0
+                        && check.ref_name == current_ref
+                        && check.commit == head
+                        && check.tree == tree
+                })
+        });
     if (current_integration.is_none() && !current_recertification)
         || receipt.canonical_ref != current_ref
         || snapshot.canonical_ref.as_deref() != Some(current_ref.as_str())
@@ -1550,9 +1568,7 @@ fn choose_event(
             if attempt.agent.is_some() {
                 return Err("bound agent must use a typed attempt report".into());
             }
-            if expired
-                || attempt.generation != generation
-                || attempt.state != AttemptState::Running
+            if expired || attempt.generation != generation || attempt.state != AttemptState::Running
             {
                 Ok(RunEventKind::LateReportIgnored {
                     attempt_id,
@@ -1907,7 +1923,10 @@ fn choose_event(
             if snapshot.canonical_ref.as_deref() != Some(receipt.canonical_ref.as_str())
                 || receipt.commit.is_empty()
                 || receipt.tree.is_empty()
-                || !snapshot.stories.iter().any(|story| story.integration_receipt.is_some())
+                || !snapshot
+                    .stories
+                    .iter()
+                    .any(|story| story.integration_receipt.is_some())
             {
                 return Err("canonical recertification has no current integration".into());
             }

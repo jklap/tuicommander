@@ -860,12 +860,16 @@ mod tests {
     fn workflow_run_changed_is_a_cursor_wake_hint() {
         let payload = serde_json::json!({ "runId": "run-1", "sequence": 7 });
         let event = AppEvent::WorkflowRunChanged {
-            repo_path: "/repo".into(), payload: payload.clone(),
+            repo_path: "/repo".into(),
+            payload: payload.clone(),
         };
         assert_eq!(event_type_name(&event), "workflow-run-changed");
-        assert_eq!(event_payload(&event), serde_json::json!({
-            "repo_path": "/repo", "payload": payload,
-        }));
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({
+                "repo_path": "/repo", "payload": payload,
+            })
+        );
     }
 
     /// A browser learns a session's lifecycle from this arm; the desktop learns

@@ -282,7 +282,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 
 	async function resumeRun(): Promise<void> {
 		const selected = run();
-		if (!selected || selected.status !== "paused" || pendingInput()) return;
+		if (selected?.status !== "paused" || pendingInput()) return;
 		setRunLoading(true);
 		setRunError("");
 		try {

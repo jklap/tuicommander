@@ -669,27 +669,61 @@ mod tests {
                 file_scope: vec![],
             })
             .expect("story");
-        let claimed = store.claim(&story.id, "implementer", story.revision).expect("claim");
+        let claimed = store
+            .claim(&story.id, "implementer", story.revision)
+            .expect("claim");
         let checked = store
-            .transition_for_actor(&story.id, claimed.revision, StoryCommand::CheckCriterion(0), Some("implementer"))
+            .transition_for_actor(
+                &story.id,
+                claimed.revision,
+                StoryCommand::CheckCriterion(0),
+                Some("implementer"),
+            )
             .expect("check criterion");
         let review = store
-            .transition_for_actor(&story.id, checked.revision, StoryCommand::SubmitReview, Some("implementer"))
+            .transition_for_actor(
+                &story.id,
+                checked.revision,
+                StoryCommand::SubmitReview,
+                Some("implementer"),
+            )
             .expect("submit review");
 
         let error = store
-            .transition_for_actor(&story.id, review.revision, StoryCommand::Approve, Some("implementer"))
+            .transition_for_actor(
+                &story.id,
+                review.revision,
+                StoryCommand::Approve,
+                Some("implementer"),
+            )
             .expect_err("implementer cannot approve their own story");
         assert_eq!(error, "a story cannot be approved by its implementer");
-        assert_eq!(store.get_story(&story.id).expect("unchanged").status, StoryStatus::Review);
+        assert_eq!(
+            store.get_story(&story.id).expect("unchanged").status,
+            StoryStatus::Review
+        );
 
         let done = store
-            .transition_for_actor(&story.id, review.revision, StoryCommand::Approve, Some("reviewer"))
+            .transition_for_actor(
+                &story.id,
+                review.revision,
+                StoryCommand::Approve,
+                Some("reviewer"),
+            )
             .expect("independent reviewer approves");
         assert_eq!(done.status, StoryStatus::Done);
         assert_eq!(done.claim_session, None);
-        assert_eq!(store.transition_history(&story.id).expect("history").last().expect("approval").actor,
-            StoryTransitionActor::ManagedSession { session_id: "reviewer".into() });
+        assert_eq!(
+            store
+                .transition_history(&story.id)
+                .expect("history")
+                .last()
+                .expect("approval")
+                .actor,
+            StoryTransitionActor::ManagedSession {
+                session_id: "reviewer".into()
+            }
+        );
     }
 
     #[test]
@@ -736,8 +770,15 @@ mod tests {
             .transition_from_local_api(&story.id, review.revision, StoryCommand::Approve)
             .expect("local reviewer approves");
         assert_eq!(done.status, StoryStatus::Done);
-        assert_eq!(store.transition_history(&story.id).expect("history").last().expect("approval").actor,
-            StoryTransitionActor::LocalApi);
+        assert_eq!(
+            store
+                .transition_history(&story.id)
+                .expect("history")
+                .last()
+                .expect("approval")
+                .actor,
+            StoryTransitionActor::LocalApi
+        );
     }
 
     #[test]
