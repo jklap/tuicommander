@@ -29,6 +29,15 @@ busy terminal. Needs the rebuilt `tuic-hook` sidecar (it now also emits `bgtasks
   `breakdown_source: "summary"`, `teammate_running`, `teammates_busy`, `counts_now`, `age_ms`,
   and a `swarm.teammates` list with each teammate's `shell_state`. On a teammate's session,
   `swarm.lead_session_id` names the lead.
+- [ ] Explain-state modal (tab context menu) on a lead with teammates: a **Declared background work**
+  section (counts_now, age, breakdown, teammates busy, unlinked) and a **Swarm** section (lead and each
+  teammate's state) appear; on a teammate, the Swarm section names its lead. Leave the modal open while a
+  teammate goes busy -> idle and re-open: values follow. With the modal open, make the tab's badge and the
+  backend disagree (e.g. let the agent finish) and confirm the mismatch banner appears/clears without
+  closing the modal.
+- [ ] Close a teammate's terminal while the lead's last Stop still lists it: the lead keeps reading working
+  until its next Stop (expected trade-off), and the explain payload shows it as unlinked, not as a listed
+  teammate.
 - [ ] Smart Prompt injection into a lead whose only remaining work is an idle teammate works (no
   "Agent is busy").
 - [ ] Old `tuic` binary on PATH (no `origin_session_id`) or a plain `tuic alias` swarm: the lead

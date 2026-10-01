@@ -884,13 +884,17 @@ captures); a teammate pane with no hook state would read idle, which is the resi
   correctly in live captures).
 - `bgtasksummary` goes through the same 512-byte payload cap as `bgtasks`; an unrealistically wide
   set of distinct `type/status` pairs could still truncate it.
-- The explain-state modal (`StateExplainModal.tsx`) computes its agree/mismatch banner once at load,
-  so it does not react if `declaredBackgroundWork` changes while it is open (pre-existing).
-  `explain_session_state_impl` samples the teammate list once; a teammate flipping between that
-  sample and the ladder's own read can make `counts_now` momentarily disagree with
-  `visible.declared_background_work` (diagnostic only).
 - `read_stdin_bounded` in `tuic-hook` reads the real process stdin and is not unit-testable
   in-process; only its constants are pinned.
+
+**A closed teammate terminal is not a linked teammate.** `tmux_routes::teammate_session_ids` only
+returns teammates whose `shell_states` entry still exists; the topology is reconciled lazily, inside
+route handlers, so a dead pane otherwise keeps its `tuic_session_id` and would satisfy the fail-safe's
+"declared <= linked" check after Claude had already dropped that teammate — masking a genuinely
+unaccounted-for one. The trade-off: until the lead's next `Stop` refreshes its list, a teammate that
+just closed still counts as declared-but-unlinked, so the lead keeps reading working (the pre-change
+behavior; it self-corrects). `lead_of_teammate` deliberately still resolves a closed teammate so the
+lead is republished when the teammate's row disappears.
 
 **Lead ↔ teammate linkage** comes from the tmux shim, because a teammate's own hooks carry no
 parent reference (payload and hook env hold only its own `session_id`/`TUIC_SESSION`). `tuic-cli`
@@ -1060,8 +1064,11 @@ agent_state, agent_state_rung, awaiting_input, background_work, declared_backgro
 `epoch_flags` (`completion_declared`, and `declared_background_work` — the raw
 `declared`/`declared_turn_epoch`/`applies_now` triple plus `age_ms`, `breakdown_source`
 (`summary`/`statuses_only`/`none`), `non_teammate_running`, `teammate_running`,
-`teammates_busy`, and `counts_now`, the value the ladder actually used, equal to
-`visible.declared_background_work`), `swarm` (present only for a lead with teammates or a
+`teammates_busy`, `counts_now` (the value the ladder actually used, equal to
+`visible.declared_background_work`), and `consistent_with_visible` — `false` means a teammate changed
+state between the payload's own teammate sample and the ladder's independent read, so the capture is
+torn and should be re-run; the sample is taken immediately before the ladder read to keep that window
+small, and it cannot be closed because the atomics belong to other sessions), `swarm` (present only for a lead with teammates or a
 teammate itself: `lead_session_id` and each owned teammate's `session_id`/`shell_state`/`busy`),
 also `epoch_flags.declared_background_work.unlinked_teammates` (declared running teammates no
 linked pane accounts for; any surplus makes `counts_now` true),
