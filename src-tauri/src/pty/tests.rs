@@ -20080,6 +20080,15 @@ async fn replay_claude_askuser_esc(
             let data = escape.push(&data);
             let (clean, _) = crate::state::strip_kitty_sequences(&data);
             processor.process_chunk(&clean, &silence, sid, &state);
+            // The declined-result branch reads the awaiting state the accumulator
+            // owns. On a current-thread runtime it applies nothing until the test
+            // yields, so a replay that never yields sees no question to release.
+            for _ in 0..200 {
+                if state.session_maps.session_state_events.depth() == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
         }
     }
     (state, silence, processor)
