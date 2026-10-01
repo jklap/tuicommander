@@ -5433,3 +5433,77 @@ mod tests {
         assert_eq!(get_dictation_config().speech_edge_voice, "");
     }
 }
+
+/// Adversarial cases from the critic of 1357-7d37 (round 1).
+#[cfg(test)]
+mod critic_round1 {
+    use super::*;
+
+    #[test]
+    fn a_command_beats_a_voice_and_an_installed_runtime_when_the_engine_is_unset() {
+        // Catches: the legacy rule putting an external-command user on Pocket
+        // because they also once chose a voice or downloaded the runtime.
+        let config = DictationConfig {
+            speech_command: vec!["piper".to_string()],
+            speech_voice: "giovanni".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(legacy_speech_engine(&config, true), SpeechEngine::External);
+    }
+
+    #[test]
+    fn nothing_chosen_and_nothing_installed_is_edge() {
+        // Catches: an empty-string voice or empty command counting as a choice.
+        let config = DictationConfig {
+            speech_command: Vec::new(),
+            speech_voice: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(legacy_speech_engine(&config, false), SpeechEngine::Edge);
+    }
+
+    #[test]
+    fn an_unknown_engine_value_resolves_like_an_unset_one_for_the_whole_config() {
+        // Catches: a hand-edited "Edge"/"pocket " silently ignoring the command
+        // the user also configured (resolver and reader disagreeing).
+        for value in ["EDGE", "pocket ", "garbage"] {
+            let config = DictationConfig {
+                speech_engine: value.to_string(),
+                speech_command: vec!["piper".to_string()],
+                ..Default::default()
+            };
+            let resolved = with_resolved_engine(config);
+            assert_eq!(resolved.speech_engine, "external", "{value:?}");
+            assert_eq!(speech_engine(&resolved), SpeechEngine::External);
+        }
+    }
+
+    #[test]
+    fn the_external_engine_with_no_command_is_a_setup_error_not_silence() {
+        // Catches: Expert → External with an empty command speaking nothing and
+        // reporting nothing (or falling through to Edge).
+        let library = speech::library::SpeechLibrary::new();
+        let config = DictationConfig {
+            speech_engine: "external".to_string(),
+            speech_command: Vec::new(),
+            ..Default::default()
+        };
+        assert!(open_voice(&config, &library, "it").is_err());
+    }
+
+    #[test]
+    fn an_edge_voice_that_is_not_a_plain_name_is_not_opened_for_a_reply() {
+        // Catches: a hand-edited speech_edge_voice reaching the SSML attribute
+        // (the adapter refuses it, but open_voice must hand it over unchanged,
+        // not repair it into something else).
+        let library = speech::library::SpeechLibrary::new();
+        let config = DictationConfig {
+            speech_engine: "edge".to_string(),
+            speech_edge_voice: "it-IT-A' x='y".to_string(),
+            ..Default::default()
+        };
+        let (engine, voice) = open_voice(&config, &library, "it").expect("opens");
+        let result = engine.synthesize("ciao", &voice, &speech::SpeechCancel::new());
+        assert!(matches!(result, Err(speech::SpeechError::UnknownVoice(_))), "{result:?}");
+    }
+}
