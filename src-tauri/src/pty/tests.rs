@@ -16121,6 +16121,9 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
         AgentScreenActivity::Ready,
         "the reader must classify the finished turn as Ready"
     );
+    // The emulator answers the capture's own terminal queries through the
+    // writer during replay; only what is written after that is the queue drain.
+    let replayed = bytes.lock().unwrap().len();
     {
         let mut silence = silence.lock();
         let settled = std::time::Instant::now() - std::time::Duration::from_secs(60);
@@ -16143,7 +16146,7 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert_eq!(
-        String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+        String::from_utf8(bytes.lock().unwrap()[replayed..].to_vec()).unwrap(),
         "\u{15}resume queued work\r",
         "the Ready screen must release the queue into the composer"
     );
