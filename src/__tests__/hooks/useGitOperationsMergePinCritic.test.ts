@@ -1,11 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createRepositoryRefreshCoordinator } from "../../hooks/git/createRepositoryRefreshCoordinator";
-import { buildAgentSeed, useGitOperations } from "../../hooks/useGitOperations";
-import * as platform from "../../platform";
-import { appLogger } from "../../stores/appLogger";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useGitOperations } from "../../hooks/useGitOperations";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
-import { getForRepo as getFocusForRepo, recordTerminalRepo } from "../../stores/focusRegistry";
 import { githubStore } from "../../stores/github";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
@@ -13,9 +9,6 @@ import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import type { BranchPrStatus } from "../../types";
-import { openDialog as open } from "../../utils/nativeDialog";
-import { navigateToTerminal } from "../../utils/navigateToTerminal";
-import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
 function resetStores() {
@@ -155,45 +148,6 @@ describe("useGitOperations", () => {
 			getDefaultFontSize: () => 14,
 			getMaxTabNameLength: () => 25,
 		});
-	});
-
-	afterEach(() => {
-		vi.useRealTimers();
-		paneLayoutStore._testCancelPendingSave();
-		repositoriesStore._testCancelPendingSave();
-	});
-		const testPr: BranchPrStatus = {
-			branch: "feature/x",
-			number: 99,
-			title: "Add feature X",
-			state: "OPEN",
-			url: "https://github.com/owner/repo/pull/99",
-			additions: 10,
-			deletions: 5,
-			checks: { passed: 1, failed: 0, pending: 0, total: 1 },
-			check_details: [],
-			author: "user",
-			commits: 2,
-			mergeable: "MERGEABLE",
-			conflict_state: "clear" as const,
-			merge_state_status: "CLEAN",
-			review_decision: "APPROVED",
-			viewer_did_approve: false,
-			labels: [],
-			is_draft: false,
-			base_ref_name: "main",
-			head_ref_oid: "abc1234",
-			created_at: "2026-01-01T00:00:00Z",
-			updated_at: "2026-01-02T00:00:00Z",
-			merge_state_label: null,
-			review_state_label: null,
-			merge_commit_allowed: true,
-			squash_merge_allowed: true,
-			rebase_merge_allowed: true,
-		};
-
-
-	beforeEach(() => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo", isMain: true });
 		repositoriesStore.setWorkspace("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
@@ -201,7 +155,40 @@ describe("useGitOperations", () => {
 
 	afterEach(() => {
 		githubStore.updateRepoData("/repo", []);
+		vi.useRealTimers();
+		paneLayoutStore._testCancelPendingSave();
+		repositoriesStore._testCancelPendingSave();
 	});
+	const testPr: BranchPrStatus = {
+		branch: "feature/x",
+		number: 99,
+		title: "Add feature X",
+		state: "OPEN",
+		url: "https://github.com/owner/repo/pull/99",
+		additions: 10,
+		deletions: 5,
+		checks: { passed: 1, failed: 0, pending: 0, total: 1 },
+		check_details: [],
+		author: "user",
+		commits: 2,
+		mergeable: "MERGEABLE",
+		conflict_state: "clear" as const,
+		merge_state_status: "CLEAN",
+		review_decision: "APPROVED",
+		viewer_did_approve: false,
+		labels: [],
+		is_draft: false,
+		base_ref_name: "main",
+		head_ref_oid: "abc1234",
+		created_at: "2026-01-01T00:00:00Z",
+		updated_at: "2026-01-02T00:00:00Z",
+		merge_state_label: null,
+		review_state_label: null,
+		merge_commit_allowed: true,
+		squash_merge_allowed: true,
+		rebase_merge_allowed: true,
+		unresolved_threads: 0,
+	};
 
 	// Catches: a PR row without head_ref_oid reaches the backend as "", the backend refuses
 	// ("Cannot merge without the head commit..."), and the coordinator treats that as a generic
