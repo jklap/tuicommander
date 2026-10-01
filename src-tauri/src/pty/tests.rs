@@ -20356,6 +20356,36 @@ fn critic3_mini_malformed_usage_or_extra_tokens_are_unknown() {
     }
 }
 
+/// Same defect through the reader: `process_chunk` must hand the grid width to the
+/// adapter, otherwise the unit above passes while production still reads Ready.
+#[test]
+fn opencode_mini_reader_passes_the_grid_width_to_the_adapter() {
+    let sid = "opencode-mini-narrow-reader";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(20, 40, 200)));
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk(
+        "\x1b[2J\x1b[H  I will run the build now.\r\n\r\n BUILD",
+        &silence,
+        sid,
+        &state,
+    );
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Unknown,
+        "a 40-column screen has no status row"
+    );
+}
+
 #[test]
 fn critic3_mini_working_row_with_unusual_agent_label_is_working() {
     // Catches: the label gate running before the interrupt/bar check, so a live turn of
