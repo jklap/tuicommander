@@ -3152,17 +3152,25 @@ impl SilenceState {
         self.declared_task_summary = None;
     }
 
-    /// Record the per-type breakdown that accompanies the `bgtasks` write made in
-    /// the same hook fire. Ignored unless a declaration for `turn_epoch` is
-    /// already in place, so a stray or reordered summary can never create one.
+    /// Apply the per-type breakdown from the `bgtasksummary` verb, which the hook
+    /// sends right after `bgtasks` in the same fire. It is authoritative for that
+    /// fire: the declaration is "something is running" iff the breakdown says so.
+    /// That matters because the joined-status `bgtasks` payload is cut at the OSC
+    /// payload cap, so a long task list can lose a late `running` entry and have
+    /// written an all-terminal declaration; the bounded summary repairs that
+    /// instead of being ignored. (It can equally clear a declaration `bgtasks`
+    /// over-reported. A process that can print this verb could already forge
+    /// `bgtasks` with the same effect, so this adds no capability.)
     pub(crate) fn set_declared_task_summary(
         &mut self,
         summary: DeclaredTaskSummary,
         turn_epoch: u64,
     ) {
-        if self.declared_background_work && self.declared_background_work_turn_epoch == turn_epoch {
-            self.declared_task_summary = Some(summary);
-        }
+        self.declared_background_work =
+            summary.non_teammate_running > 0 || summary.teammate_running > 0;
+        self.declared_background_work_turn_epoch = turn_epoch;
+        self.declared_background_work_at = Some(std::time::Instant::now());
+        self.declared_task_summary = Some(summary);
     }
 
     pub(crate) fn declared_task_summary_for_epoch(
