@@ -3,6 +3,7 @@ mod adapters;
 mod asset_download;
 pub mod browser;
 pub mod commands;
+mod edge_voices;
 pub use tuic_dictation::continuous;
 pub use tuic_dictation::corrections;
 pub use tuic_dictation::echo;
