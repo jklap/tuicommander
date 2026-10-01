@@ -1727,3 +1727,7 @@ mod tests {
         assert_eq!(send(&app, req).await.status(), StatusCode::OK);
     }
 }
+
+#[cfg(test)]
+#[path = "auth_login_critic_tests.rs"]
+mod login_critic_tests;
