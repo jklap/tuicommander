@@ -3903,26 +3903,49 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
 /// ```
 ///
 /// The `ctrl+p cmd` hint is dropped below roughly 80 columns, so it cannot anchor
-/// Ready; the uppercase agent label that opens the last painted row does, and
-/// `esc interrupt` marks a running turn exactly as in the framed interface.
+/// Ready. A false Ready feeds standby/SIGSTOP and types the queue into a live turn,
+/// so Ready needs the whole last painted row to be a status row: an uppercase label
+/// followed only by usage and hint tokens, or the bare `BUILD`/`PLAN` label of the
+/// narrow layout. A progress bar glyph or `esc interrupt` marks a running turn
+/// (the bar is painted before its text and the text is cut at narrow widths).
+/// Any other last row, such as tool output opening with an uppercase word, is Unknown.
 fn detect_opencode_mini_screen_activity(rows: &[String]) -> AgentScreenActivity {
     const INTERRUPT_HINT: &str = "esc interrupt";
+    const BAR_GLYPHS: [char; 2] = ['\u{2B1D}', '\u{25A0}'];
+    const BARE_LABELS: [&str; 2] = ["BUILD", "PLAN"];
 
     let Some(status) = rows.iter().rev().find(|row| !row.trim().is_empty()) else {
         return AgentScreenActivity::Unknown;
     };
-    let is_agent_label = status.split_whitespace().next().is_some_and(|label| {
-        label.chars().count() >= 2
-            && label
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '_')
-    });
-    if !is_agent_label {
-        AgentScreenActivity::Unknown
-    } else if status.contains(INTERRUPT_HINT) {
-        AgentScreenActivity::Working
-    } else {
+    let mut tokens = status.split_whitespace();
+    let Some(label) = tokens.next() else {
+        return AgentScreenActivity::Unknown;
+    };
+    let is_label = label.chars().count() >= 2
+        && label.starts_with(|c: char| c.is_ascii_uppercase())
+        && label
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if !is_label {
+        return AgentScreenActivity::Unknown;
+    }
+    if status.contains(INTERRUPT_HINT) || status.contains(BAR_GLYPHS) {
+        return AgentScreenActivity::Working;
+    }
+    let is_status_token = |token: &str| {
+        matches!(token, "\u{00B7}" | "ctrl+p" | "cmd")
+            || token.chars().all(|c| {
+                c.is_ascii_digit()
+                    || matches!(c, '.' | ',' | '%' | '(' | ')' | '$' | 'K' | 'M' | 'B')
+            })
+    };
+    let rest: Vec<&str> = tokens.collect();
+    let is_status_row = rest.iter().all(|token| is_status_token(token))
+        && (!rest.is_empty() || BARE_LABELS.contains(&label));
+    if is_status_row {
         AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
     }
 }
 

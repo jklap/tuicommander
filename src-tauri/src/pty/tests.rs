@@ -16052,6 +16052,10 @@ fn opencode_mini_turn_captures_read_working_then_ready() {
             .rposition(|activity| *activity == AgentScreenActivity::Working)
             .unwrap();
         assert!(
+            !after_submit[..first_working].contains(&AgentScreenActivity::Ready),
+            "{fixture}: Ready between the submit and the first Working frame"
+        );
+        assert!(
             !after_submit[first_working..=last_working].contains(&AgentScreenActivity::Ready),
             "{fixture}: Ready while the turn was still running"
         );
