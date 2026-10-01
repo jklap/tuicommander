@@ -325,6 +325,7 @@
 /tunnels/profiles/x
 /tunnels/ssh-hosts
 /tunnels/ssh-hosts/discovered
+/tunnels/ssh-hosts/probe
 /tunnels/ssh-hosts/status
 /tunnels/start/x
 /tunnels/status/x
