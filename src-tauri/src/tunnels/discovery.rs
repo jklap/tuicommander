@@ -407,3 +407,60 @@ mod critic_r3_tests {
         assert_eq!(names, vec!["dup.example", "late.example"]);
     }
 }
+
+#[cfg(test)]
+mod critic_round5_tests {
+    use super::*;
+
+    /// Catches: `is_alphanumeric` admitting non-ASCII letters and digits, so a
+    /// Cyrillic or full-width look-alike of a trusted name is listed and probed.
+    #[test]
+    fn non_ascii_look_alike_hosts_are_not_safe() {
+        for host in ["exаmple.com", "ｅxample.com", "host٣.example", "ex\u{200b}ample.com"] {
+            assert!(!is_safe_host(host), "look-alike accepted: {host:?}");
+        }
+    }
+
+    /// Catches: the allowlist rejecting a legitimate bracketed IPv6 name with a
+    /// zone id, which known_hosts writes as `[fe80::1%en0]:2222`.
+    #[test]
+    fn bracketed_ipv6_with_zone_and_port_is_listed() {
+        let known = parse_known_hosts("[fe80::1%en0]:2222 ssh-ed25519 AAAA\n");
+        assert_eq!(
+            known.hosts,
+            vec![("fe80::1%en0".to_string(), Some(2222))]
+        );
+    }
+
+    /// Catches: user@host and ssh:// forms surviving as one token, which ssh
+    /// would split into a user and a different destination.
+    #[test]
+    fn user_and_uri_forms_are_not_listed() {
+        let known = parse_known_hosts(
+            "root@victim.example ssh-rsa AAAA\nssh://victim.example ssh-rsa AAAA\nok.example ssh-rsa AAAA\n",
+        );
+        assert_eq!(known.hosts, vec![("ok.example".to_string(), None)]);
+    }
+
+    /// Catches: known_hosts names that duplicate a config alias's target
+    /// consuming the known-hosts cap, hiding real extra hosts.
+    #[test]
+    fn names_covered_by_config_do_not_consume_the_known_cap() {
+        let config = vec![ConfigHost {
+            alias: "a".to_string(),
+            hostname: Some("h0.example".to_string()),
+            user: None,
+            port: None,
+        }];
+        let text: String = (0..MAX_KNOWN_HOSTS + 1)
+            .map(|i| format!("h{i}.example ssh-rsa AAAA\n"))
+            .collect();
+        let merged = merge_discovered(config, parse_known_hosts(&text));
+        let known = merged
+            .hosts
+            .iter()
+            .filter(|h| matches!(h.source, HostSource::KnownHosts))
+            .count();
+        assert_eq!(known, MAX_KNOWN_HOSTS);
+    }
+}
