@@ -352,3 +352,41 @@ mod hostile_input_tests {
         assert_eq!(ids.len(), total, "ambiguous entries: {:?}", merged.hosts);
     }
 }
+
+#[cfg(test)]
+mod critic_r3_tests {
+    use super::*;
+
+    /// Catches: a known_hosts name that `ssh` reinterprets as `user@host` or an
+    /// `ssh://` URI, so the machine contacted differs from the listed identity.
+    #[test]
+    fn names_ssh_would_parse_as_user_or_uri_are_not_listed() {
+        let known = parse_known_hosts(
+            "root@evil.example ssh-rsa AAAA\nssh://evil.example:2222 ssh-rsa AAAA\nfine.example ssh-rsa AAAA\n",
+        );
+        assert_eq!(known.hosts, vec![("fine.example".to_string(), None)]);
+    }
+
+    /// Catches: zero-width and bidi format characters (not `is_control`) letting
+    /// two visually identical names coexist, or a reversed name be displayed.
+    #[test]
+    fn format_characters_in_a_name_are_not_listed() {
+        let known = parse_known_hosts(
+            "evil.example\u{200b} ssh-rsa AAAA\n\u{202e}moc.live ssh-rsa AAAA\nfine.example ssh-rsa AAAA\n",
+        );
+        assert_eq!(known.hosts, vec![("fine.example".to_string(), None)]);
+    }
+
+    /// Catches: the 2000 cap applied before dedupe, so repeated lines for one
+    /// host (one per key type, or after key rotation) push real hosts out.
+    #[test]
+    fn duplicate_lines_do_not_consume_the_listing_cap() {
+        let mut text: String = (0..MAX_KNOWN_HOSTS)
+            .map(|_| "dup.example ssh-ed25519 AAAA\n")
+            .collect();
+        text.push_str("late.example ssh-ed25519 AAAA\n");
+        let merged = merge_discovered(Vec::new(), parse_known_hosts(&text));
+        let names: Vec<_> = merged.hosts.iter().map(|h| h.host.as_str()).collect();
+        assert_eq!(names, vec!["dup.example", "late.example"]);
+    }
+}

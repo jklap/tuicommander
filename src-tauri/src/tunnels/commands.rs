@@ -695,3 +695,41 @@ mod hostile_probe_tests {
         assert_eq!(args[host_at - 1], "--", "host must follow `--`: {args:?}");
     }
 }
+
+#[cfg(test)]
+mod critic_r3_tests {
+    use super::*;
+
+    /// Catches: a file over the cap with no newline in its first
+    /// `KNOWN_HOSTS_MAX_BYTES` handed to the parser cut mid-name.
+    #[test]
+    fn an_oversized_known_hosts_without_a_newline_yields_no_partial_line() {
+        let bytes = vec![b'a'; KNOWN_HOSTS_MAX_BYTES as usize + 10];
+        assert_eq!(bounded_text(bytes), "");
+    }
+
+    /// Catches: the cache lock released across ssh with no single-flight, so two
+    /// concurrent bulk probes of the same hosts each spawn every ssh process.
+    #[tokio::test]
+    async fn concurrent_bulk_probes_spawn_each_host_once() {
+        let counter = crate::test_support::fake_ssh_script(
+            "ssh-hosts-critic-r3-count",
+            "echo x >> \"$0.log\"; sleep 1; exit 0",
+            "echo x>> \"%~f0.log\"\r\nping -n 3 127.0.0.1 >nul\r\nexit /b 0",
+        );
+        let _ = std::fs::remove_file(format!("{}.log", counter.display()));
+        let cache = tokio::sync::Mutex::new(None);
+        let hosts = vec![config_host("one")];
+        let (a, b) = tokio::join!(
+            probe_cached(&cache, hosts.clone(), &counter, Duration::from_secs(5)),
+            probe_cached(&cache, hosts.clone(), &counter, Duration::from_secs(5)),
+        );
+        a.unwrap();
+        b.unwrap();
+        let runs = std::fs::read_to_string(format!("{}.log", counter.display()))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(runs, 1, "ssh spawned {runs} times for one host");
+    }
+}
