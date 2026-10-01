@@ -34,6 +34,11 @@ pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
+// Tests of the pure sidecar predicate that build.rs also compiles; a build
+// script has no test harness.
+#[cfg(test)]
+#[path = "../build_sidecars.rs"]
+mod build_sidecars;
 #[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod dir_watcher;
@@ -1489,12 +1494,7 @@ pub fn run() {
 
     let data_dir = config::config_dir();
 
-    if let Err(error) = agent_hook_launch::regenerate_launch_assets(&data_dir) {
-        tracing::error!(
-            source = "agent_hooks",
-            "Failed to generate launch-scoped agent status assets: {error}"
-        );
-    }
+    agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, config.clone(), log_buffer);
     *app_state.github.token.get_mut() = github_token;
@@ -2269,6 +2269,8 @@ pub fn run() {
             tunnels::tauri_commands::list_active_tunnels,
             tunnels::tauri_commands::get_tunnel_status,
             tunnels::tauri_commands::list_ssh_config_hosts,
+            tunnels::tauri_commands::list_discovered_ssh_hosts,
+            tunnels::tauri_commands::probe_discovered_ssh_host,
             tunnels::tauri_commands::probe_ssh_config_hosts,
             tunnels::tauri_commands::list_ssh_agent_keys,
             tunnels::tauri_commands::get_tunnel_audit,
@@ -2496,6 +2498,8 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
     // HTTP server binds. No window here, but a wedged `gh` would still keep the
     // server unreachable.
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
+
+    agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     *app_state.github.token.get_mut() = github_token;
@@ -2785,6 +2789,8 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     // HTTP server binds. No window here, but a wedged `gh` would still keep the
     // server unreachable.
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
+
+    agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     app_state.remote_survive_secs = options.survive_secs;
@@ -3560,6 +3566,30 @@ mod tests {
             assert!(
                 !body.contains("github_auth::resolve_token_without_keychain()"),
                 "{entry} must not run the `gh`-spawning chain before its server binds"
+            );
+        }
+    }
+
+    /// Catches: a headless daemon that never writes `agent-hooks/claude.json`, so
+    /// a `claude` spawn fails with "Settings file not found".
+    #[test]
+    fn every_boot_path_writes_the_launch_assets_through_the_shared_helper() {
+        let source = include_str!("lib.rs");
+        for entry in [
+            "pub fn run()",
+            "pub async fn run_headless(",
+            "pub async fn run_remote(",
+        ] {
+            let body = source
+                .split(entry)
+                .nth(1)
+                .unwrap_or_else(|| panic!("{entry} must exist"))
+                .split("\n}\n")
+                .next()
+                .expect("entry body");
+            assert!(
+                body.contains("agent_hook_launch::regenerate_launch_assets_at_boot("),
+                "{entry} must write the launch assets before spawning agents"
             );
         }
     }

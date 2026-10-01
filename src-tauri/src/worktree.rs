@@ -86,6 +86,35 @@ pub(crate) struct WorktreeLiveSession {
     pub name: String,
 }
 
+/// Sessions of the registry whose cwd is inside `checkout`. The one source of
+/// "who is working in this checkout" for every removal guard.
+pub(crate) fn live_sessions_in(state: &AppState, checkout: &Path) -> Vec<WorktreeLiveSession> {
+    let root = checkout
+        .canonicalize()
+        .unwrap_or_else(|_| checkout.to_path_buf());
+    let mut live_sessions = Vec::new();
+    for entry in &state.session_maps.sessions {
+        let session = entry.value().lock();
+        let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
+            session
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.path.clone())
+        });
+        if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
+            live_sessions.push(WorktreeLiveSession {
+                session_id: entry.key().clone(),
+                name: session
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| entry.key().clone()),
+            });
+        }
+    }
+    live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    live_sessions
+}
+
 pub(crate) fn inspect_worktree_removal(
     state: &AppState,
     repo_path: &Path,
@@ -113,31 +142,10 @@ pub(crate) fn inspect_worktree_removal(
                     .count()
             })
     });
-    let mut live_sessions = Vec::new();
-    if let Some(worktree_path) = &worktree_path {
-        let root = worktree_path
-            .canonicalize()
-            .unwrap_or_else(|_| worktree_path.clone());
-        for entry in &state.session_maps.sessions {
-            let session = entry.value().lock();
-            let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
-                session
-                    .worktree
-                    .as_ref()
-                    .map(|worktree| worktree.path.clone())
-            });
-            if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
-                live_sessions.push(WorktreeLiveSession {
-                    session_id: entry.key().clone(),
-                    name: session
-                        .display_name
-                        .clone()
-                        .unwrap_or_else(|| entry.key().clone()),
-                });
-            }
-        }
-        live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
-    }
+    let live_sessions = worktree_path
+        .as_deref()
+        .map(|path| live_sessions_in(state, path))
+        .unwrap_or_default();
     let mut warnings = Vec::new();
     match lifecycle.commit_status {
         WorkspaceCommitStatus::InSync => {
@@ -521,11 +529,16 @@ pub(crate) fn remove_orphan_worktree(
     repo_path: String,
     worktree_path: String,
     safe_only: Option<bool>,
+    confirmed_sessions: Option<Vec<String>>,
 ) -> Result<(), String> {
     validate_worktree_path(&repo_path, &worktree_path)?;
-    if safe_only.unwrap_or(false) {
-        tuic_git::worktree::orphan_cleanup_safety(&repo_path, &worktree_path)?;
-    }
+    orphan_removal_guard(
+        &state,
+        &repo_path,
+        &worktree_path,
+        safe_only.unwrap_or(false),
+        &confirmed_sessions.unwrap_or_default(),
+    )?;
 
     let base_repo = PathBuf::from(&repo_path);
     let path = PathBuf::from(&worktree_path);
@@ -1118,13 +1131,116 @@ pub(crate) async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<Str
     .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn assess_orphan_cleanup(
+/// A detached checkout's removal verdict, plus the sessions working in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct OrphanCleanupReview {
+    #[serde(flatten)]
+    pub assessment: tuic_git::worktree::OrphanCleanupAssessment,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub live_sessions: Vec<WorktreeLiveSession>,
+}
+
+fn live_session_reason(sessions: &[WorktreeLiveSession]) -> String {
+    let names: Vec<&str> = sessions.iter().map(|s| s.name.as_str()).collect();
+    format!("live session: {}", names.join(", "))
+}
+
+/// Git safety plus the session registry: an orphan checkout a session still
+/// works in is never safe to remove without a human review. A checkout that
+/// is already gone holds no work, so its stale sessions do not block.
+pub(crate) fn orphan_cleanup_safety_with_sessions(
+    state: &AppState,
+    repo_path: &str,
+    worktree_path: &str,
+) -> Result<(), String> {
+    tuic_git::worktree::orphan_cleanup_safety(repo_path, worktree_path)?;
+    let path = Path::new(worktree_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let live = live_sessions_in(state, path);
+    if live.is_empty() {
+        Ok(())
+    } else {
+        Err(live_session_reason(&live))
+    }
+}
+
+/// The removal guard both transports share. A safe-only removal needs the full
+/// verdict. A review-confirmed one (`safe_only` false) needs no sessions beyond
+/// those the user saw in the dialog: one that started since was never reviewed.
+pub(crate) fn orphan_removal_guard(
+    state: &AppState,
+    repo_path: &str,
+    worktree_path: &str,
+    safe_only: bool,
+    confirmed_sessions: &[String],
+) -> Result<(), String> {
+    if safe_only {
+        return orphan_cleanup_safety_with_sessions(state, repo_path, worktree_path);
+    }
+    let path = Path::new(worktree_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let unseen: Vec<WorktreeLiveSession> = live_sessions_in(state, path)
+        .into_iter()
+        .filter(|session| !confirmed_sessions.contains(&session.session_id))
+        .collect();
+    if unseen.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}; not part of the confirmed removal",
+            live_session_reason(&unseen)
+        ))
+    }
+}
+
+pub(crate) fn assess_orphan_cleanup_with_sessions(
+    state: &AppState,
+    repo_path: &str,
+) -> Result<Vec<OrphanCleanupReview>, String> {
+    Ok(tuic_git::worktree::assess_orphan_worktrees(repo_path)?
+        .into_iter()
+        .map(|mut assessment| {
+            let live_sessions = if Path::new(&assessment.path).exists() {
+                live_sessions_in(state, Path::new(&assessment.path))
+            } else {
+                Vec::new()
+            };
+            if !live_sessions.is_empty() {
+                assessment.safe = false;
+                let live = live_session_reason(&live_sessions);
+                assessment.reason = Some(match assessment.reason.take() {
+                    Some(reason) => format!("{reason}; {live}"),
+                    None => live,
+                });
+            }
+            OrphanCleanupReview {
+                assessment,
+                live_sessions,
+            }
+        })
+        .collect())
+}
+
+pub(crate) async fn assess_orphan_cleanup_internal(
+    state: Arc<AppState>,
     repo_path: String,
-) -> Result<Vec<tuic_git::worktree::OrphanCleanupAssessment>, String> {
-    tokio::task::spawn_blocking(move || tuic_git::worktree::assess_orphan_worktrees(&repo_path))
+) -> Result<Vec<OrphanCleanupReview>, String> {
+    tokio::task::spawn_blocking(move || assess_orphan_cleanup_with_sessions(&state, &repo_path))
         .await
         .map_err(|error| format!("orphan cleanup assessment task failed: {error}"))?
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn assess_orphan_cleanup(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+) -> Result<Vec<OrphanCleanupReview>, String> {
+    assess_orphan_cleanup_internal(state.inner().clone(), repo_path).await
 }
 
 #[derive(Clone)]
@@ -1169,7 +1285,7 @@ pub(crate) fn answer_orphan_cleanup_internal(
         .clone();
     if remove {
         for path in &pending {
-            tuic_git::worktree::orphan_cleanup_safety(repo_path, path)?;
+            orphan_cleanup_safety_with_sessions(state, repo_path, path)?;
         }
     }
     let mut current = state
@@ -1950,5 +2066,284 @@ mod tests {
             "{merge_error}"
         );
         assert!(worktree.join("after-confirmation.txt").exists());
+    }
+    #[cfg(unix)]
+    mod orphan_removal_guard_critic {
+        use super::*;
+        use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
+
+        fn detached(repo: &Path, name: &str) -> PathBuf {
+            let path = repo.join(name);
+            let out = std::process::Command::new("git")
+                .current_dir(repo)
+                .args(["worktree", "add", "--detach"])
+                .arg(&path)
+                .arg("HEAD")
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "{out:?}");
+            path
+        }
+
+        fn guard(
+            state: &AppState,
+            repo: &Path,
+            checkout: &Path,
+            confirmed: &[&str],
+        ) -> Result<(), String> {
+            let confirmed: Vec<String> = confirmed.iter().map(|s| s.to_string()).collect();
+            orphan_removal_guard(
+                state,
+                &repo.to_string_lossy(),
+                &checkout.to_string_lossy(),
+                false,
+                &confirmed,
+            )
+        }
+
+        // Catches: a session in a subdirectory of the checkout escaping the unreviewed-session
+        // check on the confirmed path (exact cwd match instead of prefix).
+        #[test]
+        fn refuses_an_unreviewed_session_in_a_subdirectory() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            fs::create_dir_all(linked.join("sub/deeper")).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(
+                &state,
+                "agent",
+                &linked.join("sub/deeper").to_string_lossy(),
+            );
+
+            assert!(guard(&state, repo.path(), &linked, &[]).is_err());
+            guard(&state, repo.path(), &linked, &["agent"]).expect("reviewed");
+        }
+
+        // Catches: a session in a sibling checkout whose name shares a string prefix
+        // ("linked" vs "linked-2") being counted as inside this checkout.
+        #[test]
+        fn a_sibling_with_a_shared_name_prefix_is_not_unreviewed() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let sibling = detached(repo.path(), "linked-2");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &sibling.to_string_lossy());
+
+            guard(&state, repo.path(), &linked, &[]).expect("sibling is outside");
+        }
+
+        // Catches: the refusal text hiding which session was not reviewed, so the caller cannot
+        // act on a 400.
+        #[test]
+        fn the_refusal_names_the_unreviewed_session_and_not_the_reviewed_one() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = crate::state::tests_support::make_test_app_state();
+            for (id, name) in [("seen", "Seen Agent"), ("late", "Late Agent")] {
+                insert_dummy_session(&state, id);
+                set_session_cwd(&state, id, &linked.to_string_lossy());
+                state
+                    .session_maps
+                    .sessions
+                    .get(id)
+                    .unwrap()
+                    .lock()
+                    .display_name = Some(name.to_string());
+            }
+
+            let error = guard(&state, repo.path(), &linked, &["seen"]).unwrap_err();
+
+            assert!(error.contains("Late Agent"), "{error}");
+            assert!(!error.contains("Seen Agent"), "{error}");
+        }
+
+        // Catches: an already-removed checkout with stale sessions still refusing the
+        // confirmed removal (idempotent retry must succeed).
+        #[test]
+        fn a_missing_checkout_never_blocks() {
+            let repo = setup_test_repo();
+            let gone = repo.path().join("gone");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &gone.to_string_lossy());
+
+            guard(&state, repo.path(), &gone, &[]).expect("nothing left to protect");
+        }
+    }
+    #[cfg(unix)]
+    mod orphan_session_guard {
+        use super::*;
+        use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
+
+        fn detached(repo: &Path, name: &str) -> PathBuf {
+            let path = repo.join(name);
+            let out = std::process::Command::new("git")
+                .current_dir(repo)
+                .args(["worktree", "add", "--detach"])
+                .arg(&path)
+                .arg("HEAD")
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "{out:?}");
+            path
+        }
+
+        fn guard(state: &AppState, repo: &Path, checkout: &Path) -> Result<(), String> {
+            orphan_cleanup_safety_with_sessions(
+                state,
+                &repo.to_string_lossy(),
+                &checkout.to_string_lossy(),
+            )
+        }
+
+        // Catches: an equality or exact-match cwd test, so an agent whose shell sits
+        // in a subdirectory of the checkout is not seen and its checkout is removed.
+        #[test]
+        fn refuses_a_session_working_in_a_subdirectory_of_the_checkout() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            fs::create_dir(linked.join("src")).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.join("src").to_string_lossy());
+
+            let error = guard(&state, repo.path(), &linked).expect_err("live session");
+            assert!(error.contains("live session"), "{error}");
+        }
+
+        // Catches: a string-prefix cwd test, so a session in `wt-2` blocks the
+        // cleanup of `wt` for ever (or, inverted, `wt` hides a session of `wt-2`).
+        #[test]
+        fn ignores_a_sibling_directory_whose_name_extends_the_checkout_name() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "wt");
+            let sibling = repo.path().join("wt-2");
+            fs::create_dir(&sibling).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &sibling.to_string_lossy());
+
+            guard(&state, repo.path(), &linked)
+                .expect("sibling session is not inside the checkout");
+        }
+
+        // Catches: comparing raw cwd text, so a session that entered the checkout
+        // through a symlink is invisible to the guard.
+        #[test]
+        fn refuses_a_session_whose_cwd_reaches_the_checkout_through_a_symlink() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let alias = repo.path().join("alias");
+            std::os::unix::fs::symlink(&linked, &alias).unwrap();
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &alias.to_string_lossy());
+
+            assert!(guard(&state, repo.path(), &linked).is_err());
+        }
+
+        // Catches: reading only `cwd`, so a session created for a worktree but with
+        // no OSC 7 cwd report yet does not protect that worktree.
+        #[test]
+        fn falls_back_to_the_session_worktree_when_the_cwd_is_unknown() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            state
+                .session_maps
+                .sessions
+                .get("agent")
+                .unwrap()
+                .lock()
+                .worktree = Some(WorktreeInfo {
+                name: "linked".into(),
+                path: linked.clone(),
+                branch: None,
+                base_repo: repo.path().to_path_buf(),
+            });
+
+            assert!(guard(&state, repo.path(), &linked).is_err());
+        }
+
+        // Catches: treating a session with no location as "inside everything", which
+        // would block every orphan cleanup while any such session exists.
+        #[test]
+        fn a_session_with_no_cwd_and_no_worktree_blocks_nothing() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+
+            guard(&state, repo.path(), &linked).expect("no location, no claim on the checkout");
+        }
+
+        // Catches: a dead session left in the registry blocking the cleanup for
+        // ever — the exit path must drop it from what the guard reads.
+        #[test]
+        fn a_session_that_exited_no_longer_blocks_the_cleanup() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let state = Arc::new(crate::state::tests_support::make_test_app_state());
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.to_string_lossy());
+            assert!(guard(&state, repo.path(), &linked).is_err());
+
+            crate::pty::mark_session_exited("agent", &state);
+
+            guard(&state, repo.path(), &linked).expect("exited session is gone");
+        }
+
+        // Catches: one live session flipping the verdict of every orphan in the
+        // repo (a shared flag instead of a per-checkout check).
+        #[test]
+        fn assessment_marks_only_the_orphan_a_session_works_in() {
+            let repo = setup_test_repo();
+            let idle = detached(repo.path(), "idle");
+            let busy = detached(repo.path(), "busy");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &busy.to_string_lossy());
+
+            let rows = assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                .unwrap();
+
+            let row_of = |dir: &Path| {
+                rows.iter()
+                    .find(|row| Path::new(&row.assessment.path).ends_with(dir.file_name().unwrap()))
+                    .expect("orphan listed")
+            };
+            assert!(row_of(&idle).assessment.safe);
+            assert!(row_of(&idle).live_sessions.is_empty());
+            assert!(!row_of(&busy).assessment.safe);
+            assert_eq!(row_of(&busy).live_sessions.len(), 1);
+        }
+
+        // Catches: the live-session reason overwriting the git reason, so a dirty
+        // checkout with a session in it hides the uncommitted work from the dialog.
+        #[test]
+        fn assessment_keeps_the_git_reason_next_to_the_live_session() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            fs::write(linked.join("scratch.txt"), "unsaved").unwrap();
+            let git_reason =
+                tuic_git::worktree::assess_orphan_worktrees(&repo.path().to_string_lossy())
+                    .unwrap()
+                    .remove(0)
+                    .reason
+                    .expect("untracked file is unsafe");
+            let state = crate::state::tests_support::make_test_app_state();
+            insert_dummy_session(&state, "agent");
+            set_session_cwd(&state, "agent", &linked.to_string_lossy());
+
+            let rows = assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                .unwrap();
+
+            let reason = rows[0].assessment.reason.clone().unwrap();
+            assert!(reason.contains(&git_reason), "{reason}");
+            assert!(reason.contains("live session"), "{reason}");
+        }
     }
 }
