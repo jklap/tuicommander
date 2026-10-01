@@ -185,6 +185,11 @@ pub(crate) struct DeclaredWorkExplain {
     /// shown idle, so any surplus makes the declaration count (fail-safe). `None`
     /// without a breakdown.
     pub(crate) unlinked_teammates: Option<u32>,
+    /// Whether `counts_now` (from this payload's own teammate sample) equals
+    /// `visible.declared_background_work` (the state ladder's independent read).
+    /// `false` means a teammate changed state between the two reads: the capture
+    /// is torn, re-run it rather than trusting either value.
+    pub(crate) consistent_with_visible: bool,
     /// Whether the declaration held this session "working" at capture time —
     /// the same value `visible.declared_background_work` reports.
     pub(crate) counts_now: bool,
@@ -333,6 +338,41 @@ pub(crate) fn explain_session_state_impl(
     state: &AppState,
     session_id: &str,
 ) -> Option<SessionStateExplain> {
+    // Agent Teams linkage. Sampled BEFORE the ladder read below, as close to it as
+    // possible: the ladder reads the same teammate terminals independently, so a
+    // teammate flipping between the two reads can tear them. The window cannot be
+    // closed (the atomics belong to other sessions), so a tear is detected and
+    // reported via `consistent_with_visible` instead of silently disagreeing. Reads
+    // only the tmux topology and shell-state atomics (never a SilenceState lock),
+    // so it is safe before and under the lock taken below.
+    let teammates: Vec<TeammateExplain> =
+        crate::mcp_http::tmux_routes::teammate_session_ids(state, session_id)
+            .into_iter()
+            .map(|id| {
+                let raw = state
+                    .session_maps
+                    .shell_states
+                    .get(&id)
+                    .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
+                TeammateExplain {
+                    shell_state: raw.map(|value| match value {
+                        SHELL_BUSY => "busy",
+                        SHELL_IDLE => "idle",
+                        _ => "unknown",
+                    }),
+                    busy: raw == Some(SHELL_BUSY),
+                    session_id: id,
+                }
+            })
+            .collect();
+    let teammates_busy = teammates.iter().any(|t| t.busy);
+    let linked_teammates = teammates.len() as u32;
+    let lead_session_id = crate::mcp_http::tmux_routes::lead_of_teammate(state, session_id);
+    let swarm = (lead_session_id.is_some() || !teammates.is_empty()).then_some(SwarmExplain {
+        lead_session_id,
+        teammates,
+    });
+
     let (session, agent_state_rung, completion_declared, background_work) =
         state.session_state_with_shell_detailed(session_id)?;
 
@@ -365,37 +405,6 @@ pub(crate) fn explain_session_state_impl(
 
     let shell_is_busy = session.shell_state.as_deref() == Some("busy");
 
-    // Agent Teams linkage. Reads only the tmux topology and the shell-state
-    // atomics (never a SilenceState lock), so it is safe before and under the
-    // lock taken below.
-    let teammates: Vec<TeammateExplain> =
-        crate::mcp_http::tmux_routes::teammate_session_ids(state, session_id)
-            .into_iter()
-            .map(|id| {
-                let raw = state
-                    .session_maps
-                    .shell_states
-                    .get(&id)
-                    .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
-                TeammateExplain {
-                    shell_state: raw.map(|value| match value {
-                        SHELL_BUSY => "busy",
-                        SHELL_IDLE => "idle",
-                        _ => "unknown",
-                    }),
-                    busy: raw == Some(SHELL_BUSY),
-                    session_id: id,
-                }
-            })
-            .collect();
-    let teammates_busy = teammates.iter().any(|t| t.busy);
-    let linked_teammates = teammates.len() as u32;
-    let lead_session_id = crate::mcp_http::tmux_routes::lead_of_teammate(state, session_id);
-    let swarm = (lead_session_id.is_some() || !teammates.is_empty()).then_some(SwarmExplain {
-        lead_session_id,
-        teammates,
-    });
-
     // One lock section for everything SilenceState holds, per this module's
     // doc comment on lock ordering.
     let sl = state.session_maps.silence_states.get(session_id)?;
@@ -426,6 +435,10 @@ pub(crate) fn explain_session_state_impl(
             let applies_now = sl.declared_background_work
                 && sl.declared_background_work_turn_epoch == session.turn_epoch;
             let summary = sl.declared_task_summary_for_epoch(session.turn_epoch);
+            let counts_now = sl
+                .declared_background_work_for_epoch_with(session.turn_epoch, |declared| {
+                    declared > linked_teammates || teammates_busy
+                });
             DeclaredWorkExplain {
                 flag: EpochFlagExplain {
                     declared: sl.declared_background_work,
@@ -445,10 +458,8 @@ pub(crate) fn explain_session_state_impl(
                 teammates_busy,
                 unlinked_teammates: summary
                     .map(|s| s.teammate_running.saturating_sub(linked_teammates)),
-                counts_now: sl
-                    .declared_background_work_for_epoch_with(session.turn_epoch, |declared| {
-                        declared > linked_teammates || teammates_busy
-                    }),
+                counts_now,
+                consistent_with_visible: counts_now == session.declared_background_work,
             }
         },
     };
