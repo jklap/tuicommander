@@ -8058,6 +8058,90 @@ mod tests {
         s
     }
 
+    fn session_created(session_id: &str, agent_type: &str) -> AppEvent {
+        AppEvent::SessionCreated {
+            session_id: session_id.to_string(),
+            cwd: None,
+            agent_type: Some(agent_type.to_string()),
+            display_name: None,
+            parent_session: None,
+        }
+    }
+
+    /// Catches: SessionCreated building the row without `last_activity_ms` or
+    /// `agent_type` (new-entry path), or not refreshing them on a row that a
+    /// PtyParsed event created first (existing-entry path).
+    #[test]
+    fn session_created_stamps_activity_time_and_agent_type_on_new_and_existing_rows() {
+        let state = Arc::new(make_test_app_state());
+
+        AppState::apply_event_to_session_state(&state, &session_created("fresh", "claude"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("fresh")
+            .unwrap()
+            .clone();
+        assert!(row.last_activity_ms > 0, "new row lost its activity time");
+        assert_eq!(row.agent_type.as_deref(), Some("claude"));
+
+        state
+            .session_maps
+            .session_states
+            .insert("existing".to_string(), SessionState::default());
+        AppState::apply_event_to_session_state(&state, &session_created("existing", "codex"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("existing")
+            .unwrap()
+            .clone();
+        assert!(
+            row.last_activity_ms > 0,
+            "existing row kept a zero activity time"
+        );
+        assert_eq!(row.agent_type.as_deref(), Some("codex"));
+    }
+
+    /// Catches: `event_type == "question" && epoch_matches` turned into `||`, so a
+    /// question from a previous turn still records awaiting evidence on the
+    /// session's SilenceState even though its own state update is rejected.
+    #[test]
+    fn stale_epoch_question_records_no_awaiting_evidence() {
+        let state = fresh_state();
+        let stale = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "old?", "_turn_epoch": 99 }),
+        );
+        let row = apply(&state, &stale);
+        assert!(!row.awaiting_input, "a stale question parked the session");
+        assert_eq!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank(),
+            None,
+            "a stale question recorded awaiting evidence"
+        );
+
+        let current = make_parsed("question", serde_json::json!({ "prompt_text": "now?" }));
+        assert!(apply(&state, &current).awaiting_input);
+        assert!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank()
+                .is_some(),
+            "a current question must record awaiting evidence"
+        );
+    }
+
     #[test]
     fn pending_acp_question_alerts_the_chat_once_while_desktop_is_away() {
         let state = fresh_state();
