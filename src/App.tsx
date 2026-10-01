@@ -908,6 +908,7 @@ const App: Component = () => {
 					}
 					onRemoveRepo={gitOps.handleRemoveRepo}
 					onOpenSettings={() => openSettings()}
+					onOpenRemoteMachines={() => openSettings("remote-machines")}
 					onOpenHelp={() => setHelpPanelVisible(true)}
 					buildAgentMenuItems={terminalContextMenus.buildSidebarAgentMenuItems}
 					onRefreshBranchStats={gitOps.refreshAllBranchStats}

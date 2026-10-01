@@ -134,6 +134,10 @@ When any branch has a PR event that needs attention, a bell icon with a count ba
 - **Click the dismiss (x) button** on an item — Dismiss that single notification
 - **Click "Dismiss All"** — Clear all notifications at once
 
+### OS Notifications
+
+While TUICommander is in the background, **ready**, **CI failed**, **changes requested** and **merged** transitions also raise an operating-system notification showing `repo #number: title`. On macOS, clicking it opens the PR on GitHub. The same event delivered twice within two minutes notifies once. Turn it off in **Settings > Notifications > Pull Requests**.
+
 ### PR Badge on Sidebar Branches
 
 Click the colored PR status badge on any branch in the sidebar to open the PR detail popover directly.
@@ -142,11 +146,17 @@ Click the colored PR status badge on any branch in the sidebar to open the PR de
 
 GitHub data is polled automatically:
 
-- **Active window:** Every 30 seconds
+- **Active window:** Every 60 seconds (backs off to 120 s when the rate-limit budget runs low, up to 300 s)
 - **Hidden window:** Every 2 minutes (reduced to save API budget)
-- **API budget:** ~2 calls/min/repo = 1,200/hr for 10 repos (GitHub limit: 5,000/hr)
+- **API budget:** one batched GraphQL query per repository per poll. Measured with `rateLimit(dryRun: true)`: 2 points for 1 repository and 6 for 6 (5 before the unresolved-thread count was added), i.e. about 360 points/hr for 6 repositories at 60 s (GitHub limit: 5,000/hr). Unresolved threads are read as a plain `isResolved` flag (first 50 per PR); reading the thread comments in the batch would have cost 17 points for 1 repository and 51 for 6, so the bot/human split is fetched per PR, on demand, when the PR panel opens.
 
 Polling starts automatically when a repository with a GitHub remote is active.
+
+## Readiness Verdict
+
+The sidebar badge, the PR panel chip and the Ops dashboard all show one verdict, computed in a single function (`src/utils/prReadiness.ts`). First match wins: Draft, Merged, Closed, Conflicts, Checking (GitHub still computing mergeability), CI Failed, Changes Req., Comments (unresolved review threads), Review, CI Running, Ready (approved, mergeable, nothing outstanding), otherwise Open.
+
+The PR panel also shows the number of unresolved review threads, split into human and bot threads (a bot is a GitHub App/bot author; the author of a thread is the author of its first comment). Counts cover the first 50 threads of a PR.
 
 ## Merge State Classification
 
@@ -203,7 +213,7 @@ Clicking the PR badge on any branch (local or remote-only) opens the detail popo
 | Button | When Shown | What It Does |
 |--------|------------|--------------|
 | **View Diff** | Always | Opens PR diff in a dedicated panel tab |
-| **Merge** | PR is open, approved, CI green | Merges via GitHub API (auto-detects allowed merge method) |
+| **Merge** | PR is open, approved, CI green | Merges via GitHub API (auto-detects allowed merge method). The merge is pinned to the head commit the panel showed: if the agent pushed since, GitHub refuses and the panel shows "PR head changed" — refresh and review before merging again |
 | **Approve** | Remote-only PRs | Submits an approving review via GitHub API |
 
 ### Post-Merge Cleanup
@@ -254,6 +264,22 @@ Expand an issue to see:
 | Close / Reopen | Changes issue state via GitHub API |
 | Copy number | Copies `#123` to clipboard |
 
+### PR Row Actions (panel)
+
+Expand a PR in the GitHub panel for these actions, next to Checkout, Merge and Diff:
+
+| Action | When Shown | What It Does |
+|--------|------------|--------------|
+| **Update branch** | PR is open and GitHub reports it behind its base | Merges the base branch into the PR branch, pinned to the head the panel showed (refuses with "PR head changed" if the agent pushed meanwhile). The merge commit lands on the remote: pull it in any local clone |
+| **Close** | PR is open | Closes the PR without merging, after a confirmation |
+| **Copy ref** | PR has a GitHub URL | Copies `owner/repo#number` for pasting into prompts |
+
+Open PRs older than two weeks carry an age marker on the row: `2w`, `1m`, `3m` or `6m`, measured from the creation date.
+
+### PR Diff: collapsed files
+
+In the PR diff tab, lockfiles (`pnpm-lock.yaml`, `Cargo.lock`, ...), generated files (`dist/`, `*.min.js`, `*.snap`, `*.pb.go`, files marked `linguist-generated` in the repo's `.gitattributes`) and test files (`__tests__/`, `*.test.*`, `*_test.go`, ...) start collapsed. The header shows how many are collapsed; click a file header to expand it. `.gitattributes` is read from the local checkout, which stands in for the PR's base when another branch is checked out.
+
 ## Panel Keyboard Navigation
 
 The GitHub panel is keyboard-navigable without ever moving focus off the panel itself:
@@ -277,4 +303,4 @@ own default: PR sections start collapsed when empty, Issues starts open.
 
 **Stale data:**
 - Click the refresh button or switch away and back to the branch
-- Polling updates every 30 seconds automatically
+- Polling updates every 60 seconds automatically

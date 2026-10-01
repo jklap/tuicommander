@@ -49,7 +49,7 @@ describe("CanvasTerminal hot paths", () => {
 		it("only schedules link detection for the pane under the pointer", () => {
 			const start = source.indexOf("// Link detection (throttled)");
 			expect(start).toBeGreaterThan(-1);
-			const end = source.indexOf("checkLinksAtRow(pos.row, pos.col)", start);
+			const end = source.indexOf("scheduleLinkProbe(e)", start);
 			expect(end).toBeGreaterThan(start);
 			const block = source.slice(start, end);
 			expect(block).toMatch(/isPointerInsideRect\(e, canvasRef\.getBoundingClientRect\(\)\)/);

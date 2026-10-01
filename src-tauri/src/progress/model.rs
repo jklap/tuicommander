@@ -19,7 +19,7 @@ pub(crate) fn bounded_name(name: &str) -> Option<String> {
 
 /// Maximum number of entries rendered by the Flow view.
 pub const LIST_LIMIT: usize = 500;
-pub const DEFAULT_PAGE_LIMIT: usize = 10;
+pub const DEFAULT_PAGE_LIMIT: usize = 8;
 pub const MAX_PAGE_LIMIT: usize = 100;
 
 /// What a journal entry is.

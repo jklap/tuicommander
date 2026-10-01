@@ -164,6 +164,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "ego profile",
 		labelKey: "general.label.egoProfile",
 	},
+	{
+		tab: "general",
+		section: "ego",
+		label: "AI Chat workspace",
+		labelKey: "general.label.aiChatWorkspace",
+	},
 	{ tab: "general", section: "IDE", label: "Default IDE", labelKey: "general.label.defaultIde" },
 	// tabs/TerminalTab.tsx
 	{ tab: "terminal", section: "Theme", sectionKey: "appearance.heading.theme" },
@@ -299,6 +305,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Notification Settings",
 		label: "Toolbar Bell",
 		labelKey: "notifications.label.toolbarBell",
+	},
+	{
+		tab: "notifications",
+		section: "Notification Settings",
+		label: "Pull Requests",
+		labelKey: "notifications.label.prNotifications",
 	},
 	// DictationSettings.tsx — `SpeechRecognition`, `HandsFreeControls` and
 	// `SpeechSetup` each open with their own heading, so `extractSettings`, which

@@ -29,13 +29,20 @@ fn requires_external_registration(tuic_session: Option<&str>) -> bool {
     tuic_session.is_none()
 }
 
+/// The server logs this pid on every initialize, so a storm of fresh sessions
+/// can be traced to the process that opened them.
+fn client_pid() -> String {
+    std::process::id().to_string()
+}
+
 fn post(
     body: &Value,
     session: Option<&str>,
     tuic_session: Option<&str>,
     read_timeout: Option<std::time::Duration>,
 ) -> Result<ipc::Response, String> {
-    let extra = mcp_headers(session, tuic_session);
+    let pid = client_pid();
+    let extra = mcp_headers(session, tuic_session, &pid);
     ipc::request_with_headers_and_timeout(
         "POST",
         "/mcp",
@@ -78,8 +85,12 @@ fn mcp_read_timeout(tool: &str, arguments: &Value) -> Option<std::time::Duration
 fn mcp_headers<'a>(
     session: Option<&'a str>,
     tuic_session: Option<&'a str>,
+    client_pid: &'a str,
 ) -> Vec<(&'a str, &'a str)> {
-    let mut headers = vec![("Accept", "application/json, text/event-stream")];
+    let mut headers = vec![
+        ("Accept", "application/json, text/event-stream"),
+        ("x-tuic-client-pid", client_pid),
+    ];
     if let Some(sid) = session {
         headers.push(("Mcp-Session-Id", sid));
     }
@@ -205,6 +216,23 @@ impl McpClient {
     }
 }
 
+impl Drop for McpClient {
+    /// Release the protocol session. Without it every CLI call leaves one
+    /// session behind until the server reaper runs: 324k fresh initializes were
+    /// never deleted on 2026-09-29/30. Best effort: the call already finished.
+    fn drop(&mut self) {
+        let pid = client_pid();
+        let extra = mcp_headers(Some(&self.session), self.tuic_session.as_deref(), &pid);
+        let _ = ipc::request_with_headers_and_timeout(
+            "DELETE",
+            "/mcp",
+            None,
+            &extra,
+            Some(std::time::Duration::from_secs(2)),
+        );
+    }
+}
+
 /// Human-readable outcome line for a delivery report.
 ///
 /// `accepted`/`ok` only mean "buffered". `delivered` is false exactly when the
@@ -263,9 +291,17 @@ mod tests {
 
     #[test]
     fn managed_cli_identity_is_sent_as_the_bridge_header() {
-        let headers = mcp_headers(Some("mcp-1"), Some("peer-1"));
+        let headers = mcp_headers(Some("mcp-1"), Some("peer-1"), "4242");
         assert!(headers.contains(&("Mcp-Session-Id", "mcp-1")));
         assert!(headers.contains(&("x-tuic-session", "peer-1")));
+    }
+
+    /// Catches: a session storm that cannot be traced to a process because the
+    /// CLI never says which pid opened the connection.
+    #[test]
+    fn every_cli_request_names_its_process() {
+        let headers = mcp_headers(None, None, "4242");
+        assert!(headers.contains(&("x-tuic-client-pid", "4242")));
     }
 
     #[test]

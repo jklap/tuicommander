@@ -40,6 +40,121 @@ fn agent_alternate_screen_warning_is_once_per_session() {
     assert!(!processor.should_warn_alt_screen(Some("codex"), true));
 }
 
+/// Feed `chunks` to a fresh processor for `session_id` and return the alt-screen
+/// toasts the bus carried, as (title, message, origin_session_id).
+fn alt_screen_toasts(
+    session_id: &str,
+    agent_type: Option<&str>,
+    chunks: &[&str],
+    startup_elapsed: std::time::Duration,
+) -> Vec<(String, String, Option<String>)> {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, session_id, SHELL_BUSY);
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .agent_type = agent_type.map(String::from);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.startup_deadline -= startup_elapsed;
+    let mut events = state.event_bus.subscribe();
+    for chunk in chunks {
+        processor.process_chunk(chunk, &silence, session_id, &state);
+    }
+    std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::McpToast {
+                title,
+                message,
+                origin_session_id,
+                ..
+            } => Some((title, message.unwrap_or_default(), origin_session_id)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn startup_alt_screen_entry_toasts_once_naming_the_session() {
+    for enter in ["\x1b[?1049h", "\x1b[?47h", "\x1b[?1047h"] {
+        let toasts = alt_screen_toasts(
+            "startup-alt-toast",
+            Some("claude"),
+            &[enter, "\x1b[?1049l\x1b[?1049h"],
+            std::time::Duration::ZERO,
+        );
+        assert_eq!(toasts.len(), 1, "{enter:?}: one toast per session");
+        let (title, message, origin) = &toasts[0];
+        assert!(title.contains("alternate screen"), "{enter:?}: {title}");
+        assert!(
+            message.contains("startup-alt-toast"),
+            "{enter:?}: {message}"
+        );
+        assert_eq!(origin.as_deref(), Some("startup-alt-toast"));
+    }
+}
+
+#[test]
+fn startup_alt_screen_toast_covers_plain_shells() {
+    let toasts = alt_screen_toasts(
+        "startup-alt-shell",
+        None,
+        &["\x1b[?1049h"],
+        std::time::Duration::ZERO,
+    );
+    assert_eq!(toasts.len(), 1);
+}
+
+#[test]
+fn alt_screen_after_the_startup_window_does_not_toast() {
+    let toasts = alt_screen_toasts(
+        "late-alt-toast",
+        None,
+        &["\x1b[?1049h"],
+        std::time::Duration::from_secs(3600),
+    );
+    assert!(
+        toasts.is_empty(),
+        "vim/less later in the session: {toasts:?}"
+    );
+}
+
+#[test]
+fn alt_screen_entered_and_left_in_one_chunk_does_not_toast() {
+    let toasts = alt_screen_toasts(
+        "probe-alt-toast",
+        Some("codex"),
+        &["\x1b[?1049h\x1b[?1049l"],
+        std::time::Duration::ZERO,
+    );
+    assert!(toasts.is_empty(), "transient probe: {toasts:?}");
+}
+
+#[test]
+fn alt_screen_toast_text_names_the_fix_per_agent() {
+    let claude = alt_screen_toast_message("s", Some("claude"));
+    assert!(claude.contains("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"));
+    assert!(claude.contains("CLAUDE_CODE_DISABLE_AGENT_VIEW"));
+    assert!(alt_screen_toast_message("s", Some("codex")).contains("--no-alt-screen"));
+    assert!(alt_screen_toast_message("s", Some("opencode")).contains("--mini"));
+    for agent in [None, Some("aider")] {
+        let text = alt_screen_toast_message("s", agent);
+        assert!(text.contains("scrollback"), "{agent:?}: {text}");
+        assert!(text.contains("state detection"), "{agent:?}: {text}");
+    }
+}
+
 #[test]
 fn pty_identity_defaults_claude_to_native_scrollback() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -68,6 +183,23 @@ fn pty_identity_defaults_claude_to_native_scrollback() {
     assert_eq!(
         ipc.get_env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"),
         Some(std::ffi::OsStr::new("1"))
+    );
+}
+
+#[test]
+fn spawned_claude_disables_the_alt_screen_agent_view() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let mut cmd = CommandBuilder::new("claude");
+    bind_pty_identity(&state, &mut cmd, "agent-view-default", None);
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_AGENT_VIEW"),
+        Some(std::ffi::OsStr::new("1"))
+    );
+    // A caller's explicit value, applied afterwards, keeps precedence.
+    cmd.env("CLAUDE_CODE_DISABLE_AGENT_VIEW", "0");
+    assert_eq!(
+        cmd.get_env("CLAUDE_CODE_DISABLE_AGENT_VIEW"),
+        Some(std::ffi::OsStr::new("0"))
     );
 }
 
@@ -11697,6 +11829,251 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
     );
 }
 
+/// Drive one queued Codex delivery whose first Enter draws `screen_after_enter`
+/// (Ctrl-U, text and Enter are consumed first) and report every write the PTY
+/// saw plus whether the delivery ended uncertain. `after_retry` runs once a
+/// second Enter arrives, to draw the agent's reaction.
+#[cfg(unix)]
+fn run_codex_queued_delivery(
+    sid: &str,
+    screen_after_enter: &str,
+    after_retry: Option<&str>,
+) -> (Vec<Vec<u8>>, bool) {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(24, 80, 1000);
+    vt.process(b"\x1b[22;1H\xe2\x80\xba Ask Codex to do anything");
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut seen = Vec::new();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+            let write = received
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(write, expected);
+            seen.push(write);
+        }
+        let mut reader = ChunkProcessor::new(None, None);
+        reader.process_chunk(screen_after_enter, &silence, sid, &state);
+        if let Some(reaction) = after_retry
+            && let Ok(retry) = received.recv_timeout(std::time::Duration::from_secs(10))
+        {
+            seen.push(retry);
+            reader.process_chunk(reaction, &silence, sid, &state);
+        }
+    });
+
+    let uncertain = silence.lock().injection_delivery_uncertain;
+    seen.extend(std::iter::from_fn(|| received.try_recv().ok()));
+    (seen, uncertain)
+}
+
+/// Codex can swallow the Enter (paste-burst window) and keep the text in its
+/// composer. The retained composer gets exactly one more Enter, which submits.
+#[cfg(unix)]
+#[test]
+fn ignored_codex_enter_with_text_still_in_composer_retries_once_and_submits() {
+    let (writes, uncertain) = run_codex_queued_delivery(
+        "codex-ignored-enter-retained",
+        "\x1b[22;1H\x1b[2K\u{203a} wake the agent",
+        Some(
+            "\x1b[21;1H\u{2022} Working (1s \u{2022} esc to interrupt)\x1b[22;1H\x1b[2K\u{203a} Ask Codex to do anything",
+        ),
+    );
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|write| write.as_slice() == b"\r")
+            .count(),
+        2,
+        "one Enter for the delivery, exactly one retry"
+    );
+    assert!(!uncertain, "the retry's Working screen confirms the turn");
+}
+
+/// Real Codex 0.159 PTY capture (2026-09-30): a 1967-character brief typed into
+/// a fresh composer collapses to `[Pasted Content 1967 chars]`. The first Enter
+/// (200 ms after the text, as `CODEX_ENTER_GAP` does) is swallowed and the
+/// placeholder stays in the composer; a bare Enter 5 s later submits and Codex
+/// prints `Working` 0.18 s after it. The composer never shows the text, so the
+/// retry must recognise the placeholder as the queued text.
+#[cfg(unix)]
+#[test]
+fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder() {
+    struct ChannelWriter(std::sync::mpsc::Sender<Vec<u8>>);
+    impl std::io::Write for ChannelWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.send(bytes.to_vec()).expect("record PTY write");
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    use crate::pty_capture::CaptureDirection::{Input, Output};
+
+    let bytes = agent_prompt_fixture("codex-0.159-long-brief-swallowed-enter.tcap");
+    let capture = crate::pty_capture::decode_capture(&bytes).expect("valid capture");
+    let (rows, cols) = capture.geometry.expect("capture geometry");
+    let records = capture.records;
+    let inputs: Vec<usize> = (0..records.len())
+        .filter(|&i| records[i].direction == Input)
+        .collect();
+    // Ctrl-U, brief, first Enter, second Enter.
+    assert_eq!(inputs.len(), 4);
+    let brief = String::from_utf8(records[inputs[1]].data.clone()).unwrap();
+    let second_enter = inputs[3];
+
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "codex-long-brief-swallowed-enter";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    for record in records[..inputs[1]]
+        .iter()
+        .filter(|r| r.direction == Output)
+    {
+        vt.process(&record.data);
+    }
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1 << 20)));
+    assert_eq!(agent_submission_ack_kind(&state, sid), "ready_screen");
+    let (writes, received) = std::sync::mpsc::channel();
+    insert_session_with_writer(&state, sid, Box::new(ChannelWriter(writes)), TtyMode::Raw);
+    let mut alerts = state.event_bus.subscribe();
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let replay = |reader: &mut ChunkProcessor, range: std::ops::Range<usize>| {
+        for record in records[range].iter().filter(|r| r.direction == Output) {
+            reader.process_chunk(
+                &String::from_utf8_lossy(&record.data),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    };
+    let mut seen = Vec::new();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| enqueue_user_command(&state, sid, &brief).unwrap());
+        for expected in [b"\x15".as_slice(), brief.as_bytes(), b"\r"] {
+            let write = received
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(write, expected);
+            seen.push(write);
+        }
+        let mut reader = ChunkProcessor::new(None, None);
+        replay(&mut reader, inputs[1]..second_enter);
+        // The terminal also answers the agent's queries through the PTY writer
+        // during the replay; only the retry Enter ends the wait.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            let Ok(write) = received.recv_timeout(left) else {
+                break;
+            };
+            let is_retry = write == b"\r";
+            seen.push(write);
+            if is_retry {
+                replay(&mut reader, second_enter..records.len());
+                break;
+            }
+        }
+    });
+
+    assert_eq!(
+        seen.iter().filter(|w| w.as_slice() == b"\r").count(),
+        2,
+        "the placeholder in the composer gets exactly one retry Enter"
+    );
+    assert!(
+        !silence.lock().injection_delivery_uncertain,
+        "the retry's Working screen confirms the turn"
+    );
+    assert!(
+        std::iter::from_fn(|| alerts.try_recv().ok()).all(|event| !matches!(
+            event,
+            crate::state::AppEvent::McpToast { ref title, .. }
+                if title == "Agent input was not confirmed"
+        )),
+        "no false failure toast"
+    );
+}
+
+/// A retained composer that ignores the retry too stays uncertain; there is no
+/// second retry.
+#[cfg(unix)]
+#[test]
+fn codex_enter_retry_is_never_repeated() {
+    let (writes, uncertain) = run_codex_queued_delivery(
+        "codex-ignored-enter-twice",
+        "\x1b[22;1H\x1b[2K\u{203a} wake the agent",
+        Some("\x1b[22;1H\x1b[2K\u{203a} wake the agent"),
+    );
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|write| write.as_slice() == b"\r")
+            .count(),
+        2
+    );
+    assert!(uncertain);
+}
+
+/// An empty composer after the first Enter means nothing is left to submit.
+#[cfg(unix)]
+#[test]
+fn codex_enter_is_not_retried_when_composer_is_empty() {
+    let (writes, uncertain) = run_codex_queued_delivery(
+        "codex-empty-composer",
+        "\x1b[22;1H\x1b[2K\u{203a} Ask Codex to do anything",
+        None,
+    );
+    assert_eq!(
+        writes
+            .iter()
+            .filter(|write| write.as_slice() == b"\r")
+            .count(),
+        1,
+        "an empty composer must not receive a second Enter"
+    );
+    assert!(uncertain, "no acknowledgement still reports uncertainty");
+}
+
 #[cfg(unix)]
 #[test]
 fn queued_agent_without_child_response_remains_uncertain() {
@@ -15632,6 +16009,159 @@ fn opencode_mini_resize_repaint_does_not_reopen_an_idle_turn() {
     }
 }
 
+/// OpenCode 1.18.30 `--mini` has no composer frame, so the framed adapter read
+/// every screen as Unknown: the queue deferred `idle_unconfirmed` forever and the
+/// shell stayed busy after the turn (#1299-3ce1). Replays two live captures, wide
+/// and 64 columns (the narrow one drops the `ctrl+p cmd` hint and runs a tool).
+/// Catches an adapter that cannot see the turn at all, and one that reads Ready
+/// while the turn still runs and would type the queue into it.
+#[test]
+fn opencode_mini_turn_captures_read_working_then_ready() {
+    for fixture in [
+        "opencode-1.18.30-mini-turn.tcap",
+        "opencode-1.18.30-mini-narrow-tool-turn.tcap",
+    ] {
+        let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(fixture))
+            .expect("valid live capture");
+        let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+        let mut vt = VtLogBuffer::new(rows, cols, 2000);
+        let mut submitted = false;
+        let mut after_submit = Vec::new();
+        for record in capture.records {
+            match record.direction {
+                crate::pty_capture::CaptureDirection::Input => {
+                    submitted |= record.data == b"\r";
+                }
+                crate::pty_capture::CaptureDirection::Output => {
+                    vt.process(&record.data);
+                    if submitted {
+                        after_submit.push(detect_agent_screen_activity(
+                            Some("opencode"),
+                            &vt.screen_rows(),
+                        ));
+                    }
+                }
+            }
+        }
+        let first_working = after_submit
+            .iter()
+            .position(|activity| *activity == AgentScreenActivity::Working)
+            .unwrap_or_else(|| panic!("{fixture}: the running turn never read Working"));
+        let last_working = after_submit
+            .iter()
+            .rposition(|activity| *activity == AgentScreenActivity::Working)
+            .unwrap();
+        assert!(
+            !after_submit[..first_working].contains(&AgentScreenActivity::Ready),
+            "{fixture}: Ready between the submit and the first Working frame"
+        );
+        assert!(
+            !after_submit[first_working..=last_working].contains(&AgentScreenActivity::Ready),
+            "{fixture}: Ready while the turn was still running"
+        );
+        assert_eq!(
+            after_submit.last(),
+            Some(&AgentScreenActivity::Ready),
+            "{fixture}: the finished turn must read Ready; screen: {:#?}",
+            vt.screen_rows()
+        );
+    }
+}
+
+/// The user-visible failure: a command queued on OpenCode while it works never
+/// reached the composer, because the finished turn was never recognised as
+/// Ready and the busy shell never went idle. Replays the live turn through the
+/// production reader path, then lets the silence timer run.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
+    tokio::time::pause();
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "opencode-1.18.30-mini-turn.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "opencode-mini-queue";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let bytes = insert_recording_session(&state, sid);
+    // The turn is running when the user queues: the Enter of its own prompt
+    // left the shell busy, as observed live (`shell-state` stayed `busy`).
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        enqueue_user_command(&state, sid, "resume queued work")
+            .unwrap()
+            .queued,
+        1
+    );
+
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready,
+        "the reader must classify the finished turn as Ready"
+    );
+    // The emulator answers the capture's own terminal queries through the
+    // writer during replay; only what is written after that is the queue drain.
+    let replayed = bytes.lock().unwrap().len();
+    // Production satisfies the foreground probe from a process snapshot that
+    // shows nothing left under the agent; the test has no process tree.
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.background_probe_satisfied_turn_epoch = Some(session.turn_epoch);
+    }
+    {
+        let mut silence = silence.lock();
+        let settled = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        silence.last_output_at = settled;
+        silence.last_chunk_at = settled;
+        silence.screen_ready_pending_since = Some(settled);
+    }
+
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+
+    for _ in 0..300 {
+        if bytes.lock().unwrap().ends_with(b"\r") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        String::from_utf8(bytes.lock().unwrap()[replayed..].to_vec()).unwrap(),
+        "\u{15}resume queued work\r",
+        "the Ready screen must release the queue into the composer"
+    );
+}
+
 /// goose 1.49.0, captured live (#699-c6e0): the composer footer is on screen and
 /// nothing is running, so the session must read Ready. Without this the OSC 133
 /// busy bit set once by the long-lived `goose session` command survives for the
@@ -15656,6 +16186,20 @@ fn goose_mid_turn_capture_reads_working() {
     assert_eq!(
         detect_agent_screen_activity(Some("goose"), &screen),
         AgentScreenActivity::Working,
+        "screen: {screen:#?}"
+    );
+}
+
+/// goose 1.49.0, captured live after Ctrl+C mid-turn (#1301-87fd): the composer
+/// placeholder becomes `Interrupted, what should goose work on instead?` and the
+/// `Enter to send` hint is gone. Catches the bug where the screen read Unknown, so
+/// agent_state stayed working forever after an interrupt.
+#[test]
+fn goose_interrupted_capture_reads_ready() {
+    let screen = replay_final_screen(&agent_prompt_fixture("goose-1.49.0-interrupted.tcap"));
+    assert_eq!(
+        detect_agent_screen_activity(Some("goose"), &screen),
+        AgentScreenActivity::Ready,
         "screen: {screen:#?}"
     );
 }
@@ -16758,6 +17302,8 @@ async fn confident_awaiting_is_never_retracted() {
 /// Live Claude 2.1.280 capture: AskUserQuestion notified a confident wait,
 /// Esc dismissed it without a typed line, and the turn ended at the composer.
 /// The badge must follow that completed turn, not the historical notification.
+/// The mobile choice overlay is still set when the decline paints, and the shell
+/// state must still leave BUSY: Claude sends no Stop hook after Esc.
 #[tokio::test(flavor = "current_thread")]
 async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
     let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
@@ -16843,16 +17389,24 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
         "the completed turn must retract Claude's dismissed question"
     );
 
-    // The captured composer is ready after Claude finishes. Model the normal
-    // idle settlement, then exercise the same PTY write used by MCP submit.
-    #[cfg(unix)]
-    {
+    // Catches: Esc ends the turn with no Stop hook, so the hook-driven BUSY
+    // stays latched and queued input never flushes. Nothing here stores IDLE by
+    // hand: the dismissal itself must have released the session.
+    assert_eq!(
         state
             .session_maps
             .shell_states
             .get(sid)
             .unwrap()
-            .store(SHELL_IDLE, Ordering::Release);
+            .load(Ordering::Acquire),
+        SHELL_IDLE,
+        "the dismissed AskUserQuestion must return the session to idle"
+    );
+
+    // The captured composer is ready after Claude finishes; exercise the same
+    // PTY write used by MCP submit.
+    #[cfg(unix)]
+    {
         silence.lock().confirm_idle();
         let bytes = insert_recording_session(&state, sid);
         assert!(matches!(
@@ -19413,6 +19967,783 @@ mod grid_delivery_tests {
         assert!(
             row_count(&rx.borrow_and_update().frame) < 24,
             "repairing the desktop must not cost the browser a full frame"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------
+// Critic tests for #1312-3ba6: the live-prompt window widened from 3 to 4 rows
+// is shared with Gemini, and the paste-placeholder probe reads 8 bottom rows.
+// ---------------------------------------------------------------------
+
+#[test]
+fn gemini_quote_four_rows_above_the_bottom_is_not_a_ready_prompt() {
+    // catches: the widened 4-row window lets a markdown quote in history read
+    // as the live Gemini composer, flipping a working agent to Ready.
+    let screen: Vec<String> = ["> quoted user prose", "output a", "output b", "output c"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    assert_eq!(
+        detect_gemini_screen_activity(&screen),
+        AgentScreenActivity::Unknown
+    );
+}
+
+#[test]
+fn codex_old_prompt_four_rows_above_the_bottom_is_not_ready() {
+    // catches: a submitted `›` row in history, with no live composer, read as Ready.
+    let screen: Vec<String> = ["› earlier prompt", "• Ran ls", "  file_a", "  file_b"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+
+    assert_ne!(
+        detect_codex_screen_activity(&screen),
+        AgentScreenActivity::Ready
+    );
+}
+
+fn codex_state_showing(sid: &str, lines: &[&str]) -> crate::state::AppState {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("codex".into());
+    let mut vt = VtLogBuffer::new(24, 100, 2000);
+    vt.process(lines.join("\r\n").as_bytes());
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    state
+}
+
+#[test]
+fn placeholder_in_transcript_history_does_not_trigger_a_retry_enter() {
+    // catches: a stale `[Pasted Content` in an already-submitted transcript row
+    // within the bottom 8 rows makes composer_retains_text true for an EMPTY
+    // composer, so a second Enter is sent for a turn that was already submitted.
+    let state = codex_state_showing(
+        "crit-history-placeholder",
+        &[
+            "› [Pasted Content 1967 chars]",
+            "",
+            "• Ran cargo test",
+            "  ok",
+            "",
+            "› ",
+            "",
+            "  gpt-5 · ~/repo",
+        ],
+    );
+
+    assert!(!composer_retains_text(
+        &state,
+        "crit-history-placeholder",
+        "run the next step please"
+    ));
+}
+
+#[test]
+fn placeholder_probe_counts_non_empty_rows_not_screen_rows() {
+    // catches: the 8-row bound counting blank padding rows, or off-by-one at the edge.
+    let mut inside = vec!["› [Pasted Content 1967 chars]"];
+    inside.extend(["r2", "r3", "r4", "r5", "r6", "r7", "r8"]); // placeholder is 8th from bottom
+    let state = codex_state_showing("crit-edge-in", &inside);
+    assert!(composer_retains_text(&state, "crit-edge-in", "brief"));
+
+    let mut outside = vec!["› [Pasted Content 1967 chars]"];
+    outside.extend(["r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"]); // 9th from bottom
+    let state = codex_state_showing("crit-edge-out", &outside);
+    assert!(!composer_retains_text(&state, "crit-edge-out", "brief"));
+}
+
+// ---- critic-1302: dismissed AskUserQuestion, attack cases -----------------
+
+/// Replays the live Claude Esc capture through the production chunk processor
+/// and returns once the whole capture was consumed.
+#[cfg(test)]
+async fn replay_claude_askuser_esc(
+    sid: &str,
+) -> (Arc<AppState>, Arc<Mutex<SilenceState>>, ChunkProcessor) {
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-askuser-esc-20260929.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut utf8 = Utf8ReadBuffer::new();
+    let mut escape = EscapeAwareBuffer::new();
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            let data = utf8.push(&record.data);
+            let data = escape.push(&data);
+            let (clean, _) = crate::state::strip_kitty_sequences(&data);
+            processor.process_chunk(&clean, &silence, sid, &state);
+            // The declined-result branch reads the awaiting state the accumulator
+            // owns. On a current-thread runtime it applies nothing until the test
+            // yields, so a replay that never yields sees no question to release.
+            for _ in 0..200 {
+                if state.session_maps.session_state_events.depth() == 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        }
+    }
+    (state, silence, processor)
+}
+
+fn shell_of(state: &AppState, sid: &str) -> u8 {
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .load(Ordering::Acquire)
+}
+
+/// Catches: the declined-question idle is recorded at a rank that later hooks
+/// cannot override, so the next turn's `state=busy` hook is ignored and the tab
+/// shows idle while Claude works.
+#[tokio::test(flavor = "current_thread")]
+async fn critic_1302_hook_busy_after_a_dismissed_question_is_honoured() {
+    let sid = "critic-1302-late-busy";
+    let (state, silence, processor) = replay_claude_askuser_esc(sid).await;
+    assert_eq!(shell_of(&state, sid), SHELL_IDLE);
+
+    processor.handle_tuic_state("busy", sid, &state);
+    assert_eq!(
+        shell_of(&state, sid),
+        SHELL_BUSY,
+        "a busy hook after the dismissal starts a new turn"
+    );
+    assert!(silence.lock().hook_busy());
+
+    processor.handle_tuic_state("idle", sid, &state);
+    assert_eq!(shell_of(&state, sid), SHELL_IDLE);
+}
+
+/// Catches: the idle released by the dismissal is not confirmed idle, so the
+/// queued message of the stuck-queue symptom still waits for the silence timer.
+/// Nothing here calls `confirm_idle` by hand.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn critic_1302_queued_injection_flushes_after_a_dismissed_question() {
+    use std::collections::VecDeque;
+    let sid = "critic-1302-queue";
+    let (state, _silence, _processor) = replay_claude_askuser_esc(sid).await;
+    let bytes = insert_recording_session(&state, sid);
+    let mut queue = VecDeque::new();
+    queue.push_back(crate::state::PendingInjection::notice("after esc"));
+    state.pending_injections.insert(sid.to_string(), queue);
+
+    flush_pending_injections(&state, sid);
+    for _ in 0..300 {
+        if bytes.lock().unwrap().ends_with(b"\r") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        String::from_utf8_lossy(&bytes.lock().unwrap()).contains("after esc"),
+        "the queued injection must reach the composer once Esc released BUSY"
+    );
+}
+
+/// Catches: the decline wording in ordinary output (an agent quoting it, a
+/// diff) idles a Claude that is busy and not awaiting any question.
+#[tokio::test(flavor = "current_thread")]
+async fn critic_1302_decline_text_without_a_pending_question_leaves_busy_alone() {
+    let sid = "critic-1302-quote";
+    let (state, silence, mut processor) = replay_claude_askuser_esc(sid).await;
+    processor.handle_tuic_state("busy", sid, &state);
+    assert_eq!(shell_of(&state, sid), SHELL_BUSY);
+
+    processor.process_chunk(
+        "\r\nUser declined to answer questions\r\n",
+        &silence,
+        sid,
+        &state,
+    );
+    assert_eq!(
+        shell_of(&state, sid),
+        SHELL_BUSY,
+        "no confident question was pending, so the text proves nothing"
+    );
+}
+
+// --- critic-1299: attacks on the OpenCode --mini status-row detector. A false Ready
+// feeds auto-standby (SIGSTOP) and the queue drain, so every row below is a live turn
+// or a screen that must not be read as idle.
+
+fn opencode_mini_rows(last: &str) -> Vec<String> {
+    vec![
+        "  I will run the build now.".to_string(),
+        last.to_string(),
+        String::new(),
+    ]
+}
+
+fn assert_opencode_mini_not_ready(last: &str) {
+    assert_ne!(
+        detect_agent_screen_activity(Some("opencode"), &opencode_mini_rows(last)),
+        AgentScreenActivity::Ready,
+        "last painted row {last:?} must not read as an idle OpenCode"
+    );
+}
+
+/// Catches: a label made only of `-`/`_` reads as an agent label, so a diff header or
+/// markdown rule printed by a tool mid-turn flips the session to Ready.
+#[test]
+fn opencode_mini_dash_run_tool_output_is_not_an_agent_label() {
+    assert_opencode_mini_not_ready("--- a/src/lib.rs");
+    assert_opencode_mini_not_ready("---");
+    assert_opencode_mini_not_ready("___");
+}
+
+/// Catches: a digits-only first token satisfies the label rule, so tool output such as a
+/// match count reads as an idle status row.
+#[test]
+fn opencode_mini_numeric_tool_output_is_not_an_agent_label() {
+    assert_opencode_mini_not_ready("1234 files matched");
+    assert_opencode_mini_not_ready("42");
+}
+
+/// Catches: any uppercase first word of the last painted row (test runner `PASS`, `OK`,
+/// `NOTE`) is taken for the agent label while the status row is not painted.
+#[test]
+fn opencode_mini_uppercase_tool_output_is_not_an_agent_label() {
+    assert_opencode_mini_not_ready("PASS src/foo.test.ts");
+    assert_opencode_mini_not_ready("OK");
+    assert_opencode_mini_not_ready("NOTE remember to rebase");
+}
+
+/// Catches: at very narrow widths `esc interrupt` is cut mid-word, the contains check
+/// misses it and a running turn reads Ready.
+#[test]
+fn opencode_mini_truncated_interrupt_hint_is_not_ready() {
+    assert_opencode_mini_not_ready(
+        " BUILD  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0} esc inte",
+    );
+    assert_opencode_mini_not_ready(" BUILD  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0} esc");
+}
+
+/// Catches: the progress bar is painted before its `esc interrupt` text, so a status row
+/// that already shows the running bar but not yet the hint reads Ready.
+#[test]
+fn opencode_mini_progress_bar_without_hint_is_not_ready() {
+    assert_opencode_mini_not_ready(
+        " BUILD  \u{2B1D}\u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0}",
+    );
+}
+
+/// Catches: a permission dialog below a running status row is read as Ready because the
+/// label row is still on screen.
+#[test]
+fn opencode_mini_permission_prompt_under_working_status_is_not_ready() {
+    let rows = vec![
+        " BUILD  \u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0} esc interrupt"
+            .to_string(),
+        "  Permission required: bash".to_string(),
+        "  Allow once   Allow always   Reject".to_string(),
+    ];
+    assert_ne!(
+        detect_agent_screen_activity(Some("opencode"), &rows),
+        AgentScreenActivity::Ready
+    );
+}
+
+/// Catches: a one-letter uppercase token (`A`, `I`) opening the last row passes the label
+/// rule.
+#[test]
+fn opencode_mini_single_letter_token_is_not_an_agent_label() {
+    assert_opencode_mini_not_ready("A");
+    assert_opencode_mini_not_ready("I think the build passed");
+}
+
+/// Catches: trailing blank rows below the status row hide it, so an idle mini screen
+/// never reads Ready and the queue never drains.
+#[test]
+fn opencode_mini_ready_status_row_survives_trailing_blank_rows() {
+    let rows = vec![
+        "  done".to_string(),
+        " BUILD                                 52.9K (26%) \u{00B7} ctrl+p cmd".to_string(),
+        String::new(),
+        "   ".to_string(),
+    ];
+    assert_eq!(
+        detect_agent_screen_activity(Some("opencode"), &rows),
+        AgentScreenActivity::Ready
+    );
+}
+
+/// Catches: the queue drain of a captured OpenCode mini turn happens for a reason other
+/// than the Ready classification (silence, a stale epoch), so the drain test passes with
+/// the adapter blind. The same replay, but the status row is overwritten by a permission
+/// prompt before the timer runs: the screen is not Ready and nothing may be typed.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn queued_command_does_not_drain_when_the_captured_mini_screen_is_not_ready() {
+    tokio::time::pause();
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "opencode-1.18.30-mini-turn.tcap",
+    ))
+    .expect("valid live capture");
+    let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
+    let sid = "opencode-mini-queue-held";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    let bytes = insert_recording_session(&state, sid);
+    state
+        .session_maps
+        .shell_states
+        .get(sid)
+        .unwrap()
+        .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
+    enqueue_user_command(&state, sid, "resume queued work").unwrap();
+
+    let mut processor = ChunkProcessor::new(None, None);
+    for record in capture.records {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            processor.process_chunk(
+                std::str::from_utf8(&record.data).expect("UTF-8 terminal output"),
+                &silence,
+                sid,
+                &state,
+            );
+        }
+    }
+    processor.process_chunk(
+        &format!("\x1b[{rows};1H\x1b[2K  Allow once   Allow always   Reject"),
+        &silence,
+        sid,
+        &state,
+    );
+    assert_ne!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready,
+        "a permission prompt on the last row is not an idle composer"
+    );
+    let replayed = bytes.lock().unwrap().len();
+    {
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.background_probe_satisfied_turn_epoch = Some(session.turn_epoch);
+    }
+    {
+        let mut silence = silence.lock();
+        let settled = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        silence.last_output_at = settled;
+        silence.last_chunk_at = settled;
+        silence.screen_ready_pending_since = Some(settled);
+    }
+
+    let running = Arc::new(AtomicBool::new(true));
+    spawn_silence_timer(silence, running.clone(), sid.into(), state.clone());
+    tokio::task::yield_now().await;
+    tokio::time::advance(SILENCE_CHECK_INTERVAL + std::time::Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    running.store(false, Ordering::Release);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        bytes.lock().unwrap()[replayed..].to_vec(),
+        Vec::<u8>::new(),
+        "nothing may be typed into a session that is not at an idle composer"
+    );
+}
+
+fn critic_mini_rows(last: &str) -> Vec<String> {
+    vec![
+        "some tool output".to_string(),
+        String::new(),
+        last.to_string(),
+    ]
+}
+
+#[test]
+fn critic_mini_numeric_tool_output_with_uppercase_word_is_not_ready() {
+    // Catches: an `ERROR 404` / `FAIL 2 (50%)` / `DONE 100%` last row passes the
+    // "uppercase label + numeric tokens" rule and reads Ready on a live turn.
+    for row in [
+        "ERROR 404",
+        "FAIL 2 (50%)",
+        "DONE 100%",
+        "TOTAL 1,234.56",
+        "HTTP 200",
+    ] {
+        assert_eq!(
+            detect_opencode_screen_activity(&critic_mini_rows(row)),
+            AgentScreenActivity::Unknown,
+            "row {row:?} is tool output, not the status row"
+        );
+    }
+}
+
+#[test]
+fn critic_mini_bare_tool_word_build_percent_is_not_ready() {
+    // Catches: progress output `BUILD 45%` read as the idle status row.
+    assert_eq!(
+        detect_opencode_screen_activity(&critic_mini_rows("BUILD 45%")),
+        AgentScreenActivity::Unknown
+    );
+}
+
+#[test]
+fn critic_mini_real_ready_forms_are_ready() {
+    // Catches: an observed idle form the whole-row rule rejects, stalling the drain
+    // forever. Every row is a shape captured live from OpenCode 1.18.30 --mini: the fresh
+    // session (no usage yet), the wide idle row with context usage, and the narrow label.
+    for row in [
+        " BUILD                                 52.9K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD                                                       ctrl+p cmd",
+        " BUILD",
+    ] {
+        assert_eq!(
+            detect_opencode_screen_activity(&critic_mini_rows(row)),
+            AgentScreenActivity::Ready,
+            "row {row:?}"
+        );
+    }
+}
+
+#[test]
+fn critic_mini_unobserved_forms_stay_unknown() {
+    // Catches: widening the status-row shape for forms nobody captured. A false Ready
+    // stops a live turn; a false Unknown only delays the queue. Not seen live: a cost
+    // token, a lowercase `k`, a user agent label bare or two words, usage without hints.
+    for row in [
+        " BUILD  950 (1%) \u{00B7} $0.12 \u{00B7} ctrl+p cmd",
+        " BUILD  52.9k (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  52.9K (26%)",
+        " EXPLORE",
+        " CODE REVIEW  52.9K (26%) \u{00B7} ctrl+p cmd",
+    ] {
+        assert_eq!(
+            detect_opencode_screen_activity(&critic_mini_rows(row)),
+            AgentScreenActivity::Unknown,
+            "row {row:?}"
+        );
+    }
+}
+
+#[test]
+fn critic_mini_interrupt_beats_status_tokens() {
+    // Catches: reordering so a numeric tail wins over `esc interrupt`.
+    assert_eq!(
+        detect_opencode_screen_activity(&critic_mini_rows(" BUILD  12 esc interrupt")),
+        AgentScreenActivity::Working
+    );
+    assert_eq!(
+        detect_opencode_screen_activity(&critic_mini_rows(" BUILD  ⬝⬝■■■■■")),
+        AgentScreenActivity::Working
+    );
+}
+
+#[test]
+fn critic3_mini_usage_number_boundaries_are_ready() {
+    // Catches: the usage/percent parser rejecting a boundary of the observed
+    // `<n>[.<n>][K|M|B] (<n>%)` shape (zero, no suffix, 100% and over), which would
+    // stall the queue drain for that session.
+    for usage in [
+        "0 (0%)",
+        "999K (100%)",
+        "1.2M (80%)",
+        "3B (150%)",
+        "950 (1%)",
+    ] {
+        let row = format!(" BUILD  {usage} \u{00B7} ctrl+p cmd");
+        assert_eq!(
+            detect_opencode_screen_activity(&critic_mini_rows(&row)),
+            AgentScreenActivity::Ready,
+            "row {row:?}"
+        );
+    }
+}
+
+#[test]
+fn critic3_mini_malformed_usage_or_extra_tokens_are_unknown() {
+    // Catches: a loosened usage/percent check or a tail wildcard that lets a malformed
+    // number or a stray token ride on `ctrl+p cmd` and read Ready on a live turn.
+    for row in [
+        " BUILD  1.2.3K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  .5K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  5.K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  52.9KM (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  K (26%) \u{00B7} ctrl+p cmd",
+        " BUILD  52.9K (%) \u{00B7} ctrl+p cmd",
+        " BUILD  52.9K (26.5%) \u{00B7} ctrl+p cmd",
+        " BUILD  ctrl+p cmd extra",
+        " BUILD  extra ctrl+p cmd",
+        " BUILD  ctrl+p",
+    ] {
+        assert_eq!(
+            detect_opencode_screen_activity(&critic_mini_rows(row)),
+            AgentScreenActivity::Unknown,
+            "row {row:?}"
+        );
+    }
+}
+
+/// Below the narrowest width at which OpenCode paints the status row (46 columns) the
+/// row is absent (observed at 40), so a bare `BUILD` last line is tool output.
+/// Catches: the width never reaching the adapter, so assistant text that happens to end
+/// on `BUILD` or `PLAN` reads Ready mid-turn on a narrow pane.
+#[test]
+fn opencode_mini_bare_label_below_the_narrowest_observed_width_is_tool_output() {
+    let rows = vec![
+        "  I will run the build now.".to_string(),
+        String::new(),
+        " BUILD".to_string(),
+    ];
+    assert_eq!(
+        detect_agent_screen_activity_at(Some("opencode"), &rows, Some(40)),
+        AgentScreenActivity::Unknown
+    );
+    assert_eq!(
+        detect_agent_screen_activity_at(Some("opencode"), &rows, Some(64)),
+        AgentScreenActivity::Ready,
+        "the 64-column capture paints exactly this row, and so does every width from 46"
+    );
+}
+
+/// Same defect through the reader: `process_chunk` must hand the grid width to the
+/// adapter, otherwise the unit above passes while production still reads Ready.
+#[test]
+fn opencode_mini_reader_passes_the_grid_width_to_the_adapter() {
+    let sid = "opencode-mini-narrow-reader";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(20, 40, 200)));
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk(
+        "\x1b[2J\x1b[H  I will run the build now.\r\n\r\n BUILD",
+        &silence,
+        sid,
+        &state,
+    );
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Unknown,
+        "a 40-column screen has no status row"
+    );
+}
+
+#[test]
+fn critic3_mini_working_row_with_unusual_agent_label_is_working() {
+    // Catches: the label gate running before the interrupt/bar check, so a live turn of
+    // an agent whose name has a dot (`MY.AGENT`) reads Unknown instead of Working and
+    // the queue can be typed into the turn once the screen goes quiet.
+    assert_eq!(
+        detect_opencode_screen_activity(&critic_mini_rows(
+            " MY.AGENT  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0} esc interrupt"
+        )),
+        AgentScreenActivity::Working
+    );
+}
+
+// --- critic-1299 round 4: width gate of the OpenCode --mini status row. Live tmux capture on
+// opencode 1.18.30 (fresh screen): the ` BUILD` row is painted from 46 columns up and absent at
+// 45 and below, where the placeholder wraps onto a second line.
+
+fn critic4_bare_build_rows() -> Vec<String> {
+    vec![
+        "  I will run the build now.".to_string(),
+        String::new(),
+        " BUILD".to_string(),
+    ]
+}
+
+/// Catches: `MIN_STATUS_ROW_COLUMNS` set to the narrowest width probed (64) instead of the
+/// narrowest width that paints the row (46). An idle OpenCode in a 46..=63 column split pane
+/// then reads Unknown for ever, and its queued commands never drain.
+#[test]
+fn critic4_mini_bare_label_reads_ready_wherever_opencode_paints_the_row() {
+    for columns in [46usize, 47, 48, 52, 56, 60, 63, 64, 120] {
+        assert_eq!(
+            detect_agent_screen_activity_at(
+                Some("opencode"),
+                &critic4_bare_build_rows(),
+                Some(columns)
+            ),
+            AgentScreenActivity::Ready,
+            "opencode paints ` BUILD` at {columns} columns (tmux capture)"
+        );
+    }
+}
+
+/// Catches: the width boundary moving up from the observed 45/46 edge, or a width gate that
+/// disappears below it. At 45 and below the row is absent, so a ` BUILD` line is tool output.
+#[test]
+fn critic4_mini_bare_label_is_unknown_where_opencode_paints_no_row() {
+    for columns in [20usize, 40, 41, 44, 45] {
+        assert_eq!(
+            detect_agent_screen_activity_at(
+                Some("opencode"),
+                &critic4_bare_build_rows(),
+                Some(columns)
+            ),
+            AgentScreenActivity::Unknown,
+            "opencode paints no status row at {columns} columns"
+        );
+    }
+}
+
+/// Catches: the width gate dropping a running turn on a narrow screen — the bar and the cut
+/// `esc interrupt` text must stay Working at every width, or auto-standby stops a live turn.
+#[test]
+fn critic4_mini_running_turn_is_working_at_every_width() {
+    for columns in [
+        Some(10usize),
+        Some(40),
+        Some(46),
+        Some(63),
+        Some(64),
+        Some(200),
+        Some(0),
+        None,
+    ] {
+        for row in [
+            " BUILD  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0} esc interrupt",
+            " BUILD  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0}",
+        ] {
+            let rows = vec!["  working".to_string(), row.to_string()];
+            assert_eq!(
+                detect_agent_screen_activity_at(Some("opencode"), &rows, columns),
+                AgentScreenActivity::Working,
+                "{row:?} at {columns:?}"
+            );
+        }
+    }
+}
+
+/// Catches: a full usage status row withheld on a 46..=63 column pane (the gate returns Unknown
+/// before looking at the row), so a turn that produced usage never reads Ready there.
+#[test]
+fn critic4_mini_usage_status_row_reads_ready_on_a_mid_width_pane() {
+    let rows = vec![
+        "  done".to_string(),
+        " BUILD  52.9K (26%) \u{00B7} ctrl+p cmd".to_string(),
+    ];
+    for columns in [58usize, 63, 64, 120] {
+        assert_eq!(
+            detect_agent_screen_activity_at(Some("opencode"), &rows, Some(columns)),
+            AgentScreenActivity::Ready,
+            "{columns} columns"
+        );
+    }
+}
+
+/// Catches: the width reaching the adapter in the reader as a constant, or as the wrong
+/// dimension (rows instead of columns): a 50-column idle pane must reach Ready through
+/// `process_chunk`, the path that feeds the queue drain.
+#[test]
+fn critic4_mini_reader_reads_ready_on_a_fifty_column_screen() {
+    let sid = "opencode-mini-mid-width-reader";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(20, 50, 200)));
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk(
+        "\x1b[2J\x1b[H  I will run the build now.\r\n\r\n BUILD",
+        &silence,
+        sid,
+        &state,
+    );
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready,
+        "a 50-column opencode --mini pane paints ` BUILD`"
+    );
+}
+
+/// Catches: the width parameter leaking into another agent's adapter.
+#[test]
+fn critic4_width_does_not_change_other_agents() {
+    let rows = vec!["> Enter to send \u{00B7} Ctrl+J newline".to_string()];
+    for columns in [Some(10usize), Some(40), Some(63), None] {
+        assert_eq!(
+            detect_agent_screen_activity_at(Some("goose"), &rows, columns),
+            detect_agent_screen_activity(Some("goose"), &rows)
+        );
+    }
+}
+
+/// Catches: the width gate off by one (`<=` instead of `<`, or 45/47 typed in the constant):
+/// OpenCode paints ` BUILD` from exactly 46 columns and nothing at 45.
+#[test]
+fn critic5_mini_bare_label_gate_is_exact_at_45_46_47() {
+    for label in ["BUILD", "PLAN"] {
+        let rows = vec!["  tool output".to_string(), format!(" {label}")];
+        for (columns, expected) in [
+            (Some(45), AgentScreenActivity::Unknown),
+            (Some(46), AgentScreenActivity::Ready),
+            (Some(47), AgentScreenActivity::Ready),
+            (None, AgentScreenActivity::Ready),
+        ] {
+            assert_eq!(
+                detect_agent_screen_activity_at(Some("opencode"), &rows, columns),
+                expected,
+                "{label} at {columns:?}"
+            );
+        }
+    }
+}
+
+/// Catches: the lowered gate also admitting non-status shapes at 46..63 columns
+/// (a bare non-primary label or a truncated usage row reading Ready mid-turn).
+#[test]
+fn critic5_mini_narrow_non_status_rows_stay_unknown_at_46() {
+    for row in [
+        " BUILD 52.9K",
+        " BUILD 52.9K (26%)",
+        " REVIEW",
+        " BUILD  ctrl+p",
+        " Build",
+    ] {
+        let rows = vec![row.to_string()];
+        assert_eq!(
+            detect_agent_screen_activity_at(Some("opencode"), &rows, Some(46)),
+            AgentScreenActivity::Unknown,
+            "{row:?}"
         );
     }
 }

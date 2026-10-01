@@ -1,7 +1,8 @@
-import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, on, onCleanup, Show, untrack } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import type { ContentSearchOptions } from "../../hooks/useFileBrowser";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
+import { initMouseDrag, isHoldPointer } from "../../hooks/useMouseDrag";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { invoke, listen } from "../../invoke";
@@ -96,6 +97,16 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	 * best-effort — list_directory still works because it canonicalizes repo_path.
 	 */
 	const root = () => uiStore.state.fileBrowserExternalRoot || props.fsRoot || props.repoPath;
+
+	// The external folder belongs to the repository it was opened from: picking
+	// another repository or worktree returns the browser to it.
+	createEffect(
+		on(
+			() => [props.repoPath, props.fsRoot],
+			() => uiStore.setFileBrowserExternalRoot(null),
+			{ defer: true },
+		),
+	);
 
 	/** The active markdown-panel tab when a file on disk backs it — a markdown tab
 	 * or an HTML preview. The other md types (virtual, plugin panels, dashboards,
@@ -840,7 +851,45 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		_ptrGhost.style.top = `${y - 8}px`;
 	};
 
+	// Touch and pen: a swipe is a scroll, never a file move (the move is irreversible).
+	// initMouseDrag arms the drag only after a hold and bails out on movement before that.
+	const handleHoldDragStart = (absPath: string, e: PointerEvent) => {
+		// The hold arms the drag without movement: a release in place or finger jitter
+		// (the context-menu gesture) must not drop the file on the folder under the
+		// finger, so a drop needs displacement beyond the touch slop and a pointer off
+		// the source row (whose nearest folder is the panel root).
+		const sourceRow = e.currentTarget as HTMLElement;
+		const slop = 10;
+		let moved = false;
+		const end = () => {
+			markInternalDragEnd();
+			ptrCleanup();
+			_ptrSrc = null;
+		};
+		initMouseDrag(e, e.currentTarget as HTMLElement, {
+			onStart: () => {
+				markInternalDragStart();
+				_ptrSrc = absPath;
+			},
+			onMove: (x, y) => {
+				if (Math.abs(x - e.clientX) + Math.abs(y - e.clientY) > slop) moved = true;
+				ptrHighlight(x, y);
+			},
+			onDrop: (x, y) => {
+				const target = moved && !sourceRow.contains(document.elementFromPoint(x, y)) ? findDropFolder(x, y) : null;
+				end();
+				if (target?.dataset.absPath) performFileMove(absPath, target.dataset.absPath);
+				_ptrSuppressClick = true;
+				requestAnimationFrame(() => {
+					_ptrSuppressClick = false;
+				});
+			},
+			onCancel: end,
+		});
+	};
+
 	const handlePointerDragStart = (absPath: string, e: PointerEvent) => {
+		if (isHoldPointer(e)) return handleHoldDragStart(absPath, e);
 		if (e.button !== 0) return;
 		// Must mark before drag threshold — Tauri's onDragDropEvent fires on any pointer
 		// hold, and without this flag the OS drop handler in dragDrop.ts would treat an
@@ -1157,6 +1206,24 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 				</div>
 				<PanelWindowControls panelId="file-browser" mode={mode()} onInlineClose={props.onClose} />
 			</div>
+
+			<Show when={uiStore.state.fileBrowserExternalRoot}>
+				{(externalRoot) => (
+					<div class={s.externalRoot} data-testid="external-root-banner">
+						<span class={s.externalRootPath} title={externalRoot()}>
+							{externalRoot()}
+						</span>
+						<button
+							type="button"
+							class={s.externalRootBack}
+							title={t("fileBrowser.backToRepo", "Back to the active repository")}
+							onClick={() => uiStore.setFileBrowserExternalRoot(null)}
+						>
+							{t("fileBrowser.backToRepoLabel", "Back to repository")}
+						</button>
+					</div>
+				)}
+			</Show>
 
 			{/* Search filter with F/C mode toggle */}
 			<div class={s.searchBar}>

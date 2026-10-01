@@ -24,7 +24,7 @@
 | Command | Parameters | Result | Description |
 |---|---|---|---|
 | `report_progress_event` | `project, report` | `{id}` | Appends one `done` or `blocked` entry through the same core as MCP and HTTP. |
-| `progress_list` | `project, input.blockedOnly?, input.ptyId?, input.limit?, input.cursor?` | `ProgressList` | A newest-first page (default 10, maximum 100), matching total, next cursor, available PTY IDs, and stored last-visit mark. |
+| `progress_list` | `project, input.blockedOnly?, input.ptyId?, input.limit?, input.cursor?` | `ProgressList` | A newest-first page (default 8, maximum 100), matching total, next cursor, available PTY IDs, and stored last-visit mark. |
 | `progress_projects` | none | `string[]` | Journal projects ordered by their most recent entry, for clients without an active desktop repository. |
 | `progress_delete` | `project, input.ids` | `{deleted}` | Deletes entries by id, scoped to the project — one project cannot delete another's. |
 | `progress_flow` | `project, input.ptyId?` | `ProgressFlow` | The journal as a delegation sequence: participants and ordered hand-off events (see `docs/api/http-api.md` → Project Progress). |
@@ -160,7 +160,7 @@ receive it on `/events`.
 | `get_file_history` | `path, file, count?, after?` | `Vec<CommitLogEntry>` | Per-file commit log following renames (default 50, max 500) |
 | `get_file_blame` | `path, file` | `Vec<BlameLine>` | Per-line blame: hash, author, author_time (unix), line_number, content |
 | `get_branches_detail` | `path` | `Vec<BranchDetail>` | Rich branch listing: name, ahead/behind, last commit date, tracking upstream, merged status |
-| `delete_branch` | `path, name, force` | `()` | Delete a local branch. `force=false` uses safe `-d`; `force=true` uses `-D`. Refuses to delete the current branch or default branch |
+| `delete_branch` | `path, name, force` | `()` | Delete a local branch. `force=false` uses the shared integration proof and compares the ref with its proved tip; content-based proof requires an exact-tip archive. `force=true` uses `-D`. Refuses to delete the current branch or default branch |
 | `create_branch` | `path, name, start_point, checkout` | `()` | Create a new branch from `start_point` (defaults to HEAD). `checkout=true` switches to it immediately |
 | `get_recent_branches` | `path, limit` | `Vec<String>` | Recently checked-out branches from reflog, ordered by recency |
 
@@ -187,9 +187,12 @@ receive it on `/events`.
 |---------|------|---------|-------------|
 | `get_github_status` | `path` | `GitHubStatus` | PR + CI for current branch |
 | `get_ci_checks` | `path` | `Vec<JSON>` | CI check details |
+| `get_pr_review_threads` | `path, pr_number` | `{bot, human}` | Unresolved review threads of one PR, split bot vs human |
 | `get_repo_pr_statuses` | `path, include_merged` | `Vec<BranchPrStatus>` | Batch PR status (all branches) |
 | `approve_pr` | `repo_path, pr_number` | `String` | Submit approving review via GitHub API |
-| `merge_pr_via_github` | `repo_path, pr_number, merge_method` | `String` | Merge PR via GitHub API |
+| `update_pr_branch` | `repo_path, pr_number, expected_head_sha` | `()` | Update a BEHIND PR branch from its base, pinned to the shown head |
+| `close_pr` | `repo_path, pr_number` | `()` | Close a PR without merging |
+| `merge_pr_via_github` | `repo_path, pr_number, merge_method, expected_head_sha` | `String` | Merge PR via GitHub API, pinned to the reviewed head |
 | `get_all_pr_statuses` | `path` | `Vec<BranchPrStatus>` | Batch PR status for all branches (includes merged) |
 | `get_pr_diff` | `repo_path, pr_number` | `String` | Get PR diff content |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date |
@@ -220,7 +223,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `create_worktree` | `base_repo, branch_name, create_branch?, base_ref?` | `{ status: "ok", name, path, workspace_id, branch, base_repo, instructions }` | Create a linked worktree and start warming in the background. `instructions.warm_artifacts.status` is `pending`, matching HTTP/MCP. Parent tracked changes are not carried over. |
-| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?, override_lock?, expected_fingerprint?, confirm_missing_checkout?` | `{ branch_delete_warning?: string, branch: string, removal_rule: string }` | Remove a linked worktree by `workspace_id`. Branch deletion defaults to true, or false when force is true. Without force, a clean checkout and submodules with no Git operation in progress are required even when the branch is kept. `force` permits discarding dirty files but does not skip branch proof or override a lock; `override_lock` is separate. A live checkout requires `expected_fingerprint` for force removal. A missing registered checkout instead requires `force` and explicit `confirm_missing_checkout`; its absence is rechecked before cleanup and module refs are preserved before pruning. Branch deletion accepts ancestry in the default or checked-out integration branch, patch equivalence, or a merged GitHub PR whose verified head contains the local tip; it uses the captured OID and warns if the proof fails or the ref moves. Keeping the branch skips only branch proof. Before Git removes a live checkout, owner write permission is restored inside it so read-only ignored artifacts cannot block deletion. A leftover unregistered directory is reported with its path. `removal_rule` names the matching rule. |
+| `remove_worktree` | `repo_path, workspace_id, delete_branch?, force?, override_lock?, expected_fingerprint?, confirm_missing_checkout?` | `{ branch_delete_warning?: string, branch: string, removal_rule: string }` | Remove a linked worktree by `workspace_id`. Branch deletion defaults to true, or false when force is true. Without force, a clean checkout and submodules with no Git operation in progress are required even when the branch is kept. `force` permits discarding dirty files but does not skip branch proof or override a lock; `override_lock` is separate. A live checkout requires `expected_fingerprint` for force removal. A missing registered checkout instead requires `force` and explicit `confirm_missing_checkout`; its absence is rechecked before cleanup and module refs are preserved before pruning. Branch deletion uses the same integration proof as MCP, including no-op merges, corroborated squash messages and archived content heuristics, alongside ancestry, patch equivalence and verified merged GitHub PRs; it uses the captured OID and warns if the proof fails or the ref moves. Keeping the branch skips only branch proof. Before Git removes a live checkout, owner write permission is restored inside it so read-only ignored artifacts cannot block deletion. A leftover unregistered directory is reported with its path. `removal_rule` names the matching rule. |
 | `delete_local_branch` | `repo_path, branch_name, workspace_id, keep_worktree?` | `()` | Delete a local branch and dispose of the workspace `workspace_id` names. Two identifiers because there are two objects: `branch_name` is the ref to delete, `workspace_id` the checkout holding it. Refuses to delete the default branch, and refuses when the resolved workspace is on a different branch than the one asked for. Uses safe `git branch -d` |
 | `check_worktree_dirty` | `repo_path, workspace_id` | `bool` | Check if the workspace `workspace_id` names has uncommitted changes. Addressed by id because the answer gates an irreversible cleanup — a sibling on the same branch being clean must never authorise destroying this one. Returns false if the id resolves to no checkout. When git cannot answer (the `worktree list` or `status` call fails) it returns an **error**, never `false` — callers that gate a destructive action must see the failure |
 | `get_worktree_paths` | `repo_path` | `HashMap<String, { branch, path, kind: "worktree", warm_artifacts }>` | Every linked worktree of a repo, keyed by workspace id. `warm_artifacts.status` is `pending`, `done`, or `failed`. |
@@ -229,11 +232,11 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_local_branches` | `path` | `Vec<String>` | List local branches |
 | `checkout_remote_branch` | `repo_path, branch_name` | `()` | Check out a remote-only branch as a new local tracking branch |
 | `detect_orphan_worktrees` | `repo_path` | `Vec<String>` | Detect worktrees in detached HEAD state (branch deleted) |
-| `assess_orphan_cleanup` | `repo_path` | `Vec<{ path, safe, reason? }>` | Classify every orphan for automatic removal using tracked/untracked status and branch reachability. |
+| `assess_orphan_cleanup` | `repo_path` | `Vec<{ path, safe, reason?, live_sessions? }>` | Classify every orphan for automatic removal using tracked/untracked status, branch reachability and live sessions in the checkout. |
 | `begin_orphan_cleanup` | `repo_path, paths` | `()` | Register the open Ask dialog for an agent answer. |
 | `pending_orphan_cleanup_answer` | `repo_path` | `bool?` | Read the pending answer, or `null` while unanswered. |
 | `clear_orphan_cleanup` | `repo_path` | `()` | Clear the pending answer when the dialog closes. |
-| `remove_orphan_worktree` | `repo_path, worktree_path, safe_only?` | `()` | Remove a registered detached orphan by filesystem path. With `safe_only`, recheck clean status and branch reachability immediately before removal. |
+| `remove_orphan_worktree` | `repo_path, worktree_path, safe_only?, confirmed_sessions?` | `()` | Remove a registered detached orphan by filesystem path. With `safe_only`, recheck clean status, branch reachability and live sessions immediately before removal. Without it, refuse when a live session in the checkout is not in `confirmed_sessions` (the session ids the user saw). |
 | `switch_branch` | `repo_path, branch_name` | `()` | Switch main worktree to a different branch (with dirty-state and process checks) |
 | `merge_and_archive_worktree` | `repo_path, branch_name, workspace_id, target_branch, after_merge, force?, expected_fingerprint?` | `MergeArchiveResult` | Merge worktree branch into base and archive or delete. A pre-flight counts commits and checks the exact checkout. For `archive` or `delete`, an unverified or dirty checkout or one with a live session returns `action: "needs_confirmation"` **before merging**. Re-call with `force: true` and the confirmed lifecycle `expected_fingerprint` to proceed; a changed fingerprint aborts. A locked checkout is not archived. If conflict cleanup abort fails, the error includes the manual abort command. |
 | `finalize_merged_worktree` | `repo_path, workspace_id, action, force?, expected_fingerprint?` | `MergeArchiveResult` | Clean up after a completed merge. Uses the same lifecycle review as one-click cleanup and also requires merged commit status before automatic cleanup. Without `force`, a dirty, unverified, or live checkout returns `action: "needs_confirmation"` (`merged: true` — only cleanup stopped). Force requires the confirmed lifecycle `expected_fingerprint` and rejects changed state. A lock stops archiving. Delete may include `branch_delete_warning` if safe branch deletion kept the branch. |
@@ -250,6 +253,7 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `save_app_config` | `base, config` | `()` | Save app settings |
 | `load_notification_config` | -- | `NotificationConfig` | Load notifications |
 | `save_notification_config` | `base, config` | `()` | Save notifications |
+| `show_native_notification` | `title, body, target` | `()` | macOS desktop-only alert that retains the Notification Center click and emits `native-notification-click` for a terminal or Progress target; browser/remote clients cannot call it |
 | `load_ui_prefs` | -- | `UIPrefsConfig` | Load UI preferences |
 | `save_ui_prefs` | `base, config` | `()` | Save UI preferences |
 | `get_config_defaults` | -- | `ConfigDefaults` | Read-only defaults for Settings "expert mode" |
@@ -292,7 +296,9 @@ reached is an error carrying ego's own sentence, never an empty result.
 | `list_active_tunnels` | -- | `Vec<JSON>` | List all active tunnels with ID, status, and started_at |
 | `get_tunnel_status` | `id` | `JSON` | Get the current status of a specific tunnel (starting, connected, reconnecting, stopped, error) |
 | `list_ssh_config_hosts` | -- | `Vec<String>` | Parse `~/.ssh/config` and return all non-negated, non-wildcard Host entries |
-| `probe_ssh_config_hosts` | -- | `Vec<SshHostStatus>` | Probe deduplicated SSH config hosts with bounded concurrency and classify shell, no-shell, authentication-failed and unreachable results |
+| `list_discovered_ssh_hosts` | -- | `DiscoveredSshHosts` | List non-wildcard `~/.ssh/config` aliases and plain `~/.ssh/known_hosts` names deduplicated by resolved host and port; hashed known_hosts entries are counted in `hashed_count` |
+| `probe_discovered_ssh_host` | `target, port?` | `SshHostStatus` | Probe one discovered entry (known_hosts entries use `StrictHostKeyChecking=yes`); refuses a host not in the discovered list |
+| `probe_ssh_config_hosts` | -- | `Vec<SshHostStatus>` | Probe the `~/.ssh/config` aliases (known_hosts names excluded) with bounded concurrency and classify shell, no-shell, authentication-failed and unreachable results |
 | `get_tunnel_audit` | `id, limit?` | `Vec<JSON>` | Query audit log events for a tunnel (default limit 20). Returns timestamp, kind, and extracted message |
 | `list_ssh_agent_keys` | -- | `SshAgentInfo` | Detect SSH agent type (1Password, Secretive, GPG, generic) and list loaded keys via `ssh-add -l` |
 
@@ -728,6 +734,7 @@ can choose what the host runs.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
+| `acp_workspace_root` | — | `String` | The directory AI Chat runs in, from `ai_chat_workspace` (empty = home directory of this host). A missing folder is created; an unusable one is refused with a message naming the setting |
 | `acp_connect` | `root` | `AcpConnectionSnapshot` | Launch the configured ego in `root` and initialize a connection |
 | `acp_reconnect` | `connectionId, root` | `AcpConnectionSnapshot` | Settle the old connection and start a new generation |
 | `acp_disconnect` | `connectionId` | `AcpConnectionSettlement` | Ask the child to exit; the snapshot is retained |

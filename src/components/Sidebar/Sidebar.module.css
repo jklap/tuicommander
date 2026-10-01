@@ -24,6 +24,196 @@
   overflow: hidden;
 }
 
+/* Density (set by Sidebar.tsx from row count, pointer type and the toolbar
+   toggle). `compact` is the base above. `rich` spends spare room on detail lines
+   under each row: larger type, roomier padding and the chips below. No handler,
+   drag or long-press rule depends on it. */
+.sidebar[data-density="rich"] {
+  --row-pad-x: 10px;
+  --row-icon: 16px;
+  --row-gap: 7px;
+  --row-h: 30px;
+  --tree-indent: 12px;
+  --font-2xs: 11px;
+  --font-xs: 12px;
+  --font-sm: 13px;
+  --font-md: 14px;
+}
+
+.sidebar[data-density="rich"] .repoHeader {
+  padding: 9px 10px 3px;
+}
+
+.sidebar[data-density="rich"] .branchItem {
+  flex-wrap: wrap;
+  align-items: center;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+/* A finger: 44px targets (Apple HIG) on every control of a rich row, also with
+   a trackpad that still reports a coarse primary pointer. */
+@media (pointer: coarse) {
+  .sidebar[data-density="rich"] {
+    --row-pad-x: 12px;
+    --row-icon: 18px;
+    --row-gap: 8px;
+    --row-h: 44px;
+    --tree-indent: 14px;
+    --font-2xs: 12px;
+    --font-xs: 13px;
+    --font-sm: 15px;
+    --font-md: 16px;
+  }
+
+  .sidebar[data-density="rich"] .repoHeader {
+    padding: 10px 12px 4px;
+    min-height: 44px;
+  }
+
+  .sidebar[data-density="rich"] .repoSection {
+    margin-bottom: 6px;
+  }
+
+  .sidebar[data-density="rich"] .branchMoreBtn,
+  .sidebar[data-density="rich"] .branchAddBtn,
+  .sidebar[data-density="rich"] .branchRemoveBtn {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+/* Forces the wrap between the name line and the detail line; only touch uses it. */
+.branchBreak {
+  display: none;
+}
+
+/* Detail lines of a rich branch row: a full-width block under the name line,
+   indented to start under the name. */
+.branchRichDetail {
+  flex: 0 0 100%;
+  min-width: 0;
+  padding-left: calc(var(--row-icon) + var(--row-gap));
+}
+
+.branchRichLine {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.branchRichMeta,
+.repoRichMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+}
+
+.repoRichMeta {
+  padding: 0 10px 4px calc(var(--row-pad-x) + 4px);
+}
+
+.richChip {
+  white-space: nowrap;
+}
+
+.richChipWarn {
+  color: var(--warning, var(--fg-secondary));
+}
+
+.richChipRisk {
+  color: var(--error, var(--fg-secondary));
+}
+
+.branchRichPrState {
+  color: var(--fg-muted);
+  font-size: var(--font-2xs);
+  text-transform: uppercase;
+}
+
+.richChipMerged {
+  color: var(--success, var(--fg-secondary));
+}
+
+.branchTabItemRich {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+
+.branchTabItem.branchTabNested {
+  margin-left: 14px;
+  width: calc(100% - 14px);
+}
+
+.subagentList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 7px 2px 26px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+}
+
+.subagentRow {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.subagentMeta {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.subagentFold {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.branchTabDetail {
+  flex-basis: 100%;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 12px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+}
+
+.branchTabLine {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchTabState {
+  flex-shrink: 0;
+}
+
+.branchTabState_working {
+  color: var(--activity);
+}
+
+.branchTabState_input {
+  color: var(--warning, var(--fg-secondary));
+}
+
+.branchTabState_error {
+  color: var(--error, var(--fg-secondary));
+}
+
 .resizeHandle {
   position: absolute;
   top: 0;
@@ -979,6 +1169,90 @@
     opacity: 1;
     pointer-events: auto;
   }
+
+  /* Coarse pointer (an iPad trackpad) has 36px buttons: widen the hover reveal
+     only. Idle, the actions stay collapsed and reserve no space. */
+  @media (pointer: coarse) {
+    .sidebar[data-density="rich"] .branchItem:hover .branchActions {
+      max-width: 84px;
+    }
+  }
+}
+
+/* No hover on touch: the actions (+ with its long-press agent list) stay visible. */
+@media (hover: none) {
+  .branchActions {
+    max-width: 68px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar[data-density="rich"] .branchActions {
+    max-width: 100px;
+  }
+
+  .branchActions .branchMoreBtn {
+    display: flex;
+  }
+
+  /* Rich rows wrap, and the branch name is the row's identifier: it keeps line 1
+     (name, PR badge) to itself and the PR title keeps line 2. The detail block
+     dissolves into the row so the buttons can sit at the right end of the meta
+     line (line 3) — or of the first line when the row has no detail (shell rows). */
+  .sidebar[data-density="rich"] .branchRichDetail {
+    display: contents;
+  }
+
+  /* The name never gives way to the PR badge: it keeps its full width and the
+     badge wraps to the next line when the two do not fit together. */
+  .sidebar[data-density="rich"] .branchItem .branchContent {
+    flex: 1 0 auto;
+    max-width: calc(100% - var(--row-icon) - var(--row-gap));
+  }
+
+  .sidebar[data-density="rich"] .branchRichLine {
+    flex: 0 0 calc(100% - var(--row-icon) - var(--row-gap));
+    margin-left: calc(var(--row-icon) + var(--row-gap));
+  }
+
+  .sidebar[data-density="rich"] .branchRichMeta {
+    flex: 1 1 0;
+    min-width: 0;
+    margin-left: calc(var(--row-icon) + var(--row-gap));
+  }
+
+  .sidebar[data-density="rich"] .branchBreak {
+    display: block;
+    flex: 0 0 100%;
+    height: 0;
+  }
+
+  .sidebar[data-density="rich"] .branchActions {
+    order: 1;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .sidebar[data-density="rich"] .branchMoreBtn,
+  .sidebar[data-density="rich"] .branchAddBtn,
+  .sidebar[data-density="rich"] .branchRemoveBtn {
+    width: 28px;
+    height: 28px;
+  }
+}
+
+.branchMoreBtn {
+  display: none;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
+  font-size: var(--font-md);
+  cursor: pointer;
 }
 
 .branchAddBtn,
@@ -999,6 +1273,11 @@
 .branchAddBtn {
   background: var(--accent);
   color: var(--text-on-accent);
+  /* Long press opens the agent list: no text selection, iOS callout or pan. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .branchAddBtn:hover {
@@ -1263,6 +1542,45 @@
   .repoHeader:hover .repoActionsWithBadge .repoActionBtn {
     opacity: 1;
     pointer-events: auto;
+  }
+}
+
+/* No hover on touch: ⋯ and + are always visible. The cluster joins the header's
+   flex flow (name, badge, actions, chevron) instead of floating over it, so the
+   repo name gives way and is never covered. */
+@media (hover: none) {
+  .repoActions {
+    position: static;
+    transform: none;
+    padding-left: 0;
+    background: none;
+    opacity: 1;
+    pointer-events: auto;
+    flex-shrink: 0;
+  }
+
+  .repoActionsWithBadge .repoActionBtn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar[data-density="rich"] .repoActionBtn {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* The repo name has priority, like a branch name: it keeps its full width and
+     the action cluster gives way (tighter gaps, no extra margin on +). */
+  .sidebar[data-density="rich"] .repoName {
+    flex: 1 0 auto;
+  }
+
+  .sidebar[data-density="rich"] .repoActions {
+    gap: 0;
+  }
+
+  .sidebar[data-density="rich"] .repoActions .addBtn {
+    margin-right: 0;
   }
 }
 
@@ -1733,6 +2051,12 @@
 .ghItemNum {
   font-size: var(--font-xs);
   color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.ghAgeMarker {
+  font-size: var(--font-xs);
+  color: var(--warning, var(--fg-muted));
   flex-shrink: 0;
 }
 

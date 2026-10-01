@@ -170,6 +170,8 @@ pub(crate) fn bind_pty_identity(
     // Manually typed Claude inherits the same per-agent preference as TUIC spawns.
     if crate::agent_hook_launch::prevents_alt_screen("claude") {
         cmd.env("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", "1");
+        // The agent view is a separate full-screen renderer with its own switch.
+        cmd.env("CLAUDE_CODE_DISABLE_AGENT_VIEW", "1");
     }
     cmd.env(
         "TUIC_CONFIG_DIR",
@@ -3613,6 +3615,27 @@ pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
     });
 }
 
+/// The live `›` composer row of a Codex screen.
+fn find_codex_prompt_row(rows: &[String]) -> Option<usize> {
+    const CODEX_PROMPT_WINDOW: usize = 4;
+
+    let index = find_live_prompt_row(rows, CODEX_PROMPT_WINDOW, |row| {
+        let t = row.trim_start();
+        matches!(t.chars().next(), Some('\u{203A}' | '\u{00BB}'))
+            && !t.starts_with("\u{203A}\u{203A}")
+    })?;
+    let content_end = rows
+        .iter()
+        .rposition(|row| !row.trim().is_empty())
+        .map_or(0, |last| last + 1);
+    // The fourth row only holds the composer when Codex's layout follows it: a blank
+    // row, then the footer. Output rows below a `›` mean it is a history row.
+    if index + CODEX_PROMPT_WINDOW == content_end && !rows[index + 1].trim().is_empty() {
+        return None;
+    }
+    Some(index)
+}
+
 /// Inspect Codex's live prompt neighborhood on the UNFILTERED screen.
 ///
 /// `find_chrome_cutoff` cannot be used here: Codex separators delimit tool
@@ -3625,11 +3648,7 @@ pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
 fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
     const PROMPT_NEIGHBORHOOD: usize = 6;
 
-    let Some(prompt_idx) = find_live_prompt_row(rows, |row| {
-        let t = row.trim_start();
-        matches!(t.chars().next(), Some('\u{203A}' | '\u{00BB}'))
-            && !t.starts_with("\u{203A}\u{203A}")
-    }) else {
+    let Some(prompt_idx) = find_codex_prompt_row(rows) else {
         return AgentScreenActivity::Unknown;
     };
     let start = prompt_idx.saturating_sub(PROMPT_NEIGHBORHOOD);
@@ -3655,8 +3674,10 @@ fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
 /// The rendered viewport includes transcript history, so a whole-screen search
 /// can mistake an old submitted prompt or markdown quote for the live composer.
 /// Prefer the structurally detected input box (including tall custom HUDs); if
-/// no box can be identified, accept only the final three non-padding rows.
-fn find_live_prompt_row<F>(rows: &[String], is_prompt: F) -> Option<usize>
+/// no box can be identified, accept only the final `window` non-padding rows: Codex 0.159
+/// draws the composer, a blank row and a two-line footer below it, so Codex passes
+/// a window of four; every other agent passes three.
+fn find_live_prompt_row<F>(rows: &[String], window: usize, is_prompt: F) -> Option<usize>
 where
     F: Fn(&str) -> bool,
 {
@@ -3673,7 +3694,7 @@ where
     {
         return Some(prompt);
     }
-    (content_end.saturating_sub(3)..content_end)
+    (content_end.saturating_sub(window)..content_end)
         .rev()
         .find(|&index| is_prompt(&rows[index]))
 }
@@ -3713,7 +3734,7 @@ fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActivity {
 }
 
 fn gemini_prompt_present(rows: &[String]) -> bool {
-    find_live_prompt_row(rows, |row| {
+    find_live_prompt_row(rows, 3, |row| {
         let t = row.trim_start();
         t == ">" || t.starts_with("> ")
     })
@@ -3844,6 +3865,15 @@ fn is_opencode_frame_close_row(row: &str) -> bool {
 /// would read Ready mid-turn — exactly the false idle that lets auto-standby SIGSTOP a live
 /// session. The interrupt hint is checked first so a working screen is never downgraded.
 fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    detect_opencode_screen_activity_at(rows, None)
+}
+
+/// `columns` is the terminal width when the caller knows it; the `--mini` adapter
+/// needs it to tell a status row from tool output on a screen too narrow to paint one.
+fn detect_opencode_screen_activity_at(
+    rows: &[String],
+    columns: Option<usize>,
+) -> AgentScreenActivity {
     const STATUS_BAR_HINT: &str = "ctrl+p commands";
     const INTERRUPT_HINT: &str = "esc interrupt";
 
@@ -3851,7 +3881,7 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
         .iter()
         .rposition(|row| is_opencode_frame_close_row(row))
     else {
-        return AgentScreenActivity::Unknown;
+        return detect_opencode_mini_screen_activity(rows, columns);
     };
     if !rows[..close_idx]
         .iter()
@@ -3871,6 +3901,96 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
     }
 }
 
+/// OpenCode's `--mini` interface, which `agent_hook_launch` adds to every launch,
+/// has no composer frame. Its only fixed element is a status row at the bottom,
+/// captured live on 1.18.30 (replayed from the fixtures, and re-observed in tmux at
+/// 120, 64 and 40 columns):
+///
+/// ```text
+/// fresh:    ` BUILD                                                       ctrl+p cmd`
+/// ready:    ` BUILD                                 52.9K (26%) · ctrl+p cmd`
+/// working:  ` BUILD  ⬝⬝⬝■■■■■ esc interrupt                      ctrl+p cmd`
+/// narrow:   ` BUILD`   /   ` BUILD  ⬝⬝■■■■■■ esc interrupt`
+/// ```
+///
+/// A false Ready feeds standby/SIGSTOP and types the queue into a live turn, so Ready
+/// accepts exactly the observed shapes and nothing wider: an uppercase label followed
+/// by `ctrl+p cmd`, by `<usage> (<n>%) · ctrl+p cmd`, or by nothing for the `BUILD` and
+/// `PLAN` primary agents of the narrow layout. A progress bar glyph or `esc interrupt`
+/// marks a running turn (the bar is painted before its text and the text is cut at
+/// narrow widths). Every other last row, such as tool output opening with an uppercase
+/// word and a number, is Unknown.
+///
+/// DEFERRED (2026-10-01) — forms never observed stay Unknown, which delays the queue
+/// instead of typing into a live turn: a cost token (`$0.12`, a free local model prints
+/// none), a lowercase `k`, a user-defined agent label shown bare at narrow width.
+/// Widen only from a live capture of the form. Below 46 columns OpenCode paints no
+/// status row at all, so screen evidence cannot release the queue there: it drains
+/// only once the pane is widened.
+fn detect_opencode_mini_screen_activity(
+    rows: &[String],
+    columns: Option<usize>,
+) -> AgentScreenActivity {
+    const INTERRUPT_HINT: &str = "esc interrupt";
+    const BAR_GLYPHS: [char; 2] = ['\u{2B1D}', '\u{25A0}'];
+    const BARE_LABELS: [&str; 2] = ["BUILD", "PLAN"];
+    // Narrowest width at which OpenCode 1.18.30 paints the status row: ` BUILD` shows from
+    // 46 columns up (verified at 46..63 in tmux) and is absent at 45 and below, so a
+    // `BUILD` or `PLAN` line on a narrower screen is tool output.
+    const MIN_STATUS_ROW_COLUMNS: usize = 46;
+
+    let Some(status) = rows.iter().rev().find(|row| !row.trim().is_empty()) else {
+        return AgentScreenActivity::Unknown;
+    };
+    // A running turn is recognised before the label gate: the hint and the bar are
+    // distinctive, and an agent name with a dot or space must not read Unknown mid-turn.
+    if status.contains(INTERRUPT_HINT) || status.contains(BAR_GLYPHS) {
+        return AgentScreenActivity::Working;
+    }
+    if columns.is_some_and(|columns| columns < MIN_STATUS_ROW_COLUMNS) {
+        return AgentScreenActivity::Unknown;
+    }
+    let mut tokens = status.split_whitespace();
+    let Some(label) = tokens.next() else {
+        return AgentScreenActivity::Unknown;
+    };
+    let is_label = label.chars().count() >= 2
+        && label.starts_with(|c: char| c.is_ascii_uppercase())
+        && label
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if !is_label {
+        return AgentScreenActivity::Unknown;
+    }
+    // `52.9K`: digits with at most one dot and an optional K/M/B suffix.
+    let is_usage = |token: &str| {
+        let number = token.strip_suffix(['K', 'M', 'B']).unwrap_or(token);
+        number.starts_with(|c: char| c.is_ascii_digit())
+            && number.ends_with(|c: char| c.is_ascii_digit())
+            && number.chars().all(|c| c.is_ascii_digit() || c == '.')
+            && number.matches('.').count() <= 1
+    };
+    // `(26%)`
+    let is_percent = |token: &str| {
+        token
+            .strip_prefix('(')
+            .and_then(|inner| inner.strip_suffix("%)"))
+            .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
+    };
+    let rest: Vec<&str> = tokens.collect();
+    let is_status_row = match rest.as_slice() {
+        [] => BARE_LABELS.contains(&label),
+        ["ctrl+p", "cmd"] => true,
+        [usage, percent, "\u{00B7}", "ctrl+p", "cmd"] => is_usage(usage) && is_percent(percent),
+        _ => false,
+    };
+    if is_status_row {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
 /// goose keeps a one-line composer footer at the bottom of the screen and swaps
 /// it for a spinner row while a turn runs. Captured live on goose 1.49.0 at 120
 /// columns (#699-c6e0), the two states are:
@@ -3880,21 +4000,32 @@ fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
 /// working:  ◓  Merging memory matrices...  (Ctrl+C to interrupt)
 /// ```
 ///
+/// After Ctrl+C the composer placeholder changes, and `Enter to send` is gone
+/// (#1301-87fd):
+///
+/// ```text
+/// > Interrupted, what should goose work on instead?
+/// ```
+///
 /// Neither generic signal works here. The spinner glyph cycles `◐◓◒`, which
 /// `is_spinner_row` does not recognise, and the message beside it is whimsical
 /// and changes between turns — "Merging memory matrices…" is one of a set, so
 /// matching it would pin the adapter to a string goose is free to reword. What
 /// does not move is the **hint** at each end: `Ctrl+C to interrupt` appears only
-/// while a turn can be interrupted, and `Enter to send` only when the composer
-/// is accepting input.
+/// while a turn can be interrupted, and `Enter to send` (or the post-Ctrl+C
+/// `Interrupted, what should goose work on instead?` placeholder) only when the
+/// composer is accepting input.
 ///
-/// The interrupt hint is tested first so a working screen is never downgraded,
-/// and Ready demands the composer footer rather than merely the absence of a
+/// The lowest hint row wins, so a working screen is never downgraded by a hint
+/// above its spinner, and Ready demands the composer footer rather than merely the absence of a
 /// spinner — a half-painted screen must read Unknown, not idle. A false Ready is
 /// the expensive direction: it is what lets auto-standby SIGSTOP a live turn.
 fn detect_goose_screen_activity(rows: &[String]) -> AgentScreenActivity {
     const INTERRUPT_HINT: &str = "Ctrl+C to interrupt";
-    const COMPOSER_HINT: &str = "Enter to send";
+    const COMPOSER_HINTS: [&str; 2] = [
+        "Enter to send",
+        "Interrupted, what should goose work on instead?",
+    ];
 
     let content_end = rows
         .iter()
@@ -3903,14 +4034,18 @@ fn detect_goose_screen_activity(rows: &[String]) -> AgentScreenActivity {
     let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
     let footer = &rows[chrome_start..content_end];
 
-    if footer.iter().any(|row| row.contains(INTERRUPT_HINT)) {
-        return AgentScreenActivity::Working;
-    }
-    if footer.iter().any(|row| row.contains(COMPOSER_HINT)) {
-        AgentScreenActivity::Ready
-    } else {
-        AgentScreenActivity::Unknown
-    }
+    // The lowest hint row decides: after Ctrl+C the spinner row stays on screen
+    // above the new composer, so the interrupt hint alone is stale there.
+    let lowest_hint = footer.iter().rev().find_map(|row| {
+        if row.contains(INTERRUPT_HINT) {
+            Some(AgentScreenActivity::Working)
+        } else if COMPOSER_HINTS.iter().any(|hint| row.contains(hint)) {
+            Some(AgentScreenActivity::Ready)
+        } else {
+            None
+        }
+    });
+    lowest_hint.unwrap_or(AgentScreenActivity::Unknown)
 }
 
 /// #744-138c: call counter so a test can measure that the reader chunk path
@@ -3927,6 +4062,16 @@ fn screen_classify_calls() -> usize {
 }
 
 fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
+    detect_agent_screen_activity_at(agent_type, rows, None)
+}
+
+/// [`detect_agent_screen_activity`] with the terminal width, for the adapters whose
+/// reading depends on it.
+fn detect_agent_screen_activity_at(
+    agent_type: Option<&str>,
+    rows: &[String],
+    columns: Option<usize>,
+) -> AgentScreenActivity {
     SCREEN_CLASSIFY_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     match agent_type {
         Some("claude") => detect_claude_screen_activity(rows),
@@ -3935,7 +4080,7 @@ fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> Ag
         Some("aider") => detect_aider_screen_activity(rows),
         Some("grok") => detect_grok_screen_activity(rows),
         Some("pi") => detect_pi_screen_activity(rows),
-        Some("opencode") => detect_opencode_screen_activity(rows),
+        Some("opencode") => detect_opencode_screen_activity_at(rows, columns),
         Some("goose") => detect_goose_screen_activity(rows),
         _ => AgentScreenActivity::Unknown,
     }
@@ -3954,7 +4099,14 @@ pub(crate) fn agent_submission_ack_kind(state: &AppState, session_id: &str) -> &
         .grid
         .vt_log_buffers
         .get(session_id)
-        .map(|vt| detect_agent_screen_activity(agent_type.as_deref(), &vt.lock().screen_rows()))
+        .map(|vt| {
+            let vt = vt.lock();
+            detect_agent_screen_activity_at(
+                agent_type.as_deref(),
+                &vt.screen_rows(),
+                Some(vt.grid_columns()),
+            )
+        })
         .unwrap_or(AgentScreenActivity::Unknown);
     match activity {
         AgentScreenActivity::Working => "working_screen",
@@ -5604,6 +5756,10 @@ struct ChunkProcessor {
     last_vt_log_total: usize,
     /// Report a TUIC-managed agent entering alternate screen only once per PTY.
     alt_screen_warned: bool,
+    /// The startup toast fires only for an alternate-screen entry before this instant.
+    startup_deadline: std::time::Instant,
+    /// The startup toast is shown once per PTY.
+    alt_screen_toasted: bool,
     /// Command text captured on OSC 133 C — used when the matching D arrives
     /// to build a `CommandOutcome`. Cleared after D.
     pending_command: Option<String>,
@@ -5638,12 +5794,73 @@ struct ChunkProcessor {
     screen_buf: Vec<String>,
 }
 
+/// A terminal that enters the alternate screen this soon after spawn is treated
+/// as starting there; later entries are ordinary full-screen apps (vim, less).
+const ALT_SCREEN_STARTUP_WINDOW: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Toast attributed to `session_id`, on the desktop window and the event bus.
+fn emit_session_toast(
+    state: &AppState,
+    session_id: &str,
+    title: &str,
+    message: String,
+    level: &str,
+) {
+    #[cfg(feature = "desktop")]
+    if let Some(ref app) = *state.app_handle.read() {
+        let _ = app.emit(
+            "mcp-toast",
+            serde_json::json!({
+                "title": title,
+                "message": message,
+                "level": level,
+                "sound": null,
+                "origin_session_id": session_id,
+            }),
+        );
+    }
+    let _ = state.event_bus.send(crate::state::AppEvent::McpToast {
+        title: title.into(),
+        message: Some(message),
+        level: level.into(),
+        sound: None,
+        origin_repo_path: None,
+        origin_session_id: Some(session_id.into()),
+    });
+}
+
+fn alt_screen_toast_message(label: &str, agent_type: Option<&str>) -> String {
+    let fix = match agent_type {
+        Some("claude") => {
+            "Set CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 and CLAUDE_CODE_DISABLE_AGENT_VIEW=1 (or disableAgentView in settings)."
+        }
+        Some("codex" | "grok") => "Start it with --no-alt-screen.",
+        Some("opencode") => "Start it with --mini.",
+        _ => "Check the program for a no-alternate-screen option.",
+    };
+    format!(
+        "{label} switched to the alternate screen at startup. This breaks native scrollback and TUIC agent state detection. {fix}"
+    )
+}
+
 impl ChunkProcessor {
     fn should_warn_alt_screen(&mut self, agent_type: Option<&str>, alt_screen: bool) -> bool {
         if agent_type.is_none() || !alt_screen || self.alt_screen_warned {
             return false;
         }
         self.alt_screen_warned = true;
+        true
+    }
+
+    /// True once per PTY, when the screen is alternate on the first startup-window chunk that shows it.
+    fn should_toast_alt_screen(&mut self, alt_screen: bool) -> bool {
+        if !alt_screen
+            || self.alt_screen_toasted
+            || std::time::Instant::now() > self.startup_deadline
+        {
+            return false;
+        }
+        self.alt_screen_toasted = true;
         true
     }
 
@@ -5667,6 +5884,8 @@ impl ChunkProcessor {
             last_cursor_up_n: 0,
             last_vt_log_total: 0,
             alt_screen_warned: false,
+            startup_deadline: std::time::Instant::now() + ALT_SCREEN_STARTUP_WINDOW,
+            alt_screen_toasted: false,
             pending_command: None,
             pending_command_started: None,
             tuic_session,
@@ -6005,6 +6224,7 @@ impl ChunkProcessor {
         // dedup markers) borrow-checkable; it is put back at the end.
         let mut screen_buf = std::mem::take(&mut self.screen_buf);
         let mut unexpected_alt_screen = false;
+        let mut startup_alt_screen = false;
         let mut choice_changed_rows = Vec::new();
 
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
@@ -6034,6 +6254,7 @@ impl ChunkProcessor {
             let total = vt.total_lines();
             unexpected_alt_screen =
                 self.should_warn_alt_screen(agent_type.as_deref(), vt.is_alternate_screen());
+            startup_alt_screen = self.should_toast_alt_screen(vt.is_alternate_screen());
             let hist = vt.grid_history_size();
             let intent_origin = vt.grid_screen_origin();
             // Did this chunk produce real output, or merely repaint rows that were
@@ -6111,7 +6332,13 @@ impl ChunkProcessor {
             // BUSY through exactly that case (a frozen spinner, DEC 2026 frame
             // coalescing) is the point of `detect_agent_screen_activity`.
             let screen_activity = screen_ref
-                .map(|rows| detect_agent_screen_activity(agent_type.as_deref(), rows))
+                .map(|rows| {
+                    detect_agent_screen_activity_at(
+                        agent_type.as_deref(),
+                        rows,
+                        Some(vt.grid_columns()),
+                    )
+                })
                 .unwrap_or(AgentScreenActivity::Unknown);
 
             // ONE snapshot per tick, cloned into the retained buffer and handed
@@ -6302,6 +6529,22 @@ impl ChunkProcessor {
             if let Err(error) = accept_managed_claude_trust_dialog(state, session_id) {
                 tracing::warn!(source = "terminal", session_id, %error, "Could not accept managed Claude workspace trust dialog");
             }
+        }
+
+        if startup_alt_screen {
+            let label = state
+                .session_maps
+                .sessions
+                .get(session_id)
+                .and_then(|entry| entry.lock().display_name.clone())
+                .unwrap_or_else(|| session_id.to_string());
+            emit_session_toast(
+                state,
+                session_id,
+                "Terminal is on the alternate screen",
+                alt_screen_toast_message(&label, agent_type.as_deref()),
+                "warn",
+            );
         }
 
         if unexpected_alt_screen {
@@ -7152,7 +7395,7 @@ impl ChunkProcessor {
         // otherwise stays latched after the completed turn. Require the newly
         // painted result and a ready composer; a dialog still on screen must
         // retain its badge, including while Claude repaints its status line.
-        let declined_claude_question = if agent_type.as_deref() == Some("claude")
+        let declined_screen = agent_type.as_deref() == Some("claude")
             && screen_activity == AgentScreenActivity::Ready
             && changed_rows.iter().any(|row| {
                 row.text.contains("User declined") && row.text.contains("answer questions")
@@ -7164,37 +7407,38 @@ impl ChunkProcessor {
                     event,
                     ParsedEvent::Question { .. } | ParsedEvent::ChoicePrompt { .. }
                 )
-            }) {
-            state
-                .session_maps
-                .session_states
-                .get(session_id)
-                .and_then(|session| {
-                    if session.awaiting_input
-                        && session.question_confident
-                        && session.choice_prompt.is_none()
-                    {
-                        session
-                            .question_text
-                            .as_ref()
-                            .map(|text| (text.clone(), session.turn_epoch))
-                    } else {
-                        None
-                    }
-                })
-        } else {
-            None
-        };
-        if let Some((expected_question_text, turn_epoch)) = declined_claude_question {
-            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
-                session_id: session_id.to_string(),
-                parsed: serde_json::json!({
-                    "type": "protocol-question-cleared",
-                    "expected_question_text": expected_question_text,
-                    "_turn_epoch": turn_epoch,
-                })
-                .into(),
             });
+        let declined_session = declined_screen
+            .then(|| state.session_maps.session_states.get(session_id))
+            .flatten()
+            .filter(|session| session.awaiting_input && session.question_confident)
+            .map(|session| {
+                // A live choice overlay owns its own clear; only the shell
+                // state below is ours then.
+                let question = if session.choice_prompt.is_none() {
+                    session.question_text.clone()
+                } else {
+                    None
+                };
+                (question, session.turn_epoch)
+            });
+        if let Some((question, turn_epoch)) = declined_session {
+            if let Some(expected_question_text) = question {
+                state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                    session_id: session_id.to_string(),
+                    parsed: serde_json::json!({
+                        "type": "protocol-question-cleared",
+                        "expected_question_text": expected_question_text,
+                        "_turn_epoch": turn_epoch,
+                    })
+                    .into(),
+                });
+            }
+            // Esc ends the turn without a Stop hook (live capture: busy, busy,
+            // awaiting, then nothing), so the hook-driven BUSY would stay latched
+            // with the queue stuck until the next input. The ready composer under
+            // the fresh cancellation is the Stop it never sent.
+            transition_explicit_shell_state(state, session_id, SHELL_IDLE, "idle", true);
         }
 
         // Update silence state for fallback question detection.
@@ -7761,6 +8005,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     // decision, not a cleanup tweak.
     state.session_maps.session_parent.remove(session_id);
     state.keep_open_sessions.remove(session_id);
+    state.blocked_children.remove(session_id);
     // mcp_to_session maps mcp_session_id → tuic_session. The reverse index
     // session_to_mcp lets us drop O(k) entries (k = mcp sessions for this
     // tuic_session, typically 1) instead of scanning every entry.
@@ -9464,6 +9709,98 @@ pub(crate) fn flush_pending_injections(
     }
 }
 
+/// Codex can swallow the Enter of a queued command (paste-burst suppression)
+/// and keep the text in its composer. True when the tail of `text` is still on
+/// the tracked screen, or a paste placeholder holds the composer. Only Codex is probed:
+/// an Enter on its empty composer is a no-op, so a stale echo of already-submitted text costs nothing.
+fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool {
+    let is_codex = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.agent_type.as_deref() == Some("codex"));
+    if !is_codex {
+        return false;
+    }
+    let squash = |value: &str| {
+        value
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    let squashed = squash(text);
+    let chars: Vec<char> = squashed.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(COMPOSER_TAIL_CHARS)..]
+        .iter()
+        .collect();
+    if tail.is_empty() {
+        return false;
+    }
+    state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
+        let rows = vt.lock().screen_rows();
+        squash(&rows.join("\n")).contains(&tail) || composer_holds_paste_placeholder(&rows)
+    })
+}
+
+/// A long paste collapses to a placeholder that never shows the text. It sits inline
+/// in a wrapped composer, on a continuation row rather than the `›` row. With a live
+/// `›` row found, only that composer block counts (a stale placeholder in history
+/// must not draw a second Enter). A composer wrapped past the prompt window has no
+/// findable `›` row, so the bottom rows are searched instead.
+fn composer_holds_paste_placeholder(rows: &[String]) -> bool {
+    if let Some(prompt) = find_codex_prompt_row(rows) {
+        return rows[prompt..]
+            .iter()
+            .enumerate()
+            .take_while(|(offset, row)| *offset == 0 || !row.trim().is_empty())
+            .any(|(_, row)| row.contains(CODEX_PASTE_PLACEHOLDER));
+    }
+    rows.iter()
+        .rev()
+        .filter(|row| !row.trim().is_empty())
+        .take(COMPOSER_BOTTOM_ROWS)
+        .any(|row| row.contains(CODEX_PASTE_PLACEHOLDER))
+}
+
+/// What Codex shows in its composer in place of a long pasted text.
+const CODEX_PASTE_PLACEHOLDER: &str = "[Pasted Content";
+
+/// Non-empty bottom rows searched for the paste placeholder: a wrapped composer plus its footer.
+const COMPOSER_BOTTOM_ROWS: usize = 8;
+
+/// Number of trailing characters of a queued command searched for on screen.
+const COMPOSER_TAIL_CHARS: usize = 32;
+
+/// One bare Enter for a composer that still holds the queued text after an
+/// unconfirmed submission. Never repeated: the caller reports uncertainty when
+/// this returns false.
+fn retry_enter_for_retained_composer(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+    initial_screen: &'static str,
+) -> bool {
+    if !composer_retains_text(state, session_id, text) {
+        return false;
+    }
+    let Some(writer) = state.pty_writer(session_id) else {
+        return false;
+    };
+    let offset = state
+        .session_maps
+        .output_buffers
+        .get(session_id)
+        .map(|buffer| buffer.lock().total_written)
+        .unwrap_or(0);
+    {
+        let mut writer = writer.lock();
+        if write_all_with_progress(writer.as_mut(), b"\r", 0).is_err() || writer.flush().is_err() {
+            return false;
+        }
+    }
+    wait_for_queued_submission(state, session_id, offset, initial_screen)
+}
+
 /// A PTY write only proves that Enter reached the master. Wait for output from
 /// the child and a working-screen or agent-hook signal before settling a queued
 /// command. A silent or unrecognised composer remains uncertain, so its text
@@ -9624,13 +9961,22 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         });
     let (write_outcome, acknowledgement_offset) =
         write_agent_command_with_boundary(state, session_id, injection.text());
+    let mut enter_retry = "none";
     let outcome = if write_outcome == InjectionOutcome::Submitted
         && !legacy_write
         && !wait_for_queued_submission(state, session_id, acknowledgement_offset, initial_screen)
     {
-        InjectionOutcome::Uncertain(
-            "Enter was written, but agent submission was not confirmed".into(),
-        )
+        if retry_enter_for_retained_composer(state, session_id, injection.text(), initial_screen) {
+            enter_retry = "confirmed";
+            InjectionOutcome::Submitted
+        } else {
+            if composer_retains_text(state, session_id, injection.text()) {
+                enter_retry = "unconfirmed";
+            }
+            InjectionOutcome::Uncertain(
+                "Enter was written, but agent submission was not confirmed".into(),
+            )
+        }
     } else {
         write_outcome
     };
@@ -9655,27 +10001,7 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         let message = format!(
             "Do not retype this message. Check the agent transcript and composer; if the text remains in the composer, press Enter once. {reason}"
         );
-        #[cfg(feature = "desktop")]
-        if let Some(ref app) = *state.app_handle.read() {
-            let _ = app.emit(
-                "mcp-toast",
-                serde_json::json!({
-                    "title": title,
-                    "message": message,
-                    "level": "error",
-                    "sound": null,
-                    "origin_session_id": session_id,
-                }),
-            );
-        }
-        let _ = state.event_bus.send(crate::state::AppEvent::McpToast {
-            title: title.into(),
-            message: Some(message),
-            level: "error".into(),
-            sound: None,
-            origin_repo_path: None,
-            origin_session_id: Some(session_id.into()),
-        });
+        emit_session_toast(state, session_id, title, message, "error");
     }
     tracing::info!(
         session_id,
@@ -9686,6 +10012,7 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         typed,
         submitted,
         enter_separate,
+        enter_retry,
         "queue delivery attempt"
     );
 }
@@ -11575,6 +11902,16 @@ pub(crate) fn close_pty_core(
     session_id: &str,
     cleanup_worktree: bool,
 ) -> Option<crate::state::WorktreeInfo> {
+    close_pty_core_with_reason(state, session_id, cleanup_worktree, "close_requested")
+}
+
+/// `close_pty_core` with the cause that the close log line reports.
+pub(crate) fn close_pty_core_with_reason(
+    state: &AppState,
+    session_id: &str,
+    cleanup_worktree: bool,
+    reason: &str,
+) -> Option<crate::state::WorktreeInfo> {
     flush_open_intent_before_session_removal(session_id, state);
     let (_, session_mutex) = state.session_maps.sessions.remove(session_id)?;
     state
@@ -11586,7 +11923,7 @@ pub(crate) fn close_pty_core(
     tracing::info!(
         source = "session",
         session_id = %session_id,
-        reason = "close_requested",
+        reason,
         "Closing session: sending Ctrl-C"
     );
 

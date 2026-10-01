@@ -22,7 +22,8 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use super::mcp_transport::{
-    MCP_SESSION_HEADER, TUIC_SESSION_HEADER, end_mcp_session, mcp_post, refresh_mcp_session,
+    MCP_SESSION_HEADER, TUIC_SESSION_HEADER, add_result_envelope, end_mcp_session, mcp_post,
+    refresh_mcp_session,
 };
 use crate::AppState;
 use crate::acp::{McpNotify, McpOverAcpError, McpOverAcpHost, McpReply};
@@ -208,7 +209,11 @@ impl McpOverAcpHost for AcpMcpHost {
         Box::pin(async move {
             let (state, headers, peer_id, subscriptions) = prepared?;
             match method.as_str() {
-                "resources/list" => return Ok(resource_list()),
+                "resources/list" => {
+                    let mut result = resource_list();
+                    add_result_envelope(&mut result);
+                    return Ok(result);
+                }
                 "resources/read" => {
                     let uri = uri_param(params.as_ref())?;
                     let contents = match uri.as_str() {
@@ -218,11 +223,13 @@ impl McpOverAcpHost for AcpMcpHost {
                         INBOX_URI => inbox_snapshot(&state, peer_id.as_deref()),
                         _ => return Err(unknown_resource(&uri)),
                     };
-                    return Ok(json!({ "contents": [{
+                    let mut result = json!({ "contents": [{
                         "uri": uri,
                         "mimeType": "application/json",
                         "text": contents.to_string(),
-                    }] }));
+                    }] });
+                    add_result_envelope(&mut result);
+                    return Ok(result);
                 }
                 "resources/subscribe" | "resources/unsubscribe" => {
                     let uri = uri_param(params.as_ref())?;
@@ -234,7 +241,9 @@ impl McpOverAcpHost for AcpMcpHost {
                     } else {
                         subscriptions.lock().remove(&uri);
                     }
-                    return Ok(json!({}));
+                    let mut result = json!({});
+                    add_result_envelope(&mut result);
+                    return Ok(result);
                 }
                 _ => {}
             }
@@ -816,6 +825,34 @@ mod tests {
                 .is_none(),
             "other clients are not offered ego's resources: {over_http}"
         );
+    }
+
+    /// ego refuses to admit a server whose `resources/list` omits the
+    /// 2026-07-28 result envelope (#1318-abd7): `session/new` fails with
+    /// "MCP server `tuicommander`: server configuration is invalid". Every
+    /// resource result on this channel must carry all three fields, exactly as
+    /// `tools/list` does.
+    #[tokio::test]
+    async fn every_resource_result_carries_the_result_envelope() {
+        let state = test_state();
+        let host = AcpMcpHost::new(&state);
+        let (notify, _) = listener();
+        let id = host.connect(Some(PEER), notify).expect("mcp/connect");
+
+        for (method, params) in [
+            ("resources/list", None),
+            ("resources/read", object(json!({ "uri": WORKSPACE_URI }))),
+            ("resources/subscribe", object(json!({ "uri": INBOX_URI }))),
+            ("resources/unsubscribe", object(json!({ "uri": INBOX_URI }))),
+        ] {
+            let result = host
+                .message(&id, method.to_owned(), params)
+                .await
+                .expect(method);
+            assert_eq!(result["resultType"], "complete", "{method}: {result}");
+            assert_eq!(result["ttlMs"], 0, "{method}: {result}");
+            assert_eq!(result["cacheScope"], "private", "{method}: {result}");
+        }
     }
 
     #[test]

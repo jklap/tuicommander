@@ -24,3 +24,13 @@ output into the mobile screen trim previously cut the screen at that row;
 replaying it into the session-state accumulator left `choice_prompt` empty.
 The two capture-backed tests now assert the complete visible dialog and a
 `navigate-enter` choice contract with option 2 labeled `Green`.
+
+## Shell state after Esc (#1302-83ae)
+
+The recorded hook stream is `state=busy`, `state=busy`, `state=awaiting`, then
+no `state=idle`: Claude sends no Stop hook when Esc dismisses the dialog. At
+record 188 (`User declined to answer questions` over the ready composer) the
+session still carries the mobile `choice_prompt`, so the decline branch must
+not require it to be empty. The replay test asserts the shell state is idle
+after the replay, with no hand-stored idle; it fails when the branch skips
+sessions that hold a choice overlay.

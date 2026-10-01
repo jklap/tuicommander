@@ -395,6 +395,18 @@ fn link_pending_children_to_parent(
 /// HTTP header the bridge asserts to declare its TUIC peer identity. A PTY
 /// agent inherits it from its tab; ACP-hosted ego receives a host-issued UUID.
 pub(super) const TUIC_SESSION_HEADER: &str = "x-tuic-session";
+/// Pid of the bridge or CLI process that sent the request, logged on initialize.
+pub(super) const CLIENT_PID_HEADER: &str = "x-tuic-client-pid";
+
+/// The pid a client reported, or `""`. Digits only: the value reaches the log
+/// verbatim, so anything else is dropped rather than written.
+pub(super) fn client_pid_header(headers: &HeaderMap) -> &str {
+    headers
+        .get(CLIENT_PID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty() && v.len() <= 10 && v.bytes().all(|b| b.is_ascii_digit()))
+        .unwrap_or("")
+}
 
 /// Bind an MCP session to a TUIC peer identity: upsert `peer_agents`
 /// and the `mcp_to_session` / `session_to_mcp` reverse indices. Callers hold
@@ -655,7 +667,7 @@ fn retire_repaired_phantom_identity(
                 .into_iter()
                 .map(|message| {
                     let message_id = message.id.clone();
-                    let message_timestamp = state.push_agent_inbox(repaired, message);
+                    let message_timestamp = state.store_agent_inbox(repaired, message);
                     (message_id, message_timestamp)
                 })
                 .collect(),
@@ -1145,7 +1157,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 
 const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, close, kill, pause, resume, status, wait";
 const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
-const REPO_ACTIONS: &str = "list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
+const REPO_ACTIONS: &str = "list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
@@ -1286,9 +1298,9 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "repo",
-            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated. Requires path and branch. Refuses current/default branches, unmerged commits, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 10, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
+            "description": "Repository and version control. Query workspace repos, their GitHub PR/CI status, and manage git worktrees.\n\nActions:\n- list: Open repos with branch, dirty status, worktrees.\n- active: Focused repo path, branch, group.\n- status: Cross-repo GitHub PR and CI summary {path, branch, ahead, behind, open_prs, failing_ci}.\n- branch_integrations: Integration status and proof for every local branch, including worktree_paths. Requires path.\n- branch_integration: Same verdict for one branch. Requires path and branch. Returns tip, integrated, proof, archive_required, archived and archive_ref. Content-based proof requires an archive at that tip before deletion; unknown is never proof.\n- worktree_list: Worktrees for a repo. Requires path. Each entry includes lifecycle_status {commit_status: merged|unmerged|in_sync|unknown, dirty_files, removal_safety: safe|requires_force|unknown}, the same verdict worktree_lifecycle and the sidebar use.\n- worktree_lifecycle: Fresh safety, fingerprint and submodule commit counts. Requires path and branch.\n- worktree_create: Create a linked worktree. Requires path. Optional: branch, base_ref, spawn_session (starts a bare shell PTY, not an agent). Refs and objects are shared with the parent; parent tracked changes are not copied. Git-ignored build directories warm in the background. Wait for warm_artifacts.status in worktree_list to become done or failed before installing dependencies or building.\n- worktree_remove: Remove worktree. Requires path, branch.\n- orphan_cleanup_answer: Answer the pending orphan-removal dialog for path with decision=remove|keep; remove rechecks every worktree for uncommitted/untracked files and branch reachability.\n- branch_delete: Delete only a local branch with no checkout after proving its commits are integrated or preserved. Requires path and branch. Proof is in_sync, a merge proof, patch_equivalence, or archived (refs/archive/<branch> points at the exact tip; the response then carries archive_ref and the archive ref is kept). Refuses current/default branches, unmerged commits with no exact archive, and unsafe or changed refs; never touches a remote.\n- progress_list: The project's journal, newest first, paged with total and nextCursor. Requires path. Optional input.blockedOnly, input.ptyId, input.limit (default 8, maximum 100), input.cursor (previous nextCursor). Record a NEW outcome with the `progress` tool, not here.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, active, status, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list" },
+                "action": { "type": "string", "description": "One of: list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list" },
                 "path": { "type": "string", "description": "Absolute path to git repository (required for worktree_list, worktree_lifecycle, worktree_create, worktree_remove, branch_delete, progress_list)" },
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
@@ -1298,19 +1310,19 @@ fn native_tool_definitions() -> serde_json::Value {
                 "decision": { "type": "string", "description": "action=orphan_cleanup_answer: remove or keep the pending orphan cleanup for path" },
                 "base_ref": { "type": "string", "description": "Base ref to branch from, default HEAD (action=worktree_create)" },
                 "spawn_session": { "type": "boolean", "description": "Auto-create a PTY session in the worktree (action=worktree_create, default false)" },
-                "input": { "type": "object", "description": "Typed action payload for progress_list. Defaults to 10 entries; follow nextCursor until null. Unknown fields are rejected.", "properties": {
+                "input": { "type": "object", "description": "Typed action payload for progress_list. Defaults to 8 entries; follow nextCursor until null. Unknown fields are rejected.", "properties": {
                     "blockedOnly": { "type": "boolean", "description": "Only blocked entries, applied before paging." },
                     "ptyId": { "type": "string", "description": "Only this terminal's entries, applied before paging." },
-                    "limit": { "type": "integer", "minimum": 0, "description": "Entries per page, default 10; clamped to 1..100." },
+                    "limit": { "type": "integer", "minimum": 0, "description": "Entries per page, default 8; clamped to 1..100." },
                     "cursor": { "type": "integer", "description": "The previous page's nextCursor; omit for the newest page." }
                 }, "additionalProperties": false }
             }, "required": ["action"] }
         },
         {
             "name": "story",
-            "description": "Read and update native plans and stories in the calling managed session's project. Actions are typed; every mutation is checked by the Rust story service. A claim binds to the calling live PTY.",
+            "description": "Read and update native plans and stories in the calling managed session's project. Pass one StoryAction as `input`; the input schema lists every action, field, type and enum. Every mutation is checked by the Rust story service, and a refusal names its cause. A claim binds to the calling live PTY.\n\nAgent actions: create_plan, list_plans, list_plan_sources, add_plan_source, get_plan, plan_state, plan_view, create_story, list_stories, get_story, add_dependency, claim, and transition with check_criterion, uncheck_criterion or submit_review on a story this session claimed, and transition with approve on a story claimed by a different session (the implementer cannot approve its own story). add_dependency on a ready story whose dependency is not done moves it to backlog (it cannot be claimed until the dependency is done).\n\nUser-only (refused for an agent, the user does them in the Plans and Stories dialog): remove_dependency, and transition with start_manual, reject_review, block, unblock or wont_fix.\n\nThis tool reaches only the calling session's own project (another project's plan is refused with `plan does not belong to project`). To read or approve a plan of another project, use the CLI: `tuic story '<action JSON>' --project /abs/project` (see the native-stories user guide).",
             "inputSchema": { "type": "object", "properties": {
-                "input": { "type": "object", "description": "StoryAction object, tagged by action. Examples: {action:'list_plans'}, {action:'get_story',story_id:'...'}, {action:'claim',story_id:'...',expected_revision:1}." }
+                "input": crate::stories::story_action_schema()
             }, "required": ["input"] }
         },
         {
@@ -1958,7 +1970,7 @@ where
 }
 
 fn session_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(action, "create" | "input" | "kill" | "close")
+    matches!(action, "create" | "input" | "kill" | "close" | "resize")
 }
 
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
@@ -2488,6 +2500,8 @@ pub(super) async fn handle_session_submit(
         BeginSubmission::Response(response) => return response,
         BeginSubmission::Started(started) => started,
     };
+    // The coordinator answers a BLOCKED child through the terminal.
+    state.blocked_children.remove(&started.session_id);
     apply_pty_description(state, &started.session_id, pty_description);
 
     let deadline =
@@ -2795,6 +2809,42 @@ async fn handle_agent_wait(
         .unwrap_or(0)
         .max(since);
     serde_json::json!({"met": false, "timed_out": true, "new_messages": 0, "next_since": resume})
+}
+
+/// Secrets the terminal knows whole, so that a read showing only a fragment of
+/// one can still scrub it: the retained log (cached until it changes), and the
+/// screen with the history rows that wrap into it.
+fn terminal_secrets(buf: &mut crate::state::VtLogBuffer) -> Vec<String> {
+    let mut secrets = buf.cached_log_secrets(|buf| {
+        let (log_lines, _) = buf.lines_since_owned(buf.oldest_offset(), usize::MAX);
+        crate::redaction::secrets_in(&crate::redaction::join_wrapped_rows(
+            log_lines.iter().map(|ll| (ll.text(), ll.wrapped)),
+        ))
+    });
+    let screen = crate::redaction::join_wrapped_rows(
+        buf.screen_rows().into_iter().zip(buf.screen_row_wraps()),
+    );
+    secrets.extend(crate::redaction::secrets_in(&format!(
+        "{}{screen}",
+        buf.screen_head_context()
+    )));
+    secrets
+}
+
+/// Redact the raw byte stream of a session. Patterns alone miss a token that
+/// the line editor redrew across a wrap (the pieces sit between cursor moves),
+/// so every secret found in the whole ring or on the terminal grid is also
+/// scrubbed wherever a fragment of it survives in `window`. (#1281-10e6)
+fn redact_raw_output(
+    state: &Arc<AppState>,
+    session_id: &str,
+    window: &str,
+    mut known: Vec<String>,
+) -> String {
+    if let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
+        known.extend(terminal_secrets(&mut vt.lock()));
+    }
+    crate::redaction::redact_secrets(&crate::redaction::scrub_fragments(window, &known))
 }
 
 fn handle_session(
@@ -3124,19 +3174,21 @@ fn handle_session(
                         });
                     }
                 };
-                let buf = vt_log.lock();
+                let mut buf = vt_log.lock();
                 let total = buf.total_lines();
                 let oldest = buf.oldest_offset();
                 let scrollback_lines = total - oldest;
 
                 // Delta read: if since_cursor provided, return only new scrollback lines.
                 if let Some(since) = args["since_cursor"].as_u64().map(|v| v as usize) {
-                    let (log_lines, new_cursor) = buf.lines_since_owned(since, limit);
-                    let data: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
+                    let (log_lines, new_cursor) = buf.lines_since_logical(since, limit);
                     // Redaction applies to all three reads below — delta, absolute
                     // and raw ring. `format=raw` keeps ANSI; it is not an opt-out
                     // of redaction, and `data_length` reports what was returned.
-                    let data = crate::redaction::redact_secrets(&data.join("\n"));
+                    let data = crate::redaction::redact_wrapped_rows(
+                        log_lines.iter().map(|ll| (ll.text(), ll.wrapped)),
+                        &[],
+                    );
                     let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                     insert_optional_value(
                         response
@@ -3154,21 +3206,27 @@ fn handle_session(
                 } else {
                     total.saturating_sub(limit)
                 };
-                let (log_lines, _) = buf.lines_since_owned(offset, limit);
-                let mut all_lines: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
+                let (log_lines, _) = buf.lines_since_logical(offset, limit);
+                let mut all_lines: Vec<(String, bool)> =
+                    log_lines.iter().map(|ll| (ll.text(), ll.wrapped)).collect();
                 // Only append screen rows when reading the tail (no from_line).
                 if args["from_line"].is_null() {
-                    let mut screen = buf.screen_rows();
+                    let mut screen: Vec<(String, bool)> = buf
+                        .screen_rows()
+                        .into_iter()
+                        .zip(buf.screen_row_wraps())
+                        .collect();
                     let cutoff = {
-                        let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
+                        let refs: Vec<&str> = screen.iter().map(|(row, _)| row.as_str()).collect();
                         crate::chrome::find_empty_input_box_cutoff(&refs)
                     };
                     if let Some(cutoff) = cutoff {
                         screen.truncate(cutoff);
                     }
-                    all_lines.extend(screen.into_iter().filter(|r| !r.is_empty()));
+                    all_lines.extend(screen.into_iter().filter(|(row, _)| !row.is_empty()));
                 }
-                let data = crate::redaction::redact_secrets(&all_lines.join("\n"));
+                let known = terminal_secrets(&mut buf);
+                let data = crate::redaction::redact_wrapped_rows(all_lines, &known);
                 let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                 insert_optional_value(
                     response
@@ -3188,8 +3246,24 @@ fn handle_session(
                     });
                 }
             };
-            let (bytes, total_written) = ring.lock().read_last(limit);
-            let data = crate::redaction::redact_secrets(&String::from_utf8_lossy(&bytes));
+            // Read the whole ring: the `limit` window may cut a secret in two,
+            // and the half left in the window can only be scrubbed if the
+            // redaction has seen the other half.
+            let (all_bytes, total_written, ring_secrets) = {
+                let mut ring = ring.lock();
+                let (all_bytes, total_written) = ring.read_last(usize::MAX);
+                let secrets = ring.cached_secrets(|| {
+                    crate::redaction::secrets_in(&String::from_utf8_lossy(&all_bytes))
+                });
+                (all_bytes, total_written, secrets)
+            };
+            let window = &all_bytes[all_bytes.len().saturating_sub(limit)..];
+            let data = redact_raw_output(
+                state,
+                session_id,
+                &String::from_utf8_lossy(window),
+                ring_secrets,
+            );
             let mut response = serde_json::json!({"data": data, "data_length": data.len(), "total_written": total_written, "exited": exited});
             insert_optional_value(
                 response
@@ -3211,17 +3285,14 @@ fn handle_session(
             if let Err(msg) = super::validate_terminal_size(rows, cols) {
                 return serde_json::json!({"error": msg});
             }
-            let entry = match state.session_maps.sessions.get(session_id) {
-                Some(e) => e,
-                None => return serde_json::json!({"error": "Session not found"}),
-            };
-            if let Err(e) = entry.lock().master.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            }) {
-                return serde_json::json!({"error": format!("Resize failed: {}", e)});
+            // Same core as HTTP resize_session: grid before SIGWINCH, same-dims no-op.
+            match crate::pty::resize_session_core(state, session_id, rows, cols) {
+                Ok(Some(frame)) => crate::pty::send_grid_frame(state, session_id, frame),
+                Ok(None) => {}
+                Err(e) if e.starts_with("Session not found") => {
+                    return serde_json::json!({"error": "Session not found"});
+                }
+                Err(e) => return serde_json::json!({"error": format!("Resize failed: {}", e)}),
             }
             serde_json::json!({"ok": true})
         }
@@ -3262,7 +3333,13 @@ fn handle_session(
             // Uses the same tombstone path as the Tauri close_pty command so
             // post-mortem MCP reads keep returning final output + exit code.
             // Idempotent: returns ok even if session was already tombstoned.
-            let existed = crate::pty::close_pty_core(state, session_id, false).is_some()
+            let reason = if args.get("reason").and_then(|v| v.as_str()) == Some(IDLE_CLOSE_REASON) {
+                IDLE_CLOSE_REASON
+            } else {
+                "close_requested"
+            };
+            let existed = crate::pty::close_pty_core_with_reason(state, session_id, false, reason)
+                .is_some()
                 || state.grid.vt_log_buffers.contains_key(session_id);
             if existed {
                 // Notify frontend and SSE consumers so the tab is removed from
@@ -3461,10 +3538,13 @@ fn handle_session(
 }
 
 /// Use the same close path as `session action=close`, including frontend events.
+/// Logged as the close cause when the idle sweep, not a client, closes a session.
+const IDLE_CLOSE_REASON: &str = "idle_close";
+
 pub(crate) fn close_idle_managed_session(state: &Arc<AppState>, session_id: &str) {
     let result = handle_session(
         state,
-        &serde_json::json!({"action": "close", "session_id": session_id}),
+        &serde_json::json!({"action": "close", "session_id": session_id, "reason": IDLE_CLOSE_REASON}),
         None,
     );
     if result.get("error").is_some() {
@@ -3570,6 +3650,36 @@ async fn handle_worktree(
         Err(e) => return e,
     };
     match action {
+        "branch_integrations" | "branch_integration" => {
+            let path = match require_path(args, action) {
+                Ok(path) => path,
+                Err(error) => return error,
+            };
+            if let Err(error) = validate_mcp_repo_path(&path) {
+                return error;
+            }
+            let single = action == "branch_integration";
+            let branch = args["branch"].as_str().map(str::to_owned);
+            if single && branch.is_none() {
+                return serde_json::json!({"error":"Action 'branch_integration' requires 'branch' parameter"});
+            }
+            match tokio::task::spawn_blocking(move || {
+                let repo = std::path::Path::new(&path);
+                if let Some(branch) = branch.filter(|_| single) {
+                    crate::worktree::branch_integration(repo, &branch).map(to_json_or_error)
+                } else {
+                    crate::worktree::branch_integrations(repo).map(to_json_or_error)
+                }
+            })
+            .await
+            {
+                Ok(Ok(result)) => result,
+                Ok(Err(error)) => serde_json::json!({"error":error}),
+                Err(error) => {
+                    serde_json::json!({"error":format!("branch integration task failed: {error}")})
+                }
+            }
+        }
         "worktree_list" => {
             let path = match require_path(args, "worktree_list") {
                 Ok(p) => p,
@@ -3829,10 +3939,16 @@ async fn handle_worktree(
             };
             match tokio::task::spawn_blocking(move || {
                 crate::worktree::delete_integrated_local_branch(&path, &branch)
+                    .map(|proof| (proof, branch))
             })
             .await
             {
-                Ok(Ok(proof)) => serde_json::json!({"ok":true,"proof":proof}),
+                Ok(Ok(("archived", branch))) => serde_json::json!({
+                    "ok":true,
+                    "proof":"archived",
+                    "archive_ref":tuic_git::worktree::archive_ref_name(&branch)
+                }),
+                Ok(Ok((proof, _))) => serde_json::json!({"ok":true,"proof":proof}),
                 Ok(Err(error)) => serde_json::json!({"error":error}),
                 Err(error) => {
                     serde_json::json!({"error":format!("branch deletion task failed: {error}")})
@@ -7124,6 +7240,20 @@ fn request_is_modern_lifecycle(headers: &HeaderMap, body: &serde_json::Value) ->
         .is_some_and(|version| version == MODERN_PROTOCOL_VERSION)
 }
 
+/// 2026-07-28 makes a list result a *cache* entry: `resultType` says the page
+/// is the whole list, and `ttlMs`/`cacheScope` say how long it may be held. ego
+/// refuses to admit a server whose `tools/list` omits any of the three —
+/// measured 2026-09-19, the handshake and the list both succeeded and
+/// `session/new` still answered "the supplied MCP servers could not be
+/// admitted" (#783-3c1b); `resources/list` did the same (#1318-abd7). Same
+/// values as `server/discover`: the tool surface moves with upstream connects
+/// and config toggles, so nothing here is cacheable.
+pub(crate) fn add_result_envelope(result: &mut serde_json::Value) {
+    result["resultType"] = serde_json::json!("complete");
+    result["ttlMs"] = serde_json::json!(0);
+    result["cacheScope"] = serde_json::json!("private");
+}
+
 /// Agree on a protocol revision: the client's own when we support it, otherwise
 /// [`DEFAULT_PROTOCOL_VERSION`]. Echoing an unsupported version back would be a
 /// promise we cannot keep; answering our own version to a client that named a
@@ -7234,6 +7364,7 @@ pub(super) async fn mcp_post(
                 client = client_name.unwrap_or("unknown"),
                 mcp_session = %session_id,
                 tuic_session = tuic_session_header.unwrap_or(""),
+                client_pid = client_pid_header(&headers),
                 presented_session = match &init_kind {
                     InitializeKind::Reconnected { presented } => presented.as_str(),
                     _ => "",
@@ -7378,20 +7509,10 @@ pub(super) async fn mcp_post(
             let tools =
                 merged_tool_definitions(&state, list_session_id, request_meta_client_name(&body));
             let mut result = serde_json::json!({ "tools": tools });
-            // 2026-07-28 makes a list result a *cache* entry: `resultType`
-            // says the page is the whole list, and `ttlMs`/`cacheScope` say
-            // how long it may be held. ego refuses to admit a server whose
-            // `tools/list` omits any of the three — measured 2026-09-19, the
-            // handshake and the list both succeeded and `session/new` still
-            // answered "the supplied MCP servers could not be admitted"
-            // (#783-3c1b). Same values as `server/discover`: the tool surface
-            // moves with upstream connects and config toggles, so nothing here
-            // is cacheable. Withheld from the legacy revision, which has no
-            // such fields and no reader for them.
+            // Withheld from the legacy revision, which has no such fields and
+            // no reader for them.
             if request_is_modern_lifecycle(&headers, &body) {
-                result["resultType"] = serde_json::json!("complete");
-                result["ttlMs"] = serde_json::json!(0);
-                result["cacheScope"] = serde_json::json!("private");
+                add_result_envelope(&mut result);
             }
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -7759,12 +7880,16 @@ pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
             }
         }
     }
-    // Clean up peer agents and inboxes left with no protocol session at all.
+    // Clean up peer agents and inboxes left with no protocol session at all,
+    // except identities someone can still reach: a one-shot `tuic` call ends
+    // its session while its PTY lives on, and dropping the identity would
+    // drop that PTY's inbox. Same rule as the idle reaper.
     let removed_tuic: Vec<String> = state
         .peer_agents
         .iter()
         .filter(|e| e.value().mcp_session_id == sid)
         .map(|e| e.key().clone())
+        .filter(|tuic| state.peer_identity_is_reapable(tuic))
         .collect();
     for tuic in &removed_tuic {
         state.peer_agents.remove(tuic);
@@ -7794,7 +7919,9 @@ async fn handle_repo(
     match action {
         "list" | "active" => handle_repo_listing(state, args),
         "status" => handle_github(state, args).await,
-        "worktree_list"
+        "branch_integrations"
+        | "branch_integration"
+        | "worktree_list"
         | "worktree_lifecycle"
         | "worktree_create"
         | "worktree_remove"
@@ -8352,6 +8479,22 @@ mod tests {
     use crate::OutputRingBuffer;
     use base64::Engine;
 
+    /// Catches: a storm that cannot be traced to a process (no pid logged), or a
+    /// client-supplied header written to the log verbatim (log injection).
+    #[test]
+    fn client_pid_is_logged_only_when_it_is_a_plain_pid() {
+        let with = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(CLIENT_PID_HEADER, value.parse().unwrap());
+            headers
+        };
+        assert_eq!(client_pid_header(&with("4242")), "4242");
+        assert_eq!(client_pid_header(&with("42 INFO forged")), "");
+        assert_eq!(client_pid_header(&with("")), "");
+        assert_eq!(client_pid_header(&with("12345678901")), "");
+        assert_eq!(client_pid_header(&HeaderMap::new()), "");
+    }
+
     fn upstream_passthrough_result() -> serde_json::Value {
         serde_json::json!({
             "content": [
@@ -8564,6 +8707,34 @@ mod tests {
                 .as_str()
                 .is_some_and(|text| text.contains("requires non-empty 'query'"))
         );
+    }
+
+    /// ego's stdio requests carry the revision only in `params._meta`; the
+    /// bridge mirrors it into the header, but a direct caller sends no header.
+    #[tokio::test]
+    async fn bridge_tool_result_carries_result_type_when_only_meta_names_the_revision() {
+        let response = mcp_post(
+            State(test_state()),
+            ConnectInfo(loopback_addr()),
+            HeaderMap::new(),
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_tools",
+                    "arguments": {"query": "session list"},
+                    "_meta": {PROTOCOL_VERSION_META_KEY: MODERN_PROTOCOL_VERSION}
+                }
+            })),
+        )
+        .await
+        .into_response();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(response["result"]["resultType"], "complete");
     }
 
     #[tokio::test]
@@ -8966,6 +9137,22 @@ mod tests {
         assert_eq!(schema["inputSchema"], definition["inputSchema"]);
     }
 
+    /// Catches: the story tool going back to a bare `input: object` (callers learn field names
+    /// from errors), and its text listing user-only actions as if an agent could run them.
+    #[test]
+    fn story_tool_publishes_its_input_schema_and_marks_user_only_actions() {
+        let definition = native_tool_named("story");
+        let input = &definition["inputSchema"]["properties"]["input"];
+        assert!(
+            input["oneOf"].as_array().is_some_and(|v| v.len() > 10),
+            "the StoryAction variants must be published: {input}"
+        );
+        let description = definition["description"].as_str().unwrap_or_default();
+        assert!(description.contains("User-only"), "{description}");
+        assert!(description.contains("remove_dependency"), "{description}");
+        assert!(description.contains("moves it to backlog"), "{description}");
+    }
+
     /// The collapsed path must carry the caller's identity, not just its
     /// arguments. If `mcp-session-id` were dropped on the way through
     /// `call_tool`, a bound model would be treated as unbound — and, worse, a
@@ -9193,6 +9380,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_branch_integration_queries_include_branches_without_worktrees_1295() {
+        let (_temp, repo, _) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "query-1295"]);
+        branch_delete_commit(&repo, "one.txt", "one\n");
+        branch_delete_commit(&repo, "two.txt", "two\n");
+        git(&["checkout", "main"]);
+        git(&["merge", "--squash", "query-1295"]);
+        git(&["commit", "-m", "release\n\none.txt\ntwo.txt"]);
+        let state = test_state();
+        let query = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action":"branch_integration", "path":repo, "branch":"query-1295"
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(query["integrated"], true, "{query}");
+        assert_eq!(query["proof"], "squash_message", "{query}");
+        assert_eq!(query["archive_required"], false, "{query}");
+        let list = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action":"branch_integrations", "path":repo
+            }),
+            false,
+        )
+        .await;
+        assert!(
+            list.as_array().unwrap().iter().any(|entry| entry == &query),
+            "{list}"
+        );
+        let deleted = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action":"branch_delete", "path":repo, "branch":"query-1295"
+            }),
+            false,
+        )
+        .await;
+        assert_eq!(deleted["proof"], query["proof"], "{deleted}");
+        assert!(
+            crate::git_cli::git_cmd(&repo)
+                .args(["rev-parse", "--verify", "refs/heads/query-1295"])
+                .run_silent()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn mcp_branch_delete_accepts_integrated_refs_despite_stale_upstream_or_squash() {
         let (_temp, repo, base) = branch_delete_fixture();
         let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
@@ -9271,6 +9509,107 @@ mod tests {
                 .is_ok(),
             "the remote-tracking ref must remain untouched"
         );
+    }
+
+    fn branch_exists(repo: &std::path::Path, reference: &str) -> bool {
+        crate::git_cli::git_cmd(repo)
+            .args(["show-ref", "--verify", reference])
+            .run_silent()
+            .is_some()
+    }
+
+    #[tokio::test]
+    async fn branch_delete_accepts_archived_tip() {
+        let (_temp, repo, _base) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "feat/superseded"]);
+        branch_delete_commit(&repo, "superseded.txt", "only on this branch\n");
+        git(&["branch", "archive-src"]);
+        git(&["update-ref", "refs/archive/feat/superseded", "archive-src"]);
+        git(&["branch", "-D", "archive-src"]);
+        git(&["checkout", "integration"]);
+
+        let response = handle_repo(
+            &test_state(),
+            &serde_json::json!({"action":"branch_delete","path":repo.to_string_lossy(),"branch":"feat/superseded"}),
+            false,
+        )
+        .await;
+
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(response["proof"], "archived", "{response}");
+        assert_eq!(
+            response["archive_ref"], "refs/archive/feat/superseded",
+            "{response}"
+        );
+        assert!(!branch_exists(&repo, "refs/heads/feat/superseded"));
+        assert!(branch_exists(&repo, "refs/archive/feat/superseded"));
+    }
+
+    #[tokio::test]
+    async fn branch_delete_refuses_stale_archive() {
+        let (_temp, repo, _base) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "moved"]);
+        branch_delete_commit(&repo, "first.txt", "archived\n");
+        git(&["update-ref", "refs/archive/moved", "moved"]);
+        branch_delete_commit(&repo, "second.txt", "committed after archiving\n");
+        git(&["checkout", "integration"]);
+
+        let response = handle_repo(
+            &test_state(),
+            &serde_json::json!({"action":"branch_delete","path":repo.to_string_lossy(),"branch":"moved"}),
+            false,
+        )
+        .await;
+
+        assert!(
+            response["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("unmerged")),
+            "{response}"
+        );
+        assert!(branch_exists(&repo, "refs/heads/moved"));
+    }
+
+    #[tokio::test]
+    async fn branch_delete_refuses_checked_out_or_default() {
+        let (temp, repo, _base) = branch_delete_fixture();
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "wt-branch"]);
+        branch_delete_commit(&repo, "wt.txt", "unique\n");
+        git(&["checkout", "integration"]);
+        // The default branch carries a commit that only it holds, archived at its exact tip.
+        git(&["checkout", "main"]);
+        branch_delete_commit(&repo, "main-only.txt", "default only\n");
+        git(&["checkout", "integration"]);
+        let linked = temp.path().join("linked");
+        git(&["worktree", "add", linked.to_str().unwrap(), "wt-branch"]);
+        for branch in ["wt-branch", "main", "integration"] {
+            git(&["update-ref", &format!("refs/archive/{branch}"), branch]);
+        }
+
+        let state = test_state();
+        let path = repo.to_string_lossy();
+        for (branch, reason) in [
+            ("wt-branch", "checked out"),
+            ("main", "default"),
+            ("integration", "current"),
+        ] {
+            let response = handle_repo(
+                &state,
+                &serde_json::json!({"action":"branch_delete","path":path,"branch":branch}),
+                false,
+            )
+            .await;
+            assert!(
+                response["error"]
+                    .as_str()
+                    .is_some_and(|e| e.to_lowercase().contains(reason)),
+                "{branch}: {response}"
+            );
+            assert!(branch_exists(&repo, &format!("refs/heads/{branch}")));
+        }
     }
 
     #[tokio::test]
@@ -10268,6 +10607,22 @@ mod tests {
             .lock()
             .write(b"child moved");
         call.await.unwrap()
+    }
+
+    /// Catches: the coordinator answering a BLOCKED child with `session action=submit`
+    /// (tuic-say) leaving the idle-close hold in place, so the child resumes, finishes
+    /// without mailing and is then never closed.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_submit_to_a_blocked_child_releases_its_idle_close_hold() {
+        let state = test_state();
+        let session_id = "submit-blocked";
+        let bytes = install_atomic_submit_test_session(&state, session_id);
+        state.blocked_children.insert(session_id.to_string());
+
+        submit_with_child_movement(&state, session_id, "the box is back", &bytes).await;
+
+        assert!(!state.blocked_children.contains(session_id));
     }
 
     #[cfg(unix)]
@@ -12026,11 +12381,7 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let session_id = spawned["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !output.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let actual = std::fs::read_to_string(&output).expect("child writes its environment");
+        let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(5)).await;
         assert_eq!(
             actual,
             format!("/caller|{session_id}|parent-peer|caller|present|2")
@@ -12050,12 +12401,8 @@ mod tests {
             "spawn failed: {unparented}"
         );
         let unparented_id = unparented["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !output.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
         assert_eq!(
-            std::fs::read_to_string(&output).unwrap(),
+            wait_for_file_content_async(&output, std::time::Duration::from_secs(5)).await,
             format!("/run|{unparented_id}||run|present|1")
         );
     }
@@ -12133,6 +12480,46 @@ mod tests {
             .spawn()
             .unwrap();
         let content = wait_for_file_content(&output, std::time::Duration::from_secs(2));
+        assert_eq!(
+            content, "ready",
+            "must wait past the truncate-then-delayed-write window, not read the empty file"
+        );
+    }
+
+    /// The async twin of `wait_for_file_content`, for `#[tokio::test]` sites
+    /// that poll a spawned agent's output file (story 1283-cbce).
+    async fn wait_for_file_content_async(
+        path: &std::path::Path,
+        timeout: std::time::Duration,
+    ) -> String {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let content = std::fs::read_to_string(path).unwrap_or_default();
+            if !content.is_empty() || std::time::Instant::now() >= deadline {
+                return content;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wait_for_file_content_async_survives_a_truncate_then_delayed_write() {
+        let root = tempfile::Builder::new()
+            .prefix("mcp-wait-file-async-")
+            .tempdir_in(crate::test_support::test_temp_root())
+            .unwrap();
+        let output = root.path().join("delayed");
+        let command = format!(
+            ": > '{0}'; sleep 0.2; printf 'ready' >> '{0}'",
+            output.display()
+        );
+        std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&command)
+            .spawn()
+            .unwrap();
+        let content = wait_for_file_content_async(&output, std::time::Duration::from_secs(2)).await;
         assert_eq!(
             content, "ready",
             "must wait past the truncate-then-delayed-write window, not read the empty file"
@@ -12911,6 +13298,43 @@ mod tests {
         assert!(!state.mcp.to_session.contains_key("mcp-primary"));
     }
 
+    /// Delivery ownership moves only when the ending session holds it. The owner
+    /// is deliberately not first in the reverse route list, so a non-owner that
+    /// leaves would hand ownership to the wrong survivor if the owner check broke.
+    /// Catches: `peer.mcp_session_id == sid` inverted in `end_mcp_session`, which
+    /// re-points delivery at the first surviving route whenever a non-owner ends.
+    #[tokio::test]
+    async fn ending_a_non_owner_sibling_keeps_the_delivery_owner() {
+        let state = test_state();
+        join_two_bridges_to_one_pty(&state);
+        apply_initialize_identity(&state, "mcp-third", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-third");
+        state
+            .peer_agents
+            .get_mut(TEST_UUID_A)
+            .expect("the joined identity is registered")
+            .mcp_session_id = "mcp-third".to_string();
+
+        end_mcp_session(&state, "mcp-sibling").await;
+
+        assert_eq!(
+            state
+                .peer_agents
+                .get(TEST_UUID_A)
+                .map(|peer| peer.mcp_session_id.clone()),
+            Some("mcp-third".to_string()),
+            "a non-owner leaving must not take delivery away from the real owner"
+        );
+        assert_eq!(
+            state
+                .mcp
+                .session_to_mcp
+                .get(TEST_UUID_A)
+                .map(|entry| entry.clone()),
+            Some(vec!["mcp-primary".to_string(), "mcp-third".to_string()])
+        );
+    }
+
     /// A bridge joining while the last co-owner tears the identity down must not
     /// end up holding a route to a peer that no longer exists — that is the shape
     /// of every silent-delivery-loss bug in this module.
@@ -12978,6 +13402,115 @@ mod tests {
         assert!(!state.orchestrator_peers.contains(TEST_UUID_A));
         assert!(!state.mcp.session_to_mcp.contains_key(TEST_UUID_A));
         assert!(!state.mcp.to_session.contains_key("mcp-primary"));
+    }
+
+    /// Critic 1148. `tuic` now sends DELETE when every CLI call ends, so the last
+    /// (often only) protocol session of a PTY identity is torn down after each
+    /// command. The reaper keeps an identity with a live PTY addressable
+    /// (`peer_identity_is_reapable`); DELETE must not destroy what the reaper
+    /// keeps. Catches: mail for a live terminal deleted after every `tuic agent
+    /// send` run from that terminal, so a reply finds no peer and no inbox.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ending_the_only_cli_session_of_a_live_pty_keeps_its_peer_and_mail() {
+        let state = test_state();
+        insert_managed_test_session(&state, "pty-cli-owner", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-cli-owner");
+        apply_initialize_identity(&state, "mcp-cli-call", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-cli-call");
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: "msg-reply".to_string(),
+                from_tuic_session: "worker".to_string(),
+                from_name: "worker".to_string(),
+                content: "reply to the CLI caller".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+
+        end_mcp_session(&state, "mcp-cli-call").await;
+
+        assert!(
+            state.peer_agents.contains_key(TEST_UUID_A),
+            "a PTY that is still alive must stay addressable after its CLI session ends"
+        );
+        assert!(
+            state
+                .agent_inbox
+                .get(TEST_UUID_A)
+                .is_some_and(|inbox| inbox.iter().any(|m| m.id == "msg-reply")),
+            "mail for a live terminal must survive the CLI call that opened the session"
+        );
+        assert!(!state.mcp.to_session.contains_key("mcp-cli-call"));
+    }
+
+    /// Critic 1148. The CLI sends DELETE from Drop and cannot know whether the
+    /// reaper or an earlier DELETE already removed the session. Catches: a
+    /// repeated or unknown-session DELETE removing a different session's state.
+    #[tokio::test]
+    async fn repeated_and_unknown_deletes_leave_other_sessions_alone() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-gone", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-gone");
+        apply_initialize_identity(&state, "mcp-stays", Some(TEST_UUID_B));
+        live_mcp_session(&state, "mcp-stays");
+
+        end_mcp_session(&state, "mcp-gone").await;
+        end_mcp_session(&state, "mcp-gone").await;
+        end_mcp_session(&state, "mcp-never-existed").await;
+        let response = mcp_delete(State(Arc::clone(&state)), HeaderMap::new())
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        assert!(state.mcp.sessions.contains_key("mcp-stays"));
+        assert!(state.peer_agents.contains_key(TEST_UUID_B));
+        assert!(state.mcp.to_session.contains_key("mcp-stays"));
+        assert!(!state.peer_agents.contains_key(TEST_UUID_A));
+    }
+
+    /// Critic 1148. The pid header is client-controlled and reaches the log.
+    /// Catches: a validator using `char::is_numeric` or a length check on the
+    /// wrong side, letting signs, hex, exponents, whitespace, non-ASCII or
+    /// multi-line values through, or dropping a legitimate 10-digit pid.
+    #[test]
+    fn client_pid_header_accepts_only_ascii_digit_runs_up_to_ten() {
+        let value = |bytes: &[u8]| {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                CLIENT_PID_HEADER,
+                axum::http::HeaderValue::from_bytes(bytes).unwrap(),
+            );
+            headers
+        };
+        assert_eq!(client_pid_header(&value(b"4294967295")), "4294967295");
+        assert_eq!(client_pid_header(&value(b"1")), "1");
+        for rejected in [
+            &b"+123"[..],
+            b"-1",
+            b"0x1f",
+            b"1e5",
+            b"12 34",
+            b" 123",
+            b"123 ",
+            b"12\t34",
+            b"12\"34",
+            b"\xef\xbc\x91\xef\xbc\x92",
+            b"\xff",
+        ] {
+            assert_eq!(
+                client_pid_header(&value(rejected)),
+                "",
+                "{:?} must not reach the log",
+                String::from_utf8_lossy(rejected)
+            );
+        }
+        let mut two = HeaderMap::new();
+        two.append(CLIENT_PID_HEADER, "111".parse().unwrap());
+        two.append(CLIENT_PID_HEADER, "222".parse().unwrap());
+        assert_eq!(client_pid_header(&two), "111");
     }
 
     #[test]
@@ -13151,6 +13684,61 @@ mod tests {
             carried,
             "mail buffered under the phantom must survive the repair"
         );
+    }
+
+    /// Catches: the identity handoff replaying a child's old BLOCKED mail through the
+    /// hold-tracking push, which re-sets a hold the parent already released by
+    /// answering, so the child is kept open for ever.
+    #[cfg(unix)]
+    #[test]
+    fn repairing_an_identity_does_not_resurrect_a_released_blocked_hold() {
+        let state = test_state();
+        let mcp = "mcp-replay-hold";
+        insert_managed_test_session(&state, "pty-replay-hold", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-replay-hold");
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+        state.orchestrator_peers.insert(TEST_UUID_B.to_string());
+        state
+            .session_maps
+            .session_parent
+            .insert("blocked-child".to_string(), TEST_UUID_B.to_string());
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "msg-blocked".to_string(),
+                from_tuic_session: "blocked-child".to_string(),
+                from_name: "child".to_string(),
+                content: "BLOCKED: box down".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+        assert!(state.blocked_children.contains("blocked-child"));
+        // The parent answered through the terminal.
+        state.blocked_children.remove("blocked-child");
+
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_A, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+
+        assert!(
+            state
+                .agent_inbox
+                .get(TEST_UUID_A)
+                .is_some_and(|inbox| inbox.iter().any(|m| m.id == "msg-blocked")),
+            "the old mail must still be carried over"
+        );
+        assert!(!state.blocked_children.contains("blocked-child"));
     }
 
     /// A caller that reconnects and registers a NEW uuid arrives with no implicit
@@ -17648,12 +18236,7 @@ mod tests {
                 "missing {field} in repo progress input"
             );
         }
-        assert!(
-            input["description"]
-                .as_str()
-                .unwrap()
-                .contains("10 entries")
-        );
+        assert!(input["description"].as_str().unwrap().contains("8 entries"));
     }
 
     #[test]
@@ -18262,6 +18845,146 @@ mod tests {
 
     fn non_loopback_addr() -> SocketAddr {
         "192.168.1.42:12345".parse().unwrap()
+    }
+
+    /// Story 1285-df56: the MCP arm resized only the PTY master, so the grid
+    /// (and terminal/scroll-info) kept the old geometry.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_session_resize_updates_grid_dimensions() {
+        let state = test_state();
+        insert_managed_test_session(&state, TEST_UUID_A, TEST_SPAWN_CWD);
+        state.grid.vt_log_buffers.insert(
+            TEST_UUID_A.to_string(),
+            parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 500)),
+        );
+
+        let response = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action": "resize", "session_id": TEST_UUID_A, "rows": 30, "cols": 100}),
+            None,
+        )
+        .await;
+
+        assert_eq!(response["ok"], true, "{response}");
+        let vt = state.grid.vt_log_buffers.get(TEST_UUID_A).unwrap();
+        let vt = vt.lock();
+        assert_eq!((vt.grid_screen_lines(), vt.grid_columns()), (30, 100));
+    }
+
+    #[cfg(unix)]
+    async fn mcp_resize(state: &Arc<AppState>, session_id: &str) -> serde_json::Value {
+        handle_mcp_tool_call(
+            state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action": "resize", "session_id": session_id, "rows": 30, "cols": 100}),
+            None,
+        )
+        .await
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_session_resize_of_unknown_session_is_an_error() {
+        let state = test_state();
+        let response = mcp_resize(&state, TEST_UUID_A).await;
+        assert!(
+            response["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("Session not found")),
+            "{response}"
+        );
+        assert!(response.get("ok").is_none(), "{response}");
+    }
+
+    /// A master whose resize ioctl always fails; everything else is the real PTY.
+    #[cfg(unix)]
+    struct FailingResizeMaster(Box<dyn portable_pty::MasterPty + Send>);
+
+    #[cfg(unix)]
+    impl portable_pty::MasterPty for FailingResizeMaster {
+        fn resize(&self, _size: PtySize) -> Result<(), anyhow::Error> {
+            Err(anyhow::anyhow!("injected resize failure"))
+        }
+        fn get_size(&self) -> Result<PtySize, anyhow::Error> {
+            self.0.get_size()
+        }
+        fn try_clone_reader(&self) -> Result<Box<dyn std::io::Read + Send>, anyhow::Error> {
+            self.0.try_clone_reader()
+        }
+        fn take_writer(&self) -> Result<Box<dyn std::io::Write + Send>, anyhow::Error> {
+            self.0.take_writer()
+        }
+        fn process_group_leader(&self) -> Option<libc::pid_t> {
+            self.0.process_group_leader()
+        }
+        fn as_raw_fd(&self) -> Option<portable_pty::unix::RawFd> {
+            self.0.as_raw_fd()
+        }
+        fn tty_name(&self) -> Option<std::path::PathBuf> {
+            self.0.tty_name()
+        }
+    }
+
+    /// The error must reach the caller, and a repeat of the same request must
+    /// retry the PTY instead of being swallowed by the same-dims no-op guard.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_session_resize_reports_pty_failure_and_retries() {
+        use crate::state::PtySession;
+        use portable_pty::{CommandBuilder, native_pty_system};
+
+        let state = test_state();
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open test PTY");
+        let child = pair
+            .slave
+            .spawn_command(CommandBuilder::new("true"))
+            .expect("spawn test PTY child");
+        let writer = pair.master.take_writer().expect("open test PTY writer");
+        state.session_maps.sessions.insert(
+            TEST_UUID_A.to_string(),
+            parking_lot::Mutex::new(PtySession {
+                writer: Arc::new(parking_lot::Mutex::new(writer)),
+                master: Box::new(FailingResizeMaster(pair.master)),
+                _child: child,
+                paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                worktree: None,
+                cwd: Some(TEST_SPAWN_CWD.to_string()),
+                display_name: None,
+                display_name_is_custom: false,
+                display_name_from_spawn: false,
+                is_remote: false,
+                shell: "true".to_string(),
+            }),
+        );
+        state.grid.vt_log_buffers.insert(
+            TEST_UUID_A.to_string(),
+            parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 500)),
+        );
+
+        for attempt in 1..=2 {
+            let response = mcp_resize(&state, TEST_UUID_A).await;
+            assert!(
+                response["error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("injected resize failure")),
+                "attempt {attempt}: {response}"
+            );
+            assert!(
+                response.get("ok").is_none(),
+                "attempt {attempt}: {response}"
+            );
+        }
     }
 
     // search_tools
@@ -20337,6 +21060,396 @@ mod tests {
         }
     }
 
+    /// True when `data` holds any 5-character run of `secret`. Oracle for the
+    /// wrapped-token leaks of story 1281-10e6: independent of the redaction
+    /// patterns, and stricter than "the whole token is gone" (a 35-char tail of
+    /// a token is a leak even though the token no longer matches any regex).
+    fn leaks_fragment(data: &str, secret: &str) -> Option<String> {
+        let chars: Vec<char> = secret.chars().collect();
+        chars
+            .windows(5)
+            .map(|w| w.iter().collect::<String>())
+            .find(|gram| data.contains(gram.as_str()))
+    }
+
+    /// What a consumer that strips terminal control codes sees in a raw read.
+    /// Independent of the redaction code: CSI sequences, CR and BS are dropped.
+    fn visible_text(raw: &str) -> String {
+        let mut out = String::new();
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '\x1b' if chars.peek() == Some(&'[') => {
+                    chars.next();
+                    for n in chars.by_ref() {
+                        if ('@'..='~').contains(&n) {
+                            break;
+                        }
+                    }
+                }
+                '\r' | '\x08' => {}
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+
+    const WRAP_SECRET: &str = "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB";
+
+    /// Read `session action=output` in every shape a caller can ask for and
+    /// assert that no secret fragment survives.
+    fn assert_no_fragment_in_reads(vt: crate::state::VtLogBuffer, label: &str) {
+        let state = test_state();
+        let sid = "wrap-session".to_string();
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+        let reads = [
+            serde_json::json!({ "action": "output", "session_id": sid }),
+            serde_json::json!({ "action": "output", "session_id": sid, "since_cursor": 0 }),
+            serde_json::json!({ "action": "output", "session_id": sid, "from_line": 1 }),
+            serde_json::json!({ "action": "output", "session_id": sid, "limit": 2 }),
+        ];
+        for args in reads {
+            let response = handle_session(&state, &args, None);
+            let data = response["data"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{label}: no data in {response}"));
+            if let Some(gram) = leaks_fragment(data, WRAP_SECRET) {
+                panic!("{label}: {args} leaked {gram:?} of the token: {data:?}");
+            }
+        }
+    }
+
+    /// RED (1281-10e6): redaction ran on grid rows, so a token that the line
+    /// editor wrapped leaked whatever part landed on another row than the
+    /// `TOKEN=` prefix. Swept over every start column so the token begins on
+    /// each side of the row boundary, at widths that give 2 and 3+ rows, and
+    /// with double-width characters ahead of it.
+    #[test]
+    fn session_output_redacts_a_secret_wrapped_across_rows() {
+        use crate::state::VtLogBuffer;
+
+        for cols in [20u16, 30, 80] {
+            for prefix_len in 0..cols as usize {
+                for filler in ["a", "日"] {
+                    let prefix = filler.repeat(prefix_len);
+                    let mut vt = VtLogBuffer::new(24, cols, 100);
+                    vt.process(format!("{prefix}GITHUB_TOKEN={WRAP_SECRET}\r\n").as_bytes());
+                    assert_no_fragment_in_reads(
+                        vt,
+                        &format!("cols={cols} prefix={prefix_len}x{filler}"),
+                    );
+                }
+            }
+        }
+    }
+
+    /// The wrapped line scrolls into the durable log a few rows per `process`
+    /// call; the token's rows are then pushed as separate log lines.
+    #[test]
+    fn session_output_redacts_a_wrapped_secret_split_across_scrollback_batches() {
+        use crate::state::VtLogBuffer;
+
+        for cols in [20u16, 37] {
+            let mut vt = VtLogBuffer::new(4, cols, 100);
+            vt.process(format!("echo GITHUB_TOKEN={WRAP_SECRET}\r\n").as_bytes());
+            for _ in 0..8 {
+                vt.process(b"filler\r\n");
+            }
+            assert_no_fragment_in_reads(vt, &format!("cols={cols} one-row batches"));
+        }
+    }
+
+    /// Every response of every small-window read, individually: a caller that
+    /// polls with a tiny `limit` sees one response at a time.
+    fn assert_windows_never_leak(vt: crate::state::VtLogBuffer, label: &str) {
+        let state = test_state();
+        let sid = "window-session".to_string();
+        let total = vt.total_lines();
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+        for start in 0..=total {
+            for limit in 1..=3 {
+                for key in ["since_cursor", "from_line"] {
+                    let args = serde_json::json!({
+                        "action": "output", "session_id": sid, key: start, "limit": limit
+                    });
+                    let response = handle_session(&state, &args, None);
+                    let data = response["data"].as_str().unwrap_or("");
+                    if let Some(gram) = leaks_fragment(data, WRAP_SECRET) {
+                        panic!("{label}: {args} leaked {gram:?} of the token: {data:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Scroll a wrapped token into the durable log, then `filler` more lines.
+    fn wrapped_token_in_log(
+        rows: u16,
+        cols: u16,
+        capacity: usize,
+        filler: usize,
+    ) -> crate::state::VtLogBuffer {
+        let mut vt = crate::state::VtLogBuffer::new(rows, cols, capacity);
+        vt.process(format!("echo {WRAP_SECRET}\r\n").as_bytes());
+        for _ in 0..filler {
+            vt.process(b"filler\r\n");
+        }
+        vt
+    }
+
+    /// RED (review finding 1): `limit` cut the take mid-token and the cursor
+    /// jumped to the end, so the first row went out alone and unredacted.
+    #[test]
+    fn session_output_small_limit_polls_never_leak_a_wrapped_secret() {
+        for cols in [16u16, 20] {
+            for filler in 3..9 {
+                assert_windows_never_leak(
+                    wrapped_token_in_log(4, cols, 100, filler),
+                    &format!("cols={cols} filler={filler}"),
+                );
+            }
+        }
+    }
+
+    /// RED (review finding 3): once the head of a wrapped line is evicted from
+    /// the bounded log, its remaining rows cannot be matched by any pattern.
+    #[test]
+    fn session_output_never_leaks_the_tail_of_a_wrapped_secret_whose_head_was_evicted() {
+        for filler in 3..10 {
+            for capacity in 2..5 {
+                assert_windows_never_leak(
+                    wrapped_token_in_log(4, 16, capacity, filler),
+                    &format!("capacity={capacity} filler={filler}"),
+                );
+            }
+        }
+    }
+
+    /// Review finding 4: rows scrolled off while capture was suppressed (a side
+    /// panel halved the terminal) never reach the log.
+    #[test]
+    fn session_output_never_leaks_a_wrapped_secret_across_suppressed_capture() {
+        for filler_before in 0..6 {
+            for filler_after in 0..6 {
+                let build = || {
+                    let mut vt = crate::state::VtLogBuffer::new(4, 40, 100);
+                    for _ in 0..filler_before {
+                        vt.process(b"filler\r\n");
+                    }
+                    vt.process(format!("echo {WRAP_SECRET}\r\n").as_bytes());
+                    vt.resize(4, 12);
+                    for _ in 0..filler_after {
+                        vt.process(b"filler\r\n");
+                    }
+                    vt.resize(4, 40);
+                    vt
+                };
+                let label = format!("before={filler_before} after={filler_after}");
+                assert_no_fragment_in_reads(build(), &label);
+                assert_windows_never_leak(build(), &label);
+            }
+        }
+    }
+
+    /// RED (review finding 2): a redraw that moves the cursor after every
+    /// character leaves no 5-char run in the byte stream.
+    #[test]
+    fn session_output_raw_redacts_a_secret_redrawn_one_character_at_a_time() {
+        use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
+
+        for with_grid in [false, true] {
+            let state = test_state();
+            let sid = "per-char-session".to_string();
+            let mut raw = String::from("echo ");
+            for c in WRAP_SECRET.chars() {
+                raw.push_str(&format!("{c}\x1b[C\x1b[D"));
+            }
+            raw.push_str("\r\n");
+            let mut ring = OutputRingBuffer::new(4096);
+            ring.write(raw.as_bytes());
+            state
+                .session_maps
+                .output_buffers
+                .insert(sid.clone(), parking_lot::Mutex::new(ring));
+            if with_grid {
+                let mut vt = VtLogBuffer::new(24, 80, 100);
+                vt.process(format!("echo {WRAP_SECRET}\r\n").as_bytes());
+                state
+                    .grid
+                    .vt_log_buffers
+                    .insert(sid.clone(), parking_lot::Mutex::new(vt));
+            }
+            let response = handle_session(
+                &state,
+                &serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+                None,
+            );
+            let data = response["data"].as_str().expect("raw data");
+            assert_eq!(
+                leaks_fragment(&visible_text(data), WRAP_SECRET),
+                None,
+                "with_grid={with_grid}: {data:?}"
+            );
+        }
+    }
+
+    /// Cost of the reads agents poll: a full 10k-line log and a full 2 MB ring
+    /// with a secret every 50 lines. Run with `--run-ignored only --no-capture`.
+    #[test]
+    #[ignore = "timing measurement, not an assertion"]
+    fn session_output_read_cost_on_a_full_log() {
+        use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
+
+        let state = test_state();
+        let sid = "cost-session".to_string();
+        let mut ring = OutputRingBuffer::new(crate::state::OUTPUT_RING_BUFFER_CAPACITY);
+        let mut vt = VtLogBuffer::new(24, 80, 10_000);
+        let mut n = 0;
+        while ring.total_written() < 2 * crate::state::OUTPUT_RING_BUFFER_CAPACITY as u64 {
+            let line = if n % 50 == 0 {
+                format!("export GITHUB_TOKEN={WRAP_SECRET} # {n}")
+            } else {
+                format!(
+                    "\x1b[32m   Compiling\x1b[0m crate-{n} v1.{n}.0 (/Users/dev/project/crates/crate-{n}) done in 0.{n}s"
+                )
+            };
+            ring.write(format!("{line}\r\n").as_bytes());
+            if n < 12_000 {
+                vt.process(format!("{line}\r\n").as_bytes());
+            }
+            n += 1;
+        }
+        eprintln!("log lines={} ring lines={n}", vt.total_lines());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+        for (name, args) in [
+            (
+                "tail",
+                serde_json::json!({ "action": "output", "session_id": sid }),
+            ),
+            (
+                "raw",
+                serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+            ),
+            (
+                "raw limit=100000",
+                serde_json::json!({ "action": "output", "session_id": sid, "format": "raw", "limit": 100000 }),
+            ),
+        ] {
+            let mut times = Vec::new();
+            for _ in 0..15 {
+                let start = std::time::Instant::now();
+                let response = handle_session(&state, &args, None);
+                times.push(start.elapsed());
+                assert!(response["data"].is_string());
+            }
+            times.sort();
+            eprintln!("COST {name}: median={:?} max={:?}", times[7], times[14]);
+        }
+    }
+
+    /// Reflow on a column change re-wraps rows the shell never wrapped.
+    #[test]
+    fn session_output_redacts_a_secret_after_a_resize() {
+        use crate::state::VtLogBuffer;
+
+        for (from, to) in [(220u16, 80u16), (80, 30), (30, 220)] {
+            let mut vt = VtLogBuffer::new(24, from, 100);
+            vt.process(format!("echo GITHUB_TOKEN={WRAP_SECRET}\r\n").as_bytes());
+            vt.resize(24, to);
+            assert_no_fragment_in_reads(vt, &format!("resize {from}->{to}"));
+        }
+    }
+
+    /// `format=raw` keeps ANSI, so it cannot be cleaned by re-reading the grid.
+    /// These are the bytes zsh 5.9 really wrote to an 80-column pty for the
+    /// story's command: the typed echo is redrawn around the wrap (` \r`,
+    /// `ESC[K`, an overwritten `t`), then the command's own output follows.
+    #[test]
+    fn session_output_raw_redacts_a_secret_the_line_editor_wrapped() {
+        use crate::OutputRingBuffer;
+
+        let state = test_state();
+        let sid = "wrap-raw-session".to_string();
+        let raw = "e\x08echo GITHUB_TOKEN=ghp_abcdefghijklmnopqrs \r\x1b[Kt\rtuvwxyz0123456789\x1b[?2004l\r\r\n\
+                   GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\r\n";
+        let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+        let mut ring = OutputRingBuffer::new(4096);
+        ring.write(raw.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+            None,
+        );
+        let data = response["data"].as_str().expect("raw data");
+        assert_eq!(
+            leaks_fragment(&visible_text(data), secret),
+            None,
+            "raw leaked: {data:?}"
+        );
+        assert!(data.contains("[REDACTED]"), "{data:?}");
+    }
+
+    /// A token typed with no echo of it elsewhere (`read`-less `export`) is
+    /// known to the terminal grid only; the raw read must still scrub the
+    /// fragments the redraw left in the byte stream.
+    #[test]
+    fn session_output_raw_redacts_a_wrapped_secret_seen_only_by_the_grid() {
+        use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
+
+        let state = test_state();
+        let sid = "wrap-raw-grid-session".to_string();
+        let raw = format!(
+            "export GITHUB_TOKEN={} \r\x1b[K{}\r\n",
+            &WRAP_SECRET[..20],
+            &WRAP_SECRET[20..]
+        );
+        let mut ring = OutputRingBuffer::new(4096);
+        ring.write(raw.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
+        let mut vt = VtLogBuffer::new(24, 40, 100);
+        vt.process(format!("export GITHUB_TOKEN={WRAP_SECRET}\r\n").as_bytes());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({ "action": "output", "session_id": sid, "format": "raw" }),
+            None,
+        );
+        let data = response["data"].as_str().expect("raw data");
+        assert_eq!(
+            leaks_fragment(&visible_text(data), WRAP_SECRET),
+            None,
+            "raw leaked: {data:?}"
+        );
+    }
+
     /// The tail read is what an orchestrator pays for on every check of a child:
     /// the empty input box and the user's status line under it carry nothing it
     /// can use, so they are cut. `format=raw` stays the unfiltered escape hatch.
@@ -22280,12 +23393,12 @@ mod tests {
             .find(|row| row.session_id == sid)
             .unwrap();
         assert_eq!(row.tuic_session.as_deref(), Some(sid));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while (!argv.exists() || !submitted.exists()) && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        let actual = std::fs::read_to_string(&argv);
-        let prompt = std::fs::read_to_string(&submitted);
+        // `submitted` is written only by the invocation that reaches the
+        // trust-confirmed branch, after `argv` in the same script run — wait
+        // for it first so `argv` cannot still hold an earlier probe's argv.
+        let prompt =
+            wait_for_file_content_async(&submitted, std::time::Duration::from_secs(15)).await;
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(15)).await;
         let output = handle_session(
             &state,
             &serde_json::json!({"action":"output", "session_id":sid, "limit":50}),
@@ -22308,7 +23421,7 @@ mod tests {
             &serde_json::json!({"action":"kill", "session_id":sid}),
             None,
         );
-        let actual = actual.expect("agent must record launch argv");
+        assert!(!actual.is_empty(), "agent must record launch argv");
         let expected = format!(
             "projects.{}.trust_level=\"trusted\"",
             serde_json::to_string(&cwd.to_string_lossy()).unwrap()
@@ -22322,7 +23435,7 @@ mod tests {
             "launch must scope trust to the new cwd: {actual}"
         );
         assert!(
-            prompt.as_deref().unwrap_or_default().contains("say READY"),
+            prompt.contains("say READY"),
             "spawn prompt must be submitted: prompt={prompt:?}; queued={queued}; shell={shell:?}; idle_confirmed={idle_confirmed:?}; blocked={blocked}; output={output}"
         );
         assert!(!root.path().join("codex-config/config.toml").exists());
@@ -22368,17 +23481,13 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !argv.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let actual = std::fs::read_to_string(&argv);
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(5)).await;
         handle_session(
             &state,
             &serde_json::json!({"action":"kill", "session_id":sid}),
             None,
         );
-        let actual = actual.expect("agent must record launch argv");
+        assert!(!actual.is_empty(), "agent must record launch argv");
         assert!(
             !actual.contains("trust_level"),
             "opt-out must preserve Codex trust behavior: {actual}"
@@ -22442,12 +23551,12 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        while (!argv.exists() || !submitted.exists()) && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        let actual = std::fs::read_to_string(&argv).unwrap_or_default();
-        let prompt = std::fs::read_to_string(&submitted).unwrap_or_default();
+        // `submitted` is written only by the invocation that reaches the
+        // trust-confirmed branch, after `argv` in the same script run — wait
+        // for it first so `argv` cannot still hold an earlier probe's argv.
+        let prompt =
+            wait_for_file_content_async(&submitted, std::time::Duration::from_secs(15)).await;
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(15)).await;
         handle_session(
             &state,
             &serde_json::json!({"action":"kill", "session_id":sid}),
@@ -22518,10 +23627,7 @@ mod tests {
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !argv.exists() && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        let actual = std::fs::read_to_string(&argv).unwrap_or_default();
+        let actual = wait_for_file_content_async(&argv, std::time::Duration::from_secs(5)).await;
         let output = loop {
             let output = handle_session(
                 &state,
@@ -22585,11 +23691,7 @@ mod tests {
         );
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         let sid = spawned["session_id"].as_str().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !accepted.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let task = std::fs::read_to_string(&accepted);
+        let task = wait_for_file_content_async(&accepted, std::time::Duration::from_secs(5)).await;
         let output = handle_session(
             &state,
             &serde_json::json!({"action":"output", "session_id":sid, "format":"raw", "limit": 4096}),
@@ -22601,7 +23703,12 @@ mod tests {
             &serde_json::json!({"action":"kill", "session_id":sid}),
             None,
         );
-        let task = task.unwrap_or_else(|error| panic!("managed child must pass trust dialog without manual input: {error}; armed={armed}; keys={:?}; output={output}", std::fs::read_to_string(&observed_keys)));
+        if task.is_empty() {
+            panic!(
+                "managed child must pass trust dialog without manual input: armed={armed}; keys={:?}; output={output}",
+                std::fs::read_to_string(&observed_keys)
+            );
+        }
         assert!(
             task.contains("say READY"),
             "spawn prompt must remain submitted: {task}"

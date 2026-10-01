@@ -81,6 +81,39 @@ describe("settingsStore", () => {
 		});
 	});
 
+	describe("AI Chat workspace", () => {
+		it("persists an absolute path and allows clearing it", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.setAiChatWorkspace("/srv/chat")).toBe(true);
+				expect(store.state.aiChatWorkspace).toBe("/srv/chat");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect((saveConfigCalls()[0][1] as { config: { ai_chat_workspace: string } }).config.ai_chat_workspace).toBe(
+					"/srv/chat",
+				);
+				expect(store.setAiChatWorkspace("")).toBe(true);
+				expect(store.state.aiChatWorkspace).toBe("");
+			});
+		});
+
+		it.each(["relative/dir", "~/chat", "chat", "./chat"])("refuses %j and keeps the saved path", async (path) => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setAiChatWorkspace("/srv/chat");
+				expect(store.setAiChatWorkspace(path)).toBe(false);
+				expect(store.state.aiChatWorkspace).toBe("/srv/chat");
+			});
+		});
+
+		it.each(["C:\\chat", "C:/chat", "\\\\host\\share"])("accepts the Windows absolute path %j", async (path) => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				expect(store.setAiChatWorkspace(path)).toBe(true);
+			});
+		});
+	});
+
 	describe("pre-hydrate write protection", () => {
 		it("does not persist before hydrate", async () => {
 			await testInScopeAsync(async () => {

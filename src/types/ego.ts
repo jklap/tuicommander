@@ -56,3 +56,22 @@ export function isEgoCliError(value: unknown): value is EgoCliError {
 	const candidate = value as Partial<EgoCliError>;
 	return typeof candidate.code === "string" && typeof candidate.message === "string";
 }
+
+/**
+ * The ego failure a rejection carries, whichever transport delivered it.
+ *
+ * Desktop IPC rejects with the `EgoCliError` itself. The HTTP transport throws
+ * an `HttpRpcError` whose `body` is that same error as JSON (`ego_routes.rs`).
+ * Matched structurally so this file stays free of the transport module.
+ */
+export function asEgoCliError(value: unknown): EgoCliError | null {
+	if (isEgoCliError(value)) return value;
+	const body = (value as { body?: unknown } | null)?.body;
+	if (typeof body !== "string") return null;
+	try {
+		const parsed: unknown = JSON.parse(body);
+		return isEgoCliError(parsed) ? parsed : null;
+	} catch {
+		return null;
+	}
+}

@@ -360,7 +360,10 @@ pub(super) async fn detect_orphan_worktrees_http(Query(q): Query<OptionalRepoQue
     json_result(crate::worktree::detect_orphan_worktrees(repo_path).await)
 }
 
-pub(super) async fn assess_orphan_cleanup_http(Query(q): Query<OptionalRepoQuery>) -> Response {
+pub(super) async fn assess_orphan_cleanup_http(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<OptionalRepoQuery>,
+) -> Response {
     let repo_path = match q.repo_path {
         Some(path) if !path.is_empty() => path,
         _ => {
@@ -374,7 +377,7 @@ pub(super) async fn assess_orphan_cleanup_http(Query(q): Query<OptionalRepoQuery
     if let Err(error) = validate_repo_path(&repo_path) {
         return error.into_response();
     }
-    json_result(crate::worktree::assess_orphan_cleanup(repo_path).await)
+    json_result(crate::worktree::assess_orphan_cleanup_internal(state, repo_path).await)
 }
 
 pub(super) async fn begin_orphan_cleanup_http(
@@ -463,7 +466,7 @@ pub(super) async fn clear_orphan_cleanup_http(
     if let Err(error) = validate_repo_path(&body.repo_path) {
         return error.into_response();
     }
-    state.pending_orphan_cleanup.remove(&body.repo_path);
+    crate::worktree::clear_orphan_cleanup_internal(&state, &body.repo_path, body.kept);
     Json(serde_json::Value::Null).into_response()
 }
 
@@ -477,11 +480,22 @@ pub(super) async fn remove_orphan_worktree_http(
     let repo_path = body.repo_path.clone();
     let worktree_path = body.worktree_path.clone();
     let safe_only = body.safe_only;
+    let confirmed_sessions = body.confirmed_sessions.clone();
+    let guard_state = state.clone();
+    // A refused guard is the caller's to act on (400); a removal that fails
+    // after the guard keeps its old mapping.
     let result = tokio::task::spawn_blocking(move || {
-        crate::worktree::validate_worktree_path(&repo_path, &worktree_path)?;
-        if safe_only {
-            tuic_git::worktree::orphan_cleanup_safety(&repo_path, &worktree_path)?;
-        }
+        crate::worktree::validate_worktree_path(&repo_path, &worktree_path)
+            .and_then(|()| {
+                crate::worktree::orphan_removal_guard(
+                    &guard_state,
+                    &repo_path,
+                    &worktree_path,
+                    safe_only,
+                    &confirmed_sessions,
+                )
+            })
+            .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
         let worktree = crate::state::WorktreeInfo {
             name: std::path::Path::new(&worktree_path)
                 .file_name()
@@ -491,7 +505,14 @@ pub(super) async fn remove_orphan_worktree_http(
             branch: None,
             base_repo: std::path::PathBuf::from(&repo_path),
         };
-        crate::worktree::remove_worktree_internal(&worktree, false)
+        tuic_git::worktree::remove_orphan_worktree_internal(&worktree).map_err(|error| {
+            let status = if safe_only {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, error)
+        })
     })
     .await;
     match result {
@@ -499,12 +520,9 @@ pub(super) async fn remove_orphan_worktree_http(
             state.invalidate_repo_caches(&body.repo_path);
             (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
         }
-        Ok(Err(e)) if safe_only => (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": e})),
-        )
-            .into_response(),
-        Ok(Err(e)) => err_500(&e),
+        Ok(Err((status, error))) => {
+            (status, Json(serde_json::json!({"error": error}))).into_response()
+        }
         Err(e) => err_500(&format!("task panic: {e}")),
     }
 }
@@ -568,6 +586,7 @@ pub(super) async fn merge_pr_via_github_http(
         &body.repo_path,
         body.pr_number,
         &body.merge_method,
+        &body.expected_head_sha,
         &state,
     )
     .await
@@ -778,12 +797,20 @@ mod warm_tests {
 
     #[cfg(unix)]
     async fn wait_for_setup_exit(pid_file: &std::path::Path) {
-        wait_for_file(pid_file, "setup script did not record its PID").await;
-        let pid: i32 = std::fs::read_to_string(pid_file)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        // `echo $$ > pid_file` truncates the file before writing the PID, so
+        // polling on existence alone can read it mid-truncate.
+        let content = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            loop {
+                let content = std::fs::read_to_string(pid_file).unwrap_or_default();
+                if !content.trim().is_empty() {
+                    return content;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("setup script did not record its PID"));
+        let pid: i32 = content.trim().parse().unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(60), async {
             while unsafe { libc::kill(pid, 0) } == 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;

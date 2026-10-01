@@ -2,6 +2,7 @@ import { AGENT_TYPES, type AgentType } from "../agents";
 import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompletion";
 import { invoke, listen } from "../invoke";
 import { isNotificationSound } from "../notifications";
+import { listenForNativeNoticeClicks } from "../services/nativeNotificationNavigation";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { editorTabsStore } from "../stores/editorTabs";
@@ -11,7 +12,6 @@ import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { type ProgressRecordedPayload, progressStore } from "../stores/progress";
-import { workflowRunSignals } from "../stores/workflowRunSignals";
 import { remoteConnectionsStore } from "../stores/remoteConnections";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { placementWorkspaceFor, repositoriesStore, resolveRepoOwner, resolveRepoPathFor } from "../stores/repositories";
@@ -20,10 +20,11 @@ import { reconcileTerminalOwnership } from "../stores/terminalOwnership";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
+import { workflowRunSignals } from "../stores/workflowRunSignals";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
-import { classifyFile } from "../utils/filePreview";
+import { classifyFile, isImageFile } from "../utils/filePreview";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
@@ -400,6 +401,11 @@ export async function initApp(deps: AppInitDeps) {
 			},
 		},
 	).catch((err) => appLogger.error("app", "Failed to register progress-recorded listener", err));
+	if (isTauri()) {
+		void listenForNativeNoticeClicks()
+			.then((unlisten) => window.addEventListener("beforeunload", unlisten, { once: true }))
+			.catch((err) => appLogger.error("app", "Failed to register native notification click listener", err));
+	}
 
 	// Recover log entries from Rust backend (survives webview reloads)
 	appLogger.hydrateFromRust().catch(() => {});
@@ -712,7 +718,15 @@ export async function initApp(deps: AppInitDeps) {
 				// own tab button filtered out of the bar.
 				const background = focus === false;
 
-				if (cmd === "open" && repoPath) {
+				if (cmd === "open" && isImageFile(filePath)) {
+					// The preview tab serves images through the asset protocol, in or out
+					// of a repo. The editor cannot read them as UTF-8.
+					editorTabsStore.closeMcpFile(id);
+					mdTabsStore.closeMcpFile(id);
+					mdTabsStore.closeUiTab(id);
+					if (repoPath) mdTabsStore.addMcpHtmlPreview(id, repoPath, relPath, pinned, background);
+					else mdTabsStore.addMcpHtmlPreview(id, fallbackRepoPath ?? "", filePath, pinned, background);
+				} else if (cmd === "open" && repoPath) {
 					editorTabsStore.closeMcpFile(id);
 					mdTabsStore.closeUiTab(id);
 					mdTabsStore.addMcpFile(id, repoPath, relPath, pinned, background);

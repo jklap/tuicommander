@@ -57,6 +57,7 @@ vi.mock("../../stores/ui", () => ({
 		isDetached: vi.fn(() => false),
 		setDetached: vi.fn(),
 		clearDetached: vi.fn(),
+		setAiChatPanelMeasuredWidth: vi.fn(),
 		setFileBrowserExternalRoot: mockSetFolderRoot,
 		setFileBrowserPanelVisible: mockShowFileBrowser,
 	},
@@ -114,17 +115,18 @@ import { aiChatPanelAdapter } from "../../panelAdapters/aiChat";
 import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { aiChatTabs } from "../../stores/aiChatTabs";
+import { toastsStore } from "../../stores/toasts";
 import type {
 	AcpAttachmentSnapshot,
 	AcpClientEvent,
 	AcpConnectionSnapshot,
 	AcpSessionConfigOption,
 } from "../../types/acp";
+import { handleExternalLinkClick } from "../../utils/externalLinkClick";
 
 const ROOT = "/repo/tuicommander";
-const HOME = "/home/boss";
 /** Where every chat runs: the whole workspace, never one repository. */
-const CHAT_ROOT = "/home/boss/Gits";
+const CHAT_ROOT = "/srv/chat-workspace";
 const CONNECTION = "01932d5e-0000-7000-8000-0000000000c1";
 const SESSION = "01932d5e-0000-7000-8000-0000000000aa";
 const SECOND_SESSION = "01932d5e-0000-7000-8000-0000000000bb";
@@ -258,7 +260,7 @@ beforeEach(() => {
 	window.history.replaceState(null, "", "/");
 	vi.mocked(invoke).mockImplementation(async (command) => {
 		if (command === "load_config") return { ai_chat_sessions: {} };
-		if (command === "get_home_directory") return HOME;
+		if (command === "acp_workspace_root") return CHAT_ROOT;
 		return undefined;
 	});
 	sequence = 0;
@@ -335,7 +337,7 @@ describe("AIChatPanel: the frame it keeps", () => {
 });
 
 describe("AIChatPanel: transcript actions", () => {
-	it("reserves a copy row in both messages and keeps the tool count on one line", async () => {
+	it("reserves a copy row under assistant messages only, and keeps the tool count on one line", async () => {
 		const style = document.createElement("style");
 		style.textContent = readFileSync(
 			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
@@ -363,10 +365,12 @@ describe("AIChatPanel: transcript actions", () => {
 				},
 			});
 			await settle();
-			for (const label of ["Copy user message", "Copy assistant message"]) {
-				const button = container.querySelector(`button[aria-label="${label}"]`)!;
-				expect(getComputedStyle(button).minHeight, label).toBe("18px");
-			}
+			const assistantCopy = container.querySelector('button[aria-label="Copy assistant message"]')!;
+			expect(getComputedStyle(assistantCopy).minHeight).toBe("18px");
+			// A user bubble hugs its text: its Copy sits outside the bubble instead of
+			// holding an invisible row that made "che model usi?" look two lines tall.
+			const userCopy = container.querySelector('button[aria-label="Copy user message"]')!;
+			expect(getComputedStyle(userCopy).position).toBe("absolute");
 			const count = container.querySelector(".toolCallCount")!;
 			expect(getComputedStyle(count).whiteSpace).toBe("nowrap");
 		} finally {
@@ -487,7 +491,7 @@ describe("AIChatPanel: transcript actions", () => {
 		window.history.replaceState(null, "", "/?mode=panel");
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -512,7 +516,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("keeps a file link's line and column when opening the resolved file", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path")
 				return { absolute_path: "/repo/tuicommander/src/main.ts", is_directory: false };
 			return undefined;
@@ -531,7 +535,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("reveals a resolved directory link in the file browser", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
 			return undefined;
 		});
@@ -551,7 +555,7 @@ describe("AIChatPanel: transcript actions", () => {
 		window.history.replaceState(null, "", "/?mode=panel");
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src", is_directory: true };
 			return undefined;
 		});
@@ -596,7 +600,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("opens web links externally and file links through the terminal file opener", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -623,7 +627,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("makes a bare source path clickable only after the backend resolves it", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -651,7 +655,7 @@ describe("AIChatPanel: transcript actions", () => {
 	it("opens links in a user message through the same URL and file handlers", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") return { absolute_path: "/repo/tuicommander/src/main.ts" };
 			return undefined;
 		});
@@ -667,10 +671,31 @@ describe("AIChatPanel: transcript actions", () => {
 		expect(mockOpenFile).toHaveBeenCalledWith("/repo/tuicommander/src/main.ts");
 	});
 
+	// Catches: the transcript's own onClick and the document-level handler both opening the same web link.
+	it("opens a web link in a user message exactly once when the document handler is installed", async () => {
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {} };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		document.addEventListener("click", handleExternalLinkClick);
+		try {
+			const { container } = await renderPanel();
+			await settle();
+			feed({ kind: "promptSent", text: "Open https://example.com/help" });
+			await settle();
+			container.querySelector<HTMLAnchorElement>(".userMsg a")?.click();
+			await settle();
+			expect(mockOpenUrl).toHaveBeenCalledTimes(1);
+		} finally {
+			document.removeEventListener("click", handleExternalLinkClick);
+		}
+	});
+
 	it("keeps a failed file lookup inside the panel without opening a path", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: {} };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "resolve_terminal_path") throw new Error("resolver unavailable");
 			return undefined;
 		});
@@ -759,7 +784,7 @@ describe("AIChatPanel: one chat across repositories", () => {
 	it("does not replay a conversation the running ego already has attached", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: SESSION } };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			return undefined;
 		});
 		client.connect.mockImplementation(async () => {
@@ -1761,9 +1786,7 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).toHaveBeenCalledWith(CONNECTION, CHAT_ROOT);
 		expect(client.listSessions).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).not.toBeNull();
-		const next = container.querySelector<HTMLButtonElement>(
-			'button[aria-label="Start another conversation on this repository"]',
-		);
+		const next = container.querySelector<HTMLButtonElement>('button[aria-label="Start another conversation"]');
 		next?.click();
 		await settle();
 		expect(client.newSession).toHaveBeenCalledTimes(2);
@@ -1774,7 +1797,7 @@ describe("AIChatPanel: durable conversations", () => {
 		const saved: Record<string, string> = {};
 		vi.mocked(invoke).mockImplementation(async (command, args) => {
 			if (command === "load_config") return { ai_chat_sessions: { ...saved } };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			if (command === "save_config")
 				Object.assign(
 					saved,
@@ -1836,7 +1859,7 @@ describe("AIChatPanel: durable conversations", () => {
 	it("loads the saved conversation after a fresh document opens", async () => {
 		vi.mocked(invoke).mockImplementation(async (command) => {
 			if (command === "load_config") return { ai_chat_sessions: { [CHAT_ROOT]: "prior-session" } };
-			if (command === "get_home_directory") return HOME;
+			if (command === "acp_workspace_root") return CHAT_ROOT;
 			return undefined;
 		});
 		client.listSessions.mockResolvedValue({
@@ -2605,11 +2628,7 @@ describe("AIChatPanel: pause, resume and compact", () => {
 			const bar = container.querySelector<HTMLElement>(".controlBar")!;
 			expect(bar.querySelector(".sessionSettingsSummary")?.textContent).toBe("Model: gpt-6-sol");
 			expect(getComputedStyle(bar).flexWrap).toBe("nowrap");
-			for (const label of [
-				"Pause the turn",
-				"Compact the conversation",
-				"Start another conversation on this repository",
-			]) {
+			for (const label of ["Pause the turn", "Compact the conversation", "Start another conversation"]) {
 				const button = bar.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 				expect(button.title).toBe(label);
 				expect(button.querySelector("svg")).not.toBeNull();
@@ -2647,6 +2666,11 @@ describe("AIChatPanel: pause, resume and compact", () => {
 	});
 
 	it("compacts the conversation", async () => {
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
 		const { container } = await renderPanel();
 		await settle();
 
@@ -2655,6 +2679,87 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		await settle();
 
 		expect(client.compact).toHaveBeenCalledWith(CONNECTION, SESSION);
+	});
+
+	it("opens the compacted successor session, which is where the conversation continues", async () => {
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(client.loadSession).toHaveBeenCalledWith(CONNECTION, "sess-compacted", expect.anything());
+	});
+
+	it("reports a compaction ego did not publish instead of announcing success", async () => {
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "not_published", diagnostic: "checkpoint write refused" },
+		});
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(container.textContent).toContain("checkpoint write refused");
+		expect(toastsStore.toasts.map((toast) => toast.title)).not.toContain("Conversation compacted");
+		expect(client.loadSession).not.toHaveBeenCalled();
+	});
+
+	it("tells the person the conversation was compacted", async () => {
+		client.compact.mockResolvedValueOnce({
+			sourceSessionId: SESSION,
+			targetSessionId: "sess-compacted",
+			publication: { kind: "published_durably", diagnostic: null },
+		});
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(toastsStore.toasts.map((toast) => toast.title)).toContain("Conversation compacted");
+	});
+
+	it("shows why a refused compaction did nothing, and does not claim success", async () => {
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+		client.compact.mockRejectedValueOnce(new Error("nothing to compact"));
+		const { container } = await renderPanel();
+		await settle();
+
+		container.querySelector<HTMLButtonElement>('button[aria-label="Compact the conversation"]')?.click();
+		await settle();
+
+		expect(container.textContent).toContain("nothing to compact");
+		expect(toastsStore.toasts.map((toast) => toast.title)).not.toContain("Conversation compacted");
+	});
+
+	it("draws an unavailable control-bar button visibly dimmed", async () => {
+		const style = document.createElement("style");
+		style.textContent = readFileSync(
+			resolve(process.cwd(), "src/components/AIChatPanel/AIChatPanel.module.css"),
+			"utf8",
+		);
+		document.head.append(style);
+		try {
+			const { container } = await renderPanel();
+			await settle();
+			const pause = container.querySelector<HTMLButtonElement>('button[aria-label="Pause the turn"]')!;
+			expect(pause.disabled).toBe(true);
+			expect(Number(getComputedStyle(pause).opacity)).toBeLessThan(1);
+			expect(getComputedStyle(pause).cursor).toBe("not-allowed");
+		} finally {
+			style.remove();
+		}
 	});
 
 	// An ego that did not advertise the extension gets no button, rather than a

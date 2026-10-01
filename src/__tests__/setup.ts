@@ -130,3 +130,14 @@ Object.defineProperty(globalThis, "fetch", {
 	writable: true,
 	configurable: true,
 });
+
+// The DOM environment has no layout engine and ships no ResizeObserver. A no-op
+// keeps components that observe their size mountable; a test that needs
+// notifications stubs its own with vi.stubGlobal.
+if (typeof ResizeObserver === "undefined") {
+	(globalThis as Record<string, unknown>).ResizeObserver = class {
+		observe(): void {}
+		unobserve(): void {}
+		disconnect(): void {}
+	};
+}

@@ -50,3 +50,27 @@ test("sidecar build keeps an existing reader on the old inode", (t) => {
   assert.equal(readFileSync(join(binaries, "tuic-fixture-target"), "utf8"), "complete new executable");
   assert.deepEqual(readdirSync(binaries).filter((name) => name.includes(".update.")), []);
 });
+
+test("sidecar build fails when the release binary is an empty placeholder", (t) => {
+  const fixture = mkdtempSync(join(tmpdir(), "tuic-sidecar-"));
+  t.after(() => rmSync(fixture, { recursive: true, force: true }));
+  const tauri = join(fixture, "src-tauri");
+  const release = join(tauri, "target", "release");
+  const tools = join(fixture, "tools");
+  mkdirSync(join(tauri, "binaries"), { recursive: true });
+  mkdirSync(release, { recursive: true });
+  mkdirSync(tools);
+  copyFileSync(script, join(tauri, "build-sidecar.mjs"));
+  writeFileSync(join(tools, "rustc"), "#!/bin/sh\necho fixture-target\n", { mode: 0o755 });
+  writeFileSync(join(tools, "cargo"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  writeFileSync(join(release, "tuic-bridge"), "complete new executable", { mode: 0o755 });
+  writeFileSync(join(release, "tuic"), "", { mode: 0o755 });
+
+  assert.throws(
+    () => execFileSync(process.execPath, [join(tauri, "build-sidecar.mjs")], {
+      env: { ...process.env, PATH: `${tools}:${process.env.PATH}` },
+      stdio: "pipe",
+    }),
+    (error) => /placeholder/.test(String(error.stderr)),
+  );
+});

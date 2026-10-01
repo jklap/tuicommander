@@ -6,11 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Branch integration proofs** — MCP can list integration verdicts for all local branches or query one branch, including its worktrees and proof. The sidebar and branch panel recognise squash merges, no-op merges and revised twin patches. Content-based verdicts require an archive of the current tip before safe deletion.
+
+- **AI Chat toasts and bubbles** — Toasts keep clear of the docked AI Chat panel and return to their usual corner when it closes or is detached. A short user message no longer shows an empty second line: its Copy button moved outside the bubble.
+- **ego Login from Settings** — Each provider under Settings → AI Chat has a Login button that opens a terminal tab running `ego auth login <provider>`; the key never passes through TUICommander.
+
 - **Safe orphan cleanup countdown** — Clean detached worktrees are removed after a configurable countdown in the Ask dialog. Dirty or untracked worktrees and commits not reachable from a branch require explicit review. Agents can answer the pending dialog through MCP, with a fresh backend safety check before removal.
 
 - **Managed child idle close** — Idle managed agent children close after a configurable delay, while unread mail, background work, keep-open, or a failed background wake keeps them available.
 - **Orphan worktree cleanup** — The status message counts only successful removals and does not claim success when cleanup fails.
 
+- **Native desktop alerts** — Agent questions and Progress outcomes send system notifications while TUICommander is unfocused, with a short duplicate suppression window. Clicking one on macOS returns to its terminal or Progress project. The macOS sender accepts repeated requests without holding a backend thread per unanswered alert.
 - **Background command wakes** — `tuic bg` retries when a transient queue error and failed mail leave the caller unwoken, records the originating session and attempt count in `.wake`, and preserves the final error after its retry limit.
 - **Queued Codex confirmation** — A stop hook can delay the Working screen for several seconds. Queued submissions now wait long enough for that confirmation before showing an uncertain-delivery error.
 - **Queued Claude confirmation** — Claude can hold a submitted notice in its own queue for several seconds. TUIC now waits for its busy hook or Working screen before showing an uncertain-delivery error.

@@ -1,6 +1,7 @@
 import { batch, createSignal } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
+import { showNativeNotice } from "../services/nativeNotifications";
 import { repositoriesStore } from "./repositories";
 import { terminalsStore } from "./terminals";
 import { toastsStore } from "./toasts";
@@ -127,6 +128,20 @@ export function createProgressStore() {
 	// answered with one red block per repository that no longer existed.
 	const [arrivedSinceOpen, setArrivedSinceOpen] = createSignal(0);
 	const visitedScopes = new Set<string | null>();
+	// The rich sidebar's own copy of each project's flow. Kept apart from
+	// `flows` because the dialog scopes that one to a terminal and guards it
+	// against the dialog's selection; the sidebar always wants the whole project.
+	const [sidebarFlows, setSidebarFlows] = createStore<Record<string, ProgressFlow>>({});
+	const sidebarFlowFetchedAt = new Map<string, number>();
+	const SIDEBAR_FLOW_MIN_GAP_MS = 5000;
+	// An ask inside the gap is not dropped: one trailing refresh runs when the gap ends.
+	const sidebarFlowTrailing = new Map<string, ReturnType<typeof setTimeout>>();
+	// Responses are applied only if no reset and no newer request happened since they were sent.
+	let sidebarFlowEpoch = 0;
+	const sidebarFlowSeq = new Map<string, number>();
+	const sidebarFlowApplied = new Map<string, number>();
+	// Rows showing the flow of a project; the trailing refresh is cancelled when the last one leaves.
+	const sidebarFlowHolds = new Map<string, number>();
 
 	function ensure(project: string): void {
 		if (state.projects[project]) return;
@@ -178,6 +193,58 @@ export function createProgressStore() {
 			if (requestedProject() !== project || selectedPtyId() !== ptyId) return;
 			setState("flows", project, { loading: false, error: messageOf(error) });
 		}
+	}
+
+	/// Reads the existing `progress_flow` command for the rich sidebar's subagent
+	/// lines. Rows of one repo ask together, so asks closer than the gap collapse
+	/// into one trailing refresh.
+	async function refreshSidebarFlow(project: string): Promise<void> {
+		const wait = SIDEBAR_FLOW_MIN_GAP_MS - (Date.now() - (sidebarFlowFetchedAt.get(project) ?? 0));
+		if (wait > 0) {
+			if (!sidebarFlowTrailing.has(project)) {
+				sidebarFlowTrailing.set(
+					project,
+					setTimeout(() => {
+						sidebarFlowTrailing.delete(project);
+						void refreshSidebarFlow(project);
+					}, wait),
+				);
+			}
+			return;
+		}
+		sidebarFlowFetchedAt.set(project, Date.now());
+		const epoch = sidebarFlowEpoch;
+		const seq = (sidebarFlowSeq.get(project) ?? 0) + 1;
+		sidebarFlowSeq.set(project, seq);
+		try {
+			const flow = await invoke<ProgressFlow>("progress_flow", { project, input: {} });
+			// Drop only a response older than one already applied: a newer read that failed
+			// must not discard an older valid one.
+			if (epoch !== sidebarFlowEpoch || seq < (sidebarFlowApplied.get(project) ?? 0)) return;
+			sidebarFlowApplied.set(project, seq);
+			setSidebarFlows(project, reconcile(flow));
+		} catch {
+			// Keep the last flow: a failed read must not blank the subagent lines.
+		}
+	}
+
+	/// Registers a row that shows `project`'s flow. The returned release cancels the
+	/// pending trailing refresh once no row is left.
+	function holdSidebarFlow(project: string): () => void {
+		sidebarFlowHolds.set(project, (sidebarFlowHolds.get(project) ?? 0) + 1);
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			const left = (sidebarFlowHolds.get(project) ?? 1) - 1;
+			if (left > 0) {
+				sidebarFlowHolds.set(project, left);
+				return;
+			}
+			sidebarFlowHolds.delete(project);
+			clearTimeout(sidebarFlowTrailing.get(project));
+			sidebarFlowTrailing.delete(project);
+		};
 	}
 
 	/// Refresh whichever view is showing. The list stays the source of the
@@ -282,6 +349,12 @@ export function createProgressStore() {
 			repositoriesStore.get(payload.repo_path)?.displayName ??
 			payload.repo_path.split(/[\\/]/).pop() ??
 			payload.repo_path;
+		void showNativeNotice({
+			title: `${projectName} · Progress ${entry.type}`,
+			body: entry.text,
+			key: `progress:${payload.repo_path}:${entry.type}:${entry.text}`,
+			target: { kind: "progress", project: payload.repo_path, ptyId: entry.ptyId ?? null },
+		});
 		toastsStore.add(
 			// The repo badge already names the project (it is passed below), so a
 			// title of "<project> · <step>" printed it twice and spent half the
@@ -320,6 +393,9 @@ export function createProgressStore() {
 			if (next === "flow" && project) void refreshFlow(project);
 		},
 		refreshFlow,
+		sidebarFlow: (project: string): ProgressFlow | undefined => sidebarFlows[project],
+		refreshSidebarFlow,
+		holdSidebarFlow,
 		fetchFlowDetail: (detail: FlowDetailRef) =>
 			invoke<{ text: string }>("progress_flow_detail", { input: detail }).then((result) => result.text),
 		open,
@@ -335,6 +411,14 @@ export function createProgressStore() {
 			batch(() => {
 				setState("projects", reconcile({}));
 				setState("flows", reconcile({}));
+				setSidebarFlows(reconcile({}));
+				sidebarFlowFetchedAt.clear();
+				sidebarFlowEpoch++;
+				sidebarFlowSeq.clear();
+				sidebarFlowApplied.clear();
+				sidebarFlowHolds.clear();
+				for (const timer of sidebarFlowTrailing.values()) clearTimeout(timer);
+				sidebarFlowTrailing.clear();
 				setView("list");
 				setDialogVisible(false);
 				setRequestedProject(null);

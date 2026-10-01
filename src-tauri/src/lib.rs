@@ -35,6 +35,11 @@ pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
+// Tests of the pure sidecar predicate that build.rs also compiles; a build
+// script has no test harness.
+#[cfg(test)]
+#[path = "../build_sidecars.rs"]
+mod build_sidecars;
 #[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod dir_watcher;
@@ -84,6 +89,8 @@ mod native_dialog;
 mod native_drag;
 #[cfg(feature = "desktop")]
 mod native_keys;
+#[cfg(feature = "desktop")]
+mod native_notification;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
 pub(crate) use tuic_terminal::output_parser;
@@ -1513,12 +1520,7 @@ pub fn run() {
 
     let data_dir = config::config_dir();
 
-    if let Err(error) = agent_hook_launch::regenerate_launch_assets(&data_dir) {
-        tracing::error!(
-            source = "agent_hooks",
-            "Failed to generate launch-scoped agent status assets: {error}"
-        );
-    }
+    agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, config.clone(), log_buffer);
     *app_state.github.token.get_mut() = github_token;
@@ -1628,6 +1630,7 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
                 .on_navigation(|webview, url| {
@@ -1793,6 +1796,7 @@ pub fn run() {
 
                 // Install Fn/Globe key monitor for push-to-talk dictation
                 dictation::fn_key_monitor::install(app.handle().clone());
+                dictation::spawn_idle_unload_sweeper(app.handle().clone());
                 // Before any conversation can be armed: a speaker built without
                 // this one reports its replies to nobody but a poller.
                 dictation::commands::install_utterance_observer(app.handle());
@@ -1895,6 +1899,7 @@ pub fn run() {
             remote_deploy::service::install_remote_daemon,
             remote_deploy::service::uninstall_remote_daemon,
             open_secondary_window,
+            native_notification::show_native_notification,
             panel_window::open_panel_window,
             panel_window::focus_panel_window,
             panel_window::close_panel_window,
@@ -2030,11 +2035,14 @@ pub fn run() {
             git::get_file_blame,
             github::get_github_viewer_login,
             github::get_ci_checks,
+            github::get_pr_review_threads,
             github::get_repo_pr_statuses,
             github::get_all_pr_statuses,
             github::merge_pr_via_github,
             github::get_pr_diff,
             github::approve_pr,
+            github::update_pr_branch,
+            github::close_pr,
             github::create_pr,
             github::create_issue,
             github::post_pr_review,
@@ -2292,12 +2300,15 @@ pub fn run() {
             tunnels::tauri_commands::list_active_tunnels,
             tunnels::tauri_commands::get_tunnel_status,
             tunnels::tauri_commands::list_ssh_config_hosts,
+            tunnels::tauri_commands::list_discovered_ssh_hosts,
+            tunnels::tauri_commands::probe_discovered_ssh_host,
             tunnels::tauri_commands::probe_ssh_config_hosts,
             tunnels::tauri_commands::list_ssh_agent_keys,
             tunnels::tauri_commands::get_tunnel_audit,
             design_mode::tauri_commands::start_design_mode,
             design_mode::tauri_commands::stop_design_mode,
             design_mode::tauri_commands::get_design_mode_status,
+            acp_commands::acp_workspace_root,
             acp_commands::acp_connect,
             acp_commands::acp_reconnect,
             acp_commands::acp_disconnect,
@@ -2518,6 +2529,8 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
     // HTTP server binds. No window here, but a wedged `gh` would still keep the
     // server unreachable.
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
+
+    agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     *app_state.github.token.get_mut() = github_token;
@@ -2807,6 +2820,8 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     // HTTP server binds. No window here, but a wedged `gh` would still keep the
     // server unreachable.
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
+
+    agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     app_state.remote_survive_secs = options.survive_secs;
@@ -3582,6 +3597,30 @@ mod tests {
             assert!(
                 !body.contains("github_auth::resolve_token_without_keychain()"),
                 "{entry} must not run the `gh`-spawning chain before its server binds"
+            );
+        }
+    }
+
+    /// Catches: a headless daemon that never writes `agent-hooks/claude.json`, so
+    /// a `claude` spawn fails with "Settings file not found".
+    #[test]
+    fn every_boot_path_writes_the_launch_assets_through_the_shared_helper() {
+        let source = include_str!("lib.rs");
+        for entry in [
+            "pub fn run()",
+            "pub async fn run_headless(",
+            "pub async fn run_remote(",
+        ] {
+            let body = source
+                .split(entry)
+                .nth(1)
+                .unwrap_or_else(|| panic!("{entry} must exist"))
+                .split("\n}\n")
+                .next()
+                .expect("entry body");
+            assert!(
+                body.contains("agent_hook_launch::regenerate_launch_assets_at_boot("),
+                "{entry} must write the launch assets before spawning agents"
             );
         }
     }

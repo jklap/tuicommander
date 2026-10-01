@@ -53,7 +53,7 @@ itself from the agent's `intent:` marker, and `/progress/report` refuses one.
 entry includes `ptyId` when TUIC knows its source. Older entries and direct
 IPC/HTTP reports have no PTY ID and remain visible in the aggregate. `ptyIds`
 lists the PTYs with stored history, including closed PTYs. The list is
-newest-first in pages of 10 entries by default. `limit` is clamped to 1–100;
+newest-first in pages of 8 entries by default. `limit` is clamped to 1–100;
 `total` counts entries matching the filters before the cursor, and `nextCursor`
 is `null` after the last page. Pass it back as `cursor` to read older entries.
 There is no revision: the journal is append-only, so an entry is written once
@@ -1046,9 +1046,11 @@ GET /repo/orphan-worktrees?repoPath=/path/to/repo
 Returns list of worktree directory paths that are in detached HEAD state (their branch was deleted).
 
 `GET /repo/orphan-cleanup-assessment?repoPath=/path/to/repo` returns each orphan's
-`{ path, safe, reason? }`. A checkout is safe for automatic removal only when it
-has no tracked or untracked changes and its HEAD is reachable from a local or
-remote branch. Ignored files do not make it dirty. Assessment failures are
+`{ path, safe, reason?, live_sessions? }`. A checkout is safe for automatic removal only when it
+has no tracked or untracked changes, its HEAD is reachable from a local or
+remote branch, and no live session has its cwd inside it. `live_sessions`
+(`[{ session_id, name }]`, omitted when empty) names those sessions and `reason`
+repeats them. Ignored files do not make it dirty. Assessment failures are
 unsafe.
 
 While the Ask dialog is open, `POST /repo/orphan-cleanup/begin` with
@@ -1056,7 +1058,7 @@ While the Ask dialog is open, `POST /repo/orphan-cleanup/begin` with
 `GET /repo/orphan-cleanup/pending?repoPath=...` returns its answer (`true` for
 remove, `false` for keep, or `null` while unanswered).
 `POST /repo/orphan-cleanup/answer` with `{ "repoPath": "...", "decision": "remove" }`
-answers it; remove rechecks every path server-side and refuses unsafe or stale
+answers it; remove rechecks every path server-side and refuses unsafe (including live-session) or stale
 worktrees. `POST /repo/orphan-cleanup/clear` with `{ "repoPath": "..." }` clears
 the request when the dialog closes. MCP `repo action=orphan_cleanup_answer`
 uses the same answer operation with `path` and `decision=remove|keep`.
@@ -1070,7 +1072,7 @@ Content-Type: application/json
 { "repoPath": "/path/to/repo", "worktreePath": "/path/to/worktree", "safeOnly": true }
 ```
 
-Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list. `safeOnly` is optional; when true, the server rechecks clean status and branch reachability immediately before removal.
+Removes an orphan worktree by filesystem path. The worktree path is validated against the repo's actual worktree list. `safeOnly` is optional; when true, the server rechecks clean status, branch reachability and live sessions immediately before removal and refuses a checkout a session still works in. With `safeOnly` false the caller has confirmed the removal from the assessment: `confirmedSessions` (default `[]`) lists the `live_sessions` ids it showed, and the server refuses when a live session outside that list works in the checkout.
 
 ### Merge PR via GitHub
 
@@ -1078,10 +1080,10 @@ Removes an orphan worktree by filesystem path. The worktree path is validated ag
 POST /repo/merge-pr
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "prNumber": 42, "mergeMethod": "squash" }
+{ "repoPath": "/path/to/repo", "prNumber": 42, "mergeMethod": "squash", "expectedHeadSha": "<head sha the caller reviewed>" }
 ```
 
-Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or `"rebase"`. Returns `{"sha": "..."}` on success.
+Merges a PR via the GitHub API. `mergeMethod` must be `"merge"`, `"squash"`, or `"rebase"`. `expectedHeadSha` is required and is sent to GitHub as `sha`: if the PR head moved since the caller saw it, GitHub answers 409 and the route returns an error starting with `PR head changed`; the caller must refresh and review, never retry with the new head. Returns `{"sha": "..."}` on success.
 
 ### Approve PR
 
@@ -1094,6 +1096,28 @@ Content-Type: application/json
 
 Submits an approving review on a PR via the GitHub API.
 
+### Update PR Branch
+
+```
+POST /repo/update-pr-branch
+Content-Type: application/json
+
+{ "repoPath": "/path/to/repo", "prNumber": 42, "expectedHeadSha": "<head sha the caller saw>" }
+```
+
+Merges the base branch into the PR branch (GitHub update-branch, 202 accepted; the merge commit lands asynchronously). `expectedHeadSha` is required: if the PR head moved, the route returns an error starting with `PR head changed`. Returns `{"ok": true}`.
+
+### Close PR
+
+```
+POST /repo/close-pr
+Content-Type: application/json
+
+{ "repoPath": "/path/to/repo", "prNumber": 42 }
+```
+
+Closes the PR without merging. Returns `{"ok": true}`.
+
 ### CI Checks
 
 ```
@@ -1101,6 +1125,14 @@ GET /repo/ci?path=/path/to/repo
 ```
 
 Returns detailed CI check list.
+
+### Unresolved Review Threads
+
+```
+GET /repo/pr-review-threads?path=/path/to/repo&pr_number=42
+```
+
+Returns `{"bot": N, "human": M}`: unresolved review threads of one PR (first 50), split by the author of the first comment. One GraphQL point per call.
 
 ### PR Diff
 
@@ -1410,14 +1442,37 @@ These three routes are desktop-only — they are registered on `build_router`, n
 in `shared_routes()`. A `tuic-remote` daemon is the far end of a remote
 connection; it does not hold connections of its own.
 
+### SSH Discovered Hosts
+
+```
+GET /tunnels/ssh-hosts/discovered
+```
+
+Returns `{ "hosts": [{ "host", "target", "user", "port", "source": "config | known_hosts" }], "hashed_count": n }`:
+non-wildcard `~/.ssh/config` aliases plus plain `~/.ssh/known_hosts` names,
+deduplicated by resolved `target` and port (`target` is the alias's `HostName`,
+else the name itself). Names that start with `-`, contain control characters or
+have a port outside 1-65535 are dropped; known_hosts is read up to 4 MiB and at
+most 2000 of its names are listed. Hashed known_hosts entries cannot be
+listed and are only counted. No host is contacted.
+
 ### SSH Host Status
 
 ```
 GET /tunnels/ssh-hosts/status
 ```
 
-Returns deduplicated SSH config hosts as
-`[{ "host": "name", "auth": "shell | no_shell | auth_failed | unreachable" }]`.
+Probes the `~/.ssh/config` aliases (at most 64) and returns
+`[{ "host": "name", "target": "resolved", "port": 22, "auth": "shell | no_shell | auth_failed | unreachable" }]`.
+known_hosts names are never probed in bulk.
+
+```
+POST /tunnels/ssh-hosts/probe   {"target": "10.0.0.5", "port": 2222}
+```
+
+Probes one entry of the discovered list, identified by `target` and `port`
+(404 when it is not in the list). A known_hosts entry is probed with
+`StrictHostKeyChecking=yes`.
 The probe runs only on request, checks at most four hosts concurrently, uses
 batch authentication with a five-second connect timeout, and caches results for
 60 seconds.

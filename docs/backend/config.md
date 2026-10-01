@@ -265,6 +265,7 @@ needs an app restart is what that costs.
 | `theme` | `String` | `"commander"` | Terminal theme. An empty or unknown key falls back to `commander` (`DEFAULT_THEME`, `src/stores/settings.ts`) |
 | `ide` | `String` | `""` | IDE for "Open in..." |
 | `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General` and written through `save_config` like any other field |
+| `ai_chat_workspace` | `String` | `""` | Absolute directory every AI Chat conversation runs in. Empty means the home directory of the host that runs ego. A missing directory is created at connect; a relative path or an uncreatable one is refused with a message naming this setting. Conversations and peer identities are keyed by this path, so changing it starts from a fresh conversation list. Edited in `Settings > General > AI Chat workspace`, which refuses a non-absolute path |
 | `ego_profile` | `String` | `""` | Optional name of an ego user-config profile for AI Chat ACP launches. Empty omits `--profile`; a nonempty valid name adds `--profile <name>` after the repository root. Names with whitespace, control characters, a leading dash, or more than 64 UTF-8 bytes are refused before launch. TUICommander does not copy profile policy into ACP requests. |
 | `ai_chat_sessions` | `Map<String, String>` | `{}` | Last selected ego session ID per repository root. The AI Chat panel saves it through the shared serialized config update path and uses it to load the previous conversation after restart. |
 | `ai_chat_peer_ids` | `Map<String, String>` | `{}` | Host-issued ACP orchestration peer UUID per canonical repository root. The backend persists it before launching ego and reuses it across reconnect and restart. It is not a PTY tab ID. |
@@ -503,6 +504,7 @@ work starts.
 | `sounds.warning` | `bool` | `true` | Play on warning |
 | `silence_remote_completions` | `bool` | `true` | Suppress the completion chime for HTTP/MCP-created sessions |
 | `toasts_in_bell` | `bool` | `true` | Mirror every toast into the toolbar bell, under a MESSAGES section |
+| `pr_native_notifications` | `bool` | `true` | OS notification for PR ready / CI failed / changes requested / merged transitions |
 
 **Commands:** `load_notification_config()`, `save_notification_config(base, config)`
 
@@ -535,6 +537,7 @@ neither of which involves a model. Nothing reads them back yet.
 | `references_panel_visible` | `bool` | `false` | References panel open |
 | `ai_chat_panel_visible` | `bool` | `false` | AI chat panel open |
 | `file_browser_view_mode` | `String` | `"tree"` | File browser listing: `flat` or `tree` |
+| `sidebar_density` | `String` | `"auto"` | Sidebar layout: `auto` (rich for a short list or a finger), `compact` or `rich` |
 | `mobile_theme` | `String` | `"commander"` | Mobile PWA appearance (`commander` or `vscode-light`), separate from the desktop theme |
 | `diff_panel_width` | `u32` | `400` | Diff panel width in pixels |
 | `markdown_panel_width` | `u32` | `400` | Markdown panel width in pixels |
