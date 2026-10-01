@@ -146,11 +146,17 @@ Click the colored PR status badge on any branch in the sidebar to open the PR de
 
 GitHub data is polled automatically:
 
-- **Active window:** Every 30 seconds
+- **Active window:** Every 60 seconds (backs off to 120 s when the rate-limit budget runs low, up to 300 s)
 - **Hidden window:** Every 2 minutes (reduced to save API budget)
-- **API budget:** ~2 calls/min/repo = 1,200/hr for 10 repos (GitHub limit: 5,000/hr)
+- **API budget:** one batched GraphQL query per repository per poll. Measured with `rateLimit(dryRun: true)`: 2 points for 1 repository and 6 for 6 (5 before the unresolved-thread count was added), i.e. about 360 points/hr for 6 repositories at 60 s (GitHub limit: 5,000/hr). Unresolved threads are read as a plain `isResolved` flag (first 50 per PR); reading the thread comments in the batch would have cost 17 points for 1 repository and 51 for 6, so the bot/human split is fetched per PR, on demand, when the PR panel opens.
 
 Polling starts automatically when a repository with a GitHub remote is active.
+
+## Readiness Verdict
+
+The sidebar badge, the PR panel chip and the Ops dashboard all show one verdict, computed in a single function (`src/utils/prReadiness.ts`). First match wins: Draft, Merged, Closed, Conflicts, Checking (GitHub still computing mergeability), CI Failed, Changes Req., Comments (unresolved review threads), Review, CI Running, Ready (approved, mergeable, nothing outstanding), otherwise Open.
+
+The PR panel also shows the number of unresolved review threads, split into human and bot threads (a bot is a GitHub App/bot author; the author of a thread is the author of its first comment). Counts cover the first 50 threads of a PR.
 
 ## Merge State Classification
 
@@ -297,4 +303,4 @@ own default: PR sections start collapsed when empty, Issues starts open.
 
 **Stale data:**
 - Click the refresh button or switch away and back to the branch
-- Polling updates every 30 seconds automatically
+- Polling updates every 60 seconds automatically

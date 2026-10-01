@@ -1779,28 +1779,32 @@ fn build_multi_repo_pr_query(
     } else {
         "[OPEN]"
     };
-    let node_fields = r#"number title state url headRefName headRefOid baseRefName isDraft
+    let node_fields = format!(
+        r#"number title state url headRefName headRefOid baseRefName isDraft
         additions deletions mergeable mergeStateStatus reviewDecision
-        viewerLatestReview { state }
+        viewerLatestReview {{ state }}
         createdAt updatedAt
-        author { login }
-        labels(first: 10) { nodes { name color } }
-        commits(last: 1) {
+        author {{ login }}
+        labels(first: 10) {{ nodes {{ name color }} }}
+        {threads}
+        commits(last: 1) {{
           totalCount
-          nodes {
-            commit {
-              statusCheckRollup {
-                contexts(first: 100) {
-                  nodes {
+          nodes {{
+            commit {{
+              statusCheckRollup {{
+                contexts(first: 100) {{
+                  nodes {{
                     __typename
-                    ... on CheckRun { name status conclusion startedAt }
-                    ... on StatusContext { context state createdAt }
-                  }
-                }
-              }
-            }
-          }
-        }"#;
+                    ... on CheckRun {{ name status conclusion startedAt }}
+                    ... on StatusContext {{ context state createdAt }}
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}"#,
+        threads = review_threads_selection()
+    );
 
     let mut aliases: Vec<(String, String)> = Vec::new();
     let mut parts = vec!["query BatchRepoPRs {".to_string()];
@@ -2016,6 +2020,60 @@ fn merge_failure_message(status: u16, raw: &str) -> String {
         );
     }
     format!("GitHub merge failed ({status}): {raw}")
+}
+
+const PR_REVIEW_THREADS_QUERY: &str = r#"
+query PRReviewThreads($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          comments(first: 1) { nodes { author { __typename login } } }
+        }
+      }
+    }
+  }
+}
+"#;
+
+/// Unresolved review threads of one PR split by bot vs human. One PR costs one
+/// GraphQL point, which is why the split is not part of the batch poll.
+pub(crate) async fn get_pr_review_threads_impl(
+    path: &str,
+    pr_number: i64,
+    state: &AppState,
+) -> Result<ReviewThreadCounts, String> {
+    let repo_path = PathBuf::from(path);
+    let remote_url =
+        get_github_remote_url(&repo_path).ok_or_else(|| "No GitHub remote".to_string())?;
+    let (owner, repo) =
+        parse_remote_url(&remote_url).ok_or_else(|| "Unrecognised GitHub remote".to_string())?;
+    let variables = serde_json::json!({ "owner": owner, "repo": repo, "number": pr_number });
+    let data = graphql_with_retry(
+        state,
+        &github_com_account(state),
+        PR_REVIEW_THREADS_QUERY,
+        variables,
+        None,
+    )
+    .await
+    .map_err(|e| format!("GraphQL review threads query failed: {e}"))?;
+    Ok(count_review_threads(
+        &data["repository"]["pullRequest"]["reviewThreads"]["nodes"],
+    ))
+}
+
+/// Unresolved review threads of a PR, bot vs human (Tauri command).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn get_pr_review_threads(
+    path: String,
+    pr_number: i64,
+    state: State<'_, Arc<AppState>>,
+) -> Result<ReviewThreadCounts, String> {
+    let state = state.inner().clone();
+    get_pr_review_threads_impl(&path, pr_number, &state).await
 }
 
 /// Merge a PR via GitHub REST API using the specified merge method, pinned to

@@ -203,6 +203,36 @@
   color: var(--warning);
 }
 
+/* Readiness chip: the shared verdict (utils/prReadiness), colored by severity */
+.readinessBadge {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.readinessBadge.readinessOk {
+  background: rgba(63, 185, 80, 0.2);
+  color: var(--success);
+}
+
+.readinessBadge.readinessWarn {
+  background: rgba(220, 220, 170, 0.2);
+  color: var(--warning);
+}
+
+.readinessBadge.readinessCritical {
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--error);
+}
+
+.readinessBadge.readinessMuted {
+  background: rgba(128, 128, 128, 0.15);
+  color: var(--fg-secondary);
+}
+
 .title {
   flex: 1;
   font-size: var(--font-base);

@@ -92,6 +92,7 @@ describe("githubStore", () => {
 			merge_commit_allowed: true,
 			squash_merge_allowed: true,
 			rebase_merge_allowed: true,
+			unresolved_threads: 0,
 			...overrides,
 		};
 	}

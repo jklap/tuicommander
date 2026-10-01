@@ -261,6 +261,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 											reviewDecision={pr.review_decision}
 											ciFailed={pr.checks?.failed}
 											ciPending={pr.checks?.pending}
+											unresolvedThreads={pr.unresolved_threads}
 										/>
 									</div>
 									<Show when={props.expandedKey === pr.branch}>
