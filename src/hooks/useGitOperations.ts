@@ -14,10 +14,7 @@ import type { RepoInfo } from "../types";
 import { openDialog as open } from "../utils/nativeDialog";
 import { findOrphanTerminals } from "../utils/terminalOrphans";
 import { createBranchSelectionCoordinator } from "./git/createBranchSelectionCoordinator";
-import {
-	createRepositoryRefreshCoordinator,
-	type OrphanAssessment,
-} from "./git/createRepositoryRefreshCoordinator";
+import { createRepositoryRefreshCoordinator, type OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 import { createTerminalWorktreeCoordinator } from "./git/createTerminalWorktreeCoordinator";
 import { createWorktreeCreationCoordinator } from "./git/createWorktreeCreationCoordinator";
 import { createWorktreeRemovalCoordinator } from "./git/createWorktreeRemovalCoordinator";
