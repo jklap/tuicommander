@@ -398,7 +398,6 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 						class={cx(s.filterToggle, s.densityToggle)}
 						classList={{
 							[s.filterToggleActive]: uiStore.state.sidebarDensityMode !== "auto",
-							[s.densityToggleAuto]: uiStore.state.sidebarDensityMode === "auto",
 						}}
 						onClick={() => uiStore.cycleSidebarDensityMode()}
 						data-testid="sidebar-density-toggle"

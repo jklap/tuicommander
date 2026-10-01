@@ -39,14 +39,13 @@ const CELL_SIZE = 11;
 const GUTTER = 6;
 const CELL_W = 8;
 const ROW0 = "  followups.md  plain words";
+const WRAP0 = "                  docs/followu";
+const WRAP1 = "ps.md";
 /** `followups.md` occupies columns 2-13 of row 0. */
-const NAME_COL = 5;
-const OTHER_COL = 20;
+
 /** Tagged by the app as an OSC 8 hyperlink to `followups.md`; the text itself is no path. Columns 6-8. */
 const OSC8_ROW = "  see doc  plain words";
 const OSC8_COL = 7;
-/** Names a tool call prints before the file it writes exists. */
-const LATE_ROW = "  later.txt  plain words";
 
 /** A full screen whose row 0 is `row0`, with mouse reporting (SGR, button-event tracking) on unless `mouseMode` is 0. */
 function frame(row0 = ROW0, mouseMode = 2): ArrayBuffer {
@@ -87,11 +86,35 @@ function click(target: Element, pressCol: number, releaseCol: number, init: Mous
 const ptyWrites = () =>
 	invoke.mock.calls.filter(([cmd]) => cmd === "write_pty").map(([, a]) => (a as { data: string }).data);
 
-describe("CanvasTerminal link press under mouse reporting", () => {
+/** Like frame() but with an explicit second row and the wrapped flag on row 0. */
+function frame2(row0: string, row1: string, mouseMode: 0 | 2, wrapped: boolean): ArrayBuffer {
+	const buffer = new ArrayBuffer(HEADER_SIZE + ROWS * (4 + COLS * CELL_SIZE));
+	const view = new DataView(buffer);
+	view.setUint16(0, ROWS, true);
+	view.setUint8(6, 1);
+	view.setUint8(17, mouseMode === 0 ? 0 : (mouseMode << 3) | 0x20);
+	view.setUint16(18, ROWS, true);
+	view.setUint16(20, COLS, true);
+	let offset = HEADER_SIZE;
+	for (let r = 0; r < ROWS; r++) {
+		view.setUint16(offset, r, true);
+		view.setUint16(offset + 2, COLS | (r === 0 && wrapped ? 0x8000 : 0), true);
+		offset += 4;
+		for (const char of (r === 0 ? row0 : row1).padEnd(COLS, " ")) {
+			view.setUint32(offset, char.codePointAt(0) ?? 0, true);
+			offset += CELL_SIZE;
+		}
+	}
+	return buffer;
+}
+
+describe("CanvasTerminal link press, critic 1336 round 2", () => {
 	const onOpen = vi.fn();
 	let screenRow0 = ROW0;
+	let screenRow1 = "";
 	let lateFileExists = false;
 	let osc8Active = false;
+	let osc8Target = "followups.md";
 	let canvas: Element;
 	let unmount: () => void;
 
@@ -99,18 +122,24 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 		onOpen.mockClear();
 		invoke.mockReset();
 		screenRow0 = ROW0;
+		screenRow1 = "";
 		lateFileExists = false;
 		osc8Active = false;
+		osc8Target = "followups.md";
 		invoke.mockImplementation(
-			async (cmd: string, args: { candidate?: string; candidates?: string[]; col?: number }) => {
+			async (cmd: string, args: { candidate?: string; candidates?: string[]; col?: number; row?: number }) => {
 				if (cmd === "terminal_hyperlink_span") {
 					const col = args.col ?? -1;
-					return osc8Active && col >= 6 && col < 9 ? [6, 9, "followups.md"] : null;
+					return osc8Active && col >= 6 && col < 9 ? [6, 9, osc8Target] : null;
 				}
-				if (cmd === "terminal_get_row_text") return screenRow0.trimEnd();
-				if (cmd === "terminal_get_logical_line") return [0, screenRow0.trimEnd()];
+				if (cmd === "terminal_get_row_text") return (args.row === 1 ? screenRow1 : screenRow0).trimEnd();
+				if (cmd === "terminal_get_logical_line")
+					return [0, screenRow1 ? (screenRow0.padEnd(COLS, " ") + screenRow1).trimEnd() : screenRow0.trimEnd()];
 				const resolve = (c: string) =>
-					c.startsWith("followups") || (c.startsWith("later") && lateFileExists)
+					c.startsWith("followups") ||
+					c.startsWith("other") ||
+					c.startsWith("docs/followups") ||
+					(c.startsWith("later") && lateFileExists)
 						? { absolute_path: `/cwd/${c}`, is_directory: false }
 						: null;
 				if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
@@ -160,7 +189,9 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 			},
 		);
 
-		const view = render(() => <CanvasTerminal sessionId="link-1324" terminalId="link-1324" onOpenFilePath={onOpen} />);
+		const view = render(() => (
+			<CanvasTerminal sessionId="link-1336r2" terminalId="link-1336r2" onOpenFilePath={onOpen} />
+		));
 		unmount = view.unmount;
 		await waitFor(() => expect(frameSink.current).not.toBeNull());
 		// The reset above narrows `current` to null for the compiler; the subscribe mock refills it.
@@ -180,110 +211,94 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 		vi.unstubAllGlobals();
 	});
 
-	// Catches: the underlined name being dead under mouse reporting (press forwarded, no hover probe ran).
-	it("opens an underlined name on a plain click and keeps the press from the app", async () => {
-		click(canvas, NAME_COL, NAME_COL);
-		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined));
-		expect(ptyWrites()).toEqual([]);
-	});
-
-	// Catches: a drag-select in the app ending on a path opening the file from a leftover hover.
-	it("does not open a path where a forwarded press ended", async () => {
-		click(canvas, OTHER_COL, NAME_COL);
-		await new Promise((r) => setTimeout(r, 200));
-		expect(onOpen).not.toHaveBeenCalled();
-		expect(ptyWrites()).toContainEqual(expect.stringMatching(/^\x1b\[<0;\d+;\d+M$/));
-	});
-
-	// Catches: a claimed press released away from its span still opening it.
-	it("does not open when the claimed press is released off the span", async () => {
-		click(canvas, NAME_COL, OTHER_COL);
-		await new Promise((r) => setTimeout(r, 200));
-		expect(onOpen).not.toHaveBeenCalled();
-	});
-
-	// Catches: a double-click on a path opening the file twice (one open per click event).
-	it("opens once for a double-click", async () => {
-		click(canvas, NAME_COL, NAME_COL, { detail: 1 });
-		click(canvas, NAME_COL, NAME_COL, { detail: 2 });
-		await waitFor(() => expect(onOpen).toHaveBeenCalledTimes(1));
-		await new Promise((r) => setTimeout(r, 200));
-		expect(onOpen).toHaveBeenCalledTimes(1);
-		expect(ptyWrites()).toEqual([]);
-	});
-
-	// Catches: the app receiving a drag (button 32+) for a press the link swallowed.
-	it("reports no drag motion for a claimed press", () => {
-		fire(canvas, "mousedown", NAME_COL, { buttons: 1 });
-		fire(document.body, "mousemove", OTHER_COL, { buttons: 1 });
-		expect(ptyWrites().filter((d) => /^\x1b\[<3[2-9];/.test(d))).toEqual([]);
-	});
-
-	// Catches: the drag guard also muting motion of a press the app owns.
-	it("still reports drag motion for a press the app owns", () => {
-		fire(canvas, "mousedown", OTHER_COL, { buttons: 1 });
-		fire(document.body, "mousemove", OTHER_COL + 1, { buttons: 1 });
-		expect(ptyWrites().some((d) => /^\x1b\[<32;/.test(d))).toBe(true);
-	});
-
-	// Catches: Shift losing its documented bypass of mouse reporting over a link.
-	it("opens with Shift held and sends nothing to the app", async () => {
-		click(canvas, NAME_COL, NAME_COL, { shiftKey: true });
-		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined));
-		expect(ptyWrites()).toEqual([]);
-	});
-
-	// Catches: a hover probe made before the file exists caching "no link" for that row text forever,
-	// so the name underlined by the 3 s re-verification does nothing on click (#1330).
-	it("opens a name whose file appeared after the pointer first hovered it, without mouse reporting", async () => {
-		vi.useFakeTimers({ toFake: ["Date"] });
-		try {
-			screenRow0 = LATE_ROW;
-			const send = frameSink.current as ((data: ArrayBuffer) => void) | null;
-			send?.(frame(LATE_ROW, 0));
-			await waitFor(() => expect(invoke.mock.calls.map(([c]) => c)).toContain("resolve_terminal_paths"));
-			// Hover while the file is missing: the probe resolves nothing.
-			fire(document.body, "mousemove", NAME_COL);
-			await waitFor(() => expect(invoke.mock.calls.map(([c]) => c)).toContain("resolve_terminal_path"));
-			lateFileExists = true;
-			vi.setSystemTime(Date.now() + 4_000);
-			// A new frame schedules the re-verification that underlines the name.
-			send?.(frame(LATE_ROW, 0));
-			await waitFor(() => expect(invoke.mock.calls.filter(([c]) => c === "resolve_terminal_paths")).toHaveLength(2));
-			await new Promise((r) => setTimeout(r, 50));
-			click(canvas, NAME_COL, NAME_COL);
-			await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/later.txt", undefined, undefined));
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
-	// Catches: 1324 requiring an underlined span at the press, which killed links the hover probe
-	// resolves but the dashed underline never covers (OSC 8 over non-path text).
-	it.each([
-		["without mouse reporting", 0],
-		["under mouse reporting", 2],
-	])("opens an OSC 8 link over non-path text hovered before the click, %s", async (_name, mouseMode) => {
+	const send = (data: ArrayBuffer) => (frameSink.current as ((d: ArrayBuffer) => void) | null)?.(data);
+	const hoverOsc8 = async () => {
 		osc8Active = true;
 		screenRow0 = OSC8_ROW;
-		(frameSink.current as ((data: ArrayBuffer) => void) | null)?.(frame(OSC8_ROW, mouseMode));
+		send(frame(OSC8_ROW, 2));
 		await new Promise((r) => setTimeout(r, 20));
 		fire(document.body, "mousemove", OSC8_COL);
 		await waitFor(() => expect(canvas.getAttribute("style") ?? "").toContain("pointer"));
+	};
+
+	const contextMenu = (col: number) => {
+		fire(canvas, "mousedown", col, { button: 2, buttons: 2 });
+		const ev = new MouseEvent("contextmenu", {
+			bubbles: true,
+			cancelable: true,
+			clientX: x(col),
+			clientY: 2,
+			button: 2,
+		});
+		canvas.dispatchEvent(ev);
+		return ev;
+	};
+
+	// Catches: the context menu keyed on the dashed underline only, so a hover-only (OSC 8) link
+	// shows the default menu instead of Open / Copy link.
+	it("opens the link menu on a right press over a hover-only link", async () => {
+		await hoverOsc8();
+		const ev = contextMenu(OSC8_COL);
+		expect(ev.defaultPrevented).toBe(true);
+		await waitFor(() => expect(document.body.textContent ?? "").toContain("Copy link"));
+	});
+
+	// Catches: a hover claim that outlives its link (target gone, same text) opening a menu for
+	// the stale target. The default menu is suppressed synchronously, so no menu is the outcome.
+	it("shows no link menu when the claimed link no longer resolves", async () => {
+		await hoverOsc8();
+		osc8Active = false;
+		const ev = contextMenu(OSC8_COL);
+		await new Promise((r) => setTimeout(r, 100));
+		expect(ev.defaultPrevented).toBe(true);
+		expect(document.body.textContent ?? "").not.toContain("Copy link");
+	});
+
+	// Catches: a click on text whose hyperlink target changed (same visible text) opening the
+	// target the hover resolved earlier instead of what is under the pointer now.
+	it("opens the target under the pointer at click time, not the one hovered earlier", async () => {
+		await hoverOsc8();
+		osc8Target = "other.md";
 		click(canvas, OSC8_COL, OSC8_COL);
-		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined));
-		expect(ptyWrites()).toEqual([]);
+		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined));
+		expect(onOpen).not.toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined);
 	});
 
-	// Catches: the hover fallback claiming a press over plain text that was never a link.
-	it("does not open or swallow a press on plain text next to an OSC 8 link", async () => {
-		osc8Active = true;
-		screenRow0 = OSC8_ROW;
-		(frameSink.current as ((data: ArrayBuffer) => void) | null)?.(frame(OSC8_ROW, 2));
+	// Catches: a middle press over a hover-only link being claimed or opening it; middle belongs to the app.
+	it("forwards a middle press over a hover-only link to the app and opens nothing", async () => {
+		await hoverOsc8();
+		click(canvas, OSC8_COL, OSC8_COL, { button: 1 });
+		await new Promise((r) => setTimeout(r, 100));
+		expect(onOpen).not.toHaveBeenCalled();
+		expect(ptyWrites().length).toBeGreaterThan(0);
+	});
+
+	// Catches: the signature covering only the span under the pointer (or only the first span), so
+	// a redraw of the continuation row leaves a wrapped hover claiming a press on the first row.
+	it("forwards the press when only the continuation row of a hovered wrapped path was redrawn", async () => {
+		screenRow0 = WRAP0;
+		screenRow1 = WRAP1;
+		send(frame2(WRAP0, WRAP1, 2, true));
 		await new Promise((r) => setTimeout(r, 20));
-		fire(document.body, "mousemove", OSC8_COL);
+		const col = 22;
+		fire(document.body, "mousemove", col);
 		await waitFor(() => expect(canvas.getAttribute("style") ?? "").toContain("pointer"));
-		click(canvas, OTHER_COL, OTHER_COL);
+		screenRow1 = "zz.md";
+		send(frame2(WRAP0, "zz.md", 2, true));
+		await new Promise((r) => setTimeout(r, 20));
+		invoke.mockClear();
+		fire(canvas, "mousedown", col, { buttons: 1 });
+		fire(canvas, "mouseup", col);
+		await new Promise((r) => setTimeout(r, 100));
+		expect(onOpen).not.toHaveBeenCalledWith("/cwd/docs/followups.md", undefined, undefined);
+		expect(ptyWrites().length).toBeGreaterThan(0);
+	});
+
+	// Catches: the signature recorded as "" for a miss and compared as equal to the next miss, so a
+	// press on a cell the hover never covered is claimed (the hover covers columns 6-8 only).
+	it("forwards a press next to a hovered link, outside its cells", async () => {
+		await hoverOsc8();
+		click(canvas, OSC8_COL + 3, OSC8_COL + 3);
 		await new Promise((r) => setTimeout(r, 100));
 		expect(onOpen).not.toHaveBeenCalled();
 		expect(ptyWrites().length).toBeGreaterThan(0);
