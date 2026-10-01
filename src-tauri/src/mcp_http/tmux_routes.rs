@@ -338,6 +338,7 @@ fn validated_origin(live: &HashSet<String>, origin: Option<&str>) -> Option<Stri
 /// across every tmux server label. Reads only the topology (no session or
 /// silence locks), so it is safe to call while holding a `SilenceState` guard.
 pub(crate) fn teammate_session_ids(state: &AppState, lead_session_id: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
     state
         .tmux_servers
         .iter()
@@ -352,6 +353,11 @@ pub(crate) fn teammate_session_ids(state: &AppState, lead_session_id: &str) -> V
                 .filter(|id| id != lead_session_id)
                 .collect::<Vec<_>>()
         })
+        // Distinct teammates, not distinct panes: the fail-safe compares this count
+        // with the number of teammates the hook declared, so one terminal
+        // represented by two pane entries (a split-window/respawn-pane race) must
+        // not count twice and mask a genuinely unaccounted-for teammate.
+        .filter(|id| seen.insert(id.clone()))
         .collect()
 }
 
@@ -2919,6 +2925,22 @@ mod tests {
         assert_eq!(pane.tuic_session_id.as_deref(), Some(tuic_id));
         assert_eq!(pane.cwd.as_deref(), Some("/tmp"));
         assert!(state.session_maps.sessions.contains_key(tuic_id));
+    }
+
+    #[test]
+    fn teammate_session_ids_counts_a_terminal_once_even_if_two_panes_reference_it() {
+        let state = super::super::tests::test_state();
+        link_teammate_for_test(&state, "dup-a", "lead-x", "mate-dup");
+        link_teammate_for_test(&state, "dup-b", "lead-x", "mate-dup");
+        link_teammate_for_test(&state, "dup-c", "lead-x", "mate-other");
+        let mut ids = teammate_session_ids(&state, "lead-x");
+        ids.sort();
+        assert_eq!(ids, vec!["mate-dup".to_string(), "mate-other".to_string()]);
+        // ...so two declared teammates with one real terminal are NOT fully accounted for.
+        link_teammate_for_test(&state, "only-dup-a", "lead-y", "mate-y");
+        link_teammate_for_test(&state, "only-dup-b", "lead-y", "mate-y");
+        assert_eq!(teammate_session_ids(&state, "lead-y").len(), 1);
+        assert!(state.lead_teammates_may_be_working("lead-y", 2));
     }
 
     #[test]
