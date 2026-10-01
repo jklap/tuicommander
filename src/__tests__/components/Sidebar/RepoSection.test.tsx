@@ -1,6 +1,7 @@
-import { cleanup, render } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BranchItem, BranchTabList, WARM_BADGE_SAFETY_TIMEOUT_MS } from "../../../components/Sidebar/RepoSection";
+import { globalWorkspaceStore } from "../../../stores/globalWorkspace";
 import { repositoriesStore } from "../../../stores/repositories";
 import { settingsStore } from "../../../stores/settings";
 import { terminalsStore } from "../../../stores/terminals";
@@ -263,6 +264,73 @@ describe("RepoSection", () => {
 			expect(setWorkspace).not.toHaveBeenCalled();
 			setWorkspace.mockRestore();
 			vi.useRealTimers();
+		});
+	});
+
+	describe("agents toggle (toggleAgents)", () => {
+		afterEach(() => {
+			terminalsStore.remove("chevron-wrong-cwd");
+			repositoriesStore.remove("/chev-repo");
+			repositoriesStore._testCancelPendingSave();
+			settingsStore.setTabTreeEnabled(false);
+		});
+
+		it("re-homes a wrongly-parked terminal into the branch on click, without calling onSelect", () => {
+			settingsStore.setTabTreeEnabled(true);
+			repositoriesStore.add({ path: "/chev-repo", displayName: "chev-repo" });
+			repositoriesStore.setWorkspace("/chev-repo", "feat-x", {
+				worktreePath: "/chev-repo/.worktrees/feat-x",
+			});
+
+			// Mirrors assignSessionToRepoBranch's parking path: a session whose cwd
+			// matches this branch's worktree, but which arrived before the branch was
+			// registered, so it was never attached to branch.terminals.
+			terminalsStore.register("chevron-wrong-cwd", {
+				name: "shell",
+				cwd: "/chev-repo/.worktrees/feat-x",
+				sessionId: null,
+				fontSize: 13,
+				awaitingInput: null,
+			});
+			terminalsStore.setRepoPath("chevron-wrong-cwd", null);
+			globalWorkspaceStore.promote("chevron-wrong-cwd");
+
+			expect(globalWorkspaceStore.getPromotedIds()).toContain("chevron-wrong-cwd");
+			expect(repositoriesStore.get("/chev-repo")?.workspaces["feat-x"]?.terminals).not.toContain("chevron-wrong-cwd");
+
+			const onSelect = vi.fn();
+			// A non-empty terminals array is required for getBranchTabsAvailable to
+			// render the toggle at all — these ids don't need to exist in
+			// terminalsStore, only the prop array length matters here.
+			const branch = makeBranch({
+				workspaceId: "feat-x",
+				branchName: "feat-x",
+				parentRepoPath: "/chev-repo",
+				worktreePath: "/chev-repo/.worktrees/feat-x",
+				terminals: ["placeholder-1", "placeholder-2"],
+			});
+			const { container } = render(() => (
+				<BranchItem
+					branch={branch}
+					repoPath="/chev-repo"
+					isActive={false}
+					canRemove={true}
+					onSelect={onSelect}
+					onAddTerminal={noop}
+					onRemove={noop}
+					onRename={noop}
+					onShowPrDetail={noop}
+				/>
+			));
+
+			const chevron = container.querySelector('button[aria-label^="Show or hide agents"]');
+			expect(chevron).not.toBeNull();
+			fireEvent.click(chevron!);
+
+			// The chevron must never select/auto-spawn — only reveal/self-heal the list.
+			expect(onSelect).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/chev-repo")?.workspaces["feat-x"]?.terminals).toContain("chevron-wrong-cwd");
+			expect(globalWorkspaceStore.getPromotedIds()).not.toContain("chevron-wrong-cwd");
 		});
 	});
 });

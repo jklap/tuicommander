@@ -4,6 +4,7 @@ import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
 import type { GitOpKind, RepositoryState, WorkspaceState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
+import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { type TerminalState, terminalsStore } from "../../stores/terminals";
 import { writeClipboard } from "../../utils/clipboard";
 import { _resetMergedActivityAccum, activePrStatus } from "../../utils/mergedPrGrace";
@@ -659,8 +660,17 @@ export const BranchItem: Component<{
 	// A row click opens the branch and nothing else (AGENTS.md "Sidebar clicks").
 	// Only the separate chevron expands or collapses the agents, and it stops
 	// propagation so the toggle never also opens the branch.
+	//
+	// The toggle must not call onSelect — but a terminal that was session-created
+	// before this branch's worktree registration landed gets parked in the Global
+	// Workspace (`assignSessionToRepoBranch`) and can stay parked if the follow-up
+	// refresh there did not see the worktree yet. Re-running ownership resolution
+	// here is NOT a selection/spawn side effect — it only corrects which branch a
+	// terminal's id already belongs to, so toggling the list is enough to
+	// self-heal it.
 	const toggleAgents = (e: MouseEvent | KeyboardEvent) => {
 		e.stopPropagation();
+		reconcileTerminalOwnership();
 		repositoriesStore.toggleWorkspaceTabsCollapsed(props.repoPath, props.branch.workspaceId);
 	};
 
