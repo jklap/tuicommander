@@ -3133,9 +3133,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			e.stopPropagation();
 			// Suppression is synchronous; the target is resolved again here, so a link whose
 			// hyperlink changed or vanished under the same text opens what is there now, or no menu.
-			await checkLinksAtRow(pos.row, pos.col);
-			if (!hoveredLink) return;
-			setLinkMenuTarget({ path: hoveredLink.path, line: hoveredLink.line, col: hoveredLink.col });
+			// The lookup's own answer, never the shared hover: a newer probe for another cell owns that.
+			const link = await resolveLinkAt(pos.row, pos.col, () => !alive);
+			if (!link || link === STALE || !linkCovers(link, pos.row, pos.col)) return;
+			setLinkMenuTarget({ path: link.path, line: link.line, col: link.col });
 			linkMenu.openAt(e.clientX, e.clientY);
 		});
 
