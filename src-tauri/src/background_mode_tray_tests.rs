@@ -198,3 +198,71 @@ fn tray_never_keeps_main_visible_and_config_round_trips() {
         "never"
     );
 }
+
+// Catches: the tray counting a lead from its own hook state alone. Claude Code
+// fires no hook in the lead when a teammate starts or finishes, so the lead's
+// effective state follows its linked teammate's terminal; the tray must read
+// that same effective state, never the lead's raw idle.
+#[test]
+fn tray_working_count_follows_a_leads_teammate_derived_state() {
+    let state = Arc::new(tests_support::make_test_app_state());
+    tests_support::apply_replay_event(
+        &state,
+        &AppEvent::SessionCreated {
+            tuic_session: None,
+            session_id: "lead".into(),
+            cwd: None,
+            agent_type: Some("claude".into()),
+            display_name: None,
+            parent_session: None,
+            is_remote: true,
+        },
+    );
+    let shell = |id: &str, value: u8| {
+        state
+            .session_maps
+            .shell_states
+            .insert(id.into(), std::sync::atomic::AtomicU8::new(value));
+    };
+    shell("lead", crate::pty::SHELL_IDLE);
+    // The teammate has a terminal but no session-state entry of its own, so
+    // every working count below is the lead's.
+    shell("mate", crate::pty::SHELL_IDLE);
+    crate::mcp_http::tmux_routes::link_teammate_for_test(&state, "swarm-tray", "lead", "mate");
+    {
+        // The lead's last turn has ended, declaring one teammate still running.
+        let mut silence = crate::pty::SilenceState::new();
+        silence.confirm_idle();
+        silence.set_declared_background_work(true, 0);
+        silence.set_declared_task_summary(
+            crate::pty::DeclaredTaskSummary {
+                non_teammate_running: 0,
+                teammate_running: 1,
+            },
+            0,
+        );
+        state
+            .session_maps
+            .silence_states
+            .insert("lead".into(), Arc::new(parking_lot::Mutex::new(silence)));
+    }
+    let count = || crate::background_mode::tray::status(&state).0;
+
+    assert_eq!(
+        count(),
+        "0 working · 0 awaiting",
+        "idle teammate: lead idle"
+    );
+    shell("mate", crate::pty::SHELL_BUSY);
+    assert_eq!(
+        count(),
+        "1 working · 0 awaiting",
+        "busy teammate: lead working"
+    );
+    shell("mate", crate::pty::SHELL_IDLE);
+    assert_eq!(
+        count(),
+        "0 working · 0 awaiting",
+        "teammate done: lead idle again"
+    );
+}
