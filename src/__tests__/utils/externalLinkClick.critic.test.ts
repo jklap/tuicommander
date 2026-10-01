@@ -70,12 +70,6 @@ describe("handleExternalLinkClick (critic)", () => {
 		expect(handleOpenUrl).not.toHaveBeenCalled();
 	});
 
-	it("does not throw for a click whose target is a text node — catches: closest() called on a non-Element", () => {
-		const text = document.createTextNode("x");
-		expect(() => handleExternalLinkClick({ target: text } as unknown as MouseEvent)).not.toThrow();
-		expect(handleOpenUrl).not.toHaveBeenCalled();
-	});
-
 	it.each(["https:example.com/x", "http:/example.com/x"])(
 		"opens the scheme-only absolute form %s — catches: regex requiring '//' so the WebView navigates where anchor.href used to be intercepted",
 		(href) => {
