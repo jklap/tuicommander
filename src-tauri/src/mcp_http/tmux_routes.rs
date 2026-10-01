@@ -79,6 +79,14 @@ struct TmuxPane {
     /// allocated (tmux always creates one on `new-session`/`new-window`) but
     /// no PTY has been spawned for it yet.
     tuic_session_id: Option<String>,
+    /// The TUIC terminal that issued the `split-window`/`respawn-pane` which
+    /// created this pane — i.e. the Claude Code lead whose Agent Teams swarm
+    /// this teammate belongs to. Sent by `tuic-cli` as its own `TUIC_SESSION`
+    /// (the shim runs inside the lead's PTY) and validated against live
+    /// sessions. `None` for a plain `tuic alias` user, an older cli, or a pane
+    /// created before the lead was known. Lets a teammate's terminal be tied
+    /// back to its lead: the teammate's own hooks carry no parent reference.
+    lead_session_id: Option<String>,
     /// Set by `set-option ... window-style|pane-border-style|
     /// pane-active-border-style` (Claude Code's per-teammate
     /// `--agent-color`) — a CSS-usable color string, already resolved by
@@ -280,12 +288,20 @@ pub(crate) struct CreateTmuxPaneRequest {
     window_id: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// The calling shim's own `TUIC_SESSION` (the lead). See
+    /// [`TmuxPane::lead_session_id`]; ignored unless it names a live session.
+    #[serde(default)]
+    origin_session_id: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub(crate) struct MaterializePaneRequest {
     #[serde(default)]
     cwd: Option<String>,
+    /// See [`CreateTmuxPaneRequest::origin_session_id`]. A virtual pane
+    /// (`new-session`/`new-window`'s initial pane) only learns its lead here.
+    #[serde(default)]
+    origin_session_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -307,6 +323,50 @@ pub(crate) struct SetPaneAccentColorRequest {
 pub(crate) struct RequestWindowLayoutRequest {
     label: Option<String>,
     layout: String,
+}
+
+/// Accept a caller-supplied lead id only if it names a currently live TUIC
+/// session. The field arrives over HTTP, so an unknown/empty/stale id is
+/// dropped rather than trusted.
+fn validated_origin(live: &HashSet<String>, origin: Option<&str>) -> Option<String> {
+    origin
+        .filter(|id| !id.is_empty() && live.contains(*id))
+        .map(str::to_string)
+}
+
+/// TUIC session ids of the live teammate panes whose lead is `lead_session_id`,
+/// across every tmux server label. Reads only the topology (no session or
+/// silence locks), so it is safe to call while holding a `SilenceState` guard.
+pub(crate) fn teammate_session_ids(state: &AppState, lead_session_id: &str) -> Vec<String> {
+    state
+        .tmux_servers
+        .iter()
+        .flat_map(|server| {
+            server
+                .sessions
+                .iter()
+                .flat_map(|s| s.windows.iter())
+                .flat_map(|w| w.panes.iter())
+                .filter(|p| p.lead_session_id.as_deref() == Some(lead_session_id))
+                .filter_map(|p| p.tuic_session_id.clone())
+                .filter(|id| id != lead_session_id)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// The lead that owns `teammate_session_id`'s pane, if it was recorded.
+pub(crate) fn lead_of_teammate(state: &AppState, teammate_session_id: &str) -> Option<String> {
+    state.tmux_servers.iter().find_map(|server| {
+        server
+            .sessions
+            .iter()
+            .flat_map(|s| s.windows.iter())
+            .flat_map(|w| w.panes.iter())
+            .find(|p| p.tuic_session_id.as_deref() == Some(teammate_session_id))
+            .and_then(|p| p.lead_session_id.clone())
+            .filter(|lead| lead != teammate_session_id)
+    })
 }
 
 fn not_found(what: &str) -> (StatusCode, Json<serde_json::Value>) {
@@ -359,6 +419,7 @@ pub(crate) async fn create_tmux_session(
                 title: None,
                 cwd: body.cwd,
                 tuic_session_id: None, // virtual until first use
+                lead_session_id: None,
                 accent_color: None,
             }],
             last_layout: None,
@@ -431,6 +492,7 @@ pub(crate) async fn create_tmux_window(
                 title: None,
                 cwd: body.cwd,
                 tuic_session_id: None, // virtual until first use
+                lead_session_id: None,
                 accent_color: None,
             }],
             last_layout: None,
@@ -475,6 +537,7 @@ pub(crate) async fn create_tmux_pane(
             title: None,
             cwd: body.cwd.clone(),
             tuic_session_id: None,
+            lead_session_id: validated_origin(&live, body.origin_session_id.as_deref()),
             accent_color: None,
         });
         window.active_pane = Some(pane_id.clone());
@@ -686,6 +749,17 @@ pub(crate) async fn materialize_pane(
         .is_some_and(|t| t.find_pane(&pane_id).is_some());
     if !exists {
         return not_found("pane").into_response();
+    }
+    // A virtual pane (the initial pane of `new-session`/`new-window`, which is
+    // what a swarm's FIRST teammate uses) only learns its lead here. Never
+    // overwrite one already recorded at `split-window` time.
+    if let Some(lead) =
+        validated_origin(&live_session_ids(&state), body.origin_session_id.as_deref())
+        && let Some(mut topology) = state.tmux_servers.get_mut(&label)
+        && let Some(pane) = topology.find_pane_mut(&pane_id)
+        && pane.lead_session_id.is_none()
+    {
+        pane.lead_session_id = Some(lead);
     }
     match materialize(&state, &label, &pane_id, body.cwd).await {
         Ok(tuic_session_id) => (
@@ -933,6 +1007,7 @@ mod tests {
                         title: None,
                         cwd: None,
                         tuic_session_id: Some("uuid-live".to_string()),
+                        lead_session_id: None,
                         accent_color: None,
                     },
                     TmuxPane {
@@ -941,6 +1016,7 @@ mod tests {
                         title: None,
                         cwd: None,
                         tuic_session_id: Some("uuid-dead".to_string()),
+                        lead_session_id: None,
                         accent_color: None,
                     },
                 ],
@@ -1030,6 +1106,7 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id,
                 cwd: None,
+                origin_session_id: None,
             }),
         )
         .await
@@ -1096,7 +1173,10 @@ mod tests {
             State(state.clone()),
             Path(pane_id.clone()),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -1249,7 +1329,10 @@ mod tests {
             State(state.clone()),
             Path(pane_id.clone()),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -1340,7 +1423,10 @@ mod tests {
             State(state.clone()),
             Path(pane_id.clone()),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -1435,7 +1521,10 @@ mod tests {
             State(state.clone()),
             Path(pane_id.clone()),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -1504,6 +1593,7 @@ mod tests {
             label_query(label),
             Json(MaterializePaneRequest {
                 cwd: Some(explicit_repo.clone()),
+                origin_session_id: None,
             }),
         )
         .await
@@ -1561,7 +1651,10 @@ mod tests {
             State(state.clone()),
             Path(pane_id),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -1606,7 +1699,10 @@ mod tests {
             State(state.clone()),
             Path(pane_id),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -1699,7 +1795,10 @@ mod tests {
             State(state.clone()),
             Path(pane_id.clone()),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -1726,7 +1825,10 @@ mod tests {
                     State(waiting_state),
                     Path(waiting_pane_id),
                     label_query(label),
-                    Json(MaterializePaneRequest { cwd: None }),
+                    Json(MaterializePaneRequest {
+                        cwd: None,
+                        origin_session_id: None,
+                    }),
                 )
                 .await
                 .into_response()
@@ -1911,7 +2013,10 @@ mod tests {
             State(state.clone()),
             Path(pane_id.clone()),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -2032,7 +2137,10 @@ mod tests {
             State(state.clone()),
             Path(pane_id.clone()),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -2088,7 +2196,10 @@ mod tests {
             State(state.clone()),
             Path(first_pane_id.clone()),
             label_query(label),
-            Json(MaterializePaneRequest { cwd: None }),
+            Json(MaterializePaneRequest {
+                cwd: None,
+                origin_session_id: None,
+            }),
         )
         .await
         .into_response();
@@ -2108,6 +2219,7 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id: window_id.clone(),
                 cwd: None,
+                origin_session_id: None,
             }),
         )
         .await
@@ -2135,6 +2247,7 @@ mod tests {
                 title: None,
                 cwd: None,
                 tuic_session_id: None,
+                lead_session_id: None,
                 accent_color: None,
             });
         drop(topology);
@@ -2254,6 +2367,7 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id: window_id.clone(),
                 cwd: None,
+                origin_session_id: None,
             }),
         )
         .await
@@ -2287,6 +2401,7 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id: window_id.clone(),
                 cwd: None,
+                origin_session_id: None,
             }),
         )
         .await
@@ -2358,6 +2473,7 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id,
                 cwd: None,
+                origin_session_id: None,
             }),
         )
         .await
@@ -2373,5 +2489,582 @@ mod tests {
                 "a window that was never split before must not get one from a plain split-window"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Characterization tests (teammate-background-work-busy, step 1).
+    //
+    // These pin TODAY's wire shapes and lifecycle behavior BEFORE a planned
+    // `lead_session_id` is added to `TmuxPane` / the pane-create request (see
+    // plans/teammate-background-work-busy.md). A test that fails after that
+    // change is a deliberate shape change to reconcile, not a regression to
+    // silence — update the expectation and the consumers together.
+    // -----------------------------------------------------------------------
+
+    async fn body_json(resp: axum::response::Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// Creates a (virtual-pane only, no PTY) session under `label` and returns
+    /// `(window_id, initial_pane_id)`.
+    async fn new_virtual_session(state: &Arc<AppState>, label: &str) -> (String, String) {
+        let created = create_tmux_session(
+            State(state.clone()),
+            Json(CreateTmuxSessionRequest {
+                label: Some(label.to_string()),
+                name: "s".to_string(),
+                window_name: None,
+                cwd: None,
+            }),
+        )
+        .await
+        .into_response();
+        let created = body_json(created).await;
+        (
+            created["window_id"].as_str().unwrap().to_string(),
+            created["pane_id"].as_str().unwrap().to_string(),
+        )
+    }
+
+    #[test]
+    fn tmux_pane_serializes_with_exactly_todays_keys() {
+        // Consumers (`tuic-cli` target resolution, the UI) read this JSON; a
+        // new optional field must not remove or rename any of these.
+        let pane = TmuxPane {
+            id: "%3".to_string(),
+            index: 2,
+            title: Some("mate".to_string()),
+            cwd: Some("/repo".to_string()),
+            tuic_session_id: Some("uuid-1".to_string()),
+            lead_session_id: Some("lead-1".to_string()),
+            accent_color: Some("blue".to_string()),
+        };
+        assert_eq!(
+            serde_json::to_value(&pane).unwrap(),
+            serde_json::json!({
+                "id": "%3",
+                "index": 2,
+                "title": "mate",
+                "cwd": "/repo",
+                "tuic_session_id": "uuid-1",
+                "lead_session_id": "lead-1",
+                "accent_color": "blue",
+            })
+        );
+
+        // A virtual pane serializes its optional fields as explicit nulls
+        // (not omitted) — `tuic-cli` distinguishes "virtual" by `null`.
+        let virtual_pane = TmuxPane {
+            id: "%0".to_string(),
+            index: 0,
+            title: None,
+            cwd: None,
+            tuic_session_id: None,
+            lead_session_id: None,
+            accent_color: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&virtual_pane).unwrap(),
+            serde_json::json!({
+                "id": "%0",
+                "index": 0,
+                "title": null,
+                "cwd": null,
+                "tuic_session_id": null,
+                "lead_session_id": null,
+                "accent_color": null,
+            })
+        );
+    }
+
+    #[test]
+    fn tmux_topology_serializes_its_full_nested_shape() {
+        let mut t = sample();
+        t.sessions[0].windows[0].last_layout = Some("tiled".to_string());
+        let v = serde_json::to_value(&t).unwrap();
+        // Counters are part of the wire shape (allocator state).
+        assert_eq!(v["next_session"], 1);
+        assert_eq!(v["next_window"], 1);
+        assert_eq!(v["next_pane"], 2);
+        let session = &v["sessions"][0];
+        assert_eq!(session["id"], "$0");
+        assert_eq!(session["name"], "claude-swarm");
+        assert_eq!(session["active_window"], "@0");
+        let window = &session["windows"][0];
+        assert_eq!(window["id"], "@0");
+        assert_eq!(window["name"], "swarm-view");
+        assert_eq!(window["index"], 0);
+        assert_eq!(window["active_pane"], "%1");
+        assert_eq!(window["last_layout"], "tiled");
+        assert_eq!(window["panes"].as_array().unwrap().len(), 2);
+        assert_eq!(window["panes"][0]["tuic_session_id"], "uuid-live");
+        assert_eq!(window["panes"][1]["tuic_session_id"], "uuid-dead");
+        // The exact key set of a window (no field silently added/dropped).
+        let mut keys: Vec<&str> = window
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["active_pane", "id", "index", "last_layout", "name", "panes"]
+        );
+    }
+
+    #[test]
+    fn pane_create_and_materialize_requests_ignore_unknown_fields_and_require_window_id() {
+        // Forward/backward-compat: an OLDER server must accept a NEWER cli's
+        // extra body field, and a newer server must accept an older cli's
+        // body without it. Pin both directions of the pane-create request.
+        let today: CreateTmuxPaneRequest = serde_json::from_value(serde_json::json!({
+            "label": "claude-swarm-1", "window_id": "@0", "cwd": "/r"
+        }))
+        .unwrap();
+        assert_eq!(today.label.as_deref(), Some("claude-swarm-1"));
+        assert_eq!(today.window_id, "@0");
+        assert_eq!(today.cwd.as_deref(), Some("/r"));
+
+        let extra: CreateTmuxPaneRequest = serde_json::from_value(serde_json::json!({
+            "label": "l", "window_id": "@0", "cwd": null, "some_future_field": "x"
+        }))
+        .expect("an unknown field must be ignored, not rejected");
+        assert!(extra.cwd.is_none());
+
+        // `label` and `cwd` are optional; `window_id` is not.
+        let minimal: CreateTmuxPaneRequest =
+            serde_json::from_value(serde_json::json!({ "window_id": "@2" })).unwrap();
+        assert!(minimal.label.is_none() && minimal.cwd.is_none());
+        assert!(
+            serde_json::from_value::<CreateTmuxPaneRequest>(serde_json::json!({ "label": "l" }))
+                .is_err(),
+            "window_id is required"
+        );
+
+        // Materialize: body is `{cwd}` only; empty and extra-field bodies parse.
+        let empty: MaterializePaneRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(empty.cwd.is_none());
+        let extra: MaterializePaneRequest =
+            serde_json::from_value(serde_json::json!({ "cwd": "/r", "future": 1 })).unwrap();
+        assert_eq!(extra.cwd.as_deref(), Some("/r"));
+    }
+
+    #[tokio::test]
+    async fn get_topology_defaults_to_the_default_label_and_isolates_labels() {
+        let state = super::super::tests::test_state();
+        new_virtual_session(&state, "test-topology-isolation-swarm-7").await;
+
+        // No `?label=` -> "default", a different (empty) topology.
+        let default_topo = get_topology(State(state.clone()), Query(LabelQuery { label: None }))
+            .await
+            .into_response();
+        assert_eq!(default_topo.status(), StatusCode::OK);
+        let default_topo = body_json(default_topo).await;
+        assert_eq!(default_topo["sessions"].as_array().unwrap().len(), 0);
+        assert!(state.tmux_servers.contains_key(DEFAULT_LABEL));
+
+        let swarm = get_topology(
+            State(state.clone()),
+            label_query("test-topology-isolation-swarm-7"),
+        )
+        .await
+        .into_response();
+        let swarm = body_json(swarm).await;
+        assert_eq!(swarm["sessions"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_topology_serializes_a_fresh_virtual_pane_with_null_session_id() {
+        let state = super::super::tests::test_state();
+        let label = "test-topology-virtual-pane-shape";
+        let (window_id, pane_id) = new_virtual_session(&state, label).await;
+
+        let topo = body_json(
+            get_topology(State(state.clone()), label_query(label))
+                .await
+                .into_response(),
+        )
+        .await;
+        let pane = &topo["sessions"][0]["windows"][0]["panes"][0];
+        assert_eq!(pane["id"], pane_id.as_str());
+        assert_eq!(topo["sessions"][0]["windows"][0]["id"], window_id.as_str());
+        assert!(pane["tuic_session_id"].is_null(), "virtual until first use");
+        assert!(pane["accent_color"].is_null());
+        assert!(pane["title"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_topology_reverts_a_pane_whose_tuic_session_is_no_longer_live() {
+        // reconcile() runs on READ: a pane pointing at a dead TUIC session
+        // reverts to virtual (null) the next time the topology is fetched.
+        let state = super::super::tests::test_state();
+        let label = "test-topology-reconcile-on-read";
+        let (_window, pane_id) = new_virtual_session(&state, label).await;
+        {
+            let mut topo = state.tmux_servers.get_mut(label).unwrap();
+            topo.find_pane_mut(&pane_id).unwrap().tuic_session_id =
+                Some("ghost-session-not-in-session_maps".to_string());
+        }
+
+        let topo = body_json(
+            get_topology(State(state.clone()), label_query(label))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert!(
+            topo["sessions"][0]["windows"][0]["panes"][0]["tuic_session_id"].is_null(),
+            "a dead session id must not leak through get_topology"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_tmux_session_removes_the_session_and_404s_when_unknown() {
+        let state = super::super::tests::test_state();
+        let label = "test-delete-session";
+        new_virtual_session(&state, label).await;
+
+        let gone = delete_tmux_session(
+            State(state.clone()),
+            Path("$0".to_string()),
+            label_query(label),
+        )
+        .await
+        .into_response();
+        assert_eq!(gone.status(), StatusCode::OK);
+        assert!(state.tmux_servers.get(label).unwrap().sessions.is_empty());
+
+        // Second delete: session no longer exists.
+        let again = delete_tmux_session(
+            State(state.clone()),
+            Path("$0".to_string()),
+            label_query(label),
+        )
+        .await
+        .into_response();
+        assert_eq!(again.status(), StatusCode::NOT_FOUND);
+
+        // Unknown label: no server at all.
+        let no_server = delete_tmux_session(
+            State(state.clone()),
+            Path("$0".to_string()),
+            label_query("test-delete-session-no-such-label"),
+        )
+        .await
+        .into_response();
+        assert_eq!(no_server.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn kill_pane_removes_a_virtual_pane_and_404s_for_unknown_pane_or_label() {
+        let state = super::super::tests::test_state();
+        let label = "test-kill-pane-virtual";
+        let (_window, pane_id) = new_virtual_session(&state, label).await;
+
+        let unknown_pane = kill_pane(
+            State(state.clone()),
+            Path("%99".to_string()),
+            label_query(label),
+        )
+        .await
+        .into_response();
+        assert_eq!(unknown_pane.status(), StatusCode::NOT_FOUND);
+
+        let unknown_label = kill_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query("test-kill-pane-virtual-no-such-label"),
+        )
+        .await
+        .into_response();
+        assert_eq!(unknown_label.status(), StatusCode::NOT_FOUND);
+
+        let killed = kill_pane(State(state.clone()), Path(pane_id), label_query(label))
+            .await
+            .into_response();
+        assert_eq!(killed.status(), StatusCode::OK);
+        let topo = state.tmux_servers.get(label).unwrap();
+        assert!(topo.sessions[0].windows[0].panes.is_empty());
+        assert_eq!(
+            topo.sessions[0].windows[0].active_pane, None,
+            "killing the only pane leaves no active pane"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_tmux_pane_404s_for_an_unknown_label_or_window_without_spawning() {
+        let state = super::super::tests::test_state();
+        let label = "test-create-pane-404";
+        let (_window, _pane) = new_virtual_session(&state, label).await;
+        let sessions_before = state.session_maps.sessions.len();
+
+        let unknown_window = create_tmux_pane(
+            State(state.clone()),
+            Json(CreateTmuxPaneRequest {
+                label: Some(label.to_string()),
+                window_id: "@99".to_string(),
+                cwd: None,
+                origin_session_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(unknown_window.status(), StatusCode::NOT_FOUND);
+
+        let unknown_label = create_tmux_pane(
+            State(state.clone()),
+            Json(CreateTmuxPaneRequest {
+                label: Some("test-create-pane-404-no-such-label".to_string()),
+                window_id: "@0".to_string(),
+                cwd: None,
+                origin_session_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(unknown_label.status(), StatusCode::NOT_FOUND);
+
+        assert_eq!(
+            state.session_maps.sessions.len(),
+            sessions_before,
+            "a 404 must not spawn a PTY"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_tmux_pane_response_shape_and_recorded_pane_today() {
+        // Pins the split-window response (`pane_id` + `tuic_session_id`) and
+        // what topology records for the new pane, with NO notion of which
+        // terminal issued the request (that linkage is what step 4 adds).
+        let state = super::super::tests::test_state();
+        let label = "test-create-pane-shape";
+        let (window_id, initial_pane) = new_virtual_session(&state, label).await;
+
+        let resp = create_tmux_pane(
+            State(state.clone()),
+            Json(CreateTmuxPaneRequest {
+                label: Some(label.to_string()),
+                window_id: window_id.clone(),
+                cwd: Some("/tmp".to_string()),
+                origin_session_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            resp.status(),
+            StatusCode::CREATED,
+            "split-window answers 201 Created, not 200"
+        );
+        let resp = body_json(resp).await;
+        let mut keys: Vec<&str> = resp
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["pane_id", "tuic_session_id"]);
+        let pane_id = resp["pane_id"].as_str().unwrap();
+        let tuic_id = resp["tuic_session_id"].as_str().unwrap();
+        assert_ne!(pane_id, initial_pane);
+
+        let topo = state.tmux_servers.get(label).unwrap();
+        let window = &topo.sessions[0].windows[0];
+        assert_eq!(window.active_pane.as_deref(), Some(pane_id));
+        let pane = topo.find_pane(pane_id).unwrap();
+        assert_eq!(pane.tuic_session_id.as_deref(), Some(tuic_id));
+        assert_eq!(pane.cwd.as_deref(), Some("/tmp"));
+        assert!(state.session_maps.sessions.contains_key(tuic_id));
+    }
+
+    #[test]
+    fn validated_origin_accepts_only_a_live_non_empty_session_id() {
+        let live: HashSet<String> = ["lead-live".to_string()].into_iter().collect();
+        assert_eq!(
+            validated_origin(&live, Some("lead-live")),
+            Some("lead-live".to_string())
+        );
+        assert_eq!(validated_origin(&live, Some("gone")), None);
+        assert_eq!(validated_origin(&live, Some("")), None);
+        assert_eq!(validated_origin(&live, None), None);
+    }
+
+    #[tokio::test]
+    async fn split_window_records_the_callers_live_session_as_the_panes_lead() {
+        let state = super::super::tests::test_state();
+        let label = "test-lead-link-split";
+        let (window_id, _initial) = new_virtual_session(&state, label).await;
+        let split = |origin: Option<String>| {
+            let state = state.clone();
+            let window_id = window_id.clone();
+            async move {
+                let resp = create_tmux_pane(
+                    State(state),
+                    Json(CreateTmuxPaneRequest {
+                        label: Some(label.to_string()),
+                        window_id,
+                        cwd: Some("/tmp".to_string()),
+                        origin_session_id: origin,
+                    }),
+                )
+                .await
+                .into_response();
+                body_json(resp).await
+            }
+        };
+
+        // A first pane with no origin stands in for the lead's own terminal.
+        let lead = split(None).await;
+        let lead_session = lead["tuic_session_id"].as_str().unwrap().to_string();
+        let lead_pane = lead["pane_id"].as_str().unwrap().to_string();
+        // A teammate pane created with that live id as origin is linked.
+        let mate = split(Some(lead_session.clone())).await;
+        let mate_session = mate["tuic_session_id"].as_str().unwrap().to_string();
+        // An origin naming no live session is dropped, not trusted.
+        let stranger = split(Some("not-a-live-session".to_string())).await;
+        let stranger_pane = stranger["pane_id"].as_str().unwrap().to_string();
+
+        let topo = state.tmux_servers.get(label).unwrap();
+        assert_eq!(topo.find_pane(&lead_pane).unwrap().lead_session_id, None);
+        assert_eq!(
+            topo.find_pane(mate["pane_id"].as_str().unwrap())
+                .unwrap()
+                .lead_session_id
+                .as_deref(),
+            Some(lead_session.as_str())
+        );
+        assert_eq!(
+            topo.find_pane(&stranger_pane).unwrap().lead_session_id,
+            None
+        );
+        drop(topo);
+
+        assert_eq!(
+            teammate_session_ids(&state, &lead_session),
+            vec![mate_session.clone()]
+        );
+        assert_eq!(
+            lead_of_teammate(&state, &mate_session).as_deref(),
+            Some(lead_session.as_str())
+        );
+        assert_eq!(lead_of_teammate(&state, &lead_session), None);
+        assert!(teammate_session_ids(&state, "someone-else").is_empty());
+    }
+
+    #[tokio::test]
+    async fn materializing_a_virtual_pane_learns_its_lead_once_and_never_overwrites_it() {
+        let state = super::super::tests::test_state();
+        let label = "test-lead-link-materialize";
+        let (window_id, initial_pane) = new_virtual_session(&state, label).await;
+        // A live session to act as the lead.
+        let lead_resp = create_tmux_pane(
+            State(state.clone()),
+            Json(CreateTmuxPaneRequest {
+                label: Some(label.to_string()),
+                window_id,
+                cwd: Some("/tmp".to_string()),
+                origin_session_id: None,
+            }),
+        )
+        .await
+        .into_response();
+        let lead_session = body_json(lead_resp).await["tuic_session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        for origin in [
+            Some(lead_session.clone()),
+            Some("another-live-or-not".to_string()),
+        ] {
+            let resp = materialize_pane(
+                State(state.clone()),
+                Path(initial_pane.clone()),
+                Query(LabelQuery {
+                    label: Some(label.to_string()),
+                }),
+                Json(MaterializePaneRequest {
+                    cwd: Some("/tmp".to_string()),
+                    origin_session_id: origin,
+                }),
+            )
+            .await
+            .into_response();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+        let topo = state.tmux_servers.get(label).unwrap();
+        assert_eq!(
+            topo.find_pane(&initial_pane)
+                .unwrap()
+                .lead_session_id
+                .as_deref(),
+            Some(lead_session.as_str()),
+            "the first valid origin wins; a later call never overwrites it"
+        );
+    }
+
+    #[tokio::test]
+    async fn killing_a_materialized_pane_closes_its_tuic_session_and_topology_forgets_it() {
+        let state = super::super::tests::test_state();
+        let label = "test-kill-materialized-pane";
+        let (window_id, _initial) = new_virtual_session(&state, label).await;
+        let resp = body_json(
+            create_tmux_pane(
+                State(state.clone()),
+                Json(CreateTmuxPaneRequest {
+                    label: Some(label.to_string()),
+                    window_id,
+                    cwd: None,
+                    origin_session_id: None,
+                }),
+            )
+            .await
+            .into_response(),
+        )
+        .await;
+        let pane_id = resp["pane_id"].as_str().unwrap().to_string();
+        let tuic_id = resp["tuic_session_id"].as_str().unwrap().to_string();
+        assert!(state.session_maps.sessions.contains_key(&tuic_id));
+
+        let killed = kill_pane(
+            State(state.clone()),
+            Path(pane_id.clone()),
+            label_query(label),
+        )
+        .await
+        .into_response();
+        assert_eq!(killed.status(), StatusCode::OK);
+        assert!(
+            !state.session_maps.sessions.contains_key(&tuic_id),
+            "kill-pane must close the backing TUIC session"
+        );
+        assert!(
+            state
+                .tmux_servers
+                .get(label)
+                .unwrap()
+                .find_pane(&pane_id)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn resolve_label_defaults_only_when_absent_and_default_is_not_an_automated_swarm() {
+        assert_eq!(resolve_label(None), "default");
+        assert_eq!(
+            resolve_label(Some("claude-swarm-123".to_string())),
+            "claude-swarm-123"
+        );
+        assert!(!is_automated_swarm_label(DEFAULT_LABEL));
+        // tuic-cli's `-S <path>` label format (`S-<hex>`) is NOT a swarm label
+        // either, so a swarm driven through the `-S` leader path would not get
+        // `TUIC_NONINTERACTIVE_HINT` — pinned so a future lead-linking design
+        // that assumes a `claude-swarm-<pid>` label knows this is `-L`-only.
+        assert!(!is_automated_swarm_label("S-1a2b3c"));
     }
 }
