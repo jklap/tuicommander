@@ -19,6 +19,7 @@ import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { safeUnlisten } from "../../utils/safeUnlisten";
+import { isSuspendingOrSuspended, resumeTerminal } from "../../utils/suspendTerminal";
 import { createSearchVisibility } from "../shared/SearchBar";
 import { handleAgentExitCompletion } from "./agentExitCompletion";
 import { getAwaitingInputSound } from "./awaitingInputSound";
@@ -219,6 +220,21 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	let unlistenClipboardStore: (() => unknown) | undefined;
 
 	let kittyFlags = 0;
+
+	/** Stop listening to the current session; the three teardowns (reconnect failure,
+	 *  suspend, unmount) share it. */
+	const detachSessionListeners = () => {
+		safeUnlisten(unsubscribePty);
+		unsubscribePty = undefined;
+		safeUnlisten(unlistenParsed);
+		unlistenParsed = undefined;
+		safeUnlisten(unlistenKitty);
+		unlistenKitty = undefined;
+		safeUnlisten(unlistenTitle);
+		unlistenTitle = undefined;
+		safeUnlisten(unlistenClipboardStore);
+		unlistenClipboardStore = undefined;
+	};
 
 	const RETRY_DELAYS = [5_000, 15_000, 30_000];
 	let retryCount = 0;
@@ -597,6 +613,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			() => {},
 			() => {
 				if (disposed) return;
+				// Suspend closes the PTY on purpose and keeps the tab as it is.
+				if (isSuspendingOrSuspended(props.id)) return;
 				// Guard: terminal may have been removed from the store already
 				// (e.g. pane closed). Updating a removed entry would recreate it as a ghost.
 				const stillExists = terminalsStore.get(props.id);
@@ -817,6 +835,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	/** Initialize PTY session and event listeners */
 	const initSession = async () => {
 		if (sessionInitialized || !containerRef) return;
+		// A suspended tab has no PTY on purpose; resuming clears the flag and re-runs this.
+		if (terminalsStore.get(props.id)?.suspended) return;
 		sessionInitialized = true;
 		if (isPerfDebug()) {
 			const spawnMs = Math.round(performance.now() - mountedAt);
@@ -847,16 +867,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					);
 					sessionId = null;
 					setCurrentSessionId(null);
-					safeUnlisten(unsubscribePty);
-					unsubscribePty = undefined;
-					safeUnlisten(unlistenParsed);
-					unlistenParsed = undefined;
-					safeUnlisten(unlistenKitty);
-					unlistenKitty = undefined;
-					safeUnlisten(unlistenTitle);
-					unlistenTitle = undefined;
-					safeUnlisten(unlistenClipboardStore);
-					unlistenClipboardStore = undefined;
+					detachSessionListeners();
 				}
 			}
 			if (!reconnected) {
@@ -979,6 +990,28 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		}),
 	);
 
+	// Suspend ends the PTY and keeps the tab; resume opens a new PTY through initSession.
+	createEffect(
+		on(
+			() => terminalsStore.get(props.id)?.suspended ?? false,
+			(suspended) => {
+				if (suspended) {
+					if (sessionId) pluginRegistry.removeSession(sessionId);
+					detachSessionListeners();
+					kittyFlags = 0;
+					sessionId = null;
+					setCurrentSessionId(null);
+					sessionInitialized = false;
+				} else if (isVisible()) {
+					initSession().catch((e) =>
+						appLogger.error("terminal", "initSession failed after resume", { error: String(e) }),
+					);
+				}
+			},
+			{ defer: true },
+		),
+	);
+
 	// Alt-screen recovery: when an agent exits without leaving alt-screen,
 	// inject exit sequences directly into the terminal grid (display side only).
 	// Never writes to PTY stdin — that would leak as shell input.
@@ -1005,16 +1038,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		clearTimeout(retryTimer);
 		clearTimeout(agentDetectTimer);
 		clearTimeout(questionDebounceTimer);
-		safeUnlisten(unsubscribePty);
-		unsubscribePty = undefined;
-		safeUnlisten(unlistenParsed);
-		unlistenParsed = undefined;
-		safeUnlisten(unlistenKitty);
-		unlistenKitty = undefined;
-		safeUnlisten(unlistenTitle);
-		unlistenTitle = undefined;
-		safeUnlisten(unlistenClipboardStore);
-		unlistenClipboardStore = undefined;
+		detachSessionListeners();
 		kittyFlags = 0;
 
 		if (sessionId) pluginRegistry.removeSession(sessionId);
@@ -1310,17 +1334,40 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						<Show
 							when={spawnError()}
 							fallback={
-								<Show when={sessionEnded()}>
-									<div class={s.exitedNotice} data-testid="terminal-exited-notice">
-										<span class={s.exitedTitle}>{t("terminal.exited.title", "Session ended")}</span>
-										<span class={s.exitedHint}>
-											{t(
-												"terminal.exited.hint",
-												"The process exited and its output was released. Close this tab to remove it.",
-											)}
-										</span>
-									</div>
-								</Show>
+								<>
+									<Show when={terminalsStore.get(props.id)?.suspended}>
+										<div class={s.exitedNotice} data-testid="terminal-suspended-notice">
+											<span class={s.exitedTitle}>{t("terminal.suspended.title", "Suspended")}</span>
+											<span class={s.exitedHint}>
+												{t(
+													"terminal.suspended.hint",
+													"The process was ended to free memory and CPU. Resume opens a new session in the same folder.",
+												)}
+											</span>
+											<Show when={resumeContext()}>
+												{(ctx) => (
+													<span class={s.resumeContext} title={ctx()}>
+														{ctx()}
+													</span>
+												)}
+											</Show>
+											<button class={s.resumeButton} type="button" onClick={() => void resumeTerminal(props.id)}>
+												{t("terminal.suspended.resume", "Resume")}
+											</button>
+										</div>
+									</Show>
+									<Show when={sessionEnded()}>
+										<div class={s.exitedNotice} data-testid="terminal-exited-notice">
+											<span class={s.exitedTitle}>{t("terminal.exited.title", "Session ended")}</span>
+											<span class={s.exitedHint}>
+												{t(
+													"terminal.exited.hint",
+													"The process exited and its output was released. Close this tab to remove it.",
+												)}
+											</span>
+										</div>
+									</Show>
+								</>
 							}
 						>
 							<div class={s.exitedNotice} role="alert">

@@ -154,6 +154,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/dictation/speech/voices?language=${encodeURIComponent(String(args.language))}`,
 		}),
 	},
+	get_edge_voices: {
+		map: (args) => ({
+			method: "GET",
+			path: `/dictation/speech/edge-voices?language=${encodeURIComponent(String(args.language))}`,
+		}),
+	},
 	import_speech_voice: {
 		map: (args) => ({
 			method: "POST",
@@ -529,6 +535,14 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: "/mcp/confirm-response",
 			body: { request_id: args.requestId, confirmed: args.confirmed },
+		}),
+	},
+	// The tab's verdict on `session action=suspend`; the MCP call waits for it.
+	session_suspend_response: {
+		map: (args) => ({
+			method: "POST",
+			path: "/mcp/suspend-response",
+			body: { request_id: args.requestId, ok: args.ok, reason: args.reason ?? null },
 		}),
 	},
 	get_session_foreground_process: {

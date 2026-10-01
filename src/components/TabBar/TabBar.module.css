@@ -338,6 +338,16 @@
   vertical-align: middle;
 }
 
+.tab.suspended {
+  opacity: 0.6;
+}
+
+.suspendedBadge {
+  opacity: 0.8;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
 /* Awaiting input — override tabIcon to show state via left dot */
 .tab.awaitingInput .tabIcon {
   opacity: 1;

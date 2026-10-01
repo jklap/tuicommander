@@ -108,6 +108,8 @@ export interface TerminalData {
 	userPromptLines: number[]; // Absolute lines where the user submitted a prompt (UserInput.line), for the green scrollbar marker
 	alias: string | null; // Human-friendly alias from Rust (e.g. "tc-1")
 	standby: boolean; // Session is SIGSTOP'd (auto-standby)
+	/** PTY and agent were ended on purpose (Suspend); the tab is kept and resumes like a restored one. */
+	suspended: boolean;
 	parentSession: string | null; // Session or TUIC_SESSION of the agent that spawned this one (sub-agent PTY)
 }
 
@@ -152,6 +154,7 @@ type TerminalCreateData = Omit<
 	| "userPromptLines"
 	| "alias"
 	| "standby"
+	| "suspended"
 	| "repoPath"
 	| "parentSession"
 > & {
@@ -463,6 +466,7 @@ function createTerminalsStore() {
 				userPromptLines: [],
 				alias: null,
 				standby: false,
+				suspended: false,
 				repoPath: null,
 				parentSession: null,
 				...data,
@@ -516,6 +520,7 @@ function createTerminalsStore() {
 				userPromptLines: [],
 				alias: null,
 				standby: false,
+				suspended: false,
 				repoPath: null,
 				parentSession: null,
 				...data,

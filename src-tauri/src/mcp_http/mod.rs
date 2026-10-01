@@ -1376,6 +1376,9 @@ fn shared_routes() -> Router<Arc<AppState>> {
         // Answer a pending MCP confirmation (the browser/PWA half of the desktop
         // `mcp_confirm_response` command).
         .route("/mcp/confirm-response", post(mcp_confirm_response_http))
+        // The tab's verdict on a `session action=suspend` request (browser/PWA half
+        // of the desktop `session_suspend_response` command).
+        .route("/mcp/suspend-response", post(session_suspend_response_http))
         // ACP (ego). Shared, not desktop-only: driving ego from a phone is the
         // whole point of the client, and the binary it may launch comes from
         // this host's configuration rather than from any request.
@@ -1400,6 +1403,22 @@ async fn mcp_confirm_response_http(
     Json(body): Json<McpConfirmResponseBody>,
 ) -> Json<serde_json::Value> {
     resolve_mcp_confirm(&state, &body.request_id, body.confirmed);
+    Json(serde_json::json!({ "ok": true }))
+}
+
+/// Body of `POST /mcp/suspend-response`.
+#[derive(serde::Deserialize)]
+struct SessionSuspendResponseBody {
+    request_id: String,
+    ok: bool,
+    reason: Option<String>,
+}
+
+async fn session_suspend_response_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SessionSuspendResponseBody>,
+) -> Json<serde_json::Value> {
+    mcp_transport::resolve_session_suspend(&state, &body.request_id, body.ok, body.reason);
     Json(serde_json::json!({ "ok": true }))
 }
 
@@ -2056,6 +2075,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/dictation/speech/voices",
             get(dictation_routes::get_speech_voices_http),
+        )
+        .route(
+            "/dictation/speech/edge-voices",
+            get(dictation_routes::get_edge_voices_http),
         )
         .route(
             "/dictation/speech/voices/import",
@@ -9301,5 +9324,54 @@ mod tests {
             saved["agents"]["claude"]["run_configs"][0]["name"],
             "remote"
         );
+    }
+
+    // Catches: /mcp/suspend-response missing from the router the app serves (the browser/PWA
+    // half of session_suspend_response), so a web tab's verdict never reaches the MCP caller.
+    #[tokio::test]
+    async fn crit1358_suspend_response_route_delivers_the_verdict_and_ignores_unknown_ids() {
+        let state = test_state();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        state.suspend_responses.insert("req-1".to_string(), tx);
+
+        let unknown = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/mcp/suspend-response",
+                &serde_json::json!({"request_id": "other", "ok": true, "reason": null}),
+            ))
+            .await
+            .expect("unknown id response");
+        assert_eq!(unknown.status(), StatusCode::OK);
+        assert!(state.suspend_responses.contains_key("req-1"));
+
+        let known = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/mcp/suspend-response",
+                &serde_json::json!({"request_id": "req-1", "ok": false, "reason": "agent working"}),
+            ))
+            .await
+            .expect("known id response");
+        assert_eq!(known.status(), StatusCode::OK);
+        assert_eq!(rx.await.unwrap(), Err("agent working".to_string()));
+    }
+
+    // Catches: a body without `reason` (the web client sends null, other clients may omit it)
+    // being rejected, so a refusal never arrives and the caller waits 20 s.
+    #[tokio::test]
+    async fn crit1358_suspend_response_route_accepts_a_missing_reason() {
+        let state = test_state();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        state.suspend_responses.insert("req-2".to_string(), tx);
+
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/mcp/suspend-response",
+                &serde_json::json!({"request_id": "req-2", "ok": false}),
+            ))
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(rx.await.unwrap(), Err("refused".to_string()));
     }
 }
