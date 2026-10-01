@@ -2085,7 +2085,7 @@ pub(crate) async fn merge_pr_github_impl(
     expected_head_sha: &str,
     state: &AppState,
 ) -> Result<String, String> {
-    if expected_head_sha.is_empty() {
+    if expected_head_sha.trim().is_empty() {
         return Err("Cannot merge without the head commit the PR was reviewed at".to_string());
     }
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
@@ -2621,7 +2621,7 @@ pub(crate) async fn update_pr_branch_impl(
     expected_head_sha: &str,
     state: &AppState,
 ) -> Result<(), String> {
-    if expected_head_sha.is_empty() {
+    if expected_head_sha.trim().is_empty() {
         return Err("Cannot update the branch without the head commit the PR showed".to_string());
     }
     let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
@@ -4366,6 +4366,17 @@ mod tests {
         let err = update_pr_branch_impl("/nonexistent", 1, "", &state)
             .await
             .expect_err("empty sha must be rejected");
+        assert!(err.contains("head commit"), "{err}");
+    }
+
+    /// Catches: a whitespace-only sha passing the `is_empty` guard and reaching GitHub as an
+    /// invalid pin (422) instead of being refused before any request.
+    #[tokio::test]
+    async fn merge_with_blank_expected_head_is_rejected_before_any_request() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let err = merge_pr_github_impl("/nonexistent", 1, "squash", "  ", &state)
+            .await
+            .expect_err("blank sha must be rejected");
         assert!(err.contains("head commit"), "{err}");
     }
 
