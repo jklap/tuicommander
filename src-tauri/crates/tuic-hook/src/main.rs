@@ -1404,6 +1404,300 @@ mod tests {
         assert_eq!(pairs[0].payload, "running");
     }
 
+    // ---- `background_tasks` scrape: characterization of today's behavior ----
+    // (Step 1 of plans/teammate-background-work-busy.md — these pin what the
+    // scrape does TODAY so the later `type`-scrape change can't silently
+    // alter status handling.)
+
+    fn stop_with(tasks: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"hook_event_name": "Stop", "background_tasks": tasks})
+    }
+
+    fn bgtasks_payload(json: &serde_json::Value) -> Option<String> {
+        build_emissions(&ParsedArgs::default(), json)
+            .into_iter()
+            .find(|p| p.verb == "bgtasks")
+            .map(|p| p.payload)
+    }
+
+    #[test]
+    fn background_tasks_type_field_is_ignored_only_status_is_scraped() {
+        // `tuic-hook` deliberately never discriminates on `type` today (docs:
+        // terminal-state-machine.md). A teammate, subagent and shell all look
+        // identical on the wire — only their `status` survives, in order.
+        let json = stop_with(serde_json::json!([
+            {"id": "t", "type": "teammate", "status": "running"},
+            {"id": "s", "type": "subagent", "status": "running"},
+            {"id": "b", "type": "shell", "status": "completed"},
+        ]));
+        assert_eq!(
+            bgtasks_payload(&json).as_deref(),
+            Some("running%2Crunning%2Ccompleted")
+        );
+        // Same statuses with no `type` at all produce the identical payload.
+        let untyped = stop_with(serde_json::json!([
+            {"id": "t", "status": "running"},
+            {"id": "s", "status": "running"},
+            {"id": "b", "status": "completed"},
+        ]));
+        assert_eq!(bgtasks_payload(&untyped), bgtasks_payload(&json));
+    }
+
+    #[test]
+    fn background_tasks_only_the_status_key_is_used_from_each_entry() {
+        // description/command/agent_type/etc. never reach the wire.
+        let json = stop_with(serde_json::json!([{
+            "id": "x", "type": "shell", "status": "running",
+            "description": "secret; stuff", "command": "rm -rf /", "agent_type": "Explore"
+        }]));
+        assert_eq!(bgtasks_payload(&json).as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn background_tasks_entries_without_a_string_status_are_dropped() {
+        // Missing status, non-string status, null status and non-object items
+        // are all skipped (`filter_map`), not errors and not placeholders —
+        // so the surviving statuses are NOT index-aligned with the input array.
+        let json = stop_with(serde_json::json!([
+            {"id": "a", "type": "shell"},
+            {"id": "b", "status": 7},
+            {"id": "c", "status": null},
+            "running",
+            42,
+            null,
+            [],
+            {"id": "d", "status": "running"},
+        ]));
+        assert_eq!(bgtasks_payload(&json).as_deref(), Some("running"));
+    }
+
+    #[test]
+    fn background_tasks_all_entries_malformed_is_present_but_empty() {
+        // Indistinguishable on the wire from a genuine `[]` ("nothing
+        // outstanding") — the empty payload also clears a prior declaration.
+        let json = stop_with(serde_json::json!([{"id": "a"}, {"status": false}, 1]));
+        assert_eq!(bgtasks_payload(&json).as_deref(), Some(""));
+    }
+
+    #[test]
+    fn background_tasks_that_is_not_an_array_emits_nothing() {
+        for not_array in [
+            serde_json::json!(null),
+            serde_json::json!("running"),
+            serde_json::json!(5),
+            serde_json::json!({"status": "running"}),
+            serde_json::json!(true),
+        ] {
+            let json = stop_with(not_array.clone());
+            assert_eq!(
+                bgtasks_payload(&json),
+                None,
+                "non-array background_tasks ({not_array}) must leave the prior value alone"
+            );
+        }
+    }
+
+    #[test]
+    fn background_tasks_empty_string_status_is_kept_as_an_empty_slot() {
+        // `filter_map` only drops non-strings: an empty-string status survives
+        // and becomes an empty comma slot (the receiver ignores empties).
+        let json = stop_with(serde_json::json!([
+            {"status": "running"},
+            {"status": ""},
+            {"status": "completed"},
+        ]));
+        assert_eq!(
+            bgtasks_payload(&json).as_deref(),
+            Some("running%2C%2Ccompleted")
+        );
+    }
+
+    #[test]
+    fn background_tasks_unrecognized_status_values_pass_through_verbatim() {
+        // No vocabulary is baked in here: `pending`/`queued`/future values are
+        // forwarded raw; `pty.rs` decides what counts as running.
+        let json = stop_with(serde_json::json!([
+            {"status": "pending"},
+            {"status": "Running"},
+            {"status": "some future value"},
+        ]));
+        assert_eq!(
+            bgtasks_payload(&json).as_deref(),
+            Some("pending%2CRunning%2Csome%20future%20value")
+        );
+    }
+
+    #[test]
+    fn background_tasks_payload_is_truncated_at_512_raw_bytes_losing_later_statuses() {
+        // GAP (characterized, not fixed): `payload::encode` truncates the RAW
+        // joined string to MAX_PAYLOAD_LEN (512) bytes BEFORE encoding, so a
+        // long task list silently drops its tail. 60 x "completed," is 540
+        // raw bytes; a trailing "running" is cut off and the receiver would
+        // see "all terminal" -> clear the declaration. Fail-UNsafe for lists
+        // longer than 512 bytes with the running task late in the array.
+        let mut tasks: Vec<serde_json::Value> = (0..60)
+            .map(|_| serde_json::json!({"status": "completed"}))
+            .collect();
+        tasks.push(serde_json::json!({"status": "running"}));
+        let payload = bgtasks_payload(&stop_with(serde_json::Value::Array(tasks))).unwrap();
+        assert!(
+            !payload.contains("running"),
+            "trailing running status was expected to be lost to truncation"
+        );
+        // Raw cap is 512 bytes; every `,` becomes `%2C`, so the wire payload is
+        // longer than 512 but bounded by 3x.
+        assert!(payload.len() > 512 && payload.len() <= 512 * 3);
+    }
+
+    #[test]
+    fn background_tasks_short_list_with_running_first_survives_intact() {
+        let mut tasks = vec![serde_json::json!({"status": "running"})];
+        tasks.extend((0..10).map(|_| serde_json::json!({"status": "completed"})));
+        let payload = bgtasks_payload(&stop_with(serde_json::Value::Array(tasks))).unwrap();
+        assert!(payload.starts_with("running%2Ccompleted"));
+        assert_eq!(payload.matches("completed").count(), 10);
+    }
+
+    #[test]
+    fn stop_wire_order_is_bgtasks_then_state_and_state_is_still_idle_with_running_tasks() {
+        // The hook never lets background work change the derived state: Stop
+        // is always `idle` here; `pty.rs` layers the declared-work signal on top.
+        let json = stop_with(serde_json::json!([{"status": "running"}]));
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let wire: Vec<(&str, &str)> = pairs.iter().map(|p| (p.verb, p.payload.as_str())).collect();
+        assert_eq!(wire, [("bgtasks", "running"), ("state", "idle")]);
+    }
+
+    #[test]
+    fn explicit_state_flag_overrides_derived_state_but_bgtasks_is_still_scraped() {
+        let parsed = ParsedArgs {
+            state: Some("busy".into()),
+            ..Default::default()
+        };
+        let pairs = build_emissions(
+            &parsed,
+            &stop_with(serde_json::json!([{"status": "running"}])),
+        );
+        let wire: Vec<(&str, &str)> = pairs.iter().map(|p| (p.verb, p.payload.as_str())).collect();
+        assert_eq!(wire, [("bgtasks", "running"), ("state", "busy")]);
+    }
+
+    #[test]
+    fn stop_failure_wire_order_is_toolfail_bgtasks_state() {
+        let json = serde_json::json!({
+            "hook_event_name": "StopFailure",
+            "background_tasks": [{"status": "running"}],
+        });
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let wire: Vec<(&str, &str)> = pairs.iter().map(|p| (p.verb, p.payload.as_str())).collect();
+        assert_eq!(
+            wire,
+            [("toolfail", "1"), ("bgtasks", "running"), ("state", "idle")]
+        );
+    }
+
+    #[test]
+    fn background_tasks_not_scraped_for_other_agents_stop_events() {
+        // --agent scoping: DERIVATIONS rows are all `agent: "claude"`, so a
+        // Stop from gemini/grok/codex (even with a `background_tasks` field)
+        // derives nothing — no `bgtasks`, no `state`.
+        for agent in ["gemini", "grok", "codex", "unknown-agent"] {
+            let parsed = ParsedArgs {
+                agent: Some(agent.into()),
+                ..Default::default()
+            };
+            let pairs = build_emissions(
+                &parsed,
+                &stop_with(serde_json::json!([{"status": "running"}])),
+            );
+            assert!(
+                pairs.is_empty(),
+                "--agent {agent} must not inherit Claude's Stop derivation, got {:?}",
+                pairs.iter().map(|p| p.verb).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_agent_claude_matches_absent_agent_for_background_tasks() {
+        let json = stop_with(serde_json::json!([{"status": "running"}]));
+        let explicit = ParsedArgs {
+            agent: Some("claude".into()),
+            ..Default::default()
+        };
+        let a: Vec<_> = build_emissions(&explicit, &json)
+            .into_iter()
+            .map(|p| (p.verb, p.payload))
+            .collect();
+        let b: Vec<_> = build_emissions(&ParsedArgs::default(), &json)
+            .into_iter()
+            .map(|p| (p.verb, p.payload))
+            .collect();
+        assert_eq!(a, b);
+        assert_eq!(a[0], ("bgtasks", "running".to_string()));
+    }
+
+    #[test]
+    fn emit_background_tasks_flag_scrapes_even_for_a_non_claude_agent() {
+        // The explicit flag is independent of derivation scoping.
+        let parsed = ParsedArgs {
+            agent: Some("gemini".into()),
+            emit_background_tasks: true,
+            ..Default::default()
+        };
+        let pairs = build_emissions(
+            &parsed,
+            &stop_with(serde_json::json!([{"status": "running"}])),
+        );
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].verb, "bgtasks");
+    }
+
+    #[test]
+    fn emit_background_tasks_flag_with_empty_array_emits_empty_and_absent_emits_nothing() {
+        let parsed = ParsedArgs {
+            emit_background_tasks: true,
+            ..Default::default()
+        };
+        let empty = build_emissions(&parsed, &serde_json::json!({"background_tasks": []}));
+        assert_eq!(empty.len(), 1);
+        assert_eq!((empty[0].verb, empty[0].payload.as_str()), ("bgtasks", ""));
+        assert!(build_emissions(&parsed, &serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn background_tasks_on_null_stdin_derives_nothing() {
+        // read_stdin_json falls back to Value::Null on malformed/oversized/
+        // timed-out stdin: the whole fire's derivation is lost, no panic.
+        let pairs = build_emissions(&ParsedArgs::default(), &serde_json::Value::Null);
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn stdin_bound_constants_are_pinned() {
+        // `read_stdin_bounded` reads the real process stdin on a thread, so the
+        // function itself is not unit-testable here (see report); pin the two
+        // constants its invariants depend on. MAX_STDIN_BYTES must stay well
+        // above MAX_PAYLOAD_LEN-sized fields (a truncated/invalid JSON blob
+        // loses the ENTIRE fire), and the timeout must stay sub-second so a
+        // hung stdin can never stall the hook.
+        assert_eq!(MAX_STDIN_BYTES, 1024 * 1024);
+        assert!(STDIN_READ_TIMEOUT <= std::time::Duration::from_secs(1));
+        assert!(MAX_STDIN_BYTES > crate::payload::MAX_PAYLOAD_LEN as u64 * 100);
+    }
+
+    #[test]
+    fn stop_and_stop_failure_rows_are_the_only_background_task_scrapers() {
+        for d in DERIVATIONS {
+            let expect = d.agent == "claude" && (d.event == "Stop" || d.event == "StopFailure");
+            assert_eq!(
+                d.scrape_background_tasks, expect,
+                "{} {} scrape_background_tasks",
+                d.agent, d.event
+            );
+        }
+    }
+
     #[test]
     fn unrecognized_hook_event_name_derives_nothing() {
         let json = serde_json::json!({"hook_event_name": "SomeFutureEvent", "tool_name": "Bash"});
