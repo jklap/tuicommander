@@ -22,6 +22,11 @@ describe("remove_orphan_worktree transport binding (critic-1188 r2)", () => {
 	// Catches: an omitted list serialised as undefined/null (serde Vec rejects null with 422).
 	it("sends an empty array, not null, when no sessions were reviewed", () => {
 		const mapped = mapCommandToHttp("remove_orphan_worktree", { repoPath: "/r", worktreePath: "/r/wt" });
-		expect((mapped as { body: unknown }).body).toEqual({ repoPath: "/r", worktreePath: "/r/wt", safeOnly: false, confirmedSessions: [] });
+		expect((mapped as { body: unknown }).body).toEqual({
+			repoPath: "/r",
+			worktreePath: "/r/wt",
+			safeOnly: false,
+			confirmedSessions: [],
+		});
 	});
 });

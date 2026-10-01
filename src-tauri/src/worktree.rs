@@ -2110,7 +2110,11 @@ mod tests {
             fs::create_dir_all(linked.join("sub/deeper")).unwrap();
             let state = crate::state::tests_support::make_test_app_state();
             insert_dummy_session(&state, "agent");
-            set_session_cwd(&state, "agent", &linked.join("sub/deeper").to_string_lossy());
+            set_session_cwd(
+                &state,
+                "agent",
+                &linked.join("sub/deeper").to_string_lossy(),
+            );
 
             assert!(guard(&state, repo.path(), &linked, &[]).is_err());
             guard(&state, repo.path(), &linked, &["agent"]).expect("reviewed");
@@ -2140,8 +2144,13 @@ mod tests {
             for (id, name) in [("seen", "Seen Agent"), ("late", "Late Agent")] {
                 insert_dummy_session(&state, id);
                 set_session_cwd(&state, id, &linked.to_string_lossy());
-                state.session_maps.sessions.get(id).unwrap().lock().display_name =
-                    Some(name.to_string());
+                state
+                    .session_maps
+                    .sessions
+                    .get(id)
+                    .unwrap()
+                    .lock()
+                    .display_name = Some(name.to_string());
             }
 
             let error = guard(&state, repo.path(), &linked, &["seen"]).unwrap_err();

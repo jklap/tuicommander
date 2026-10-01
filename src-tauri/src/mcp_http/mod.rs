@@ -6336,7 +6336,13 @@ mod tests {
         let repo = create_temp_git_repo();
         let linked = repo.path().join("linked");
         crate::git_cli::git_cmd(repo.path())
-            .args(["worktree", "add", "--detach", linked.to_str().unwrap(), "HEAD"])
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
             .run()
             .unwrap();
         let response = build_router(test_state(), false, true)
