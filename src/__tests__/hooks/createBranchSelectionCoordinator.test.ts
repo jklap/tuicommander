@@ -326,6 +326,71 @@ describe("createBranchSelectionCoordinator", () => {
 		});
 	});
 
+	// `handleBranchSelectInner`'s own orphan-adoption scan (lines ~267-293): a
+	// terminal whose cwd matches a branch's worktreePath but was never attached to
+	// it (the same race `createRepositoryRefreshCoordinator.ts`'s
+	// `reconcileTerminalOwnership()` call and `RepoSection.tsx`'s chevron fix close
+	// for their own trigger points) gets adopted into `branch.terminals` the
+	// moment that branch is selected.
+	describe("orphan adoption on branch select", () => {
+		const flushRaf = () => new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+		it("adopts an unclaimed terminal whose cwd matches the branch's worktree path", async () => {
+			await testInScope(async () => {
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "feature", {
+					worktreePath: "/Gits/alpha-wt-feature",
+				});
+
+				const orphanId = terminalsStore.add({
+					sessionId: null,
+					fontSize: 14,
+					name: "orphan",
+					cwd: "/Gits/alpha-wt-feature",
+					awaitingInput: null,
+				});
+
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.feature?.terminals).not.toContain(orphanId);
+
+				await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "feature");
+				await flushRaf();
+
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.feature?.terminals).toContain(orphanId);
+				expect(terminalsStore.state.activeId).toBe(orphanId);
+			});
+		});
+
+		// Guards the `claimedIds` set: two workspaces can point at the same
+		// directory (e.g. a same-named sibling branch), and a cwd match alone must
+		// not be enough to pull a terminal out of the workspace that already owns it.
+		it("does not steal a terminal already claimed by a sibling workspace with the same cwd", async () => {
+			await testInScope(async () => {
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "feat-1", {
+					worktreePath: "/Gits/alpha-wt-shared",
+				});
+				repositoriesStore.setWorkspace("/Gits/alpha", "feat-2", {
+					worktreePath: "/Gits/alpha-wt-shared",
+				});
+
+				const sibTermId = terminalsStore.add({
+					sessionId: null,
+					fontSize: 14,
+					name: "sibling",
+					cwd: "/Gits/alpha-wt-shared",
+					awaitingInput: null,
+				});
+				repositoriesStore.addTerminalToWorkspace("/Gits/alpha", "feat-1", sibTermId);
+
+				await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "feat-2");
+				await flushRaf();
+
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces["feat-2"]?.terminals).not.toContain(sibTermId);
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces["feat-1"]?.terminals).toContain(sibTermId);
+			});
+		});
+	});
+
 	// --- Characterization tests for savedTerminals restore (createBranchSelectionCoordinator.ts:235-304) ---
 	// These pin down TODAY's behavior — agent-only restore — before a later change
 	// makes shell restoration configurable. Any intentional behavior change here
