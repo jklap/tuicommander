@@ -45,7 +45,8 @@
 }
 
 .sidebar[data-density="rich"] .branchItem {
-  align-items: flex-start;
+  flex-wrap: wrap;
+  align-items: center;
   padding-top: 5px;
   padding-bottom: 5px;
 }
@@ -81,7 +82,19 @@
   }
 }
 
-/* Detail lines of a rich branch row. */
+/* Forces the wrap between the name line and the detail line; only touch uses it. */
+.branchBreak {
+  display: none;
+}
+
+/* Detail lines of a rich branch row: a full-width block under the name line,
+   indented to start under the name. */
+.branchRichDetail {
+  flex: 0 0 100%;
+  min-width: 0;
+  padding-left: calc(var(--row-icon) + var(--row-gap));
+}
+
 .branchRichLine {
   display: block;
   font-size: var(--font-xs);
@@ -1130,6 +1143,24 @@
 
   .sidebar[data-density="rich"] .branchActions {
     max-width: 84px;
+  }
+
+  /* Always-visible 36px buttons would leave the name 8 characters on a phone-width
+     row. In rich mode they drop to the detail line, which wraps to make room. */
+  .sidebar[data-density="rich"] .branchBreak {
+    display: block;
+    order: 1;
+    flex: 0 0 100%;
+    height: 0;
+  }
+
+  .sidebar[data-density="rich"] .branchRichDetail {
+    order: 2;
+    flex: 1 1 0;
+  }
+
+  .sidebar[data-density="rich"] .branchActions {
+    order: 3;
   }
 }
 

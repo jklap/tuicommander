@@ -329,12 +329,12 @@ describe("Sidebar", () => {
 		const withBranch = (b: Record<string, unknown>) => setRepos({ "/repo1": makeRepo({ workspaces: { feat: b } }) });
 
 		// Catches: the rich row printing nothing beyond the name (the bare list Boss rejected).
-		it("prints PR title, commit age, diff stats and dirty count under the branch name", () => {
+		it("prints the PR title, commit age, diff stats and dirty count under the branch name", () => {
 			mockGetPrStatus.mockReturnValue({ state: "OPEN", number: 77, title: "Add the thing", url: "u" });
 			withBranch(richBranch());
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const row = container.querySelector(".branchItem") as HTMLElement;
-			expect(row.querySelector(".branchRichLine")?.textContent).toBe("#77 Add the thing");
+			expect(row.querySelector(".branchRichLine")?.textContent).toBe("Add the thing");
 			const meta = row.querySelector(".branchRichMeta")?.textContent ?? "";
 			expect(meta).toContain("3h");
 			expect(meta).toContain("+12");
