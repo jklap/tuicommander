@@ -1202,6 +1202,55 @@ describe("initApp", () => {
 			expect(terminalsStore.get(id)).toMatchObject({ name: "Foo", nameIsCustom: true });
 		});
 
+		describe("session-suspend-requested", () => {
+			async function initWithSuspendListener() {
+				let cb: ((event: { payload: { session_id: string; request_id: string } }) => void) | null = null;
+				vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+					if (event === "session-suspend-requested") cb = handler as typeof cb;
+					return Promise.resolve(vi.fn());
+				}) as unknown as typeof listen);
+				await initApp(createMockDeps());
+				mockRpc.mockClear();
+				return cb!;
+			}
+			const verdicts = () => mockRpc.mock.calls.filter(([cmd]) => cmd === "session_suspend_response");
+
+			// The MCP call waits for this answer; without it a refusal read as success.
+			it("answers ok after suspending the tab that owns the session", async () => {
+				const fire = await initWithSuspendListener();
+				const id = terminalsStore.add(makeTerminal({ name: "Idle shell" }));
+				terminalsStore.setSessionId(id, "sess-susp-ok");
+
+				fire({ payload: { session_id: "sess-susp-ok", request_id: "req-ok" } });
+
+				await vi.waitFor(() => expect(verdicts()).toHaveLength(1));
+				expect(verdicts()[0][1]).toEqual({ requestId: "req-ok", ok: true, reason: null });
+				expect(terminalsStore.get(id)?.suspended).toBe(true);
+			});
+
+			it("answers with the refusal reason when the tab is busy and leaves the tab alone", async () => {
+				const fire = await initWithSuspendListener();
+				const id = terminalsStore.add(makeTerminal({ name: "Busy shell" }));
+				terminalsStore.setSessionId(id, "sess-susp-busy");
+				terminalsStore.update(id, { shellState: "busy" });
+
+				fire({ payload: { session_id: "sess-susp-busy", request_id: "req-busy" } });
+
+				await vi.waitFor(() => expect(verdicts()).toHaveLength(1));
+				expect(verdicts()[0][1]).toEqual({ requestId: "req-busy", ok: false, reason: "command running" });
+				expect(terminalsStore.get(id)?.suspended).toBeFalsy();
+			});
+
+			it("stays silent for a session no tab here owns", async () => {
+				const fire = await initWithSuspendListener();
+
+				fire({ payload: { session_id: "sess-elsewhere", request_id: "req-none" } });
+				await Promise.resolve();
+
+				expect(verdicts()).toHaveLength(0);
+			});
+		});
+
 		it("retains an alias event that arrives before the session is bound to a terminal", async () => {
 			const getCb = captureAliasAssigned();
 			const deps = createMockDeps();

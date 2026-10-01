@@ -34,10 +34,29 @@ function resumeCommandFor(term: TerminalData): Promise<string | null> {
 	);
 }
 
+/** Tabs whose suspend is in flight. The PTY's exit event can arrive before the tab is
+ *  marked suspended, and the exit and session-closed handlers must not take it for a crash. */
+const suspending = new Set<string>();
+
+export function isSuspendingOrSuspended(id: string): boolean {
+	return suspending.has(id) || (terminalsStore.get(id)?.suspended ?? false);
+}
+
 /** End the tab's PTY (and its agent) but keep the tab, in the state a restart restores it in.
  *  The tab keeps agentType, agentSessionId, tuicSession, alias and cwd; `suspended` makes
- *  it persist across a restart and stops its Terminal from spawning a new PTY. */
+ *  it persist across a restart and stops its Terminal from spawning a new PTY.
+ *  `suspended` is set only once the PTY is closed: a failed close leaves the tab untouched. */
 export async function suspendTerminal(id: string): Promise<SuspendOutcome> {
+	if (suspending.has(id)) return { ok: false, reason: "already suspending" };
+	suspending.add(id);
+	try {
+		return await suspendTab(id);
+	} finally {
+		suspending.delete(id);
+	}
+}
+
+async function suspendTab(id: string): Promise<SuspendOutcome> {
 	const initial = terminalsStore.get(id);
 	if (!initial) return { ok: false, reason: "unknown tab" };
 	const refusal = suspendRefusal(initial);
@@ -55,18 +74,15 @@ export async function suspendTerminal(id: string): Promise<SuspendOutcome> {
 	if (recheck) return { ok: false, reason: recheck };
 	const sessionId = term.sessionId as string;
 
-	// Before the close, so the tab's exit handler sees a suspend and not an agent exit.
-	terminalsStore.update(id, { suspended: true });
 	try {
 		clearShellFamilyCache(sessionId);
 		await rpc("close_pty", { sessionId, cleanupWorktree: false });
 	} catch (e) {
-		terminalsStore.update(id, { suspended: false });
 		appLogger.warn("terminal", "Suspend: closing the PTY failed", { id, error: String(e) });
 		return { ok: false, reason: "closing the session failed" };
 	}
-	terminalsStore.setSessionId(id, null);
 	terminalsStore.update(id, {
+		suspended: true,
 		shellState: null,
 		agentState: null,
 		backgroundWork: false,
@@ -74,6 +90,7 @@ export async function suspendTerminal(id: string): Promise<SuspendOutcome> {
 		pendingInitCommand: null,
 		pendingResumeCommand: null,
 	});
+	terminalsStore.setSessionId(id, null);
 	return { ok: true };
 }
 

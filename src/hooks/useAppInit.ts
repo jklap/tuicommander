@@ -21,13 +21,13 @@ import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
-import { isTauri, subscribeEvents } from "../transport";
+import { isTauri, rpc, subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { classifyFile, isImageFile } from "../utils/filePreview";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
-import { suspendTerminal } from "../utils/suspendTerminal";
+import { isSuspendingOrSuspended, suspendTerminal } from "../utils/suspendTerminal";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -648,14 +648,24 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.update(termId, { name: event.payload.name, nameIsCustom: event.payload.is_custom });
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));
 
-	// `session action=suspend` already refused a busy session; the tab is ended here.
-	listen<{ session_id: string; __tuic_origin?: unknown }>("session-suspend-requested", (event) => {
+	// `session action=suspend` waits for this tab's verdict. A client without the tab stays
+	// silent: another attached client may own it, and the backend times out if none does.
+	listen<{ session_id: string; request_id: string; __tuic_origin?: unknown }>("session-suspend-requested", (event) => {
 		if (event.payload.__tuic_origin !== undefined) return;
 		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
 		if (!termId) return;
-		suspendTerminal(termId).then((outcome) => {
-			if (!outcome.ok) appLogger.warn("terminal", "MCP suspend refused by the tab", { termId, reason: outcome.reason });
-		});
+		const requestId = event.payload.request_id;
+		suspendTerminal(termId)
+			.then((outcome) => {
+				if (!outcome.ok)
+					appLogger.warn("terminal", "MCP suspend refused by the tab", { termId, reason: outcome.reason });
+				return rpc("session_suspend_response", {
+					requestId,
+					ok: outcome.ok,
+					reason: outcome.ok ? null : outcome.reason,
+				});
+			})
+			.catch((err) => appLogger.error("terminal", "Failed to answer the MCP suspend request", err));
 	}).catch((err) => appLogger.error("app", "Failed to register session-suspend-requested listener", err));
 
 	listen<{ session_id: string; alias: string; __tuic_origin?: unknown }>("term-alias-assigned", (event) => {
@@ -810,7 +820,7 @@ export async function initApp(deps: AppInitDeps) {
 		const t0 = terminalsStore.get(termId);
 		if (!t0?.isRemote) return;
 		// A suspended tab ended its PTY on purpose and must stay, restorable.
-		if (t0.suspended) return;
+		if (isSuspendingOrSuspended(termId)) return;
 
 		const parsedAgentType = parseAgentType(agent_type);
 		handleAgentExitCompletion(termId, parsedAgentType != null);

@@ -2021,9 +2021,19 @@ async fn handle_mcp_tool_call_with_context(
                 })
             } else if action == "submit" {
                 handle_session_submit(state, args, false).await
+            } else if action == "suspend" && addr.ip().is_loopback() {
+                handle_session_suspend(state, args, mcp_session_id).await
             } else if matches!(
                 action,
-                "create" | "input" | "kill" | "close" | "pause" | "resume" | "resize" | "rename"
+                "create"
+                    | "input"
+                    | "kill"
+                    | "close"
+                    | "pause"
+                    | "resume"
+                    | "resize"
+                    | "rename"
+                    | "suspend"
             ) && !addr.ip().is_loopback()
             {
                 serde_json::json!({
@@ -2204,6 +2214,88 @@ fn session_wait_response(
             .map(|entry| serde_json::Value::from(*entry.value())),
     );
     response
+}
+
+/// How long the tab has to answer a suspend request: it verifies the agent's resume
+/// command and closes the PTY before it can say yes.
+const SUSPEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// A UI that can own the tab is attached: the desktop window, or an open HTTP event stream.
+fn ui_attached(state: &AppState) -> bool {
+    #[cfg(feature = "desktop")]
+    if state.app_handle.read().is_some() {
+        return true;
+    }
+    state
+        .sse_client_count
+        .load(std::sync::atomic::Ordering::Relaxed)
+        > 0
+}
+
+/// `session action=suspend`. The tab lives in the frontend, which ends the PTY and keeps
+/// the tab; this returns the tab's verdict, so a refusal there is never reported as success.
+async fn handle_session_suspend(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let resolved = match require_session_id(state, args, "suspend") {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    let session_id = resolved.as_str();
+    // Self-suspend guard: mirror close — an agent must not end its own session.
+    if let Some(sid) = mcp_session_id
+        && let Some(own_pty) = state.mcp.to_session.get(sid)
+        && own_pty.value() == session_id
+    {
+        return serde_json::json!({"error": "Cannot suspend own session."});
+    }
+    // An exited session keeps its `session_states` entry (and the agent state it died in)
+    // until SessionClosed, so that entry alone would let the busy rule pass for a dead PTY.
+    if state.session_maps.exit_codes.contains_key(session_id) {
+        return serde_json::json!({"error": "Cannot suspend: session has exited"});
+    }
+    let Some(ss) = state.session_state_with_shell(session_id) else {
+        return serde_json::json!({"error": "Session not found"});
+    };
+    if let Some(reason) = suspend_refusal(&ss) {
+        return serde_json::json!({"error": format!("Cannot suspend: {reason}")});
+    }
+    if !ui_attached(state) {
+        return serde_json::json!({"error": "Cannot suspend: no UI is attached to own the tab (headless)"});
+    }
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    state.suspend_responses.insert(request_id.clone(), tx);
+    state.request_session_suspend(session_id, &request_id);
+    match tokio::time::timeout(SUSPEND_TIMEOUT, rx).await {
+        Ok(Ok(Ok(()))) => serde_json::json!({"ok": true}),
+        Ok(Ok(Err(reason))) => serde_json::json!({"error": format!("Cannot suspend: {reason}")}),
+        // Sender dropped, or no tab answered: no UI owns this session's tab.
+        _ => {
+            state.suspend_responses.remove(&request_id);
+            serde_json::json!({"error": "Cannot suspend: no tab answered the request"})
+        }
+    }
+}
+
+/// Deliver a tab's suspend verdict to the waiting MCP call. Shared by the Tauri command
+/// and the HTTP route. Unknown or already-answered ids are ignored: every attached client
+/// that owns the tab may answer, and only the first can win.
+pub(crate) fn resolve_session_suspend(
+    state: &AppState,
+    request_id: &str,
+    ok: bool,
+    reason: Option<String>,
+) {
+    if let Some((_, tx)) = state.suspend_responses.remove(request_id) {
+        let _ = tx.send(if ok {
+            Ok(())
+        } else {
+            Err(reason.unwrap_or_else(|| "refused".to_string()))
+        });
+    }
 }
 
 /// `session action=wait` — block (server-side) until the session is idle or has
@@ -3336,29 +3428,6 @@ fn handle_session(
                 state.keep_open_sessions.remove(&resolved);
             }
             serde_json::json!({"ok": true, "keep_open": enabled})
-        }
-        "suspend" => {
-            let resolved = match require_session_id(state, args, "suspend") {
-                Ok(id) => id,
-                Err(e) => return e,
-            };
-            let session_id = resolved.as_str();
-            // Self-suspend guard: mirror close — an agent must not end its own session.
-            if let Some(sid) = mcp_session_id
-                && let Some(own_pty) = state.mcp.to_session.get(sid)
-                && own_pty.value() == session_id
-            {
-                return serde_json::json!({"error": "Cannot suspend own session."});
-            }
-            let Some(ss) = state.session_state_with_shell(session_id) else {
-                return serde_json::json!({"error": "Session not found"});
-            };
-            if let Some(reason) = suspend_refusal(&ss) {
-                return serde_json::json!({"error": format!("Cannot suspend: {reason}")});
-            }
-            // The tab lives in the frontend, which ends the PTY and keeps the tab.
-            state.request_session_suspend(session_id);
-            serde_json::json!({"ok": true, "requested": true})
         }
         "kill" => {
             let resolved = match require_session_id(state, args, "kill") {
@@ -9797,64 +9866,160 @@ mod tests {
         assert_eq!(suspend_refusal(&idle_shell), None);
     }
 
+    fn idle_suspend_candidate(state: &Arc<AppState>, sid: &str) {
+        state.session_maps.session_states.insert(
+            sid.to_string(),
+            suspend_candidate(Some("claude"), Some("idle"), Some("busy")),
+        );
+        // The backend derives agent_state from the PTY's shell-state atom.
+        state.session_maps.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+    }
+
+    async fn suspend(state: &Arc<AppState>, sid: &str) -> serde_json::Value {
+        handle_session_suspend(
+            state,
+            &serde_json::json!({"action": "suspend", "session_id": sid}),
+            None,
+        )
+        .await
+    }
+
     #[tokio::test]
-    async fn session_suspend_requests_the_ui_only_for_a_session_that_is_not_busy() {
+    async fn session_suspend_never_reaches_the_ui_for_a_busy_session() {
         let state = test_state();
         let busy = "550e8400-e29b-41d4-a716-446655440c01";
-        let idle = "550e8400-e29b-41d4-a716-446655440c02";
         state.session_maps.session_states.insert(
             busy.to_string(),
             suspend_candidate(Some("claude"), Some("working"), Some("busy")),
         );
-        state.session_maps.session_states.insert(
-            idle.to_string(),
-            suspend_candidate(Some("claude"), Some("idle"), Some("busy")),
+        state.session_maps.shell_states.insert(
+            busy.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
         );
-        // The backend derives agent_state from the PTY's shell-state atom.
-        for (sid, atom) in [
-            (busy, crate::pty::SHELL_BUSY),
-            (idle, crate::pty::SHELL_IDLE),
-        ] {
-            state
-                .session_maps
-                .shell_states
-                .insert(sid.to_string(), std::sync::atomic::AtomicU8::new(atom));
-        }
+        state
+            .sse_client_count
+            .store(1, std::sync::atomic::Ordering::Relaxed);
         let mut events = state.event_bus.subscribe();
 
-        let refused = handle_session(
-            &state,
-            &serde_json::json!({"action": "suspend", "session_id": busy}),
-            None,
-        );
+        let refused = suspend(&state, busy).await;
+
         assert_eq!(refused["error"], "Cannot suspend: agent working");
         assert!(
             events.try_recv().is_err(),
             "a refused suspend must not reach the UI"
         );
+    }
 
-        let accepted = handle_session(
-            &state,
-            &serde_json::json!({"action": "suspend", "session_id": idle}),
-            None,
+    // Catches: a tombstoned session (exited, `session_states` entry still present) passing the busy rule.
+    #[tokio::test]
+    async fn session_suspend_refuses_an_exited_session_that_keeps_its_state_entry() {
+        let state = test_state();
+        let gone = "550e8400-e29b-41d4-a716-446655440c05";
+        idle_suspend_candidate(&state, gone);
+        state.session_maps.exit_codes.insert(gone.to_string(), 0);
+        state
+            .sse_client_count
+            .store(1, std::sync::atomic::Ordering::Relaxed);
+        let mut events = state.event_bus.subscribe();
+
+        let result = suspend(&state, gone).await;
+
+        assert_eq!(result["error"], "Cannot suspend: session has exited");
+        assert!(events.try_recv().is_err());
+    }
+
+    // Catches: reporting `ok` when nothing can perform the suspend (headless daemon with no client).
+    #[tokio::test]
+    async fn session_suspend_errors_when_no_ui_is_attached() {
+        let state = test_state();
+        let idle = "550e8400-e29b-41d4-a716-446655440c02";
+        idle_suspend_candidate(&state, idle);
+        let mut events = state.event_bus.subscribe();
+
+        let result = suspend(&state, idle).await;
+
+        assert!(
+            result["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("no UI is attached")),
+            "got {result}"
         );
-        assert_eq!(accepted, serde_json::json!({"ok": true, "requested": true}));
-        let requested =
-            std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
-                crate::state::AppEvent::SessionSuspendRequested { session_id } => Some(session_id),
-                _ => None,
-            });
-        assert_eq!(requested.as_deref(), Some(idle));
+        assert!(
+            events.try_recv().is_err(),
+            "nobody is listening: nothing to emit"
+        );
+        assert!(state.suspend_responses.is_empty());
+    }
+
+    /// Run `suspend` against an attached UI that answers the request with `verdict`.
+    async fn suspend_answered_with(verdict: Option<(bool, Option<String>)>) -> serde_json::Value {
+        let state = test_state();
+        let idle = "550e8400-e29b-41d4-a716-446655440c04";
+        idle_suspend_candidate(&state, idle);
+        state
+            .sse_client_count
+            .store(1, std::sync::atomic::Ordering::Relaxed);
+        let mut events = state.event_bus.subscribe();
+        let call = tokio::spawn({
+            let state = state.clone();
+            async move { suspend(&state, idle).await }
+        });
+        let request_id = loop {
+            if let Ok(crate::state::AppEvent::SessionSuspendRequested {
+                session_id,
+                request_id,
+            }) = events.recv().await
+            {
+                assert_eq!(session_id, idle);
+                break request_id;
+            }
+        };
+        if let Some((ok, reason)) = verdict {
+            crate::mcp_http::mcp_transport::resolve_session_suspend(
+                &state,
+                &request_id,
+                ok,
+                reason,
+            );
+        }
+        call.await.expect("suspend task")
+    }
+
+    // Catches: answering `ok` as soon as the request is emitted, before the tab has acted.
+    #[tokio::test]
+    async fn session_suspend_returns_ok_once_the_tab_suspended() {
+        assert_eq!(
+            suspend_answered_with(Some((true, None))).await,
+            serde_json::json!({"ok": true})
+        );
+    }
+
+    // Catches: the old `{"ok":true,"requested":true}` that hid a frontend refusal.
+    #[tokio::test]
+    async fn session_suspend_returns_the_tabs_refusal() {
+        let result =
+            suspend_answered_with(Some((false, Some("waiting for input".to_string())))).await;
+        assert_eq!(result["error"], "Cannot suspend: waiting for input");
+        assert!(result.get("ok").is_none());
+    }
+
+    // Catches: a request nobody answers hanging the MCP call for ever.
+    #[tokio::test(start_paused = true)]
+    async fn session_suspend_gives_up_when_no_tab_answers() {
+        let result = suspend_answered_with(None).await;
+        assert_eq!(
+            result["error"],
+            "Cannot suspend: no tab answered the request"
+        );
     }
 
     #[tokio::test]
     async fn session_suspend_reports_an_unknown_session() {
         let state = test_state();
-        let result = handle_session(
-            &state,
-            &serde_json::json!({"action": "suspend", "session_id": "550e8400-e29b-41d4-a716-446655440c03"}),
-            None,
-        );
+        let result = suspend(&state, "550e8400-e29b-41d4-a716-446655440c03").await;
         assert_eq!(result["error"], "Session not found");
     }
 
