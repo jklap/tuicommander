@@ -1595,6 +1595,23 @@ stale turn" got conflated** — audit any third reset method added near
 `reset_suggest_memory`/`apply_working_evidence` for the same shape before
 assuming it's safe to share.
 
+**Update 2026-10-01 — an idle teammate is still listed `running`, so the flag alone can't be
+trusted for teammates.** Measured in `.claude/hook-debug.log`: a lead's `Stop` keeps listing a
+finished, idle teammate as `{type: "teammate", status: "running"}` for as long as the teammate
+exists (minutes), and a teammate's completion fires **no hook in the lead** (it is its own Claude
+session; `SubagentStart`/`SubagentStop` never fire for it). So a teammate counts as work only
+while its own terminal is busy: `tuic-hook` sends `bgtasksummary` (`type/status*N` pairs),
+`pty.rs` stores `DeclaredTaskSummary`, and `SilenceState::declared_background_work_for_epoch_with`
+takes a lazy `teammates_busy` closure backed by `AppState::lead_teammates_busy` (tmux topology +
+shell-state atomics only — never a `SilenceState` lock, which the caller holds). Lead↔teammate
+linkage is `TmuxPane::lead_session_id`, sent by `tuic-cli` as `origin_session_id`; the
+accumulator republishes the lead when a teammate's state moves. Read any *new* consumer of
+`declared_background_work` through the `_with` variant (the plain one is the conservative
+"everything counts" read). A background **subagent** is different: it drops out of the next
+`Stop` list by itself, and its `SubagentStop` payload still lists itself as `running` and fires
+*after* the parent's `Stop`, so `SubagentStop` is not a usable clear signal. Full write-up:
+`docs/backend/pty.md`'s "An idle Agent-Teams teammate does not count as work".
+
 **A handful of git-behavior-dependent unit tests can fail purely from the
 running machine's global git config** (e.g. `merge.ff = only` turns an
 expected merge conflict into a hard refusal; an `insteadOf` URL rewrite makes

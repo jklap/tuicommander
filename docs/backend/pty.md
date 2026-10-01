@@ -829,6 +829,49 @@ unrecognized one) counts as still active, the same "unanswered evidence counts a
 work" philosophy `has_pending_background_probe` already applies to the OS-heuristic
 path.
 
+**An idle Agent-Teams teammate does not count as work (2026-10-01).** Claude Code keeps a
+teammate in every `Stop` payload's `background_tasks` as `status: "running"` for as long as
+it exists, idle and `available` included (measured: the lead's `Stop` at +5 min, +10 min,
++12 min all still listed both finished teammates as running). `declared_background_work`
+built from statuses alone therefore stayed `true` forever for any lead that had a teammate —
+the lead never went idle, and completion/suggest publication, the parent-idle notification
+and standby were all held with it. A teammate's completion also fires **no hook in the lead**:
+a teammate is its own Claude session with its own `Stop`, not a `SubagentStop`.
+
+The fix has three parts, all additive and fail-safe:
+
+1. `tuic-hook` also emits `bgtasksummary`: the same array as distinct `type/status` pairs with
+   counts (`teammate/running*2,shell/completed`) — bounded by distinct pairs, so it cannot lose
+   a late `running` to the 512-byte payload cap the way the joined-status `bgtasks` can.
+2. `pty.rs` stores it as `SilenceState::declared_task_summary` (`DeclaredTaskSummary {
+   non_teammate_running, teammate_running }`), written right after the `bgtasks` declaration
+   in the same hook fire and under the same turn epoch; a fresh `bgtasks` drops it, a summary
+   with no matching declaration is ignored, and `reset_declared_background_work` clears it. **No
+   summary (an older hook) means every running task counts, as before** — a mixed-version
+   install can never under-report.
+3. `SilenceState::declared_background_work_for_epoch_with(epoch, teammates_busy)` is the
+   teammate-aware read every consumer uses (`AppState::declared_background_work_for`, the
+   parent-idle notification gate, the suggest-drain gate, the standby gate). Non-teammate
+   running work always counts; a teammate counts only if `AppState::lead_teammates_busy`
+   says one of this lead's teammates is actually working. The closure is lazy and must not
+   take a `SilenceState` lock (the caller holds the lead's own); it reads only the tmux
+   topology and the teammates' shell-state atomics.
+
+**Lead ↔ teammate linkage** comes from the tmux shim, because a teammate's own hooks carry no
+parent reference (payload and hook env hold only its own `session_id`/`TUIC_SESSION`). `tuic-cli`
+runs inside the lead's PTY and sends its own `TUIC_SESSION` as `origin_session_id` on
+`POST /tmux/panes` and `/tmux/panes/:id/materialize`; the server validates it against live
+sessions and stores it as `TmuxPane::lead_session_id` (first valid value wins, never
+overwritten). `tmux_routes::teammate_session_ids` / `lead_of_teammate` are the lookups. An
+older cli, a plain `tuic alias` user, or an unknown id leaves the link unset, in which case a
+teammate-only declaration is not working (nothing can be busy on its behalf).
+
+**The lead is republished when a teammate's state moves.** Nothing fires in the lead when a
+teammate finishes, so `AppState::publish_session_state_change` (the accumulator's only
+publisher) also publishes the lead's current state whenever a teammate's own published state
+changes or its row disappears, reusing the same baseline dedup so the lead emits only if its
+derived state really changed.
+
 **The clear path is a separate method from `completion_declared`'s, not folded into
 it (fixed 2026-09-16).** It originally was: `reset_suggest_memory()` cleared
 `completion_declared` and `declared_background_work` together, on the reasoning "a
@@ -978,7 +1021,14 @@ evidence.
 **Payload shape** (`SessionStateExplain`, snake_case): `agent` (agent_type, agent_seen_running,
 hook_instrumented, hook_state_seen, has_ready_screen_adapter), `visible` (shell_state,
 agent_state, agent_state_rung, awaiting_input, background_work, declared_background_work, …),
-`evidence` (busy/idle/awaiting snapshots, activity_seen, idle_confirmed, decide_now), `screen`
+`evidence` (busy/idle/awaiting snapshots, activity_seen, idle_confirmed, decide_now),
+`epoch_flags` (`completion_declared`, and `declared_background_work` — the raw
+`declared`/`declared_turn_epoch`/`applies_now` triple plus `age_ms`, `breakdown_source`
+(`summary`/`statuses_only`/`none`), `non_teammate_running`, `teammate_running`,
+`teammates_busy`, and `counts_now`, the value the ladder actually used, equal to
+`visible.declared_background_work`), `swarm` (present only for a lead with teammates or a
+teammate itself: `lead_session_id` and each owned teammate's `session_id`/`shell_state`/`busy`),
+`screen`
 (cached_activity, skipped_by_protocol_authority, no_adapter_for_agent), `silence` (last_output,
 threshold, remaining_before_fire), `notification` (the last `NotificationClassification`, if
 any), `trail` (the ring, oldest first).
