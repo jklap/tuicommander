@@ -108,6 +108,18 @@ esac
     )
 }
 
+/// Boot-time entry shared by the desktop and both headless binaries: a
+/// `claude` spawn points at `agent-hooks/claude.json`, so every process that can
+/// spawn agents must write it before serving. A failure is logged, not fatal.
+pub(crate) fn regenerate_launch_assets_at_boot(config_dir: &Path) {
+    if let Err(error) = regenerate_launch_assets(config_dir) {
+        tracing::error!(
+            source = "agent_hooks",
+            "Failed to generate launch-scoped agent status assets: {error}"
+        );
+    }
+}
+
 pub(crate) fn regenerate_launch_assets(config_dir: &Path) -> Result<(), String> {
     let dir = config_dir.join("agent-hooks");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
@@ -499,5 +511,70 @@ mod tests {
         }
         assert_eq!(std::fs::read_to_string(global_marker).unwrap(), "global");
         assert_eq!(std::fs::read_to_string(project_marker).unwrap(), "project");
+    }
+}
+
+#[cfg(test)]
+mod critic_1302_tests {
+    use super::*;
+
+    /// Catches: two boots on one config dir (desktop + `tuic-remote`) tear
+    /// `claude.json`, so a `claude --settings` spawn reads half a document.
+    #[test]
+    fn concurrent_boots_never_expose_a_torn_claude_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("agent-hooks/claude.json");
+        regenerate_launch_assets_at_boot(dir.path());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writers: Vec<_> = (0..4)
+            .map(|_| {
+                let root = dir.path().to_path_buf();
+                let stop = stop.clone();
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        regenerate_launch_assets_at_boot(&root);
+                    }
+                })
+            })
+            .collect();
+        for _ in 0..300 {
+            let bytes = std::fs::read(&path).expect("claude.json always present");
+            serde_json::from_slice::<serde_json::Value>(&bytes).expect("never torn");
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for writer in writers {
+            writer.join().unwrap();
+        }
+    }
+
+    /// Catches: `codex-notify.sh` is renamed into place as 0600 and chmod'ed
+    /// afterwards, so a codex spawn racing a second boot finds it not executable.
+    #[cfg(unix)]
+    #[test]
+    fn codex_notify_script_is_never_visible_without_the_execute_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("agent-hooks/codex-notify.sh");
+        regenerate_launch_assets_at_boot(dir.path());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = {
+            let root = dir.path().to_path_buf();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    regenerate_launch_assets_at_boot(&root);
+                }
+            })
+        };
+        let mut bad = 0;
+        for _ in 0..2000 {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            if mode & 0o100 == 0 {
+                bad += 1;
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        writer.join().unwrap();
+        assert_eq!(bad, 0, "observed the script without its execute bit {bad}x");
     }
 }
