@@ -1238,6 +1238,9 @@ busy terminal. Needs the rebuilt `tuic-hook` sidecar (it now also emits `bgtasks
   `swarm.lead_session_id` names the lead.
 - [ ] Smart Prompt injection into a lead whose only remaining work is an idle teammate works (no
   "Agent is busy").
+- [ ] Old `tuic` binary on PATH (no `origin_session_id`) or a plain `tuic alias` swarm: the lead
+  still reads working while a teammate exists (fail-safe, the old behavior) and `explain-state`
+  shows `unlinked_teammates > 0`. It must never read idle while a teammate is working.
 - [ ] Older installed `tuic-hook` (no `bgtasksummary`): the lead still reads working while a
   teammate exists (old behavior, not worse). `explain-state` shows `breakdown_source:
   "statuses_only"`.

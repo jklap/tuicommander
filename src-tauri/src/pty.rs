@@ -3179,22 +3179,25 @@ impl SilenceState {
     /// without an explicit clear (see `reset_declared_background_work`).
     ///
     /// This is the conservative read: every running task counts, teammates
-    /// included. Callers that can see the rest of the app should use
+    /// included. Production code must use
     /// [`Self::declared_background_work_for_epoch_with`] so an idle teammate does
-    /// not count.
+    /// not count; this exists for tests of the raw declaration.
+    #[cfg(test)]
     pub(crate) fn declared_background_work_for_epoch(&self, turn_epoch: u64) -> bool {
-        self.declared_background_work_for_epoch_with(turn_epoch, || true)
+        self.declared_background_work_for_epoch_with(turn_epoch, |_| true)
     }
 
-    /// Like [`Self::declared_background_work_for_epoch`], but a declared
-    /// *teammate* only counts when `teammates_busy()` says one is actually
-    /// working. The closure is evaluated lazily (only when teammates are the sole
-    /// declared work), and it must not take any `SilenceState` lock — callers
-    /// typically hold this one.
+    /// The teammate-aware read of the declaration. Non-teammate running work
+    /// always counts; declared *teammates* only count when
+    /// `teammates_may_be_working(declared_teammates)` says so — it receives how
+    /// many teammates the hook declared running, so the caller can treat ones it
+    /// cannot account for as working (fail-safe). The closure is evaluated lazily
+    /// (only when teammates are the sole declared work), and it must not take any
+    /// `SilenceState` lock — callers typically hold this one.
     pub(crate) fn declared_background_work_for_epoch_with(
         &self,
         turn_epoch: u64,
-        teammates_busy: impl FnOnce() -> bool,
+        teammates_may_be_working: impl FnOnce(u32) -> bool,
     ) -> bool {
         if !(self.declared_background_work
             && self.declared_background_work_turn_epoch == turn_epoch)
@@ -3205,7 +3208,8 @@ impl SilenceState {
             None => true,
             Some(summary) => {
                 summary.non_teammate_running > 0
-                    || (summary.teammate_running > 0 && teammates_busy())
+                    || (summary.teammate_running > 0
+                        && teammates_may_be_working(summary.teammate_running))
             }
         }
     }
@@ -3481,8 +3485,8 @@ fn try_shell_transition_locked<F: FnOnce()>(
             // re-lock the same non-reentrant mutex and deadlock.
             let declared_background_work = session_lifecycle.is_some_and(|(_, turn_epoch)| {
                 silence_state.as_ref().is_some_and(|silence| {
-                    silence.declared_background_work_for_epoch_with(turn_epoch, || {
-                        state.lead_teammates_busy(session_id)
+                    silence.declared_background_work_for_epoch_with(turn_epoch, |declared| {
+                        state.lead_teammates_may_be_working(session_id, declared)
                     })
                 })
             });
@@ -6469,8 +6473,8 @@ fn emit_pending_suggest_if_idle(
     // descendant that just hasn't been confirmed yet.
     if background_work
         || background_probe_pending
-        || silence_state.declared_background_work_for_epoch_with(current_turn_epoch, || {
-            state.lead_teammates_busy(session_id)
+        || silence_state.declared_background_work_for_epoch_with(current_turn_epoch, |declared| {
+            state.lead_teammates_may_be_working(session_id, declared)
         })
     {
         return false;
@@ -14308,8 +14312,8 @@ fn background_activity_blocks_standby_with_silence(
         return false;
     };
     let declared_background_work = match locked_silence {
-        Some(silence) => silence.declared_background_work_for_epoch_with(turn_epoch, || {
-            state.lead_teammates_busy(session_id)
+        Some(silence) => silence.declared_background_work_for_epoch_with(turn_epoch, |declared| {
+            state.lead_teammates_may_be_working(session_id, declared)
         }),
         None => state.declared_background_work_for(session_id, turn_epoch),
     };
