@@ -140,6 +140,9 @@ mod tests {
             url: "https://github.com/o/r/pull/1".into(),
         })
         .unwrap();
-        assert_eq!(json, r#"{"kind":"pr","url":"https://github.com/o/r/pull/1"}"#);
+        assert_eq!(
+            json,
+            r#"{"kind":"pr","url":"https://github.com/o/r/pull/1"}"#
+        );
     }
 }

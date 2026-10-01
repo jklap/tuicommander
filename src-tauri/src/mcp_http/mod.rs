@@ -1513,6 +1513,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(github_routes::repo_conflict_assist),
         )
         .route("/repo/approve-pr", post(github_routes::repo_approve_pr))
+        .route(
+            "/repo/update-pr-branch",
+            post(github_routes::repo_update_pr_branch),
+        )
+        .route("/repo/close-pr", post(github_routes::repo_close_pr))
         .route("/repo/create-pr", post(github_routes::repo_create_pr))
         .route("/repo/create-issue", post(github_routes::repo_create_issue))
         .route(

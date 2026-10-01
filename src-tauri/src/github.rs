@@ -2081,7 +2081,14 @@ pub(crate) async fn merge_pr_via_github(
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     let state = state.inner().clone();
-    merge_pr_github_impl(&repo_path, pr_number, &merge_method, &expected_head_sha, &state).await
+    merge_pr_github_impl(
+        &repo_path,
+        pr_number,
+        &merge_method,
+        &expected_head_sha,
+        &state,
+    )
+    .await
 }
 
 /// Get CI check details for a PR via GitHub GraphQL API (Story 060).
@@ -2533,6 +2540,125 @@ pub(crate) async fn approve_pr(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     approve_pr_impl(&repo_path, pr_number, &state).await
+}
+
+/// Map a failed update-branch response. GitHub answers 422 when the pinned
+/// `expected_head_sha` no longer matches the PR head.
+fn update_branch_failure_message(status: u16, raw: &str) -> String {
+    if status == 422 && raw.to_lowercase().contains("expected head sha") {
+        return format!(
+            "{MERGE_HEAD_CHANGED}: new commits were pushed after you looked at it. Refresh before updating the branch."
+        );
+    }
+    format!("Failed to update branch ({status}): {raw}")
+}
+
+/// Merge the base branch into a PR branch via the REST update-branch endpoint,
+/// pinned to `expected_head_sha` (the same operation as GraphQL
+/// `updatePullRequestBranch` with `expectedHeadOid`). GitHub answers 202: the
+/// merge commit lands asynchronously, so the caller re-polls.
+pub(crate) async fn update_pr_branch_impl(
+    repo_path: &str,
+    pr_number: i64,
+    expected_head_sha: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    if expected_head_sha.is_empty() {
+        return Err("Cannot update the branch without the head commit the PR showed".to_string());
+    }
+    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+
+    let url = crate::github_account::github_rest_url(
+        &account.host,
+        &format!("/repos/{owner}/{repo}/pulls/{pr_number}/update-branch"),
+    );
+    crate::github_debug::log_api("PUT", &url, "update_pr_branch_impl");
+    let body = serde_json::json!({ "expected_head_sha": expected_head_sha });
+
+    let response = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .put(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body),
+    )
+    .await?;
+
+    let status = response.status().as_u16();
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        let json: serde_json::Value = response.json().await.unwrap_or_default();
+        let msg = json["message"].as_str().unwrap_or("Unknown error");
+        Err(update_branch_failure_message(status, msg))
+    }
+}
+
+/// Update a PR branch (Tauri command).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn update_pr_branch(
+    repo_path: String,
+    pr_number: i64,
+    expected_head_sha: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    update_pr_branch_impl(&repo_path, pr_number, &expected_head_sha, &state).await
+}
+
+/// Close a PR without merging via the REST pulls endpoint.
+pub(crate) async fn close_pr_impl(
+    repo_path: &str,
+    pr_number: i64,
+    state: &AppState,
+) -> Result<(), String> {
+    let (account, token, owner, repo) = resolve_repo_for_rest(state, repo_path).await?;
+
+    let url = crate::github_account::github_rest_url(
+        &account.host,
+        &format!("/repos/{owner}/{repo}/pulls/{pr_number}"),
+    );
+    crate::github_debug::log_api("PATCH", &url, "close_pr_impl");
+    let body = serde_json::json!({ "state": "closed" });
+
+    let response = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body),
+    )
+    .await?;
+
+    let status = response.status().as_u16();
+    if (200..300).contains(&status) {
+        Ok(())
+    } else {
+        let json: serde_json::Value = response.json().await.unwrap_or_default();
+        let msg = json["message"].as_str().unwrap_or("Unknown error");
+        Err(format!("Failed to close PR ({status}): {msg}"))
+    }
+}
+
+/// Close a PR (Tauri command).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn close_pr(
+    repo_path: String,
+    pr_number: i64,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    close_pr_impl(&repo_path, pr_number, &state).await
 }
 
 /// Fetch the unified diff for a PR via GitHub REST API.
@@ -4157,6 +4283,29 @@ mod tests {
     async fn merge_without_expected_head_is_rejected_before_any_request() {
         let state = crate::state::tests_support::make_test_app_state();
         let err = merge_pr_github_impl("/nonexistent", 1, "squash", "", &state)
+            .await
+            .expect_err("empty sha must be rejected");
+        assert!(err.contains("head commit"), "{err}");
+    }
+
+    /// Catches: update-branch against a head that moved, reported as a generic 422.
+    #[test]
+    fn update_branch_422_expected_head_reports_head_changed() {
+        let msg = update_branch_failure_message(
+            422,
+            "Validation Failed: expected head sha didn't match current head ref.",
+        );
+        assert!(msg.starts_with(MERGE_HEAD_CHANGED), "{msg}");
+        assert_eq!(
+            update_branch_failure_message(403, "Forbidden"),
+            "Failed to update branch (403): Forbidden"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_branch_without_expected_head_is_rejected_before_any_request() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let err = update_pr_branch_impl("/nonexistent", 1, "", &state)
             .await
             .expect_err("empty sha must be rejected");
         assert!(err.contains("head commit"), "{err}");
