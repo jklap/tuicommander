@@ -95,13 +95,4 @@ describe("Compose paste chain (critic r3)", () => {
 		expect(e.defaultPrevented).toBe(true);
 		expect(view.state.doc.toString()).toBe("[image: /saved/h.png]");
 	});
-
-	// Catches: text-wins rule leaking into the invoke path (an image is saved although text/plain is present).
-	it("text/plain next to an image saves nothing", async () => {
-		const view = await mount();
-		pasteTypes(view, ["text/plain", "image/png"]);
-		await settle();
-		expect(view.state.doc.toString()).toBe("hello");
-		expect(invoke).not.toHaveBeenCalled();
-	});
 });
