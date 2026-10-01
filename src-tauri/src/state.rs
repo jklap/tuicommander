@@ -8076,7 +8076,12 @@ mod tests {
         let state = Arc::new(make_test_app_state());
 
         AppState::apply_event_to_session_state(&state, &session_created("fresh", "claude"));
-        let row = state.session_maps.session_states.get("fresh").unwrap().clone();
+        let row = state
+            .session_maps
+            .session_states
+            .get("fresh")
+            .unwrap()
+            .clone();
         assert!(row.last_activity_ms > 0, "new row lost its activity time");
         assert_eq!(row.agent_type.as_deref(), Some("claude"));
 
@@ -8085,8 +8090,16 @@ mod tests {
             .session_states
             .insert("existing".to_string(), SessionState::default());
         AppState::apply_event_to_session_state(&state, &session_created("existing", "codex"));
-        let row = state.session_maps.session_states.get("existing").unwrap().clone();
-        assert!(row.last_activity_ms > 0, "existing row kept a zero activity time");
+        let row = state
+            .session_maps
+            .session_states
+            .get("existing")
+            .unwrap()
+            .clone();
+        assert!(
+            row.last_activity_ms > 0,
+            "existing row kept a zero activity time"
+        );
         assert_eq!(row.agent_type.as_deref(), Some("codex"));
     }
 
