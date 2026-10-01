@@ -847,15 +847,24 @@ The fix has three parts, all additive and fail-safe:
    non_teammate_running, teammate_running }`), written right after the `bgtasks` declaration
    in the same hook fire and under the same turn epoch; a fresh `bgtasks` drops it, a summary
    with no matching declaration is ignored, and `reset_declared_background_work` clears it. **No
-   summary (an older hook) means every running task counts, as before** — a mixed-version
-   install can never under-report.
-3. `SilenceState::declared_background_work_for_epoch_with(epoch, teammates_busy)` is the
-   teammate-aware read every consumer uses (`AppState::declared_background_work_for`, the
+   summary (an older hook) means every running task counts, as before.**
+3. `SilenceState::declared_background_work_for_epoch_with(epoch, teammates_may_be_working)` is
+   the teammate-aware read every consumer uses (`AppState::declared_background_work_for`, the
    parent-idle notification gate, the suggest-drain gate, the standby gate). Non-teammate
-   running work always counts; a teammate counts only if `AppState::lead_teammates_busy`
-   says one of this lead's teammates is actually working. The closure is lazy and must not
-   take a `SilenceState` lock (the caller holds the lead's own); it reads only the tmux
-   topology and the teammates' shell-state atomics.
+   running work always counts; declared teammates count only if
+   `AppState::lead_teammates_may_be_working(lead, declared)` says so. The closure is lazy and
+   must not take a `SilenceState` lock (the caller holds the lead's own); it reads only the
+   tmux topology and the teammates' shell-state atomics.
+
+**Fail-safe: an unaccounted-for teammate counts as working.** `lead_teammates_may_be_working`
+answers "yes" when the hook declared more running teammates than there are linked panes, and
+otherwise only if a linked teammate's terminal is busy. So a missing link (old `tuic` binary,
+plain `tuic alias`, an in-process teammate, a pane made before the link existed) degrades to
+exactly the pre-change behavior (lead stays working) rather than the opposite error of
+calling a working lead idle. The teammate's busy signal is its own terminal's `shell_states`
+atomic, which for a hook-instrumented Claude session comes from its `UserPromptSubmit`/`Stop`
+hooks (a teammate's `Stop` reported `background_tasks: []` and flipped it idle in the live
+captures); a teammate pane with no hook state would read idle, which is the residual risk.
 
 **Lead ↔ teammate linkage** comes from the tmux shim, because a teammate's own hooks carry no
 parent reference (payload and hook env hold only its own `session_id`/`TUIC_SESSION`). `tuic-cli`
@@ -1028,6 +1037,8 @@ agent_state, agent_state_rung, awaiting_input, background_work, declared_backgro
 `teammates_busy`, and `counts_now`, the value the ladder actually used, equal to
 `visible.declared_background_work`), `swarm` (present only for a lead with teammates or a
 teammate itself: `lead_session_id` and each owned teammate's `session_id`/`shell_state`/`busy`),
+also `epoch_flags.declared_background_work.unlinked_teammates` (declared running teammates no
+linked pane accounts for; any surplus makes `counts_now` true),
 `screen`
 (cached_activity, skipped_by_protocol_authority, no_adapter_for_agent), `silence` (last_output,
 threshold, remaining_before_fire), `notification` (the last `NotificationClassification`, if
