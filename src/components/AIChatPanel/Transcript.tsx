@@ -8,7 +8,7 @@
  */
 
 import { type Component, createEffect, createMemo, createSignal, For, type JSX, Match, Show, Switch } from "solid-js";
-import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
+import type { AcpNoticeAction, AcpTranscriptEntry } from "../../stores/acpTranscript";
 import { appLogger } from "../../stores/appLogger";
 import type { AcpToolCall, AcpToolCallContent } from "../../types/acp";
 import { cx } from "../../utils";
@@ -26,6 +26,12 @@ const SETTLEMENTS: Record<string, string> = {
 	refusal: "The agent refused this turn.",
 	max_tokens: "The turn stopped: the answer ran out of room.",
 	max_turn_requests: "The turn stopped: it reached its request limit.",
+};
+
+const NOTICE_LABELS: Record<AcpNoticeAction["kind"], { title: string; button: string }> = {
+	open_result: { title: "Result ready", button: "Open result" },
+	answer: { title: "Question", button: "Answer" },
+	approve: { title: "Approval needed", button: "Approve" },
 };
 
 function settlement(stopReason: string): string {
@@ -159,6 +165,8 @@ export interface TranscriptProps {
 	emptyMessage: string;
 	onOpenFile?: (href: string) => void;
 	onClear?: () => void;
+	/** `open_result` opens its file. `answer` and `approve` have nothing to open: the open interaction is drawn at the end, and the transcript scrolls there. */
+	onNoticeAction?: (action: AcpNoticeAction) => void;
 	onSuggestion: (text: string) => void;
 	/** Open questions, drawn at the end of the conversation they belong to. */
 	children?: JSX.Element;
@@ -245,6 +253,13 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 			if (container && stickToBottom) container.scrollTop = container.scrollHeight;
 		});
 	});
+	const runNoticeAction = (action: AcpNoticeAction) => {
+		if (action.kind !== "open_result" && container) {
+			stickToBottom = true;
+			container.scrollTop = container.scrollHeight;
+		}
+		props.onNoticeAction?.(action);
+	};
 	const findNext = () => {
 		if (!container || !query()) return;
 		const needle = query().toLocaleLowerCase();
@@ -386,6 +401,23 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 										</div>
 									);
 								}}
+							</Match>
+							<Match when={entry.kind === "notice" && entry}>
+								{(notice) => (
+									<div class={s.noticeCard} role="group" aria-label="Notice">
+										<div class={s.noticeTitle}>
+											{(notice().action && NOTICE_LABELS[notice().action!.kind].title) || "Notice"}
+										</div>
+										<div>{notice().text}</div>
+										<Show when={notice().action}>
+											{(action) => (
+												<button type="button" class={s.noticeAction} onClick={() => runNoticeAction(action())}>
+													{NOTICE_LABELS[action().kind].button}
+												</button>
+											)}
+										</Show>
+									</div>
+								)}
 							</Match>
 							<Match when={entry.kind === "thought" && entry}>
 								{(thought) => (
