@@ -24,6 +24,58 @@
   overflow: hidden;
 }
 
+/* Density (set by Sidebar.tsx from row count and pointer type). `compact` is the
+   base above. Only variables and hit areas change: no handler, drag or long-press
+   rule depends on them. */
+.sidebar[data-density="comfortable"] {
+  --row-pad-x: 9px;
+  --row-icon: 16px;
+  --row-gap: 6px;
+  --row-h: 30px;
+  --tree-indent: 12px;
+  --font-2xs: 11px;
+  --font-xs: 12px;
+  --font-sm: 13px;
+  --font-md: 14px;
+}
+
+/* Finger: 44px targets (Apple HIG), also under (hover: hover) with a coarse
+   pointer such as an iPad with trackpad. */
+.sidebar[data-density="touch"] {
+  --row-pad-x: 12px;
+  --row-icon: 18px;
+  --row-gap: 8px;
+  --row-h: 44px;
+  --tree-indent: 14px;
+  --font-2xs: 12px;
+  --font-xs: 13px;
+  --font-sm: 15px;
+  --font-md: 16px;
+}
+
+.sidebar[data-density="comfortable"] .repoHeader {
+  padding: 9px 10px 5px;
+}
+
+.sidebar[data-density="touch"] .repoHeader {
+  padding: 10px 12px 6px;
+  min-height: 44px;
+}
+
+.sidebar[data-density="touch"] .repoSection {
+  margin-bottom: 6px;
+}
+
+.sidebar[data-density="touch"] .branchAddBtn,
+.sidebar[data-density="touch"] .branchRemoveBtn {
+  width: 36px;
+  height: 36px;
+}
+
+.sidebar[data-density="touch"] .branchActions {
+  max-width: 84px;
+}
+
 .resizeHandle {
   position: absolute;
   top: 0;

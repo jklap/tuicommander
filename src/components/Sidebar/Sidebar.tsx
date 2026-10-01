@@ -10,6 +10,7 @@ import { tunnelPanelStore } from "../../stores/tunnelPanel";
 import { tunnelsStore } from "../../stores/tunnels";
 import { uiStore } from "../../stores/ui";
 import { getRepoTextColor } from "../../utils/repoColor";
+import { countSidebarRows, createCoarsePointer, sidebarDensity } from "../../utils/sidebarDensity";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { PromptDialog } from "../PromptDialog";
@@ -105,6 +106,15 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 		layout.ungrouped.length + layout.groups.reduce((n, g) => n + g.repos.length, 0);
 	const totalRepoCount = createMemo(() => countRepos(groupedLayout()));
 	const shownRepoCount = createMemo(() => countRepos(filteredLayout()));
+
+	// Density follows how much is on screen and how the user points: a short list
+	// or a finger gets roomier rows (CSS vars only; no handler is touched).
+	const coarsePointer = createCoarsePointer();
+	const density = createMemo(() => {
+		const layout = filteredLayout();
+		const repos = [...layout.ungrouped, ...layout.groups.flatMap((g) => g.repos)];
+		return sidebarDensity(countSidebarRows(repos), coarsePointer());
+	});
 
 	const drag = useSidebarDragDrop();
 
@@ -335,7 +345,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	};
 
 	return (
-		<aside id="sidebar" class={s.sidebar} data-testid="sidebar">
+		<aside id="sidebar" class={s.sidebar} data-testid="sidebar" data-density={density()}>
 			{/* Content */}
 			<div class={s.content}>
 				{/* Repo filter status — only rendered while the "active only" filter is
