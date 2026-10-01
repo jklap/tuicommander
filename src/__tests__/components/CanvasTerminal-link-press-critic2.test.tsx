@@ -150,7 +150,8 @@ describe("CanvasTerminal link press tracker (critic round 2)", () => {
 		));
 		unmount = view.unmount;
 		await waitFor(() => expect(frameSink.current).not.toBeNull());
-		frameSink.current?.(frame(FIRST, mouseMode));
+		// The reset above narrows `current` to null for the compiler; the subscribe mock refills it.
+		(frameSink.current as ((data: ArrayBuffer) => void) | null)?.(frame(FIRST, mouseMode));
 		const found = view.container.querySelector('canvas[tabindex="0"]');
 		if (!found) throw new Error("terminal canvas not mounted");
 		canvas = found;
