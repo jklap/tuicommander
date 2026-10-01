@@ -668,6 +668,11 @@ pub struct TerminalGrid {
     /// visible screen untouched. Preserves TUI cursor positioning on screen
     /// while keeping scrollback readable across resize cycles.
     pub reflow_history: bool,
+    /// Armed by a resize of the primary screen: `total_scrolled` at that moment.
+    /// While armed, [`Self::merge_reprinted_history_tail`] runs after every chunk.
+    reprint_merge_armed_at: Option<usize>,
+    /// Tail of the previous chunk, so a frame end split across chunks is seen.
+    frame_end_carry: Vec<u8>,
 }
 
 impl TerminalGrid {
@@ -715,6 +720,8 @@ impl TerminalGrid {
             bell_flag,
             events,
             reflow_history: true,
+            reprint_merge_armed_at: None,
+            frame_end_carry: Vec::new(),
         }
     }
 
@@ -723,7 +730,14 @@ impl TerminalGrid {
     /// Returns changed rows. OSC 133 events are delivered via `drain_events()`
     /// as `TermEvent::Osc133` (parsed natively by the patched VTE handler).
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
-        self.processor.advance(&mut self.term, data);
+        if self.reprint_merge_armed_at.is_some() {
+            if self.advance_frame_by_frame(data) {
+                // History shrank: the cached rows and the frame bookkeeping are stale.
+                self.prev_rows.clear();
+            }
+        } else {
+            self.processor.advance(&mut self.term, data);
+        }
 
         // Prefer the alacritty parse-damage set: read+diff ONLY the lines whose
         // content actually changed, instead of rebuilding+diffing the whole screen
@@ -1189,9 +1203,99 @@ impl TerminalGrid {
             cols: cols as usize,
             lines: rows as usize,
         };
+        let was_alt = self.is_alternate_screen();
         self.term.resize_reflow(size, mode);
+        self.reprint_merge_armed_at = (!was_alt).then(|| self.term.grid().total_scrolled());
+        self.frame_end_carry.clear();
         self.prev_rows.clear();
         self.term.mark_fully_damaged();
+    }
+
+    /// Feed `data`, trying [`Self::merge_reprinted_history_tail`] at the end of
+    /// every synchronized-update frame. Claude Code draws a repaint inside one,
+    /// so that is the moment its reprinted rows are complete whatever the chunk
+    /// boundaries were. Returns true when history rows were dropped.
+    fn advance_frame_by_frame(&mut self, data: &[u8]) -> bool {
+        const FRAME_END: &[u8] = b"\x1b[?2026l";
+        let carried = self.frame_end_carry.len();
+        let mut window = std::mem::take(&mut self.frame_end_carry);
+        window.extend_from_slice(data);
+        let mut merged = false;
+        let mut fed = 0;
+        let mut from = 0;
+        while let Some(at) = window[from..]
+            .windows(FRAME_END.len())
+            .position(|w| w == FRAME_END)
+        {
+            let end = from + at + FRAME_END.len();
+            from = end;
+            // A match that ended in the carried bytes was already fed.
+            let Some(end_in_data) = end.checked_sub(carried).filter(|&e| e > fed) else {
+                continue;
+            };
+            self.processor
+                .advance(&mut self.term, &data[fed..end_in_data]);
+            fed = end_in_data;
+            merged |= self.merge_reprinted_history_tail();
+            if self.reprint_merge_armed_at.is_none() {
+                break;
+            }
+        }
+        self.processor.advance(&mut self.term, &data[fed..]);
+        self.frame_end_carry = if self.reprint_merge_armed_at.is_some() {
+            window[window.len().saturating_sub(FRAME_END.len() - 1)..].to_vec()
+        } else {
+            Vec::new()
+        };
+        merged
+    }
+
+    /// Undo the duplicate a resize leaves behind in scrollback.
+    ///
+    /// A resize that shrinks the screen scrolls its top rows into history so no
+    /// row is lost. Claude Code then wipes the visible screen and prints its
+    /// last rows again, beginning with rows that were just scrolled out, so
+    /// the same rows are in history and on screen. When the newest history
+    /// rows are the first rows of the screen, drop them from history.
+    ///
+    /// Armed by [`Self::resize_with_mode`]; a program that draws without synchronized
+    /// updates keeps the duplicate. Disarms on the first merge, or once
+    /// the output has scrolled a screenful, which ends the repaint window.
+    /// Returns true when history rows were dropped.
+    fn merge_reprinted_history_tail(&mut self) -> bool {
+        const MIN_ROWS: usize = 2;
+        let Some(armed_at) = self.reprint_merge_armed_at else {
+            return false;
+        };
+        let (history, lines, scrolled) = {
+            let grid = self.term.grid();
+            (
+                grid.history_size(),
+                grid.screen_lines(),
+                grid.total_scrolled(),
+            )
+        };
+        if self.is_alternate_screen() || scrolled.saturating_sub(armed_at) > lines {
+            self.reprint_merge_armed_at = None;
+            return false;
+        }
+        let m = history.min(lines) as i32;
+        let text = |line: i32| self.row_to_text(Line(line)).unwrap_or_default();
+        let tail: Vec<String> = (-m..0).map(text).collect();
+        let head: Vec<String> = (0..m).map(text).collect();
+        let overlap = (MIN_ROWS..=m as usize)
+            .rev()
+            .find(|&k| {
+                tail[m as usize - k..] == head[..k]
+                    && head[..k].iter().filter(|row| !row.is_empty()).count() >= MIN_ROWS
+            })
+            .unwrap_or(0);
+        if overlap == 0 {
+            return false;
+        }
+        self.term.grid_mut().drop_newest_history(overlap);
+        self.reprint_merge_armed_at = None;
+        true
     }
 
     /// Override ANSI colors 0-15 with theme values.
@@ -3705,6 +3809,65 @@ mod tests {
             Err(_) => println!("{out}"),
         }
         eprintln!("replayed {} bytes → {} history lines", data.len(), history);
+    }
+
+    /// Real Claude Code (v2.1.286, Haiku) capture of "print LINE 001..250", taken
+    /// while the PTY was resized 20x100 -> 14x100 -> 26x100 -> 10x80 -> 24x100 ->
+    /// 16x100 -> 20x100 (byte offsets in `CLAUDE_LINES_RESIZES`). Claude answers each
+    /// SIGWINCH by wiping the visible screen and printing its last rows again.
+    ///
+    /// Every numbered line must survive exactly once, in order. Catches both
+    /// failures of the shrink: the top-clamped shrink keeps no row the wipe
+    /// erases (lines 1-3, 75-76 and 148-150 vanish), and a bottom-anchored shrink
+    /// that never takes back what the reprint repeats puts 77 and 78 in twice.
+    const CLAUDE_LINES_RESIZES: [(usize, u16, u16); 6] = [
+        (9146, 14, 100),
+        (21500, 26, 100),
+        (34739, 10, 80),
+        (45525, 24, 100),
+        (62285, 16, 100),
+        (86115, 20, 100),
+    ];
+
+    #[test]
+    fn resized_claude_repaint_keeps_every_line_once_in_order() {
+        let data = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/terminal_resize/claude-lines-resized.raw"),
+        )
+        .expect("fixture claude-lines-resized.raw");
+        for chunk in [4096, 61] {
+            let mut grid = TerminalGrid::new(20, 100, 10_000);
+            let mut pos = 0;
+            while pos < data.len() {
+                let mut end = (pos + chunk).min(data.len());
+                let next = CLAUDE_LINES_RESIZES.iter().find(|r| r.0 > pos);
+                if let Some(&(at, rows, cols)) = next {
+                    end = end.min(at);
+                    let _ = grid.process(&data[pos..end]);
+                    pos = end;
+                    if pos == at {
+                        grid.resize_with_mode(rows, cols, ReflowMode::All);
+                    }
+                } else {
+                    let _ = grid.process(&data[pos..end]);
+                    pos = end;
+                }
+            }
+            let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+            rows.extend(grid.screen_text_rows());
+            let numbers: Vec<u32> = rows
+                .iter()
+                .filter_map(|row| {
+                    row.find("LINE ")?
+                        .checked_add(5)
+                        .and_then(|i| row.get(i..i + 3))
+                })
+                .filter_map(|n| n.parse().ok())
+                .collect();
+            let expected: Vec<u32> = (1..=250).collect();
+            assert_eq!(numbers, expected, "chunk size {chunk}");
+        }
     }
 
     #[test]
