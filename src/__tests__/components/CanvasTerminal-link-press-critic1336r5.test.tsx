@@ -72,7 +72,7 @@ function fire(target: Element, type: string, col: number, init: MouseEventInit =
 	);
 }
 
-describe("CanvasTerminal link context menu, critic 1336 round 4", () => {
+describe("CanvasTerminal link context menu, critic 1336 round 5", () => {
 	const onOpen = vi.fn();
 	let canvas: Element;
 	let unmount: () => void;
@@ -141,7 +141,7 @@ describe("CanvasTerminal link context menu, critic 1336 round 4", () => {
 			},
 		);
 		const view = render(() => (
-			<CanvasTerminal sessionId="link-1336r4" terminalId="link-1336r4" onOpenFilePath={onOpen} />
+			<CanvasTerminal sessionId="link-1336r5" terminalId="link-1336r5" onOpenFilePath={onOpen} />
 		));
 		unmount = view.unmount;
 		await waitFor(() => expect(frameSink.current).not.toBeNull());
@@ -156,27 +156,44 @@ describe("CanvasTerminal link context menu, critic 1336 round 4", () => {
 
 	afterEach(() => {
 		unmount();
+		invoke.mockClear();
+	});
+
+	afterEach(() => {
+		unmount();
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 	});
 
-	// Catches: the menu serving the hover of ANOTHER link when its own re-resolution is superseded by
-	// the next hover probe (the probe returns STALE and the handler reads the old `hoveredLink`):
-	// right-clicking the path right after leaving the OSC 8 link opened a menu for `other.md`.
-	it("never opens the menu of a link from another cell when the re-resolution is superseded", async () => {
-		fire(document.body, "mousemove", OSC8_COL);
-		await waitFor(() => expect(canvas.getAttribute("style") ?? "").toContain("pointer"));
-		// Leave for the path; the throttled probe of this move supersedes the menu's own probe.
-		fire(document.body, "mousemove", PATH_COL);
-		fire(canvas, "mousedown", PATH_COL, { button: 2, buttons: 2 });
-		canvas.dispatchEvent(
-			new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x(PATH_COL), clientY: 2, button: 2 }),
-		);
-		await new Promise((r) => setTimeout(r, SLOW_MS * 3));
-		const items = Array.from(document.body.querySelectorAll("*")).filter(
+	const openItems = () =>
+		Array.from(document.body.querySelectorAll("*")).filter(
 			(n) => n.children.length === 0 && n.textContent?.trim() === "Open",
 		) as HTMLElement[];
-		for (const el of items) el.click();
-		expect(onOpen).not.toHaveBeenCalledWith("/cwd/other.md", undefined, undefined);
+	const contextmenu = (col: number) =>
+		canvas.dispatchEvent(
+			new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x(col), clientY: 2, button: 2 }),
+		);
+
+	// Catches: two overlapping right-clicks resolving out of order, so the menu serves the link of the
+	// click the user made FIRST (its slow lookup finishes last and overwrites the target).
+	it("opens the link of the latest right-click when an earlier slower lookup finishes after it", async () => {
+		fire(document.body, "mousemove", OSC8_COL);
+		await waitFor(() => expect(canvas.getAttribute("style") ?? "").toContain("pointer"));
+		contextmenu(PATH_COL); // slow hyperlink probe (SLOW_MS)
+		contextmenu(OSC8_COL); // fast: OSC 8 answers at once
+		await new Promise((r) => setTimeout(r, SLOW_MS * 3));
+		for (const el of openItems()) el.click();
+		expect(onOpen).toHaveBeenCalledTimes(1);
+		expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined);
+	});
+
+	// Catches: a lookup that resolves after the user dismissed the intent (left click elsewhere) and
+	// pops a menu up out of nowhere.
+	it("does not pop a menu up after the user left-clicked elsewhere while the lookup ran", async () => {
+		contextmenu(PATH_COL);
+		fire(canvas, "mousedown", 30, { button: 0 });
+		fire(document.body, "mouseup", 30, { button: 0 });
+		await new Promise((r) => setTimeout(r, SLOW_MS * 3));
+		expect(openItems()).toHaveLength(0);
 	});
 });
