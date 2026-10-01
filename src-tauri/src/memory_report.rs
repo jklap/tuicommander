@@ -125,6 +125,151 @@ pub(crate) fn malloc_zone_stats() -> Option<(u64, u64)> {
     None
 }
 
+/// Blocks at least this big are listed apart from the heap total: one of them
+/// is a whole structure (a decoder state, an index, a buffer), not an
+/// accumulation of small allocations.
+pub(crate) const LARGE_BLOCK_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Live malloc blocks of at least [`LARGE_BLOCK_BYTES`]: how many, and their
+/// combined size.
+///
+/// 2026-09-29: `malloc_bytes_in_use` was 912 MB against 260 MB accounted, and the
+/// only way to see that four 82.76 MB blocks were the difference was `heap
+/// -addresses all` on a 983k-node heap, which suspends the process for seconds.
+/// The totals cannot say whether the gap is one structure or a million small
+/// allocations; this pair can, and it reads the zones from inside the process.
+///
+/// Each zone's allocator lock is held for the walk — the protocol `fork` uses
+/// (`force_lock`/`force_unlock`) — so a concurrent resize of the allocator's own
+/// tables cannot be observed half-done. Other threads' `malloc` calls wait for
+/// it, and the recorder therefore never allocates.
+#[cfg(target_os = "macos")]
+pub(crate) fn large_malloc_blocks() -> Option<(u64, u64)> {
+    // Declared here rather than taken from `libc`, which exposes none of it.
+    // Layouts are `<malloc/malloc.h>`; only the prefix this walk reads is spelled.
+    #[repr(C)]
+    struct VmRange {
+        address: usize,
+        size: usize,
+    }
+    type Recorder =
+        unsafe extern "C" fn(u32, *mut libc::c_void, libc::c_uint, *mut VmRange, libc::c_uint);
+    type Lock = unsafe extern "C" fn(*mut Zone);
+    #[repr(C)]
+    struct Introspection {
+        enumerator: Option<
+            unsafe extern "C" fn(
+                u32,
+                *mut libc::c_void,
+                libc::c_uint,
+                usize,
+                *mut libc::c_void,
+                Recorder,
+            ) -> libc::c_int,
+        >,
+        good_size: *const libc::c_void,
+        check: *const libc::c_void,
+        print: *const libc::c_void,
+        log: *const libc::c_void,
+        force_lock: Option<Lock>,
+        force_unlock: Option<Lock>,
+    }
+    #[repr(C)]
+    struct Zone {
+        reserved1: *const libc::c_void,
+        reserved2: *const libc::c_void,
+        size: *const libc::c_void,
+        malloc: *const libc::c_void,
+        calloc: *const libc::c_void,
+        valloc: *const libc::c_void,
+        free: *const libc::c_void,
+        realloc: *const libc::c_void,
+        destroy: *const libc::c_void,
+        zone_name: *const libc::c_char,
+        batch_malloc: *const libc::c_void,
+        batch_free: *const libc::c_void,
+        introspect: *const Introspection,
+    }
+    #[derive(Default)]
+    struct Census {
+        count: u64,
+        bytes: u64,
+    }
+    unsafe extern "C" {
+        fn malloc_get_all_zones(
+            task: u32,
+            reader: *mut libc::c_void,
+            addresses: *mut *mut usize,
+            count: *mut libc::c_uint,
+        ) -> libc::c_int;
+    }
+    const MALLOC_PTR_IN_USE_RANGE_TYPE: libc::c_uint = 2;
+
+    unsafe extern "C" fn record(
+        _task: u32,
+        context: *mut libc::c_void,
+        _kind: libc::c_uint,
+        ranges: *mut VmRange,
+        count: libc::c_uint,
+    ) {
+        // No allocation, no panic, no log: the zone locks are held.
+        let census = unsafe { &mut *context.cast::<Census>() };
+        for i in 0..count as usize {
+            let size = unsafe { (*ranges.add(i)).size } as u64;
+            if size >= LARGE_BLOCK_BYTES {
+                census.count += 1;
+                census.bytes += size;
+            }
+        }
+    }
+
+    #[allow(deprecated)] // libc's own accessor; `mach2` would be a new dependency
+    let task = unsafe { libc::mach_task_self() };
+    let mut addresses: *mut usize = std::ptr::null_mut();
+    let mut zone_count: libc::c_uint = 0;
+    // A null reader means "this process": the addresses are directly readable.
+    let rc = unsafe {
+        malloc_get_all_zones(task, std::ptr::null_mut(), &mut addresses, &mut zone_count)
+    };
+    if rc != 0 || addresses.is_null() {
+        return None;
+    }
+
+    let mut census = Census::default();
+    for i in 0..zone_count as usize {
+        let zone = unsafe { *addresses.add(i) } as *mut Zone;
+        let introspect = unsafe { zone.as_ref() }.map(|z| z.introspect)?;
+        let Some(introspect) = (unsafe { introspect.as_ref() }) else {
+            continue;
+        };
+        let (Some(enumerate), Some(lock), Some(unlock)) = (
+            introspect.enumerator,
+            introspect.force_lock,
+            introspect.force_unlock,
+        ) else {
+            continue;
+        };
+        unsafe {
+            lock(zone);
+            enumerate(
+                task,
+                std::ptr::addr_of_mut!(census).cast(),
+                MALLOC_PTR_IN_USE_RANGE_TYPE,
+                zone as usize,
+                std::ptr::null_mut(),
+                record,
+            );
+            unlock(zone);
+        }
+    }
+    Some((census.count, census.bytes))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn large_malloc_blocks() -> Option<(u64, u64)> {
+    None
+}
+
 /// Just the bytes half of [`malloc_zone_stats`], for callers weighing a
 /// structure across its own construction.
 pub(crate) fn malloc_bytes_in_use() -> Option<u64> {
@@ -259,6 +404,7 @@ pub(crate) fn report(state: &Arc<AppState>) -> serde_json::Value {
     let maps = maps(state);
     let accounted: usize = maps.iter().filter_map(|m| m.bytes).sum();
     let (blocks, heap_bytes) = malloc_zone_stats().unzip();
+    let (large_count, large_bytes) = large_malloc_blocks().unzip();
     serde_json::json!({
         "phys_footprint_bytes": phys_footprint_bytes(),
         // What the maps below explain. A footprint far above this is memory no
@@ -270,6 +416,15 @@ pub(crate) fn report(state: &Arc<AppState>) -> serde_json::Value {
         // owns; `blocks_in_use` rising with it says how many.
         "malloc_blocks_in_use": blocks,
         "malloc_bytes_in_use": heap_bytes,
+        // The blocks of `min_bytes` or more among them. `accounted_bytes` plus
+        // these (minus whatever a map also holds as one block) is how much of the
+        // heap a name can be put to; a gap that is one big block is a structure,
+        // a gap with none is small allocations.
+        "malloc_large_blocks": {
+            "min_bytes": LARGE_BLOCK_BYTES,
+            "count": large_count,
+            "bytes": large_bytes,
+        },
         "maps": maps,
         // Memory held outside `maps` and outside the malloc heap (a loaded
         // model). Not part of `accounted_bytes`, which is compared to the heap.
@@ -370,6 +525,39 @@ mod tests {
         }
         #[cfg(not(target_os = "macos"))]
         assert_eq!(stats, None);
+    }
+
+    #[test]
+    fn a_live_large_block_is_counted_in_the_heap_census() {
+        // The bug this guards: the report shows only totals, so a gap made of a few
+        // 80 MB blocks (the 2026-09-29 Whisper decoder state) reads the same as a
+        // million small allocations. A census that walks the wrong zone, or that
+        // never sees a block this size, answers "none" every time.
+        let block = vec![1u8; 2 * LARGE_BLOCK_BYTES as usize];
+        let census = large_malloc_blocks();
+        #[cfg(target_os = "macos")]
+        {
+            let (count, bytes) = census.expect("the zones can be enumerated");
+            assert!(count >= 1, "a 16 MiB block is live: {count} blocks");
+            assert!(
+                bytes >= block.len() as u64,
+                "the census holds at least that block: {bytes} bytes"
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(census, None);
+        drop(std::hint::black_box(block));
+    }
+
+    #[test]
+    fn the_report_carries_the_large_block_census() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let report = report(&state);
+        assert_eq!(
+            report["malloc_large_blocks"]["min_bytes"],
+            LARGE_BLOCK_BYTES
+        );
+        assert!(report["malloc_large_blocks"].get("count").is_some());
     }
 
     #[test]
