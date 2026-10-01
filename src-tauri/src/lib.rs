@@ -34,6 +34,11 @@ pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
+// Tests of the pure sidecar predicate that build.rs also compiles; a build
+// script has no test harness.
+#[cfg(test)]
+#[path = "../build_sidecars.rs"]
+mod build_sidecars;
 #[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod dir_watcher;
