@@ -126,8 +126,9 @@ let clockTimer: ReturnType<typeof setInterval> | undefined;
 export function createMinuteClock(active: Accessor<boolean> = () => true): Accessor<number> {
 	createEffect(() => {
 		if (!active()) return;
+		// A late joiner must not read the time of the last tick, up to a minute old.
+		setSharedNow(Date.now());
 		if (clockUsers++ === 0) {
-			setSharedNow(Date.now());
 			clockTimer = setInterval(() => setSharedNow(Date.now()), MINUTE);
 		}
 		onCleanup(() => {

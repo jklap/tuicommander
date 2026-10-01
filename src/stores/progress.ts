@@ -134,6 +134,11 @@ export function createProgressStore() {
 	const [sidebarFlows, setSidebarFlows] = createStore<Record<string, ProgressFlow>>({});
 	const sidebarFlowFetchedAt = new Map<string, number>();
 	const SIDEBAR_FLOW_MIN_GAP_MS = 5000;
+	// An ask inside the gap is not dropped: one trailing refresh runs when the gap ends.
+	const sidebarFlowTrailing = new Map<string, ReturnType<typeof setTimeout>>();
+	// Responses are applied only if no reset and no newer request happened since they were sent.
+	let sidebarFlowEpoch = 0;
+	const sidebarFlowSeq = new Map<string, number>();
 
 	function ensure(project: string): void {
 		if (state.projects[project]) return;
@@ -188,13 +193,29 @@ export function createProgressStore() {
 	}
 
 	/// Reads the existing `progress_flow` command for the rich sidebar's subagent
-	/// lines. Rows of one repo ask together, so asks closer than the gap collapse.
+	/// lines. Rows of one repo ask together, so asks closer than the gap collapse
+	/// into one trailing refresh.
 	async function refreshSidebarFlow(project: string): Promise<void> {
-		const last = sidebarFlowFetchedAt.get(project) ?? 0;
-		if (Date.now() - last < SIDEBAR_FLOW_MIN_GAP_MS) return;
+		const wait = SIDEBAR_FLOW_MIN_GAP_MS - (Date.now() - (sidebarFlowFetchedAt.get(project) ?? 0));
+		if (wait > 0) {
+			if (!sidebarFlowTrailing.has(project)) {
+				sidebarFlowTrailing.set(
+					project,
+					setTimeout(() => {
+						sidebarFlowTrailing.delete(project);
+						void refreshSidebarFlow(project);
+					}, wait),
+				);
+			}
+			return;
+		}
 		sidebarFlowFetchedAt.set(project, Date.now());
+		const epoch = sidebarFlowEpoch;
+		const seq = (sidebarFlowSeq.get(project) ?? 0) + 1;
+		sidebarFlowSeq.set(project, seq);
 		try {
 			const flow = await invoke<ProgressFlow>("progress_flow", { project, input: {} });
+			if (epoch !== sidebarFlowEpoch || sidebarFlowSeq.get(project) !== seq) return;
 			setSidebarFlows(project, reconcile(flow));
 		} catch {
 			// Keep the last flow: a failed read must not blank the subagent lines.
@@ -366,6 +387,10 @@ export function createProgressStore() {
 				setState("flows", reconcile({}));
 				setSidebarFlows(reconcile({}));
 				sidebarFlowFetchedAt.clear();
+				sidebarFlowEpoch++;
+				sidebarFlowSeq.clear();
+				for (const timer of sidebarFlowTrailing.values()) clearTimeout(timer);
+				sidebarFlowTrailing.clear();
 				setView("list");
 				setDialogVisible(false);
 				setRequestedProject(null);

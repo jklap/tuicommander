@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -151,6 +152,7 @@ import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
+import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
 
 /** Helper to create default no-op props for Sidebar */
@@ -679,6 +681,18 @@ describe("Sidebar", () => {
 				const { container } = setup({ t2: term("t2", { parentSession: "tuic-gone" }) }, []);
 				const item = container.querySelector(".branchTabItem") as HTMLElement;
 				expect(item.classList.contains("branchTabNested")).toBe(false);
+			});
+
+			// Catches: the polling effect tracking only the first agent terminal, so a later agent
+			// finishing (its subagents returning) never triggers a refresh.
+			it("refreshes the flow when a second agent terminal flips busy", () => {
+				const [busy, setBusy] = createSignal(false);
+				vi.mocked(terminalsStore.isBusy).mockImplementation((id: string) => (id === "t2" ? busy() : false));
+				setup({ t1: term("t1"), t2: term("t2") }, []);
+				const calls = vi.mocked(progressStore.refreshSidebarFlow).mock.calls.length;
+				setBusy(true);
+				expect(vi.mocked(progressStore.refreshSidebarFlow).mock.calls.length).toBeGreaterThan(calls);
+				vi.mocked(terminalsStore.isBusy).mockImplementation(() => false);
 			});
 
 			// Catches: compact mode changed by round 6.
