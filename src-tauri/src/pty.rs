@@ -1148,6 +1148,49 @@ const SUBTASK_STALE_MS: u64 = 30_000;
 /// AtomicU8 encoding for shell_states DashMap.
 pub(crate) const SHELL_NULL: u8 = 0;
 pub(crate) const SHELL_BUSY: u8 = 1;
+
+/// `background_tasks[].status` values confirmed terminal from real Claude Code
+/// captures. Any other status is treated as still running (fail-safe: an
+/// unrecognized future status can never silently clear a real declaration).
+const KNOWN_TERMINAL_BG_STATUSES: &[&str] = &["completed", "failed"];
+
+/// Claude Code's `background_tasks[].type` for an Agent Teams teammate.
+const BG_TASK_TYPE_TEAMMATE: &str = "teammate";
+
+/// Running background tasks declared by a `Stop` hook, split by whether they are
+/// Agent Teams teammates. See `SilenceState::declared_task_summary`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct DeclaredTaskSummary {
+    pub(crate) non_teammate_running: u32,
+    pub(crate) teammate_running: u32,
+}
+
+/// Parse the decoded `bgtasksummary` payload: comma-separated `type/status` or
+/// `type/status*N` items (see `tuic-hook`'s `background_task_summary`).
+/// Fail-safe: an item with no `/` has no recognizable type, so it counts as
+/// non-teammate work; a malformed `*N` count is read as 1.
+pub(crate) fn parse_bg_task_summary(decoded: &str) -> DeclaredTaskSummary {
+    let mut summary = DeclaredTaskSummary::default();
+    for item in decoded.split(',').filter(|i| !i.is_empty()) {
+        let (head, count) = match item.rsplit_once('*') {
+            Some((head, n)) => match n.parse::<u32>() {
+                Ok(n) => (head, n),
+                Err(_) => (item, 1),
+            },
+            None => (item, 1),
+        };
+        let (kind, status) = head.split_once('/').unwrap_or(("", head));
+        if status.is_empty() || KNOWN_TERMINAL_BG_STATUSES.contains(&status) {
+            continue;
+        }
+        if kind == BG_TASK_TYPE_TEAMMATE {
+            summary.teammate_running = summary.teammate_running.saturating_add(count);
+        } else {
+            summary.non_teammate_running = summary.non_teammate_running.saturating_add(count);
+        }
+    }
+    summary
+}
 pub(crate) const SHELL_IDLE: u8 = 2;
 
 /// Wire representation of an observed shell state. `SHELL_NULL` means no
@@ -1818,6 +1861,13 @@ pub(crate) struct SilenceState {
     declared_background_work: bool,
     /// Input-turn epoch that made the declaration above.
     declared_background_work_turn_epoch: u64,
+    /// Breakdown of the same declaration by task type, from the `bgtasksummary`
+    /// verb (same hook fire, same turn epoch). `None` means the hook was too old
+    /// to send it (or it has not arrived yet): every running task then counts, as
+    /// before. When present it is what lets an idle Agent Teams teammate — which
+    /// Claude Code keeps listing as `running` in every `Stop` payload until it is
+    /// shut down — stop holding its lead "working".
+    declared_task_summary: Option<DeclaredTaskSummary>,
     /// Ranked busy/idle/awaiting evidence for the current turn (#744-138c).
     /// Replaces eight independently-mutated booleans (explicit_busy, hook_busy,
     /// explicit_idle, idle_confirmed, turn_started_by_input, turn_activity_seen,
@@ -1895,6 +1945,7 @@ impl SilenceState {
             completion_turn_epoch: 0,
             declared_background_work: false,
             declared_background_work_turn_epoch: 0,
+            declared_task_summary: None,
             evidence: TurnEvidence::default(),
             trail: DecisionTrail::new(),
             last_notification_classification: None,
@@ -2717,6 +2768,7 @@ impl SilenceState {
     pub(crate) fn reset_declared_background_work(&mut self) {
         self.declared_background_work = false;
         self.declared_background_work_turn_epoch = 0;
+        self.declared_task_summary = None;
     }
 
     #[cfg(test)]
@@ -2734,13 +2786,67 @@ impl SilenceState {
     pub(crate) fn set_declared_background_work(&mut self, active: bool, turn_epoch: u64) {
         self.declared_background_work = active;
         self.declared_background_work_turn_epoch = turn_epoch;
+        // A fresh `bgtasks` observation invalidates any earlier breakdown; the
+        // `bgtasksummary` verb that follows it in the same hook fire restores one.
+        self.declared_task_summary = None;
+    }
+
+    /// Record the per-type breakdown that accompanies the `bgtasks` write made in
+    /// the same hook fire. Ignored unless a declaration for `turn_epoch` is
+    /// already in place, so a stray or reordered summary can never create one.
+    pub(crate) fn set_declared_task_summary(
+        &mut self,
+        summary: DeclaredTaskSummary,
+        turn_epoch: u64,
+    ) {
+        if self.declared_background_work && self.declared_background_work_turn_epoch == turn_epoch {
+            self.declared_task_summary = Some(summary);
+        }
+    }
+
+    pub(crate) fn declared_task_summary_for_epoch(
+        &self,
+        turn_epoch: u64,
+    ) -> Option<DeclaredTaskSummary> {
+        (self.declared_background_work && self.declared_background_work_turn_epoch == turn_epoch)
+            .then_some(self.declared_task_summary)
+            .flatten()
     }
 
     /// Mirrors `completion_declared_for_epoch`: only true for the CURRENT
     /// turn — a new turn silently invalidates a stale declaration even
     /// without an explicit clear (see `reset_declared_background_work`).
+    ///
+    /// This is the conservative read: every running task counts, teammates
+    /// included. Callers that can see the rest of the app should use
+    /// [`Self::declared_background_work_for_epoch_with`] so an idle teammate does
+    /// not count.
     pub(crate) fn declared_background_work_for_epoch(&self, turn_epoch: u64) -> bool {
-        self.declared_background_work && self.declared_background_work_turn_epoch == turn_epoch
+        self.declared_background_work_for_epoch_with(turn_epoch, || true)
+    }
+
+    /// Like [`Self::declared_background_work_for_epoch`], but a declared
+    /// *teammate* only counts when `teammates_busy()` says one is actually
+    /// working. The closure is evaluated lazily (only when teammates are the sole
+    /// declared work), and it must not take any `SilenceState` lock — callers
+    /// typically hold this one.
+    pub(crate) fn declared_background_work_for_epoch_with(
+        &self,
+        turn_epoch: u64,
+        teammates_busy: impl FnOnce() -> bool,
+    ) -> bool {
+        if !(self.declared_background_work
+            && self.declared_background_work_turn_epoch == turn_epoch)
+        {
+            return false;
+        }
+        match self.declared_task_summary {
+            None => true,
+            Some(summary) => {
+                summary.non_teammate_running > 0
+                    || (summary.teammate_running > 0 && teammates_busy())
+            }
+        }
     }
 
     /// Returns true if the session has been silent long enough and the spinner
@@ -2999,9 +3105,11 @@ fn try_shell_transition_locked<F: FnOnce()>(
             // `state.declared_background_work_for`, which would try to
             // re-lock the same non-reentrant mutex and deadlock.
             let declared_background_work = session_lifecycle.is_some_and(|(_, turn_epoch)| {
-                silence_state
-                    .as_ref()
-                    .is_some_and(|silence| silence.declared_background_work_for_epoch(turn_epoch))
+                silence_state.as_ref().is_some_and(|silence| {
+                    silence.declared_background_work_for_epoch_with(turn_epoch, || {
+                        state.lead_teammates_busy(session_id)
+                    })
+                })
             });
             if is_agent
                 && !completion_declared
@@ -5805,7 +5913,9 @@ fn emit_pending_suggest_if_idle(
     // descendant that just hasn't been confirmed yet.
     if background_work
         || background_probe_pending
-        || silence_state.declared_background_work_for_epoch(current_turn_epoch)
+        || silence_state.declared_background_work_for_epoch_with(current_turn_epoch, || {
+            state.lead_teammates_busy(session_id)
+        })
     {
         return false;
     }
@@ -7437,10 +7547,9 @@ impl ChunkProcessor {
                             // — the same "unanswered evidence counts as work"
                             // philosophy `has_pending_background_probe` already
                             // uses for the OS-heuristic path.
-                            const KNOWN_TERMINAL_STATUSES: &[&str] = &["completed", "failed"];
                             let decoded = percent_decode_osc_payload(&payload);
                             let running = decoded.split(',').any(|status| {
-                                !status.is_empty() && !KNOWN_TERMINAL_STATUSES.contains(&status)
+                                !status.is_empty() && !KNOWN_TERMINAL_BG_STATUSES.contains(&status)
                             });
                             if let Some(turn_epoch) = state
                                 .session_maps
@@ -7453,6 +7562,32 @@ impl ChunkProcessor {
                                 silence
                                     .lock()
                                     .set_declared_background_work(running, turn_epoch);
+                            }
+                        }
+                        "bgtasksummary" => {
+                            // Sent by `tuic-hook` right after `bgtasks` in the same
+                            // Stop/StopFailure fire: the same `background_tasks`
+                            // array grouped as `type/status[*N]` items. Lets us tell
+                            // an Agent Teams teammate (which Claude Code keeps
+                            // listing as `running` in every Stop payload, idle or
+                            // not, until it is shut down) from real background
+                            // work. Refines the `bgtasks` declaration just written;
+                            // ignored if none is in place for this turn (see
+                            // `SilenceState::set_declared_task_summary`). An older
+                            // hook never sends it and keeps today's behavior.
+                            let summary =
+                                parse_bg_task_summary(&percent_decode_osc_payload(&payload));
+                            if let Some(turn_epoch) = state
+                                .session_maps
+                                .session_states
+                                .get(session_id)
+                                .map(|s| s.turn_epoch)
+                                && let Some(silence) =
+                                    state.session_maps.silence_states.get(session_id)
+                            {
+                                silence
+                                    .lock()
+                                    .set_declared_task_summary(summary, turn_epoch);
                             }
                         }
                         "userwrap" => {
@@ -12207,7 +12342,9 @@ fn background_activity_blocks_standby_with_silence(
         return false;
     };
     let declared_background_work = match locked_silence {
-        Some(silence) => silence.declared_background_work_for_epoch(turn_epoch),
+        Some(silence) => silence.declared_background_work_for_epoch_with(turn_epoch, || {
+            state.lead_teammates_busy(session_id)
+        }),
         None => state.declared_background_work_for(session_id, turn_epoch),
     };
     base_activity || declared_background_work
