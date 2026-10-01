@@ -68,8 +68,16 @@ async fn redirect_to_login_keeps_the_query_of_the_deep_link() {
     let app = app(&state_with(5, 3600));
     let response = send(&app, nav("/mobile?shared=abc").body(empty()).unwrap()).await;
     assert_eq!(response.status(), StatusCode::FOUND);
-    let location = response.headers().get(header::LOCATION).unwrap().to_str().unwrap();
-    assert!(location.contains("shared%3Dabc"), "query dropped: {location}");
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        location.contains("shared%3Dabc"),
+        "query dropped: {location}"
+    );
 }
 
 /// Plausible bug: the per-IP budget keyed on a client-supplied header, so a
@@ -86,8 +94,12 @@ async fn forwarded_for_header_does_not_open_a_second_budget() {
     let mut req = post_from(IP).body(body("boss", "co:rrect")).unwrap();
     req.headers_mut()
         .insert("x-forwarded-for", "10.9.9.200".parse().unwrap());
-    req.headers_mut().insert("x-real-ip", "10.9.9.201".parse().unwrap());
-    assert_eq!(send(&app, req).await.status(), StatusCode::TOO_MANY_REQUESTS);
+    req.headers_mut()
+        .insert("x-real-ip", "10.9.9.201".parse().unwrap());
+    assert_eq!(
+        send(&app, req).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
 }
 
 /// Plausible bug: admission counted after bcrypt finishes, so a burst of
@@ -99,7 +111,9 @@ async fn concurrent_guesses_never_exceed_the_budget() {
     for i in 0..12 {
         let app = app.clone();
         set.spawn(async move {
-            let req = post_from(IP).body(body("boss", &format!("wrong-{i}"))).unwrap();
+            let req = post_from(IP)
+                .body(body("boss", &format!("wrong-{i}")))
+                .unwrap();
             app.oneshot(req).await.unwrap().status()
         });
     }
@@ -123,10 +137,22 @@ async fn login_cookie_flags_plain_and_tls() {
     let app = app(&state_with(5, 3600));
     let plain = send(&app, post_from(IP).body(body("boss", "co:rrect")).unwrap()).await;
     assert_eq!(plain.status(), StatusCode::OK);
-    let cookie = plain.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
-    assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"), "{cookie}");
+    let cookie = plain
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        cookie.contains("HttpOnly") && cookie.contains("SameSite=Strict"),
+        "{cookie}"
+    );
     assert!(cookie.contains("Path=/"), "{cookie}");
-    assert!(!cookie.contains("Secure"), "plain HTTP must not set Secure: {cookie}");
+    assert!(
+        !cookie.contains("Secure"),
+        "plain HTTP must not set Secure: {cookie}"
+    );
 
     let tls = send(
         &app,
@@ -136,7 +162,12 @@ async fn login_cookie_flags_plain_and_tls() {
             .unwrap(),
     )
     .await;
-    let cookie = tls.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+    let cookie = tls
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(cookie.contains("Secure"), "{cookie}");
 }
 
@@ -147,16 +178,55 @@ async fn sliding_cookie_never_exceeds_the_configured_lifetime() {
     let state = state_with(5, 3600);
     let app = app(&state);
     let login = send(&app, post_from(IP).body(body("boss", "co:rrect")).unwrap()).await;
-    let pair = login.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap()
-        .split(';').next().unwrap().to_string();
+    let pair = login
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
     for _ in 0..3 {
-        let hit = send(&app, nav("/mobile").header(header::COOKIE, pair.clone()).body(empty()).unwrap()).await;
-        let renewed = hit.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        let hit = send(
+            &app,
+            nav("/mobile")
+                .header(header::COOKIE, pair.clone())
+                .body(empty())
+                .unwrap(),
+        )
+        .await;
+        let renewed = hit
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(renewed.contains("Max-Age=3600"), "{renewed}");
     }
-    state.config.write().services.auth.session_token_duration_secs = 0;
-    let hit = send(&app, nav("/mobile").header(header::COOKIE, pair).body(empty()).unwrap()).await;
-    assert!(!hit.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().contains("Max-Age"));
+    state
+        .config
+        .write()
+        .services
+        .auth
+        .session_token_duration_secs = 0;
+    let hit = send(
+        &app,
+        nav("/mobile")
+            .header(header::COOKIE, pair)
+            .body(empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        !hit.headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("Max-Age")
+    );
 }
 
 /// Plausible bug: Sec-Fetch-Site accepted for `same-site`/`none`, or an Origin
@@ -167,16 +237,31 @@ async fn only_exact_same_origin_signals_are_accepted() {
     let app = app(&state);
     for site in ["same-site", "none", "cross-site"] {
         let mut req = post_from(IP).body(body("boss", "co:rrect")).unwrap();
-        req.headers_mut().insert("sec-fetch-site", site.parse().unwrap());
-        assert_eq!(send(&app, req).await.status(), StatusCode::FORBIDDEN, "{site}");
+        req.headers_mut()
+            .insert("sec-fetch-site", site.parse().unwrap());
+        assert_eq!(
+            send(&app, req).await.status(),
+            StatusCode::FORBIDDEN,
+            "{site}"
+        );
     }
     let mut other_port = post_from(IP).body(body("boss", "co:rrect")).unwrap();
-    other_port.headers_mut().insert(header::ORIGIN, "http://tuic.test:9999".parse().unwrap());
+    other_port
+        .headers_mut()
+        .insert(header::ORIGIN, "http://tuic.test:9999".parse().unwrap());
     assert_eq!(send(&app, other_port).await.status(), StatusCode::FORBIDDEN);
     let mut null_origin = post_from(IP).body(body("boss", "co:rrect")).unwrap();
-    null_origin.headers_mut().insert(header::ORIGIN, "null".parse().unwrap());
-    assert_eq!(send(&app, null_origin).await.status(), StatusCode::FORBIDDEN);
-    assert!(state.auth_rate_limits.is_empty(), "refused POSTs must not spend budget");
+    null_origin
+        .headers_mut()
+        .insert(header::ORIGIN, "null".parse().unwrap());
+    assert_eq!(
+        send(&app, null_origin).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert!(
+        state.auth_rate_limits.is_empty(),
+        "refused POSTs must not spend budget"
+    );
 }
 
 /// Plausible bug: Content-Type compared as an exact string, so the charset
@@ -186,12 +271,20 @@ async fn only_exact_same_origin_signals_are_accepted() {
 async fn content_type_parameters_ok_but_simple_request_types_refused() {
     let app = app(&state_with(5, 3600));
     let mut ok = post_from(IP).body(body("boss", "co:rrect")).unwrap();
-    ok.headers_mut().insert(header::CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
+    ok.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/json; charset=utf-8".parse().unwrap(),
+    );
     assert_eq!(send(&app, ok).await.status(), StatusCode::OK);
     for ct in ["text/plain", "application/jsonx", "multipart/form-data"] {
         let mut req = post_from(IP).body(body("boss", "co:rrect")).unwrap();
-        req.headers_mut().insert(header::CONTENT_TYPE, ct.parse().unwrap());
-        assert_eq!(send(&app, req).await.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE, "{ct}");
+        req.headers_mut()
+            .insert(header::CONTENT_TYPE, ct.parse().unwrap());
+        assert_eq!(
+            send(&app, req).await.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "{ct}"
+        );
     }
 }
 
@@ -230,7 +323,10 @@ async fn stale_cookie_redirects_but_wrong_basic_keeps_the_challenge() {
     let app = app(&state_with(5, 3600));
     let stale = send(
         &app,
-        nav("/mobile/session/a").header(header::COOKIE, "tui-session=old-token").body(empty()).unwrap(),
+        nav("/mobile/session/a")
+            .header(header::COOKIE, "tui-session=old-token")
+            .body(empty())
+            .unwrap(),
     )
     .await;
     assert_eq!(stale.status(), StatusCode::FOUND);
@@ -238,7 +334,10 @@ async fn stale_cookie_redirects_but_wrong_basic_keeps_the_challenge() {
     let wrong = base64::engine::general_purpose::STANDARD.encode("boss:nope");
     let basic = send(
         &app,
-        nav("/mobile").header(header::AUTHORIZATION, format!("Basic {wrong}")).body(empty()).unwrap(),
+        nav("/mobile")
+            .header(header::AUTHORIZATION, format!("Basic {wrong}"))
+            .body(empty())
+            .unwrap(),
     )
     .await;
     assert_eq!(basic.status(), StatusCode::UNAUTHORIZED);
@@ -252,7 +351,9 @@ async fn degenerate_login_bodies_never_succeed() {
     let app = app(&state_with(5, 3600));
     let bad_next = r#"{"username":"boss","password":"co:rrect","next":5}"#;
     assert_eq!(
-        send(&app, post_from(IP).body(bad_next.into()).unwrap()).await.status(),
+        send(&app, post_from(IP).body(bad_next.into()).unwrap())
+            .await
+            .status(),
         StatusCode::BAD_REQUEST
     );
     let empty_pair = send(&app, post_from(IP).body(body("", "")).unwrap()).await;
