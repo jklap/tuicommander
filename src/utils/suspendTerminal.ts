@@ -81,6 +81,8 @@ async function suspendTab(id: string): Promise<SuspendOutcome> {
 		appLogger.warn("terminal", "Suspend: closing the PTY failed", { id, error: String(e) });
 		return { ok: false, reason: "closing the session failed" };
 	}
+	// The tab may have been closed while close_pty was pending: there is nothing left to mark.
+	if (!terminalsStore.get(id)) return { ok: false, reason: "unknown tab" };
 	terminalsStore.update(id, {
 		suspended: true,
 		shellState: null,
