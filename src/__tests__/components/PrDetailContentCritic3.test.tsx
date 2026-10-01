@@ -62,4 +62,14 @@ describe("PrDetailContent (critic round 3)", () => {
 		));
 		expect(queryByText("Resolve conflicts")).toBeTruthy();
 	});
+
+	// Catches: a merged PR rendering an empty status row (all pills hidden for terminal states)
+	// that still takes layout space.
+	it("a merged PR renders no empty status row", () => {
+		mockGithubStore.getBranchPrData.mockReturnValue({ ...conflicting, state: "MERGED", conflict_state: "clear" });
+		const { container } = render(() => <PrDetailContent repoPath="/repo-c3-merged" branch="feature" />);
+		const rows = [...container.querySelectorAll("[class*='statusRow']")];
+		expect(rows.filter((r) => r.children.length === 0)).toHaveLength(0);
+		expect(container.querySelector("[data-readiness]")).toBeNull();
+	});
 });

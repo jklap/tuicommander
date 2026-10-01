@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, For, on, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
@@ -49,18 +49,47 @@ export interface PrSectionProps {
 	onMerged: (branchName: string, baseBranch: string, hasDirtyFiles: boolean) => void;
 }
 
+/** One GitHub poll interval (`BASE_INTERVAL` in github_poller.rs). */
+const UPDATE_BRANCH_HOLD_MS = 60_000;
+
 export const PrSection: Component<PrSectionProps> = (props) => {
 	const [mergingPr, setMergingPr] = createSignal<number | null>(null);
 	const [mergeError, setMergeError] = createSignal<string | null>(null);
 	const [diffLoadingPr, setDiffLoadingPr] = createSignal<number | null>(null);
 	const [approvingPr, setApprovingPr] = createSignal<number | null>(null);
 	const [approveError, setApproveError] = createSignal<string | null>(null);
-	const [busyPr, setBusyPr] = createSignal<number | null>(null);
+	/** PRs with a row action in flight: per PR, so two concurrent actions never clear each other. */
+	const [busyPrs, setBusyPrs] = createSignal<ReadonlySet<number>>(new Set());
+	const setBusy = (prNumber: number, busy: boolean) =>
+		setBusyPrs((set) => {
+			const next = new Set(set);
+			if (busy) next.add(prNumber);
+			else next.delete(prNumber);
+			return next;
+		});
 	/** Error of the last row action, kept with its PR so another row never shows it. */
 	const [rowActionError, setRowActionError] = createSignal<{ prNumber: number; message: string } | null>(null);
 	/** Heads an update-branch request was accepted for: GitHub answers 202 and the merge lands
-	 *  later, so the row keeps reading BEHIND until the next poll brings a new head. */
+	 *  later, so the row keeps reading BEHIND until a poll brings a new head. The hold lasts one
+	 *  poll interval: if the async update failed silently the head is unchanged and the button
+	 *  must come back. */
 	const [updateRequestedFor, setUpdateRequestedFor] = createSignal<ReadonlySet<string>>(new Set());
+	const updateHoldTimers = new Set<ReturnType<typeof setTimeout>>();
+	onCleanup(() => {
+		for (const timer of updateHoldTimers) clearTimeout(timer);
+	});
+	const holdUpdateBranch = (headSha: string) => {
+		setUpdateRequestedFor((heads) => new Set(heads).add(headSha));
+		const timer = setTimeout(() => {
+			updateHoldTimers.delete(timer);
+			setUpdateRequestedFor((heads) => {
+				const next = new Set(heads);
+				next.delete(headSha);
+				return next;
+			});
+		}, UPDATE_BRANCH_HOLD_MS);
+		updateHoldTimers.add(timer);
+	};
 	createEffect(
 		on(
 			() => props.expandedKey,
@@ -140,7 +169,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 	};
 
 	const handleUpdateBranch = async (pr: BranchPrStatus) => {
-		setBusyPr(pr.number);
+		setBusy(pr.number, true);
 		setRowActionError(null);
 		try {
 			await invoke("update_pr_branch", {
@@ -148,7 +177,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 				prNumber: pr.number,
 				expectedHeadSha: pr.head_ref_oid,
 			});
-			setUpdateRequestedFor((heads) => new Set(heads).add(pr.head_ref_oid));
+			holdUpdateBranch(pr.head_ref_oid);
 			appLogger.info("github", `Requested branch update for PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
@@ -156,7 +185,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			setRowActionError({ prNumber: pr.number, message: msg });
 			appLogger.error("github", `Failed to update branch of PR #${pr.number}`, { error: msg });
 		} finally {
-			setBusyPr(null);
+			setBusy(pr.number, false);
 		}
 	};
 
@@ -165,7 +194,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			!window.confirm(t("sidebar.closePrConfirm", "Close PR #{number} without merging?", { number: String(pr.number) }))
 		)
 			return;
-		setBusyPr(pr.number);
+		setBusy(pr.number, true);
 		setRowActionError(null);
 		try {
 			await invoke("close_pr", { repoPath: props.repoPath, prNumber: pr.number });
@@ -176,7 +205,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			setRowActionError({ prNumber: pr.number, message: msg });
 			appLogger.error("github", `Failed to close PR #${pr.number}`, { error: msg });
 		} finally {
-			setBusyPr(null);
+			setBusy(pr.number, false);
 		}
 	};
 
@@ -325,7 +354,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 														<button
 															class={s.ghActionBtn}
 															onClick={() => handleUpdateBranch(pr)}
-															disabled={busyPr() === pr.number}
+															disabled={busyPrs().has(pr.number)}
 															title={t("sidebar.updateBranchTitle", "Merge the base branch into this PR branch")}
 														>
 															{t("sidebar.updateBranch", "Update branch")}
@@ -364,7 +393,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 														<button
 															class={cx(s.ghActionBtn, s.ghCloseBtn)}
 															onClick={() => handleClosePr(pr)}
-															disabled={busyPr() === pr.number}
+															disabled={busyPrs().has(pr.number)}
 															title={t("sidebar.closePr", "Close this pull request without merging")}
 														>
 															{t("sidebar.close", "Close")}

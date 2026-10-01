@@ -151,4 +151,57 @@ describe("PrSection row actions", () => {
 		setKey(other.branch);
 		await vi.waitFor(() => expect(container.textContent).not.toContain("boom"));
 	});
+
+	it("brings Update branch back after one poll interval when the head did not change", async () => {
+		// Catches: a silently failed async update leaving the button hidden until remount.
+		vi.useFakeTimers();
+		try {
+			const { container } = renderSection(pr());
+			fireEvent.click(button(container, "Update branch"));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(button(container, "Update branch")).toBeUndefined();
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(button(container, "Update branch")).toBeDefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps each PR busy on its own while two row actions are in flight", async () => {
+		// Catches: one busy slot, so the first action finishing re-enables the second PR's buttons.
+		let finishFirst: (v?: unknown) => void = () => {};
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise((r) => {
+					finishFirst = r;
+				}),
+		);
+		mockInvoke.mockImplementationOnce(() => new Promise(() => {}));
+		const first = pr();
+		const second = pr({ number: 13, branch: "feat/other", head_ref_oid: "headsha2" });
+		const [key, setKey] = createSignal<string | null>(first.branch);
+		const { container } = render(() => (
+			<PrSection
+				title="PRs"
+				prs={[first, second]}
+				repoPath="/repo"
+				collapsed={false}
+				onToggleCollapsed={vi.fn()}
+				expandedKey={key()}
+				onToggleExpanded={vi.fn()}
+				activeKey={null}
+				dismissedCount={0}
+				onDismiss={vi.fn()}
+				onShowDismissed={vi.fn()}
+				onCheckout={vi.fn()}
+				onMerged={vi.fn()}
+			/>
+		));
+		fireEvent.click(button(container, "Update branch"));
+		setKey(second.branch);
+		await vi.waitFor(() => expect(button(container, "Update branch")).toBeDefined());
+		fireEvent.click(button(container, "Update branch"));
+		finishFirst();
+		await vi.waitFor(() => expect(button(container, "Update branch")?.disabled).toBe(true));
+	});
 });

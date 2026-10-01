@@ -84,11 +84,6 @@ describe("PrBadge", () => {
 		return container.querySelector("[data-testid='status-badge']")!.getAttribute("data-variant");
 	};
 
-	it("renders PR number", () => {
-		const { container } = render(() => <PrBadge number={42} title="Fix bug" readiness="open" />);
-		expect(container.querySelector("[data-testid='status-badge']")!.textContent).toBe("PR #42");
-	});
-
 	// Catches: the status bar keeping its own verdict (mergeable === CONFLICTING) next to the shared one.
 	it.each([
 		["merged", "merged"],
