@@ -2084,7 +2084,8 @@ mod tests {
             insert_dummy_session(&state, "agent");
             set_session_cwd(&state, "agent", &sibling.to_string_lossy());
 
-            guard(&state, repo.path(), &linked).expect("sibling session is not inside the checkout");
+            guard(&state, repo.path(), &linked)
+                .expect("sibling session is not inside the checkout");
         }
 
         // Catches: comparing raw cwd text, so a session that entered the checkout
@@ -2110,7 +2111,13 @@ mod tests {
             let linked = detached(repo.path(), "linked");
             let state = crate::state::tests_support::make_test_app_state();
             insert_dummy_session(&state, "agent");
-            state.session_maps.sessions.get("agent").unwrap().lock().worktree = Some(WorktreeInfo {
+            state
+                .session_maps
+                .sessions
+                .get("agent")
+                .unwrap()
+                .lock()
+                .worktree = Some(WorktreeInfo {
                 name: "linked".into(),
                 path: linked.clone(),
                 branch: None,
@@ -2159,8 +2166,8 @@ mod tests {
             insert_dummy_session(&state, "agent");
             set_session_cwd(&state, "agent", &busy.to_string_lossy());
 
-            let rows =
-                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy()).unwrap();
+            let rows = assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                .unwrap();
 
             let row_of = |dir: &Path| {
                 rows.iter()
@@ -2180,17 +2187,18 @@ mod tests {
             let repo = setup_test_repo();
             let linked = detached(repo.path(), "linked");
             fs::write(linked.join("scratch.txt"), "unsaved").unwrap();
-            let git_reason = tuic_git::worktree::assess_orphan_worktrees(&repo.path().to_string_lossy())
-                .unwrap()
-                .remove(0)
-                .reason
-                .expect("untracked file is unsafe");
+            let git_reason =
+                tuic_git::worktree::assess_orphan_worktrees(&repo.path().to_string_lossy())
+                    .unwrap()
+                    .remove(0)
+                    .reason
+                    .expect("untracked file is unsafe");
             let state = crate::state::tests_support::make_test_app_state();
             insert_dummy_session(&state, "agent");
             set_session_cwd(&state, "agent", &linked.to_string_lossy());
 
-            let rows =
-                assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy()).unwrap();
+            let rows = assess_orphan_cleanup_with_sessions(&state, &repo.path().to_string_lossy())
+                .unwrap();
 
             let reason = rows[0].assessment.reason.clone().unwrap();
             assert!(reason.contains(&git_reason), "{reason}");
