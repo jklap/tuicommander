@@ -316,6 +316,71 @@ describe("createBranchSelectionCoordinator", () => {
 		});
 	});
 
+	// `handleBranchSelectInner`'s own orphan-adoption scan (lines ~267-293): a
+	// terminal whose cwd matches a branch's worktreePath but was never attached to
+	// it (the same race `createRepositoryRefreshCoordinator.ts`'s
+	// `reconcileTerminalOwnership()` call and `RepoSection.tsx`'s chevron fix close
+	// for their own trigger points) gets adopted into `branch.terminals` the
+	// moment that branch is selected.
+	describe("orphan adoption on branch select", () => {
+		const flushRaf = () => new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+		it("adopts an unclaimed terminal whose cwd matches the branch's worktree path", async () => {
+			await testInScope(async () => {
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "feature", {
+					worktreePath: "/Gits/alpha-wt-feature",
+				});
+
+				const orphanId = terminalsStore.add({
+					sessionId: null,
+					fontSize: 14,
+					name: "orphan",
+					cwd: "/Gits/alpha-wt-feature",
+					awaitingInput: null,
+				});
+
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.feature?.terminals).not.toContain(orphanId);
+
+				await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "feature");
+				await flushRaf();
+
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces.feature?.terminals).toContain(orphanId);
+				expect(terminalsStore.state.activeId).toBe(orphanId);
+			});
+		});
+
+		// Guards the `claimedIds` set: two workspaces can point at the same
+		// directory (e.g. a same-named sibling branch), and a cwd match alone must
+		// not be enough to pull a terminal out of the workspace that already owns it.
+		it("does not steal a terminal already claimed by a sibling workspace with the same cwd", async () => {
+			await testInScope(async () => {
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "feat-1", {
+					worktreePath: "/Gits/alpha-wt-shared",
+				});
+				repositoriesStore.setWorkspace("/Gits/alpha", "feat-2", {
+					worktreePath: "/Gits/alpha-wt-shared",
+				});
+
+				const sibTermId = terminalsStore.add({
+					sessionId: null,
+					fontSize: 14,
+					name: "sibling",
+					cwd: "/Gits/alpha-wt-shared",
+					awaitingInput: null,
+				});
+				repositoriesStore.addTerminalToWorkspace("/Gits/alpha", "feat-1", sibTermId);
+
+				await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "feat-2");
+				await flushRaf();
+
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces["feat-2"]?.terminals).not.toContain(sibTermId);
+				expect(repositoriesStore.get("/Gits/alpha")?.workspaces["feat-1"]?.terminals).toContain(sibTermId);
+			});
+		});
+	});
+
 	// --- Characterization tests for savedTerminals restore (createBranchSelectionCoordinator.ts:235-304) ---
 	// These pin down TODAY's behavior — agent-only restore — before a later change
 	// makes shell restoration configurable. Any intentional behavior change here
@@ -518,6 +583,70 @@ describe("createBranchSelectionCoordinator", () => {
 				const [newId] = terminalsStore.getIds();
 				const remapped = paneLayoutStore.getTerminalTabIds();
 				expect(remapped).toEqual([newId]);
+			});
+		});
+	});
+
+	/**
+	 * A branch-row click is the same kind of "ordinary sidebar row" click as a
+	 * terminal-row click (navigateToTerminal.ts) — it's another place that can
+	 * exit the manual Global Workspace view. isManualWorkspaceActive() (not bare
+	 * isActive()) is what keeps this from also tearing down a repo's own
+	 * auto-consolidated worktree view when switching branches within it.
+	 */
+	describe("Global Workspace exit on branch select", () => {
+		// handleBranchSelectInner schedules a requestAnimationFrame for focus
+		// restoration — flush it so it doesn't leak past the test.
+		const flushRaf = () => new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+		it("deactivates the manual Global Workspace before switching branches", async () => {
+			await testInScope(async () => {
+				const { makeTerminal } = await import("../helpers/store");
+				const gw = await import("../../stores/globalWorkspace");
+				const term = terminalsStore.add(makeTerminal({ name: "manual" }));
+				gw.globalWorkspaceStore.promote(term);
+				gw.globalWorkspaceStore.activate();
+				expect(gw.globalWorkspaceStore.isManualWorkspaceActive()).toBe(true);
+
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+
+				await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "main");
+				await flushRaf();
+
+				expect(gw.globalWorkspaceStore.isManualWorkspaceActive()).toBe(false);
+			});
+		});
+
+		it("does not touch a repo's own auto-consolidated view when switching branches within it", async () => {
+			await testInScope(async () => {
+				const gw = await import("../../stores/globalWorkspace");
+				const repoSettingsStore = (await import("../../stores/repoSettings")).repoSettingsStore;
+				const hook = await import("../../hooks/useWorktreeConsolidation");
+
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: null, isMain: true });
+				repositoriesStore.setWorkspace("/Gits/alpha", "feat-1", { worktreePath: "/Gits/alpha-wt-1" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "feat-2", { worktreePath: "/Gits/alpha-wt-2" });
+				repoSettingsStore.getOrCreate("/Gits/alpha", "alpha");
+				repoSettingsStore.update("/Gits/alpha", { autoConsolidateWorktrees: true });
+				// Normally kept populated in the background by
+				// useWorktreeConsolidation()'s first effect.
+				gw.globalWorkspaceStore.syncScopeMembers("/Gits/alpha", hook.worktreeTerminalsOf("/Gits/alpha"));
+				repositoriesStore.setActive("/Gits/alpha");
+				hook.syncScopeForActiveRepo();
+				expect(gw.globalWorkspaceStore.isActive()).toBe(false); // no worktree terminals yet
+				gw.globalWorkspaceStore.activate();
+				expect(gw.globalWorkspaceStore.getScope()).toBe("/Gits/alpha");
+				expect(gw.globalWorkspaceStore.isManualWorkspaceActive()).toBe(false);
+
+				await makeCoordinator().handleBranchSelectInner("/Gits/alpha", "feat-1");
+				await flushRaf();
+
+				// Still the repo's own scope, still active — a branch switch
+				// within the same consolidated repo must not have deactivated it.
+				expect(gw.globalWorkspaceStore.getScope()).toBe("/Gits/alpha");
+				expect(gw.globalWorkspaceStore.isActive()).toBe(true);
 			});
 		});
 	});

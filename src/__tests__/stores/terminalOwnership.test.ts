@@ -83,7 +83,7 @@ describe("reconcileTerminalOwnership", () => {
 			addRepoWithBranch("/Gits/alpha", "main");
 			const id = terminalsStore.add(makeTerminal({ cwd: "/Gits/gate-os/src" }));
 			terminalsStore.setRepoPath(id, null);
-			globalWorkspaceStore.promote(id, MANUAL_SCOPE);
+			globalWorkspaceStore.promote(id);
 
 			addRepoWithBranch("/Gits/gate-os", "trunk");
 			reconcile();
@@ -103,7 +103,7 @@ describe("reconcileTerminalOwnership", () => {
 			const id = terminalsStore.add(makeTerminal({ cwd: "/Gits/alpha/src" }));
 			repositoriesStore.addTerminalToWorkspace("/Gits/alpha", "main", id);
 			terminalsStore.setRepoPath(id, "/Gits/alpha");
-			globalWorkspaceStore.promote(id, MANUAL_SCOPE);
+			globalWorkspaceStore.promote(id);
 
 			reconcile();
 
