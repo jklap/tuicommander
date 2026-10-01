@@ -334,10 +334,22 @@ fn validated_origin(live: &HashSet<String>, origin: Option<&str>) -> Option<Stri
         .map(str::to_string)
 }
 
-/// TUIC session ids of the live teammate panes whose lead is `lead_session_id`,
-/// across every tmux server label. Reads only the topology (no session or
-/// silence locks), so it is safe to call while holding a `SilenceState` guard.
+/// TUIC session ids of the live teammate terminals whose pane names `lead_session_id`
+/// as its lead, across every tmux server label. Reads only the topology and the
+/// shell-state map (no session or silence locks), so it is safe to call while
+/// holding a `SilenceState` guard.
+///
+/// Liveness is `shell_states` membership (created with the session, removed on
+/// close). The topology is only reconciled lazily inside route handlers, so a
+/// closed teammate's pane otherwise keeps its `tuic_session_id`; counting it as a
+/// linked teammate would let a corpse satisfy the fail-safe's "declared <= linked"
+/// check after Claude had already dropped that teammate from the lead's list,
+/// masking a genuinely unaccounted-for one. The cost of excluding it: until the
+/// lead's next `Stop` refreshes its list, a just-closed teammate still counts as
+/// declared-but-unlinked, i.e. the lead keeps reading working (the old behavior,
+/// self-correcting) rather than idle.
 pub(crate) fn teammate_session_ids(state: &AppState, lead_session_id: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
     state
         .tmux_servers
         .iter()
@@ -352,7 +364,52 @@ pub(crate) fn teammate_session_ids(state: &AppState, lead_session_id: &str) -> V
                 .filter(|id| id != lead_session_id)
                 .collect::<Vec<_>>()
         })
+        // Distinct teammates, not distinct panes: the fail-safe compares this count
+        // with the number of teammates the hook declared, so one terminal
+        // represented by two pane entries (a split-window/respawn-pane race) must
+        // not count twice and mask a genuinely unaccounted-for teammate.
+        .filter(|id| seen.insert(id.clone()))
+        .filter(|id| state.session_maps.shell_states.contains_key(id))
         .collect()
+}
+
+/// Test-only: register a one-pane topology under `label` in which
+/// `teammate_session_id` is a materialized teammate pane owned by `lead_session_id`.
+#[cfg(test)]
+pub(crate) fn link_teammate_for_test(
+    state: &AppState,
+    label: &str,
+    lead_session_id: &str,
+    teammate_session_id: &str,
+) {
+    let pane = TmuxPane {
+        id: "%0".to_string(),
+        index: 0,
+        title: None,
+        cwd: None,
+        tuic_session_id: Some(teammate_session_id.to_string()),
+        lead_session_id: Some(lead_session_id.to_string()),
+        accent_color: None,
+    };
+    let topology = TmuxTopology {
+        next_session: 1,
+        next_window: 1,
+        next_pane: 1,
+        sessions: vec![TmuxSession {
+            id: "$0".to_string(),
+            name: "claude-swarm".to_string(),
+            active_window: Some("@0".to_string()),
+            windows: vec![TmuxWindow {
+                id: "@0".to_string(),
+                name: "swarm-view".to_string(),
+                index: 0,
+                active_pane: Some("%0".to_string()),
+                panes: vec![pane],
+                last_layout: None,
+            }],
+        }],
+    };
+    state.tmux_servers.insert(label.to_string(), topology);
 }
 
 /// The lead that owns `teammate_session_id`'s pane, if it was recorded.
@@ -2880,6 +2937,54 @@ mod tests {
         assert_eq!(pane.tuic_session_id.as_deref(), Some(tuic_id));
         assert_eq!(pane.cwd.as_deref(), Some("/tmp"));
         assert!(state.session_maps.sessions.contains_key(tuic_id));
+    }
+
+    #[test]
+    fn teammate_session_ids_counts_a_terminal_once_even_if_two_panes_reference_it() {
+        let state = super::super::tests::test_state();
+        for live in ["mate-dup", "mate-other", "mate-y"] {
+            state
+                .session_maps
+                .shell_states
+                .insert(live.to_string(), std::sync::atomic::AtomicU8::new(0));
+        }
+        link_teammate_for_test(&state, "dup-a", "lead-x", "mate-dup");
+        link_teammate_for_test(&state, "dup-b", "lead-x", "mate-dup");
+        link_teammate_for_test(&state, "dup-c", "lead-x", "mate-other");
+        let mut ids = teammate_session_ids(&state, "lead-x");
+        ids.sort();
+        assert_eq!(ids, vec!["mate-dup".to_string(), "mate-other".to_string()]);
+        // ...so two declared teammates with one real terminal are NOT fully accounted for.
+        link_teammate_for_test(&state, "only-dup-a", "lead-y", "mate-y");
+        link_teammate_for_test(&state, "only-dup-b", "lead-y", "mate-y");
+        assert_eq!(teammate_session_ids(&state, "lead-y").len(), 1);
+        assert!(state.lead_teammates_may_be_working("lead-y", 2));
+    }
+
+    #[test]
+    fn a_closed_teammate_terminal_is_not_a_linked_teammate_but_still_names_its_lead() {
+        let state = super::super::tests::test_state();
+        link_teammate_for_test(&state, "closed-a", "lead-c", "mate-alive");
+        link_teammate_for_test(&state, "closed-b", "lead-c", "mate-closed");
+        state.session_maps.shell_states.insert(
+            "mate-alive".to_string(),
+            std::sync::atomic::AtomicU8::new(0),
+        );
+        // "mate-closed" has no shell_states entry: its session was torn down but its
+        // pane is still in the (lazily reconciled) topology.
+        assert_eq!(
+            teammate_session_ids(&state, "lead-c"),
+            vec!["mate-alive".to_string()]
+        );
+        // The reverse lookup must still resolve a closed teammate so the lead is
+        // republished when the teammate's row disappears.
+        assert_eq!(
+            lead_of_teammate(&state, "mate-closed").as_deref(),
+            Some("lead-c")
+        );
+        // Two declared, one live linked, one closed: the closed one no longer vouches,
+        // so the fail-safe still sees an unaccounted-for teammate.
+        assert!(state.lead_teammates_may_be_working("lead-c", 2));
     }
 
     #[test]

@@ -127,6 +127,9 @@ FLAGS (override the derived value; freely combinable):
                                     command now passes this explicitly.
     --state <busy|prompt|awaiting|idle>
                                    Force the state verb, regardless of derivation.
+    --no-state                     Drop the derived or forced state verb (receipt-only
+                                    events: the Rust side decides the state from the
+                                    receipt; metadata scrapes are kept).
     --toolfail <code>              Force a fixed toolfail verb.
     --toolfail-from-stdin          Force toolfail, extracting `exit_code` from stdin
                                     JSON (falls back to "1" if absent or malformed);
@@ -137,6 +140,13 @@ FLAGS (override the derived value; freely combinable):
     --codex-session                Codex identity: emit codex-session=<TUIC_SESSION>:<base64 of
                                     the raw stdin> before state, and skip the Claude-table
                                     derivation (the payload is Codex's, not Claude Code's).
+    --receipt <claude|grok|codex-tool>
+                                   Also forward the raw stdin, base64, as main's hook
+                                    receipt: claude-hook=<TUIC_SESSION>:<pid>:<b64> plus
+                                    its empty terminator, grok-hook=<TUIC_SESSION>:<b64>
+                                    or codex-tool=<TUIC_SESSION>:<b64>, ahead of every
+                                    other frame (permission ownership and tool lifecycle
+                                    are decoded from it on the Rust side).
     --emit-notification-type       Force scraping notification_type.
     --emit-background-tasks        Force scraping background_tasks.
     --emit-title                   Force scraping session_title.
@@ -193,6 +203,15 @@ fn run(args: &[String]) {
 /// `codex_binding::receive` checks the owner prefix against its own tab.
 fn build_fire(parsed: &ParsedArgs, raw: &[u8], session: &str, stdin_json: &Value) -> Vec<Emission> {
     let mut pairs = build_emissions(parsed, stdin_json);
+    if parsed.no_state {
+        pairs.retain(|pair| pair.verb != "state");
+    }
+    if !raw.is_empty()
+        && !session.is_empty()
+        && let Some(receipt) = receipt_frames(parsed.receipt.as_deref(), session, raw)
+    {
+        pairs.splice(0..0, receipt);
+    }
     if parsed.codex_session && !raw.is_empty() && !session.is_empty() {
         let at = pairs.iter().take_while(|p| p.verb == "toolfail").count();
         pairs.insert(
@@ -204,6 +223,32 @@ fn build_fire(parsed: &ParsedArgs, raw: &[u8], session: &str, stdin_json: &Value
         );
     }
     pairs
+}
+
+/// The receipt frames of `--receipt <kind>` (see the help text), byte-identical
+/// to the shell hooks of `agent_hook.rs` (`claude_hook_command`,
+/// `grok_hook_command`, `codex_tool_command`). `None` for an unknown kind, so a
+/// stale binary degrades to no receipt rather than a wrong one.
+fn receipt_frames(kind: Option<&str>, session: &str, raw: &[u8]) -> Option<Vec<Emission>> {
+    let b64 = base64_standard(raw);
+    match kind? {
+        "claude" => {
+            let owner = format!("{session}:{}", std::process::id());
+            Some(vec![
+                Emission::verbatim("claude-hook", format!("{owner}:{b64}")),
+                Emission::verbatim("claude-hook", format!("{owner}:")),
+            ])
+        }
+        "grok" => Some(vec![Emission::verbatim(
+            "grok-hook",
+            format!("{session}:{b64}"),
+        )]),
+        "codex-tool" => Some(vec![Emission::verbatim(
+            "codex-tool",
+            format!("{session}:{b64}"),
+        )]),
+        _ => None,
+    }
 }
 
 /// Standard (RFC 4648, padded) base64 — what `base64 | tr -d '\r\n'` prints.
@@ -245,12 +290,15 @@ struct ParsedArgs {
     /// compatible default).
     agent: Option<String>,
     state: Option<String>,
+    no_state: bool,
     toolfail: Option<String>,
     toolfail_from_stdin: bool,
     emit_session: bool,
     emit_tool: bool,
     emit_notify: bool,
     codex_session: bool,
+    /// `--receipt <claude|grok|codex-tool>`: forward the raw stdin as main's receipt.
+    receipt: Option<String>,
     emit_notification_type: bool,
     emit_background_tasks: bool,
     emit_title: bool,
@@ -285,11 +333,18 @@ fn parse_args(args: &[String]) -> ParsedArgs {
                     i += 1;
                 }
             }
+            "--no-state" => out.no_state = true,
             "--toolfail-from-stdin" => out.toolfail_from_stdin = true,
             "--emit-session" => out.emit_session = true,
             "--emit-tool" => out.emit_tool = true,
             "--emit-notify" => out.emit_notify = true,
             "--codex-session" => out.codex_session = true,
+            "--receipt" => {
+                if let Some(v) = args.get(i + 1) {
+                    out.receipt = Some(v.clone());
+                    i += 1;
+                }
+            }
             "--emit-notification-type" => out.emit_notification_type = true,
             "--emit-background-tasks" => out.emit_background_tasks = true,
             "--emit-title" => out.emit_title = true,
@@ -678,6 +733,17 @@ fn build_emissions(parsed: &ParsedArgs, stdin_json: &Value) -> Vec<Emission> {
         pairs.push(Emission::encoded("bgtasks", v));
     }
 
+    // `bgtasksummary`: the same `background_tasks` array, grouped as distinct
+    // `type/status` pairs with counts (e.g. `teammate/running*2,shell/completed`).
+    // Sent alongside `bgtasks` (which carries no `type`, and whose payload is cut
+    // at `payload::MAX_PAYLOAD_LEN`, so a late `running` in a long list can be
+    // lost) so the receiving end can tell an idle teammate from real background
+    // work. Still a dumb extractor: no interpretation of either field, bounded
+    // by distinct pairs rather than task count.
+    if scrape_background_tasks && let Some(v) = background_task_summary(stdin_json) {
+        pairs.push(Emission::encoded("bgtasksummary", v));
+    }
+
     // `reason` — Claude Code's own SessionEnd reason string (e.g. "exit",
     // "other" — not a documented closed set, so scraped raw and unclassified
     // like `bgtasks`'s statuses above; the receiving end records it for
@@ -746,6 +812,56 @@ fn background_task_statuses(stdin_json: &Value) -> Option<String> {
             .collect::<Vec<_>>()
             .join(","),
     )
+}
+
+/// Groups stdin's `background_tasks` into distinct `type/status` pairs with
+/// counts: `type/status` for one, `type/status*N` for N (first-appearance
+/// order). An entry with no string `status` is dropped, exactly as in
+/// `background_task_statuses`; a missing/non-string `type` becomes the empty
+/// string (`/running`). `None` when the field is absent; `Some("")` when
+/// present but empty or every entry lacks a status.
+fn background_task_summary(stdin_json: &Value) -> Option<String> {
+    let tasks = stdin_json.get("background_tasks")?.as_array()?;
+    let mut groups: Vec<(String, String, usize)> = Vec::new();
+    for task in tasks {
+        let Some(status) = task.get("status").and_then(Value::as_str) else {
+            continue;
+        };
+        let kind = summary_token(task.get("type").and_then(Value::as_str).unwrap_or(""));
+        let status = summary_token(status);
+        match groups
+            .iter_mut()
+            .find(|(k, st, _)| *k == kind && *st == status)
+        {
+            Some(group) => group.2 += 1,
+            None => groups.push((kind, status, 1)),
+        }
+    }
+    Some(
+        groups
+            .iter()
+            .map(|(kind, status, n)| {
+                if *n == 1 {
+                    format!("{kind}/{status}")
+                } else {
+                    format!("{kind}/{status}*{n}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+    )
+}
+
+/// Make a `type`/`status` value safe to embed in a `bgtasksummary` item: the
+/// item grammar is `type/status[*N]` joined by `,`, so any of those three
+/// delimiters inside a value would shift the parse. Claude Code's known values
+/// contain none of them; a future one that does is kept distinguishable from its
+/// neighbours by swapping the delimiter for `_` instead of corrupting the item.
+fn summary_token(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if matches!(c, ',' | '/' | '*') { '_' } else { c })
+        .collect()
 }
 
 /// `None` suppresses the toolfail emission entirely — used for
@@ -1429,9 +1545,10 @@ mod tests {
         });
         let pairs = build_emissions(&ParsedArgs::default(), &json);
         let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
-        assert_eq!(verbs, ["bgtasks", "state"]);
+        assert_eq!(verbs, ["bgtasks", "bgtasksummary", "state"]);
         assert_eq!(pairs[0].payload, "running");
-        assert_eq!(pairs[1].payload, "idle");
+        assert_eq!(pairs[1].payload, "shell%2Frunning");
+        assert_eq!(pairs[2].payload, "idle");
     }
 
     #[test]
@@ -1478,7 +1595,7 @@ mod tests {
         });
         let pairs = build_emissions(&ParsedArgs::default(), &json);
         let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
-        assert_eq!(verbs, ["toolfail", "bgtasks", "state"]);
+        assert_eq!(verbs, ["toolfail", "bgtasks", "bgtasksummary", "state"]);
     }
 
     #[test]
@@ -1666,13 +1783,20 @@ mod tests {
     }
 
     #[test]
-    fn stop_wire_order_is_bgtasks_then_state_and_state_is_still_idle_with_running_tasks() {
+    fn stop_wire_order_is_bgtasks_summary_then_state_and_state_is_still_idle_with_running_tasks() {
         // The hook never lets background work change the derived state: Stop
         // is always `idle` here; `pty.rs` layers the declared-work signal on top.
         let json = stop_with(serde_json::json!([{"status": "running"}]));
         let pairs = build_emissions(&ParsedArgs::default(), &json);
         let wire: Vec<(&str, &str)> = pairs.iter().map(|p| (p.verb, p.payload.as_str())).collect();
-        assert_eq!(wire, [("bgtasks", "running"), ("state", "idle")]);
+        assert_eq!(
+            wire,
+            [
+                ("bgtasks", "running"),
+                ("bgtasksummary", "%2Frunning"),
+                ("state", "idle")
+            ]
+        );
     }
 
     #[test]
@@ -1686,11 +1810,18 @@ mod tests {
             &stop_with(serde_json::json!([{"status": "running"}])),
         );
         let wire: Vec<(&str, &str)> = pairs.iter().map(|p| (p.verb, p.payload.as_str())).collect();
-        assert_eq!(wire, [("bgtasks", "running"), ("state", "busy")]);
+        assert_eq!(
+            wire,
+            [
+                ("bgtasks", "running"),
+                ("bgtasksummary", "%2Frunning"),
+                ("state", "busy")
+            ]
+        );
     }
 
     #[test]
-    fn stop_failure_wire_order_is_toolfail_bgtasks_state() {
+    fn stop_failure_wire_order_is_toolfail_bgtasks_summary_state() {
         let json = serde_json::json!({
             "hook_event_name": "StopFailure",
             "background_tasks": [{"status": "running"}],
@@ -1699,7 +1830,12 @@ mod tests {
         let wire: Vec<(&str, &str)> = pairs.iter().map(|p| (p.verb, p.payload.as_str())).collect();
         assert_eq!(
             wire,
-            [("toolfail", "1"), ("bgtasks", "running"), ("state", "idle")]
+            [
+                ("toolfail", "1"),
+                ("bgtasks", "running"),
+                ("bgtasksummary", "%2Frunning"),
+                ("state", "idle")
+            ]
         );
     }
 
@@ -1756,8 +1892,8 @@ mod tests {
             &parsed,
             &stop_with(serde_json::json!([{"status": "running"}])),
         );
-        assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0].verb, "bgtasks");
+        let verbs: Vec<&str> = pairs.iter().map(|p| p.verb).collect();
+        assert_eq!(verbs, ["bgtasks", "bgtasksummary"]);
     }
 
     #[test]
@@ -1767,8 +1903,12 @@ mod tests {
             ..Default::default()
         };
         let empty = build_emissions(&parsed, &serde_json::json!({"background_tasks": []}));
-        assert_eq!(empty.len(), 1);
+        assert_eq!(empty.len(), 2);
         assert_eq!((empty[0].verb, empty[0].payload.as_str()), ("bgtasks", ""));
+        assert_eq!(
+            (empty[1].verb, empty[1].payload.as_str()),
+            ("bgtasksummary", "")
+        );
         assert!(build_emissions(&parsed, &serde_json::json!({})).is_empty());
     }
 
@@ -1959,5 +2099,102 @@ mod tests {
                 d.event
             );
         }
+    }
+
+    #[test]
+    fn summary_groups_distinct_type_status_pairs_with_counts_in_first_appearance_order() {
+        let json = serde_json::json!({"background_tasks": [
+            {"type": "teammate", "status": "running"},
+            {"type": "shell", "status": "completed"},
+            {"type": "teammate", "status": "running"},
+            {"type": "subagent", "status": "running"},
+            {"type": "teammate", "status": "completed"},
+        ]});
+        assert_eq!(
+            background_task_summary(&json).as_deref(),
+            Some("teammate/running*2,shell/completed,subagent/running,teammate/completed")
+        );
+    }
+
+    #[test]
+    fn summary_missing_type_is_empty_and_entries_without_status_are_dropped() {
+        let json = serde_json::json!({"background_tasks": [
+            {"status": "running"},
+            {"type": "shell"},
+            {"type": "shell", "status": 7},
+            "not-an-object",
+            {"type": 3, "status": "running"},
+        ]});
+        assert_eq!(
+            background_task_summary(&json).as_deref(),
+            Some("/running*2")
+        );
+    }
+
+    #[test]
+    fn summary_absent_and_non_array_are_none_and_empty_array_is_present_but_empty() {
+        assert_eq!(background_task_summary(&serde_json::json!({})), None);
+        assert_eq!(
+            background_task_summary(&serde_json::json!({"background_tasks": "x"})),
+            None
+        );
+        assert_eq!(
+            background_task_summary(&serde_json::json!({"background_tasks": []})).as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn summary_survives_a_task_list_long_enough_to_truncate_bgtasks() {
+        // `bgtasks` joins every status and is cut at MAX_PAYLOAD_LEN, losing a
+        // late `running`; the grouped summary is bounded by distinct pairs.
+        let mut tasks: Vec<serde_json::Value> = (0..200)
+            .map(|_| serde_json::json!({"type": "shell", "status": "completed"}))
+            .collect();
+        tasks.push(serde_json::json!({"type": "teammate", "status": "running"}));
+        let json = serde_json::json!({"hook_event_name": "Stop", "background_tasks": tasks});
+        let pairs = build_emissions(&ParsedArgs::default(), &json);
+        let summary = pairs.iter().find(|p| p.verb == "bgtasksummary").unwrap();
+        assert!(
+            summary.payload.contains("teammate%2Frunning"),
+            "{}",
+            summary.payload
+        );
+        assert!(
+            summary.payload.contains("shell%2Fcompleted%2A200"),
+            "{}",
+            summary.payload
+        );
+    }
+
+    #[test]
+    fn summary_is_scraped_only_where_bgtasks_is() {
+        for event in [
+            "PostToolUse",
+            "Notification",
+            "SessionEnd",
+            "UserPromptSubmit",
+        ] {
+            let json = serde_json::json!({
+                "hook_event_name": event,
+                "background_tasks": [{"type": "teammate", "status": "running"}],
+            });
+            let pairs = build_emissions(&ParsedArgs::default(), &json);
+            assert!(pairs.iter().all(|p| p.verb != "bgtasksummary"), "{event}");
+        }
+    }
+
+    #[test]
+    fn summary_delimiters_inside_a_value_cannot_shift_the_parse() {
+        // `type/status*N` items are joined by `,`; a value containing one of those
+        // three characters is neutralized to `_` rather than corrupting its item or
+        // its neighbours.
+        let json = serde_json::json!({"background_tasks": [
+            {"type": "a/b", "status": "run,ning"},
+            {"type": "x*y", "status": "ok"},
+        ]});
+        let out = background_task_summary(&json).unwrap();
+        assert_eq!(out, "a_b/run_ning,x_y/ok");
+        assert_eq!(out.split(',').count(), 2);
     }
 }
