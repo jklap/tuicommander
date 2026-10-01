@@ -2034,6 +2034,18 @@ fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> Mar
     resolve_markdown_link_with_home(root, current_file, href, dirs::home_dir().as_deref())
 }
 
+/// `~/rest` under `home`, or `None` when the path has no `~/` prefix or `rest` would not stay
+/// under home. Leading separators are trimmed (`~//x` must not join as an absolute path) and a
+/// drive-prefixed rest (`~/C:\x`) is refused: on Windows `join` would replace home with it.
+fn expand_home_prefix(path: &str, home: &Path) -> Option<String> {
+    let rest = path.strip_prefix("~/")?.trim_start_matches(['/', '\\']);
+    let bytes = rest.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        return None;
+    }
+    Some(home.join(rest).to_string_lossy().into_owned())
+}
+
 /// `~/` in a link names the home directory, as it does in the terminal paths.
 fn resolve_markdown_link_with_home(
     root: &str,
@@ -2058,12 +2070,8 @@ fn resolve_markdown_link_with_home(
             reason: "Network paths are not supported in Markdown links".into(),
         };
     }
-    if let (Some(rest), Some(home)) = (path.strip_prefix("~/"), home) {
-        // `~//x` must stay under home: joining an absolute rest would replace it.
-        path = home
-            .join(rest.trim_start_matches(['/', '\\']))
-            .to_string_lossy()
-            .into_owned();
+    if let Some(expanded) = home.and_then(|home| expand_home_prefix(&path, home)) {
+        path = expanded;
     }
     let mut line = anchor
         .strip_prefix('L')
@@ -3651,6 +3659,23 @@ mod tests {
             resolve_markdown_link_with_home("/repo", "/repo/r.md", "%7E/a.md", Some(home.path())),
             MarkdownLinkTarget::File { .. }
         ));
+    }
+
+    #[test]
+    fn home_prefix_expansion_never_escapes_home() {
+        let home = Path::new("/home/boss");
+        assert_eq!(
+            expand_home_prefix("~/a/b.md", home).as_deref(),
+            Some("/home/boss/a/b.md")
+        );
+        assert_eq!(
+            expand_home_prefix("~//a.md", home).as_deref(),
+            Some("/home/boss/a.md")
+        );
+        // A drive-prefixed rest would replace home in a Windows join.
+        assert_eq!(expand_home_prefix("~/C:\\x.md", home), None);
+        assert_eq!(expand_home_prefix("~/c:/x.md", home), None);
+        assert_eq!(expand_home_prefix("notes/a.md", home), None);
     }
 
     #[test]
