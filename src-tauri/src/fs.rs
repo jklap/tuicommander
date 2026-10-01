@@ -3604,6 +3604,56 @@ mod tests {
     }
 
     #[test]
+    fn critic2_markdown_link_home_prefix_into_tcc_dir_is_blocked() {
+        // Catches: `~/Library/x.md` bypassing the TCC guard (the guard must see the
+        // expanded path, including when `..` reaches the protected dir).
+        let Some(home) = dirs::home_dir() else { return };
+        for href in [
+            "~/Library/x.md",
+            "~/Desktop/x.md",
+            "~/notes/../Documents/x.md",
+        ] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(&home)),
+                    MarkdownLinkTarget::Blocked { .. }
+                ),
+                "{href}"
+            );
+        }
+    }
+
+    #[test]
+    fn critic2_markdown_link_home_prefix_keeps_heading_anchor() {
+        // Catches: expansion running before the anchor split, losing `#L9` / `#heading`.
+        let home = TempDir::new().unwrap();
+        fs::write(home.path().join("a.md"), "").unwrap();
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/r.md", "~/a.md#L9", Some(home.path())),
+            MarkdownLinkTarget::File {
+                line: Some(9),
+                anchor: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/r.md", "~/a.md#intro", Some(home.path())),
+            MarkdownLinkTarget::File { anchor: Some(a), .. } if a == "intro"
+        ));
+    }
+
+    #[test]
+    fn critic2_markdown_link_percent_encoded_tilde_expands_like_literal() {
+        // Catches: expansion on the raw href so `%7E/a.md` resolves next to the file instead of home.
+        let home = TempDir::new().unwrap();
+        fs::write(home.path().join("a.md"), "").unwrap();
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/r.md", "%7E/a.md", Some(home.path())),
+            MarkdownLinkTarget::File { .. }
+        ));
+    }
+
+    #[test]
     fn markdown_link_resolution_blocks_invalid_percent_encoding() {
         for href in ["file%ZZ.md", "file.md#%ZZ", "file%E0.md"] {
             assert!(matches!(
