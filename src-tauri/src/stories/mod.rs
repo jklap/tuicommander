@@ -1,4 +1,6 @@
 mod api;
+#[cfg(test)]
+mod critic_tests;
 mod model;
 mod sources;
 mod store;
