@@ -3591,6 +3591,42 @@ describe("useGitOperations", () => {
 			expect(mockCloseTerminal).not.toHaveBeenCalled();
 		});
 
+		// Catches: a removal that fails (a Windows lock on a checkout a PTY still holds) being reported as
+		// done, or its terminals being closed anyway, leaving a half-removed checkout with no terminal.
+		it("auto mode: a removal error is logged as a failure, closes nothing and reports no removal", async () => {
+			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/locked", safe: true }]);
+			mockRepo.removeOrphanWorktree.mockRejectedValueOnce(new Error("The process cannot access the file"));
+			terminalsStore.add(makeTerminal({ name: "Holds lock", cwd: "/wt/locked" }));
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).not.toHaveBeenCalledWith(expect.stringContaining("Removed"));
+			expect(appLogger.getEntries()).toContainEqual(
+				expect.objectContaining({
+					level: "warn",
+					message: "Failed to auto-remove orphan worktree /wt/locked",
+				}),
+			);
+		});
+
+		// Catches: a terminal that fails to close after the removal turning a removed checkout into
+		// "Failed to remove" with no count in the status line.
+		it("auto mode: a close error after a successful removal still counts the removal", async () => {
+			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/gone", safe: true }]);
+			mockCloseTerminal.mockRejectedValueOnce(new Error("pty already closed"));
+			terminalsStore.add(makeTerminal({ name: "Stuck", cwd: "/wt/gone" }));
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Removed 1 orphaned worktree(s)");
+			expect(appLogger.getEntries()).not.toContainEqual(
+				expect.objectContaining({ message: "Failed to auto-remove orphan worktree /wt/gone" }),
+			);
+		});
+
 		// Catches: widening the Auto-mode review to every unsafe orphan, which would pop a dialog
 		// for dirty checkouts that Auto mode has always skipped silently.
 		it("auto mode: a dirty orphan without a live session stays skipped and opens no dialog", async () => {
