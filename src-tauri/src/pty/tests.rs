@@ -20420,3 +20420,138 @@ fn critic3_mini_working_row_with_unusual_agent_label_is_working() {
         AgentScreenActivity::Working
     );
 }
+
+// --- critic-1299 round 4: width gate of the OpenCode --mini status row. Live tmux capture on
+// opencode 1.18.30 (fresh screen): the ` BUILD` row is painted from 46 columns up and absent at
+// 45 and below, where the placeholder wraps onto a second line.
+
+fn critic4_bare_build_rows() -> Vec<String> {
+    vec![
+        "  I will run the build now.".to_string(),
+        String::new(),
+        " BUILD".to_string(),
+    ]
+}
+
+/// Catches: `MIN_STATUS_ROW_COLUMNS` set to the narrowest width probed (64) instead of the
+/// narrowest width that paints the row (46). An idle OpenCode in a 46..=63 column split pane
+/// then reads Unknown for ever, and its queued commands never drain.
+#[test]
+fn critic4_mini_bare_label_reads_ready_wherever_opencode_paints_the_row() {
+    for columns in [46usize, 47, 48, 52, 56, 60, 63, 64, 120] {
+        assert_eq!(
+            detect_agent_screen_activity_at(
+                Some("opencode"),
+                &critic4_bare_build_rows(),
+                Some(columns)
+            ),
+            AgentScreenActivity::Ready,
+            "opencode paints ` BUILD` at {columns} columns (tmux capture)"
+        );
+    }
+}
+
+/// Catches: the width boundary moving up from the observed 45/46 edge, or a width gate that
+/// disappears below it. At 45 and below the row is absent, so a ` BUILD` line is tool output.
+#[test]
+fn critic4_mini_bare_label_is_unknown_where_opencode_paints_no_row() {
+    for columns in [20usize, 40, 41, 44, 45] {
+        assert_eq!(
+            detect_agent_screen_activity_at(
+                Some("opencode"),
+                &critic4_bare_build_rows(),
+                Some(columns)
+            ),
+            AgentScreenActivity::Unknown,
+            "opencode paints no status row at {columns} columns"
+        );
+    }
+}
+
+/// Catches: the width gate dropping a running turn on a narrow screen — the bar and the cut
+/// `esc interrupt` text must stay Working at every width, or auto-standby stops a live turn.
+#[test]
+fn critic4_mini_running_turn_is_working_at_every_width() {
+    for columns in [
+        Some(10usize),
+        Some(40),
+        Some(46),
+        Some(63),
+        Some(64),
+        Some(200),
+        Some(0),
+        None,
+    ] {
+        for row in [
+            " BUILD  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0} esc interrupt",
+            " BUILD  \u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0}\u{25A0}",
+        ] {
+            let rows = vec!["  working".to_string(), row.to_string()];
+            assert_eq!(
+                detect_agent_screen_activity_at(Some("opencode"), &rows, columns),
+                AgentScreenActivity::Working,
+                "{row:?} at {columns:?}"
+            );
+        }
+    }
+}
+
+/// Catches: a full usage status row withheld on a 46..=63 column pane (the gate returns Unknown
+/// before looking at the row), so a turn that produced usage never reads Ready there.
+#[test]
+fn critic4_mini_usage_status_row_reads_ready_on_a_mid_width_pane() {
+    let rows = vec![
+        "  done".to_string(),
+        " BUILD  52.9K (26%) \u{00B7} ctrl+p cmd".to_string(),
+    ];
+    for columns in [58usize, 63, 64, 120] {
+        assert_eq!(
+            detect_agent_screen_activity_at(Some("opencode"), &rows, Some(columns)),
+            AgentScreenActivity::Ready,
+            "{columns} columns"
+        );
+    }
+}
+
+/// Catches: the width reaching the adapter in the reader as a constant, or as the wrong
+/// dimension (rows instead of columns): a 50-column idle pane must reach Ready through
+/// `process_chunk`, the path that feeds the queue drain.
+#[test]
+fn critic4_mini_reader_reads_ready_on_a_fifty_column_screen() {
+    let sid = "opencode-mini-mid-width-reader";
+    let (state, silence) = chunk_trace_state(sid);
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("opencode".into());
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(20, 50, 200)));
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk(
+        "\x1b[2J\x1b[H  I will run the build now.\r\n\r\n BUILD",
+        &silence,
+        sid,
+        &state,
+    );
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready,
+        "a 50-column opencode --mini pane paints ` BUILD`"
+    );
+}
+
+/// Catches: the width parameter leaking into another agent's adapter.
+#[test]
+fn critic4_width_does_not_change_other_agents() {
+    let rows = vec!["> Enter to send \u{00B7} Ctrl+J newline".to_string()];
+    for columns in [Some(10usize), Some(40), Some(63), None] {
+        assert_eq!(
+            detect_agent_screen_activity_at(Some("goose"), &rows, columns),
+            detect_agent_screen_activity(Some("goose"), &rows)
+        );
+    }
+}
