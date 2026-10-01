@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRepositoryRefreshCoordinator } from "../../hooks/git/createRepositoryRefreshCoordinator";
-import { repositoriesStore } from "../../stores/repositories";
 import { repoSettingsStore } from "../../stores/repoSettings";
+import { repositoriesStore } from "../../stores/repositories";
 
 describe("orphan removal order and session binding (critic-1188 r2)", () => {
 	const setStatusInfo = vi.fn();
