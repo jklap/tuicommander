@@ -3,7 +3,7 @@ use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::grid::{Dimensions, ReflowMode};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
-use alacritty_terminal::term::color::{Colors, named_color_to_index};
+use alacritty_terminal::term::color::{named_color_to_index, Colors};
 use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode, TermParseDamage};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
@@ -3487,11 +3487,9 @@ mod tests {
             "section duplicated on the final screen: {screen:?}"
         );
         assert!(screen.iter().any(|row| row == "frame: 511"));
-        assert!(
-            screen
-                .iter()
-                .any(|row| row == "data: never truncate this payload")
-        );
+        assert!(screen
+            .iter()
+            .any(|row| row == "data: never truncate this payload"));
     }
 
     #[test]
@@ -5515,43 +5513,33 @@ mod tests {
         // Shell displays prompt (OSC 133 A)
         grid.process(b"\x1b]133;A\x07$ ");
         let events = grid.drain_events();
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. }))
-        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. })));
 
         // User types and presses enter (OSC 133 C)
         grid.process(b"ls\r\n\x1b]133;C\x07");
         let events = grid.drain_events();
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, TermEvent::Osc133 { command: 'C', .. }))
-        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, TermEvent::Osc133 { command: 'C', .. })));
 
         // Command output + done (OSC 133 D)
         grid.process(b"file1.txt\r\n\x1b]133;D;0\x07");
         let events = grid.drain_events();
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, TermEvent::Osc133 { command: 'D', .. }))
-        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, TermEvent::Osc133 { command: 'D', .. })));
 
         // Prompt returns (OSC 133 A) + agent suggests via OSC 7770
         grid.process(b"\x1b]133;A\x07$ \x1b]7770;suggest=Show details|Delete file|Open\x07");
         let events = grid.drain_events();
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. }))
-        );
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, TermEvent::Tuic { verb, .. } if verb == "suggest"))
-        );
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, TermEvent::Tuic { verb, .. } if verb == "suggest")));
     }
 
     #[test]
@@ -6505,7 +6493,10 @@ mod reprint_merge_critic_tests {
     }
 
     fn non_empty(grid: &TerminalGrid) -> usize {
-        all_rows(grid).iter().filter(|r| !r.trim().is_empty()).count()
+        all_rows(grid)
+            .iter()
+            .filter(|r| !r.trim().is_empty())
+            .count()
     }
 
     /// Scenario shared by the cases below: 6x20 grid holding L01..L10, shrunk to
@@ -6520,7 +6511,8 @@ mod reprint_merge_critic_tests {
     }
 
     /// The program's repaint: home, then the last rows, inside one sync frame.
-    const REPAINT: &[u8] = b"\x1b[?2026h\x1b[HL06\x1b[K\r\nL07\x1b[K\r\nL08\x1b[K\r\nL09\x1b[K\x1b[?2026l";
+    const REPAINT: &[u8] =
+        b"\x1b[?2026h\x1b[HL06\x1b[K\r\nL07\x1b[K\r\nL08\x1b[K\r\nL09\x1b[K\x1b[?2026l";
 
     /// Catches: the merge fires on any frame end after a shrink whose history
     /// tail happens to equal the screen head, with no repaint having happened.
@@ -6535,7 +6527,11 @@ mod reprint_merge_critic_tests {
         grid.resize_with_mode(4, 20, ReflowMode::All);
         let before = non_empty(&grid);
         grid.process(IDLE_FRAME);
-        assert_eq!(non_empty(&grid), before, "an empty sync frame deleted printed rows");
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "an empty sync frame deleted printed rows"
+        );
     }
 
     /// Catches: same as above for a run of identical separator rows.
@@ -6548,7 +6544,11 @@ mod reprint_merge_critic_tests {
         grid.resize_with_mode(4, 20, ReflowMode::All);
         let before = non_empty(&grid);
         grid.process(IDLE_FRAME);
-        assert_eq!(non_empty(&grid), before, "an empty sync frame deleted separator rows");
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "an empty sync frame deleted separator rows"
+        );
     }
 
     /// Catches: the merge drops history rows but leaves `display_offset`
@@ -6564,7 +6564,10 @@ mod reprint_merge_critic_tests {
         assert_eq!(grid.scrollback_count(), 5, "scenario must merge L06,L07");
         let d = grid.display_offset();
         let top_after = grid.row_to_text(Line(-(d as i32))).unwrap();
-        assert_eq!(top_after, top_before, "viewport top row changed under a scrolled-up user");
+        assert_eq!(
+            top_after, top_before,
+            "viewport top row changed under a scrolled-up user"
+        );
     }
 
     /// Catches: the frame-end carry mishandles a FRAME_END split across chunks,
