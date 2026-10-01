@@ -18,7 +18,14 @@ import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
-import { createCanvasLinkController } from "./canvasTerminalLinks";
+import {
+	createCanvasLinkController,
+	createLinkPressTracker,
+	isOverSpan,
+	linkClaimsPress,
+	linkCovers,
+	spanAt,
+} from "./canvasTerminalLinks";
 import { createCanvasScrollController, ROW_CACHE_CHUNK } from "./canvasTerminalScroll";
 import {
 	commitSelectionCopy,
@@ -50,6 +57,7 @@ import {
 	installFrameRows,
 	reconcileDelay,
 	rowText,
+	rowTextLayout,
 	shouldFireReconcile,
 	snapLineHeight,
 	textSpanToCellRanges,
@@ -221,7 +229,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// Link detection
 	const linkController = createCanvasLinkController();
 	const linkCache = linkController.rowCache;
-	let hoveredLink: {
+	type HoveredLink = {
 		row: number;
 		colStart: number;
 		colEnd: number;
@@ -229,7 +237,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		line?: number;
 		col?: number;
 		spans?: { row: number; colStart: number; colEnd: number }[];
-	} | null = null;
+	};
+	const STALE = Symbol("stale link lookup");
+	let hoveredLink: HoveredLink | null = null;
 	const detectedLinks = linkController.detectedSpans;
 	// Spans of links that span soft-wrapped rows (web + file://), keyed by row.
 	// scanRowForLinks() merges these each time it rebuilds a row's dashed-underline
@@ -257,6 +267,27 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			props.onOpenFilePath?.(path, link.line, link.col);
 		}
 	};
+
+	// The press claimed a span; what it opens is resolved now, at the pointer, by its
+	// own lookup — neither `hoveredLink` nor the hover probe's staleness check.
+	const linkPress = createLinkPressTracker();
+	async function openLinkAt(row: number, col: number) {
+		const link = await resolveLinkAt(row, col, () => !alive);
+		if (link && link !== STALE && linkCovers(link, row, col)) openLink(link);
+	}
+	/** What a span underlines on screen right now; "" when there is none. */
+	function underlinedText(row: number, span: { colStart: number; colEnd: number } | undefined): string {
+		const decoded = rowMap.get(row);
+		if (!decoded || !span) return "";
+		const { text, utf16Starts } = rowTextLayout(decoded);
+		return text.slice(
+			utf16Starts[Math.min(span.colStart, decoded.count)],
+			utf16Starts[Math.min(span.colEnd, decoded.count)],
+		);
+	}
+	function underlinedTextAt(row: number, col: number): string {
+		return underlinedText(row, spanAt(detectedLinks.get(row), col));
+	}
 
 	const copyLink = (link: LinkTarget) => {
 		const text = link.path.startsWith("file://") ? link.path.slice(7) : link.path;
@@ -1973,10 +2004,28 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	let linkThrottle: ReturnType<typeof setTimeout> | undefined;
 
+	/** Hover probe: the link under the cell becomes `hoveredLink`; a newer probe supersedes this one. */
 	async function checkLinksAtRow(row: number, col: number) {
-		const ref = invokeRef;
-		if (!ref || !alive) return;
+		if (!invokeRef || !alive) return;
 		const gen = linkController.beginCheck();
+		const found = await resolveLinkAt(row, col, () => !linkController.isCurrent(gen));
+		if (found === STALE) return;
+		hoveredLink = found;
+		canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
+		if (currentFrame) {
+			const m = metrics();
+			if (m) repaintOverlay(currentFrame, m);
+		}
+	}
+
+	/** The link under the cell, or `STALE` when `isStale` turned true while resolving. Touches no hover state. */
+	async function resolveLinkAt(
+		row: number,
+		col: number,
+		isStale: () => boolean,
+	): Promise<HoveredLink | null | typeof STALE> {
+		const ref = invokeRef;
+		if (!ref || !alive) return STALE;
 
 		// OSC 8 hyperlinks take priority — the program explicitly tagged this cell
 		try {
@@ -2003,19 +2052,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						/* resolve failed — use raw URI */
 					}
 				}
-				if (!alive || !linkController.isCurrent(gen)) return;
-				hoveredLink = { row, colStart, colEnd, path: resolvedPath };
-				canvasRef.style.cursor = "pointer";
-				if (currentFrame) {
-					const m = metrics();
-					if (m) repaintOverlay(currentFrame, m);
-				}
-				return;
+				if (!alive || isStale()) return STALE;
+				return { row, colStart, colEnd, path: resolvedPath };
 			}
 		} catch {
 			/* ignore — command may not exist on older backend */
 		}
-		if (!alive || !linkController.isCurrent(gen)) return;
+		if (!alive || isStale()) return STALE;
 
 		let rowText: string;
 		try {
@@ -2024,9 +2067,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				row,
 			})) as string;
 		} catch {
-			return;
+			return STALE;
 		}
-		if (!alive || !linkController.isCurrent(gen)) return;
+		if (!alive || isStale()) return STALE;
 
 		const cacheKey = `${row}:${rowText}`;
 		let links = linkCache.get(cacheKey);
@@ -2101,15 +2144,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}[];
 				const allLinks = [...validFiles, ...urlMatches];
 				links = allLinks.length > 0 ? allLinks : null;
-				if (linkCache.size > 200) {
-					const oldest = linkCache.keys().next().value;
-					if (oldest !== undefined) linkCache.delete(oldest);
+				// A file that did not resolve may be written a moment later (the tool
+				// call line prints before the file exists). Caching that miss would keep
+				// the name dead on click after the 3 s re-verification underlines it.
+				if (validFiles.length === fileMatches.length) {
+					if (linkCache.size > 200) {
+						const oldest = linkCache.keys().next().value;
+						if (oldest !== undefined) linkCache.delete(oldest);
+					}
+					linkCache.set(cacheKey, links);
 				}
-				linkCache.set(cacheKey, links);
 			}
 		}
 
-		hoveredLink = null;
+		let found: HoveredLink | null = null;
 		const decodedRow = rowMap.get(row);
 		if (links) {
 			for (const link of links) {
@@ -2119,7 +2167,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					? textSpanToCellRanges([{ index: row, row: decodedRow }], rowText, start, end)?.[0]
 					: null;
 				if (cells && col >= cells.colStart && col < cells.colEnd) {
-					hoveredLink = {
+					found = {
 						row,
 						colStart: cells.colStart,
 						colEnd: cells.colEnd,
@@ -2138,13 +2186,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const rowHasEdgeUrl = matchWebUrls(rowText).some((url) => url.index + url.text.length >= rowText.length);
 
 		// If no single-row link found, try logical line (joins soft-wrapped rows)
-		if (!hoveredLink && ref) {
+		if (!found && ref) {
 			try {
 				const [startRow, logicalText] = (await ref("terminal_get_logical_line", {
 					sessionId: props.sessionId,
 					row,
 				})) as [number, string];
-				if (!alive || !linkController.isCurrent(gen)) return;
+				if (!alive || isStale()) return STALE;
 				if (startRow !== row || logicalText !== rowText || rowHasEdgeUrl) {
 					const logicalOffset = logicalCellToStringOffset(startRow, logicalText, row, col);
 					const fuRe = FILE_URL_RE;
@@ -2177,14 +2225,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 									absolute_path: string;
 									is_directory: boolean;
 								} | null;
-								if (!alive || !linkController.isCurrent(gen)) return;
+								if (!alive || isStale()) return STALE;
 								if (!r) break;
 								resolvedPath = r.absolute_path;
 							}
 							const spans = logicalStringSpanToCells(startRow, logicalText, lm.index, matchEnd);
 							if (spans.length === 0) break;
 							const firstSpan = spans[0];
-							hoveredLink = {
+							found = {
 								row: firstSpan.row,
 								colStart: firstSpan.colStart,
 								colEnd: firstSpan.colEnd,
@@ -2200,11 +2248,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 		}
 
-		canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
-		if (currentFrame) {
-			const m = metrics();
-			if (m) repaintOverlay(currentFrame, m);
-		}
+		return found;
 	}
 
 	let scrollGestureEndTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2779,14 +2823,28 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		bindings.listen(canvasRef, "mousedown", (e: MouseEvent) => {
 			keyInputRef.focus({ preventScroll: true });
+			{
+				const at = canvasToGrid(e);
+				const span = spanAt(detectedLinks.get(at.row), at.col);
+				linkPress.begin(e.button, at.row, span, underlinedText(at.row, span));
+			}
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				const pos = canvasToGrid(e);
-				// Right-click on a detected link → let the contextmenu handler fire (Open /
-				// Copy link), even while an app has mouse reporting on. In WKWebView,
-				// preventDefault on a right-button mousedown suppresses the contextmenu event,
-				// so over a link we neither forward nor preventDefault: the app loses this one
-				// right-click, but the link menu works — UI-first (see #57).
-				if (e.button === 2 && detectedLinks.get(pos.row)?.some((sp) => pos.col >= sp.colStart && pos.col < sp.colEnd)) {
+				// A press on a detected link → let the link handlers fire (click opens,
+				// contextmenu shows Open / Copy link), even while an app has mouse
+				// reporting on. The underline promises the click opens, and Claude
+				// Code's fullscreen mode reports the mouse, so forwarding the press left
+				// every underlined path dead. In WKWebView, preventDefault on a
+				// right-button mousedown suppresses the contextmenu event, so over a link
+				// we neither forward nor preventDefault: the app loses this one press,
+				// but the link works — UI-first (see #57). Shift bypasses reporting.
+				if (linkClaimsPress(e.button, isOverSpan(detectedLinks.get(pos.row), pos.col))) {
+					// A leftover Shift-drag selection would make the click bail as a drag.
+					if (linkPress.isClaimed() && selection.hasRange()) {
+						selection.clear();
+						fullRepaintNeeded = true;
+						scheduleRepaint();
+					}
 					return;
 				}
 				if (currentFrame.sgrMouse) {
@@ -2924,6 +2982,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && mRepaint) paintFrame(currentFrame, mRepaint);
 		};
 
+		const scheduleLinkProbe = (e: MouseEvent) => {
+			clearTimeout(linkThrottle);
+			linkThrottle = setTimeout(() => {
+				const pos = canvasToGrid(e);
+				checkLinksAtRow(pos.row, pos.col);
+			}, 100);
+		};
+
 		const onMouseMove = (e: MouseEvent) => {
 			// The listener is on document, so this fires for every terminal on every
 			// move. A hidden one has a 1x1 canvas and canvasToGrid clamps, so without
@@ -2932,10 +2998,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				const rect = canvasRef.getBoundingClientRect();
 				if (!isPointerInsideRect(e, rect)) return;
+				// Keep probing links: the press over one is claimed from the app
+				// (mousedown), and the click only opens what this probe found.
+				if (!selection.selecting) scheduleLinkProbe(e);
 				if (currentFrame.mouseMode >= 3) {
 					const pos = canvasToGrid(e, rect);
 					writePtyNoScroll(sgrMouseSequence(35, pos.col, pos.row, true, e));
-				} else if (currentFrame.mouseMode >= 2 && e.buttons > 0) {
+				} else if (currentFrame.mouseMode >= 2 && e.buttons > 0 && !linkPress.isClaimed()) {
 					const pos = canvasToGrid(e, rect);
 					const btn = e.buttons & 1 ? 0 : e.buttons & 4 ? 1 : 2;
 					writePtyNoScroll(sgrMouseSequence(32 + btn, pos.col, pos.row, true, e));
@@ -2956,11 +3025,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// on every move — up to 3 IPC round trips each — for panes the pointer
 			// never touched.
 			if (!selection.selecting && isPointerInsideRect(e, canvasRef.getBoundingClientRect())) {
-				clearTimeout(linkThrottle);
-				linkThrottle = setTimeout(() => {
-					const pos = canvasToGrid(e);
-					checkLinksAtRow(pos.row, pos.col);
-				}, 100);
+				scheduleLinkProbe(e);
 			}
 		};
 
@@ -2969,7 +3034,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// hiding the terminal or dragging off it mid-gesture would otherwise
 			// leave the button logically held with nothing left to retract it.
 			const rect = canvasRef.getBoundingClientRect();
-			const reportUp = shouldReportMouseUp(reportedDown, e.button, isPointerInsideRect(e, rect));
+			// A claimed link press was never reported down, so its release is not owed either.
+			const reportUp =
+				!linkPress.isClaimed() && shouldReportMouseUp(reportedDown, e.button, isPointerInsideRect(e, rect));
 			const owed = reportedDown.delete(e.button);
 			if (hidden && !owed) return;
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
@@ -3007,18 +3074,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		bindings.listen(document, "mouseup", onMouseUp);
 
 		// Link click — plain click opens, skip if user was selecting text
-		bindings.listen(canvasRef, "click", () => {
-			if (!hoveredLink) return;
-			if (selection.hasRange()) return;
-			openLink(hoveredLink);
+		bindings.listen(canvasRef, "click", (e: MouseEvent) => {
+			const at = canvasToGrid(e);
+			const claimed = linkPress.release(at.row, at.col, underlinedTextAt(at.row, at.col));
+			// The first click of a double-click already opened it.
+			if (!claimed || e.detail > 1 || selection.hasRange()) return;
+			void openLinkAt(at.row, at.col);
 		});
 
 		// Right-click on a detected link → context menu (Open / Copy link).
 		// Only when the click lands on a link span; elsewhere the default is left alone.
 		bindings.listen(canvasRef, "contextmenu", async (e: MouseEvent) => {
 			const pos = canvasToGrid(e);
-			const onLink = detectedLinks.get(pos.row)?.some((sp) => pos.col >= sp.colStart && pos.col < sp.colEnd);
-			if (!onLink) return;
+			if (!isOverSpan(detectedLinks.get(pos.row), pos.col)) return;
 			e.preventDefault();
 			// Stop the App-level terminal context menu (#terminal-panes onContextMenu)
 			// from also opening and covering our Open/Copy-link menu.

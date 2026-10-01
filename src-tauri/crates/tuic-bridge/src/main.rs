@@ -1198,8 +1198,7 @@ mod tests {
     }
 
     /// The regression: a long request must not hold the reader hostage. Two slow
-    /// (300ms) calls sent back-to-back finish in roughly one slow window, and the
-    /// server sees both open at once.
+    /// (300ms) calls sent back-to-back are seen open at once by the server.
     #[cfg(unix)]
     #[tokio::test]
     async fn concurrent_requests_are_not_serialized() {
@@ -1212,19 +1211,16 @@ mod tests {
         tx.send(call("slow_other")).unwrap();
         drop(tx);
 
-        let started = std::time::Instant::now();
         dispatch_loop(state, rx).await;
-        let elapsed = started.elapsed();
 
+        // Overlap is asserted through the mock's in-flight counter, not through
+        // elapsed time: a wall-clock bound fails on a loaded box (597ms observed
+        // under nextest -j 6) while proving nothing the counter does not.
         assert_eq!(stats.tool_calls.load(Ordering::SeqCst), 2);
         assert_eq!(
             stats.max_in_flight.load(Ordering::SeqCst),
             2,
             "both requests must be in flight together — serialized dispatch is the bug"
-        );
-        assert!(
-            elapsed < std::time::Duration::from_millis(550),
-            "two 300ms calls took {elapsed:?}: they ran back-to-back, not concurrently"
         );
     }
 
@@ -1242,14 +1238,15 @@ mod tests {
         tx.send(call("repo")).unwrap();
         drop(tx);
 
-        let started = std::time::Instant::now();
         dispatch_loop(state, rx).await;
 
+        // The fast call never sleeps, so it is in flight alongside the slow one
+        // only if it was dispatched while the slow call was still pending.
         assert_eq!(stats.tool_calls.load(Ordering::SeqCst), 2);
-        assert_eq!(stats.max_in_flight.load(Ordering::SeqCst), 2);
-        assert!(
-            started.elapsed() < std::time::Duration::from_millis(650),
-            "the fast call inherited the slow call's latency"
+        assert_eq!(
+            stats.max_in_flight.load(Ordering::SeqCst),
+            2,
+            "the fast call waited for the slow call instead of overlapping it"
         );
     }
 
