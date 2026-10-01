@@ -6171,11 +6171,7 @@ mod tests {
             .unwrap();
         let state = test_state();
         crate::state::tests_support::insert_dummy_session(&state, "agent-1");
-        crate::state::tests_support::set_session_cwd(
-            &state,
-            "agent-1",
-            &linked.to_string_lossy(),
-        );
+        crate::state::tests_support::set_session_cwd(&state, "agent-1", &linked.to_string_lossy());
         state
             .session_maps
             .sessions
@@ -6261,7 +6257,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(removal.status(), StatusCode::BAD_REQUEST);
-        assert!(linked.exists(), "a checkout with a live session must survive");
+        assert!(
+            linked.exists(),
+            "a checkout with a live session must survive"
+        );
     }
 
     #[tokio::test]
