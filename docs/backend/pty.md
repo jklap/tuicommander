@@ -945,6 +945,25 @@ atomic, which for a hook-instrumented Claude session comes from its `UserPromptS
 hooks (a teammate's `Stop` reported `background_tasks: []` and flipped it idle in the live
 captures); a teammate pane with no hook state would read idle, which is the residual risk.
 
+**Known limitations, deliberately not fixed (2026-10-01):**
+- `TmuxPane::lead_session_id` is first-write-wins and validated only as "names a live session". A
+  caller that can already drive the tmux shim could materialize a virtual pane first with a wrong
+  but live origin, so the real lead would not count that teammate (and could read idle while it
+  works). Needs local IPC access, which can already write to any session; binding the link to the
+  caller's own `$TUIC_SESSION` identity would close it.
+- A teammate's busy signal is its own terminal's `shell_states` atomic. A teammate pane with no
+  hook/OSC state would read idle even while working (hook-instrumented Claude teammates report
+  correctly in live captures).
+- `bgtasksummary` goes through the same 512-byte payload cap as `bgtasks`; an unrealistically wide
+  set of distinct `type/status` pairs could still truncate it.
+- The explain-state modal (`StateExplainModal.tsx`) computes its agree/mismatch banner once at load,
+  so it does not react if `declaredBackgroundWork` changes while it is open (pre-existing).
+  `explain_session_state_impl` samples the teammate list once; a teammate flipping between that
+  sample and the ladder's own read can make `counts_now` momentarily disagree with
+  `visible.declared_background_work` (diagnostic only).
+- `read_stdin_bounded` in `tuic-hook` reads the real process stdin and is not unit-testable
+  in-process; only its constants are pinned.
+
 **Lead ↔ teammate linkage** comes from the tmux shim, because a teammate's own hooks carry no
 parent reference (payload and hook env hold only its own `session_id`/`TUIC_SESSION`). `tuic-cli`
 runs inside the lead's PTY and sends its own `TUIC_SESSION` as `origin_session_id` on
