@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(feature = "desktop")]
@@ -2031,6 +2031,16 @@ fn is_unc_markdown_path(path: &str) -> bool {
 }
 
 fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> MarkdownLinkTarget {
+    resolve_markdown_link_with_home(root, current_file, href, dirs::home_dir().as_deref())
+}
+
+/// `~/` in a link names the home directory, as it does in the terminal paths.
+fn resolve_markdown_link_with_home(
+    root: &str,
+    current_file: &str,
+    href: &str,
+    home: Option<&Path>,
+) -> MarkdownLinkTarget {
     let (raw_path, raw_anchor) = href.split_once('#').unwrap_or((href, ""));
     let raw_path = raw_path.split_once('?').map_or(raw_path, |(path, _)| path);
     let Some(mut path) = decode_markdown_link_part(raw_path) else {
@@ -2047,6 +2057,9 @@ fn resolve_markdown_link_impl(root: &str, current_file: &str, href: &str) -> Mar
         return MarkdownLinkTarget::Blocked {
             reason: "Network paths are not supported in Markdown links".into(),
         };
+    }
+    if let (Some(rest), Some(home)) = (path.strip_prefix("~/"), home) {
+        path = home.join(rest).to_string_lossy().into_owned();
     }
     let mut line = anchor
         .strip_prefix('L')
@@ -3485,6 +3498,30 @@ mod tests {
                 is_directory: true,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn markdown_link_expands_home_prefix_and_keeps_line_suffix() {
+        let home = TempDir::new().unwrap();
+        fs::create_dir(home.path().join("notes")).unwrap();
+        fs::write(home.path().join("notes/design.md"), "").unwrap();
+        let canonical = home.path().canonicalize().unwrap();
+        let expected = canonical.join("notes/design.md");
+        let expected = expected.to_string_lossy();
+        for (href, line) in [("~/notes/design.md", None), ("~/notes/design.md:7", Some(7))] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(home.path())),
+                    MarkdownLinkTarget::File { absolute_path, open_path, line: actual, .. }
+                        if absolute_path == expected && open_path == expected && actual == line
+                ),
+                "{href}"
+            );
+        }
+        assert!(matches!(
+            resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/notes/gone.md", Some(home.path())),
+            MarkdownLinkTarget::Missing { .. }
         ));
     }
 
