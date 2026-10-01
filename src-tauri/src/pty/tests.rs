@@ -20754,9 +20754,12 @@ fn critic5_mini_narrow_non_status_rows_stay_unknown_at_46() {
 fn session_exit_records_task_error_or_result_from_the_exit_code() {
     use crate::tasks::{TaskKind, TaskStatus};
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
-    let cases: [(&str, Option<i32>); 3] = [("failed", Some(3)), ("clean", Some(0)), ("unknown", None)];
+    let cases: [(&str, Option<i32>); 3] =
+        [("failed", Some(3)), ("clean", Some(0)), ("unknown", None)];
     for (sid, code) in cases {
-        let task = state.tasks.create(TaskKind::AgentSpawn, "orchestrator", Some(sid));
+        let task = state
+            .tasks
+            .create(TaskKind::AgentSpawn, "orchestrator", Some(sid));
         if let Some(code) = code {
             state.session_maps.exit_codes.insert(sid.to_string(), code);
         }
@@ -20764,7 +20767,10 @@ fn session_exit_records_task_error_or_result_from_the_exit_code() {
         let rec = state.tasks.get(&task).expect("task");
         if code.is_some_and(|c| c != 0) {
             assert_eq!(rec.status, TaskStatus::Failed, "{sid}");
-            assert_eq!(rec.error.as_deref(), Some("agent session exited with code 3"));
+            assert_eq!(
+                rec.error.as_deref(),
+                Some("agent session exited with code 3")
+            );
             assert_eq!(rec.result, None);
         } else {
             assert_eq!(rec.status, TaskStatus::Completed, "{sid}");
