@@ -8290,7 +8290,10 @@ branch refs/heads/feat
         let wt_b = add_worktree(&repo, "beta-1327");
         for (branch, own) in [("alpha-1327", &wt_a), ("beta-1327", &wt_b)] {
             let query = branch_integration_with_pr(&repo, branch, |_, _, _| false).unwrap();
-            assert_eq!(query.worktree_paths, vec![own.to_string_lossy().to_string()]);
+            assert_eq!(
+                query.worktree_paths,
+                vec![own.to_string_lossy().to_string()]
+            );
         }
     }
 
