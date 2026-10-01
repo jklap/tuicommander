@@ -93,6 +93,32 @@ describe("snapshotToRows row identity", () => {
 		expect(second[0].status.label).toBe("Working");
 	});
 
+	it("derives Working / isWorking from declaredBackgroundWork alone, even with an idle shell and idle agent state", () => {
+		const rows = snapshotToRows(
+			snapshot(terminal({ shellState: "idle", agentState: "idle", declaredBackgroundWork: true })),
+		);
+
+		expect(rows[0].status.label).toBe("Working");
+		expect(rows[0].isWorking).toBe(true);
+	});
+
+	it("reads the same idle terminal as Idle / not working when declaredBackgroundWork is false", () => {
+		const rows = snapshotToRows(
+			snapshot(terminal({ shellState: "idle", agentState: "idle", declaredBackgroundWork: false })),
+		);
+
+		expect(rows[0].status.label).toBe("Idle");
+		expect(rows[0].isWorking).toBe(false);
+	});
+
+	it("replaces the row when only declaredBackgroundWork flips", () => {
+		const first = snapshotToRows(snapshot(terminal({ shellState: "idle", declaredBackgroundWork: false })));
+		const second = snapshotToRows(snapshot(terminal({ shellState: "idle", declaredBackgroundWork: true })), first);
+
+		expect(second[0]).not.toBe(first[0]);
+		expect(second[0].isWorking).toBe(true);
+	});
+
 	it("does not reuse a row for a different terminal at the same index", () => {
 		const first = snapshotToRows(snapshot(terminal({ id: "a" })));
 		const second = snapshotToRows(snapshot(terminal({ id: "b" })), first);

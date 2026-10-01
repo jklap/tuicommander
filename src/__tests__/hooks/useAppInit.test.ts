@@ -992,6 +992,49 @@ describe("initApp", () => {
 		expect(terminalsStore.get(nestedBranch!.terminals[0])?.sessionId).toBe("sess-nested-repo");
 	});
 
+	it("hydrates declaredBackgroundWork from a surviving session's snapshot, separate from backgroundWork", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{
+						session_id: "sess-declared",
+						cwd: "/repo",
+						state: {
+							shell_state: "idle",
+							agent_state: "working",
+							agent_type: "claude",
+							declared_background_work: true,
+						},
+					},
+					{
+						// serde omits the field when false: absence must hydrate as false.
+						session_id: "sess-plain",
+						cwd: "/repo",
+						state: { shell_state: "idle", agent_state: "idle", agent_type: "claude" },
+					},
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const declared = terminalsStore.get(terminalsStore.getTerminalForSession("sess-declared")!);
+		expect(declared?.declaredBackgroundWork).toBe(true);
+		expect(declared?.backgroundWork).toBe(false);
+		expect(terminalsStore.isWorking(terminalsStore.getTerminalForSession("sess-declared")!)).toBe(true);
+		expect(terminalsStore.isBusy(terminalsStore.getTerminalForSession("sess-declared")!)).toBe(false);
+
+		const plain = terminalsStore.get(terminalsStore.getTerminalForSession("sess-plain")!);
+		expect(plain?.declaredBackgroundWork).toBe(false);
+		expect(terminalsStore.isWorking(terminalsStore.getTerminalForSession("sess-plain")!)).toBe(false);
+	});
+
 	it("prefers a longer external worktree over an enclosing repo root", async () => {
 		repositoriesStore.add({ path: "/external", displayName: "External" });
 		repositoriesStore.setWorkspace("/external", "main", { worktreePath: "/external" });

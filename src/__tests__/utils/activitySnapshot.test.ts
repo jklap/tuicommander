@@ -115,6 +115,70 @@ describe("activitySnapshot", () => {
 		expect(row.isWorking).toBe(false);
 	});
 
+	it("carries declaredBackgroundWork into the row and renders an idle-shell declared terminal as Working, not busy", () => {
+		const id = terminalsStore.add({
+			name: "Declared",
+			sessionId: "sess-declared",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: "claude",
+		});
+		terminalsStore.update(id, { shellState: "idle", agentState: "idle", declaredBackgroundWork: true });
+
+		const snap = buildActivitySnapshot();
+		expect(snap.terminals[0].declaredBackgroundWork).toBe(true);
+		// The debounced raw-busy flag stays false: declared work is a separate signal.
+		expect(snap.terminals[0].isBusy).toBe(false);
+
+		const row = snapshotToRows(snap)[0];
+		expect(row.status.label).toBe("Working");
+		expect(row.isWorking).toBe(true);
+	});
+
+	it("orders a declared-background-work terminal into the working group ahead of a plain idle one", () => {
+		const idleId = terminalsStore.add({
+			name: "Plain idle",
+			sessionId: "sess-plain-idle",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: "claude",
+		});
+		terminalsStore.update(idleId, { shellState: "idle", agentState: "idle" });
+		const declaredId = terminalsStore.add({
+			name: "Declared",
+			sessionId: "sess-declared-order",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: "claude",
+		});
+		terminalsStore.update(declaredId, { shellState: "idle", agentState: "idle", declaredBackgroundWork: true });
+
+		const rows = snapshotToRows(buildActivitySnapshot());
+		expect(rows.map((r) => r.name)).toEqual(["Declared", "Plain idle"]);
+		expect(rows.map((r) => r.isWorking)).toEqual([true, false]);
+	});
+
+	it("drops a terminal back to Idle once declaredBackgroundWork is cleared", () => {
+		const id = terminalsStore.add({
+			name: "Declared",
+			sessionId: "sess-declared-clear",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: "claude",
+		});
+		terminalsStore.update(id, { shellState: "idle", agentState: "idle", declaredBackgroundWork: true });
+		expect(snapshotToRows(buildActivitySnapshot())[0].isWorking).toBe(true);
+
+		terminalsStore.update(id, { declaredBackgroundWork: false });
+		const row = snapshotToRows(buildActivitySnapshot())[0];
+		expect(row.status.label).toBe("Idle");
+		expect(row.isWorking).toBe(false);
+	});
+
 	it("orders the snapshot working-first, idle-second", () => {
 		const idleId = terminalsStore.add({
 			name: "Idle terminal",
@@ -574,6 +638,33 @@ describe("branchActivitySummary", () => {
 
 		const summary = branchActivitySummary([id]);
 		expect(summary.terminals).toEqual([{ id, agentType: "claude", label: "Exited" }]);
+	});
+
+	it("labels an idle-shell terminal with declared background work 'Working' in the removal summary", () => {
+		const declaredId = terminalsStore.add({
+			name: "Declared",
+			sessionId: "sess-declared-removal",
+			cwd: "/repo/wt",
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: "claude",
+		});
+		terminalsStore.update(declaredId, { shellState: "idle", agentState: "idle", declaredBackgroundWork: true });
+		const plainId = terminalsStore.add({
+			name: "Plain",
+			sessionId: "sess-plain-removal",
+			cwd: "/repo/wt",
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: "claude",
+		});
+		terminalsStore.update(plainId, { shellState: "idle", agentState: "idle" });
+
+		const summary = branchActivitySummary([declaredId, plainId]);
+		expect(summary.terminals).toEqual([
+			{ id: declaredId, agentType: "claude", label: "Working" },
+			{ id: plainId, agentType: "claude", label: "Idle" },
+		]);
 	});
 
 	it("is busy when at least one of several attached terminals is still live", () => {
