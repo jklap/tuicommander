@@ -5504,6 +5504,9 @@ mod critic_round1 {
         };
         let (engine, voice) = open_voice(&config, &library, "it").expect("opens");
         let result = engine.synthesize("ciao", &voice, &speech::SpeechCancel::new());
-        assert!(matches!(result, Err(speech::SpeechError::UnknownVoice(_))), "{result:?}");
+        assert!(
+            matches!(result, Err(speech::SpeechError::UnknownVoice(_))),
+            "{result:?}"
+        );
     }
 }

@@ -1084,7 +1084,8 @@ mod critic_round1 {
     }
 
     fn audio_frame(body: &[u8]) -> Result<Frame> {
-        let headers = b"X-RequestId:abc\r\nContent-Type:audio/mpeg\r\nX-StreamId:1\r\nPath:audio\r\n";
+        let headers =
+            b"X-RequestId:abc\r\nContent-Type:audio/mpeg\r\nX-StreamId:1\r\nPath:audio\r\n";
         let mut frame = (headers.len() as u16).to_be_bytes().to_vec();
         frame.extend_from_slice(headers);
         frame.extend_from_slice(body);
@@ -1164,7 +1165,10 @@ mod critic_round1 {
     #[test]
     fn markup_in_the_text_cannot_open_a_second_voice() {
         // Catches: unescaped text closing prosody/voice and selecting another voice.
-        let ssml = ssml_message(VOICE, "</prosody></voice><voice name='en-US-AriaNeural'>hi & bye");
+        let ssml = ssml_message(
+            VOICE,
+            "</prosody></voice><voice name='en-US-AriaNeural'>hi & bye",
+        );
         assert_eq!(ssml.matches("<voice ").count(), 1, "{ssml}");
         assert!(ssml.contains("&lt;/prosody&gt;"), "{ssml}");
         assert!(ssml.contains("hi &amp; bye"), "{ssml}");
@@ -1206,7 +1210,11 @@ mod critic_round1 {
         let result = speech.synthesize("ciao a tutti", VOICE, &cancel);
         trigger.join().unwrap();
         assert!(matches!(result, Err(SpeechError::Cancelled)), "{result:?}");
-        assert!(start.elapsed() < Duration::from_secs(1), "{:?}", start.elapsed());
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]
@@ -1247,7 +1255,9 @@ mod critic_round1 {
     fn an_offline_dial_error_reaches_the_caller_unchanged() {
         // Catches: the network error being swallowed into silence or a generic message.
         let speech = EdgeSpeech::with_dial(Box::new(|| {
-            Err(SpeechError::Failed("cannot reach it needs an internet connection".into()))
+            Err(SpeechError::Failed(
+                "cannot reach it needs an internet connection".into(),
+            ))
         }));
         let result = synth(&speech, "ciao");
         assert!(
@@ -1261,10 +1271,15 @@ mod critic_round1 {
         // Catches: the byte budget not being enforced across frames.
         let over = (budget_seconds("hi") * BYTES_PER_SECOND) as usize + 1;
         let (speech, _, _) = dial_with(move |_| {
-            (0..4).map(|_| audio_frame(&vec![0u8; over / 3 + 1])).collect()
+            (0..4)
+                .map(|_| audio_frame(&vec![0u8; over / 3 + 1]))
+                .collect()
         });
         let result = synth(&speech, "hi");
-        assert!(matches!(result, Err(SpeechError::Runaway { .. })), "{result:?}");
+        assert!(
+            matches!(result, Err(SpeechError::Runaway { .. })),
+            "{result:?}"
+        );
     }
 
     #[test]
@@ -1284,7 +1299,8 @@ mod critic_round1 {
     #[test]
     fn the_service_closing_mid_reply_is_a_typed_failure() {
         // Catches: Closed read as a clean end, returning half a sentence.
-        let (speech, _, _) = dial_with(|_| vec![audio_frame(&recorded_mp3()[..400]), Ok(Frame::Closed)]);
+        let (speech, _, _) =
+            dial_with(|_| vec![audio_frame(&recorded_mp3()[..400]), Ok(Frame::Closed)]);
         let result = synth(&speech, "ciao a tutti quanti");
         assert!(
             matches!(&result, Err(SpeechError::Failed(m)) if m.contains("closed")),
@@ -1296,7 +1312,10 @@ mod critic_round1 {
     fn a_reply_with_no_audio_is_an_error_not_silence() {
         // Catches: turn.end with no audio frames returning Ok(empty) and playing nothing.
         let (speech, _, _) = dial_with(|_| vec![turn_end()]);
-        assert!(matches!(synth(&speech, "ciao"), Err(SpeechError::Failed(_))));
+        assert!(matches!(
+            synth(&speech, "ciao"),
+            Err(SpeechError::Failed(_))
+        ));
     }
 
     #[test]
@@ -1336,9 +1355,11 @@ mod critic_round1 {
     #[test]
     fn bytes_that_are_not_mp3_are_a_typed_failure() {
         // Catches: a proxy error page or garbage decoding to Ok or panicking.
-        let (speech, _, _) =
-            dial_with(|_| vec![audio_frame(&[0xABu8; 4000]), turn_end()]);
-        assert!(matches!(synth(&speech, "ciao"), Err(SpeechError::Failed(_))));
+        let (speech, _, _) = dial_with(|_| vec![audio_frame(&[0xABu8; 4000]), turn_end()]);
+        assert!(matches!(
+            synth(&speech, "ciao"),
+            Err(SpeechError::Failed(_))
+        ));
     }
 
     #[test]
@@ -1349,7 +1370,10 @@ mod critic_round1 {
         let one = {
             let m = mp3.clone();
             let (speech, _, _) = dial_with(move |_| vec![audio_frame(&m), turn_end()]);
-            synth(&speech, "Ciao Boss, il pannello è su main.").unwrap().samples.len()
+            synth(&speech, "Ciao Boss, il pannello è su main.")
+                .unwrap()
+                .samples
+                .len()
         };
         let text = "parola ".repeat(600);
         assert_eq!(split_text(&text).len(), 2);
@@ -1378,7 +1402,9 @@ mod critic_round1 {
         // Catches: a language selectable in settings (WHISPER_LANGUAGES: en es fr
         // de it pt nl ja zh ko ru) with no Edge default, so its replies fail with
         // "No default Microsoft Edge voice" on a fresh install.
-        for code in ["en", "es", "fr", "de", "it", "pt", "nl", "ja", "zh", "ko", "ru"] {
+        for code in [
+            "en", "es", "fr", "de", "it", "pt", "nl", "ja", "zh", "ko", "ru",
+        ] {
             assert!(choose_voice(code, "").is_ok(), "{code}");
         }
     }
@@ -1390,6 +1416,9 @@ mod critic_round1 {
             choose_voice("en", "it-IT-IsabellaNeural").unwrap(),
             "en-US-AriaNeural"
         );
-        assert_eq!(choose_voice("it", "it-IT-IsabellaNeural").unwrap(), "it-IT-IsabellaNeural");
+        assert_eq!(
+            choose_voice("it", "it-IT-IsabellaNeural").unwrap(),
+            "it-IT-IsabellaNeural"
+        );
     }
 }
