@@ -254,7 +254,8 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 			} else if (branch?.savedTerminals && branch.savedTerminals.length > 0) {
 				// Only restore agent tabs with resumable sessions — plain shell tabs
 				// have nothing meaningful to resume and would just be empty shells.
-				const restorableTerminals = branch.savedTerminals.filter((t) => t.agentType != null);
+				// A suspended tab is the exception: the user kept it on purpose.
+				const restorableTerminals = branch.savedTerminals.filter((t) => t.agentType != null || t.suspended);
 				// Clear savedTerminals (consume-once) regardless of filter result
 				repositoriesStore.setWorkspace(repoPath, workspaceId, { savedTerminals: [] });
 
@@ -280,6 +281,8 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 							// fresh tab cannot be handed the same name.
 							alias: terminal.alias ?? null,
 						});
+						// Restored without a PTY; the user resumes it.
+						if (terminal.suspended) terminalsStore.update(id, { suspended: true });
 						// What the tab was doing before the restart. Carried purely so the
 						// resume banner and the Context bar can say it — the next `intent:`
 						// or user prompt overwrites both.
@@ -311,23 +314,26 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 						paneLayoutStore.reset();
 					}
 
-					// Second pass: verify resume commands in parallel (non-blocking)
+					// Second pass: verify resume commands in parallel (non-blocking).
+					// A suspended tab stays suspended; resuming it builds the command then.
 					Promise.all(
-						restoredIds.map(async ({ id, terminal }) => {
-							const resumeCmd = await verifyAndBuildResumeCommand(
-								terminal.agentType!,
-								terminal.cwd,
-								terminal.tuicSession,
-								terminal.agentSessionId,
-								terminal.agentLaunchCommand,
-							);
-							if (resumeCmd) {
-								terminalsStore.update(id, {
-									pendingResumeCommand: resumeCmd,
-									agentSessionId: terminal.agentSessionId ?? null,
-								});
-							}
-						}),
+						restoredIds
+							.filter(({ terminal }) => !terminal.suspended)
+							.map(async ({ id, terminal }) => {
+								const resumeCmd = await verifyAndBuildResumeCommand(
+									terminal.agentType!,
+									terminal.cwd,
+									terminal.tuicSession,
+									terminal.agentSessionId,
+									terminal.agentLaunchCommand,
+								);
+								if (resumeCmd) {
+									terminalsStore.update(id, {
+										pendingResumeCommand: resumeCmd,
+										agentSessionId: terminal.agentSessionId ?? null,
+									});
+								}
+							}),
 					).catch((e) => appLogger.warn("terminal", "Resume command verification failed", { error: String(e) }));
 				} else {
 					// All saved tabs were plain shells — spawn a fresh terminal

@@ -1155,7 +1155,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
     super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, close, kill, pause, resume, status, wait";
+const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait";
 const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
 const REPO_ACTIONS: &str = "list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
@@ -1225,10 +1225,10 @@ fn native_tool_definitions() -> serde_json::Value {
     let defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, close, kill, pause, resume" },
-                "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, keep_open, close, kill, pause, resume, wait" },
+                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, suspend, close, kill, pause, resume" },
+                "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, keep_open, suspend, close, kill, pause, resume, wait" },
                 "name": { "type": "string", "description": "New tab display name, non-empty (action=rename, required)" },
                 "is_custom": { "type": "boolean", "description": "action=rename, default true. true protects the name from later OSC/intent title updates; false lets them refine it." },
                 "enabled": { "type": "boolean", "description": "Required for action=keep_open: true disables idle close for a managed child; false restores it." },
@@ -3337,6 +3337,29 @@ fn handle_session(
             }
             serde_json::json!({"ok": true, "keep_open": enabled})
         }
+        "suspend" => {
+            let resolved = match require_session_id(state, args, "suspend") {
+                Ok(id) => id,
+                Err(e) => return e,
+            };
+            let session_id = resolved.as_str();
+            // Self-suspend guard: mirror close — an agent must not end its own session.
+            if let Some(sid) = mcp_session_id
+                && let Some(own_pty) = state.mcp.to_session.get(sid)
+                && own_pty.value() == session_id
+            {
+                return serde_json::json!({"error": "Cannot suspend own session."});
+            }
+            let Some(ss) = state.session_state_with_shell(session_id) else {
+                return serde_json::json!({"error": "Session not found"});
+            };
+            if let Some(reason) = suspend_refusal(&ss) {
+                return serde_json::json!({"error": format!("Cannot suspend: {reason}")});
+            }
+            // The tab lives in the frontend, which ends the PTY and keeps the tab.
+            state.request_session_suspend(session_id);
+            serde_json::json!({"ok": true, "requested": true})
+        }
         "kill" => {
             let resolved = match require_session_id(state, args, "kill") {
                 Ok(id) => id,
@@ -3489,6 +3512,27 @@ fn handle_session(
             "Unknown action '{}' for tool 'session'. Available: {}", other, SESSION_ACTIONS
         )}),
     }
+}
+
+/// Why a session must not be suspended now, or None. Ending the PTY mid-turn would
+/// cut the agent's work or an unanswered question. The UI applies the same rule to
+/// the tab (`suspendRefusal` in src/utils/suspendTerminal.ts).
+fn suspend_refusal(ss: &crate::state::SessionState) -> Option<&'static str> {
+    if ss.awaiting_input {
+        return Some("waiting for input");
+    }
+    if ss.queued_commands > 0 {
+        return Some("queued commands pending");
+    }
+    if ss.agent_type.is_some() {
+        let working = matches!(ss.agent_state.as_deref(), Some("working" | "starting"));
+        if ss.background_work || working {
+            return Some("agent working");
+        }
+    } else if ss.shell_state.as_deref() == Some("busy") {
+        return Some("command running");
+    }
+    None
 }
 
 /// Use the same close path as `session action=close`, including frontend events.
@@ -9708,6 +9752,110 @@ mod tests {
                 .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)),
             "MCP session(input) must feed InputLineBuffer and enter slash mode for '/'"
         );
+    }
+
+    fn suspend_candidate(
+        agent_type: Option<&str>,
+        agent_state: Option<&str>,
+        shell_state: Option<&str>,
+    ) -> crate::state::SessionState {
+        crate::state::SessionState {
+            agent_type: agent_type.map(str::to_string),
+            agent_state: agent_state.map(str::to_string),
+            shell_state: shell_state.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    // Each row is a turn, question or command a suspend would cut silently.
+    #[test]
+    fn suspend_refusal_names_the_work_a_suspend_would_cut() {
+        let working = suspend_candidate(Some("claude"), Some("working"), Some("busy"));
+        assert_eq!(suspend_refusal(&working), Some("agent working"));
+        let starting = suspend_candidate(Some("claude"), Some("starting"), Some("busy"));
+        assert_eq!(suspend_refusal(&starting), Some("agent working"));
+        let mut background = suspend_candidate(Some("claude"), Some("idle"), Some("busy"));
+        background.background_work = true;
+        assert_eq!(suspend_refusal(&background), Some("agent working"));
+        let mut asking = suspend_candidate(Some("claude"), Some("awaiting_input"), Some("busy"));
+        asking.awaiting_input = true;
+        assert_eq!(suspend_refusal(&asking), Some("waiting for input"));
+        let mut queued = suspend_candidate(Some("claude"), Some("idle"), Some("busy"));
+        queued.queued_commands = 1;
+        assert_eq!(suspend_refusal(&queued), Some("queued commands pending"));
+        let running = suspend_candidate(None, None, Some("busy"));
+        assert_eq!(suspend_refusal(&running), Some("command running"));
+    }
+
+    // An agent TUI keeps the shell "busy" for its whole life, so the shell state must not
+    // veto an idle agent; otherwise no agent could ever be suspended.
+    #[test]
+    fn suspend_refusal_allows_an_idle_agent_and_an_idle_shell() {
+        let idle_agent = suspend_candidate(Some("claude"), Some("idle"), Some("busy"));
+        assert_eq!(suspend_refusal(&idle_agent), None);
+        let idle_shell = suspend_candidate(None, None, Some("idle"));
+        assert_eq!(suspend_refusal(&idle_shell), None);
+    }
+
+    #[tokio::test]
+    async fn session_suspend_requests_the_ui_only_for_a_session_that_is_not_busy() {
+        let state = test_state();
+        let busy = "550e8400-e29b-41d4-a716-446655440c01";
+        let idle = "550e8400-e29b-41d4-a716-446655440c02";
+        state.session_maps.session_states.insert(
+            busy.to_string(),
+            suspend_candidate(Some("claude"), Some("working"), Some("busy")),
+        );
+        state.session_maps.session_states.insert(
+            idle.to_string(),
+            suspend_candidate(Some("claude"), Some("idle"), Some("busy")),
+        );
+        // The backend derives agent_state from the PTY's shell-state atom.
+        for (sid, atom) in [
+            (busy, crate::pty::SHELL_BUSY),
+            (idle, crate::pty::SHELL_IDLE),
+        ] {
+            state
+                .session_maps
+                .shell_states
+                .insert(sid.to_string(), std::sync::atomic::AtomicU8::new(atom));
+        }
+        let mut events = state.event_bus.subscribe();
+
+        let refused = handle_session(
+            &state,
+            &serde_json::json!({"action": "suspend", "session_id": busy}),
+            None,
+        );
+        assert_eq!(refused["error"], "Cannot suspend: agent working");
+        assert!(
+            events.try_recv().is_err(),
+            "a refused suspend must not reach the UI"
+        );
+
+        let accepted = handle_session(
+            &state,
+            &serde_json::json!({"action": "suspend", "session_id": idle}),
+            None,
+        );
+        assert_eq!(accepted, serde_json::json!({"ok": true, "requested": true}));
+        let requested =
+            std::iter::from_fn(|| events.try_recv().ok()).find_map(|event| match event {
+                crate::state::AppEvent::SessionSuspendRequested { session_id } => Some(session_id),
+                _ => None,
+            });
+        assert_eq!(requested.as_deref(), Some(idle));
+    }
+
+    #[tokio::test]
+    async fn session_suspend_reports_an_unknown_session() {
+        let state = test_state();
+        let result = handle_session(
+            &state,
+            &serde_json::json!({"action": "suspend", "session_id": "550e8400-e29b-41d4-a716-446655440c03"}),
+            None,
+        );
+        assert_eq!(result["error"], "Session not found");
     }
 
     #[tokio::test]

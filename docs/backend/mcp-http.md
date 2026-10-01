@@ -335,6 +335,7 @@ When sessions are created or closed (via HTTP, MCP, or PTY exit), the server bro
 - **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, the optional stable `display_name`, and `parent_session` (the spawning agent's `$TUIC_SESSION`, present only for `agent action=spawn` by a caller with a registered identity — a `pending-mcp:` placeholder is never published; the UI marks such tabs with a shared robot icon). Frontend uses this to auto-add remote tabs; a spawn-assigned name may be refined by an `intent:` title or replaced by a user rename, but an agent's OSC 0/2 title (Claude Code's own session title) never replaces it, while session-list snapshots carry independent `display_name_is_custom`, `display_name_from_spawn` and `is_remote` flags, plus `parent_session` and the live `tuic_session` bound to each PTY, for reconnect and parent-name resolution.
 - **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Published after `session-created` on the bus, and also as a desktop window event. Frontend uses this to update tab tooltips; it fires once, so after a reload the alias comes from the session list (`alias` on `GET /sessions` / `list_active_sessions`).
 - **`session-renamed`** — Emitted when MCP `session action=rename` changes a tab's display name. Carries `session_id`, `name` and `is_custom`. The desktop and browser UIs update the tab bar and sidebar from it. The name must be one line of at most 256 characters without control characters.
+- **`session-suspend-requested`** — Emitted when MCP `session action=suspend` passed the busy check. Carries `session_id`. The UI ends that tab's PTY and keeps the tab suspended.
 - **`session-closed`** — Emitted when a session exits. Carries `session_id`. Frontend uses this for cleanup.
 
 These events are available on the SSE `/events` stream used by the mobile PWA and any connected WebSocket clients.
@@ -986,6 +987,13 @@ gap, and Enter. Ctrl-U travels alone because Claude Code strips it from a long
 text it treats as a paste and then refuses the Enter. The existing
 `InputLineBuffer`, slash-mode tracking, submitted-input lifecycle, and
 `turn_epoch` advance exactly once after the full write.
+
+`session action=suspend session_id=<id>` asks the UI to end a tab's PTY and agent
+while keeping the tab restorable like after a restart (the user resumes it from
+the tab). It is refused with `Cannot suspend: <reason>` while the agent is
+working, a question awaits input, compose commands are queued or a plain shell is
+busy, and for the caller's own session. The reply is `{ok, requested}`: the tab
+performs the suspend after the `session-suspend-requested` event.
 
 `session action=keep_open session_id=<id> enabled=<bool>` controls automatic
 idle closure for a managed child. `agent action=spawn keep_open=true` sets the

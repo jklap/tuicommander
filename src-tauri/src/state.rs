@@ -245,6 +245,11 @@ pub enum AppEvent {
         name: String,
         is_custom: bool,
     },
+    /// An MCP client asked for a tab to be suspended (`session action=suspend`).
+    /// The tab, its agent identity and its resume path live in the frontend, so it
+    /// performs the suspend; the backend has already refused a busy session.
+    #[serde(rename = "session-suspend-requested")]
+    SessionSuspendRequested { session_id: String },
     /// Orchestrator-supplied description of the work currently assigned to a PTY.
     #[serde(rename = "pty-description-changed")]
     PtyDescriptionChanged {
@@ -519,6 +524,7 @@ impl AppEvent {
             | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionRenamed { session_id, .. }
+            | AppEvent::SessionSuspendRequested { session_id }
             | AppEvent::TermAliasAssigned { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
@@ -2294,6 +2300,21 @@ impl AppState {
             );
         }
         true
+    }
+
+    /// Ask the UI to suspend the tab that owns this session. Dual-emitted like a
+    /// rename: Tauri listeners on desktop, the event bus for browser/SSE clients.
+    pub(crate) fn request_session_suspend(&self, session_id: &str) {
+        self.emit_pty_event(AppEvent::SessionSuspendRequested {
+            session_id: session_id.to_string(),
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "session-suspend-requested",
+                serde_json::json!({ "session_id": session_id }),
+            );
+        }
     }
 
     /// Set or clear the orchestrator-owned description shown above a PTY.
@@ -4443,6 +4464,7 @@ impl AppState {
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
             AppEvent::SessionRenamed { .. } => {}
+            AppEvent::SessionSuspendRequested { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
