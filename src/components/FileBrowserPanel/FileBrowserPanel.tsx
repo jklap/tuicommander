@@ -2,6 +2,7 @@ import { type Component, createEffect, createMemo, createSignal, For, on, onClea
 import { createStore, produce } from "solid-js/store";
 import type { ContentSearchOptions } from "../../hooks/useFileBrowser";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
+import { initMouseDrag } from "../../hooks/useMouseDrag";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { invoke, listen } from "../../invoke";
@@ -850,10 +851,37 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		_ptrGhost.style.top = `${y - 8}px`;
 	};
 
+	// Touch and pen: a swipe is a scroll, never a file move (the move is irreversible).
+	// initMouseDrag arms the drag only after a hold and bails out on movement before that.
+	const handleHoldDragStart = (absPath: string, e: PointerEvent) => {
+		const end = () => {
+			markInternalDragEnd();
+			ptrCleanup();
+			_ptrSrc = null;
+		};
+		initMouseDrag(e, e.currentTarget as HTMLElement, {
+			onStart: () => {
+				markInternalDragStart();
+				_ptrSrc = absPath;
+			},
+			onMove: ptrHighlight,
+			onDrop: (x, y) => {
+				const src = _ptrSrc;
+				const target = findDropFolder(x, y);
+				end();
+				if (src && target?.dataset.absPath) performFileMove(src, target.dataset.absPath);
+				_ptrSuppressClick = true;
+				requestAnimationFrame(() => {
+					_ptrSuppressClick = false;
+				});
+			},
+			onCancel: end,
+		});
+	};
+
 	const handlePointerDragStart = (absPath: string, e: PointerEvent) => {
-		// A finger swipe is a scroll, never a file move: the move is irreversible
-		// and a scroll that outruns pointercancel would otherwise drop the file on a folder.
-		if (e.button !== 0 || e.pointerType === "touch") return;
+		if (e.pointerType === "touch" || e.pointerType === "pen") return handleHoldDragStart(absPath, e);
+		if (e.button !== 0) return;
 		// Must mark before drag threshold — Tauri's onDragDropEvent fires on any pointer
 		// hold, and without this flag the OS drop handler in dragDrop.ts would treat an
 		// internal file-browser drag as an external Finder drop (wrong dispatch path).

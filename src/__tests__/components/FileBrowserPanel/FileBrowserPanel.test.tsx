@@ -578,12 +578,20 @@ describe("FileBrowserPanel external root (#1207-efd4)", () => {
 
 describe("FileBrowserPanel pointer drag (#1329-a31a)", () => {
 	const pointer = (type: string, pointerType: string, x: number, y: number) =>
-		new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, pointerType, clientX: x, clientY: y });
+		new PointerEvent(type, {
+			bubbles: true,
+			cancelable: true,
+			button: 0,
+			pointerId: 1,
+			pointerType,
+			clientX: x,
+			clientY: y,
+		});
 
 	const renameCalls = () => mockInvoke.mock.calls.filter(([cmd]) => cmd === "rename_path");
 
-	/** Press on `file`, move far past the drag threshold and release over the `dir` row. */
-	const dragFileOntoDir = async (pointerType: string) => {
+	/** Press on `file`, optionally hold, move past the drag threshold and release over the `dir` row. */
+	const dragFileOntoDir = async (pointerType: string, holdMs = 0) => {
 		listings.set("/repo|.", [dir("docs"), file("a.txt")]);
 		const { container, queryByText } = render(() => (
 			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
@@ -596,6 +604,7 @@ describe("FileBrowserPanel pointer drag (#1329-a31a)", () => {
 		document.elementFromPoint = () => dirRow;
 		try {
 			fileRow.dispatchEvent(pointer("pointerdown", pointerType, 50, 50));
+			if (holdMs) await new Promise((resolve) => setTimeout(resolve, holdMs));
 			document.dispatchEvent(pointer("pointermove", pointerType, 50, 20));
 			document.dispatchEvent(pointer("pointerup", pointerType, 50, 10));
 			await new Promise((resolve) => setTimeout(resolve, 20));
@@ -604,14 +613,21 @@ describe("FileBrowserPanel pointer drag (#1329-a31a)", () => {
 		}
 	};
 
-	// Catches: a touch swipe that outruns pointercancel dropping the file onto a
-	// folder (an irreversible move started by a scroll gesture).
-	it("never moves a file when a touch swipe ends over a folder", async () => {
-		await dragFileOntoDir("touch");
+	// Catches: a swipe that outruns pointercancel dropping the file onto a folder
+	// (an irreversible move started by a scroll gesture).
+	it.each(["touch", "pen"])("never moves a file when a %s swipe ends over a folder", async (pointerType) => {
+		await dragFileOntoDir(pointerType);
 		expect(renameCalls()).toHaveLength(0);
 	});
 
-	// Guards the fix: mouse drag and drop must keep moving files.
+	// Catches: removing touch file move instead of arming it with a long press.
+	it("moves a file when a touch long press is dragged onto a folder", async () => {
+		await dragFileOntoDir("touch", 450);
+		expect(renameCalls()).toHaveLength(1);
+		expect(renameCalls()[0][1]).toMatchObject({ from: "a.txt", to: "docs/a.txt" });
+	});
+
+	// Guards the mouse path: drag and drop must keep moving files.
 	it("still moves a file when a mouse drag ends over a folder", async () => {
 		await dragFileOntoDir("mouse");
 		expect(renameCalls()).toHaveLength(1);
