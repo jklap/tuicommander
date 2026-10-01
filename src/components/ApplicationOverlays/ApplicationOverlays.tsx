@@ -24,6 +24,7 @@ import { RemoteRepoPicker } from "../RemoteRepoPicker";
 import { RenameBranchDialog } from "../RenameBranchDialog";
 import { RunCommandDialog } from "../RunCommandDialog";
 import type { SettingsContext, SettingsSearchTarget } from "../SettingsPanel";
+import { StateExplainHost } from "../StateExplainModal/StateExplainHost";
 import { UpdateProgressDialog } from "../UpdateProgressDialog";
 import { WhatsNewDialog } from "../WhatsNewDialog/WhatsNewDialog";
 
@@ -295,6 +296,7 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 			<GitDialogOverlays contract={props.git} />
 			<McpConfirmHost />
 			<PtyOpenUrlHost />
+			<StateExplainHost />
 			<PromptDialog
 				visible={props.prompts.terminalRenameVisible()}
 				title="Terminal Title"

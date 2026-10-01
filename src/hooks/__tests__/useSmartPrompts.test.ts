@@ -27,7 +27,7 @@ vi.mock("../../stores/agentConfigs", () => ({
 }));
 
 vi.mock("../../stores/terminals", () => ({
-	terminalsStore: { getActive: vi.fn(), isBusy: vi.fn() },
+	terminalsStore: { getActive: vi.fn(), isBusy: vi.fn(), isWorking: vi.fn() },
 }));
 
 vi.mock("../../stores/github", () => ({
@@ -106,6 +106,7 @@ const mockedGetHeadlessTemplate = vi.mocked(agentConfigsStore.getHeadlessTemplat
 const mockedWarn = vi.mocked(appLogger.warn);
 const mockedGetActive = vi.mocked(terminalsStore.getActive);
 const mockedIsBusy = vi.mocked(terminalsStore.isBusy);
+const mockedIsWorking = vi.mocked(terminalsStore.isWorking);
 const mockedGetRunConfigs = vi.mocked(agentConfigsStore.getRunConfigs);
 
 /** Build a minimal SavedPrompt fixture with headless executionMode */
@@ -397,6 +398,18 @@ describe("canExecuteInject — idle gate by inject target", () => {
 		expect(result.ok).toBe(false);
 		expect(result.reason).toBe("No agent detected in terminal");
 		expect(mockedIsBusy).not.toHaveBeenCalled();
+	});
+
+	it("gates off terminalsStore.isBusy, not isWorking — declared background work alone must not block a prompt into the main agent", () => {
+		// isWorking also folds in declaredBackgroundWork (a background task/teammate
+		// still running). That must not stop the user injecting into the main agent,
+		// which is idle; only the main agent's own busy state gates the prompt.
+		mockedIsBusy.mockReturnValue(false);
+		mockedIsWorking.mockReturnValue(true);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal" }));
+		expect(result.ok).toBe(true);
+		expect(mockedIsWorking).not.toHaveBeenCalled();
 	});
 });
 
@@ -712,9 +725,10 @@ describe("resolveFrontendVars (via executeSmartPrompt)", () => {
 	});
 
 	it("resolves pr_* variables only when the active branch has a PR", async () => {
-		mockedRepoGet.mockReturnValue({ activeWorkspaceId: "feature-x" } as unknown as ReturnType<
-			typeof repositoriesStore.get
-		>);
+		mockedRepoGet.mockReturnValue({
+			activeWorkspaceId: "feature-x",
+			workspaces: { "feature-x": { branchName: "feature-x" } },
+		} as unknown as ReturnType<typeof repositoriesStore.get>);
 		mockedGetBranchPrData.mockReturnValue({ title: "My PR" } as unknown as ReturnType<
 			typeof githubStore.getBranchPrData
 		>);
@@ -807,7 +821,7 @@ describe("executeSmartPrompt — active-repo-vs-worktree-cwd fix", () => {
 		});
 	});
 
-	it("falls back to the active repo when the cwd belongs to no registered repo", async () => {
+	it("resolves against the terminal's cwd when it belongs to no registered repo", async () => {
 		mockedRepoGetActive.mockReturnValue({ path: REPO_ROOT } as unknown as ReturnType<
 			typeof repositoriesStore.getActive
 		>);
@@ -815,7 +829,7 @@ describe("executeSmartPrompt — active-repo-vs-worktree-cwd fix", () => {
 			id: "t1",
 			sessionId: "s1",
 			agentType: "claude",
-			cwd: "/tmp/some/unregistered/dir",
+			cwd: "/unregistered/some/dir",
 			ref: { openComposeWithText: vi.fn(), isComposeOpen: () => false },
 		} as unknown as ReturnType<typeof terminalsStore.getActive>);
 
@@ -824,7 +838,7 @@ describe("executeSmartPrompt — active-repo-vs-worktree-cwd fix", () => {
 
 		expect(mockedInvoke).toHaveBeenCalledWith("resolve_prompt_variables", {
 			content: "Do something",
-			repoPath: REPO_ROOT,
+			repoPath: "/unregistered/some/dir",
 		});
 	});
 
@@ -977,17 +991,17 @@ describe("executeSmartPrompt — explicit targetPath override (GitPanel/ChangesT
 		expect(call?.[1]).toMatchObject({ repoPath: "/completely/unrelated/terminal/cwd" });
 	});
 
-	it("falls back to the active repo when targetPath itself belongs to no registered repo", async () => {
-		// A caller-supplied targetPath isn't guaranteed to resolve either (a
-		// stale/unregistered path) — must fall back the same way the
-		// terminal-cwd path already does, not silently resolve against nothing
-		// or throw.
+	it("resolves against targetPath itself when it belongs to no registered repo", async () => {
+		// A caller-supplied targetPath isn't guaranteed to resolve to a registered
+		// repo (a stale/unregistered path) — the prompt still runs where the
+		// caller said, the same way the terminal-cwd path does; it must not
+		// silently resolve against nothing or throw.
 		const { executeSmartPrompt } = useSmartPrompts();
-		await executeSmartPrompt(makePrompt({ executionMode: "inject" }), undefined, "/tmp/some/unregistered/dir");
+		await executeSmartPrompt(makePrompt({ executionMode: "inject" }), undefined, "/unregistered/some/dir");
 
 		expect(mockedInvoke).toHaveBeenCalledWith("resolve_prompt_variables", {
 			content: "Do something",
-			repoPath: OTHER_REPO,
+			repoPath: "/unregistered/some/dir",
 		});
 	});
 });

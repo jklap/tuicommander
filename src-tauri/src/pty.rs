@@ -47,6 +47,12 @@ mod terminal_reply_tests;
 #[cfg(feature = "desktop")]
 pub(crate) use commands::*;
 
+// Not desktop-gated: shared by both the (desktop-only) Tauri command in
+// `commands.rs` and the HTTP route in `mcp_http/session.rs`, which compiles
+// regardless of the `desktop` feature.
+mod explain;
+pub(crate) use explain::*;
+
 /// Capacity of the per-session raw-byte flight recorder (story 056-7545).
 /// 2 MiB ≈ several minutes of heavy agent output — enough to capture the
 /// corruption window when a duplication shows up in the wild.
@@ -561,9 +567,7 @@ fn try_timer_idle_transition(
                         activity_source = "protocol-stale",
                         "authoritative busy signal became stale on a stable ready screen"
                     );
-                    silence
-                        .evidence
-                        .force_idle(EvidenceRank::Process, "protocol-stale");
+                    silence.force_idle(EvidenceRank::Process, "protocol-stale");
                     true
                 }
                 AgentScreenActivity::Ready => silence.note_ready_screen(),
@@ -639,9 +643,7 @@ fn try_timer_idle_transition(
             };
         }
         if native_idle_claim {
-            silence
-                .evidence
-                .force_idle(EvidenceRank::Protocol, "hook-idle");
+            silence.force_idle(EvidenceRank::Protocol, "hook-idle");
         } else if probe == ForegroundProbe::Quiet {
             // The probe looked at the process table and found nothing left
             // running under the agent. That outranks the ready screen that
@@ -653,14 +655,10 @@ fn try_timer_idle_transition(
             // `force_idle`, like the two screen adapters: the `else if` chain
             // above already decided this transition is allowed, so the generic
             // busy-rank gate in `record_idle` must not re-reject it.
-            silence
-                .evidence
-                .force_idle(EvidenceRank::Process, "process");
+            silence.force_idle(EvidenceRank::Process, "process");
         }
         if legacy_submission_stale {
-            silence
-                .evidence
-                .force_idle(EvidenceRank::Process, "submission-stale");
+            silence.force_idle(EvidenceRank::Process, "submission-stale");
         } else if !screen_confirms_idle {
             // Silence-timeout evidence, forced in regardless of rank: the
             // `else if` chain above (mirroring the old checks exactly, incl.
@@ -671,7 +669,7 @@ fn try_timer_idle_transition(
             } else {
                 "silence-timeout-agent"
             };
-            silence.evidence.force_idle(EvidenceRank::Silence, source);
+            silence.force_idle(EvidenceRank::Silence, source);
         }
         let evidence = match decide(&silence.evidence, true, std::time::Instant::now()) {
             Some(Transition::ToIdle(evidence)) => Some(evidence),
@@ -3455,6 +3453,22 @@ impl ChunkProcessor {
                                     "Notification-sourced state=awaiting classified \
                                      (research: notification confidence)"
                                 );
+                                // Kept for query (state-explain), not just the log
+                                // line above — a rare fire, so one small
+                                // allocation here is fine; never on the per-chunk
+                                // path.
+                                if let Some(sl) = state.session_maps.silence_states.get(session_id)
+                                {
+                                    sl.lock().last_notification_classification =
+                                        Some(NotificationClassification {
+                                            at: std::time::Instant::now(),
+                                            notification_type,
+                                            has_message: notify_message.is_some(),
+                                            shell_already_idle,
+                                            confident,
+                                            suppressed: evt.is_none(),
+                                        });
+                                }
                             }
                             if let Some(evt) = evt {
                                 tuic_events.push(evt);
@@ -4795,7 +4809,7 @@ impl ChunkProcessor {
                     } else {
                         EvidenceRank::Screen
                     };
-                    sl.evidence.record_busy(rank, working_source);
+                    sl.record_busy(rank, working_source);
                     working_applied = true;
                 }
             }
@@ -4810,9 +4824,7 @@ impl ChunkProcessor {
             if real_activity
                 && sl.native_state.activity().is_none()
                 && (sl.evidence.busy.is_some()
-                    || sl
-                        .evidence
-                        .record_busy(EvidenceRank::Screen, activity_source))
+                    || sl.record_busy(EvidenceRank::Screen, activity_source))
             {
                 if has_spinner {
                     sl.note_working_screen();
@@ -4913,7 +4925,7 @@ impl ChunkProcessor {
                     || busy.source == "spinner-active"
                     || busy.source == "real-activity"
             }) {
-                silence.evidence.busy = None;
+                silence.clear_busy_evidence();
             }
         }
 
@@ -5850,6 +5862,15 @@ pub(crate) fn spawn_reader_thread(
                         state.metrics.bytes_emitted.fetch_add(n, Ordering::Relaxed);
                         let has_secret_mask = processor.secret_mask.active()
                             || state.secrets.has_pty_secrets(&session_id);
+                        // Per-session sibling of the global counter above — see
+                        // `state::drain_counter_map`. Answers "which session
+                        // produced the most raw output recently," which the
+                        // global-only counter never could.
+                        crate::state::bump_counter(
+                            &state.session_maps.session_output_bytes,
+                            &session_id,
+                            n as u64,
+                        );
                         // Flight recorder: keep the last PTY_RAW_RING_CAP raw bytes
                         // (pre-transform) so a wild rendering corruption can be
                         // dumped and replayed offline (story 056-7545).
