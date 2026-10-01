@@ -16190,6 +16190,20 @@ fn goose_mid_turn_capture_reads_working() {
     );
 }
 
+/// goose 1.49.0, captured live after Ctrl+C mid-turn (#1301-87fd): the composer
+/// placeholder becomes `Interrupted, what should goose work on instead?` and the
+/// `Enter to send` hint is gone. Catches the bug where the screen read Unknown, so
+/// agent_state stayed working forever after an interrupt.
+#[test]
+fn goose_interrupted_capture_reads_ready() {
+    let screen = replay_final_screen(&agent_prompt_fixture("goose-1.49.0-interrupted.tcap"));
+    assert_eq!(
+        detect_agent_screen_activity(Some("goose"), &screen),
+        AgentScreenActivity::Ready,
+        "screen: {screen:#?}"
+    );
+}
+
 /// A goose screen whose footer has not been painted yet must read Unknown, not
 /// Ready. Ready is the expensive direction to get wrong: it is what lets
 /// auto-standby SIGSTOP a live turn.

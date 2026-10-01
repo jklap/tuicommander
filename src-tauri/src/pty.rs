@@ -4000,21 +4000,32 @@ fn detect_opencode_mini_screen_activity(
 /// working:  ◓  Merging memory matrices...  (Ctrl+C to interrupt)
 /// ```
 ///
+/// After Ctrl+C the composer placeholder changes, and `Enter to send` is gone
+/// (#1301-87fd):
+///
+/// ```text
+/// > Interrupted, what should goose work on instead?
+/// ```
+///
 /// Neither generic signal works here. The spinner glyph cycles `◐◓◒`, which
 /// `is_spinner_row` does not recognise, and the message beside it is whimsical
 /// and changes between turns — "Merging memory matrices…" is one of a set, so
 /// matching it would pin the adapter to a string goose is free to reword. What
 /// does not move is the **hint** at each end: `Ctrl+C to interrupt` appears only
-/// while a turn can be interrupted, and `Enter to send` only when the composer
-/// is accepting input.
+/// while a turn can be interrupted, and `Enter to send` (or the post-Ctrl+C
+/// `Interrupted, what should goose work on instead?` placeholder) only when the
+/// composer is accepting input.
 ///
-/// The interrupt hint is tested first so a working screen is never downgraded,
-/// and Ready demands the composer footer rather than merely the absence of a
+/// The lowest hint row wins, so a working screen is never downgraded by a hint
+/// above its spinner, and Ready demands the composer footer rather than merely the absence of a
 /// spinner — a half-painted screen must read Unknown, not idle. A false Ready is
 /// the expensive direction: it is what lets auto-standby SIGSTOP a live turn.
 fn detect_goose_screen_activity(rows: &[String]) -> AgentScreenActivity {
     const INTERRUPT_HINT: &str = "Ctrl+C to interrupt";
-    const COMPOSER_HINT: &str = "Enter to send";
+    const COMPOSER_HINTS: [&str; 2] = [
+        "Enter to send",
+        "Interrupted, what should goose work on instead?",
+    ];
 
     let content_end = rows
         .iter()
@@ -4023,14 +4034,18 @@ fn detect_goose_screen_activity(rows: &[String]) -> AgentScreenActivity {
     let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
     let footer = &rows[chrome_start..content_end];
 
-    if footer.iter().any(|row| row.contains(INTERRUPT_HINT)) {
-        return AgentScreenActivity::Working;
-    }
-    if footer.iter().any(|row| row.contains(COMPOSER_HINT)) {
-        AgentScreenActivity::Ready
-    } else {
-        AgentScreenActivity::Unknown
-    }
+    // The lowest hint row decides: after Ctrl+C the spinner row stays on screen
+    // above the new composer, so the interrupt hint alone is stale there.
+    let lowest_hint = footer.iter().rev().find_map(|row| {
+        if row.contains(INTERRUPT_HINT) {
+            Some(AgentScreenActivity::Working)
+        } else if COMPOSER_HINTS.iter().any(|hint| row.contains(hint)) {
+            Some(AgentScreenActivity::Ready)
+        } else {
+            None
+        }
+    });
+    lowest_hint.unwrap_or(AgentScreenActivity::Unknown)
 }
 
 /// #744-138c: call counter so a test can measure that the reader chunk path
