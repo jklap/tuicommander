@@ -1,12 +1,12 @@
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 
-const IMAGE_EXTENSIONS: Record<string, string> = {
-	"image/png": "png",
-	"image/jpeg": "jpg",
-	"image/webp": "webp",
-	"image/gif": "gif",
-};
+const IMAGE_EXTENSIONS = new Map([
+	["image/png", "png"],
+	["image/jpeg", "jpg"],
+	["image/webp", "webp"],
+	["image/gif", "gif"],
+]);
 
 /** Convert a Blob to a base64 string */
 async function blobToBase64(blob: Blob): Promise<string> {
@@ -30,10 +30,12 @@ export async function savePastedImage(e: ClipboardEvent, getNoteId: () => string
 	if (!items) return null;
 
 	for (const item of items) {
-		if (!(item.type in IMAGE_EXTENSIONS)) continue;
-		e.preventDefault();
+		const extension = IMAGE_EXTENSIONS.get(item.type);
+		if (!extension) continue;
 		const blob = item.getAsFile();
+		// An image item without a file must not swallow the rest of the paste.
 		if (!blob) continue;
+		e.preventDefault();
 
 		const noteId = getNoteId();
 		try {
@@ -44,7 +46,7 @@ export async function savePastedImage(e: ClipboardEvent, getNoteId: () => string
 			return await invoke<string>("save_note_image", {
 				noteId,
 				dataBase64,
-				extension: IMAGE_EXTENSIONS[item.type],
+				extension,
 			});
 		} catch (err) {
 			appLogger.error("store", "Failed to save pasted image", err);

@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
-vi.mock("../../stores/appLogger", () => ({ appLogger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({
+	appLogger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}));
 
 import { invoke } from "../../invoke";
 import { savePastedImage } from "../../utils/pastedImage";
@@ -57,7 +59,11 @@ describe("savePastedImage (critic 1350)", () => {
 	it("maps jpeg to jpg and sends the base64 of the bytes — catches a wrong extension or encoding", async () => {
 		const e = pasteEvent([imageItem("image/jpeg")]);
 		await savePastedImage(e, () => "n1");
-		expect(invoke).toHaveBeenCalledWith("save_note_image", { noteId: "n1", dataBase64: btoa("\x01\x02\x03"), extension: "jpg" });
+		expect(invoke).toHaveBeenCalledWith("save_note_image", {
+			noteId: "n1",
+			dataBase64: btoa("\x01\x02\x03"),
+			extension: "jpg",
+		});
 	});
 
 	it("returns null and still cancels the default when saving fails — catches a rejection escaping to the caller", async () => {
@@ -69,7 +75,10 @@ describe("savePastedImage (critic 1350)", () => {
 
 	it("does not call getNoteId for a non-image paste — catches allocating a note id (and Ideas pendingIdeaId) on text paste", async () => {
 		const getNoteId = vi.fn(() => "n1");
-		const e = pasteEvent([textItem(), { kind: "file", type: "application/pdf", getAsFile: () => file("application/pdf") }]);
+		const e = pasteEvent([
+			textItem(),
+			{ kind: "file", type: "application/pdf", getAsFile: () => file("application/pdf") },
+		]);
 		expect(await savePastedImage(e, getNoteId)).toBeNull();
 		expect(getNoteId).not.toHaveBeenCalled();
 		expect(e.defaultPrevented).toBe(false);

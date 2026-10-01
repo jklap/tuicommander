@@ -52,7 +52,9 @@ function paste(view: EditorView, types: string[]): Event {
 		getAsFile: () => (type.startsWith("image/") ? new File([new Uint8Array([1])], "x", { type }) : null),
 	}));
 	const e = new Event("paste", { bubbles: true, cancelable: true });
-	Object.defineProperty(e, "clipboardData", { value: { items, getData: (t: string) => (t === "text/plain" ? "hello" : "") } });
+	Object.defineProperty(e, "clipboardData", {
+		value: { items, getData: (t: string) => (t === "text/plain" ? "hello" : "") },
+	});
 	view.contentDOM.dispatchEvent(e);
 	return e;
 }
