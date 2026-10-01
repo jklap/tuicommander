@@ -504,6 +504,7 @@ work starts.
 | `sounds.warning` | `bool` | `true` | Play on warning |
 | `silence_remote_completions` | `bool` | `true` | Suppress the completion chime for HTTP/MCP-created sessions |
 | `toasts_in_bell` | `bool` | `true` | Mirror every toast into the toolbar bell, under a MESSAGES section |
+| `pr_native_notifications` | `bool` | `true` | OS notification for PR ready / CI failed / changes requested / merged transitions |
 
 **Commands:** `load_notification_config()`, `save_notification_config(base, config)`
 

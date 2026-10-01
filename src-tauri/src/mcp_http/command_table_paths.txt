@@ -203,6 +203,7 @@
 /repo/ci
 /repo/ci-failure-logs
 /repo/clone-branch-name
+/repo/close-pr
 /repo/commit
 /repo/commit-graph
 /repo/commit-log
@@ -251,6 +252,7 @@
 /repo/post-pr-review
 /repo/pr-diff
 /repo/pr-review
+/repo/pr-review-threads
 /repo/prs
 /repo/prs/batch
 /repo/recent-branches
@@ -269,6 +271,7 @@
 /repo/switch-branch
 /repo/unstage
 /repo/update-from-base
+/repo/update-pr-branch
 /repo/working-tree-status
 /repo/worktree-dirty
 /sessions

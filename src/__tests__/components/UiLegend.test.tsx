@@ -14,7 +14,7 @@ describe("UiLegend PR markers", () => {
 		const { container } = render(() => <UiLegend />);
 		const badges = container.querySelectorAll(".prBadge.prBadgeCompact");
 
-		expect(badges.length).toBe(11);
+		expect(badges.length).toBe(12);
 		expect(container.querySelector(".prMarkConflict")?.getAttribute("data-tooltip")).toBe("PR #42 · Conflicts");
 		expect(container.querySelectorAll(".prMarkPending").length).toBe(2);
 	});
@@ -52,7 +52,7 @@ describe("UiLegend branch markers", () => {
 describe("UiLegend covers every marker kind the sidebar can render", () => {
 	it("has a PR badge entry for every PR state", () => {
 		const legendKinds = new Set(PR_BADGE_LEGEND.map((e) => prBadgeKind(e.badge)));
-		expect([...Object.keys(PR_STATE_LABELS)].filter((k) => !legendKinds.has(k))).toEqual([]);
+		expect(Object.keys(PR_STATE_LABELS).filter((k) => !legendKinds.has(k as never))).toEqual([]);
 	});
 
 	it("has a sidebar icon entry for every branch icon shape", () => {

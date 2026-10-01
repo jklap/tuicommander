@@ -71,6 +71,16 @@ pub(super) async fn repo_ci_checks(
     Json(crate::github::get_ci_checks_impl(&path, pr_number, &state).await).into_response()
 }
 
+pub(super) async fn repo_pr_review_threads(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<CiChecksQuery>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&q.path) {
+        return e.into_response();
+    }
+    json_result(crate::github::get_pr_review_threads_impl(&q.path, q.pr_number, &state).await)
+}
+
 pub(super) async fn repo_approve_pr(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::types::ApprovePrRequest>,
@@ -82,6 +92,39 @@ pub(super) async fn repo_approve_pr(
     let pr = body.pr_number;
     upstream_json_result(
         crate::github::approve_pr_impl(&path, pr, &state)
+            .await
+            .map(|()| serde_json::json!({"ok": true})),
+    )
+}
+
+pub(super) async fn repo_update_pr_branch(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::UpdatePrBranchRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    upstream_json_result(
+        crate::github::update_pr_branch_impl(
+            &body.repo_path,
+            body.pr_number,
+            &body.expected_head_sha,
+            &state,
+        )
+        .await
+        .map(|()| serde_json::json!({"ok": true})),
+    )
+}
+
+pub(super) async fn repo_close_pr(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::ApprovePrRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    upstream_json_result(
+        crate::github::close_pr_impl(&body.repo_path, body.pr_number, &state)
             .await
             .map(|()| serde_json::json!({"ok": true})),
     )

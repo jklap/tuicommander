@@ -1369,6 +1369,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_ci_checks: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/ci?path=${p("path")}&pr_number=${p("prNumber")}` }),
 	},
+	get_pr_review_threads: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/pr-review-threads?path=${p("path")}&pr_number=${p("prNumber")}`,
+		}),
+	},
 	rename_branch: {
 		map: (args) => ({
 			method: "POST",
@@ -1651,6 +1657,20 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/approve-pr",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber },
+		}),
+	},
+	update_pr_branch: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/update-pr-branch",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, expectedHeadSha: args.expectedHeadSha },
+		}),
+	},
+	close_pr: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/close-pr",
 			body: { repoPath: args.repoPath, prNumber: args.prNumber },
 		}),
 	},

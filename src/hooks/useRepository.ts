@@ -450,8 +450,13 @@ export function useRepository() {
 	}
 
 	/** Merge a PR via GitHub REST API. merge_method: "merge" | "squash" | "rebase" */
-	async function mergePrViaGithub(repoPath: string, prNumber: number, mergeMethod: string): Promise<string> {
-		return await invoke<string>("merge_pr_via_github", { repoPath, prNumber, mergeMethod });
+	async function mergePrViaGithub(
+		repoPath: string,
+		prNumber: number,
+		mergeMethod: string,
+		expectedHeadSha: string,
+	): Promise<string> {
+		return await invoke<string>("merge_pr_via_github", { repoPath, prNumber, mergeMethod, expectedHeadSha });
 	}
 
 	/** List local branch names for a repository */

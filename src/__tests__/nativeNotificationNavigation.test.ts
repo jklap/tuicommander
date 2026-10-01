@@ -9,6 +9,8 @@ vi.mock("../utils/navigateToTerminal", () => ({ navigateToTerminal: terminal }))
 vi.mock("../stores/progress", () => ({ progressStore: { open: progress } }));
 vi.mock("../stores/ui", () => ({ uiStore: { setAiChatPanelVisible: aiChat } }));
 vi.mock("../invoke", () => ({ listen }));
+const openUrl = vi.fn();
+vi.mock("../utils/openUrl", () => ({ handleOpenUrl: openUrl }));
 
 describe("native notification click", () => {
 	it("opens the named terminal after a question", async () => {
@@ -31,6 +33,13 @@ describe("native notification click", () => {
 		expect(aiChat).toHaveBeenCalledWith(true);
 		expect(terminal).not.toHaveBeenCalled();
 		expect(progress).not.toHaveBeenCalled();
+	});
+
+	it("opens the PR in the browser after a PR notice", async () => {
+		const { navigateFromNativeNotice } = await import("../services/nativeNotificationNavigation");
+		navigateFromNativeNotice({ kind: "pr", url: "https://github.com/acme/api/pull/12" });
+		expect(openUrl).toHaveBeenCalledWith("https://github.com/acme/api/pull/12");
+		expect(terminal).not.toHaveBeenCalled();
 	});
 
 	it("routes a native click event to its recorded target", async () => {

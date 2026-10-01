@@ -1493,6 +1493,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/repo/github", get(github_routes::repo_github_status))
         .route("/repo/prs", get(github_routes::repo_pr_statuses))
         .route("/repo/ci", get(github_routes::repo_ci_checks))
+        .route(
+            "/repo/pr-review-threads",
+            get(github_routes::repo_pr_review_threads),
+        )
         .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
         .route("/repo/merged-prs", get(github_routes::repo_merged_prs))
         .route(
@@ -1513,6 +1517,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(github_routes::repo_conflict_assist),
         )
         .route("/repo/approve-pr", post(github_routes::repo_approve_pr))
+        .route(
+            "/repo/update-pr-branch",
+            post(github_routes::repo_update_pr_branch),
+        )
+        .route("/repo/close-pr", post(github_routes::repo_close_pr))
         .route("/repo/create-pr", post(github_routes::repo_create_pr))
         .route("/repo/create-issue", post(github_routes::repo_create_issue))
         .route(

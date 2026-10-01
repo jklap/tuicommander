@@ -71,6 +71,7 @@ const NOTIFICATION_DEFAULTS = {
 	audio_device: null,
 	silence_remote_completions: true,
 	toasts_in_bell: true,
+	pr_native_notifications: true,
 };
 
 interface Case {

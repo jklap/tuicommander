@@ -1,4 +1,4 @@
-import { type Component, createEffect, createMemo, createSignal, For, type JSX, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createResource, createSignal, For, type JSX, Show } from "solid-js";
 import { t } from "../../i18n";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
@@ -9,6 +9,7 @@ import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { getCiClass, getCiIcon } from "../../utils/ciDisplay";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { PR_READINESS_LABELS, PR_READINESS_SEVERITY, prReadinessOf } from "../../utils/prReadiness";
 import { stripAnsi } from "../../utils/stripAnsi";
 import { relativeTime } from "../../utils/time";
 import { SeverityIcon } from "../shared/SeverityIcon";
@@ -28,6 +29,14 @@ const REVIEW_STATE_CLASSES: Record<string, string> = {
 	approved: s.approved,
 	"changes-requested": s.changesRequested,
 	"review-required": s.reviewRequired,
+};
+
+/** Readiness severity -> module class (the verdict itself comes from prReadiness) */
+const READINESS_CLASSES = {
+	ok: s.readinessOk,
+	warn: s.readinessWarn,
+	critical: s.readinessCritical,
+	muted: s.readinessMuted,
 };
 
 /** Map CI state strings to module classes */
@@ -207,6 +216,16 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		if (isTerminalState()) return null;
 		const label = prData()?.merge_state_label;
 		if (!label) return null;
+		// GitHub's CLEAN knows nothing of unresolved threads or running checks: while the shared
+		// verdict names a blocker, "Ready to merge" would contradict the chip beside it.
+		const kind = readiness();
+		if (
+			label.css_class === "clean" &&
+			kind &&
+			PR_READINESS_SEVERITY[kind] !== "ok" &&
+			PR_READINESS_SEVERITY[kind] !== "muted"
+		)
+			return null;
 		return { label: label.label, cssClass: label.css_class };
 	};
 
@@ -217,7 +236,30 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		return { label: label.label, cssClass: label.css_class };
 	};
 
-	const isConflicting = () => mergeState()?.cssClass === "conflicting";
+	const readiness = () => {
+		const pr = prData();
+		return pr ? prReadinessOf(pr) : null;
+	};
+
+	// The bot/human split costs one GraphQL query per PR, so it is fetched only
+	// while the panel is open on a PR that has unresolved threads.
+	const [threadSplit] = createResource(
+		() => {
+			const pr = prData();
+			return pr && (pr.unresolved_threads > 0 || pr.unresolved_threads_truncated) && !isTerminalState()
+				? { path: props.repoPath, prNumber: pr.number, unresolved: pr.unresolved_threads }
+				: null;
+		},
+		({ path, prNumber }) =>
+			rpc<{ bot: number; human: number }>("get_pr_review_threads", { path, prNumber }).catch((e) => {
+				appLogger.warn("github", "Failed to load review threads", { error: String(e) });
+				return null;
+			}),
+	);
+
+	// Keyed on the conflict state, not the readiness verdict: the verdict ranks "draft" above
+	// "conflict", but a conflicting draft PR still needs Resolve conflicts / Push.
+	const isConflicting = () => prData()?.conflict_state === "conflicting";
 
 	/** Local worktree path for this PR's head branch, if one exists (e.g. after
 	 *  conflict-assist created it). Drives the Push button's visibility. */
@@ -245,14 +287,40 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 			{(pr) => (
 				<>
 					{/* Merge + review status pills */}
-					<Show when={mergeState() || reviewState()}>
+					{/* Terminal PRs show no pill, so the row would be empty */}
+					<Show when={!isTerminalState() && readiness()}>
 						<div class={s.statusRow}>
+							<Show when={readiness()}>
+								{(kind) => (
+									<span
+										class={cx(s.readinessBadge, READINESS_CLASSES[PR_READINESS_SEVERITY[kind()]])}
+										data-readiness={kind()}
+									>
+										{PR_READINESS_LABELS[kind()]}
+									</span>
+								)}
+							</Show>
 							<Show when={mergeState()}>
 								{(ms) => <span class={cx(s.mergeStateBadge, MERGE_STATE_CLASSES[ms().cssClass])}>{ms().label}</span>}
 							</Show>
 							<Show when={reviewState()}>
 								{(rs) => <span class={cx(s.reviewStateBadge, REVIEW_STATE_CLASSES[rs().cssClass])}>{rs().label}</span>}
 							</Show>
+						</div>
+					</Show>
+
+					<Show when={!isTerminalState() && (pr().unresolved_threads > 0 || pr().unresolved_threads_truncated)}>
+						<div class={s.statusRow} data-testid="unresolved-threads">
+							<span class={s.reviewStateBadge}>
+								{threadSplit()
+									? t("prDetail.unresolvedSplit", "{human} human, {bot} bot unresolved threads", {
+											human: String(threadSplit()?.human),
+											bot: String(threadSplit()?.bot),
+										})
+									: t("prDetail.unresolved", "{count} unresolved threads", {
+											count: `${pr().unresolved_threads}${pr().unresolved_threads_truncated ? "+" : ""}`,
+										})}
+							</span>
 						</div>
 					</Show>
 

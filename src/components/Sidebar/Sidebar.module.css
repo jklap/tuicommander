@@ -2054,6 +2054,12 @@
   flex-shrink: 0;
 }
 
+.ghAgeMarker {
+  font-size: var(--font-xs);
+  color: var(--warning, var(--fg-muted));
+  flex-shrink: 0;
+}
+
 .ghItemTitle {
   flex: 1;
   font-size: var(--font-sm);
