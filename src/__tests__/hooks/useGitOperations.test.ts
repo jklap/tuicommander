@@ -3544,7 +3544,9 @@ describe("useGitOperations", () => {
 			reason: "live session: Claude: refactor",
 			live_sessions: [{ session_id: "s1", name: "Claude: refactor" }],
 		});
-		const gitOpsWith = (confirmOrphanCleanup: ReturnType<typeof vi.fn>) =>
+		const gitOpsWith = (
+			confirmOrphanCleanup: NonNullable<Parameters<typeof useGitOperations>[0]["dialogs"]["confirmOrphanCleanup"]>,
+		) =>
 			useGitOperations({
 				repo: mockRepo,
 				pty: mockPty,
@@ -3624,6 +3626,23 @@ describe("useGitOperations", () => {
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Removed 1 orphaned worktree(s)");
 			expect(appLogger.getEntries()).not.toContainEqual(
 				expect.objectContaining({ message: "Failed to auto-remove orphan worktree /wt/gone" }),
+			);
+		});
+
+		// Catches: terminals left alive on a removed checkout with only a log line: the status line must
+		// say how many could not be closed, counting every failing terminal, not just the first.
+		it("auto mode: the status line says how many terminals of a removed orphan could not be closed", async () => {
+			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/gone", safe: true }]);
+			mockCloseTerminal.mockRejectedValue(new Error("pty busy"));
+			terminalsStore.add(makeTerminal({ name: "A", cwd: "/wt/gone" }));
+			terminalsStore.add(makeTerminal({ name: "B", cwd: "/wt/gone/sub" }));
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockCloseTerminal).toHaveBeenCalledTimes(2);
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(
+				"Removed 1 orphaned worktree(s); 2 terminal(s) could not be closed",
 			);
 		});
 
