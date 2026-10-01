@@ -273,7 +273,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const linkPress = createLinkPressTracker();
 	async function openLinkAt(row: number, col: number) {
 		const link = await resolveLinkAt(row, col, () => !alive);
-		if (link && link !== STALE && linkCovers(link, row, col)) openLink(link);
+		if (link === STALE) {
+			appLogger.debug("terminal", "link click: lookup went stale", { row, col });
+		} else if (!link) {
+			appLogger.debug("terminal", "link click: nothing resolved under the pointer", { row, col });
+		} else if (!linkCovers(link, row, col)) {
+			appLogger.debug("terminal", "link click: resolved link does not cover the pointer", { row, col, link });
+		} else {
+			appLogger.debug("terminal", "link click: opening", { row, col, path: link.path });
+			openLink(link);
+		}
 	}
 	/** What a span underlines on screen right now; "" when there is none. */
 	function underlinedText(row: number, span: { colStart: number; colEnd: number } | undefined): string {
@@ -3078,7 +3087,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const at = canvasToGrid(e);
 			const claimed = linkPress.release(at.row, at.col, underlinedTextAt(at.row, at.col));
 			// The first click of a double-click already opened it.
-			if (!claimed || e.detail > 1 || selection.hasRange()) return;
+			if (!claimed || e.detail > 1 || selection.hasRange()) {
+				// Only a click on something the user sees as a link is worth a line.
+				if (claimed || isOverSpan(detectedLinks.get(at.row), at.col)) {
+					appLogger.debug("terminal", "link click: not opened", {
+						row: at.row,
+						col: at.col,
+						claimed: claimed !== null,
+						detail: e.detail,
+						hasRange: selection.hasRange(),
+					});
+				}
+				return;
+			}
 			void openLinkAt(at.row, at.col);
 		});
 
