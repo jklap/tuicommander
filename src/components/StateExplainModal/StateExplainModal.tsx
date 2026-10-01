@@ -1,4 +1,4 @@
-import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { type Component, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { registerModal } from "../../stores/modalStack";
@@ -73,6 +73,31 @@ interface NotificationExplain {
 	suppressed: boolean;
 	age_ms: number;
 }
+/** `epoch_flags.declared_background_work`: the raw declaration plus what the state
+ *  ladder actually did with it (see `pty/explain.rs`'s `DeclaredWorkExplain`). */
+interface DeclaredWorkExplain {
+	declared: boolean;
+	declared_turn_epoch: number;
+	applies_now: boolean;
+	age_ms: number | null;
+	breakdown_source: "summary" | "statuses_only" | "none";
+	non_teammate_running: number | null;
+	teammate_running: number | null;
+	teammates_busy: boolean;
+	unlinked_teammates: number | null;
+	consistent_with_visible: boolean;
+	counts_now: boolean;
+}
+interface TeammateExplain {
+	session_id: string;
+	shell_state: string | null;
+	busy: boolean;
+}
+/** The recorded lead/teammate linkage, in both directions. */
+interface SwarmExplain {
+	lead_session_id: string | null;
+	teammates: TeammateExplain[];
+}
 interface TrailEntryExplain {
 	seq: number;
 	age_ms: number;
@@ -86,14 +111,18 @@ interface TrailEntryExplain {
 
 /** Backend `explain_session_state` response — mirrors `pty/explain.rs`'s
  *  `SessionStateExplain` verbatim, snake_case, on both transports. Some
- *  sections (`epoch_flags`, `holds`) aren't rendered here yet; add fields as
- *  the modal grows rather than widening this interface speculatively. */
+ *  sections (`holds`, `epoch_flags.completion_declared`) aren't rendered here
+ *  yet; add fields as the modal grows rather than widening this interface
+ *  speculatively. `epoch_flags`/`swarm` are optional: a payload from a backend
+ *  that predates them must still render. */
 export interface SessionStateExplain {
 	session_id: string;
 	captured_at_ms: number;
 	agent: AgentExplain;
 	visible: VisibleExplain;
 	evidence: EvidenceExplain;
+	epoch_flags?: { declared_background_work: DeclaredWorkExplain };
+	swarm?: SwarmExplain | null;
 	screen: ScreenExplain;
 	silence: SilenceExplain;
 	notification: NotificationExplain | null;
@@ -233,10 +262,13 @@ export const StateExplainModal: Component<{
 					<Show when={explain()}>
 						{(exAccessor) => {
 							const ex = exAccessor();
-							const mismatch = disagrees(ex);
+							// A memo, not a const: the badge inputs are props that keep changing
+							// while the modal is open, and the banner must follow them.
+							const mismatch = createMemo(() => disagrees(ex));
+							const declared = () => ex.epoch_flags?.declared_background_work;
 							return (
 								<>
-									<Show when={mismatch}>
+									<Show when={mismatch()}>
 										<div class={s.banner}>
 											Frontend badge (<strong>{frontendBadge()}</strong>) disagrees with backend{" "}
 											<code>agent_state</code> (<strong>{ex.visible.agent_state ?? "null"}</strong>). Check{" "}
@@ -254,7 +286,7 @@ export const StateExplainModal: Component<{
 											<dt>agent_state_rung</dt>
 											<dd>{ex.visible.agent_state_rung}</dd>
 											<dt>frontend badge</dt>
-											<dd class={mismatch ? s.badgeMismatch : undefined}>{frontendBadge()}</dd>
+											<dd class={mismatch() ? s.badgeMismatch : undefined}>{frontendBadge()}</dd>
 											<dt>awaiting_input</dt>
 											<dd>
 												{fmtBool(ex.visible.awaiting_input)}
@@ -276,6 +308,76 @@ export const StateExplainModal: Component<{
 											<dd>{ex.visible.turn_epoch}</dd>
 										</dl>
 									</div>
+
+									<Show when={declared()?.declared}>
+										{(_) => {
+											const d = () => declared() as DeclaredWorkExplain;
+											return (
+												<div class={s.section}>
+													<div class={s.sectionTitle}>Declared background work</div>
+													<Show when={!d().consistent_with_visible}>
+														<div class={s.banner}>
+															Captured mid-change: a teammate changed state between two reads, so{" "}
+															<code>counts_now</code> and the visible value disagree. Re-open this dialog.
+														</div>
+													</Show>
+													<dl class={s.grid}>
+														<dt>counts_now</dt>
+														<dd class={d().counts_now ? s.badgeMismatch : undefined}>
+															{fmtBool(d().counts_now)}
+															{d().counts_now ? " — holds the session working" : " — does not hold it working"}
+														</dd>
+														<dt>applies_now / epoch</dt>
+														<dd>
+															{fmtBool(d().applies_now)} (declared for epoch {d().declared_turn_epoch})
+														</dd>
+														<dt>declared</dt>
+														<dd>{fmtMs(d().age_ms)} ago</dd>
+														<dt>breakdown</dt>
+														<dd>{d().breakdown_source}</dd>
+														<dt>running (other / teammates)</dt>
+														<dd>
+															{d().non_teammate_running ?? "—"} / {d().teammate_running ?? "—"}
+														</dd>
+														<dt>teammates_busy</dt>
+														<dd>{fmtBool(d().teammates_busy)}</dd>
+														<dt>unlinked_teammates</dt>
+														<dd class={(d().unlinked_teammates ?? 0) > 0 ? s.badgeMismatch : undefined}>
+															{d().unlinked_teammates ?? "—"}
+															{(d().unlinked_teammates ?? 0) > 0
+																? " — declared running but no linked pane accounts for them (counts as working)"
+																: ""}
+														</dd>
+													</dl>
+												</div>
+											);
+										}}
+									</Show>
+
+									<Show when={ex.swarm}>
+										{(swarmAccessor) => {
+											const swarm = swarmAccessor();
+											return (
+												<div class={s.section}>
+													<div class={s.sectionTitle}>Swarm</div>
+													<dl class={s.grid}>
+														<Show when={swarm.lead_session_id}>
+															<dt>lead</dt>
+															<dd>{swarm.lead_session_id?.slice(0, 8)}</dd>
+														</Show>
+														<For each={swarm.teammates}>
+															{(t) => (
+																<>
+																	<dt>teammate {t.session_id.slice(0, 8)}</dt>
+																	<dd>{t.shell_state ?? "closed"}</dd>
+																</>
+															)}
+														</For>
+													</dl>
+												</div>
+											);
+										}}
+									</Show>
 
 									<div class={s.section}>
 										<div class={s.sectionTitle}>Evidence &amp; decision</div>
