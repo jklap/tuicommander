@@ -12385,6 +12385,222 @@ mod tests {
         assert_eq!(snapshot.agent_state.as_deref(), Some("awaiting_input"));
     }
 
+    // ── `declared_background_work` readers (characterization) ──────────────
+    //
+    // Claude's hook-declared background work (`SilenceState::declared_background_work`,
+    // written by the `bgtasks` OSC verb) is read in exactly two places in this
+    // file: `AppState::declared_background_work_for` and the
+    // `session_state_with_shell_detailed` ladder that folds it in. These pin
+    // today's behavior before the teammate/subagent split changes the write side.
+
+    fn declare_background_work(state: &AppState, sid: &str, active: bool, epoch: u64) {
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .expect("silence state for session")
+            .lock()
+            .set_declared_background_work(active, epoch);
+    }
+
+    #[test]
+    fn test_declared_background_work_for_is_false_without_silence_state() {
+        let state = fresh_state();
+        assert!(
+            !state.declared_background_work_for("no-such-session", 0),
+            "an unknown session has no declaration"
+        );
+        state.session_maps.silence_states.remove("s1");
+        assert!(
+            !state.declared_background_work_for("s1", 0),
+            "a session whose SilenceState is gone reads as not declared"
+        );
+    }
+
+    #[test]
+    fn test_declared_background_work_for_requires_matching_epoch() {
+        let state = fresh_state();
+        assert!(!state.declared_background_work_for("s1", 4));
+        declare_background_work(&state, "s1", true, 4);
+        assert!(state.declared_background_work_for("s1", 4));
+        assert!(
+            !state.declared_background_work_for("s1", 5),
+            "a declaration from epoch 4 must not apply to epoch 5"
+        );
+        assert!(!state.declared_background_work_for("s1", 3));
+        declare_background_work(&state, "s1", false, 4);
+        assert!(
+            !state.declared_background_work_for("s1", 4),
+            "an explicit not-active declaration reads as not declared"
+        );
+    }
+
+    #[test]
+    fn test_declared_background_work_alone_yields_working_on_background_work_rung() {
+        let state = fresh_state();
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .agent_type = Some("claude".into());
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        declare_background_work(&state, "s1", true, 0);
+
+        let (snapshot, rung, completion_declared, background_work) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        assert_eq!(rung, "background_work");
+        assert!(snapshot.declared_background_work, "wire field is set");
+        assert!(
+            !snapshot.background_work,
+            "the OS-heuristic field is a separate signal and stays false"
+        );
+        assert!(!completion_declared);
+        assert!(
+            background_work,
+            "the ladder's folded background_work input includes the declaration"
+        );
+    }
+
+    #[test]
+    fn test_stale_epoch_declaration_does_not_hold_agent_working() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.turn_epoch = 2;
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        // Declared during epoch 1; the session has since moved to epoch 2.
+        declare_background_work(&state, "s1", true, 1);
+
+        let (snapshot, rung, _, background_work) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert!(
+            !snapshot.declared_background_work,
+            "a declaration from a previous turn epoch must read as not declared"
+        );
+        assert!(!background_work);
+        assert_eq!(snapshot.agent_state.as_deref(), Some("idle"));
+        assert_eq!(rung, "shell_idle");
+    }
+
+    #[test]
+    fn test_declared_background_work_is_independent_of_os_background_work() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.background_work = true;
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert!(snapshot.background_work);
+        assert!(
+            !snapshot.declared_background_work,
+            "OS-level background work must not read as a hook declaration"
+        );
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+
+        // The reverse: a declaration never writes the OS-level field back.
+        declare_background_work(&state, "s1", true, 0);
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .background_work = false;
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert!(snapshot.declared_background_work);
+        assert!(!snapshot.background_work);
+    }
+
+    #[test]
+    fn test_declared_background_work_outranks_completion_declared() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.suggested_actions = Some(vec!["Next".into()]);
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        declare_background_work(&state, "s1", true, 0);
+
+        let (snapshot, rung, completion_declared, background_work) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert!(completion_declared);
+        assert!(background_work);
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        assert_eq!(rung, "background_work");
+        assert_eq!(
+            snapshot.shell_state.as_deref(),
+            Some("busy"),
+            "the completion-declared idle normalization only applies when NO background work remains"
+        );
+
+        // Once the declaration clears, the same session normalizes to completed/idle.
+        declare_background_work(&state, "s1", false, 0);
+        let (snapshot, rung, _, _) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
+        assert_eq!(rung, "completion_declared");
+        assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+    }
+
+    #[test]
+    fn test_awaiting_input_outranks_declared_background_work() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_maps.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("claude".into());
+            session.awaiting_input = true;
+        }
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        declare_background_work(&state, "s1", true, 0);
+        let (snapshot, rung, _, _) = state
+            .session_state_with_shell_detailed("s1")
+            .expect("session state");
+        assert_eq!(snapshot.agent_state.as_deref(), Some("awaiting_input"));
+        assert_eq!(rung, "awaiting_or_choice_prompt");
+        assert!(
+            snapshot.declared_background_work,
+            "the wire field still reports the declaration while a higher rung wins"
+        );
+    }
+
+    #[test]
+    fn test_declared_background_work_without_agent_type_keeps_agent_state_none() {
+        let state = fresh_state();
+        state.session_maps.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        declare_background_work(&state, "s1", true, 0);
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.agent_state, None);
+        assert!(snapshot.declared_background_work);
+    }
+
     #[test]
     fn test_session_state_repeated_status_line_same_task_no_change() {
         let state = fresh_state();
