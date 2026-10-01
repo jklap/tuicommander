@@ -493,7 +493,10 @@ fn login_redirect(uri: &axum::http::Uri) -> Response {
     (
         StatusCode::FOUND,
         [
-            (header::LOCATION, format!("{LOGIN_PAGE_PATH}?next={encoded}")),
+            (
+                header::LOCATION,
+                format!("{LOGIN_PAGE_PATH}?next={encoded}"),
+            ),
             (header::CACHE_CONTROL, "no-store".to_string()),
         ],
     )
@@ -559,7 +562,10 @@ pub async fn login_handler(
         return login_error(StatusCode::FORBIDDEN, "Cross-origin login refused");
     }
     if !is_json_content_type(req.headers()) {
-        return login_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Expected application/json");
+        return login_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Expected application/json",
+        );
     }
     let is_tls = req
         .extensions()
@@ -623,7 +629,9 @@ pub async fn login_handler(
             let session_token = state.session_token.read().clone();
             let mut response = (
                 [(header::CACHE_CONTROL, "no-store")],
-                axum::Json(serde_json::json!({ "ok": true, "next": safe_next(body.next.as_deref()) })),
+                axum::Json(
+                    serde_json::json!({ "ok": true, "next": safe_next(body.next.as_deref()) }),
+                ),
             )
                 .into_response();
             if let Ok(val) =
@@ -1455,7 +1463,10 @@ mod tests {
         assert!(is_public_login_route(&Method::POST, "/auth/login"));
         // Plausible bug: a prefix match would expose the whole mobile app.
         assert!(!is_public_login_route(&Method::GET, "/mobile"));
-        assert!(!is_public_login_route(&Method::GET, "/mobile/login/../session"));
+        assert!(!is_public_login_route(
+            &Method::GET,
+            "/mobile/login/../session"
+        ));
         assert!(!is_public_login_route(&Method::GET, "/auth/login"));
         assert!(!is_public_login_route(&Method::POST, "/mobile/login"));
         assert!(!is_public_login_route(&Method::DELETE, "/auth/login"));
@@ -1483,7 +1494,13 @@ mod tests {
     #[tokio::test]
     async fn unauthenticated_page_navigation_lands_on_the_login_page() {
         let app = login_app(&login_state(5));
-        let response = send(&app, nav("/mobile/session/a").body(axum::body::Body::empty()).unwrap()).await;
+        let response = send(
+            &app,
+            nav("/mobile/session/a")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::FOUND);
         assert_eq!(
             response.headers().get(header::LOCATION).unwrap(),
@@ -1497,7 +1514,11 @@ mod tests {
     #[tokio::test]
     async fn api_and_non_html_requests_keep_the_401_challenge() {
         let app = login_app(&login_state(5));
-        let api = send(&app, nav("/api/ping").body(axum::body::Body::empty()).unwrap()).await;
+        let api = send(
+            &app,
+            nav("/api/ping").body(axum::body::Body::empty()).unwrap(),
+        )
+        .await;
         assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
         assert!(api.headers().contains_key(header::WWW_AUTHENTICATE));
 
@@ -1516,14 +1537,24 @@ mod tests {
         let state = login_state(5);
         state.config.write().services.auth.password_hash.clear();
         let app = login_app(&state);
-        let response = send(&app, nav("/mobile").body(axum::body::Body::empty()).unwrap()).await;
+        let response = send(
+            &app,
+            nav("/mobile").body(axum::body::Body::empty()).unwrap(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn login_page_loads_without_a_session() {
         let app = login_app(&login_state(5));
-        let response = send(&app, nav("/mobile/login").body(axum::body::Body::empty()).unwrap()).await;
+        let response = send(
+            &app,
+            nav("/mobile/login")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -1534,7 +1565,13 @@ mod tests {
         let body = credentials("boss", "correct", Some("/mobile/session/a"));
         let response = send(&app, login_post().body(body.into()).unwrap()).await;
         assert_eq!(response.status(), StatusCode::OK);
-        let cookie = response.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         let token = state.session_token.read().clone();
         assert!(cookie.contains(&format!("tui-session={token}")), "{cookie}");
         assert!(cookie.contains("Max-Age=2592000"), "{cookie}");
@@ -1580,7 +1617,10 @@ mod tests {
         foreign_origin
             .headers_mut()
             .insert(header::ORIGIN, "http://evil.test".parse().unwrap());
-        assert_eq!(send(&app, foreign_origin).await.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            send(&app, foreign_origin).await.status(),
+            StatusCode::FORBIDDEN
+        );
 
         let mut cross_site = login_post().body(body.clone().into()).unwrap();
         cross_site
@@ -1611,7 +1651,10 @@ mod tests {
             header::CONTENT_TYPE,
             "application/x-www-form-urlencoded".parse().unwrap(),
         );
-        assert_eq!(send(&app, req).await.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(
+            send(&app, req).await.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
     }
 
     #[tokio::test]
@@ -1622,7 +1665,10 @@ mod tests {
 
         let huge = "x".repeat(MAX_LOGIN_BODY_BYTES + 1);
         let big = login_post().body(huge.into()).unwrap();
-        assert_eq!(send(&app, big).await.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            send(&app, big).await.status(),
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
     }
 
     /// The login path spends the same per-IP budget as the Basic fallback: once
@@ -1667,7 +1713,12 @@ mod tests {
         let app = login_app(&state);
         let body = credentials("boss", "correct", None);
         let response = send(&app, login_post().body(body.into()).unwrap()).await;
-        let cookie = response.headers().get(header::SET_COOKIE).unwrap().to_str().unwrap();
+        let cookie = response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
         let pair = cookie.split(';').next().unwrap().to_string();
         let req = nav("/mobile")
             .header(header::COOKIE, pair)
