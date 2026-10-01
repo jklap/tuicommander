@@ -240,6 +240,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	};
 	const STALE = Symbol("stale link lookup");
 	let hoveredLink: HoveredLink | null = null;
+	/** What the hovered link underlined when the probe resolved it; see pressSpanAt. */
+	let hoveredSignature = "";
 	const detectedLinks = linkController.detectedSpans;
 	// Spans of links that span soft-wrapped rows (web + file://), keyed by row.
 	// scanRowForLinks() merges these each time it rebuilds a row's dashed-underline
@@ -302,7 +304,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function pressSpanAt(row: number, col: number): { colStart: number; colEnd: number } | undefined {
 		const underlined = spanAt(detectedLinks.get(row), col);
 		if (underlined || !hoveredLink || !linkCovers(hoveredLink, row, col)) return underlined;
+		// An in-place redraw leaves the hover standing; it only counts while it underlines what it did.
+		if (hoverSignature(hoveredLink) !== hoveredSignature) return undefined;
 		return (hoveredLink.spans ?? [hoveredLink]).find((sp) => sp.row === row && col >= sp.colStart && col < sp.colEnd);
+	}
+	/** The text each span of the link covers on screen now. */
+	function hoverSignature(link: HoveredLink): string {
+		return (link.spans ?? [link]).map((sp) => `${sp.row}:${underlinedText(sp.row, sp)}`).join("\n");
 	}
 	function underlinedTextAt(row: number, col: number): string {
 		return underlinedText(row, pressSpanAt(row, col));
@@ -2030,6 +2038,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const found = await resolveLinkAt(row, col, () => !linkController.isCurrent(gen));
 		if (found === STALE) return;
 		hoveredLink = found;
+		hoveredSignature = found ? hoverSignature(found) : "";
 		canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
 		if (currentFrame) {
 			const m = metrics();
@@ -3117,7 +3126,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// Only when the click lands on a link span; elsewhere the default is left alone.
 		bindings.listen(canvasRef, "contextmenu", async (e: MouseEvent) => {
 			const pos = canvasToGrid(e);
-			if (!isOverSpan(detectedLinks.get(pos.row), pos.col)) return;
+			if (!pressSpanAt(pos.row, pos.col)) return;
 			e.preventDefault();
 			// Stop the App-level terminal context menu (#terminal-panes onContextMenu)
 			// from also opening and covering our Open/Copy-link menu.
