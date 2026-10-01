@@ -131,7 +131,7 @@ the language's model.
 | `get_speech_voices(language)` | `GET /dictation/speech/voices?language=` | The voices the language can speak with now, as `[{ id, source }]` with `source` `"default"`, `"downloaded"` or `"user"`, in that order |
 | `import_speech_voice(language, name, dataBase64)` | `POST /dictation/speech/voices/import` | Store a voice file the user chose (the whole file as base64). Checked before it is stored — see "Voice files the user adds" below. This route alone accepts a body of about 85 MiB (`SPEECH_VOICE_IMPORT_BODY_BYTES`); every other route keeps the 2 MB limit |
 | `delete_speech_voice(language, name)` | `POST /dictation/speech/voices/delete` | Remove a voice file the user imported. A file that is already absent is success |
-| `preview_speech_voice(language, voice, text)` | `POST /dictation/speech/voices/preview` | Speak `text` (at most 200 characters) in `voice` on this machine's speaker, through the configured engine (Edge or Pocket; an external command names its own voices and is refused), the same loudness stage and echo tap as a reply. Needs no hands-free conversation and does not change `speech_voice` or `speech_edge_voice`. An Edge voice that does not speak `language` is refused, not replaced by the default. Refused, not queued, while a hands-free reply is queued, rendering or playing |
+| `preview_speech_voice(language, voice, text)` | `POST /dictation/speech/voices/preview` | Speak `text` (at most 200 characters) in `voice` on this machine's speaker, through the configured engine (Edge or Pocket; an external command names its own voices and is refused), the same loudness stage and echo tap as a reply. Needs no hands-free conversation and does not change `speech_voice` or `speech_edge_voice`. An Edge voice that does not speak `language` previews as the language default, the same resolution a reply makes and what the picker shows for it. Refused, not queued, while a hands-free reply is queued, rendering or playing |
 
 The HTTP body of the import uses the same camelCase key as the IPC argument
 (`dataBase64`).
@@ -834,9 +834,13 @@ speech service** (the settings panel says so under Spoken replies).
   bytes per second) and the audio rate a constant.
 - **Whole utterance.** `synthesize` returns once `turn.end` has arrived and the
   MP3 is decoded (rodio, `symphonia-mp3`) to mono PCM at 24 kHz. Streaming
-  playback is a separate decision. Text over about 3000 bytes is sent as
-  several requests on separate connections and the MP3 streams are joined.
-- **Bounds.** Cancel → `SpeechError::Cancelled`. More audio than
+  playback is a separate decision. Text whose escaped SSML (`'` is six
+  bytes) exceeds 3000 bytes is sent as several requests on separate connections
+  and the MP3 streams are joined; the service refuses about 4 KB.
+- **Bounds.** Name resolution and `connect` cannot look at a flag, so the dial
+  runs on a helper thread that the request polls: cancel and the deadline apply
+  to the dial too, and an abandoned dial ends at its own connect timeout.
+  Cancel → `SpeechError::Cancelled`. More audio than
   `budget_seconds` justifies → `Runaway`. No `turn.end` within
   `max(30 s, budget)` → `Failed("… did not finish in time")`. A connection
   closed before `turn.end` is `Failed`, not truncated speech.
@@ -851,9 +855,16 @@ speech service** (the settings panel says so under Spoken replies).
   (`dictation/edge_voices.rs`) and `edge::voices_for_language` filters it by
   the language subtag. `speech_edge_voice` holds one voice; for a reply it is
   used only if it speaks the conversation language (or is multilingual), else
-  the language default (`DEFAULT_VOICES`, ten languages verified against the
-  live list). A language with no default and no chosen voice is an error that
+  the language default (`DEFAULT_VOICES`, every language the settings offer, verified against the
+  live list and recorded in `fixtures/edge_voices.json`). A language with no default and no chosen voice is an error that
   tells the user to choose one — never a voice of another language.
+- **Proxy.** The voice list goes through reqwest and honours the system proxy;
+  the synthesis socket does not (DEFERRED 2026-10-01, `dial_service`). Behind a
+  proxy the picker loads and speech fails with "cannot reach … needs an internet
+  connection". Pocket TTS or an external command work there.
+- **Defaults.** `get_config_defaults` reports `speech_engine: "edge"`, the value
+  a brand-new install loads, so the settings panel hides the Expert engine
+  selector while Edge is in use.
 - **Unofficial.** The service is not a supported API. If it changes, the
   adapter fails with a typed error and Pocket TTS or the external command stay
   available in Expert.

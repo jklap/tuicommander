@@ -1360,37 +1360,7 @@ pub(crate) fn preview_voice(
     text: &str,
 ) -> Result<(), String> {
     let text = preview_text(text)?;
-    // The voice asked for, in a copy of the configuration only: previewing a
-    // voice does not select it.
-    let current = get_dictation_config();
-    let config = match speech_engine(&current) {
-        SpeechEngine::Edge => {
-            // A preview plays the voice that was asked for or says why not; the
-            // fallback to the language default is for replies, not for a
-            // button labelled with a voice name.
-            if !voice.is_empty() && speech::edge::choose_voice(language, voice)? != voice {
-                return Err(format!("The voice {voice} does not speak \"{language}\""));
-            }
-            DictationConfig {
-                speech_edge_voice: voice.to_string(),
-                ..current
-            }
-        }
-        SpeechEngine::Pocket => {
-            // Named first, so an unknown voice is reported as such rather than
-            // as a missing download of the language.
-            choose_voice(voice_language(language)?, voice)?;
-            DictationConfig {
-                speech_voice: voice.to_string(),
-                ..current
-            }
-        }
-        SpeechEngine::External => {
-            return Err(
-                "An external command names its own voices; there is nothing to preview".to_string(),
-            );
-        }
-    };
+    let config = preview_config(get_dictation_config(), language, voice)?;
     let (engine, voice) = open_voice(&config, &dictation.speech, language)?;
     let device = open_reply_output(dictation, None)?;
     play_preview(
@@ -1401,6 +1371,36 @@ pub(crate) fn preview_voice(
         text,
         config.loudness(),
     )
+}
+
+/// The voice asked for, in a copy of the configuration only: previewing a
+/// voice does not select it.
+fn preview_config(
+    current: DictationConfig,
+    language: &str,
+    voice: &str,
+) -> Result<DictationConfig, String> {
+    match speech_engine(&current) {
+        // The same resolution a reply makes (`open_voice`): a stored voice that
+        // does not speak the language previews as the language default, which
+        // is also what the picker shows for it.
+        SpeechEngine::Edge => Ok(DictationConfig {
+            speech_edge_voice: voice.to_string(),
+            ..current
+        }),
+        SpeechEngine::Pocket => {
+            // Named first, so an unknown voice is reported as such rather than
+            // as a missing download of the language.
+            choose_voice(voice_language(language)?, voice)?;
+            Ok(DictationConfig {
+                speech_voice: voice.to_string(),
+                ..current
+            })
+        }
+        SpeechEngine::External => {
+            Err("An external command names its own voices; there is nothing to preview".to_string())
+        }
+    }
 }
 
 fn preview_text(text: &str) -> Result<&str, String> {
@@ -5416,21 +5416,21 @@ mod tests {
     }
 
     #[test]
-    fn previewing_an_edge_voice_of_another_language_is_refused_not_replaced() {
-        // Catches: a "Listen" button that plays the default voice when the
-        // chosen one does not speak the language.
-        let _config = config_of_this_test(DictationConfig {
-            language: "it".to_string(),
+    fn listen_speaks_a_voice_of_another_language_as_the_language_default_like_a_reply() {
+        // Catches: Listen refusing a stored voice that the picker shows as the
+        // default and that replies silently replace with the default.
+        let (_dir, _guard) = speech_root();
+        let library = speech::library::SpeechLibrary::new();
+        let current = DictationConfig {
             speech_engine: "edge".to_string(),
             ..Default::default()
-        });
-        let dictation = DictationState::new();
+        };
 
-        let error = preview_voice(&dictation, "it", "en-US-AriaNeural", "ciao")
-            .expect_err("wrong language");
+        let config =
+            preview_config(current, "it", "en-US-AriaNeural").expect("the preview is not refused");
+        let (_engine, voice) = open_voice(&config, &library, "it").expect("edge opens");
 
-        assert!(error.contains("en-US-AriaNeural"), "{error}");
-        assert_eq!(get_dictation_config().speech_edge_voice, "");
+        assert_eq!(voice, "it-IT-IsabellaNeural");
     }
 }
 

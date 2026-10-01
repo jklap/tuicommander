@@ -630,5 +630,138 @@
     "Positive"
    ]
   }
+ },
+ {
+  "Name": "Microsoft Server Speech Text to Speech Voice (nl-NL, ColetteNeural)",
+  "ShortName": "nl-NL-ColetteNeural",
+  "Gender": "Female",
+  "Locale": "nl-NL",
+  "LocaleName": "Dutch (Netherlands)",
+  "SuggestedCodec": "audio-24khz-48kbitrate-mono-mp3",
+  "FriendlyName": "Microsoft Colette Online (Natural) - Dutch (Netherlands)",
+  "Status": "GA",
+  "VoiceTag": {
+   "ContentCategories": [
+    "General"
+   ],
+   "VoicePersonalities": [
+    "Friendly",
+    "Positive"
+   ]
+  }
+ },
+ {
+  "Name": "Microsoft Server Speech Text to Speech Voice (es-ES, ElviraNeural)",
+  "ShortName": "es-ES-ElviraNeural",
+  "Gender": "Female",
+  "Locale": "es-ES",
+  "LocaleName": "Spanish (Spain)",
+  "SuggestedCodec": "audio-24khz-48kbitrate-mono-mp3",
+  "FriendlyName": "Microsoft Elvira Online (Natural) - Spanish (Spain)",
+  "Status": "GA",
+  "VoiceTag": {
+   "ContentCategories": [
+    "General"
+   ],
+   "VoicePersonalities": [
+    "Friendly",
+    "Positive"
+   ]
+  }
+ },
+ {
+  "Name": "Microsoft Server Speech Text to Speech Voice (pt-BR, FranciscaNeural)",
+  "ShortName": "pt-BR-FranciscaNeural",
+  "Gender": "Female",
+  "Locale": "pt-BR",
+  "LocaleName": "Portuguese (Brazil)",
+  "SuggestedCodec": "audio-24khz-48kbitrate-mono-mp3",
+  "FriendlyName": "Microsoft Francisca Online (Natural) - Portuguese (Brazil)",
+  "Status": "GA",
+  "VoiceTag": {
+   "ContentCategories": [
+    "General"
+   ],
+   "VoicePersonalities": [
+    "Friendly",
+    "Positive"
+   ]
+  }
+ },
+ {
+  "Name": "Microsoft Server Speech Text to Speech Voice (ja-JP, NanamiNeural)",
+  "ShortName": "ja-JP-NanamiNeural",
+  "Gender": "Female",
+  "Locale": "ja-JP",
+  "LocaleName": "Japanese (Japan)",
+  "SuggestedCodec": "audio-24khz-48kbitrate-mono-mp3",
+  "FriendlyName": "Microsoft Nanami Online (Natural) - Japanese (Japan)",
+  "Status": "GA",
+  "VoiceTag": {
+   "ContentCategories": [
+    "General"
+   ],
+   "VoicePersonalities": [
+    "Friendly",
+    "Positive"
+   ]
+  }
+ },
+ {
+  "Name": "Microsoft Server Speech Text to Speech Voice (zh-CN, XiaoxiaoNeural)",
+  "ShortName": "zh-CN-XiaoxiaoNeural",
+  "Gender": "Female",
+  "Locale": "zh-CN",
+  "LocaleName": "Chinese (Mandarin, Simplified)",
+  "SuggestedCodec": "audio-24khz-48kbitrate-mono-mp3",
+  "FriendlyName": "Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)",
+  "Status": "GA",
+  "VoiceTag": {
+   "ContentCategories": [
+    "News",
+    "Novel"
+   ],
+   "VoicePersonalities": [
+    "Warm"
+   ]
+  }
+ },
+ {
+  "Name": "Microsoft Server Speech Text to Speech Voice (ko-KR, SunHiNeural)",
+  "ShortName": "ko-KR-SunHiNeural",
+  "Gender": "Female",
+  "Locale": "ko-KR",
+  "LocaleName": "Korean (Korea)",
+  "SuggestedCodec": "audio-24khz-48kbitrate-mono-mp3",
+  "FriendlyName": "Microsoft SunHi Online (Natural) - Korean (Korea)",
+  "Status": "GA",
+  "VoiceTag": {
+   "ContentCategories": [
+    "General"
+   ],
+   "VoicePersonalities": [
+    "Friendly",
+    "Positive"
+   ]
+  }
+ },
+ {
+  "Name": "Microsoft Server Speech Text to Speech Voice (ru-RU, SvetlanaNeural)",
+  "ShortName": "ru-RU-SvetlanaNeural",
+  "Gender": "Female",
+  "Locale": "ru-RU",
+  "LocaleName": "Russian (Russia)",
+  "SuggestedCodec": "audio-24khz-48kbitrate-mono-mp3",
+  "FriendlyName": "Microsoft Svetlana Online (Natural) - Russian (Russia)",
+  "Status": "GA",
+  "VoiceTag": {
+   "ContentCategories": [
+    "General"
+   ],
+   "VoicePersonalities": [
+    "Friendly",
+    "Positive"
+   ]
+  }
  }
 ]

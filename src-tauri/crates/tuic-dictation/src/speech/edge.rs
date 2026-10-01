@@ -13,7 +13,8 @@
 //! a second certificate-verifier setup beside the `rustls` and `tungstenite`
 //! the application already ships. This file is the part of it that is needed —
 //! the handshake token, two messages, a frame parser — with a read timeout on
-//! the socket so the request is abandoned within [`POLL_INTERVAL`].
+//! the socket so the request is abandoned within [`POLL_INTERVAL`], and the
+//! dial on a helper thread so a black-holed network does not hold a cancel.
 //!
 //! ## What is assumed about the service
 //!
@@ -32,6 +33,7 @@
 
 use std::io::Cursor;
 use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rodio::Source;
@@ -64,7 +66,8 @@ const OUTPUT_FORMAT: &str = "audio-24khz-48kbitrate-mono-mp3";
 const BYTES_PER_SECOND: f32 = 6000.0;
 
 /// The service refuses SSML past about 4 KB. Longer text is sent as several
-/// requests and the MP3 streams are joined, which decoders accept.
+/// requests of at most this many escaped bytes and the MP3 streams are
+/// joined, which decoders accept.
 const MAX_TEXT_BYTES: usize = 3000;
 
 /// How often a blocked read gives control back to look at the cancel flag and
@@ -108,7 +111,7 @@ struct Limits {
 
 /// Edge neural voices as a speech engine.
 pub struct EdgeSpeech {
-    dial: Dial,
+    dial: Arc<dyn Fn() -> Result<Box<dyn Socket>> + Send + Sync>,
     /// Set only by [`EdgeSpeech::with_timeout`]; otherwise derived from the text.
     timeout: Option<Duration>,
 }
@@ -122,7 +125,7 @@ impl Default for EdgeSpeech {
 impl EdgeSpeech {
     pub fn new() -> Self {
         Self {
-            dial: Box::new(dial_service),
+            dial: Arc::new(dial_service),
             timeout: None,
         }
     }
@@ -130,7 +133,7 @@ impl EdgeSpeech {
     #[cfg(test)]
     fn with_dial(dial: Dial) -> Self {
         Self {
-            dial,
+            dial: Arc::from(dial),
             timeout: None,
         }
     }
@@ -147,6 +150,40 @@ impl EdgeSpeech {
             .unwrap_or_else(|| Duration::from_secs_f32(budget).max(TIMEOUT_FLOOR))
     }
 
+    /// A connection, or the reason there is none, given up on as soon as the
+    /// cancel flag rises or the deadline passes.
+    ///
+    /// Name resolution and `connect` block with no way to look at a flag, so
+    /// they run on a helper thread and this one polls for the answer. A dial
+    /// abandoned on a black-holed network ends by itself at the connect and
+    /// handshake timeouts; its socket is dropped then.
+    fn dial(&self, cancel: &SpeechCancel, deadline: Instant) -> Result<Box<dyn Socket>> {
+        let (answer, dialled) = mpsc::channel();
+        let dial = Arc::clone(&self.dial);
+        std::thread::Builder::new()
+            .name("edge-dial".to_string())
+            .spawn(move || {
+                // Nobody is listening once the request was abandoned.
+                let _ = answer.send(dial());
+            })
+            .map_err(|error| unreachable_service(&error))?;
+        loop {
+            if cancel.is_cancelled() {
+                return Err(SpeechError::Cancelled);
+            }
+            if Instant::now() >= deadline {
+                return Err(timed_out());
+            }
+            match dialled.recv_timeout(POLL_INTERVAL) {
+                Ok(socket) => return socket,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(unreachable_service(&"the connection attempt failed"));
+                }
+            }
+        }
+    }
+
     /// One request on its own connection: the MP3 bytes for `text`, appended
     /// to `mp3`.
     fn request(
@@ -157,7 +194,7 @@ impl EdgeSpeech {
         limits: &Limits,
         mp3: &mut Vec<u8>,
     ) -> Result<()> {
-        let mut socket = (self.dial)()?;
+        let mut socket = self.dial(cancel, limits.deadline)?;
         if cancel.is_cancelled() {
             return Err(SpeechError::Cancelled);
         }
@@ -168,9 +205,7 @@ impl EdgeSpeech {
                 return Err(SpeechError::Cancelled);
             }
             if Instant::now() >= limits.deadline {
-                return Err(SpeechError::Failed(
-                    "the Microsoft Edge speech service did not finish in time".to_string(),
-                ));
+                return Err(timed_out());
             }
             match socket.recv()? {
                 Frame::Idle => {}
@@ -296,41 +331,46 @@ fn ssml_message(voice: &str, text: &str) -> String {
 }
 
 /// A transcript is arbitrary text: `<` and `&` must not become markup, and
-/// control characters are not legal XML at all.
+/// characters XML 1.0 does not allow (control characters, U+FFFE, U+FFFF) are
+/// dropped.
 fn escape_xml(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            '\t' | '\n' | '\r' => out.push(c),
-            c if c.is_control() => {}
-            c => out.push(c),
-        }
-    }
+    text.chars().for_each(|c| push_escaped(c, &mut out));
     out
 }
 
-/// Pieces of at most [`MAX_TEXT_BYTES`], cut at whitespace where there is one.
+fn push_escaped(c: char, out: &mut String) {
+    match c {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        '"' => out.push_str("&quot;"),
+        '\'' => out.push_str("&apos;"),
+        '\t' | '\n' | '\r' => out.push(c),
+        c if c.is_control() || matches!(c, '\u{FFFE}' | '\u{FFFF}') => {}
+        c => out.push(c),
+    }
+}
+
+/// Pieces whose escaped form is at most [`MAX_TEXT_BYTES`], cut at whitespace
+/// where there is one. The service limits the SSML text, and `'` becomes six
+/// bytes of it, so the cut counts what is sent.
 fn split_text(text: &str) -> Vec<&str> {
     let mut pieces = Vec::new();
     let mut rest = text.trim();
     while !rest.is_empty() {
-        if rest.len() <= MAX_TEXT_BYTES {
-            pieces.push(rest);
-            break;
+        let mut escaped = String::new();
+        let mut cut = rest.len();
+        for (at, c) in rest.char_indices() {
+            push_escaped(c, &mut escaped);
+            if escaped.len() > MAX_TEXT_BYTES {
+                cut = rest[..at]
+                    .rfind(char::is_whitespace)
+                    .filter(|&space| space > 0)
+                    .unwrap_or(at);
+                break;
+            }
         }
-        let mut cut = MAX_TEXT_BYTES;
-        while !rest.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        let cut = rest[..cut]
-            .rfind(char::is_whitespace)
-            .filter(|&at| at > 0)
-            .unwrap_or(cut);
         pieces.push(rest[..cut].trim_end());
         rest = rest[cut..].trim_start();
     }
@@ -448,6 +488,10 @@ fn connection_failed(error: &tungstenite::Error) -> SpeechError {
     ))
 }
 
+fn timed_out() -> SpeechError {
+    SpeechError::Failed("the Microsoft Edge speech service did not finish in time".to_string())
+}
+
 fn unreachable_service(reason: &dyn std::fmt::Display) -> SpeechError {
     SpeechError::Failed(format!(
         "cannot reach the Microsoft Edge speech service ({reason}); it needs an internet connection"
@@ -477,6 +521,11 @@ fn handshake_request() -> Result<tungstenite::handshake::client::Request> {
     Ok(request)
 }
 
+// DEFERRED (2026-10-01) — the system proxy. The voice list goes through reqwest
+// and honours it; this raw `TcpStream` does not, so behind a corporate proxy the
+// picker loads and speech fails with "cannot reach". Honouring it means finding
+// the proxy (environment, macOS and Windows settings, PAC) and an HTTP CONNECT
+// tunnel under the TLS handshake; not a small change, and no user has asked yet.
 fn dial_service() -> Result<Box<dyn Socket>> {
     let request = handshake_request()?;
     let addresses = (HOST, 443)
@@ -585,7 +634,8 @@ pub fn voices_for_language(voices: &[EdgeVoice], language: &str) -> Vec<EdgeVoic
 }
 
 /// The voice a language speaks with when none is chosen. Verified against the
-/// live list on 2026-10-01; a language not listed has no default and the user
+/// live list on 2026-10-01 for every language the settings offer
+/// (`WHISPER_LANGUAGES`); a language not listed has no default and the user
 /// is asked to choose from the service list.
 const DEFAULT_VOICES: &[(&str, &str)] = &[
     ("it", "it-IT-IsabellaNeural"),
@@ -597,6 +647,7 @@ const DEFAULT_VOICES: &[(&str, &str)] = &[
     ("ja", "ja-JP-NanamiNeural"),
     ("zh", "zh-CN-XiaoxiaoNeural"),
     ("ko", "ko-KR-SunHiNeural"),
+    ("nl", "nl-NL-ColetteNeural"),
     ("ru", "ru-RU-SvetlanaNeural"),
 ];
 
@@ -863,12 +914,13 @@ mod tests {
     #[test]
     fn long_text_is_split_on_char_boundaries_below_the_service_limit() {
         // Catches: a byte-offset cut inside "è" (panic) and a request over the
-        // service's size limit (rejected reply).
+        // service's size limit (rejected reply). The limit is on what is sent,
+        // so it is measured on the escaped text against the service's 4 KB.
         let text = "perché è così. ".repeat(500);
         let pieces = split_text(&text);
 
         assert!(pieces.len() > 1);
-        assert!(pieces.iter().all(|p| p.len() <= MAX_TEXT_BYTES));
+        assert!(pieces.iter().all(|p| escape_xml(p).len() <= 4096));
         let rejoined = pieces.join(" ");
         assert_eq!(
             rejoined.split_whitespace().count(),
@@ -973,14 +1025,13 @@ mod tests {
     }
 
     #[test]
-    fn every_default_voice_is_in_the_recorded_list_where_the_list_covers_its_language() {
-        // Catches: a default that the service does not offer (typo, rename).
+    fn every_default_voice_is_in_the_recorded_list() {
+        // Catches: a default that the service does not offer (typo, rename). The
+        // fixture holds one entry for every default, so none is skipped.
         let voices = parse_voices(VOICES).unwrap();
         for (language, voice) in DEFAULT_VOICES {
             let offered = voices_for_language(&voices, language);
-            if !offered.is_empty() {
-                assert!(offered.iter().any(|v| v.id == *voice), "{voice}");
-            }
+            assert!(offered.iter().any(|v| v.id == *voice), "{voice}");
         }
     }
 
@@ -1222,6 +1273,49 @@ mod critic_round1 {
         // Catches: a half-open connection hanging forever instead of a typed error.
         let (speech, _, _) = dial_with(|_| vec![audio_frame(b"\xff\xfb")]);
         let speech = speech.with_timeout(Duration::from_millis(200));
+        let start = Instant::now();
+        let result = synth(&speech, "ciao");
+        assert!(
+            matches!(&result, Err(SpeechError::Failed(m)) if m.contains("in time")),
+            "{result:?}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_dial_that_blocks_like_a_black_holed_address_is_abandoned_at_the_cancel() {
+        // Catches: name resolution and connect (blocking, up to 10 s per address)
+        // holding a hushed reply, and with it the single speaker worker.
+        let speech = EdgeSpeech::with_dial(Box::new(|| {
+            std::thread::sleep(Duration::from_secs(5));
+            Err(SpeechError::Failed("cannot reach it".into()))
+        }));
+        let cancel = SpeechCancel::new();
+        let remote = cancel.clone();
+        let trigger = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            remote.cancel();
+        });
+        let start = Instant::now();
+        let result = speech.synthesize("ciao a tutti", VOICE, &cancel);
+        trigger.join().unwrap();
+        assert!(matches!(result, Err(SpeechError::Cancelled)), "{result:?}");
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_dial_that_never_answers_ends_at_the_deadline() {
+        // Catches: the dial sitting outside the time limit, so a black-holed
+        // network hangs for connect timeouts that no deadline covers.
+        let speech = EdgeSpeech::with_dial(Box::new(|| {
+            std::thread::sleep(Duration::from_secs(5));
+            Err(SpeechError::Failed("cannot reach it".into()))
+        }))
+        .with_timeout(Duration::from_millis(200));
         let start = Instant::now();
         let result = synth(&speech, "ciao");
         assert!(
