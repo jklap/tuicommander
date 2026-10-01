@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 
-const { mockRepositoriesStore, mockPaneLayoutStore, mockFocus, mockTerminalsStore } = vi.hoisted(() => {
+const {
+	mockRepositoriesStore,
+	mockPaneLayoutStore,
+	mockFocus,
+	mockTerminalsStore,
+	mockGlobalWorkspaceStore,
+	mockSyncScopeForActiveRepo,
+} = vi.hoisted(() => {
 	const mockRepositoriesStore = {
 		getRepoPathForTerminal: vi.fn<(id: string) => string | null>(),
 		state: {
@@ -13,6 +20,7 @@ const { mockRepositoriesStore, mockPaneLayoutStore, mockFocus, mockTerminalsStor
 		},
 		setActive: vi.fn(),
 		setActiveWorkspace: vi.fn(),
+		getActive: vi.fn<() => { path: string; activeWorkspaceId: string | null } | null>(() => null),
 	};
 
 	const mockPaneLayoutStore = {
@@ -28,17 +36,40 @@ const { mockRepositoriesStore, mockPaneLayoutStore, mockFocus, mockTerminalsStor
 		get: vi.fn<(id: string) => { ref?: { focus: () => void } } | undefined>(),
 	};
 
-	return { mockRepositoriesStore, mockPaneLayoutStore, mockFocus, mockTerminalsStore };
+	const mockGlobalWorkspaceStore = {
+		isManualWorkspaceActive: vi.fn(() => false),
+		getPromotedIds: vi.fn<() => string[]>(() => []),
+		deactivate: vi.fn(),
+		// Main's unowned-session path: repo-owned terminals never enter the
+		// manual workspace, and no other scope is active here.
+		getScopeMembers: vi.fn<(scope: string) => string[]>(() => []),
+		isActive: vi.fn(() => false),
+		isPromoted: vi.fn(() => false),
+		getScope: vi.fn(() => "manual"),
+		setScope: vi.fn(),
+		activate: vi.fn(),
+	};
+
+	const mockSyncScopeForActiveRepo = vi.fn();
+
+	return {
+		mockRepositoriesStore,
+		mockPaneLayoutStore,
+		mockFocus,
+		mockTerminalsStore,
+		mockGlobalWorkspaceStore,
+		mockSyncScopeForActiveRepo,
+	};
 });
 
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: mockRepositoriesStore }));
 vi.mock("../../stores/paneLayout", () => ({ paneLayoutStore: mockPaneLayoutStore }));
 vi.mock("../../stores/terminals", () => ({ terminalsStore: mockTerminalsStore }));
-// Repo-owned terminals never enter the manual workspace, which stays inactive here.
 vi.mock("../../stores/globalWorkspace", () => ({
 	MANUAL_SCOPE: "manual",
-	globalWorkspaceStore: { getScopeMembers: () => [], isActive: () => false },
+	globalWorkspaceStore: mockGlobalWorkspaceStore,
 }));
+vi.mock("../../hooks/useWorktreeConsolidation", () => ({ syncScopeForActiveRepo: mockSyncScopeForActiveRepo }));
 
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 
@@ -48,9 +79,17 @@ describe("navigateToTerminal", () => {
 		mockRepositoriesStore.getRepoPathForTerminal.mockReturnValue(null);
 		mockRepositoriesStore.state.activeRepoPath = null;
 		mockRepositoriesStore.state.repositories = {};
+		mockRepositoriesStore.getActive.mockReturnValue(null);
 		mockPaneLayoutStore.isSplit.mockReturnValue(false);
 		mockPaneLayoutStore.getGroupForTab.mockReturnValue(null);
 		mockTerminalsStore.get.mockReturnValue({ ref: { focus: mockFocus } });
+		mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(false);
+		mockGlobalWorkspaceStore.getPromotedIds.mockReturnValue([]);
+		// clearAllMocks keeps implementations; reset the ones a test overrides.
+		mockGlobalWorkspaceStore.getScope.mockImplementation(() => "manual");
+		mockGlobalWorkspaceStore.setScope.mockImplementation(() => {});
+		mockGlobalWorkspaceStore.getScopeMembers.mockImplementation(() => []);
+		mockSyncScopeForActiveRepo.mockImplementation(() => {});
 		vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback): number => {
 			cb(0);
 			return 0;
@@ -133,5 +172,93 @@ describe("navigateToTerminal", () => {
 	it("does not throw when the terminal has no ref", () => {
 		mockTerminalsStore.get.mockReturnValue(undefined);
 		expect(() => navigateToTerminal("missing")).not.toThrow();
+	});
+
+	describe("manual Global Workspace exit", () => {
+		it("deactivates the manual Global Workspace before doing anything else when it's active", () => {
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(true);
+
+			navigateToTerminal("t1");
+
+			expect(mockGlobalWorkspaceStore.deactivate).toHaveBeenCalledOnce();
+			expect(mockTerminalsStore.setActive).toHaveBeenCalledWith("t1");
+		});
+
+		it("does not deactivate anything when the manual Global Workspace isn't active", () => {
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(false);
+
+			navigateToTerminal("t1");
+
+			expect(mockGlobalWorkspaceStore.deactivate).not.toHaveBeenCalled();
+		});
+
+		it("deactivates even when navigating to a terminal that's already promoted into the workspace", () => {
+			// A sidebar row click is a deliberate "go look at this repo/branch"
+			// action, not a within-workspace tab switch — always exits, unlike
+			// the main TabBar's own tab clicks (handled separately in
+			// useTerminalLifecycle.ts, which never calls this function for a
+			// promoted tab).
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(true);
+			mockGlobalWorkspaceStore.getPromotedIds.mockReturnValue(["t1", "t2"]);
+
+			navigateToTerminal("t1");
+
+			expect(mockGlobalWorkspaceStore.deactivate).toHaveBeenCalledOnce();
+			expect(mockTerminalsStore.setActive).toHaveBeenCalledWith("t1");
+		});
+
+		it("re-syncs the active repo's scope even when the repo doesn't change (same-repo click while manual workspace is active)", () => {
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(true);
+			mockRepositoriesStore.getRepoPathForTerminal.mockReturnValue("/repo/a");
+			mockRepositoriesStore.state.activeRepoPath = "/repo/a";
+			mockRepositoriesStore.state.repositories = {
+				"/repo/a": { activeWorkspaceId: "main", workspaces: { main: { terminals: ["t1"] } } },
+			};
+
+			navigateToTerminal("t1");
+
+			// setActive/setActiveWorkspace are skipped because nothing changed —
+			// exactly the case syncScopeForActiveRepo's own doc comment exists for.
+			expect(mockRepositoriesStore.setActive).not.toHaveBeenCalled();
+			expect(mockSyncScopeForActiveRepo).toHaveBeenCalledOnce();
+		});
+
+		it("re-syncs the active repo's scope after switching repos too", () => {
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(true);
+			mockRepositoriesStore.getRepoPathForTerminal.mockReturnValue("/repo/b");
+			mockRepositoriesStore.state.activeRepoPath = "/repo/a";
+			mockRepositoriesStore.state.repositories = {
+				"/repo/b": { activeWorkspaceId: "main", workspaces: { main: { terminals: ["t1"] } } },
+			};
+
+			navigateToTerminal("t1");
+
+			expect(mockRepositoriesStore.setActive).toHaveBeenCalledWith("/repo/b");
+			expect(mockSyncScopeForActiveRepo).toHaveBeenCalledOnce();
+		});
+
+		// Catches: the parked-row branch opening the manual workspace and the
+		// trailing re-sync then switching it to the consolidated active repo.
+		it("keeps MANUAL_SCOPE when a parked row is clicked while the active repo is consolidated", () => {
+			let scope = "manual";
+			mockGlobalWorkspaceStore.getScope.mockImplementation(() => scope);
+			mockGlobalWorkspaceStore.setScope.mockImplementation((next: string) => {
+				scope = next;
+			});
+			// What the real sync does for a repo with autoConsolidateWorktrees.
+			mockSyncScopeForActiveRepo.mockImplementation(() => mockGlobalWorkspaceStore.setScope("/repo/a"));
+			mockGlobalWorkspaceStore.isManualWorkspaceActive.mockReturnValue(true);
+			mockGlobalWorkspaceStore.getScopeMembers.mockImplementation((s: string) => (s === "manual" ? ["t1"] : []));
+			mockRepositoriesStore.getRepoPathForTerminal.mockReturnValue(null);
+			mockRepositoriesStore.state.activeRepoPath = "/repo/a";
+			mockRepositoriesStore.getActive.mockReturnValue({ path: "/repo/a", activeWorkspaceId: "main" });
+
+			navigateToTerminal("t1");
+
+			expect(mockSyncScopeForActiveRepo).not.toHaveBeenCalled();
+			expect(scope).toBe("manual");
+			expect(mockGlobalWorkspaceStore.activate).toHaveBeenCalled();
+			expect(mockTerminalsStore.setActive).toHaveBeenCalledWith("t1");
+		});
 	});
 });
