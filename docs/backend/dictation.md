@@ -25,6 +25,7 @@ Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk
 | `continuous.rs` | Hands-free mode: utterance segmentation and session-bound delivery |
 | `speaker.rs` | The reply queue: `Speaker` (bounded, generation-stamped), the `Output` port and its rodio adapter |
 | `speech.rs` | The speech port: `Speech`, `SpeechAudio`, `SpeechError`, `SpeechCancel`, `budget_seconds` — no engine named |
+| `speech/edge.rs` | The default adapter: Microsoft Edge neural voices over a WebSocket (own minimal client), MP3 decoded through rodio, voice-list parsing, default voice per language |
 | `speech/pocket/` | The Pocket TTS adapter: `pocket.rs` (the port impl), `bundle.rs` (manifest + streaming state), `tokenizer.rs` (SentencePiece Unigram), `engine.rs` (the four ONNX graphs) |
 | `speech/external.rs` | The bring-your-own-engine adapter: a configured command plus a RIFF/WAVE reader |
 | `speech/assets.rs` | The pinned, allowlisted catalogue and local install rules: `Asset`, `Fetch`, `status`, `promote`, `remove` |
@@ -126,10 +127,11 @@ the language's model.
 
 | Command | HTTP | Description |
 |---------|------|-------------|
+| `get_edge_voices(language)` | `GET /dictation/speech/edge-voices?language=` | The Microsoft Edge voices that speak the language, from the service's own list, as `[{ id, locale, gender, label }]`. Needs the network; the list is cached for six hours and a failed fetch is not cached. An unreachable service is an `Err` naming the network, never an empty list |
 | `get_speech_voices(language)` | `GET /dictation/speech/voices?language=` | The voices the language can speak with now, as `[{ id, source }]` with `source` `"default"`, `"downloaded"` or `"user"`, in that order |
 | `import_speech_voice(language, name, dataBase64)` | `POST /dictation/speech/voices/import` | Store a voice file the user chose (the whole file as base64). Checked before it is stored — see "Voice files the user adds" below. This route alone accepts a body of about 85 MiB (`SPEECH_VOICE_IMPORT_BODY_BYTES`); every other route keeps the 2 MB limit |
 | `delete_speech_voice(language, name)` | `POST /dictation/speech/voices/delete` | Remove a voice file the user imported. A file that is already absent is success |
-| `preview_speech_voice(language, voice, text)` | `POST /dictation/speech/voices/preview` | Speak `text` (at most 200 characters) in `voice` on this machine's speaker, through the same engine, loudness stage and echo tap as a reply. Needs no hands-free conversation and does not change `speech_voice`. Refused, not queued, while a hands-free reply is queued, rendering or playing |
+| `preview_speech_voice(language, voice, text)` | `POST /dictation/speech/voices/preview` | Speak `text` (at most 200 characters) in `voice` on this machine's speaker, through the configured engine (Edge or Pocket; an external command names its own voices and is refused), the same loudness stage and echo tap as a reply. Needs no hands-free conversation and does not change `speech_voice` or `speech_edge_voice`. An Edge voice that does not speak `language` previews as the language default, the same resolution a reply makes and what the picker shows for it. Refused, not queued, while a hands-free reply is queued, rendering or playing |
 
 The HTTP body of the import uses the same camelCase key as the IPC argument
 (`dataBase64`).
@@ -155,7 +157,7 @@ own identity so the binding can be checked — see "Who may speak" below.
 |---------|-------------|
 | `get_dictation_status()` | Model status, recording/processing state, and normalized `audio_level` (0–1). The preview polls this shared IPC/HTTP response while recording. |
 | `get_dictation_config()` | Load dictation configuration (includes `rms_threshold` and `no_speech_threshold` — see "Speech gates") |
-| `set_dictation_config(base, config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase`, `hands_free_notify_model`, `hands_free_start_notice`, `hands_free_earcons`, `speech_command`, `speech_voice`, `speech_volume_db` and `speech_levelling`). Applies the caller's changes to the latest document — see "Configuration persistence" |
+| `set_dictation_config(base, config)` | Save dictation configuration (includes `hands_free_hold_back_ms`, `hands_free_activation_phrase`, `hands_free_notify_model`, `hands_free_start_notice`, `hands_free_earcons`, `speech_engine`, `speech_command`, `speech_edge_voice`, `speech_voice`, `speech_volume_db` and `speech_levelling`). Applies the caller's changes to the latest document — see "Configuration persistence" |
 | `get_correction_map()` | Load text correction dictionary |
 | `set_correction_map(map)` | Save text correction dictionary |
 | `list_audio_devices()` | List available audio input devices |
@@ -794,7 +796,83 @@ On macOS, microphone access is gated by the TCC (Transparency, Consent, and Cont
 - **macOS:** Full TCC integration via AVFoundation
 - **Linux/Windows:** Always returns `Authorized` (no TCC framework)
 
+## Speech engines
+
+Three engines sit behind the `Speech` port; `speech_engine` picks one: `edge`
+(the default), `pocket` or `external`. Echo cancellation, hush, loudness and
+the stale-generation checks live in `speaker.rs` and `echo.rs` and see only
+`SpeechAudio`, so they behave the same for all three.
+
+**Which engine a configuration means.** `get_dictation_config` never returns
+an empty `speech_engine`. While the file has none, the answer is derived
+(`legacy_speech_engine` in `dictation/commands.rs`): a configured
+`speech_command` is `external`; a chosen `speech_voice` or a Pocket runtime on
+disk is `pocket`; everything else, including a fresh install, is `edge`. The
+settings panel writes the key as soon as the user picks an engine in the Expert
+section, after which the derivation is never consulted — so downloading Pocket
+later does not move a fresh install off Edge.
+
+### Microsoft Edge voices (`speech/edge.rs`)
+
+The service behind the browser's "Read aloud". No model, no download; it needs
+the internet, and **the text of every reply is sent to Microsoft's online
+speech service** (the settings panel says so under Spoken replies).
+
+- **Client.** Our own, not the `msedge-tts` crate (0.4.0, MIT OR Apache-2.0,
+  maintained): its blocking client reads from a socket it keeps private, so a
+  `SpeechCancel` raised mid-request cannot reach it, and it adds `ureq` and a
+  second certificate-verifier setup beside the `rustls` and `tungstenite` 0.30
+  the application already ships. This one is a blocking `tungstenite` socket
+  with a 100 ms read timeout: cancel, the deadline and the budget are checked
+  between reads, so a cancelled reply stops within about 100 ms.
+- **Protocol** (recorded, see `speech/fixtures/edge_stream.json`): handshake
+  with `Sec-MS-GEC` (SHA-256 of the clock rounded to five minutes plus the
+  public client token) and the browser's `Origin`; `speech.config` then `ssml`;
+  text frames `turn.start`, `response`, `turn.end` around binary frames made of
+  a big-endian `u16` header length, the headers and the MP3 body. Output is
+  `audio-24khz-48kbitrate-mono-mp3`, which makes the budget a byte count (6000
+  bytes per second) and the audio rate a constant.
+- **Whole utterance.** `synthesize` returns once `turn.end` has arrived and the
+  MP3 is decoded (rodio, `symphonia-mp3`) to mono PCM at 24 kHz. Streaming
+  playback is a separate decision. Text whose escaped SSML (`'` is six
+  bytes) exceeds 3000 bytes is sent as several requests on separate connections
+  and the MP3 streams are joined; the service refuses about 4 KB.
+- **Bounds.** Name resolution and `connect` cannot look at a flag, so the dial
+  runs on a helper thread that the request polls: cancel and the deadline apply
+  to the dial too, and an abandoned dial ends at its own connect timeout.
+  Cancel → `SpeechError::Cancelled`. More audio than
+  `budget_seconds` justifies → `Runaway`. No `turn.end` within
+  `max(30 s, budget)` → `Failed("… did not finish in time")`. A connection
+  closed before `turn.end` is `Failed`, not truncated speech.
+- **Errors say what is wrong.** Offline or DNS failure: `Failed("cannot reach
+  the Microsoft Edge speech service (…); it needs an internet connection")`.
+  HTTP 403 on the handshake mentions the system clock, because `Sec-MS-GEC`
+  depends on it.
+- **Safety.** The voice id reaches SSML as an attribute, so anything but
+  letters, digits and hyphens is `UnknownVoice` before a connection is opened;
+  the text is XML-escaped and control characters are dropped.
+- **Voices.** `get_edge_voices` fetches the service list
+  (`dictation/edge_voices.rs`) and `edge::voices_for_language` filters it by
+  the language subtag. `speech_edge_voice` holds one voice; for a reply it is
+  used only if it speaks the conversation language (or is multilingual), else
+  the language default (`DEFAULT_VOICES`, every language the settings offer, verified against the
+  live list and recorded in `fixtures/edge_voices.json`). A language with no default and no chosen voice is an error that
+  tells the user to choose one — never a voice of another language.
+- **Proxy.** The voice list goes through reqwest and honours the system proxy;
+  the synthesis socket does not (DEFERRED 2026-10-01, `dial_service`). Behind a
+  proxy the picker loads and speech fails with "cannot reach … needs an internet
+  connection". Pocket TTS or an external command work there.
+- **Defaults.** `get_config_defaults` reports `speech_engine: "edge"`, the value
+  a brand-new install loads, so the settings panel hides the Expert engine
+  selector while Edge is in use.
+- **Unofficial.** The service is not a supported API. If it changes, the
+  adapter fails with a typed error and Pocket TTS or the external command stay
+  available in Expert.
+
 ## Pocket TTS speech synthesis (`speech/pocket/`)
+
+This engine is selected with `speech_engine: "pocket"` (Expert section of the
+settings).
 
 Spoken replies are rendered locally by [Pocket TTS](https://github.com/kyutai-labs/pocket-tts),
 run in-process over ONNX Runtime. There is no Python, no external service, and
@@ -1520,7 +1598,7 @@ test that reads the TypeScript.
 
 **Changing the language stops the replies written for the old one.**
 `save_dictation_config` drops `DictationState.speaker` when `language`,
-`speech_command` or `speech_voice` moves — and on nothing else, because cutting
+`speech_engine`, `speech_command`, `speech_edge_voice` or `speech_voice` moves — and on nothing else, because cutting
 a reply off mid-word because somebody moved a threshold slider would be the
 worse bug. A voice belongs to a conversation as much as a language does: a
 sentence half said in one voice does not finish in another. The

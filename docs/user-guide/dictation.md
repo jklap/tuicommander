@@ -83,10 +83,19 @@ phrase is configured, even if you saved a shorter delay.
 
 ## Spoken Replies
 
-The agent can answer out loud. **Settings → Voice → Spoken replies** lists
-the downloads this needs: one shared runtime library, plus one bundle for each
-language, each with its own voices. English, French, German, Italian,
-Portuguese and Spanish are available.
+The agent can answer out loud. By default the voice is a **Microsoft Edge**
+neural voice: nothing to download, many languages, a voice list filtered by the
+dictation language and a **Listen** button to hear each one. It needs the
+internet, and the text of each reply is sent to Microsoft's online speech
+service. Offline, the Voice section says so instead of staying silent.
+
+Echo cancellation, hush, volume and levelling work the same for every engine.
+Expert mode adds a **Speech engine** setting: **Pocket TTS** runs fully on this
+machine (**Settings → Voice → Spoken replies** then lists one shared runtime
+library plus a bundle per language, each with its own voices; English, French,
+German, Italian, Portuguese and Spanish), and **External command** pipes the
+reply text to a program you name. Installations that already chose a Pocket
+voice or downloaded Pocket keep Pocket.
 
 Replies are spoken in the language of the conversation. When the dictation
 language is set to auto-detect, nothing is spoken until somebody speaks — the

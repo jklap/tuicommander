@@ -618,6 +618,7 @@ describe("transport", () => {
 				["get_speech_status", { utterance: "7" }, "GET", "/dictation/speech/status?utterance=7"],
 				// The language is a Whisper code, as for every other speech command.
 				["get_speech_voices", { language: "it" }, "GET", "/dictation/speech/voices?language=it"],
+				["get_edge_voices", { language: "it" }, "GET", "/dictation/speech/edge-voices?language=it"],
 				["start_dictation", {}, "POST", "/dictation/start"],
 				["stop_dictation_and_transcribe", {}, "POST", "/dictation/stop"],
 				["get_correction_map", {}, "GET", "/dictation/corrections"],

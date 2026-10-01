@@ -45,6 +45,11 @@ const mockStore = vi.hoisted(() => ({
 		handsFreeEarcons: true,
 		handsFreeStartNotice: "",
 		handsFreeActivationPhrase: "",
+		speechEngine: "edge" as string,
+		speechCommand: [] as string[],
+		speechEdgeVoice: "",
+		edgeVoices: [] as { id: string; locale: string; gender: string; label: string }[],
+		edgeVoicesError: null as string | null,
 		speechVoice: "",
 		speechVolumeDb: -18,
 		speechLevelling: 0.67,
@@ -83,6 +88,10 @@ const mockStore = vi.hoisted(() => ({
 	cancelSpeechDownload: vi.fn(),
 	deleteSpeechAsset: vi.fn(),
 	setSpeechVoice: vi.fn(),
+	setSpeechEngine: vi.fn(),
+	setSpeechCommand: vi.fn(),
+	setSpeechEdgeVoice: vi.fn(),
+	refreshEdgeVoices: vi.fn(),
 	setSpeechVolumeDb: vi.fn(),
 	setSpeechLevelling: vi.fn(),
 	refreshSpeechVoices: vi.fn(),
@@ -120,6 +129,11 @@ vi.mock("../../stores/dictation", () => ({
 import { DictationSettings } from "../../components/SettingsPanel/DictationSettings";
 import { settingsExpertStore } from "../../stores/settingsExpert";
 import { uiStore } from "../../stores/ui";
+
+// Edge is the default engine; the blocks that exercise Pocket TTS opt in.
+beforeEach(() => {
+	mockStore.state.speechEngine = "edge";
+});
 
 describe("DictationSettings – Model Selector", () => {
 	beforeEach(() => {
@@ -450,6 +464,7 @@ describe("DictationSettings – Spoken replies", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockInvoke.mockResolvedValue("not_determined");
+		mockStore.state.speechEngine = "pocket";
 		mockStore.state.language = "it";
 		mockStore.state.speechDownloads = {};
 		mockStore.state.speechAssets = [
@@ -524,6 +539,7 @@ describe("DictationSettings – Voice library", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockInvoke.mockResolvedValue("not_determined");
+		mockStore.state.speechEngine = "pocket";
 		mockStore.state.language = "it";
 		mockStore.state.speechVoice = "";
 		mockStore.state.speechVolumeDb = -18;
@@ -689,6 +705,7 @@ describe("DictationSettings – Language without spoken replies", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockInvoke.mockResolvedValue("not_determined");
+		mockStore.state.speechEngine = "pocket";
 		mockStore.state.speechDownloads = {};
 		mockStore.state.speechAssets = [languageAsset("it"), languageAsset("en")];
 	});
@@ -886,6 +903,8 @@ describe("DictationSettings – expert controls", () => {
 			hands_free_start_notice: "",
 			speech_volume_db: -18,
 			speech_levelling: 0.67,
+			speech_engine: "edge",
+			speech_command: [],
 		},
 	};
 
@@ -900,6 +919,7 @@ describe("DictationSettings – expert controls", () => {
 		["Hold-back before sending", "handsFreeHoldBackMs", 0],
 		["Notify model when hands-free changes", "notifyModelOnHandsFree", false],
 		["Start notice", "handsFreeStartNotice", "Speak Italian."],
+		["Speech engine", "speechEngine", "pocket"],
 		["Voice volume", "speechVolumeDb", -24],
 		["Levelling", "speechLevelling", 0.2],
 	];
@@ -951,5 +971,136 @@ describe("DictationSettings – expert controls", () => {
 		await waitFor(() => {
 			for (const [label] of EXPERT) expect(hasLabel(container, label), label).toBe(true);
 		});
+	});
+});
+
+describe("DictationSettings – Edge engine", () => {
+	const edgeVoices = [
+		{ id: "it-IT-IsabellaNeural", locale: "it-IT", gender: "Female", label: "Isabella (Italian)" },
+		{ id: "it-IT-DiegoNeural", locale: "it-IT", gender: "Male", label: "Diego (Italian)" },
+	];
+	const labelled = (container: HTMLElement, text: string) =>
+		Array.from(container.querySelectorAll("label")).find((el) => el.textContent === text);
+	const voiceSelect = (container: HTMLElement) =>
+		labelled(container, "Voice")?.parentElement?.querySelector("select") as HTMLSelectElement;
+	const listenButton = (container: HTMLElement) =>
+		Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Listen");
+
+	// Only the keys the Edge section compares against; the full set is in the expert describe above.
+	const DEFAULTS = {
+		app: {},
+		notifications: {},
+		agent_settings: {},
+		dictation: { speech_engine: "edge", speech_command: [] },
+	};
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		mockInvoke.mockImplementation((cmd: string) =>
+			Promise.resolve(cmd === "get_config_defaults" ? DEFAULTS : "not_determined"),
+		);
+		uiStore.setSettingsExpertMode(false);
+		await settingsExpertStore.open();
+		mockStore.state.speechEngine = "edge";
+		mockStore.state.language = "it";
+		mockStore.state.speechEdgeVoice = "";
+		mockStore.state.edgeVoices = edgeVoices;
+		mockStore.state.edgeVoicesError = null;
+		mockStore.state.speechCommand = [];
+		mockStore.state.speechAssets = [];
+	});
+
+	afterEach(() => {
+		settingsExpertStore._resetForTests();
+		uiStore.setSettingsExpertMode(false);
+	});
+
+	it("lists the service voices for the dictation language and asks for them", () => {
+		// Catches: a picker fed from the Pocket catalogue, which has no entry
+		// for the service's voices.
+		const { container } = render(() => <DictationSettings />);
+		expect(mockStore.refreshEdgeVoices).toHaveBeenCalledWith("it");
+		const labels = Array.from(voiceSelect(container).options).map((o) => o.textContent);
+		expect(labels).toEqual(["Default for this language", "Isabella (Italian)", "Diego (Italian)"]);
+	});
+
+	it("shows no downloads and no engine switch for a user who never opened Expert", () => {
+		// Catches: Pocket's model rows leaking into the default experience.
+		const { container } = render(() => <DictationSettings />);
+		expect(container.querySelector("[data-speech-downloads]")).toBeNull();
+		expect(labelled(container, "Speech engine")).toBeUndefined();
+	});
+
+	it("saves the chosen Edge voice, not the Pocket voice", () => {
+		const { container } = render(() => <DictationSettings />);
+		fireEvent.change(voiceSelect(container), { target: { value: "it-IT-DiegoNeural" } });
+		expect(mockStore.setSpeechEdgeVoice).toHaveBeenCalledWith("it-IT-DiegoNeural");
+		expect(mockStore.setSpeechVoice).not.toHaveBeenCalled();
+	});
+
+	it("previews the chosen Edge voice for the dictation language", async () => {
+		mockStore.state.speechEdgeVoice = "it-IT-DiegoNeural";
+		const { container } = render(() => <DictationSettings />);
+		fireEvent.click(listenButton(container) as HTMLButtonElement);
+		await waitFor(() => expect(mockStore.previewSpeechVoice).toHaveBeenCalledWith("it", "it-IT-DiegoNeural"));
+	});
+
+	it("tells the user why the voice list is empty when the service cannot be reached", () => {
+		// Catches: an empty picker that reads as "this language has no voices".
+		mockStore.state.edgeVoices = [];
+		mockStore.state.edgeVoicesError = "Cannot load the Microsoft Edge voice list; it needs an internet connection";
+		const { container } = render(() => <DictationSettings />);
+		expect(container.textContent).toContain("it needs an internet connection");
+	});
+
+	it("keeps Voice volume and Levelling reachable without any Pocket download", () => {
+		// Catches: the sliders staying hidden until a Pocket language bundle exists.
+		uiStore.setSettingsExpertMode(true);
+		const { container } = render(() => <DictationSettings />);
+		expect(labelled(container, "Voice volume")).toBeDefined();
+		expect(labelled(container, "Levelling")).toBeDefined();
+	});
+
+	it("does not mark a language as unspoken just because Pocket ships no bundle for it", async () => {
+		// Catches: "Japanese — no spoken replies" under an engine that speaks it.
+		mockStore.state.speechAssets = [
+			{
+				id: "italian",
+				display_name: "Italian",
+				kind: "language",
+				language: "it",
+				voices: [],
+				download_bytes: 1,
+				state: "ready",
+			},
+		];
+		const { container } = render(() => <DictationSettings />);
+		const japanese = Array.from(container.querySelectorAll("option")).find((o) => o.value === "ja");
+		expect(japanese?.textContent).toBe("Japanese");
+	});
+
+	it("switches engine from the Expert selector", () => {
+		uiStore.setSettingsExpertMode(true);
+		const { container } = render(() => <DictationSettings />);
+		const select = labelled(container, "Speech engine")?.parentElement?.querySelector("select") as HTMLSelectElement;
+		fireEvent.change(select, { target: { value: "pocket" } });
+		expect(mockStore.setSpeechEngine).toHaveBeenCalledWith("pocket");
+	});
+
+	it("saves the external command as one argument per line and drops blank lines", () => {
+		// Catches: a command saved as a single argv element, which would try to
+		// run a program named "piper --model x".
+		mockStore.state.speechEngine = "external";
+		uiStore.setSettingsExpertMode(true);
+		const { container } = render(() => <DictationSettings />);
+		const area = labelled(container, "Speech command")?.parentElement?.querySelector("textarea") as HTMLTextAreaElement;
+		fireEvent.change(area, { target: { value: "piper\n--output_file\n\n{out}\n" } });
+		expect(mockStore.setSpeechCommand).toHaveBeenCalledWith(["piper", "--output_file", "{out}"]);
+	});
+
+	it("offers no voice picker for an external command, which names its own voices", () => {
+		mockStore.state.speechEngine = "external";
+		const { container } = render(() => <DictationSettings />);
+		expect(labelled(container, "Voice")).toBeUndefined();
 	});
 });
