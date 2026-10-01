@@ -2,7 +2,7 @@ import { type Component, createEffect, createSignal, For, onCleanup, onMount, Sh
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
-import type { ModelInfo, SpeechAsset } from "../../stores/dictation";
+import type { ModelInfo, SpeechAsset, SpeechEngineId } from "../../stores/dictation";
 import { dictationStore, WHISPER_LANGUAGES } from "../../stores/dictation";
 import { settingsExpertStore } from "../../stores/settingsExpert";
 import { terminalsStore } from "../../stores/terminals";
@@ -341,11 +341,18 @@ const SpeechRecognition: Component = () => {
 	const thresholdPercent = () => rmsToMeter(dictationStore.state.rmsThreshold) * 100;
 	const levelPercent = () => dictationStore.state.audioLevel * 100;
 
-	/** Replies follow this language, so one with no speech bundle stays silent.
+	/** Replies follow this language, so one with no speech bundle stays silent
+	 *  under Pocket TTS. Edge covers about seventy languages and the external
+	 *  command picks its own, so only Pocket is limited by the bundles.
 	 *  Auto has no fixed language, and an empty catalogue has not loaded yet. */
 	const isVoiceless = (code: string): boolean => {
 		const assets = dictationStore.state.speechAssets;
-		return code !== "auto" && assets.length > 0 && !assets.some((asset) => asset.language === code);
+		return (
+			dictationStore.state.speechEngine === "pocket" &&
+			code !== "auto" &&
+			assets.length > 0 &&
+			!assets.some((asset) => asset.language === code)
+		);
 	};
 
 	const toggleTest = async () => {
@@ -554,13 +561,30 @@ const SpeechSetup: Component = () => {
 	// in this list of downloads.
 	const downloadRows = (): SpeechAsset[] => dictationStore.state.speechAssets.filter((asset) => asset.kind !== "voice");
 
+	const engine = (): SpeechEngineId => dictationStore.state.speechEngine;
+	const isEdge = () => engine() === "edge";
+
 	// Re-read the language's voices whenever the catalogue moves (a voice was
 	// downloaded, repaired or deleted) or the language changes.
 	createEffect(() => {
 		const code = dictationStore.state.language;
 		void dictationStore.state.speechAssets;
-		if (code !== "auto") void dictationStore.refreshSpeechVoices(code);
+		if (code !== "auto" && engine() === "pocket") void dictationStore.refreshSpeechVoices(code);
 	});
+
+	// The Edge list comes from the service, so it is asked only while Edge is
+	// the engine and a language is fixed.
+	createEffect(() => {
+		const code = dictationStore.state.language;
+		if (code !== "auto" && isEdge()) void dictationStore.refreshEdgeVoices(code);
+	});
+
+	/** Whether there is a voice to choose: Edge under a fixed language, or a
+	 * Pocket language that ships voices. The external command names its own. */
+	const hasVoicePicker = (): boolean =>
+		isEdge()
+			? dictationStore.state.language !== "auto"
+			: engine() === "pocket" && (languageAsset()?.voices.length ?? 0) > 0;
 
 	/** Voice ids the picker offers: only voices that can speak now. Before the
 	 * list loads, the language's shipped voices — but only once the language is
@@ -574,9 +598,10 @@ const SpeechSetup: Component = () => {
 
 	const [previewError, setPreviewError] = createSignal<string | null>(null);
 	const listen = async () => {
-		const code = languageAsset()?.language;
+		const code = isEdge() ? dictationStore.state.language : languageAsset()?.language;
 		if (!code) return;
-		setPreviewError(await dictationStore.previewSpeechVoice(code, dictationStore.state.speechVoice));
+		const voice = isEdge() ? dictationStore.state.speechEdgeVoice : dictationStore.state.speechVoice;
+		setPreviewError(await dictationStore.previewSpeechVoice(code, voice));
 	};
 
 	// The drag shows its value at once; the config is written on release.
@@ -586,9 +611,11 @@ const SpeechSetup: Component = () => {
 	/** Which language replies are spoken in, in the user's terms. */
 	const spokenLanguage = (): string => {
 		const code = dictationStore.state.language;
+		if (engine() === "external") return t("dictation.speechLanguageExternal", "Chosen by your command");
 		if (code === "auto") {
 			return t("dictation.speechLanguageAuto", "Whatever Whisper hears — nothing is spoken until somebody speaks");
 		}
+		if (isEdge()) return WHISPER_LANGUAGES[code] ?? code;
 		const asset = languageAsset();
 		return asset
 			? asset.display_name
@@ -602,16 +629,28 @@ const SpeechSetup: Component = () => {
 		<>
 			<h3>{t("dictation.heading.spokenReplies", "Spoken replies")}</h3>
 			<p class={cx(s.hint, d.intro)}>
-				{t(
-					"dictation.speechHint",
-					"Downloads needed to let an agent answer out loud. The runtime library is shared; each language is a separate bundle and brings its own voices.",
-				)}
+				{isEdge()
+					? t(
+							"dictation.speechHintEdge",
+							"Replies are spoken with Microsoft Edge neural voices: nothing to download, but each reply's text is sent to Microsoft's online speech service, so it needs an internet connection.",
+						)
+					: engine() === "pocket"
+						? t(
+								"dictation.speechHint",
+								"Downloads needed to let an agent answer out loud. The runtime library is shared; each language is a separate bundle and brings its own voices.",
+							)
+						: t(
+								"dictation.speechHintExternal",
+								"Replies are spoken by the command below, which runs on this machine as you.",
+							)}
 			</p>
 
 			<div class={s.group}>
-				<div class={d.modelList} data-speech-downloads>
-					<For each={downloadRows()}>{(asset) => <SpeechAssetRow asset={asset} />}</For>
-				</div>
+				<Show when={engine() === "pocket"}>
+					<div class={d.modelList} data-speech-downloads>
+						<For each={downloadRows()}>{(asset) => <SpeechAssetRow asset={asset} />}</For>
+					</div>
+				</Show>
 
 				<div class={d.conversation}>
 					<div class={d.conversationRow}>
@@ -621,21 +660,85 @@ const SpeechSetup: Component = () => {
 				</div>
 			</div>
 
-			<Show when={(languageAsset()?.voices.length ?? 0) > 0}>
+			<ExpertSetting configKey="dictation.speech_engine" value={engine()}>
+				<div class={s.group}>
+					<label>{t("dictation.speechEngineLabel", "Speech engine")}</label>
+					<select
+						value={engine()}
+						onChange={(e) => void dictationStore.setSpeechEngine(e.currentTarget.value as SpeechEngineId)}
+					>
+						<option value="edge">{t("dictation.engineEdge", "Microsoft Edge voices (online)")}</option>
+						<option value="pocket">{t("dictation.enginePocket", "Pocket TTS (local, downloads a model)")}</option>
+						<option value="external">{t("dictation.engineExternal", "External command")}</option>
+					</select>
+					<p class={s.hint}>
+						{t(
+							"dictation.speechEngineHint",
+							"Edge is the default. Pocket TTS runs entirely on this machine after a download. An external command is your own engine.",
+						)}
+					</p>
+				</div>
+			</ExpertSetting>
+
+			<Show when={engine() === "external"}>
+				<ExpertSetting configKey="dictation.speech_command" value={dictationStore.state.speechCommand}>
+					<div class={s.group}>
+						<label>{t("dictation.speechCommandLabel", "Speech command")}</label>
+						<textarea
+							rows={4}
+							value={dictationStore.state.speechCommand.join("\n")}
+							onChange={(e) =>
+								void dictationStore.setSpeechCommand(
+									e.currentTarget.value
+										.split("\n")
+										.map((line) => line.trim())
+										.filter((line) => line !== ""),
+								)
+							}
+						/>
+						<p class={s.hint}>
+							{t(
+								"dictation.speechCommandHint",
+								"One argument per line, no shell. {out} is the WAV file the command must write; {text} and {voice} are optional (without {text}, the text arrives on stdin).",
+							)}
+						</p>
+					</div>
+				</ExpertSetting>
+			</Show>
+
+			<Show when={hasVoicePicker()}>
 				<div class={s.group}>
 					<label>{t("dictation.voiceLabel", "Voice")}</label>
 					<div class={d.controlRow}>
-						<select
-							value={dictationStore.state.speechVoice}
-							onChange={(e) => dictationStore.setSpeechVoice(e.currentTarget.value)}
+						<Show
+							when={isEdge()}
+							fallback={
+								<select
+									value={dictationStore.state.speechVoice}
+									onChange={(e) => dictationStore.setSpeechVoice(e.currentTarget.value)}
+								>
+									<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
+									<For each={voiceChoices()}>{(voice) => <option value={voice}>{voice}</option>}</For>
+								</select>
+							}
 						>
-							<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
-							<For each={voiceChoices()}>{(voice) => <option value={voice}>{voice}</option>}</For>
-						</select>
+							<select
+								value={dictationStore.state.speechEdgeVoice}
+								onChange={(e) => dictationStore.setSpeechEdgeVoice(e.currentTarget.value)}
+							>
+								<option value="">{t("dictation.voiceDefault", "Default for this language")}</option>
+								<For each={dictationStore.state.edgeVoices}>
+									{(voice) => <option value={voice.id}>{voice.label}</option>}
+								</For>
+							</select>
+						</Show>
 						<button class={d.modelDownload} onClick={listen}>
 							{t("dictation.listen", "Listen")}
 						</button>
 					</div>
+					<Show when={isEdge() && dictationStore.state.edgeVoicesError}>
+						<p class={cx(s.hint, d.conversationError)}>{dictationStore.state.edgeVoicesError}</p>
+					</Show>
 					<Show when={previewError()}>
 						<p class={cx(s.hint, d.conversationError)}>{previewError()}</p>
 					</Show>
@@ -646,55 +749,57 @@ const SpeechSetup: Component = () => {
 						)}
 					</p>
 				</div>
-
-				<VoiceLibrary language={languageAsset()?.language ?? ""} />
-
-				<ExpertSetting configKey="dictation.speech_volume_db" value={dictationStore.state.speechVolumeDb}>
-					<SettingSlider
-						label={t("dictation.voiceVolumeLabel", "Voice volume")}
-						value={volumeDrag() ?? dictationStore.state.speechVolumeDb}
-						onChange={setVolumeDrag}
-						onCommit={(v) => {
-							void dictationStore.setSpeechVolumeDb(v);
-							setVolumeDrag(undefined);
-						}}
-						min={-30}
-						max={-12}
-						step={1}
-						formatValue={(v) => `${v} dB`}
-						hint={t(
-							"dictation.voiceVolumeHint",
-							"How loud every reply is spoken. Peaks are limited, so a high level never clips. Applies to the next reply.",
-						)}
-					/>
-				</ExpertSetting>
-
-				<ExpertSetting configKey="dictation.speech_levelling" value={dictationStore.state.speechLevelling}>
-					<SettingSlider
-						label={t("dictation.levellingLabel", "Levelling")}
-						value={levellingDrag() ?? Math.round(dictationStore.state.speechLevelling * 100)}
-						onChange={setLevellingDrag}
-						onCommit={(v) => {
-							void dictationStore.setSpeechLevelling(v / 100);
-							setLevellingDrag(undefined);
-						}}
-						min={0}
-						max={100}
-						step={1}
-						formatValue={(v) =>
-							v === 0
-								? t("dictation.levellingOff", "Off")
-								: v === 100
-									? t("dictation.levellingStrong", "Strong")
-									: `${v}%`
-						}
-						hint={t(
-							"dictation.levellingHint",
-							"Evens out quiet and loud words within a reply. Off keeps the voice as recorded.",
-						)}
-					/>
-				</ExpertSetting>
 			</Show>
+
+			<Show when={engine() === "pocket" && (languageAsset()?.voices.length ?? 0) > 0}>
+				<VoiceLibrary language={languageAsset()?.language ?? ""} />
+			</Show>
+
+			<ExpertSetting configKey="dictation.speech_volume_db" value={dictationStore.state.speechVolumeDb}>
+				<SettingSlider
+					label={t("dictation.voiceVolumeLabel", "Voice volume")}
+					value={volumeDrag() ?? dictationStore.state.speechVolumeDb}
+					onChange={setVolumeDrag}
+					onCommit={(v) => {
+						void dictationStore.setSpeechVolumeDb(v);
+						setVolumeDrag(undefined);
+					}}
+					min={-30}
+					max={-12}
+					step={1}
+					formatValue={(v) => `${v} dB`}
+					hint={t(
+						"dictation.voiceVolumeHint",
+						"How loud every reply is spoken. Peaks are limited, so a high level never clips. Applies to the next reply.",
+					)}
+				/>
+			</ExpertSetting>
+
+			<ExpertSetting configKey="dictation.speech_levelling" value={dictationStore.state.speechLevelling}>
+				<SettingSlider
+					label={t("dictation.levellingLabel", "Levelling")}
+					value={levellingDrag() ?? Math.round(dictationStore.state.speechLevelling * 100)}
+					onChange={setLevellingDrag}
+					onCommit={(v) => {
+						void dictationStore.setSpeechLevelling(v / 100);
+						setLevellingDrag(undefined);
+					}}
+					min={0}
+					max={100}
+					step={1}
+					formatValue={(v) =>
+						v === 0
+							? t("dictation.levellingOff", "Off")
+							: v === 100
+								? t("dictation.levellingStrong", "Strong")
+								: `${v}%`
+					}
+					hint={t(
+						"dictation.levellingHint",
+						"Evens out quiet and loud words within a reply. Off keeps the voice as recorded.",
+					)}
+				/>
+			</ExpertSetting>
 		</>
 	);
 };

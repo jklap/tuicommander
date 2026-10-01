@@ -1622,4 +1622,75 @@ describe("dictationStore", () => {
 			});
 		});
 	});
+
+	// Edge voices (1357-7d37)
+	describe("Edge voices", () => {
+		it("keeps the reason when the service cannot be reached instead of an empty list that means nothing", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				command === "get_edge_voices"
+					? Promise.reject("Cannot load the Microsoft Edge voice list; it needs an internet connection")
+					: Promise.resolve(command === "get_dictation_config" ? {} : undefined),
+			);
+			await testInScopeAsync(async () => {
+				await store.refreshEdgeVoices("it");
+				expect(store.state.edgeVoices).toEqual([]);
+				expect(store.state.edgeVoicesError).toContain("internet connection");
+			});
+		});
+
+		it("clears an earlier error once the list loads", async () => {
+			const voices = [{ id: "it-IT-IsabellaNeural", locale: "it-IT", gender: "Female", label: "Isabella" }];
+			let online = false;
+			mockInvoke.mockImplementation((command: string) => {
+				if (command === "get_edge_voices") return online ? Promise.resolve(voices) : Promise.reject("offline");
+				return Promise.resolve(command === "get_dictation_config" ? {} : undefined);
+			});
+			await testInScopeAsync(async () => {
+				await store.refreshEdgeVoices("it");
+				online = true;
+				await store.refreshEdgeVoices("it");
+				expect(store.state.edgeVoices).toEqual(voices);
+				expect(store.state.edgeVoicesError).toBeNull();
+			});
+		});
+
+		it("lets only the latest language request update the picker", async () => {
+			let resolveItalian: ((v: unknown) => void) | undefined;
+			mockInvoke.mockImplementation((command: string, args?: { language?: string }) => {
+				if (command === "get_edge_voices") {
+					return args?.language === "it"
+						? new Promise((resolve) => {
+								resolveItalian = resolve;
+							})
+						: Promise.resolve([{ id: "de-DE-KatjaNeural", locale: "de-DE", gender: "Female", label: "Katja" }]);
+				}
+				return Promise.resolve(command === "get_dictation_config" ? {} : undefined);
+			});
+			await testInScopeAsync(async () => {
+				const first = store.refreshEdgeVoices("it");
+				await store.refreshEdgeVoices("de");
+				resolveItalian?.([{ id: "it-IT-ElsaNeural", locale: "it-IT", gender: "Female", label: "Elsa" }]);
+				await first;
+				expect(store.state.edgeVoices.map((v) => v.id)).toEqual(["de-DE-KatjaNeural"]);
+			});
+		});
+
+		it("saves the engine and the Edge voice under their own config keys", async () => {
+			let stored: Record<string, unknown> = {};
+			mockInvoke.mockImplementation((command: string, args?: { config: Record<string, unknown> }) => {
+				if (command === "get_dictation_config") return Promise.resolve(stored);
+				if (command === "set_dictation_config" && args) stored = args.config;
+				return Promise.resolve(undefined);
+			});
+			await testInScopeAsync(async () => {
+				await store.setSpeechEngine("pocket");
+				await store.saveConfig({ speech_edge_voice: "it-IT-ElsaNeural" });
+				expect(stored.speech_engine).toBe("pocket");
+				expect(stored.speech_edge_voice).toBe("it-IT-ElsaNeural");
+				expect(stored.speech_voice).toBeUndefined();
+				expect(store.state.speechEngine).toBe("pocket");
+				expect(store.state.speechEdgeVoice).toBe("it-IT-ElsaNeural");
+			});
+		});
+	});
 });

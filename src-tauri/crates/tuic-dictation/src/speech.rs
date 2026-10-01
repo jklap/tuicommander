@@ -22,6 +22,7 @@
 //!    states the ceiling once, for every adapter.
 
 pub mod assets;
+pub mod edge;
 pub mod external;
 pub mod library;
 pub mod pocket;
