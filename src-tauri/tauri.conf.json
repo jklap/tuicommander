@@ -44,7 +44,8 @@
           "$APPDATA/**",
           "$APPDATA/**/*",
           "$HOME/**",
-          "/**"
+          "/**",
+          "$HOME/Gits/**/.tmp/**"
         ]
       }
     }
