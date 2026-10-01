@@ -2374,8 +2374,13 @@ impl AppState {
             .session_parent
             .get(&msg.from_tuic_session)
             .is_some_and(|parent| parent.value() == recipient);
-        if to_parent && msg.content.trim_start().starts_with("BLOCKED") {
+        if !to_parent {
+            return;
+        }
+        if msg.content.trim_start().starts_with("BLOCKED") {
             self.blocked_children.insert(msg.from_tuic_session.clone());
+        } else {
+            self.blocked_children.remove(&msg.from_tuic_session);
         }
     }
 
