@@ -1838,11 +1838,7 @@ mod tests {
         // `run -s -t` runs the text and stays interactive.
         assert_eq!(
             default_prompt_args("goose"),
-            Some(
-                ["run", "-s", "-t", "{prompt}"]
-                    .map(String::from)
-                    .to_vec()
-            )
+            Some(["run", "-s", "-t", "{prompt}"].map(String::from).to_vec())
         );
         // Every template must contain the placeholder so substitution works.
         for agent in ["gemini", "codex", "aider", "goose"] {
