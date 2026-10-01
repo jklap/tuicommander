@@ -66,6 +66,7 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 |---------|-----------|-------------|
 | `get_github_status` | `(path: String) -> GitHubStatus` | Remote presence, current branch, ahead/behind counts |
 | `get_ci_checks` | `(path: String, pr_number: i64) -> Vec<Value>` | Detailed CI check list for one PR |
+| `get_pr_review_threads` | `(path: String, pr_number: i64) -> ReviewThreadCounts` | Unresolved review threads of one PR, bot vs human (GraphQL, 1 point). The batch poll only carries `BranchPrStatus.unresolved_threads` |
 | `get_repo_pr_statuses` | `(path: String, include_merged: Option<bool>) -> Vec<BranchPrStatus>` | PR status for every branch of one repo (TTL-cached unless `include_merged`) |
 | `approve_pr` | `(repo_path: String, pr_number: i64) -> ()` | Submit approving review via the REST reviews endpoint |
 | `update_pr_branch` | `(repo_path: String, pr_number: i64, expected_head_sha: String) -> ()` | Merge the base branch into the PR branch (REST `PUT /pulls/{n}/update-branch`, same operation as GraphQL `updatePullRequestBranch`), pinned to the head the UI showed; 422 head mismatch → `PR head changed` |

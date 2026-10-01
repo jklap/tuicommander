@@ -206,6 +206,49 @@ pub struct BranchPrStatus {
     pub squash_merge_allowed: bool,
     /// Repo-level: rebase merge allowed
     pub rebase_merge_allowed: bool,
+    /// Unresolved review threads among the first [`REVIEW_THREADS_LIMIT`]. A plain
+    /// `isResolved` selection costs no extra GraphQL points; the bot/human split
+    /// needs a nested connection per thread and is fetched on demand
+    /// (`get_pr_review_threads`).
+    pub unresolved_threads: u32,
+}
+
+/// Threads inspected per PR in the batch poll.
+pub const REVIEW_THREADS_LIMIT: u32 = 50;
+
+/// GraphQL selection for [`BranchPrStatus::unresolved_threads`], shared by every PR query.
+pub fn review_threads_selection() -> String {
+    format!("reviewThreads(first: {REVIEW_THREADS_LIMIT}) {{ nodes {{ isResolved }} }}")
+}
+
+/// Unresolved review threads split by who opened them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ReviewThreadCounts {
+    pub bot: u32,
+    pub human: u32,
+}
+
+/// Count unresolved threads from `reviewThreads.nodes`, attributing each to the
+/// author of its first comment: GraphQL actor `__typename` "Bot" is a bot (a
+/// `[bot]` login covers apps surfaced as users), everything else is human.
+pub fn count_review_threads(nodes: &serde_json::Value) -> ReviewThreadCounts {
+    let mut counts = ReviewThreadCounts::default();
+    for node in nodes.as_array().into_iter().flatten() {
+        if node["isResolved"].as_bool().unwrap_or(true) {
+            continue;
+        }
+        let author = &node["comments"]["nodes"][0]["author"];
+        let is_bot = author["__typename"].as_str() == Some("Bot")
+            || author["login"]
+                .as_str()
+                .is_some_and(|l| l.ends_with("[bot]"));
+        if is_bot {
+            counts.bot += 1;
+        } else {
+            counts.human += 1;
+        }
+    }
+    counts
 }
 
 /// Classification of a single check node for summary counting.
@@ -331,6 +374,15 @@ pub fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
     let review_decision = v["reviewDecision"].as_str().unwrap_or("").to_string();
     let viewer_did_approve = v["viewerLatestReview"]["state"].as_str() == Some("APPROVED");
     let is_draft = v["isDraft"].as_bool().unwrap_or(false);
+    let unresolved_threads = v["reviewThreads"]["nodes"]
+        .as_array()
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter(|n| n["isResolved"].as_bool() == Some(false))
+                .count() as u32
+        })
+        .unwrap_or(0);
 
     let labels = v["labels"]["nodes"]
         .as_array()
@@ -407,6 +459,7 @@ pub fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
         merge_commit_allowed: true,
         squash_merge_allowed: true,
         rebase_merge_allowed: true,
+        unresolved_threads,
     })
 }
 
@@ -634,28 +687,32 @@ pub fn build_unified_batch_query(
     };
     // Fetch more items when drafts are hidden so filtering leaves enough valid PRs.
     let pr_first = if hide_drafts { 40 } else { 20 };
-    let pr_node_fields = r#"number title state url headRefName headRefOid baseRefName isDraft
+    let pr_node_fields = format!(
+        r#"number title state url headRefName headRefOid baseRefName isDraft
         additions deletions mergeable mergeStateStatus reviewDecision
-        viewerLatestReview { state }
+        viewerLatestReview {{ state }}
         createdAt updatedAt
-        author { login }
-        labels(first: 10) { nodes { name color } }
-        commits(last: 1) {
+        author {{ login }}
+        labels(first: 10) {{ nodes {{ name color }} }}
+        {threads}
+        commits(last: 1) {{
           totalCount
-          nodes {
-            commit {
-              statusCheckRollup {
-                contexts(first: 100) {
-                  nodes {
+          nodes {{
+            commit {{
+              statusCheckRollup {{
+                contexts(first: 100) {{
+                  nodes {{
                     __typename
-                    ... on CheckRun { name status conclusion startedAt }
-                    ... on StatusContext { context state createdAt }
-                  }
-                }
-              }
-            }
-          }
-        }"#;
+                    ... on CheckRun {{ name status conclusion startedAt }}
+                    ... on StatusContext {{ context state createdAt }}
+                  }}
+                }}
+              }}
+            }}
+          }}
+        }}"#,
+        threads = review_threads_selection()
+    );
 
     let include_issues = !matches!(filter_mode, "" | "disabled");
 
@@ -854,6 +911,61 @@ pub fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- review threads ---
+
+    fn thread(resolved: bool, typename: &str, login: &str) -> serde_json::Value {
+        serde_json::json!({
+            "isResolved": resolved,
+            "comments": {"nodes": [{"author": {"__typename": typename, "login": login}}]}
+        })
+    }
+
+    /// Catches: a blocked PR with open threads reporting no reason, or bot and human
+    /// threads collapsed into one number.
+    #[test]
+    fn review_threads_split_unresolved_by_bot_and_human() {
+        let nodes = serde_json::json!([
+            thread(false, "User", "alice"),
+            thread(false, "User", "bob"),
+            thread(false, "Bot", "quill-reviewer"),
+            thread(false, "User", "copilot-pull-request-reviewer[bot]"),
+            thread(true, "User", "alice"),
+        ]);
+        assert_eq!(
+            count_review_threads(&nodes),
+            ReviewThreadCounts { bot: 2, human: 2 }
+        );
+        assert_eq!(
+            count_review_threads(&serde_json::Value::Null),
+            ReviewThreadCounts::default()
+        );
+    }
+
+    #[test]
+    fn pr_node_counts_unresolved_threads_and_defaults_to_zero() {
+        let mut node = serde_json::json!({
+            "number": 7, "headRefName": "feat/x", "state": "OPEN",
+            "reviewThreads": {"nodes": [{"isResolved": false}, {"isResolved": true}, {"isResolved": false}]}
+        });
+        assert_eq!(parse_pr_node(&node).unwrap().unresolved_threads, 2);
+        node.as_object_mut().unwrap().remove("reviewThreads");
+        assert_eq!(parse_pr_node(&node).unwrap().unresolved_threads, 0);
+    }
+
+    #[test]
+    fn batch_query_selects_review_threads_without_a_nested_connection() {
+        // A nested comments connection per thread multiplied the poll cost 10x (5 -> 51
+        // points for 6 repos, measured with rateLimit dryRun); the plain selection is ~free.
+        let (query, _) = build_unified_batch_query(
+            &[("/r".into(), "o".into(), "r".into())],
+            false,
+            "disabled",
+            "me",
+            false,
+        );
+        assert!(query.contains("reviewThreads(first: 50) { nodes { isResolved } }"));
+    }
 
     // --- statusCheckRollup dedup + classification tests ---
 

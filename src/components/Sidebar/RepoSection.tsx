@@ -571,6 +571,7 @@ export const BranchItem: Component<{
 				reviewDecision: p.review_decision,
 				ciFailed: checks()?.failed,
 				ciPending: checks()?.pending,
+				unresolvedThreads: p.unresolved_threads,
 			})
 		];
 	const lifecycle = () => props.branch.lifecycleStatus;
@@ -922,6 +923,7 @@ export const BranchItem: Component<{
 									ciPassed={checks()?.passed}
 									ciFailed={checks()?.failed}
 									ciPending={checks()?.pending}
+									unresolvedThreads={pr()!.unresolved_threads}
 									dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
 								/>
 							</span>

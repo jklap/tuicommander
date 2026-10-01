@@ -1112,6 +1112,14 @@ GET /repo/ci?path=/path/to/repo
 
 Returns detailed CI check list.
 
+### Unresolved Review Threads
+
+```
+GET /repo/pr-review-threads?path=/path/to/repo&pr_number=42
+```
+
+Returns `{"bot": N, "human": M}`: unresolved review threads of one PR (first 50), split by the author of the first comment. One GraphQL point per call.
+
 ### PR Diff
 
 ```

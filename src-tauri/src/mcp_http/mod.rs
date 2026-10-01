@@ -1493,6 +1493,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/repo/github", get(github_routes::repo_github_status))
         .route("/repo/prs", get(github_routes::repo_pr_statuses))
         .route("/repo/ci", get(github_routes::repo_ci_checks))
+        .route(
+            "/repo/pr-review-threads",
+            get(github_routes::repo_pr_review_threads),
+        )
         .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
         .route("/repo/merged-prs", get(github_routes::repo_merged_prs))
         .route(

@@ -150,6 +150,8 @@ export interface BranchPrStatus {
 	merge_commit_allowed: boolean;
 	squash_merge_allowed: boolean;
 	rebase_merge_allowed: boolean;
+	/** Unresolved review threads (first 50 per PR). Counts only; the bot/human split is fetched on demand. */
+	unresolved_threads: number;
 }
 
 /** A single match from cross-terminal buffer search */

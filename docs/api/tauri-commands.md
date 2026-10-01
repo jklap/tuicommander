@@ -175,6 +175,7 @@ receive it on `/events`.
 |---------|------|---------|-------------|
 | `get_github_status` | `path` | `GitHubStatus` | PR + CI for current branch |
 | `get_ci_checks` | `path` | `Vec<JSON>` | CI check details |
+| `get_pr_review_threads` | `path, pr_number` | `{bot, human}` | Unresolved review threads of one PR, split bot vs human |
 | `get_repo_pr_statuses` | `path, include_merged` | `Vec<BranchPrStatus>` | Batch PR status (all branches) |
 | `approve_pr` | `repo_path, pr_number` | `String` | Submit approving review via GitHub API |
 | `update_pr_branch` | `repo_path, pr_number, expected_head_sha` | `()` | Update a BEHIND PR branch from its base, pinned to the shown head |

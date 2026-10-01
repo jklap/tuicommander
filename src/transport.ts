@@ -1369,6 +1369,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_ci_checks: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/ci?path=${p("path")}&pr_number=${p("prNumber")}` }),
 	},
+	get_pr_review_threads: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/pr-review-threads?path=${p("path")}&pr_number=${p("prNumber")}`,
+		}),
+	},
 	rename_branch: {
 		map: (args) => ({
 			method: "POST",

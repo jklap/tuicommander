@@ -2009,6 +2009,7 @@ pub fn run() {
             git::get_file_blame,
             github::get_github_viewer_login,
             github::get_ci_checks,
+            github::get_pr_review_threads,
             github::get_repo_pr_statuses,
             github::get_all_pr_statuses,
             github::merge_pr_via_github,

@@ -252,6 +252,7 @@
 /repo/post-pr-review
 /repo/pr-diff
 /repo/pr-review
+/repo/pr-review-threads
 /repo/prs
 /repo/prs/batch
 /repo/recent-branches

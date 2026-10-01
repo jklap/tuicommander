@@ -1,18 +1,10 @@
 import type { Component } from "solid-js";
 import { cx } from "../../utils";
+import { PR_READINESS_LABELS, prReadiness } from "../../utils/prReadiness";
 import s from "./Sidebar.module.css";
 
-interface PrBadgeState {
-	state?: string;
-	isDraft?: boolean;
-	mergeable?: string;
-	conflictState?: string;
-	reviewDecision?: string;
-	ciFailed?: number;
-	ciPending?: number;
-}
-
 const PR_BADGE_CLASSES: Record<string, string> = {
+	"unresolved-comments": s.prReviewRequired,
 	ready: s.prReady,
 	open: s.prOpen,
 	merged: s.prMerged,
@@ -26,38 +18,18 @@ const PR_BADGE_CLASSES: Record<string, string> = {
 	"ci-pending": s.prCiPending,
 };
 
-export function prBadgeKind(props: PrBadgeState): string {
-	if (props.isDraft) return "draft";
-	const state = props.state?.toLowerCase();
-	if (state === "merged") return "merged";
-	if (state === "closed") return "closed";
-	if (props.conflictState === "conflicting") return "conflict";
-	if (props.conflictState === "checking") return "checking";
-	if ((props.ciFailed ?? 0) > 0) return "ci-failed";
-	if (props.reviewDecision === "CHANGES_REQUESTED") return "changes-requested";
-	if (props.reviewDecision === "REVIEW_REQUIRED") return "review-required";
-	if ((props.ciPending ?? 0) > 0) return "ci-pending";
-	if (props.mergeable === "MERGEABLE" && props.reviewDecision === "APPROVED") return "ready";
-	return "open";
-}
+export const prBadgeKind = prReadiness;
 
-/** Every PR state the badge can show, keyed by prBadgeKind. The Help > UI legend must explain each. */
-export const PR_STATE_LABELS: Record<string, string> = {
-	draft: "Draft",
-	merged: "Merged",
-	closed: "Closed",
-	conflict: "Conflicts",
-	checking: "Checking",
-	"ci-failed": "CI Failed",
-	"changes-requested": "Changes Req.",
-	"review-required": "Review",
-	"ci-pending": "CI Running",
-	ready: "Ready",
-};
+/** Every PR state the badge can show, keyed by prBadgeKind. The Help > UI legend must explain each.
+ *  A plain open PR carries no state word, so it has no entry. */
+export const PR_STATE_LABELS: Record<string, string> = Object.fromEntries(
+	Object.entries(PR_READINESS_LABELS).filter(([kind]) => kind !== "open"),
+);
 
 /** Compact form: the state is carried by the marker's color (and, for a
  *  conflict, its shape) instead of a filled pill. */
 const PR_MARK_CLASSES: Record<string, string> = {
+	"unresolved-comments": s.prMarkReview,
 	ready: s.prMarkOpen,
 	open: s.prMarkOpen,
 	merged: s.prMarkMerged,
@@ -86,6 +58,7 @@ export const PrStateBadge: Component<{
 	ciPassed?: number;
 	ciFailed?: number;
 	ciPending?: number;
+	unresolvedThreads?: number;
 	/** Files a removal would discard. This badge takes the row's one chip slot,
 	 *  so it carries the warning the lifecycle chip would have shown. */
 	dirtyFiles?: number;
