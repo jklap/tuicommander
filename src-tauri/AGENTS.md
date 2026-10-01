@@ -1480,8 +1480,10 @@ exists (minutes), and a teammate's completion fires **no hook in the lead** (it 
 session; `SubagentStart`/`SubagentStop` never fire for it). So a teammate counts as work only
 while its own terminal is busy: `tuic-hook` sends `bgtasksummary` (`type/status*N` pairs),
 `pty.rs` stores `DeclaredTaskSummary`, and `SilenceState::declared_background_work_for_epoch_with`
-takes a lazy `teammates_busy` closure backed by `AppState::lead_teammates_busy` (tmux topology +
-shell-state atomics only — never a `SilenceState` lock, which the caller holds). Lead↔teammate
+takes a lazy closure backed by `AppState::lead_teammates_may_be_working(lead, declared)` (tmux
+topology + shell-state atomics only — never a `SilenceState` lock, which the caller holds). It is
+fail-safe: more declared teammates than linked panes means "working", so a missing link is never
+worse than the pre-change behavior. Lead↔teammate
 linkage is `TmuxPane::lead_session_id`, sent by `tuic-cli` as `origin_session_id`; the
 accumulator republishes the lead when a teammate's state moves. Read any *new* consumer of
 `declared_background_work` through the `_with` variant (the plain one is the conservative

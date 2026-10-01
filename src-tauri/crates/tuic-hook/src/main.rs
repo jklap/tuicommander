@@ -713,13 +713,14 @@ fn background_task_summary(stdin_json: &Value) -> Option<String> {
         let Some(status) = task.get("status").and_then(Value::as_str) else {
             continue;
         };
-        let kind = task.get("type").and_then(Value::as_str).unwrap_or("");
+        let kind = summary_token(task.get("type").and_then(Value::as_str).unwrap_or(""));
+        let status = summary_token(status);
         match groups
             .iter_mut()
-            .find(|(k, st, _)| k == kind && st == status)
+            .find(|(k, st, _)| *k == kind && *st == status)
         {
             Some(group) => group.2 += 1,
-            None => groups.push((kind.to_string(), status.to_string(), 1)),
+            None => groups.push((kind, status, 1)),
         }
     }
     Some(
@@ -735,6 +736,18 @@ fn background_task_summary(stdin_json: &Value) -> Option<String> {
             .collect::<Vec<_>>()
             .join(","),
     )
+}
+
+/// Make a `type`/`status` value safe to embed in a `bgtasksummary` item: the
+/// item grammar is `type/status[*N]` joined by `,`, so any of those three
+/// delimiters inside a value would shift the parse. Claude Code's known values
+/// contain none of them; a future one that does is kept distinguishable from its
+/// neighbours by swapping the delimiter for `_` instead of corrupting the item.
+fn summary_token(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if matches!(c, ',' | '/' | '*') { '_' } else { c })
+        .collect()
 }
 
 /// `None` suppresses the toolfail emission entirely — used for
@@ -2006,5 +2019,19 @@ mod tests {
             let pairs = build_emissions(&ParsedArgs::default(), &json);
             assert!(pairs.iter().all(|p| p.verb != "bgtasksummary"), "{event}");
         }
+    }
+
+    #[test]
+    fn summary_delimiters_inside_a_value_cannot_shift_the_parse() {
+        // `type/status*N` items are joined by `,`; a value containing one of those
+        // three characters is neutralized to `_` rather than corrupting its item or
+        // its neighbours.
+        let json = serde_json::json!({"background_tasks": [
+            {"type": "a/b", "status": "run,ning"},
+            {"type": "x*y", "status": "ok"},
+        ]});
+        let out = background_task_summary(&json).unwrap();
+        assert_eq!(out, "a_b/run_ning,x_y/ok");
+        assert_eq!(out.split(',').count(), 2);
     }
 }
