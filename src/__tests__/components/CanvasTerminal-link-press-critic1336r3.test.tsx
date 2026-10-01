@@ -39,8 +39,6 @@ const CELL_SIZE = 11;
 const GUTTER = 6;
 const CELL_W = 8;
 const ROW0 = "  followups.md  plain words";
-const WRAP0 = "                  docs/followu";
-const WRAP1 = "ps.md";
 /** `followups.md` occupies columns 2-13 of row 0. */
 
 /** Tagged by the app as an OSC 8 hyperlink to `followups.md`; the text itself is no path. Columns 6-8. */
@@ -75,37 +73,6 @@ function fire(target: Element, type: string, col: number, init: MouseEventInit =
 	target.dispatchEvent(
 		new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x(col), clientY: 2, button: 0, ...init }),
 	);
-}
-
-function click(target: Element, pressCol: number, releaseCol: number, init: MouseEventInit = {}) {
-	fire(target, "mousedown", pressCol, { buttons: 1, ...init });
-	fire(target, "mouseup", releaseCol, init);
-	fire(target, "click", releaseCol, init);
-}
-
-const ptyWrites = () =>
-	invoke.mock.calls.filter(([cmd]) => cmd === "write_pty").map(([, a]) => (a as { data: string }).data);
-
-/** Like frame() but with an explicit second row and the wrapped flag on row 0. */
-function frame2(row0: string, row1: string, mouseMode: 0 | 2, wrapped: boolean): ArrayBuffer {
-	const buffer = new ArrayBuffer(HEADER_SIZE + ROWS * (4 + COLS * CELL_SIZE));
-	const view = new DataView(buffer);
-	view.setUint16(0, ROWS, true);
-	view.setUint8(6, 1);
-	view.setUint8(17, mouseMode === 0 ? 0 : (mouseMode << 3) | 0x20);
-	view.setUint16(18, ROWS, true);
-	view.setUint16(20, COLS, true);
-	let offset = HEADER_SIZE;
-	for (let r = 0; r < ROWS; r++) {
-		view.setUint16(offset, r, true);
-		view.setUint16(offset + 2, COLS | (r === 0 && wrapped ? 0x8000 : 0), true);
-		offset += 4;
-		for (const char of (r === 0 ? row0 : row1).padEnd(COLS, " ")) {
-			view.setUint32(offset, char.codePointAt(0) ?? 0, true);
-			offset += CELL_SIZE;
-		}
-	}
-	return buffer;
 }
 
 describe("CanvasTerminal link press, critic 1336 round 3", () => {
