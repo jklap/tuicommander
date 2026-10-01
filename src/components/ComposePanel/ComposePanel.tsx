@@ -3,6 +3,7 @@ import { drawSelection, EditorView, keymap } from "@codemirror/view";
 import { createCodeMirror } from "solid-codemirror";
 import { type Accessor, type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import type { QueuedCommand } from "../../hooks/usePty";
+import { appLogger } from "../../stores/appLogger";
 import { generateId } from "../../stores/ideas";
 import { cx } from "../../utils";
 import { savePastedImage } from "../../utils/pastedImage";
@@ -139,10 +140,14 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 				});
 				// preventDefault runs synchronously inside the helper.
 				if (!event.defaultPrevented) return false;
+				// The chain must always resolve: a throwing dispatch (torn-down view)
+				// would otherwise drop every later pasted image.
 				insertions = insertions.then(() =>
-					saved.then((path) => {
-						if (path) view.dispatch(view.state.replaceSelection(`[image: ${path}]`));
-					}),
+					saved
+						.then((path) => {
+							if (path) view.dispatch(view.state.replaceSelection(`[image: ${path}]`));
+						})
+						.catch((err) => appLogger.error("store", "Failed to insert pasted image", err)),
 				);
 				return true;
 			},

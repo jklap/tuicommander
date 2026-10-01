@@ -31,6 +31,10 @@ describe("Toolbar density marker after removing the auto outline (critic 1351)",
 		}
 		expect(uiStore.state.sidebarDensityMode).toBe(seen[0][0]);
 		expect(seen.map(([m, l]) => `${m}:${l}`).sort()).toEqual(["auto:A", "compact:C", "rich:R"]);
-		for (const [mode, , active] of seen) expect(active).toBe(mode !== "auto");
+		expect(Object.fromEntries(seen.map(([m, , active]) => [m, active]))).toEqual({
+			auto: false,
+			compact: true,
+			rich: true,
+		});
 	});
 });
