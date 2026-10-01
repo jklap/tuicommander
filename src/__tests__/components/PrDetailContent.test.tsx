@@ -237,6 +237,7 @@ describe("PrDetailContent — readiness and unresolved threads", () => {
 			conflict_state: "clear",
 			review_decision: "APPROVED",
 			unresolved_threads: 3,
+			unresolved_threads_truncated: false,
 		});
 		mockRpc.mockImplementation(async (cmd: string) => (cmd === "get_pr_review_threads" ? { bot: 2, human: 1 } : null));
 		const repo = nextRepo();
@@ -253,6 +254,7 @@ describe("PrDetailContent — readiness and unresolved threads", () => {
 			conflict_state: "clear",
 			review_decision: "APPROVED",
 			unresolved_threads: 0,
+			unresolved_threads_truncated: false,
 		});
 		const repo = nextRepo();
 		const { container } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);

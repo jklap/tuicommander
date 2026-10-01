@@ -43,18 +43,38 @@ describe("prReadiness", () => {
 		expect(prReadiness({ ...open, ciPending: 1 })).toBe("ci-pending");
 	});
 
-	it("gives the badge adapter the same verdict as the raw input", () => {
-		// Panel and Ops go through prReadinessOf; a drift between the two shapes would
-		// reintroduce the three-surfaces-three-answers bug.
-		const pr = {
-			state: "OPEN",
-			is_draft: false,
-			conflict_state: "clear",
-			mergeable: "MERGEABLE",
-			review_decision: "APPROVED",
-			checks: { passed: 1, failed: 0, pending: 0, total: 1 },
-			unresolved_threads: 1,
-		} as BranchPrStatus;
-		expect(prReadinessOf(pr)).toBe("unresolved-comments");
+	// Catches: prReadinessOf dropping or mis-mapping one field of the batch payload, so the panel,
+	// status bar and Ops dashboard disagree with prReadiness fed the same facts. One case per field.
+	const ready = {
+		state: "OPEN",
+		is_draft: false,
+		conflict_state: "clear",
+		mergeable: "MERGEABLE",
+		review_decision: "APPROVED",
+		checks: { passed: 1, failed: 0, pending: 0, total: 1 },
+		unresolved_threads: 0,
+		unresolved_threads_truncated: false,
+	};
+	it.each([
+		["a clean approved PR", {}, "ready"],
+		["state", { state: "MERGED" }, "merged"],
+		["is_draft", { is_draft: true }, "draft"],
+		["conflict_state conflicting", { conflict_state: "conflicting" }, "conflict"],
+		["conflict_state checking", { conflict_state: "checking" }, "checking"],
+		["checks.failed", { checks: { passed: 0, failed: 1, pending: 0, total: 1 } }, "ci-failed"],
+		["checks.pending", { checks: { passed: 0, failed: 0, pending: 1, total: 1 } }, "ci-pending"],
+		["review_decision", { review_decision: "CHANGES_REQUESTED" }, "changes-requested"],
+		["unresolved_threads", { unresolved_threads: 1 }, "unresolved-comments"],
+		["unresolved_threads_truncated", { unresolved_threads_truncated: true }, "unresolved-comments"],
+		["mergeable", { mergeable: "UNKNOWN" }, "open"],
+	])("prReadinessOf maps %s", (_field, override, expected) => {
+		expect(prReadinessOf({ ...ready, ...override } as unknown as BranchPrStatus)).toBe(expected);
+	});
+
+	it("never reads a truncated thread page as thread-free", () => {
+		// Catches: 50 resolved threads before an open one reporting a clean 0 and showing Ready.
+		expect(prReadiness({ ...open, unresolvedThreads: 0, unresolvedThreadsTruncated: true })).toBe(
+			"unresolved-comments",
+		);
 	});
 });

@@ -71,8 +71,18 @@ pub enum PrTransition {
     },
 }
 
+/// The "ready" verdict of the shared readiness function (`src/utils/prReadiness.ts`): the OS
+/// notice must never say "ready to merge" while the badge says Comments or CI Running. Keep the
+/// two in step.
 fn is_ready(pr: &BranchPrStatus) -> bool {
-    pr.mergeable == "MERGEABLE" && pr.review_decision == "APPROVED" && pr.checks.failed == 0
+    !pr.is_draft
+        && pr.conflict_state == crate::github::ConflictState::Clear
+        && pr.mergeable == "MERGEABLE"
+        && pr.review_decision == "APPROVED"
+        && pr.checks.failed == 0
+        && pr.checks.pending == 0
+        && pr.unresolved_threads == 0
+        && !pr.unresolved_threads_truncated
 }
 
 pub fn detect_transitions(
@@ -250,6 +260,7 @@ mod tests {
             squash_merge_allowed: true,
             rebase_merge_allowed: true,
             unresolved_threads: 0,
+            unresolved_threads_truncated: false,
         }
     }
 
@@ -422,6 +433,14 @@ mod tests {
         assert!(
             !t.iter().any(|x| matches!(x, PrTransition::Ready { .. })),
             "unresolved threads must not notify ready: {t:?}"
+        );
+
+        let mut truncated = make_pr("OPEN", "MERGEABLE", "APPROVED", 0, 0);
+        truncated.unresolved_threads_truncated = true;
+        let t = detect_transitions("/repo", &old, &truncated);
+        assert!(
+            !t.iter().any(|x| matches!(x, PrTransition::Ready { .. })),
+            "a truncated thread page must not notify ready: {t:?}"
         );
 
         let pending = make_pr("OPEN", "MERGEABLE", "APPROVED", 0, 3);

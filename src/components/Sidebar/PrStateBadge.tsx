@@ -59,6 +59,7 @@ export const PrStateBadge: Component<{
 	ciFailed?: number;
 	ciPending?: number;
 	unresolvedThreads?: number;
+	unresolvedThreadsTruncated?: boolean;
 	/** Files a removal would discard. This badge takes the row's one chip slot,
 	 *  so it carries the warning the lifecycle chip would have shown. */
 	dirtyFiles?: number;

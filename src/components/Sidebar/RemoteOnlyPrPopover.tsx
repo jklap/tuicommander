@@ -298,6 +298,7 @@ export const RemoteOnlyPrPopover: Component<{
 											ciFailed={pr.checks?.failed}
 											ciPending={pr.checks?.pending}
 											unresolvedThreads={pr.unresolved_threads}
+											unresolvedThreadsTruncated={pr.unresolved_threads_truncated}
 										/>
 									</div>
 									<Show when={expandedBranch() === pr.branch}>

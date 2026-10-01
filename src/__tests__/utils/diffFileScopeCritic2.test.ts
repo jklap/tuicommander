@@ -24,14 +24,18 @@ describe("globToRegExp (critic round 2)", () => {
 describe("linguist-generated attribute semantics (critic round 2)", () => {
 	// Catches: `-linguist-generated` / `=false` treated as "generated".
 	it("an unset or false attribute does not mark a pattern generated", () => {
-		const text = ["a.txt -linguist-generated", "b.txt linguist-generated=false", "c.txt linguist-generated=true"].join("\n");
+		const text = ["a.txt -linguist-generated", "b.txt linguist-generated=false", "c.txt linguist-generated=true"].join(
+			"\n",
+		);
 		expect(parseLinguistGenerated(text)).toEqual(["c.txt"]);
 	});
 
 	// Catches: a later `-linguist-generated` line for one file being ignored, so a file
 	// the repo explicitly un-generated stays collapsed in review.
 	it("a later unset line overrides an earlier pattern for the same path", () => {
-		const patterns = parseLinguistGenerated(["gen/** linguist-generated", "gen/keep.ts -linguist-generated"].join("\n"));
+		const patterns = parseLinguistGenerated(
+			["gen/** linguist-generated", "gen/keep.ts -linguist-generated"].join("\n"),
+		);
 		expect(classifyDiffFile("gen/other.ts", patterns)).toBe("generated");
 		expect(classifyDiffFile("gen/keep.ts", patterns)).toBeNull();
 	});

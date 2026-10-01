@@ -30,7 +30,8 @@ export function prReference(pr: Pick<BranchPrStatus, "url" | "number">): string 
 }
 
 /** Update branch is offered only for an open PR GitHub reports as behind its base,
- *  and needs the head it will be pinned to. */
+ *  and needs the head it will be pinned to. Accepted limit: GitHub reports BEHIND only when the
+ *  base branch requires branches to be up to date, so the action never shows on other repos. */
 export function canUpdatePrBranch(pr: BranchPrStatus): boolean {
 	return pr.state?.toUpperCase() === "OPEN" && pr.merge_state_status === "BEHIND" && !!pr.head_ref_oid;
 }

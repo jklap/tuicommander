@@ -34,6 +34,7 @@ function makePr(overrides: Partial<BranchPrStatus> = {}): BranchPrStatus {
 		squash_merge_allowed: true,
 		rebase_merge_allowed: true,
 		unresolved_threads: 0,
+		unresolved_threads_truncated: false,
 		...overrides,
 	};
 }
@@ -120,6 +121,7 @@ describe("effectiveMergeMethod", () => {
 			squash_merge_allowed: true,
 			rebase_merge_allowed: false,
 			unresolved_threads: 0,
+			unresolved_threads_truncated: false,
 		});
 		expect(effectiveMergeMethod(pr, "merge")).toBe("squash");
 		expect(effectiveMergeMethod(pr, "rebase")).toBe("squash");
@@ -131,6 +133,7 @@ describe("effectiveMergeMethod", () => {
 			squash_merge_allowed: false,
 			rebase_merge_allowed: false,
 			unresolved_threads: 0,
+			unresolved_threads_truncated: false,
 		});
 		expect(effectiveMergeMethod(pr, "squash")).toBe("squash");
 	});

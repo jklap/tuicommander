@@ -43,13 +43,14 @@ describe("prReference (critic round 2)", () => {
 });
 
 describe("canUpdatePrBranch (critic round 2)", () => {
-	const pr = (o: Partial<BranchPrStatus>) => ({ state: "OPEN", merge_state_status: "BEHIND", head_ref_oid: "abc", ...o }) as BranchPrStatus;
+	const pr = (o: Partial<BranchPrStatus>) =>
+		({ state: "OPEN", merge_state_status: "BEHIND", head_ref_oid: "abc", ...o }) as BranchPrStatus;
 	// Catches: offering a pinned update with no pin, or on merged/draft-less closed PRs.
 	it("needs open + BEHIND + a head sha", () => {
 		expect(canUpdatePrBranch(pr({}))).toBe(true);
 		expect(canUpdatePrBranch(pr({ head_ref_oid: "" }))).toBe(false);
 		expect(canUpdatePrBranch(pr({ state: "MERGED" }))).toBe(false);
 		expect(canUpdatePrBranch(pr({ merge_state_status: "CLEAN" }))).toBe(false);
-		expect(canUpdatePrBranch(pr({ merge_state_status: "behind" }))).toBe(false);
+		expect(canUpdatePrBranch(pr({ merge_state_status: "behind" as never }))).toBe(false);
 	});
 });

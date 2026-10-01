@@ -1,4 +1,4 @@
-import { type Component, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, on, Show } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
@@ -56,7 +56,18 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 	const [approvingPr, setApprovingPr] = createSignal<number | null>(null);
 	const [approveError, setApproveError] = createSignal<string | null>(null);
 	const [busyPr, setBusyPr] = createSignal<number | null>(null);
-	const [rowActionError, setRowActionError] = createSignal<string | null>(null);
+	/** Error of the last row action, kept with its PR so another row never shows it. */
+	const [rowActionError, setRowActionError] = createSignal<{ prNumber: number; message: string } | null>(null);
+	/** Heads an update-branch request was accepted for: GitHub answers 202 and the merge lands
+	 *  later, so the row keeps reading BEHIND until the next poll brings a new head. */
+	const [updateRequestedFor, setUpdateRequestedFor] = createSignal<ReadonlySet<string>>(new Set());
+	createEffect(
+		on(
+			() => props.expandedKey,
+			() => setRowActionError(null),
+			{ defer: true },
+		),
+	);
 
 	const visiblePrs = () => props.prs;
 
@@ -137,11 +148,12 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 				prNumber: pr.number,
 				expectedHeadSha: pr.head_ref_oid,
 			});
+			setUpdateRequestedFor((heads) => new Set(heads).add(pr.head_ref_oid));
 			appLogger.info("github", `Requested branch update for PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
 			const msg = String(e);
-			setRowActionError(msg);
+			setRowActionError({ prNumber: pr.number, message: msg });
 			appLogger.error("github", `Failed to update branch of PR #${pr.number}`, { error: msg });
 		} finally {
 			setBusyPr(null);
@@ -161,7 +173,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
 			const msg = String(e);
-			setRowActionError(msg);
+			setRowActionError({ prNumber: pr.number, message: msg });
 			appLogger.error("github", `Failed to close PR #${pr.number}`, { error: msg });
 		} finally {
 			setBusyPr(null);
@@ -262,6 +274,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 											ciFailed={pr.checks?.failed}
 											ciPending={pr.checks?.pending}
 											unresolvedThreads={pr.unresolved_threads}
+											unresolvedThreadsTruncated={pr.unresolved_threads_truncated}
 										/>
 									</div>
 									<Show when={props.expandedKey === pr.branch}>
@@ -308,7 +321,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 																: t("sidebar.approve", "Approve")}
 														</button>
 													</Show>
-													<Show when={canUpdatePrBranch(pr)}>
+													<Show when={canUpdatePrBranch(pr) && !updateRequestedFor().has(pr.head_ref_oid)}>
 														<button
 															class={s.ghActionBtn}
 															onClick={() => handleUpdateBranch(pr)}
@@ -383,8 +396,8 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 												<Show when={approveError()}>
 													<div class={s.ghActionError}>{approveError()}</div>
 												</Show>
-												<Show when={rowActionError()}>
-													<div class={s.ghActionError}>{rowActionError()}</div>
+												<Show when={rowActionError()?.prNumber === pr.number}>
+													<div class={s.ghActionError}>{rowActionError()?.message}</div>
 												</Show>
 												<Show when={mergeError()}>
 													<div class={s.ghActionError}>{mergeError()}</div>
