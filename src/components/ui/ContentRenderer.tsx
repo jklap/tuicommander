@@ -322,7 +322,7 @@ function renderMarkdownSegment(
 		const baseDir = opts.baseDir;
 		if (baseDir || opts.imageSrc) {
 			html = html.replace(
-				/(<img\b[^>]*\ssrc=")(?!https?:\/\/|data:|asset:\/\/)([^"]+)"/gi,
+				/(<img\b[^>]*\ssrc=")(?!https?:\/\/|\/\/|data:|asset:\/\/)([^"]+)"/gi,
 				(_, prefix, relativePath) => {
 					if (opts.imageSrc) return `${prefix}${opts.imageSrc(relativePath)}"`;
 					const local = isAbsolutePath(relativePath) ? relativePath : `${baseDir}/${relativePath}`;

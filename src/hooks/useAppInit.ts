@@ -23,7 +23,7 @@ import { uiStore } from "../stores/ui";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
-import { classifyFile } from "../utils/filePreview";
+import { classifyFile, isImageFile } from "../utils/filePreview";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
@@ -713,14 +713,14 @@ export async function initApp(deps: AppInitDeps) {
 				// own tab button filtered out of the bar.
 				const background = focus === false;
 
-				if (cmd === "open" && classifyFile(filePath) === "preview") {
-					// Images, PDFs, media: the preview tab serves them through the asset
-					// protocol, in or out of a repo. The editor cannot read them as UTF-8.
+				if (cmd === "open" && isImageFile(filePath)) {
+					// The preview tab serves images through the asset protocol, in or out
+					// of a repo. The editor cannot read them as UTF-8.
 					editorTabsStore.closeMcpFile(id);
 					mdTabsStore.closeMcpFile(id);
 					mdTabsStore.closeUiTab(id);
-					if (repoPath) mdTabsStore.addHtmlPreview(repoPath, relPath);
-					else mdTabsStore.addHtmlPreview(fallbackRepoPath ?? "", filePath);
+					if (repoPath) mdTabsStore.addMcpHtmlPreview(id, repoPath, relPath, background);
+					else mdTabsStore.addMcpHtmlPreview(id, fallbackRepoPath ?? "", filePath, background);
 				} else if (cmd === "open" && repoPath) {
 					editorTabsStore.closeMcpFile(id);
 					mdTabsStore.closeUiTab(id);

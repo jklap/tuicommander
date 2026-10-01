@@ -105,6 +105,8 @@ export interface HtmlPreviewTab extends BaseTab {
 	filePath: string;
 	fileName: string;
 	fsRoot?: string;
+	/** Set when the tab was opened by an MCP `ui-tab` event (`tuic://open`). */
+	mcpUiId?: string;
 }
 
 /** Native Command Overview panel tab */
@@ -300,7 +302,9 @@ function createMdTabsStore() {
 		},
 
 		closeMcpFile(mcpUiId: string): void {
-			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "file" && tab.mcpUiId === mcpUiId);
+			const existing = Object.values(base.state.tabs).find(
+				(tab) => (tab.type === "file" || tab.type === "html-preview") && tab.mcpUiId === mcpUiId,
+			);
 			if (existing) base.remove(existing.id);
 		},
 
@@ -604,6 +608,7 @@ function createMdTabsStore() {
 			const existing = Object.values(base.state.tabs).find(
 				(tab) =>
 					tab.type === "html-preview" &&
+					!tab.mcpUiId &&
 					tab.repoPath === repoPath &&
 					(tab as HtmlPreviewTab).fsRoot === effectiveRoot &&
 					tab.filePath === filePath,
@@ -626,6 +631,24 @@ function createMdTabsStore() {
 				fsRoot: effectiveRoot,
 			};
 			return base._addTab(tab);
+		},
+
+		/** Add a preview tab owned by an MCP ui id (never shared with a user-opened preview of the same file). */
+		addMcpHtmlPreview(mcpUiId: string, repoPath: string, filePath: string, background: boolean): string {
+			const id = base._nextId("md");
+			const fileName = pathBasename(filePath) || filePath;
+			const tab: HtmlPreviewTab = {
+				type: "html-preview",
+				id,
+				mcpUiId,
+				title: fileName,
+				repoPath,
+				filePath,
+				fileName,
+				branchKey: branchKeyFor(repoPath),
+				fsRoot: repoPath,
+			};
+			return background ? base._addTabBackground(tab) : base._addTab(tab);
 		},
 
 		/** Set a tab's font size (clamped to [MIN, MAX]). */
