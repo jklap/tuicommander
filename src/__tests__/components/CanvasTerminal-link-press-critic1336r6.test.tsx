@@ -185,6 +185,17 @@ describe("CanvasTerminal link context menu, critic 1336 round 6", () => {
 		expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined);
 	});
 
+	// Catches: the mouseup that ends a macOS ctrl+click (mousedown button 0 → contextmenu → mouseup)
+	// bumping the press counter, which would retire the menu lookup the contextmenu just started.
+	it("still opens the menu when a ctrl+click mouseup follows the contextmenu", async () => {
+		fire(document.body, "mousemove", OSC8_COL);
+		await waitFor(() => expect(canvas.getAttribute("style") ?? "").toContain("pointer"));
+		fire(canvas, "mousedown", OSC8_COL, { button: 0, ctrlKey: true });
+		contextmenu(OSC8_COL);
+		fire(document.body, "mouseup", OSC8_COL, { button: 0, ctrlKey: true });
+		await waitFor(() => expect(openItems()).toHaveLength(1));
+	});
+
 	// Catches: a contextmenu that is not over a link returns before bumping the counter, so an earlier
 	// slow lookup still pops its link menu on top of the menu the user just asked for elsewhere
 	// (keyboard Menu key / Shift+F10 raise contextmenu with no mousedown).
