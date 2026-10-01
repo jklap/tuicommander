@@ -398,7 +398,12 @@ describe("githubStore", () => {
 					title: "Add feature",
 				});
 				expect(notify).toHaveBeenCalledWith(
-					expect.objectContaining({ prNumber: 42, title: "Add feature", type: "ready", url: "https://github.com/org/repo/pull/42" }),
+					expect.objectContaining({
+						prNumber: 42,
+						title: "Add feature",
+						type: "ready",
+						url: "https://github.com/org/repo/pull/42",
+					}),
 				);
 				s.stopPolling();
 			});
