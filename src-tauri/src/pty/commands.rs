@@ -190,6 +190,7 @@ pub(crate) async fn create_pty(
         created_agent_type,
         created_display_name,
         None,
+        false, // desktop create_pty/create_pty_with_worktree is always human-initiated
     );
     // Assigned AFTER SessionCreated — a subscriber must see SessionCreated as
     // the first event for a brand-new session_id; TermAliasAssigned
@@ -387,6 +388,7 @@ pub(crate) async fn create_pty_with_worktree(
         created_agent_type,
         created_display_name,
         None,
+        false, // desktop create_pty/create_pty_with_worktree is always human-initiated
     );
     // Assigned AFTER SessionCreated — a subscriber must see SessionCreated as
     // the first event for a brand-new session_id; TermAliasAssigned

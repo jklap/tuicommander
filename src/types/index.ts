@@ -49,6 +49,11 @@ export interface PtyConfig {
 	/** Whether `display_name` above is a user's explicit rename rather than a
 	 *  frontend-computed default. */
 	display_name_is_custom?: boolean;
+	/** Set by our own HTTP client (never by an agent using curl, MCP, or the
+	 *  tmux shim) to mark a session as created by a human. Drives `is_remote`
+	 *  on the HTTP transport (`is_remote = !user_initiated`); accepted but not
+	 *  consulted on desktop IPC, where `is_remote` is always `false` already. */
+	user_initiated?: boolean;
 }
 
 /** PTY exit event data */

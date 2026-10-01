@@ -135,7 +135,11 @@ previously-built worktree but fail in a fresh one:
 
 1. **Frontend `dist/` stub** — `src-tauri/src/mcp_http/static_files.rs` does
    `include_dir!("$CARGO_MANIFEST_DIR/../dist")` at compile time. Without it: `mkdir -p dist &&
-   echo '<html></html>' > dist/index.html` (from the repo root).
+   echo '<html></html>' > dist/index.html` (from the repo root). **Also create `dist/mobile.html`**
+   the same way (`echo '<html></html>' > dist/mobile.html`) — `static_files.rs`'s `spa_fallback_file()`
+   maps every `/mobile`/`/mobile/*` path to `mobile.html` specifically, not `index.html`, so without
+   it `mcp_http::tests::unknown_api_path_404s_while_spa_deep_links_still_load` fails on a fresh
+   worktree's first `cargo nextest run` with a real 404 where the test expects the SPA shell.
 2. **Sidecar binary placeholders** — `tauri.conf.json`'s `externalBin` lists `binaries/tuic-bridge`,
    `binaries/tuic`, `binaries/tuic-hook`; the build script checks these paths exist for the host
    target triple. None of them are tracked in git (`src-tauri/binaries/*` is gitignored). Empty
@@ -277,6 +281,23 @@ If `check-gate`/`cargo nextest` stalls or fails on exactly these names and your 
 routes, grant/confirm the prompt for the terminal/process running the tests (System Settings →
 Privacy & Security, or let it appear once and click through it interactively) and re-run — do not
 treat it as a regression from whatever you just changed.
+
+**`mdkb_daemon::tests::ensure_running_without_binary_uses_existing_daemon` can fail deterministically
+from a stale, orphaned Unix socket file — not a code regression.** Found 2026-09-30 running the
+full gate after an unrelated `terminals.ts`/`osc_title.rs` fix (neither `mdkb_daemon.rs` nor
+`mdkb_client.rs` were touched). The test branches on `MdkbClient::socket_path().exists()`
+(`~/.mdkb/daemon-hook.sock`) to decide which assertion to make — but existence of the socket
+*file* doesn't mean a process is actually listening on it: a daemon that exited without cleaning
+up its socket leaves the file behind, and `ensure_running()`'s subsequent connect attempt then
+fails with "should connect to running daemon" every time, deterministically (confirmed: re-ran in
+isolation, same failure; `ps aux | grep mdkb` showed zero running daemon processes; `ls -la
+~/.mdkb/daemon-hook.sock` showed a day-old file). This is a real gap in the test itself (it should
+probably try connecting, not just stat the path, to decide which branch it's in) but not something
+to "fix" as a side effect of an unrelated change — if this test fails and your diff doesn't touch
+`mdkb_daemon.rs`/`mdkb_client.rs`, check `ps aux | grep mdkb` and the socket file's age before
+assuming a regression. This machine's own mdkb/rtk tooling (if in use) may recreate a fresh socket
+on its own if restarted; deleting the stale file yourself is not this fix's call to make since
+another process could own its lifecycle.
 
 
 ## Building
