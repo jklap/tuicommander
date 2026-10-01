@@ -1,5 +1,5 @@
 import { type Component, Show } from "solid-js";
-import { globalWorkspaceStore } from "../../stores/globalWorkspace";
+import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
 import { repositoriesStore } from "../../stores/repositories";
 import { paneLayoutKey } from "../../stores/savedPaneLayouts";
 import { GlobeIcon } from "../GlobeIcon";
@@ -15,24 +15,26 @@ function currentRepoLayoutKey(): string | undefined {
 }
 
 export const GlobalWorkspaceEntry: Component = () => {
+	// One-way: clicking always means "show the manual Global Workspace." It
+	// never deactivates — the only way to leave it is clicking a terminal
+	// within a repo in the sidebar (see navigateToTerminal.ts).
 	const handleClick = () => {
-		const key = currentRepoLayoutKey();
-		if (globalWorkspaceStore.isActive()) {
-			globalWorkspaceStore.deactivate(key);
-		} else {
-			globalWorkspaceStore.activate(key);
+		if (globalWorkspaceStore.isManualWorkspaceActive()) return;
+		globalWorkspaceStore.setScope(MANUAL_SCOPE);
+		if (!globalWorkspaceStore.isActive()) {
+			globalWorkspaceStore.activate(currentRepoLayoutKey());
 		}
 	};
 
 	return (
-		<Show when={globalWorkspaceStore.hasPromoted()}>
+		<Show when={globalWorkspaceStore.getLiveManualMembers().length > 0}>
 			<div
-				class={`${s.globalWorkspaceEntry} ${globalWorkspaceStore.isActive() ? s.globalWorkspaceActive : ""}`}
+				class={`${s.globalWorkspaceEntry} ${globalWorkspaceStore.isManualWorkspaceActive() ? s.globalWorkspaceActive : ""}`}
 				onClick={handleClick}
 			>
 				<GlobeIcon />
 				<span class={s.globalWorkspaceLabel}>Global Workspace</span>
-				<span class={s.globalWorkspaceBadge}>{globalWorkspaceStore.getPromotedIds().length}</span>
+				<span class={s.globalWorkspaceBadge}>{globalWorkspaceStore.getLiveManualMembers().length}</span>
 			</div>
 		</Show>
 	);
