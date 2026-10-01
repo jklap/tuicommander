@@ -4971,14 +4971,36 @@ impl AppState {
         let Some(session_id) = event.pty_session_id() else {
             return;
         };
+        let moved = Self::publish_current_session_state(state, session_id, published);
+        // An Agent Teams teammate going busy/idle (or closing) changes what its
+        // LEAD should read as, yet produces no event of the lead's own — Claude
+        // Code fires no hook in the lead when a teammate finishes. So when a
+        // teammate's own published state moved, re-evaluate its lead too; the same
+        // baseline dedup means the lead only emits if its derived state really did
+        // change. Gated on `moved` so the topology lookup runs per real state
+        // change, not per PTY event.
+        if moved
+            && let Some(lead) = crate::mcp_http::tmux_routes::lead_of_teammate(state, session_id)
+        {
+            Self::publish_current_session_state(state, &lead, published);
+        }
+    }
+
+    /// Publish `session_id`'s current `SessionState` if it differs from the last
+    /// one published. Returns true when the published state moved (including the
+    /// row disappearing).
+    fn publish_current_session_state(
+        state: &Arc<AppState>,
+        session_id: &str,
+        published: &mut HashMap<String, SessionState>,
+    ) -> bool {
         let Some(current) = state.session_state_with_shell(session_id) else {
             // The row is gone (`SessionClosed`). Drop the baseline too: a reused
             // id must not be deduped against the state of a dead session.
-            published.remove(session_id);
-            return;
+            return published.remove(session_id).is_some();
         };
         if published.get(session_id) == Some(&current) {
-            return;
+            return false;
         }
         published.insert(session_id.to_string(), current.clone());
         // Dual-emit. Nothing forwards the bus to the desktop window, so the
@@ -4995,6 +5017,7 @@ impl AppState {
             session_id: session_id.to_string(),
             state: Box::new(current),
         });
+        true
     }
 
     /// Send a push notification to all mobile subscribers, deep-linking a session.
@@ -9677,6 +9700,84 @@ mod tests {
             awaiting_pushes,
             vec![true, false],
             "one push per real transition; the identical repaint must add none"
+        );
+    }
+
+    /// Claude Code fires no hook in the lead when a teammate finishes, so the only
+    /// thing that can move the lead's badge is the teammate's own terminal going
+    /// busy/idle. The accumulator must therefore republish the lead when a teammate's
+    /// published state moves — and only then, never on an unchanged repaint.
+    #[tokio::test]
+    async fn teammate_state_change_republishes_its_lead() {
+        let state = fresh_state();
+        state
+            .session_maps
+            .session_states
+            .get_mut("s1")
+            .unwrap()
+            .agent_type = Some("claude".into());
+        set_shell_state(&state, "s1", crate::pty::SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .insert("mate".to_string(), SessionState::default());
+        set_shell_state(&state, "mate", crate::pty::SHELL_IDLE);
+        crate::mcp_http::tmux_routes::link_teammate_for_test(&state, "swarm-pub", "s1", "mate");
+        declare_task_summary(&state, "s1", 0, 0, 1);
+
+        let mut bus = state.event_bus.subscribe();
+        AppState::spawn_session_state_accumulator(Arc::clone(&state));
+
+        let mate_event = |n: &str| AppEvent::PtyParsed {
+            session_id: "mate".to_string(),
+            parsed: serde_json::json!({ "type": "user-input", "content": n }).into(),
+        };
+        // Await the lead's next push after each step: the accumulator reads state
+        // when it PROCESSES an event, so flipping the atomics again before it has
+        // run would make it see only the final value.
+        async fn next_lead_push(bus: &mut tokio::sync::broadcast::Receiver<AppEvent>) -> bool {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if let Ok(AppEvent::SessionStateChanged {
+                        session_id,
+                        state: pushed,
+                    }) = bus.recv().await
+                        && session_id == "s1"
+                    {
+                        return pushed.agent_state.as_deref() == Some("working");
+                    }
+                }
+            })
+            .await
+            .expect("the lead was not republished as its teammate changed state")
+        }
+
+        let mut lead_working: Vec<bool> = Vec::new();
+        // Prime the lead's baseline with everything idle.
+        state.emit_pty_event(make_parsed(
+            "user-input",
+            serde_json::json!({ "content": "a" }),
+        ));
+        lead_working.push(next_lead_push(&mut bus).await);
+        state.emit_pty_event(mate_event("a"));
+
+        // The teammate goes busy. Nothing happens in the lead itself.
+        set_shell_state(&state, "mate", crate::pty::SHELL_BUSY);
+        state.emit_pty_event(mate_event("b"));
+        lead_working.push(next_lead_push(&mut bus).await);
+
+        // An unchanged repaint from the teammate must not republish the lead.
+        state.emit_pty_event(mate_event("b2"));
+
+        // The teammate finishes.
+        set_shell_state(&state, "mate", crate::pty::SHELL_IDLE);
+        state.emit_pty_event(mate_event("c"));
+        lead_working.push(next_lead_push(&mut bus).await);
+
+        assert_eq!(
+            lead_working,
+            vec![false, true, false],
+            "lead: idle at baseline, working while its teammate is busy, idle once it finishes"
         );
     }
 
