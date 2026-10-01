@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+mod build_sidecars;
+
 fn main() {
     if cfg!(feature = "desktop") && std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
@@ -60,38 +63,65 @@ fn main() {
 /// built binary whenever this script runs after the link, and the tests that
 /// spawn `CARGO_BIN_EXE_tuic*` fail with EACCES (#1325-394f).
 ///
-/// A sidecar that is empty or not executable is a placeholder: drop
-/// `externalBin` for this run. Real sidecars come from `pnpm build:sidecar`,
-/// which writes executable files, so `make dev` keeps its copy. An explicit
-/// `TAURI_CONFIG` (the tauri CLI `--config`) is left alone.
+/// An `externalBin` entry whose source is empty or not executable is a
+/// placeholder: leave it out of `externalBin` for this run. Real sidecars come
+/// from `pnpm build:sidecar`, which writes executable files, so `make dev`
+/// keeps its copy. An explicit `TAURI_CONFIG` (the tauri CLI `--config`) is
+/// left alone.
 #[cfg(feature = "desktop")]
 fn skip_placeholder_sidecars() {
-    use std::path::Path;
+    use build_sidecars::{FileState, placeholder_entries};
+    use std::collections::HashMap;
 
     println!("cargo:rerun-if-changed=binaries");
     if std::env::var_os("TAURI_CONFIG").is_some() {
         return;
     }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let Some(external_bin) = std::fs::read_to_string(root.join("tauri.conf.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|conf| {
+            conf["bundle"]["externalBin"].as_array().map(|list| {
+                list.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+        })
+    else {
+        return;
+    };
     let triple = std::env::var("TARGET").unwrap_or_default();
     let ext = if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         ".exe"
     } else {
         ""
     };
-    let suffix = format!("-{triple}{ext}");
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(dir) = std::fs::read_dir(root.join("binaries")) else {
         return;
     };
-    let placeholder = entries
+    let files: HashMap<String, FileState> = dir
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_name().to_string_lossy().ends_with(&suffix))
-        .filter_map(|entry| entry.metadata().ok())
-        .any(|meta| meta.len() == 0 || !is_executable(&meta));
-    if placeholder {
-        // SAFETY: a build script is single-threaded at this point.
-        unsafe { std::env::set_var("TAURI_CONFIG", r#"{"bundle":{"externalBin":null}}"#) };
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok()?;
+            let state = FileState {
+                len: meta.len(),
+                executable: is_executable(&meta),
+            };
+            Some((entry.file_name().to_string_lossy().into_owned(), state))
+        })
+        .collect();
+    let placeholders = placeholder_entries(&external_bin, &triple, ext, &files);
+    if placeholders.is_empty() {
+        return;
     }
+    let real: Vec<&String> = external_bin
+        .iter()
+        .filter(|entry| !placeholders.contains(&entry.as_str()))
+        .collect();
+    let patch = serde_json::json!({ "bundle": { "externalBin": real } });
+    // SAFETY: a build script is single-threaded at this point.
+    unsafe { std::env::set_var("TAURI_CONFIG", patch.to_string()) };
 }
 
 #[cfg(all(feature = "desktop", unix))]
