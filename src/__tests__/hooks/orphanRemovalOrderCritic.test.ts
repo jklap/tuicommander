@@ -91,7 +91,7 @@ describe("orphan removal order and session binding (critic-1188 r2)", () => {
 		await refresh("/repo");
 
 		expect(removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/idle", true);
-		expect(setStatusInfo).toHaveBeenCalledWith("Removed 1 orphaned worktree(s)");
+		expect(setStatusInfo).toHaveBeenCalledWith("Removed 1 orphaned worktree(s); 1 terminal(s) could not be closed");
 	});
 
 	// Catches: sending an undefined/absent session list for an unsafe (dirty) orphan with no
