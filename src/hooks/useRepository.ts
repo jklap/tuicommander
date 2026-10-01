@@ -440,8 +440,13 @@ export function useRepository() {
 	}
 
 	/** Remove a detached-HEAD worktree by path (no branch to look up). */
-	async function removeOrphanWorktree(repoPath: string, worktreePath: string, safeOnly = false): Promise<void> {
-		await invoke("remove_orphan_worktree", { repoPath, worktreePath, safeOnly });
+	async function removeOrphanWorktree(
+		repoPath: string,
+		worktreePath: string,
+		safeOnly = false,
+		confirmedSessions: string[] = [],
+	): Promise<void> {
+		await invoke("remove_orphan_worktree", { repoPath, worktreePath, safeOnly, confirmedSessions });
 	}
 
 	/** Merge a PR via GitHub REST API. merge_method: "merge" | "squash" | "rebase" */

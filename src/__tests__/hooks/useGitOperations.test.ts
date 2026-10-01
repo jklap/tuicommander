@@ -3577,6 +3577,20 @@ describe("useGitOperations", () => {
 			expect(mockCloseTerminal).not.toHaveBeenCalled();
 		});
 
+		// Catches: the confirmed (safeOnly=false) removal closing terminals before the backend
+		// refused it because a session started after the dialog was shown.
+		it("ask mode: a refused confirmed removal closes no terminal and sends the seen session ids", async () => {
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(true);
+			mockRepo.assessOrphanCleanup.mockResolvedValue([live("/wt/busy")]);
+			mockRepo.removeOrphanWorktree.mockRejectedValueOnce(new Error("live session: Claude: new; not confirmed"));
+			terminalsStore.add(makeTerminal({ name: "New agent", cwd: "/wt/busy" }));
+
+			await gitOpsWith(confirmOrphanCleanup).refreshAllBranchStats();
+
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/busy", false, ["s1"]);
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+		});
+
 		// Catches: widening the Auto-mode review to every unsafe orphan, which would pop a dialog
 		// for dirty checkouts that Auto mode has always skipped silently.
 		it("auto mode: a dirty orphan without a live session stays skipped and opens no dialog", async () => {
@@ -3613,7 +3627,7 @@ describe("useGitOperations", () => {
 
 			await gitOpsWith(confirmOrphanCleanup).refreshAllBranchStats();
 
-			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/busy", false);
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/busy", false, ["s1"]);
 			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/idle", true);
 		});
 	});
@@ -3695,7 +3709,7 @@ describe("useGitOperations", () => {
 			await askGitOps.refreshAllBranchStats();
 
 			expect(confirmOrphanCleanup).toHaveBeenCalledWith("/repo", [live], 10);
-			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/busy", false);
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/busy", false, ["s1"]);
 		});
 
 		it("auto-removes orphans silently when orphanCleanup=on", async () => {
@@ -3735,7 +3749,7 @@ describe("useGitOperations", () => {
 			expect(mockSetStatusInfo).not.toHaveBeenCalledWith(expect.stringContaining("Removed"));
 		});
 
-		it("closes terminals in orphan worktree before auto-removing (orphanCleanup=on)", async () => {
+		it("closes terminals in orphan worktree after the backend accepts auto-removal (orphanCleanup=on)", async () => {
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
@@ -3747,10 +3761,10 @@ describe("useGitOperations", () => {
 
 			expect(mockCloseTerminal).toHaveBeenCalledWith(termInOrphan, true);
 			expect(mockCloseTerminal).not.toHaveBeenCalledWith(termElsewhere, true);
-			// closeTerminal called before the worktree is removed
+			// the backend accepts the removal first; terminals are closed only after it
 			const closeOrder = mockCloseTerminal.mock.invocationCallOrder[0];
 			const removeOrder = mockRepo.removeOrphanWorktree.mock.invocationCallOrder[0];
-			expect(closeOrder).toBeLessThan(removeOrder);
+			expect(removeOrder).toBeLessThan(closeOrder);
 		});
 
 		it("asks user before removing when orphanCleanup=ask and user confirms", async () => {
@@ -3904,7 +3918,7 @@ describe("useGitOperations", () => {
 			expect(mockSetStatusInfo).not.toHaveBeenCalledWith(expect.stringContaining("Removed"));
 		});
 
-		it("closes terminals in orphan worktree before removing when user confirms (orphanCleanup=ask)", async () => {
+		it("closes terminals in orphan worktree after the backend accepts the confirmed removal (orphanCleanup=ask)", async () => {
 			const confirmOrphanCleanup = vi.fn().mockResolvedValue(true);
 			const askGitOps = useGitOperations({
 				repo: mockRepo,
@@ -3927,7 +3941,7 @@ describe("useGitOperations", () => {
 			expect(mockCloseTerminal).not.toHaveBeenCalledWith(termElsewhere, true);
 			const closeOrder = mockCloseTerminal.mock.invocationCallOrder[0];
 			const removeOrder = mockRepo.removeOrphanWorktree.mock.invocationCallOrder[0];
-			expect(closeOrder).toBeLessThan(removeOrder);
+			expect(removeOrder).toBeLessThan(closeOrder);
 		});
 
 		it("skips removal when orphanCleanup=ask and user cancels", async () => {

@@ -1575,7 +1575,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/repo/remove-orphan",
-			body: { repoPath: args.repoPath, worktreePath: args.worktreePath, safeOnly: args.safeOnly ?? false },
+			body: {
+				repoPath: args.repoPath,
+				worktreePath: args.worktreePath,
+				safeOnly: args.safeOnly ?? false,
+				confirmedSessions: args.confirmedSessions ?? [],
+			},
 		}),
 	},
 	run_setup_script: {

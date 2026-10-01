@@ -529,11 +529,16 @@ pub(crate) fn remove_orphan_worktree(
     repo_path: String,
     worktree_path: String,
     safe_only: Option<bool>,
+    confirmed_sessions: Option<Vec<String>>,
 ) -> Result<(), String> {
     validate_worktree_path(&repo_path, &worktree_path)?;
-    if safe_only.unwrap_or(false) {
-        orphan_cleanup_safety_with_sessions(&state, &repo_path, &worktree_path)?;
-    }
+    orphan_removal_guard(
+        &state,
+        &repo_path,
+        &worktree_path,
+        safe_only.unwrap_or(false),
+        &confirmed_sessions.unwrap_or_default(),
+    )?;
 
     let base_repo = PathBuf::from(&repo_path);
     let path = PathBuf::from(&worktree_path);
@@ -1158,6 +1163,37 @@ pub(crate) fn orphan_cleanup_safety_with_sessions(
         Ok(())
     } else {
         Err(live_session_reason(&live))
+    }
+}
+
+/// The removal guard both transports share. A safe-only removal needs the full
+/// verdict. A review-confirmed one (`safe_only` false) needs no sessions beyond
+/// those the user saw in the dialog: one that started since was never reviewed.
+pub(crate) fn orphan_removal_guard(
+    state: &AppState,
+    repo_path: &str,
+    worktree_path: &str,
+    safe_only: bool,
+    confirmed_sessions: &[String],
+) -> Result<(), String> {
+    if safe_only {
+        return orphan_cleanup_safety_with_sessions(state, repo_path, worktree_path);
+    }
+    let path = Path::new(worktree_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let unseen: Vec<WorktreeLiveSession> = live_sessions_in(state, path)
+        .into_iter()
+        .filter(|session| !confirmed_sessions.contains(&session.session_id))
+        .collect();
+    if unseen.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}; not part of the confirmed removal",
+            live_session_reason(&unseen)
+        ))
     }
 }
 
