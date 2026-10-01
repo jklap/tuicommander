@@ -542,6 +542,10 @@ pub(super) struct RemoveOrphanRequest {
     pub worktree_path: String,
     #[serde(rename = "safeOnly", default)]
     pub safe_only: bool,
+    /// Session ids the user saw when confirming; a live session outside this
+    /// list refuses a `safeOnly` false removal.
+    #[serde(rename = "confirmedSessions", default)]
+    pub confirmed_sessions: Vec<String>,
 }
 
 #[derive(Deserialize)]
