@@ -6198,6 +6198,234 @@ mod tests {
         assert!(linked.exists(), "tag-only orphan must survive safe removal");
     }
 
+    /// A clean detached checkout with a live session registered in it.
+    fn orphan_with_live_session() -> (tempfile::TempDir, std::path::PathBuf, Arc<AppState>) {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "agent-1");
+        crate::state::tests_support::set_session_cwd(&state, "agent-1", &linked.to_string_lossy());
+        state
+            .session_maps
+            .sessions
+            .get("agent-1")
+            .unwrap()
+            .lock()
+            .display_name = Some("Claude: refactor".to_string());
+        (repo, linked, state)
+    }
+
+    // Catches: a clean detached checkout reported safe (and auto-removed) while
+    // an agent session is still working inside it.
+    #[tokio::test]
+    async fn orphan_cleanup_assessment_names_live_sessions_and_is_not_safe() {
+        let (repo, linked, state) = orphan_with_live_session();
+
+        let response = build_router(state, false, true)
+            .oneshot(get_localhost(&format!(
+                "/repo/orphan-cleanup-assessment?repoPath={}",
+                repo.path().display()
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        assert_eq!(rows[0]["safe"], false);
+        assert!(
+            rows[0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Claude: refactor")
+        );
+        assert_eq!(rows[0]["live_sessions"][0]["session_id"], "agent-1");
+    }
+
+    // Catches: the agent/MCP "remove" answer and the safe-only HTTP removal
+    // skipping the session registry that the assessment consults.
+    #[tokio::test]
+    async fn orphan_cleanup_answer_and_safe_removal_refuse_a_live_session() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let pending = build_router(state.clone(), false, true)
+            .oneshot(mcp_post(
+                "/repo/orphan-cleanup/begin",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "paths": [linked.display().to_string()]
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::OK);
+
+        let answer = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "orphan_cleanup_answer",
+                "path": repo.path().display().to_string(),
+                "decision": "remove"
+            }),
+        )
+        .await;
+        assert!(
+            answer["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("Claude") || error.contains("live session")),
+            "{answer}"
+        );
+
+        let removal = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": true
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(removal.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            linked.exists(),
+            "a checkout with a live session must survive"
+        );
+    }
+
+    // Catches: a confirmed (safeOnly=false) removal ignoring a session that
+    // started after the user reviewed the dialog, or refusing the sessions the
+    // user did see.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_refuses_only_sessions_the_user_did_not_see() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let remove = |sessions: serde_json::Value| {
+            mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": sessions,
+                }),
+            )
+        };
+
+        let unreviewed = build_router(state.clone(), false, true)
+            .oneshot(remove(serde_json::json!([])))
+            .await
+            .unwrap();
+        assert_eq!(unreviewed.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+
+        crate::state::tests_support::insert_dummy_session(&state, "agent-late");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "agent-late",
+            &linked.to_string_lossy(),
+        );
+        let late = build_router(state.clone(), false, true)
+            .oneshot(remove(serde_json::json!(["agent-1"])))
+            .await
+            .unwrap();
+        assert_eq!(late.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+
+        let reviewed = build_router(state, false, true)
+            .oneshot(remove(serde_json::json!(["agent-1", "agent-late"])))
+            .await
+            .unwrap();
+        assert_eq!(reviewed.status(), StatusCode::OK);
+        assert!(!linked.exists());
+    }
+
+    // Catches: a client that predates `confirmedSessions` (field absent) being treated as
+    // having reviewed every session, so its removal closes a live checkout.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_without_the_session_field_refuses_a_live_checkout() {
+        let (repo, linked, state) = orphan_with_live_session();
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(linked.exists());
+    }
+
+    // Catches: an id list that names sessions which do not (or no longer) live in the checkout
+    // blocking a removal that has no live session at all.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_ignores_stale_confirmed_ids() {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("linked");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let response = build_router(test_state(), false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": linked.display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": ["gone-1"],
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!linked.exists());
+    }
+
+    // Catches: a path outside the repo's worktree list being refused as a server error (500)
+    // instead of 400 on the confirmed (safeOnly=false) path.
+    #[tokio::test]
+    async fn confirmed_orphan_removal_of_an_unregistered_path_is_a_400() {
+        let (repo, _linked, state) = orphan_with_live_session();
+        let stranger = tempfile::tempdir().unwrap();
+        let response = build_router(state, false, true)
+            .oneshot(mcp_post(
+                "/repo/remove-orphan",
+                &serde_json::json!({
+                    "repoPath": repo.path().display().to_string(),
+                    "worktreePath": stranger.path().display().to_string(),
+                    "safeOnly": false,
+                    "confirmedSessions": [],
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(stranger.path().exists());
+    }
+
     #[tokio::test]
     async fn orphan_cleanup_answer_accepts_clean_branch_reachable_worktree() {
         let repo = create_temp_git_repo();
