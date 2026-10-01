@@ -399,14 +399,14 @@ html, body {
 }
 
 /* Touch device: eliminate double-tap-to-activate caused by sticky :hover.
- * touch-action: pan-x pan-y disables double-tap-to-zoom, removing the
+ * touch-action: pan-x pan-y pinch-zoom disables double-tap-to-zoom, removing the
  * 300ms click delay that causes the browser to use first tap for :hover
  * and second tap for click. Desktop behavior is unaffected.
  * Not `manipulation`: on iOS it blocks pan-scroll recognition (3b02a2ed2 had
  * to override it per view), so the panels would not scroll with a finger. */
 @media (hover: none) {
   *, *::before, *::after {
-    touch-action: pan-x pan-y;
+    touch-action: pan-x pan-y pinch-zoom;
     -webkit-tap-highlight-color: transparent;
   }
 }

@@ -149,4 +149,14 @@ describe("initMouseDrag", () => {
 		vi.advanceTimersByTime(350); // long-press timer was cleared
 		expect(cbs.onStart).not.toHaveBeenCalled();
 	});
+
+	// Catches: a pen swipe starting a drag after 5px like a mouse (a scroll then drops the item).
+	it("pen: a move beyond slop before the hold bails out as a scroll", () => {
+		vi.useFakeTimers();
+		start(0, 0, undefined, "pen");
+		move(0, 20, "pen");
+		vi.advanceTimersByTime(350);
+		expect(cbs.onStart).not.toHaveBeenCalled();
+		expect(cbs.onMove).not.toHaveBeenCalled();
+	});
 });

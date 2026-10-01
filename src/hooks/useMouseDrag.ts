@@ -42,7 +42,8 @@ export function initMouseDrag(
 
 	const threshold = options?.threshold ?? 5;
 	const ghostOpacity = options?.ghostOpacity ?? 0.8;
-	const isTouch = e.pointerType === "touch";
+	// A pen swipes and scrolls like a finger, so it takes the long-press path too.
+	const isTouch = e.pointerType === "touch" || e.pointerType === "pen";
 	// Touch drag arms after a hold; a move beyond touchSlop before then is a scroll.
 	const longPressMs = options?.touchLongPressMs ?? 350;
 	const touchSlop = options?.touchSlop ?? 10;
