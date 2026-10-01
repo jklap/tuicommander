@@ -355,6 +355,45 @@ pub(crate) fn teammate_session_ids(state: &AppState, lead_session_id: &str) -> V
         .collect()
 }
 
+/// Test-only: register a one-pane topology under `label` in which
+/// `teammate_session_id` is a materialized teammate pane owned by `lead_session_id`.
+#[cfg(test)]
+pub(crate) fn link_teammate_for_test(
+    state: &AppState,
+    label: &str,
+    lead_session_id: &str,
+    teammate_session_id: &str,
+) {
+    let pane = TmuxPane {
+        id: "%0".to_string(),
+        index: 0,
+        title: None,
+        cwd: None,
+        tuic_session_id: Some(teammate_session_id.to_string()),
+        lead_session_id: Some(lead_session_id.to_string()),
+        accent_color: None,
+    };
+    let topology = TmuxTopology {
+        next_session: 1,
+        next_window: 1,
+        next_pane: 1,
+        sessions: vec![TmuxSession {
+            id: "$0".to_string(),
+            name: "claude-swarm".to_string(),
+            active_window: Some("@0".to_string()),
+            windows: vec![TmuxWindow {
+                id: "@0".to_string(),
+                name: "swarm-view".to_string(),
+                index: 0,
+                active_pane: Some("%0".to_string()),
+                panes: vec![pane],
+                last_layout: None,
+            }],
+        }],
+    };
+    state.tmux_servers.insert(label.to_string(), topology);
+}
+
 /// The lead that owns `teammate_session_id`'s pane, if it was recorded.
 pub(crate) fn lead_of_teammate(state: &AppState, teammate_session_id: &str) -> Option<String> {
     state.tmux_servers.iter().find_map(|server| {
