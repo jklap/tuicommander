@@ -126,6 +126,16 @@
   color: var(--warning, var(--fg-secondary));
 }
 
+.richChipRisk {
+  color: var(--error, var(--fg-secondary));
+}
+
+.branchRichPrState {
+  color: var(--fg-muted);
+  font-size: var(--font-2xs);
+  text-transform: uppercase;
+}
+
 .richChipMerged {
   color: var(--success, var(--fg-secondary));
 }

@@ -1,4 +1,4 @@
-import { type Accessor, createSignal, onCleanup } from "solid-js";
+import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
 import type { ProgressFlow } from "../stores/progress";
 
 /**
@@ -32,6 +32,8 @@ export interface BranchFactsInput {
 	dirtyFiles: number | null | undefined;
 	isMerged: boolean;
 	commitStatus?: string;
+	/** A main checkout is never removed, so it carries no stale, merged, unknown or dirty fact. */
+	isMain?: boolean;
 }
 
 export interface BranchFacts {
@@ -41,21 +43,23 @@ export interface BranchFacts {
 	additions: number;
 	deletions: number;
 	dirtyFiles: number;
-	state: "merged" | "stale" | null;
+	/** `unknown`: removal is blocked because the lifecycle status could not be read. */
+	state: "unknown" | "merged" | "stale" | null;
 }
 
 export function branchFacts(i: BranchFactsInput, nowMs: number): BranchFacts {
 	const commitMs = i.lastCommitTs ? i.lastCommitTs * 1000 : null;
-	const merged = i.isMerged || i.commitStatus === "merged";
-	const stale = !merged && commitMs !== null && nowMs - commitMs > STALE_AFTER_DAYS * 24 * 60 * MINUTE;
+	const merged = !i.isMain && (i.isMerged || i.commitStatus === "merged");
+	const stale = !i.isMain && !merged && commitMs !== null && nowMs - commitMs > STALE_AFTER_DAYS * 24 * 60 * MINUTE;
 	const sync = [i.ahead ? `↑${i.ahead}` : "", i.behind ? `↓${i.behind}` : ""].filter(Boolean).join(" ");
+	const unknown = !i.isMain && i.commitStatus === "unknown";
 	return {
 		commitAge: commitMs ? compactAge(commitMs, nowMs) : null,
 		sync: sync || null,
 		additions: i.additions,
 		deletions: i.deletions,
-		dirtyFiles: i.dirtyFiles ?? 0,
-		state: merged ? "merged" : stale ? "stale" : null,
+		dirtyFiles: i.isMain ? 0 : (i.dirtyFiles ?? 0),
+		state: unknown ? "unknown" : merged ? "merged" : stale ? "stale" : null,
 	};
 }
 
@@ -81,7 +85,8 @@ export function agentFacts(i: AgentFactsInput, task: string | null): AgentFacts 
 		i.awaitingInput === "error" ? "error" : i.awaitingInput === "question" ? "input" : i.busy ? "working" : "idle";
 	return {
 		state,
-		line: i.agentIntent ?? task ?? i.lastPrompt ?? null,
+		// Blank is absent: an empty intent must not hide the task or the prompt.
+		line: [i.agentIntent, task, i.lastPrompt].find((v) => v?.trim()) ?? null,
 	};
 }
 
@@ -109,12 +114,43 @@ export function repoFacts(i: RepoFactsInput, nowMs: number): RepoFacts {
 	};
 }
 
-/** Wall clock that ticks once a minute, for ages that must not freeze on screen. */
-export function createMinuteClock(): Accessor<number> {
-	const [now, setNow] = createSignal(Date.now());
-	const timer = setInterval(() => setNow(Date.now()), MINUTE);
-	onCleanup(() => clearInterval(timer));
-	return now;
+const [sharedNow, setSharedNow] = createSignal(Date.now());
+let clockUsers = 0;
+let clockTimer: ReturnType<typeof setInterval> | undefined;
+
+/**
+ * Wall clock that ticks once a minute, for ages that must not freeze on screen.
+ * One interval serves every row: it runs while at least one caller is `active`,
+ * so a compact sidebar, which prints no ages, keeps no timer at all.
+ */
+export function createMinuteClock(active: Accessor<boolean> = () => true): Accessor<number> {
+	createEffect(() => {
+		if (!active()) return;
+		if (clockUsers++ === 0) {
+			setSharedNow(Date.now());
+			clockTimer = setInterval(() => setSharedNow(Date.now()), MINUTE);
+		}
+		onCleanup(() => {
+			if (--clockUsers === 0) clearInterval(clockTimer);
+		});
+	});
+	return sharedNow;
+}
+
+/** Trailing separators and backslashes differ between how git and the store spell one checkout. */
+export function normalizePath(path: string): string {
+	return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+/**
+ * Linked worktrees of a repo: every workspace with its own checkout path that is
+ * not the repo root itself.
+ */
+// DEFERRED (2026-10-01) — a symlinked spelling of the repo root still counts as a worktree;
+// resolving it needs a realpath, which only the backend has.
+export function countWorktrees(repoPath: string, worktreePaths: (string | null | undefined)[]): number {
+	const root = normalizePath(repoPath);
+	return worktreePaths.filter((p) => p && normalizePath(p) !== root).length;
 }
 
 /** More subagents than this collapse into one "N subagents" line. */

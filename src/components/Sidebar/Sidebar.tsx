@@ -14,6 +14,8 @@ import { getRepoTextColor } from "../../utils/repoColor";
 import {
 	countSidebarRows,
 	createCoarsePointer,
+	createViewportHeight,
+	roomyMaxRows,
 	SidebarDensityContext,
 	sidebarDensity,
 } from "../../utils/sidebarDensity";
@@ -116,6 +118,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	// Density follows how much is on screen and how the user points: a short list
 	// or a finger gets roomier rows (CSS vars only; no handler is touched).
 	const coarsePointer = createCoarsePointer();
+	const viewportHeight = createViewportHeight();
 	const density = createMemo(() => {
 		const layout = filteredLayout();
 		// A collapsed group keeps its header row (counted below) but renders no repos.
@@ -130,6 +133,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 			countSidebarRows(repos, settingsStore.state.tabTreeEnabled, pluginRows) + layout.groups.length,
 			coarsePointer(),
 			uiStore.state.sidebarDensityMode,
+			roomyMaxRows(viewportHeight()),
 		);
 	});
 

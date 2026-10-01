@@ -1,6 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { createRoot } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProgressFlow } from "../stores/progress";
-import { agentFacts, branchFacts, compactAge, repoFacts, STALE_AFTER_DAYS, subagentRows } from "../utils/sidebarRich";
+import {
+	agentFacts,
+	branchFacts,
+	compactAge,
+	countWorktrees,
+	createMinuteClock,
+	repoFacts,
+	STALE_AFTER_DAYS,
+	subagentRows,
+} from "../utils/sidebarRich";
 
 // Each case names the plausible bug it catches (#1334-b659).
 
@@ -128,5 +138,88 @@ describe("subagentRows", () => {
 	it("returns nothing without a flow or a session", () => {
 		expect(subagentRows(undefined, "s1", NOW)).toEqual([]);
 		expect(subagentRows(flow([part("a", "running")]), null, NOW)).toEqual([]);
+	});
+});
+
+describe("branchFacts for a main checkout", () => {
+	const old = { ...base, lastCommitTs: NOW / 1000 - 90 * DAY_S };
+
+	// Catches: main/master older than 30 days shown as Stale.
+	it("is never stale", () => {
+		expect(branchFacts({ ...old, isMain: true }, NOW).state).toBeNull();
+		expect(branchFacts({ ...old }, NOW).state).toBe("stale");
+	});
+
+	// Catches: isMerged marking the main row "Merged" in rich only.
+	it("is never merged", () => {
+		expect(branchFacts({ ...base, isMain: true, isMerged: true, commitStatus: "merged" }, NOW).state).toBeNull();
+	});
+
+	// Catches: rich printing "N dirty" on main, which compact deliberately never does.
+	it("carries no dirty count or unknown verdict", () => {
+		const f = branchFacts({ ...base, isMain: true, dirtyFiles: 5, commitStatus: "unknown" }, NOW);
+		expect(f.dirtyFiles).toBe(0);
+		expect(f.state).toBeNull();
+	});
+});
+
+describe("branchFacts lifecycle unknown", () => {
+	// Catches: an unverifiable status (removal blocked) dropping out of rich.
+	it("reports unknown, outranking merged and stale", () => {
+		expect(branchFacts({ ...base, isMerged: true, commitStatus: "unknown" }, NOW).state).toBe("unknown");
+	});
+});
+
+describe("agentFacts blank handling", () => {
+	const input = { awaitingInput: null, busy: false, agentIntent: "", currentTask: null, lastPrompt: "ask" };
+
+	// Catches: `??` letting an empty intent hide the task and the prompt.
+	it("falls through an empty intent to the task, then the prompt", () => {
+		expect(agentFacts(input, "task").line).toBe("task");
+		expect(agentFacts(input, "  ").line).toBe("ask");
+	});
+
+	// Catches: a blank line rendered as an empty detail row.
+	it("returns null when every source is blank", () => {
+		expect(agentFacts({ ...input, lastPrompt: " " }, "")).toMatchObject({ line: null });
+	});
+});
+
+describe("countWorktrees", () => {
+	// Catches: the main checkout counted as a worktree when its path differs by a trailing slash or separator.
+	it("ignores the repo root however it is spelled", () => {
+		expect(countWorktrees("/r", ["/r/", "/r__wt/a", null, "/r__wt/b/"])).toBe(2);
+		expect(countWorktrees("C:/r", ["C:\\r", "C:/r__wt/a"])).toBe(1);
+	});
+});
+
+describe("createMinuteClock", () => {
+	afterEach(() => vi.useRealTimers());
+
+	// Catches: one setInterval per row, and a timer running while the sidebar is compact.
+	it("runs one shared interval while any caller is active and none otherwise", async () => {
+		vi.useFakeTimers();
+		const spy = vi.spyOn(globalThis, "setInterval");
+		let disposeA = () => {};
+		let disposeB = () => {};
+		createRoot((d) => {
+			disposeA = d;
+			createMinuteClock(() => true);
+		});
+		createRoot((d) => {
+			disposeB = d;
+			createMinuteClock(() => true);
+		});
+		createRoot((d) => {
+			createMinuteClock(() => false);
+			d();
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(spy).toHaveBeenCalledTimes(1);
+		disposeA();
+		expect(vi.getTimerCount()).toBe(1);
+		disposeB();
+		expect(vi.getTimerCount()).toBe(0);
+		spy.mockRestore();
 	});
 });

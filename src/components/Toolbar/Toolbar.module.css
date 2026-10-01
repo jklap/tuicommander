@@ -145,6 +145,24 @@
   color: var(--text-on-accent);
 }
 
+/* Density toggle: icon plus a one-letter mode (A, C, R). The mode must be readable
+   without hover, and auto, which forces nothing, gets an outline instead of a fill. */
+.densityToggle {
+  width: auto;
+  padding: 0 6px;
+  gap: 3px;
+}
+
+.densityToggleAuto {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.densityLabel {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 /* Branch button */
 .branch {
   display: flex;
