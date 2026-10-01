@@ -116,6 +116,16 @@ pattern before adding a fourth.
   means touching `main.rs` call sites unrelated to this fix — left as a separate, future
   cleanup rather than scope-creeping this change.
 
+## Pane create/materialize send the caller's `TUIC_SESSION` as `origin_session_id`
+
+A teammate's own hooks carry no parent reference, so the only way TUIC can tie a swarm pane back
+to its Claude Code lead is that this shim runs inside the lead's PTY: `create_tmux_pane` and
+`materialize_pane` (`exec.rs`) send `env_origin_session()` (`TUIC_SESSION`, `null` when unset or
+empty) and `tmux_routes.rs` stores it as `TmuxPane::lead_session_id` after validating it against
+live sessions. `new-session`/`new-window` deliberately do not send it (their initial pane is
+virtual; it learns its lead on `materialize`). Wire-body tests pin this, including the explicit
+`null`s — update them deliberately if the body changes.
+
 ## `DisplayMessage`/`ListPanes` session-name resolution
 
 Both need to report `#{session_name}` for the session that actually *owns*
