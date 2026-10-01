@@ -270,6 +270,10 @@ Expand a PR in the GitHub panel for these actions, next to Checkout, Merge and D
 
 Open PRs older than two weeks carry an age marker on the row: `2w`, `1m`, `3m` or `6m`, measured from the creation date.
 
+### PR Diff: collapsed files
+
+In the PR diff tab, lockfiles (`pnpm-lock.yaml`, `Cargo.lock`, ...), generated files (`dist/`, `*.min.js`, `*.snap`, `*.pb.go`, files marked `linguist-generated` in the repo's `.gitattributes`) and test files (`__tests__/`, `*.test.*`, `*_test.go`, ...) start collapsed. The header shows how many are collapsed; click a file header to expand it. `.gitattributes` is read from the local checkout, which stands in for the PR's base when another branch is checked out.
+
 ## Panel Keyboard Navigation
 
 The GitHub panel is keyboard-navigable without ever moving focus off the panel itself:
