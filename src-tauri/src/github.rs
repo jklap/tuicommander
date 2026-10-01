@@ -7254,3 +7254,121 @@ mod settled_threads_critic4_tests {
         assert_eq!(prs[0].unresolved_threads, 5);
     }
 }
+
+#[cfg(test)]
+mod settled_threads_critic5_tests {
+    use super::*;
+    use crate::state::SettledReviewThreads;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    type Cache = dashmap::DashMap<String, SettledReviewThreads>;
+    type WalkResult = std::future::Ready<Result<(ReviewThreadCounts, bool), String>>;
+
+    fn truncated(number: u32, updated_at: &str, head: &str, first_page: u32) -> BranchPrStatus {
+        let nodes: Vec<_> = (0..first_page)
+            .map(|_| serde_json::json!({"isResolved": false}))
+            .collect();
+        parse_pr_node(&serde_json::json!({
+            "number": number, "headRefName": format!("feat/{number}"), "state": "OPEN",
+            "updatedAt": updated_at, "headRefOid": head,
+            "reviewThreads": {"pageInfo": {"hasNextPage": true}, "nodes": nodes}
+        }))
+        .unwrap()
+    }
+
+    fn walk_ok(walks: &AtomicUsize, human: u32) -> impl Fn(i64) -> WalkResult + '_ {
+        move |_| {
+            walks.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Ok((ReviewThreadCounts { bot: 0, human }, true)))
+        }
+    }
+
+    fn walk_err(walks: &AtomicUsize) -> impl Fn(i64) -> WalkResult + '_ {
+        move |_| {
+            walks.fetch_add(1, Ordering::SeqCst);
+            std::future::ready(Err("rate limited".to_string()))
+        }
+    }
+
+    fn age_all(cache: &Cache, secs: u64) {
+        for mut entry in cache.iter_mut() {
+            entry.walked_at = Instant::now() - std::time::Duration::from_secs(secs);
+        }
+    }
+
+    /// Catches: a failed-walk entry that suppresses the walk for a new push or a new `updatedAt`
+    /// (negative cache not keyed on the PR version), pinning the stale lower bound for 60 s.
+    #[tokio::test]
+    async fn failed_entry_does_not_block_a_walk_for_a_new_head_or_updated_at() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+
+        let mut prs = vec![truncated(7, "t1", "h2", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 4)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2, "new head walks at once");
+        assert_eq!(prs[0].unresolved_threads, 4);
+
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+        let mut prs = vec![truncated(7, "t2", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 0)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2, "new updatedAt walks at once");
+        assert!(!prs[0].unresolved_threads_truncated);
+    }
+
+    /// Catches: a successful retry leaving `failed` set (or the old entry in place), so a settled
+    /// PR is re-walked on every poll after 60 s, or the entry keeps a stale count.
+    #[tokio::test]
+    async fn successful_retry_replaces_the_failed_entry_and_is_then_reused() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+        age_all(&cache, 61);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 6)).await;
+        assert!(!cache.get("h/o/r#7").unwrap().failed);
+
+        age_all(&cache, 120);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 99)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2, "settled entry reused after 120 s");
+        assert_eq!(prs[0].unresolved_threads, 6);
+        assert!(!prs[0].unresolved_threads_truncated);
+    }
+
+    /// Catches: a held-back failed PR losing its "N+" marker (reading as exactly N, or Ready at
+    /// 0) while the retry is suppressed.
+    #[tokio::test]
+    async fn pr_held_back_by_a_failed_walk_stays_truncated_and_never_ready() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+        for _ in 0..3 {
+            let mut prs = vec![truncated(7, "t1", "h1", 0)];
+            settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 0)).await;
+            assert!(prs[0].unresolved_threads_truncated);
+        }
+        assert_eq!(walks.load(Ordering::SeqCst), 1);
+    }
+
+    /// Catches: a failed entry that outlives `SETTLED_THREADS_TTL` or is never purged, so a PR
+    /// whose retry keeps failing is never walked again once the entry is old.
+    #[tokio::test]
+    async fn failed_entry_older_than_the_ttl_is_purged_and_walked_again() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
+        age_all(&cache, SETTLED_THREADS_TTL.as_secs() + 1);
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 3)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2);
+        assert_eq!(prs[0].unresolved_threads, 3);
+    }
+}
