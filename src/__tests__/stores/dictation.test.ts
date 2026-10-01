@@ -1621,7 +1621,6 @@ describe("dictationStore", () => {
 				expect(await store.previewSpeechVoice("it", "jean")).toBe("a reply is being spoken; try again when it ends");
 			});
 		});
-
 	});
 
 	// Edge voices (1357-7d37)

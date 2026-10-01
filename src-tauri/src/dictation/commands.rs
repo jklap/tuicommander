@@ -695,9 +695,12 @@ fn speech_engine(config: &DictationConfig) -> SpeechEngine {
 /// `config` with `speech_engine` filled in, so every reader — the engine
 /// choice here and the settings panel — sees one answer.
 fn with_resolved_engine(mut config: DictationConfig) -> DictationConfig {
-    if !matches!(config.speech_engine.as_str(), "edge" | "pocket" | "external") {
-        let pocket_installed = speech::assets::status(speech::assets::runtime())
-            != speech::assets::Status::Absent;
+    if !matches!(
+        config.speech_engine.as_str(),
+        "edge" | "pocket" | "external"
+    ) {
+        let pocket_installed =
+            speech::assets::status(speech::assets::runtime()) != speech::assets::Status::Absent;
         config.speech_engine = match legacy_speech_engine(&config, pocket_installed) {
             SpeechEngine::Edge => "edge",
             SpeechEngine::Pocket => "pocket",
