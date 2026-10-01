@@ -137,10 +137,59 @@ pub(crate) struct EpochFlagExplain {
     pub(crate) applies_now: bool,
 }
 
+/// `epoch_flags.declared_background_work`: the raw declaration (same three keys
+/// as every other epoch flag, unchanged) plus what the state ladder actually did
+/// with it. `applies_now` is only "the declaration is for the current turn" —
+/// whether it *counts* additionally depends on the per-type breakdown and on
+/// whether any teammate is really working, which is `counts_now`.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DeclaredWorkExplain {
+    #[serde(flatten)]
+    pub(crate) flag: EpochFlagExplain,
+    /// How long ago the declaration was written. A tab stuck on background work
+    /// with a declaration from many minutes ago is the telltale.
+    pub(crate) age_ms: Option<u64>,
+    /// `"summary"` when the hook sent the per-type `bgtasksummary` breakdown;
+    /// `"statuses_only"` for an older hook (every running task then counts,
+    /// idle teammates included); `"none"` when nothing applies now.
+    pub(crate) breakdown_source: &'static str,
+    /// Running non-teammate tasks (shell, subagent, monitor, ...) from the
+    /// breakdown; `None` without one.
+    pub(crate) non_teammate_running: Option<u32>,
+    /// Running Agent Teams teammates from the breakdown; `None` without one.
+    pub(crate) teammate_running: Option<u32>,
+    /// Whether any teammate owned by this session is busy right now (see
+    /// `swarm.teammates`). Only consulted when teammates are the sole declared work.
+    pub(crate) teammates_busy: bool,
+    /// Whether the declaration held this session "working" at capture time —
+    /// the same value `visible.declared_background_work` reports.
+    pub(crate) counts_now: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct EpochFlagsExplain {
     pub(crate) completion_declared: EpochFlagExplain,
-    pub(crate) declared_background_work: EpochFlagExplain,
+    pub(crate) declared_background_work: DeclaredWorkExplain,
+}
+
+/// One Agent Teams teammate owned by the session being explained.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TeammateExplain {
+    pub(crate) session_id: String,
+    /// The teammate terminal's own shell state (`"busy"`/`"idle"`); `None` when
+    /// its session no longer exists.
+    pub(crate) shell_state: Option<&'static str>,
+    pub(crate) busy: bool,
+}
+
+/// The lead/teammate link the tmux shim recorded, in both directions. Present
+/// only when this session is a lead with teammates, or is itself a teammate.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SwarmExplain {
+    /// Set when this session is a teammate: the lead whose badge it feeds.
+    pub(crate) lead_session_id: Option<String>,
+    /// Set when this session is a lead: the teammate terminals it owns.
+    pub(crate) teammates: Vec<TeammateExplain>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,6 +284,7 @@ pub(crate) struct SessionStateExplain {
     pub(crate) visible: VisibleExplain,
     pub(crate) evidence: EvidenceExplain,
     pub(crate) epoch_flags: EpochFlagsExplain,
+    pub(crate) swarm: Option<SwarmExplain>,
     pub(crate) screen: ScreenExplain,
     pub(crate) silence: SilenceExplain,
     pub(crate) holds: HoldsExplain,
@@ -288,6 +338,36 @@ pub(crate) fn explain_session_state_impl(
 
     let shell_is_busy = session.shell_state.as_deref() == Some("busy");
 
+    // Agent Teams linkage. Reads only the tmux topology and the shell-state
+    // atomics (never a SilenceState lock), so it is safe before and under the
+    // lock taken below.
+    let teammates: Vec<TeammateExplain> =
+        crate::mcp_http::tmux_routes::teammate_session_ids(state, session_id)
+            .into_iter()
+            .map(|id| {
+                let raw = state
+                    .session_maps
+                    .shell_states
+                    .get(&id)
+                    .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
+                TeammateExplain {
+                    shell_state: raw.map(|value| match value {
+                        SHELL_BUSY => "busy",
+                        SHELL_IDLE => "idle",
+                        _ => "unknown",
+                    }),
+                    busy: raw == Some(SHELL_BUSY),
+                    session_id: id,
+                }
+            })
+            .collect();
+    let teammates_busy = teammates.iter().any(|t| t.busy);
+    let lead_session_id = crate::mcp_http::tmux_routes::lead_of_teammate(state, session_id);
+    let swarm = (lead_session_id.is_some() || !teammates.is_empty()).then(|| SwarmExplain {
+        lead_session_id,
+        teammates,
+    });
+
     // One lock section for everything SilenceState holds, per this module's
     // doc comment on lock ordering.
     let sl = state.session_maps.silence_states.get(session_id)?;
@@ -314,11 +394,30 @@ pub(crate) fn explain_session_state_impl(
             declared_turn_epoch: sl.completion_turn_epoch,
             applies_now: sl.completion_declared && sl.completion_turn_epoch == session.turn_epoch,
         },
-        declared_background_work: EpochFlagExplain {
-            declared: sl.declared_background_work,
-            declared_turn_epoch: sl.declared_background_work_turn_epoch,
-            applies_now: sl.declared_background_work
-                && sl.declared_background_work_turn_epoch == session.turn_epoch,
+        declared_background_work: {
+            let applies_now = sl.declared_background_work
+                && sl.declared_background_work_turn_epoch == session.turn_epoch;
+            let summary = sl.declared_task_summary_for_epoch(session.turn_epoch);
+            DeclaredWorkExplain {
+                flag: EpochFlagExplain {
+                    declared: sl.declared_background_work,
+                    declared_turn_epoch: sl.declared_background_work_turn_epoch,
+                    applies_now,
+                },
+                age_ms: sl
+                    .declared_background_work_at
+                    .map(|at| at.elapsed().as_millis() as u64),
+                breakdown_source: match (applies_now, summary) {
+                    (false, _) => "none",
+                    (true, Some(_)) => "summary",
+                    (true, None) => "statuses_only",
+                },
+                non_teammate_running: summary.map(|s| s.non_teammate_running),
+                teammate_running: summary.map(|s| s.teammate_running),
+                teammates_busy,
+                counts_now: sl
+                    .declared_background_work_for_epoch_with(session.turn_epoch, || teammates_busy),
+            }
         },
     };
     // `completion_declared` (the local computed by `session_state_with_shell_detailed`,
@@ -416,6 +515,7 @@ pub(crate) fn explain_session_state_impl(
         visible,
         evidence,
         epoch_flags,
+        swarm,
         screen,
         silence: silence_explain,
         holds,
