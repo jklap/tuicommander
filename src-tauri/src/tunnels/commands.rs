@@ -719,7 +719,13 @@ mod critic_r3_tests {
         );
         let _ = std::fs::remove_file(format!("{}.log", counter.display()));
         let cache = tokio::sync::Mutex::new(None);
-        let hosts = vec![config_host("one")];
+        let hosts = vec![DiscoveredHost {
+            host: "one".to_string(),
+            target: "one".to_string(),
+            user: None,
+            port: None,
+            source: discovery::HostSource::Config,
+        }];
         let (a, b) = tokio::join!(
             probe_cached(&cache, hosts.clone(), &counter, Duration::from_secs(5)),
             probe_cached(&cache, hosts.clone(), &counter, Duration::from_secs(5)),
