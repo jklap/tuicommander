@@ -21720,3 +21720,155 @@ fn explain_declared_teammates_no_linked_pane_accounts_for_are_reported_and_count
     );
     assert_eq!(flag.counts_now, explain.visible.declared_background_work);
 }
+
+// --- teammate-aware declared-work read: the three pty.rs consumers ---
+
+/// A Claude lead whose `Stop` declared `declared_teammates` teammates running,
+/// with (optionally) one linked teammate terminal in `mate_shell`. The lead has a
+/// parent so the parent-idle notification path has somewhere to deliver.
+fn teammate_gate_fixture(
+    state: &crate::state::AppState,
+    lead: &str,
+    parent: &str,
+    lead_shell: u8,
+    declared_teammates: u32,
+    linked_mate_shell: Option<u8>,
+) -> Arc<Mutex<SilenceState>> {
+    state
+        .session_maps
+        .session_parent
+        .insert(lead.to_string(), parent.to_string());
+    state.agent_inbox.entry(parent.to_string()).or_default();
+    state.session_maps.session_states.insert(
+        lead.to_string(),
+        crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            turn_epoch: 0,
+            ..Default::default()
+        },
+    );
+    state.session_maps.shell_states.insert(
+        lead.to_string(),
+        std::sync::atomic::AtomicU8::new(lead_shell),
+    );
+    let mut silence = SilenceState::new();
+    silence.set_declared_background_work(true, 0);
+    silence.set_declared_task_summary(
+        DeclaredTaskSummary {
+            non_teammate_running: 0,
+            teammate_running: declared_teammates,
+        },
+        0,
+    );
+    let silence = Arc::new(Mutex::new(silence));
+    state
+        .session_maps
+        .silence_states
+        .insert(lead.to_string(), silence.clone());
+    if let Some(shell) = linked_mate_shell {
+        let mate = format!("{lead}-mate");
+        state
+            .session_maps
+            .shell_states
+            .insert(mate.clone(), std::sync::atomic::AtomicU8::new(shell));
+        crate::mcp_http::tmux_routes::link_teammate_for_test(
+            state,
+            &format!("gate-{lead}"),
+            lead,
+            &mate,
+        );
+    }
+    silence
+}
+
+#[test]
+fn an_idle_teammate_does_not_defer_the_leads_parent_idle_notification() {
+    let state = crate::state::tests_support::make_test_app_state();
+    teammate_gate_fixture(
+        &state,
+        "lead-pi-idle",
+        "parent-pi-idle",
+        SHELL_BUSY,
+        1,
+        Some(SHELL_IDLE),
+    );
+    assert!(try_shell_transition(
+        &state,
+        "lead-pi-idle",
+        SHELL_BUSY,
+        SHELL_IDLE,
+        true
+    ));
+    assert_eq!(
+        state.agent_inbox.get("parent-pi-idle").unwrap().len(),
+        1,
+        "only an idle teammate is declared: the lead's idle edge must be reported"
+    );
+}
+
+#[test]
+fn a_busy_or_unlinked_teammate_defers_the_leads_parent_idle_notification() {
+    for (name, declared, mate) in [
+        ("busy", 1, Some(SHELL_BUSY)),
+        ("unlinked", 1, None),
+        ("surplus", 2, Some(SHELL_IDLE)),
+    ] {
+        let state = crate::state::tests_support::make_test_app_state();
+        let lead = format!("lead-pi-{name}");
+        let parent = format!("parent-pi-{name}");
+        teammate_gate_fixture(&state, &lead, &parent, SHELL_BUSY, declared, mate);
+        assert!(try_shell_transition(
+            &state, &lead, SHELL_BUSY, SHELL_IDLE, true
+        ));
+        assert_eq!(
+            state.agent_inbox.get(&parent).unwrap().len(),
+            0,
+            "{name}: a teammate that may still be working must defer the idle report"
+        );
+    }
+}
+
+#[test]
+fn an_idle_teammate_does_not_defer_suggest_publication_but_a_busy_or_unlinked_one_does() {
+    let publish = |name: &str, declared: u32, mate: Option<u8>| -> (bool, usize) {
+        let state = crate::state::tests_support::make_test_app_state();
+        let lead = format!("lead-sg-{name}");
+        let parent = format!("parent-sg-{name}");
+        let silence = teammate_gate_fixture(&state, &lead, &parent, SHELL_IDLE, declared, mate);
+        silence
+            .lock()
+            .mark_suggest_candidate(vec!["Review result".to_string()], 0);
+        let emitted = emit_pending_suggest_if_idle(&state, &silence, &lead);
+        (emitted, state.agent_inbox.get(&parent).unwrap().len())
+    };
+    assert_eq!(publish("idle", 1, Some(SHELL_IDLE)), (true, 1));
+    assert_eq!(publish("busy", 1, Some(SHELL_BUSY)), (false, 0));
+    assert_eq!(publish("unlinked", 1, None), (false, 0));
+    assert_eq!(publish("surplus", 2, Some(SHELL_IDLE)), (false, 0));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_idle_teammate_does_not_block_standby_but_a_busy_or_unlinked_one_does() {
+    let blocks = |name: &str, declared: u32, mate: Option<u8>| -> (bool, bool) {
+        let state = crate::state::tests_support::make_test_app_state();
+        let lead = format!("lead-sb-{name}");
+        let silence = teammate_gate_fixture(
+            &state,
+            &lead,
+            &format!("parent-sb-{name}"),
+            SHELL_IDLE,
+            declared,
+            mate,
+        );
+        let guard = silence.lock();
+        let locked = background_activity_blocks_standby_with_silence(&state, &lead, Some(&guard));
+        drop(guard);
+        // The self-locking variant must agree with the already-locked one.
+        (background_activity_blocks_standby(&state, &lead), locked)
+    };
+    assert_eq!(blocks("idle", 1, Some(SHELL_IDLE)), (false, false));
+    assert_eq!(blocks("busy", 1, Some(SHELL_BUSY)), (true, true));
+    assert_eq!(blocks("unlinked", 1, None), (true, true));
+    assert_eq!(blocks("surplus", 2, Some(SHELL_IDLE)), (true, true));
+}
