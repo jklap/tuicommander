@@ -4738,7 +4738,10 @@ describe("useGitOperations", () => {
 			let p = keep.refreshAllBranchStats();
 			await vi.advanceTimersByTimeAsync(0);
 			await p;
-			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/a", safe: true }, { path: "/wt/b", safe: true }]);
+			mockRepo.assessOrphanCleanup.mockResolvedValue([
+				{ path: "/wt/a", safe: true },
+				{ path: "/wt/b", safe: true },
+			]);
 			mockRepo.removeOrphanWorktree.mockRejectedValue(new Error("locked"));
 			p = keep.refreshAllBranchStats();
 			await vi.advanceTimersByTimeAsync(0);
