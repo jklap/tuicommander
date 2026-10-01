@@ -7,6 +7,8 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 const DEFAULT_SSH_PORT: u16 = 22;
+/// Listed known_hosts names are capped so a huge file cannot flood the panel.
+pub(crate) const MAX_KNOWN_HOSTS: usize = 2000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,7 +19,12 @@ pub(crate) enum HostSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct DiscoveredHost {
+    /// Name to show and to hand to `ssh`: the config alias, or the known_hosts name.
     pub(crate) host: String,
+    /// Resolved machine (`HostName` for an alias, else the name itself). With
+    /// `port` it is the entry's identity: two entries sharing a display name
+    /// can still be different machines.
+    pub(crate) target: String,
     pub(crate) user: Option<String>,
     pub(crate) port: Option<u16>,
     pub(crate) source: HostSource,
@@ -26,6 +33,10 @@ pub(crate) struct DiscoveredHost {
 impl DiscoveredHost {
     /// Port to pass to `ssh -p`. A config alias carries its own port in the
     /// config, which ssh applies by itself.
+    pub(crate) fn identity(&self) -> (String, u16) {
+        dedupe_key(&self.target, self.port)
+    }
+
     pub(crate) fn probe_port(&self) -> Option<u16> {
         match self.source {
             HostSource::Config => None,
@@ -63,7 +74,9 @@ pub(crate) fn is_wildcard(pattern: &str) -> bool {
 
 /// Parse OpenSSH known_hosts text. Hashed names (`|1|…`) are counted, marker
 /// lines (`@cert-authority`, `@revoked`) and wildcard/negated patterns are
-/// skipped (a leading `-` would reach ssh as an option); `[host]:port` and comma-separated names are expanded.
+/// skipped; `[host]:port` and comma-separated names are expanded. Names that
+/// could reach `ssh` as an option or carry control characters, and ports that
+/// are not 1-65535, are dropped.
 pub(crate) fn parse_known_hosts(text: &str) -> KnownHosts {
     let mut known = KnownHosts::default();
     for line in text.lines() {
@@ -79,23 +92,43 @@ pub(crate) fn parse_known_hosts(text: &str) -> KnownHosts {
             continue;
         }
         for name in names.split(',') {
-            if name.is_empty() || name.starts_with(['!', '-']) || is_wildcard(name) {
+            if name.starts_with('!') || is_wildcard(name) {
                 continue;
             }
-            known.hosts.push(split_host_port(name));
+            if let Some((host, port)) = split_host_port(name)
+                && is_safe_host(&host)
+            {
+                known.hosts.push((host, port));
+            }
         }
     }
     known
 }
 
-fn split_host_port(name: &str) -> (String, Option<u16>) {
-    if let Some(rest) = name.strip_prefix('[')
-        && let Some((host, tail)) = rest.split_once(']')
-    {
-        let port = tail.strip_prefix(':').and_then(|p| p.parse().ok());
-        return (host.to_string(), port);
+/// A host that is safe to pass to `ssh` as a destination: non-empty, no
+/// leading `-`, no whitespace, control characters or brackets.
+pub(crate) fn is_safe_host(host: &str) -> bool {
+    !host.is_empty()
+        && !host.starts_with('-')
+        && !host.contains(|c: char| c.is_whitespace() || c.is_control() || c == '[' || c == ']')
+}
+
+/// `None` when the name is malformed (bad port, unbalanced bracket).
+fn split_host_port(name: &str) -> Option<(String, Option<u16>)> {
+    if let Some(rest) = name.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']')?;
+        let port = match tail {
+            "" => None,
+            _ => Some(
+                tail.strip_prefix(':')?
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|p| *p != 0)?,
+            ),
+        };
+        return Some((host.to_string(), port));
     }
-    (name.to_string(), None)
+    Some((name.to_string(), None))
 }
 
 fn dedupe_key(host: &str, port: Option<u16>) -> (String, u16) {
@@ -108,19 +141,21 @@ pub(crate) fn merge_discovered(config: Vec<ConfigHost>, known: KnownHosts) -> Di
     let mut seen = HashSet::new();
     let mut hosts = Vec::new();
     for entry in config {
-        let resolved = entry.hostname.as_deref().unwrap_or(&entry.alias);
-        if seen.insert(dedupe_key(resolved, entry.port)) {
+        let target = entry.hostname.unwrap_or_else(|| entry.alias.clone());
+        if seen.insert(dedupe_key(&target, entry.port)) {
             hosts.push(DiscoveredHost {
                 host: entry.alias,
+                target,
                 user: entry.user,
                 port: entry.port,
                 source: HostSource::Config,
             });
         }
     }
-    for (host, port) in known.hosts {
+    for (host, port) in known.hosts.into_iter().take(MAX_KNOWN_HOSTS) {
         if seen.insert(dedupe_key(&host, port)) {
             hosts.push(DiscoveredHost {
+                target: host.clone(),
                 host,
                 user: None,
                 port,
@@ -271,6 +306,33 @@ mod hostile_input_tests {
         assert_eq!(known.hashed_count, 1);
     }
 
+    /// Catches: `[h]:abc` parsing to port None (listed as 22, wrong dedupe key)
+    /// and `[h]:0` or an unbalanced bracket being accepted as a host.
+    #[test]
+    fn malformed_ports_and_brackets_are_not_listed() {
+        let known = parse_known_hosts(
+            "[a.example]:abc ssh-rsa AAAA\n[b.example]:0 ssh-rsa AAAA\n[c.example ssh-rsa AAAA\n[d.example]: ssh-rsa AAAA\n[e.example]:99999 ssh-rsa AAAA\n[ok.example]:65535 ssh-rsa AAAA\n",
+        );
+        assert_eq!(known.hosts, vec![("ok.example".to_string(), Some(65535))]);
+    }
+
+    /// Catches: control characters or an embedded bracket inside a name reaching ssh.
+    #[test]
+    fn control_characters_in_a_name_are_not_listed() {
+        let known = parse_known_hosts("bad\x07host ssh-rsa AAAA\nfine.example ssh-rsa AAAA\n");
+        assert_eq!(known.hosts, vec![("fine.example".to_string(), None)]);
+    }
+
+    /// Catches: a known_hosts flood listing more than the cap.
+    #[test]
+    fn listed_known_hosts_are_capped() {
+        let text: String = (0..MAX_KNOWN_HOSTS + 50)
+            .map(|i| format!("h{i}.example ssh-rsa AAAA\n"))
+            .collect();
+        let merged = merge_discovered(Vec::new(), parse_known_hosts(&text));
+        assert_eq!(merged.hosts.len(), MAX_KNOWN_HOSTS);
+    }
+
     /// Catches: a config alias and a known_hosts name that resolve to different
     /// machines sharing the same (host, port) identity, so the UI matches the
     /// probe result of one entry onto the other (statuses carry no source).
@@ -283,11 +345,7 @@ mod hostile_input_tests {
             port: None,
         }];
         let merged = merge_discovered(config, parse_known_hosts("db ssh-ed25519 AAAA\n"));
-        let mut ids: Vec<(String, Option<u16>)> = merged
-            .hosts
-            .iter()
-            .map(|h| (h.host.clone(), h.port))
-            .collect();
+        let mut ids: Vec<(String, u16)> = merged.hosts.iter().map(|h| h.identity()).collect();
         let total = ids.len();
         ids.sort();
         ids.dedup();

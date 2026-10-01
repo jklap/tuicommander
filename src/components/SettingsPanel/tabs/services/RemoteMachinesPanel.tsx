@@ -81,9 +81,14 @@ export function emptyRemoteForm() {
 	};
 }
 
-/** Probe state of a discovered host, matched by host and port. */
+/** Probe state of a discovered host, matched by resolved target and port (never by display name). */
 export function discoveredHostAuth(host: DiscoveredSshHost, statuses: SshHostStatus[]): SshHostStatus["auth"] | null {
-	return statuses.find((st) => st.host === host.host && st.port === host.port)?.auth ?? null;
+	return statuses.find((st) => st.target === host.target && st.port === host.port)?.auth ?? null;
+}
+
+/** Replace the status of the same target and port, or append it. */
+export function withStatus(statuses: SshHostStatus[], status: SshHostStatus): SshHostStatus[] {
+	return [...statuses.filter((st) => !(st.target === status.target && st.port === status.port)), status];
 }
 
 /** Add-form state prefilled from a discovered host. */
@@ -258,6 +263,16 @@ export const RemoteMachinesPanel: Component = () => {
 			setError(String(e));
 		} finally {
 			setProbingHosts(false);
+		}
+	}
+
+	async function probeOneHost(host: DiscoveredSshHost) {
+		setError("");
+		try {
+			const status = await remoteConnectionsStore.probeSshHost(host);
+			setSshHosts((current) => withStatus(current, status));
+		} catch (e) {
+			setError(String(e));
 		}
 	}
 
@@ -521,9 +536,12 @@ export const RemoteMachinesPanel: Component = () => {
 						Discovered SSH hosts ({discovered().hosts.length})
 					</span>
 					<button class={s.textBtn} type="button" onClick={probeHosts} disabled={probingHosts()}>
-						{probingHosts() ? "Probing..." : "Probe hosts"}
+						{probingHosts() ? "Probing..." : "Probe config hosts"}
 					</button>
 				</div>
+				<p class={s.hint} style={{ margin: "4px 0 0" }}>
+					Only ssh config hosts are probed in bulk. A known_hosts host is contacted only when you press its own Probe.
+				</p>
 				<Show when={discovered().hashed_count > 0}>
 					<p class={s.hint} style={{ margin: "4px 0 0" }}>
 						{discovered().hashed_count} known_hosts entries are hashed and cannot be listed.
@@ -534,26 +552,36 @@ export const RemoteMachinesPanel: Component = () => {
 						{(host) => {
 							const auth = () => discoveredHostAuth(host, sshHosts());
 							return (
-								<button
-									type="button"
-									class={s.textBtn}
-									title="Prefill the Add form with this host"
-									style={{ display: "flex", width: "100%", "justify-content": "space-between", gap: "8px" }}
-									onClick={() => {
-										setForm(formFromDiscoveredHost(host));
-										setShowAdd(true);
-										setError("");
-									}}
-								>
-									<span style={{ "font-family": "monospace", "font-size": "11px" }}>
-										{host.user ? `${host.user}@` : ""}
-										{host.host}
-										{host.port ? `:${host.port}` : ""}
-									</span>
-									<span style={{ "font-size": "11px", color: "var(--text-dimmed)" }}>
-										{auth() ? auth()?.replaceAll("_", " ") : host.source === "config" ? "ssh config" : "known_hosts"}
-									</span>
-								</button>
+								<div style={{ display: "flex", gap: "4px", "align-items": "center" }}>
+									<button
+										type="button"
+										class={s.textBtn}
+										title="Prefill the Add form with this host"
+										style={{ display: "flex", flex: 1, "justify-content": "space-between", gap: "8px" }}
+										onClick={() => {
+											setForm(formFromDiscoveredHost(host));
+											setShowAdd(true);
+											setError("");
+										}}
+									>
+										<span style={{ "font-family": "monospace", "font-size": "11px" }}>
+											{host.user ? `${host.user}@` : ""}
+											{host.host}
+											{host.port ? `:${host.port}` : ""}
+										</span>
+										<span style={{ "font-size": "11px", color: "var(--text-dimmed)" }}>
+											{auth() ? auth()?.replaceAll("_", " ") : host.source === "config" ? "ssh config" : "known_hosts"}
+										</span>
+									</button>
+									<button
+										type="button"
+										class={s.textBtn}
+										title="Contact this host once to check authentication"
+										onClick={() => probeOneHost(host)}
+									>
+										Probe
+									</button>
+								</div>
 							);
 						}}
 					</For>

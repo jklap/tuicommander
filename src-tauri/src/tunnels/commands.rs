@@ -149,6 +149,10 @@ pub(crate) async fn get_tunnel_audit(
 const SSH_PROBE_CACHE_TTL: Duration = Duration::from_secs(60);
 const SSH_PROBE_TIMEOUT: Duration = Duration::from_secs(7);
 const SSH_PROBE_CONCURRENCY: usize = 4;
+/// Most hosts one bulk probe contacts; the rest of a long config stay unprobed.
+const SSH_PROBE_MAX_HOSTS: usize = 64;
+/// known_hosts is read up to this size; a longer file is cut at its last full line.
+const KNOWN_HOSTS_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -162,6 +166,8 @@ pub(crate) enum HostAuth {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SshHostStatus {
     pub(crate) host: String,
+    /// With `port`, the identity of the discovered entry this result belongs to.
+    pub(crate) target: String,
     pub(crate) port: Option<u16>,
     pub(crate) auth: HostAuth,
 }
@@ -229,11 +235,28 @@ fn known_hosts_path() -> Option<PathBuf> {
 }
 
 fn read_known_hosts(path: &FsPath) -> Result<discovery::KnownHosts, String> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(discovery::parse_known_hosts(&text)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
-        Err(error) => Err(format!("failed to read known_hosts: {error}")),
+    use std::io::Read;
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(error) => return Err(format!("failed to read known_hosts: {error}")),
+    };
+    let mut bytes = Vec::new();
+    file.take(KNOWN_HOSTS_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read known_hosts: {error}"))?;
+    Ok(discovery::parse_known_hosts(&bounded_text(bytes)))
+}
+
+/// Lossy text of at most `KNOWN_HOSTS_MAX_BYTES`, cut at the last full line.
+fn bounded_text(mut bytes: Vec<u8>) -> String {
+    if bytes.len() as u64 > KNOWN_HOSTS_MAX_BYTES {
+        bytes.truncate(KNOWN_HOSTS_MAX_BYTES as usize);
+        if let Some(last_newline) = bytes.iter().rposition(|b| *b == b'\n') {
+            bytes.truncate(last_newline + 1);
+        }
     }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 pub(crate) fn load_discovered_hosts() -> Result<DiscoveredHosts, String> {
@@ -271,27 +294,73 @@ pub(crate) async fn probe_ssh_config_hosts_http() -> Response {
     }
 }
 
+/// Bulk probe: the `~/.ssh/config` aliases only. known_hosts names are probed
+/// one at a time, on request (`probe_discovered_host`).
 pub(crate) async fn probe_ssh_config_hosts() -> Result<Vec<SshHostStatus>, String> {
-    let hosts = load_discovered_hosts()?.hosts;
+    let config = match ssh_config_path() {
+        Some(path) => parse_ssh_config_entries(&path)?,
+        None => Vec::new(),
+    };
+    let mut hosts = discovery::merge_discovered(config, Default::default()).hosts;
+    hosts.truncate(SSH_PROBE_MAX_HOSTS);
     let cache = SSH_PROBE_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
     probe_cached(cache, hosts, FsPath::new("ssh"), SSH_PROBE_TIMEOUT).await
 }
 
+#[derive(Deserialize)]
+pub(crate) struct ProbeHostRequest {
+    pub(crate) target: String,
+    pub(crate) port: Option<u16>,
+}
+
+/// Probe one discovered entry, identified by (target, port). Only entries the
+/// discovery list itself yields are contacted, never a caller-supplied name.
+pub(crate) async fn probe_discovered_host(
+    target: &str,
+    port: Option<u16>,
+) -> Result<SshHostStatus, String> {
+    let wanted = (target.to_ascii_lowercase(), port.unwrap_or(22));
+    let host = load_discovered_hosts()?
+        .hosts
+        .into_iter()
+        .find(|host| host.identity() == wanted)
+        .ok_or_else(|| "host is not in the discovered list".to_string())?;
+    let auth = probe_host_with_binary(&host, FsPath::new("ssh"), SSH_PROBE_TIMEOUT).await;
+    Ok(status_of(host, auth))
+}
+
+/// POST /tunnels/ssh-hosts/probe — probe one discovered host.
+pub(crate) async fn probe_discovered_host_http(Json(request): Json<ProbeHostRequest>) -> Response {
+    match probe_discovered_host(&request.target, request.port).await {
+        Ok(status) => (StatusCode::OK, Json(serde_json::json!(status))).into_response(),
+        Err(error) => err_json(StatusCode::NOT_FOUND, &error),
+    }
+}
+
+fn status_of(host: DiscoveredHost, auth: HostAuth) -> SshHostStatus {
+    SshHostStatus {
+        host: host.host,
+        target: host.target,
+        port: host.port,
+        auth,
+    }
+}
+
+/// The cache lock is held only to read and to store, never across `ssh`.
 async fn probe_cached(
     cache: &tokio::sync::Mutex<Option<ProbeCacheEntry>>,
     hosts: Vec<DiscoveredHost>,
     binary: &FsPath,
     timeout: Duration,
 ) -> Result<Vec<SshHostStatus>, String> {
-    let mut cached = cache.lock().await;
-    if let Some(entry) = cached.as_ref()
+    if let Some(entry) = cache.lock().await.as_ref()
         && entry.hosts == hosts
         && entry.stored_at.elapsed() < SSH_PROBE_CACHE_TTL
     {
         return Ok(entry.statuses.clone());
     }
     let statuses = probe_hosts_with_binary(hosts.clone(), binary, timeout).await;
-    *cached = Some(ProbeCacheEntry {
+    *cache.lock().await = Some(ProbeCacheEntry {
         stored_at: Instant::now(),
         hosts,
         statuses: statuses.clone(),
@@ -306,45 +375,49 @@ async fn probe_hosts_with_binary(
 ) -> Vec<SshHostStatus> {
     use futures_util::StreamExt;
     futures_util::stream::iter(hosts.into_iter().map(|host| async move {
-        let auth = probe_host_with_binary(&host.host, host.probe_port(), binary, timeout).await;
-        SshHostStatus {
-            host: host.host,
-            port: host.port,
-            auth,
-        }
+        let auth = probe_host_with_binary(&host, binary, timeout).await;
+        status_of(host, auth)
     }))
     .buffer_unordered(SSH_PROBE_CONCURRENCY)
     .collect()
     .await
 }
 
-fn probe_args(host: &str, port: Option<u16>) -> Vec<String> {
+/// `host_key_policy` is the `StrictHostKeyChecking` value. The host follows
+/// `--` so a name that starts with `-` can never be read as an option.
+fn probe_args(host: &str, port: Option<u16>, host_key_policy: &str) -> Vec<String> {
     let mut args = vec![
         "-o".into(),
         "BatchMode=yes".into(),
         "-o".into(),
         "ConnectTimeout=5".into(),
         "-o".into(),
-        "StrictHostKeyChecking=accept-new".into(),
+        format!("StrictHostKeyChecking={host_key_policy}"),
     ];
     if let Some(port) = port {
         args.push("-p".into());
         args.push(port.to_string());
     }
+    args.push("--".into());
     args.push(host.to_string());
     args.push("true".into());
     args
 }
 
+/// A known_hosts entry is already trusted, so a changed key must fail rather
+/// than be accepted; a config alias keeps the original `accept-new`.
 async fn probe_host_with_binary(
-    host: &str,
-    port: Option<u16>,
+    host: &DiscoveredHost,
     binary: &FsPath,
     timeout: Duration,
 ) -> HostAuth {
+    let policy = match host.source {
+        discovery::HostSource::KnownHosts => "yes",
+        discovery::HostSource::Config => "accept-new",
+    };
     let mut command = tokio::process::Command::new(binary);
     command
-        .args(probe_args(host, port))
+        .args(probe_args(&host.host, host.probe_port(), policy))
         .kill_on_drop(true)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -434,6 +507,16 @@ pub(crate) async fn list_agent_keys() -> Response {
 mod tests {
     use super::*;
 
+    fn config_host(name: &str) -> DiscoveredHost {
+        DiscoveredHost {
+            host: name.to_string(),
+            target: name.to_string(),
+            user: None,
+            port: None,
+            source: discovery::HostSource::Config,
+        }
+    }
+
     #[test]
     fn ssh_hosts_are_deduplicated_and_wildcards_are_omitted() {
         let dir = tempfile::tempdir().unwrap();
@@ -453,7 +536,7 @@ mod tests {
     #[test]
     fn ssh_hosts_probe_uses_the_noninteractive_bounded_command() {
         assert_eq!(
-            probe_args("vps", None),
+            probe_args("vps", None, "accept-new"),
             vec![
                 "-o",
                 "BatchMode=yes",
@@ -461,6 +544,7 @@ mod tests {
                 "ConnectTimeout=5",
                 "-o",
                 "StrictHostKeyChecking=accept-new",
+                "--",
                 "vps",
                 "true",
             ]
@@ -488,19 +572,19 @@ mod tests {
         );
 
         assert_eq!(
-            probe_host_with_binary("host", None, &shell, Duration::from_secs(1)).await,
+            probe_host_with_binary(&config_host("host"), &shell, Duration::from_secs(1)).await,
             HostAuth::Shell
         );
         assert_eq!(
-            probe_host_with_binary("host", None, &no_shell, Duration::from_secs(1)).await,
+            probe_host_with_binary(&config_host("host"), &no_shell, Duration::from_secs(1)).await,
             HostAuth::NoShell
         );
         assert_eq!(
-            probe_host_with_binary("host", None, &auth, Duration::from_secs(1)).await,
+            probe_host_with_binary(&config_host("host"), &auth, Duration::from_secs(1)).await,
             HostAuth::AuthFailed
         );
         assert_eq!(
-            probe_host_with_binary("host", None, &timeout, Duration::from_millis(50)).await,
+            probe_host_with_binary(&config_host("host"), &timeout, Duration::from_millis(50)).await,
             HostAuth::Unreachable
         );
     }
@@ -515,12 +599,7 @@ mod tests {
             "echo 'Permission denied' >&2; exit 255",
             "echo Permission denied 1>&2& exit /b 255",
         );
-        let hosts = vec![DiscoveredHost {
-            host: "cached".to_string(),
-            user: None,
-            port: None,
-            source: discovery::HostSource::Config,
-        }];
+        let hosts = vec![config_host("cached")];
 
         let first = probe_cached(&cache, hosts.clone(), &shell, Duration::from_secs(1))
             .await
@@ -532,6 +611,72 @@ mod tests {
         assert_eq!(first[0].auth, HostAuth::Shell);
         assert_eq!(second, first, "fresh cache must skip the second process");
     }
+
+    /// Catches: a known_hosts entry probed with `accept-new` (a changed key
+    /// accepted for a host that is already trusted) or without its `-p` port.
+    #[tokio::test]
+    async fn a_known_hosts_probe_is_strict_and_carries_its_port() {
+        let recorder = crate::test_support::fake_ssh_script(
+            "ssh-hosts-known-strict",
+            "printf '%s\\n' \"$*\" > \"$0.log\"; exit 0",
+            "echo %* > \"%~f0.log\"\r\nexit /b 0",
+        );
+        let _ = std::fs::remove_file(format!("{}.log", recorder.display()));
+        let host = DiscoveredHost {
+            host: "10.0.0.5".into(),
+            target: "10.0.0.5".into(),
+            user: None,
+            port: Some(2222),
+            source: discovery::HostSource::KnownHosts,
+        };
+        probe_host_with_binary(&host, &recorder, Duration::from_secs(2)).await;
+        let log = std::fs::read_to_string(format!("{}.log", recorder.display())).unwrap();
+        assert!(log.contains("StrictHostKeyChecking=yes"), "{log}");
+        assert!(!log.contains("accept-new"), "{log}");
+        assert!(log.contains("-p 2222 -- 10.0.0.5"), "{log}");
+    }
+
+    /// Catches: the probe cache mutex held across the ssh processes, so a
+    /// second request waits for every host of the first.
+    #[tokio::test]
+    async fn the_probe_cache_lock_is_free_while_ssh_runs() {
+        let cache = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+        let slow = crate::test_support::fake_ssh_script(
+            "ssh-hosts-lock-slow",
+            "sleep 1; exit 0",
+            "ping -n 3 127.0.0.1 >nul",
+        );
+        let running = tokio::spawn({
+            let cache = cache.clone();
+            async move {
+                probe_cached(
+                    &cache,
+                    vec![config_host("slow")],
+                    &slow,
+                    Duration::from_secs(5),
+                )
+                .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            cache.try_lock().is_ok(),
+            "cache locked while ssh is running"
+        );
+        running.await.unwrap().unwrap();
+    }
+
+    /// Catches: an unbounded known_hosts read; a file over the cap must be cut
+    /// at its last full line, never mid-name.
+    #[test]
+    fn an_oversized_known_hosts_is_cut_at_a_full_line() {
+        let line = "h.example ssh-rsa AAAA\n";
+        let count = (KNOWN_HOSTS_MAX_BYTES as usize / line.len()) + 10;
+        let bytes = line.repeat(count).into_bytes();
+        let text = bounded_text(bytes);
+        assert!(text.len() as u64 <= KNOWN_HOSTS_MAX_BYTES);
+        assert!(text.ends_with('\n'));
+    }
 }
 
 #[cfg(test)]
@@ -542,7 +687,7 @@ mod hostile_probe_tests {
     /// passed to `ssh` as an option because no `--` precedes it.
     #[test]
     fn probe_args_cannot_let_a_host_become_an_option() {
-        let args = probe_args("-oProxyCommand=evil", None);
+        let args = probe_args("-oProxyCommand=evil", None, "yes");
         let host_at = args
             .iter()
             .position(|a| a == "-oProxyCommand=evil")

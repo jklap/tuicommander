@@ -2270,6 +2270,7 @@ pub fn run() {
             tunnels::tauri_commands::get_tunnel_status,
             tunnels::tauri_commands::list_ssh_config_hosts,
             tunnels::tauri_commands::list_discovered_ssh_hosts,
+            tunnels::tauri_commands::probe_discovered_ssh_host,
             tunnels::tauri_commands::probe_ssh_config_hosts,
             tunnels::tauri_commands::list_ssh_agent_keys,
             tunnels::tauri_commands::get_tunnel_audit,

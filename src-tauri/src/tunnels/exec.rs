@@ -35,6 +35,7 @@ pub(crate) async fn ssh_exec_with_binary(
 ) -> Result<ExecOutput, ExitReason> {
     let mut args = build_ssh_base_args(profile);
     args.push("-T".to_string());
+    args.push("--".to_string());
     args.push(format!("{}@{}", profile.user, profile.host));
     args.push(remote_command.to_string());
 
@@ -69,6 +70,7 @@ pub(crate) async fn scp_push_with_binaries(
     validate_remote_path(remote)?;
     let staged = format!("{remote}.tmp-{}", uuid::Uuid::new_v4());
     let mut args = build_ssh_base_args(profile);
+    args.push("--".to_string());
     args.push(local.to_string_lossy().into_owned());
     args.push(format!("{}@{}:{staged}", profile.user, profile.host));
 
@@ -220,6 +222,42 @@ mod tests {
         assert!(output.stdout.contains("got:secret"));
         assert!(output.stderr.contains("warning"));
         assert_eq!(output.code, Some(0));
+    }
+
+    /// Catches: the one-shot ssh and scp destinations lacking `--`, so a
+    /// profile user starting with `-` is read as an option.
+    #[tokio::test]
+    async fn one_shot_ssh_and_scp_put_the_destination_after_double_dash() {
+        let script = "printf '%s\\n' \"$*\" > \"$0.log\"; exit 0";
+        let batch = "echo %* > \"%~f0.log\"\r\nexit /b 0";
+        let ssh = fake_ssh_script("exec_double_dash_ssh", script, batch);
+        let scp = fake_ssh_script("exec_double_dash_scp", script, batch);
+        let _ = std::fs::remove_file(format!("{}.log", ssh.display()));
+        let _ = std::fs::remove_file(format!("{}.log", scp.display()));
+        let mut hostile = profile();
+        hostile.user = "-oProxyCommand=evil".to_string();
+        let local_dir = tempfile::tempdir().expect("temp dir");
+        let local = local_dir.path().join("bin");
+        std::fs::write(&local, b"x").expect("write local");
+
+        scp_push_with_binaries(
+            &hostile,
+            &local,
+            ".cache/tuic/bin",
+            Duration::from_secs(5),
+            &scp,
+            &ssh,
+        )
+        .await
+        .expect("push succeeds");
+
+        let scp_log = std::fs::read_to_string(format!("{}.log", scp.display())).unwrap();
+        assert!(scp_log.contains("-- "), "{scp_log}");
+        let ssh_log = std::fs::read_to_string(format!("{}.log", ssh.display())).unwrap();
+        assert!(
+            ssh_log.contains("-T -- -oProxyCommand=evil@example.com"),
+            "{ssh_log}"
+        );
     }
 
     #[tokio::test]

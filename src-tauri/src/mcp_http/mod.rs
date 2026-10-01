@@ -845,6 +845,10 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
             get(commands::list_discovered_ssh_hosts_http),
         )
         .route(
+            "/ssh-hosts/probe",
+            post(commands::probe_discovered_host_http),
+        )
+        .route(
             "/ssh-hosts/status",
             get(commands::probe_ssh_config_hosts_http),
         )
@@ -4338,13 +4342,19 @@ mod tests {
             ("build_remote_router", build_remote_router(test_state())),
         ];
         for (name, app) in routers {
-            for path in [
-                "/tunnels/ssh-hosts",
-                "/tunnels/ssh-hosts/discovered",
-                "/tunnels/ssh-hosts/status",
-                "/tunnels/agent-keys",
+            for (method, path) in [
+                ("GET", "/tunnels/ssh-hosts"),
+                ("GET", "/tunnels/ssh-hosts/discovered"),
+                ("GET", "/tunnels/ssh-hosts/status"),
+                ("POST", "/tunnels/ssh-hosts/probe"),
+                ("GET", "/tunnels/agent-keys"),
             ] {
-                let mut req = Request::get(path).body(Body::empty()).unwrap();
+                let mut req = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap();
                 req.extensions_mut().insert(ConnectInfo(remote));
                 let response = app.clone().oneshot(req).await.unwrap();
                 assert_eq!(

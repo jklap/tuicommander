@@ -824,6 +824,14 @@ describe("transport", () => {
 			});
 		});
 
+		it("maps the per-host SSH probe to a POST with the identity in the body", () => {
+			expect(mapCommandToHttp("probe_discovered_ssh_host", { target: "10.0.0.5", port: 2222 })).toMatchObject({
+				method: "POST",
+				path: "/tunnels/ssh-hosts/probe",
+				body: { target: "10.0.0.5", port: 2222 },
+			});
+		});
+
 		it("maps detect_agents to GET /agents", () => {
 			const result = mapCommandToHttp("detect_agents", {});
 			expect(result.method).toBe("GET");
