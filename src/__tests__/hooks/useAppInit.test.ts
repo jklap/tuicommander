@@ -1981,6 +1981,7 @@ describe("initApp", () => {
 			getCreated()!({ payload: { session_id: "agent-sess-2", cwd: null, agent_type: "claude" } });
 			const termId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "agent-sess-2")!;
 			terminalsStore.update(termId, { pendingResumeCommand: "claude --continue" });
+			terminalsStore.setAwaitingInput(termId, "question");
 
 			getClosed()!({ payload: { session_id: "agent-sess-2", reason: "process_exit", agent_type: "claude" } });
 
@@ -1989,6 +1990,29 @@ describe("initApp", () => {
 			expect(terminal?.pendingResumeCommand).toBeNull();
 			expect(terminal?.sessionId).toBeNull();
 			expect(terminal?.shellState).toBe("exited");
+			expect(terminal?.awaitingInput).toBeNull();
+		});
+
+		/**
+		 * `clearAwaitingInput` previously ran only inside the (pre-existing)
+		 * `hadAgent` conditional spread — a remote PLAIN-SHELL tab (no agent) had
+		 * no path that cleared it at all. This is the branch commit 3's
+		 * unconditional `terminalsStore.clearAwaitingInput(termId)` call actually
+		 * fixes; the agent-tab test above doesn't exercise it since that branch
+		 * was already covered by the old conditional.
+		 */
+		it("clears awaitingInput on session-closed for a remote plain-shell tab (no agent)", async () => {
+			const { getCreated, getClosed } = captureCreatedAndClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCreated()!({ payload: { session_id: "shell-sess-await", cwd: null, agent_type: null } });
+			const termId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "shell-sess-await")!;
+			terminalsStore.setAwaitingInput(termId, "question");
+
+			getClosed()!({ payload: { session_id: "shell-sess-await", reason: "process_exit", agent_type: null } });
+
+			expect(terminalsStore.get(termId)?.awaitingInput).toBeNull();
 		});
 
 		it("auto-removes a remote tab after REMOTE_TAB_AUTOCLOSE_MS when agent_type is absent", async () => {
