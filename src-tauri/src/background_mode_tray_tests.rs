@@ -69,6 +69,7 @@ fn session(state: &Arc<AppState>, id: &str, awaiting: bool) {
             agent_type: Some("codex".into()),
             display_name: None,
             parent_session: None,
+            is_remote: true,
         },
     );
     state.session_maps.shell_states.insert(
