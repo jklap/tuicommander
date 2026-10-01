@@ -29,7 +29,9 @@ const GENERATED = [
 	/_pb2(_grpc)?\.py$/,
 	/\.d\.ts$/,
 ];
-const GENERATED_DIRS = /(^|\/)(dist|build|node_modules|vendor|__snapshots__)\//;
+// build/dist/vendor only at the repo root: a nested scripts/build is hand-written code.
+// node_modules and __snapshots__ are generated wherever they sit.
+const GENERATED_DIRS = /^(dist|build|vendor)\/|(^|\/)(node_modules|__snapshots__)\//;
 
 const TESTS = [
 	/(^|\/)(__tests__|tests?|spec|e2e)\//,
@@ -57,14 +59,23 @@ export function globToRegExp(pattern: string): RegExp {
 			}
 		} else if (c === "*") re += "[^/]*";
 		else if (c === "?") re += "[^/]";
-		else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+		else if (c === "[") {
+			// Character class `[abc]`, `[a-z]`, `[!abc]`; an unterminated `[` is a literal.
+			const end = body.indexOf("]", i + 2);
+			if (end === -1) re += "\\[";
+			else {
+				const cls = body.slice(i + 1, end);
+				re += cls.startsWith("!") ? `[^${cls.slice(1).replace(/\\/g, "\\\\")}]` : `[${cls.replace(/\\/g, "\\\\")}]`;
+				i = end;
+			}
+		} else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
 	}
 	return new RegExp(anchored ? `^${re}$` : `(^|/)${re}$`);
 }
 
 /** Patterns that set `linguist-generated` (set, or `=true`), in file order. A later line that
- *  unsets it (`-linguist-generated`, `=false`) is kept as `!pattern` so that, as in gitattributes,
- *  the LAST matching line wins. Gitattributes patterns cannot start with `!`, so the prefix is
+ *  unsets or resets it (`-linguist-generated`, `!linguist-generated`, `=false`) is kept as
+ *  `!pattern` so that, as in gitattributes, the LAST matching line wins. Gitattributes patterns cannot start with `!`, so the prefix is
  *  unambiguous. An unset line with nothing before it to override is dropped. */
 export function parseLinguistGenerated(gitattributes: string): string[] {
 	const patterns: string[] = [];
@@ -73,7 +84,7 @@ export function parseLinguistGenerated(gitattributes: string): string[] {
 		if (!line || line.startsWith("#")) continue;
 		const [pattern, ...attrs] = line.split(/\s+/);
 		// The last token naming the attribute decides for that line.
-		const decisive = attrs.filter((a) => /^-?linguist-generated(=.*)?$/.test(a)).pop();
+		const decisive = attrs.filter((a) => /^[-!]?linguist-generated(=.*)?$/.test(a)).pop();
 		if (!decisive) continue;
 		if (decisive === "linguist-generated" || decisive === "linguist-generated=true") patterns.push(pattern);
 		else if (patterns.length > 0) patterns.push(`!${pattern}`);
