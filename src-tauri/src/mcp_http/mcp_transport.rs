@@ -12785,6 +12785,43 @@ mod tests {
         assert!(!state.mcp.to_session.contains_key("mcp-primary"));
     }
 
+    /// Delivery ownership moves only when the ending session holds it. The owner
+    /// is deliberately not first in the reverse route list, so a non-owner that
+    /// leaves would hand ownership to the wrong survivor if the owner check broke.
+    /// Catches: `peer.mcp_session_id == sid` inverted in `end_mcp_session`, which
+    /// re-points delivery at the first surviving route whenever a non-owner ends.
+    #[tokio::test]
+    async fn ending_a_non_owner_sibling_keeps_the_delivery_owner() {
+        let state = test_state();
+        join_two_bridges_to_one_pty(&state);
+        apply_initialize_identity(&state, "mcp-third", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-third");
+        state
+            .peer_agents
+            .get_mut(TEST_UUID_A)
+            .expect("the joined identity is registered")
+            .mcp_session_id = "mcp-third".to_string();
+
+        end_mcp_session(&state, "mcp-sibling").await;
+
+        assert_eq!(
+            state
+                .peer_agents
+                .get(TEST_UUID_A)
+                .map(|peer| peer.mcp_session_id.clone()),
+            Some("mcp-third".to_string()),
+            "a non-owner leaving must not take delivery away from the real owner"
+        );
+        assert_eq!(
+            state
+                .mcp
+                .session_to_mcp
+                .get(TEST_UUID_A)
+                .map(|entry| entry.clone()),
+            Some(vec!["mcp-primary".to_string(), "mcp-third".to_string()])
+        );
+    }
+
     /// A bridge joining while the last co-owner tears the identity down must not
     /// end up holding a route to a peer that no longer exists — that is the shape
     /// of every silent-delivery-loss bug in this module.
