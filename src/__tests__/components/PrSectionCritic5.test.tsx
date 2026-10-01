@@ -59,7 +59,11 @@ describe("PrSection critic r5", () => {
 		const [expanded, setExpanded] = createSignal<string>("feat/a");
 		let rejectUpdate: (e: unknown) => void = () => {};
 		mockInvoke.mockImplementation((cmd: string) =>
-			cmd === "update_pr_branch" ? new Promise((_, reject) => { rejectUpdate = reject; }) : Promise.resolve(undefined),
+			cmd === "update_pr_branch"
+				? new Promise((_, reject) => {
+						rejectUpdate = reject;
+					})
+				: Promise.resolve(undefined),
 		);
 		const { container } = render(() => (
 			<PrSection
