@@ -116,13 +116,13 @@ import { acpStore } from "../../stores/acp";
 import { acpTranscript } from "../../stores/acpTranscript";
 import { aiChatTabs } from "../../stores/aiChatTabs";
 import { toastsStore } from "../../stores/toasts";
-import { handleExternalLinkClick } from "../../utils/externalLinkClick";
 import type {
 	AcpAttachmentSnapshot,
 	AcpClientEvent,
 	AcpConnectionSnapshot,
 	AcpSessionConfigOption,
 } from "../../types/acp";
+import { handleExternalLinkClick } from "../../utils/externalLinkClick";
 
 const ROOT = "/repo/tuicommander";
 /** Where every chat runs: the whole workspace, never one repository. */
