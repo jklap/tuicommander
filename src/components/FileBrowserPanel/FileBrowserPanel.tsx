@@ -851,7 +851,9 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	};
 
 	const handlePointerDragStart = (absPath: string, e: PointerEvent) => {
-		if (e.button !== 0) return;
+		// A finger swipe is a scroll, never a file move: the move is irreversible
+		// and a scroll that outruns pointercancel would otherwise drop the file on a folder.
+		if (e.button !== 0 || e.pointerType === "touch") return;
 		// Must mark before drag threshold — Tauri's onDragDropEvent fires on any pointer
 		// hold, and without this flag the OS drop handler in dragDrop.ts would treat an
 		// internal file-browser drag as an external Finder drop (wrong dispatch path).

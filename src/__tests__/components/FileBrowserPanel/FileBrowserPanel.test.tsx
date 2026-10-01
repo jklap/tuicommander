@@ -575,3 +575,46 @@ describe("FileBrowserPanel external root (#1207-efd4)", () => {
 		expect(uiStore.state.fileBrowserExternalRoot).toBe("/outside");
 	});
 });
+
+describe("FileBrowserPanel pointer drag (#1329-a31a)", () => {
+	const pointer = (type: string, pointerType: string, x: number, y: number) =>
+		new PointerEvent(type, { bubbles: true, cancelable: true, button: 0, pointerId: 1, pointerType, clientX: x, clientY: y });
+
+	const renameCalls = () => mockInvoke.mock.calls.filter(([cmd]) => cmd === "rename_path");
+
+	/** Press on `file`, move far past the drag threshold and release over the `dir` row. */
+	const dragFileOntoDir = async (pointerType: string) => {
+		listings.set("/repo|.", [dir("docs"), file("a.txt")]);
+		const { container, queryByText } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+		await waitFor(() => expect(queryByText("a.txt")).not.toBeNull());
+		const rows = Array.from(container.querySelectorAll(".entry")) as HTMLElement[];
+		const fileRow = rows.find((r) => r.textContent?.includes("a.txt")) as HTMLElement;
+		const dirRow = rows.find((r) => r.dataset.dropTarget === "folder") as HTMLElement;
+		const original = document.elementFromPoint;
+		document.elementFromPoint = () => dirRow;
+		try {
+			fileRow.dispatchEvent(pointer("pointerdown", pointerType, 50, 50));
+			document.dispatchEvent(pointer("pointermove", pointerType, 50, 20));
+			document.dispatchEvent(pointer("pointerup", pointerType, 50, 10));
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		} finally {
+			document.elementFromPoint = original;
+		}
+	};
+
+	// Catches: a touch swipe that outruns pointercancel dropping the file onto a
+	// folder (an irreversible move started by a scroll gesture).
+	it("never moves a file when a touch swipe ends over a folder", async () => {
+		await dragFileOntoDir("touch");
+		expect(renameCalls()).toHaveLength(0);
+	});
+
+	// Guards the fix: mouse drag and drop must keep moving files.
+	it("still moves a file when a mouse drag ends over a folder", async () => {
+		await dragFileOntoDir("mouse");
+		expect(renameCalls()).toHaveLength(1);
+		expect(renameCalls()[0][1]).toMatchObject({ from: "a.txt", to: "docs/a.txt" });
+	});
+});
