@@ -903,7 +903,7 @@ describe("DictationSettings – expert controls", () => {
 			hands_free_start_notice: "",
 			speech_volume_db: -18,
 			speech_levelling: 0.67,
-			speech_engine: "",
+			speech_engine: "edge",
 			speech_command: [],
 		},
 	};
@@ -991,7 +991,7 @@ describe("DictationSettings – Edge engine", () => {
 		app: {},
 		notifications: {},
 		agent_settings: {},
-		dictation: { speech_engine: "", speech_command: [] },
+		dictation: { speech_engine: "edge", speech_command: [] },
 	};
 
 	beforeEach(async () => {

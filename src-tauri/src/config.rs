@@ -3982,8 +3982,14 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
         repo_defaults: RepoDefaultsConfig::default(),
         agents: AgentsConfig::default(),
         github_accounts: crate::github_account::GitHubAccountRegistry::default(),
+        // `speech_engine` is empty in the struct so a file without it can be
+        // told apart from a choice (`dictation::commands`); a brand-new install
+        // loads it as "edge", and the settings panel compares against that.
         #[cfg(feature = "desktop")]
-        dictation: DictationConfig::default(),
+        dictation: DictationConfig {
+            speech_engine: "edge".to_string(),
+            ..DictationConfig::default()
+        },
     }
 }
 
@@ -8733,7 +8739,13 @@ mod tests {
         #[cfg(feature = "desktop")]
         assert_eq!(
             serde_json::to_value(&defaults.dictation).unwrap(),
-            serde_json::to_value(crate::dictation::commands::DictationConfig::default()).unwrap()
+            // The one deliberate difference: a fresh install resolves the engine
+            // to Edge, and the settings panel compares against that.
+            serde_json::to_value(crate::dictation::commands::DictationConfig {
+                speech_engine: "edge".to_string(),
+                ..Default::default()
+            })
+            .unwrap()
         );
     }
 

@@ -660,7 +660,7 @@ const SpeechSetup: Component = () => {
 				</div>
 			</div>
 
-			<ExpertSetting configKey="dictation.speech_engine" value={isEdge() ? "" : engine()}>
+			<ExpertSetting configKey="dictation.speech_engine" value={engine()}>
 				<div class={s.group}>
 					<label>{t("dictation.speechEngineLabel", "Speech engine")}</label>
 					<select
