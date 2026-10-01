@@ -2362,13 +2362,20 @@ impl AppState {
     /// Buffer a message into `recipient`'s bounded inbox. Replace an older
     /// lifecycle notice for the same child and kind, except question waits;
     /// otherwise evict FIFO at capacity.
-    /// Mail to a child ends its BLOCKED hold; the child's own BLOCKED mail to
+    /// Mail from its parent ends a child's BLOCKED hold; the child's own BLOCKED mail to
     /// its parent starts one. Lifecycle notices are TUIC's, not either party's.
     fn track_blocked_hold(&self, recipient: &str, msg: &AgentMessage) {
         if msg.id.starts_with(LIFECYCLE_MSG_ID_PREFIX) {
             return;
         }
-        self.blocked_children.remove(recipient);
+        if self
+            .session_maps
+            .session_parent
+            .get(recipient)
+            .is_some_and(|parent| parent.value() == &msg.from_tuic_session)
+        {
+            self.blocked_children.remove(recipient);
+        }
         let to_parent = self
             .session_maps
             .session_parent
