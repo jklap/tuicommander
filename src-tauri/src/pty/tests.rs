@@ -26300,6 +26300,348 @@ fn declared_background_work_alone_makes_agent_state_working() {
     );
 }
 
+// ── `declared_background_work` edge cases (characterization) ────────────
+//
+// Pin the `bgtasks` OSC arm's payload classification, epoch stamping and
+// missing-state tolerance, plus each reader's stale-epoch behavior, so the
+// teammate/subagent split can change the write side without silently
+// changing what readers see.
+
+/// A Claude agent session with a VT log buffer, ready for `process_chunk`.
+fn bgtasks_test_session(
+    state: &crate::state::AppState,
+    session_id: &str,
+) -> Arc<Mutex<SilenceState>> {
+    agent_session(state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone()
+}
+
+fn feed_bgtasks(
+    state: &crate::state::AppState,
+    session_id: &str,
+    silence: &Arc<Mutex<SilenceState>>,
+    payload: &str,
+) {
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk(
+        &format!("\x1b]7770;bgtasks={payload}\x07"),
+        silence,
+        session_id,
+        state,
+    );
+}
+
+#[test]
+fn tuic_osc_bgtasks_classifies_percent_decoded_status_lists() {
+    // `tuic-hook` percent-encodes the comma-joined statuses, so the comma arrives
+    // as `%2C`. Any non-terminal entry anywhere in the list keeps the declaration
+    // active; only an all-terminal (or empty-element) list clears it.
+    let cases: &[(&str, bool)] = &[
+        ("running", true),
+        ("running%2Ccompleted", true),
+        ("completed%2Crunning", true),
+        ("completed%2Cfailed", false),
+        ("failed%2Ccompleted%2Cfailed", false),
+        ("completed%2Cpending", true),
+        ("completed%2C", false),
+        ("%2C", false),
+        ("completed", false),
+        ("failed", false),
+        ("", false),
+    ];
+    for (payload, expect_running) in cases {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "test-bgtasks-list";
+        let silence = bgtasks_test_session(&state, session_id);
+        // Seed the opposite value so a no-op would be caught.
+        silence
+            .lock()
+            .set_declared_background_work(!*expect_running, 0);
+        feed_bgtasks(&state, session_id, &silence, payload);
+        assert_eq!(
+            silence.lock().declared_background_work_for_epoch(0),
+            *expect_running,
+            "bgtasks payload {payload:?}"
+        );
+    }
+}
+
+#[test]
+fn tuic_osc_bgtasks_stamps_the_sessions_current_turn_epoch() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-bgtasks-epoch-stamp";
+    let silence = bgtasks_test_session(&state, session_id);
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .turn_epoch = 5;
+
+    feed_bgtasks(&state, session_id, &silence, "running");
+    assert!(silence.lock().declared_background_work_for_epoch(5));
+    assert!(
+        !silence.lock().declared_background_work_for_epoch(0),
+        "the declaration is stamped with the session's epoch, not a constant"
+    );
+    assert!(!silence.lock().declared_background_work_for_epoch(6));
+}
+
+#[test]
+fn tuic_osc_bgtasks_restamps_a_stale_declaration_to_the_current_epoch() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-bgtasks-restamp";
+    let silence = bgtasks_test_session(&state, session_id);
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .turn_epoch = 3;
+    // A declaration left over from an earlier epoch.
+    silence.lock().set_declared_background_work(true, 2);
+    assert!(!silence.lock().declared_background_work_for_epoch(3));
+
+    feed_bgtasks(&state, session_id, &silence, "running");
+    assert!(silence.lock().declared_background_work_for_epoch(3));
+    assert!(
+        !silence.lock().declared_background_work_for_epoch(2),
+        "a re-assertion overwrites the stored epoch rather than accumulating"
+    );
+
+    feed_bgtasks(&state, session_id, &silence, "completed");
+    assert!(!silence.lock().declared_background_work_for_epoch(3));
+}
+
+#[test]
+fn tuic_osc_bgtasks_without_session_state_leaves_declaration_untouched() {
+    // The arm needs the session's turn epoch; with no SessionState it must not
+    // guess (and must not panic).
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-bgtasks-no-session-state";
+    let silence = bgtasks_test_session(&state, session_id);
+    state.session_maps.session_states.remove(session_id);
+
+    feed_bgtasks(&state, session_id, &silence, "running");
+    assert!(!silence.lock().declared_background_work_for_epoch(0));
+}
+
+#[test]
+fn tuic_osc_bgtasks_without_registered_silence_state_does_not_create_one() {
+    // The arm writes through the map's own entry, not the `process_chunk`
+    // argument; with no registered entry it must neither panic nor insert one.
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-bgtasks-no-silence-entry";
+    let silence = bgtasks_test_session(&state, session_id);
+    state.session_maps.silence_states.remove(session_id);
+
+    feed_bgtasks(&state, session_id, &silence, "running");
+    assert!(!state.session_maps.silence_states.contains_key(session_id));
+    assert!(!silence.lock().declared_background_work_for_epoch(0));
+}
+
+#[test]
+fn tuic_osc_bgtasks_and_os_background_work_do_not_touch_each_other() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-bgtasks-os-independence";
+    let silence = bgtasks_test_session(&state, session_id);
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .background_work = true;
+
+    feed_bgtasks(&state, session_id, &silence, "completed");
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .unwrap()
+            .background_work,
+        "a bgtasks clear must not clear the OS-heuristic field"
+    );
+
+    feed_bgtasks(&state, session_id, &silence, "running");
+    state
+        .session_maps
+        .session_states
+        .get_mut(session_id)
+        .unwrap()
+        .background_work = false;
+    assert!(
+        silence.lock().declared_background_work_for_epoch(0),
+        "clearing the OS-heuristic field must not clear the declaration"
+    );
+}
+
+#[test]
+fn stale_declared_background_work_does_not_defer_parent_idle_notification() {
+    // Counterpart of `declared_background_work_defers_parent_idle_notification`:
+    // a declaration from a previous turn epoch no longer applies, so the idle
+    // edge must be reported to the parent as usual.
+    let state = crate::state::tests_support::make_test_app_state();
+    let child_id = "child-stale-declared-sess";
+    let parent_id = "parent-stale-declared-sess";
+    state
+        .session_maps
+        .session_parent
+        .insert(child_id.to_string(), parent_id.to_string());
+    state.agent_inbox.entry(parent_id.to_string()).or_default();
+    state.session_maps.session_states.insert(
+        child_id.to_string(),
+        crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            turn_epoch: 1,
+            ..Default::default()
+        },
+    );
+    state.session_maps.shell_states.insert(
+        child_id.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+    );
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    silence.lock().set_declared_background_work(true, 0);
+    state
+        .session_maps
+        .silence_states
+        .insert(child_id.to_string(), silence);
+
+    assert!(try_shell_transition(
+        &state, child_id, SHELL_BUSY, SHELL_IDLE, true
+    ));
+    assert_eq!(
+        state.agent_inbox.get(parent_id).unwrap().len(),
+        1,
+        "a declaration stamped for epoch 0 must not defer an idle edge on epoch 1"
+    );
+}
+
+#[test]
+fn stale_declared_background_work_does_not_defer_suggest_publication() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let child_id = "child-stale-declared-completed";
+    let parent_id = "parent-stale-declared-completed";
+    state
+        .session_maps
+        .session_parent
+        .insert(child_id.to_string(), parent_id.to_string());
+    state.agent_inbox.entry(parent_id.to_string()).or_default();
+    state.session_maps.session_states.insert(
+        child_id.to_string(),
+        crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            turn_epoch: 1,
+            ..Default::default()
+        },
+    );
+    state.session_maps.shell_states.insert(
+        child_id.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+    );
+    let mut silence = SilenceState::new();
+    silence.mark_suggest_candidate(vec!["Review result".to_string()], 1);
+    silence.set_declared_background_work(true, 0);
+    let silence = Arc::new(Mutex::new(silence));
+    state
+        .session_maps
+        .silence_states
+        .insert(child_id.to_string(), silence.clone());
+
+    assert!(
+        emit_pending_suggest_if_idle(&state, &silence, child_id),
+        "a declaration from epoch 0 must not defer a completion on epoch 1"
+    );
+    assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn standby_gate_reads_declared_work_for_the_current_epoch_only() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "declared-background-standby-gate";
+    state.session_maps.session_states.insert(
+        session_id.to_string(),
+        crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            turn_epoch: 2,
+            ..Default::default()
+        },
+    );
+    let silence = Arc::new(Mutex::new(SilenceState::new()));
+    state
+        .session_maps
+        .silence_states
+        .insert(session_id.to_string(), silence.clone());
+
+    assert!(!background_activity_blocks_standby(&state, session_id));
+
+    silence.lock().set_declared_background_work(true, 1);
+    assert!(
+        !background_activity_blocks_standby(&state, session_id),
+        "a stale declaration must not block standby"
+    );
+
+    silence.lock().set_declared_background_work(true, 2);
+    assert!(background_activity_blocks_standby(&state, session_id));
+
+    // The already-locked variant used by `standby_session` agrees with the
+    // self-locking one (and must not re-lock the held guard).
+    let guard = silence.lock();
+    assert!(background_activity_blocks_standby_with_silence(
+        &state,
+        session_id,
+        Some(&guard)
+    ));
+    drop(guard);
+
+    silence.lock().set_declared_background_work(false, 2);
+    assert!(!background_activity_blocks_standby(&state, session_id));
+}
+
+#[cfg(unix)]
+#[test]
+fn standby_gate_unknown_session_does_not_block() {
+    let state = crate::state::tests_support::make_test_app_state();
+    assert!(!background_activity_blocks_standby(
+        &state,
+        "no-such-session"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn standby_gate_os_background_work_blocks_without_any_declaration() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "os-background-standby-gate";
+    state.session_maps.session_states.insert(
+        session_id.to_string(),
+        crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            background_work: true,
+            ..Default::default()
+        },
+    );
+    state.session_maps.silence_states.insert(
+        session_id.to_string(),
+        Arc::new(Mutex::new(SilenceState::new())),
+    );
+    assert!(
+        background_activity_blocks_standby(&state, session_id),
+        "the OS-heuristic signal blocks standby on its own, independent of the declaration"
+    );
+}
+
 /// Fullscreen-mode fix: a busy/idle edge that lands while the alternate
 /// screen buffer is active (Claude Code's default renderer) must still
 /// emit its `AgentBlock` (so `CommandOverview`'s prompt/duration/exit
