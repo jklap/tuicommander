@@ -3445,7 +3445,7 @@ fn fetch_ci_failure_logs_impl(
 
 /// Tauri command: fetch failed-job logs for the branch's latest workflow head.
 #[cfg(feature = "desktop")]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn fetch_ci_failure_logs(
     repo_path: String,
     branch: String,

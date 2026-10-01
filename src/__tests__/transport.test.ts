@@ -350,6 +350,22 @@ describe("transport", () => {
 				body: { action: remove },
 			});
 		});
+		it("routes versioned workflow definitions to their owning project", () => {
+			const action = { action: "get_published", id: "flow-1", revision: 2 };
+			expect(mapCommandToHttp("workflow_definition_action", { project: "/repo a", action })).toEqual({
+				method: "POST",
+				path: "/workflows/definition/action?path=%2Frepo%20a",
+				body: action,
+			});
+		});
+		it("routes workflow run actions to their owning project", () => {
+			const action = { action: "events", run_id: "run-1", after_sequence: 4, limit: 20 };
+			expect(mapCommandToHttp("workflow_run_action", { project: "/repo a", action })).toEqual({
+				method: "POST",
+				path: "/workflows/run/action?path=%2Frepo%20a",
+				body: action,
+			});
+		});
 
 		it("maps typed project progress controls", () => {
 			// The whole Progress surface: record, list, delete, and the divider.
