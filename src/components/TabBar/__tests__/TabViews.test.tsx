@@ -78,3 +78,32 @@ describe("TerminalTabView progress bar", () => {
 		expect(bar.style.transform).toBe("scaleX(1)");
 	});
 });
+
+describe("TerminalTabView busy/idle dot", () => {
+	afterEach(() => {
+		for (const id of Object.keys(terminalsStore.state.terminals)) terminalsStore.remove(id);
+	});
+
+	it("applies the busy class when the terminal has declared background work despite an idle shell", () => {
+		const id = addTerminal({ shellState: "idle", declaredBackgroundWork: true });
+		const { container } = renderTab(id);
+		const tab = container.querySelector(`[data-tab-id="${id}"]`);
+		expect(tab?.className).toMatch(/shellBusy/);
+		expect(tab?.className).not.toMatch(/shellIdle/);
+	});
+
+	it("applies the idle class (not busy) for a plain idle terminal with no declared background work", () => {
+		const id = addTerminal({ shellState: "idle" });
+		const { container } = renderTab(id);
+		const tab = container.querySelector(`[data-tab-id="${id}"]`);
+		expect(tab?.className).toMatch(/shellIdle/);
+		expect(tab?.className).not.toMatch(/shellBusy/);
+	});
+
+	it("applies the busy class for a plain busy shell (no declared background work involved)", () => {
+		const id = addTerminal({ shellState: "busy" });
+		const { container } = renderTab(id);
+		const tab = container.querySelector(`[data-tab-id="${id}"]`);
+		expect(tab?.className).toMatch(/shellBusy/);
+	});
+});

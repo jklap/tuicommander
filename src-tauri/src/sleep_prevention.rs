@@ -160,6 +160,7 @@ fn session_has_live_work(session: &SessionState, keep_open: bool) -> bool {
         || (session.agent_type.is_some()
             && (keep_open
                 || session.background_work
+                || session.declared_background_work
                 || session.has_pending_background_probe()
                 || matches!(session.agent_state.as_deref(), Some("working" | "starting"))))
 }
@@ -523,6 +524,27 @@ mod tests {
             session_has_live_work(&session, false),
             "idle composer must not release sleep prevention while its background job remains live"
         );
+    }
+
+    // Catches: a Stop-fired idle agent that declared its own background work
+    // ("running" via the agent-state declaration) releasing the sleep assertion
+    // while that work is still running — the idle shell and idle agent state
+    // alone say nothing about it.
+    #[test]
+    fn declared_background_work_retains_sleep_assertion_despite_idle_agent() {
+        let session = crate::state::SessionState {
+            agent_type: Some("claude".into()),
+            shell_state: Some("idle".into()),
+            agent_state: Some("idle".into()),
+            declared_background_work: true,
+            ..Default::default()
+        };
+        assert!(session_has_live_work(&session, false));
+        let cleared = crate::state::SessionState {
+            declared_background_work: false,
+            ..session
+        };
+        assert!(!session_has_live_work(&cleared, false));
     }
 
     #[test]

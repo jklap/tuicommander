@@ -148,6 +148,11 @@ export function getShortcutSections(): ShortcutSection[] {
 							},
 						]
 					: []),
+				{
+					action: "explain-session-state",
+					keys: keyFor("explain-session-state"),
+					description: "Explain session state (active tab)",
+				},
 			],
 		},
 		{

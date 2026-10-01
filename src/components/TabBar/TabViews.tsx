@@ -130,9 +130,14 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 	const terminal = () => terminalsStore.get(props.id);
 	const isActive = () => terminalsStore.state.activeId === props.id;
 	const isDetached = () => terminalsStore.isDetached(props.id);
-	const isBusy = () => terminalsStore.isBusy(props.id);
+	// Includes declaredBackgroundWork (see terminalsStore.isWorking's doc comment) so a
+	// session Claude has declared background work for still shows the busy dot even
+	// while its shell itself is idle.
+ terminalsStore.isWorking(props.id);
+=>	const isWorking = () => terminalsStore.isWorking(props.id);
 	const isStalled = () => terminal()?.stalled === true;
-	const isIdle = () => !isBusy() && terminal()?.shellState === "idle";
+=> terminalsStore.isWorking(props.id);
+	const isIdle = () => !isWorking() && terminal()?.shellState === "idle";
 	const isExited = () => terminal()?.shellState === "exited";
 	const isUnseen = () => !isActive() && terminal()?.unseen;
 	const awaitingInput = () => terminal()?.awaitingInput;
@@ -140,7 +145,7 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 	const statusIconId = () =>
 		resolveIconId(
 			settingsStore.state.indicatorOverrides,
-			terminalStatusIndicatorId(awaitingInput(), isBusy(), !!isUnseen(), isIdle(), isExited()),
+			terminalStatusIndicatorId(awaitingInput(), isWorking(), !!isUnseen(), isIdle(), isExited()),
 		);
 	const progress = () => terminal()?.progress;
 	const isPromoted = () => globalWorkspaceStore.isPromoted(props.id);
@@ -171,9 +176,9 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 					isDetached() && s.detached,
 					awaitingInput() && s.awaitingInput,
 					awaitingInput() && AWAITING_CLASSES[awaitingInput()!],
-					!awaitingInput() && !terminal()?.providerRecovery && isBusy() && !isStalled() && s.shellBusy,
+					!awaitingInput() && !terminal()?.providerRecovery && isWorking() && !isStalled() && s.shellBusy,
 					!awaitingInput() && isStalled() && s.shellStalled,
-					!awaitingInput() && !isBusy() && isUnseen() && s.shellUnseen,
+					!awaitingInput() && !isWorking() && isUnseen() && s.shellUnseen,
 					!awaitingInput() && isIdle() && !isUnseen() && s.shellIdle,
 					isExited() && s.shellExited,
 					terminal()?.isExternallyCreated && s.remoteTab,
