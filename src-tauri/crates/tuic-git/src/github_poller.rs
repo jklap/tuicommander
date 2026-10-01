@@ -451,3 +451,49 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod critic3_tests {
+    use super::*;
+    use crate::github::ConflictState;
+
+    fn base(unresolved: u32) -> BranchPrStatus {
+        // MERGEABLE + CLEAN + APPROVED, no checks: ready unless a blocker is set below.
+        let open: Vec<serde_json::Value> = (0..unresolved)
+            .map(|_| serde_json::json!({"isResolved": false}))
+            .collect();
+        crate::github::parse_pr_node(&serde_json::json!({
+            "number": 42, "headRefName": "feat/test", "state": "OPEN",
+            "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "reviewThreads": {"nodes": open}
+        }))
+        .expect("PR node parses")
+    }
+
+    fn fires_ready(old: &BranchPrStatus, new: &BranchPrStatus) -> bool {
+        detect_transitions("/repo", old, new)
+            .iter()
+            .any(|x| matches!(x, PrTransition::Ready { .. }))
+    }
+
+    /// Catches: the last blocker (open threads) being resolved while everything else is
+    /// green never notifying, because ready is only evaluated on review/check edges.
+    #[test]
+    fn resolving_the_last_thread_fires_ready() {
+        assert!(fires_ready(&base(2), &base(0)));
+    }
+
+    /// Catches: is_ready ignoring the draft flag or a recomputing conflict state, so a draft
+    /// or a "checking" PR is announced as ready to merge while the badge says Draft/Checking.
+    #[test]
+    fn draft_or_checking_pr_never_fires_ready() {
+        let old = base(1);
+        let mut draft = base(0);
+        draft.is_draft = true;
+        assert!(!fires_ready(&old, &draft), "draft");
+        let mut checking = base(0);
+        checking.conflict_state = ConflictState::Checking;
+        assert!(!fires_ready(&old, &checking), "checking");
+    }
+}
