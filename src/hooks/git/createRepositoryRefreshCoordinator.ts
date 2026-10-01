@@ -596,12 +596,48 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			return err instanceof AggregateError ? err.errors.length : 1;
 		}
 	};
-	const reportOrphanRemoval = (removed: number, unclosedTerminals: number) => {
-		if (removed === 0) return;
-		const unclosed = unclosedTerminals > 0 ? `; ${unclosedTerminals} terminal(s) could not be closed` : "";
-		deps.setStatusInfo(`Removed ${removed} orphaned worktree(s)${unclosed}`);
+	interface OrphanRemovalTally {
+		removed: number;
+		unclosedTerminals: number;
+	}
+	/** Remove the orphans concurrently and add the outcome to `tally` once all settled: each task
+	 *  returns its own count, so concurrent removals cannot overwrite one another's. */
+	const removeOrphans = async (
+		repoPath: string,
+		entries: OrphanAssessment[],
+		failure: string,
+		tally: OrphanRemovalTally,
+	) => {
+		const results = await Promise.allSettled(
+			entries.map(async (entry) => {
+				try {
+					return await removeOrphan(repoPath, entry);
+				} catch (err) {
+					appLogger.warn("git", `${failure} ${entry.path}`, err);
+					return null;
+				}
+			}),
+		);
+		for (const result of results) {
+			if (result.status !== "fulfilled" || result.value === null) continue;
+			tally.removed++;
+			tally.unclosedTerminals += result.value;
+		}
 	};
+	/** One status line for the whole sweep, whichever phase removed the checkouts. */
 	const handleOrphanCleanup = async (repoPath: string) => {
+		const tally: OrphanRemovalTally = { removed: 0, unclosedTerminals: 0 };
+		try {
+			await sweepOrphans(repoPath, tally);
+		} finally {
+			if (tally.removed > 0) {
+				const unclosed =
+					tally.unclosedTerminals > 0 ? `; ${tally.unclosedTerminals} terminal(s) could not be closed` : "";
+				deps.setStatusInfo(`Removed ${tally.removed} orphaned worktree(s)${unclosed}`);
+			}
+		}
+	};
+	const sweepOrphans = async (repoPath: string, tally: OrphanRemovalTally) => {
 		const orphanCleanup = repoSettingsStore.getEffective(repoPath)?.orphanCleanup ?? "ask";
 		if (orphanCleanup === "off") return;
 
@@ -618,21 +654,12 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		let reviewable = assessments;
 		if (orphanCleanup === "on") {
 			// Auto-remove only the worktrees the backend classified as safe.
-			let removed = 0;
-			let unclosed = 0;
-			await Promise.allSettled(
-				assessments
-					.filter((entry) => entry.safe)
-					.map(async (entry) => {
-						try {
-							unclosed += await removeOrphan(repoPath, entry);
-							removed++;
-						} catch (err) {
-							appLogger.warn("git", `Failed to auto-remove orphan worktree ${entry.path}`, err);
-						}
-					}),
+			await removeOrphans(
+				repoPath,
+				assessments.filter((entry) => entry.safe),
+				"Failed to auto-remove orphan worktree",
+				tally,
 			);
-			reportOrphanRemoval(removed, unclosed);
 			reviewable = assessments.filter((entry) => (entry.live_sessions?.length ?? 0) > 0);
 		}
 
@@ -695,19 +722,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			return;
 		}
 
-		let removed = 0;
-		let unclosed = 0;
-		await Promise.allSettled(
-			pending.map(async (entry) => {
-				try {
-					unclosed += await removeOrphan(repoPath, entry);
-					removed++;
-				} catch (err) {
-					appLogger.warn("git", `Failed to remove orphan worktree ${entry.path}`, err);
-				}
-			}),
-		);
-		reportOrphanRemoval(removed, unclosed);
+		await removeOrphans(repoPath, pending, "Failed to remove orphan worktree", tally);
 	};
 
 	/** Archive all merged linked worktrees when the autoArchiveMerged setting is enabled. */
