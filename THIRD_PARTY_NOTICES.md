@@ -119,13 +119,6 @@ authors and communities behind each project.
 | @tauri-apps/plugin-opener | 2.5.3 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-process | 2.3.1 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-updater | 2.10.0 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-window-state | 2.4.1 | MIT OR Apache-2.0 |
-| @xterm/addon-fit | 0.11.0 | MIT |
-| @xterm/addon-search | 0.16.0 | MIT |
-| @xterm/addon-unicode11 | 0.9.0 | MIT |
-| @xterm/addon-web-links | 0.12.0 | MIT |
-| @xterm/addon-webgl | 0.19.0 | MIT |
-| @xterm/xterm | 6.0.0 | MIT |
 | dompurify | 3.3.2 | MPL-2.0 OR Apache-2.0 |
 | marked | 17.0.4 | MIT |
 | qrcode | 1.5.4 | MIT |
@@ -160,8 +153,8 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 
 | License | Count |
 |---------|-------|
-| MIT | 55 |
-| MIT OR Apache-2.0 | 49 |
+| MIT | 49 |
+| MIT OR Apache-2.0 | 48 |
 | Apache-2.0 | 4 |
 | Unlicense OR MIT | 4 |
 | Unlicense | 3 |

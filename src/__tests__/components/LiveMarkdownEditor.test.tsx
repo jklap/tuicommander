@@ -99,3 +99,60 @@ describe("LiveMarkdownEditor disk changes", () => {
 		await waitFor(() => expect(t.onSave).toHaveBeenCalledWith("mine old"));
 	});
 });
+
+describe("LiveMarkdownEditor comment composer", () => {
+	/** Open the block, select "hello" and click Comment, as a user does. */
+	async function startComment() {
+		const t = setup("hello world", () => "hello world");
+		await t.open();
+		t.view().focus();
+		t.view().dispatch({ selection: { anchor: 0, head: 5 } });
+		fireEvent.click(await screen.findByText("Comment"));
+		const input = (await screen.findByPlaceholderText("Comment on the selection")) as HTMLInputElement;
+		return { ...t, input };
+	}
+
+	it("moves focus to the comment input so typing cannot overwrite the selection", async () => {
+		// catches: focus stays in .cm-content after clicking Comment (story 1293)
+		const t = await startComment();
+		await waitFor(() => expect(document.activeElement).toBe(t.input));
+		expect(t.view().state.sliceDoc()).toBe("hello world");
+	});
+
+	it("Escape cancels the composer and returns focus to the editor", async () => {
+		// catches: Escape leaves focus on a removed input
+		const t = await startComment();
+		await waitFor(() => expect(document.activeElement).toBe(t.input));
+		fireEvent.keyDown(t.input, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByPlaceholderText("Comment on the selection")).toBeNull());
+		expect(document.activeElement).toBe(t.view().contentDOM);
+		expect(t.view().state.sliceDoc()).toBe("hello world");
+	});
+
+	it("Enter writes the tweak marker without a newline after the end marker and swallows the key", async () => {
+		// catches: Enter's default action landing in the editor after focus moves, adding a newline after the end marker
+		const t = await startComment();
+		fireEvent.input(t.input, { target: { value: "note" } });
+		const notPrevented = fireEvent.keyDown(t.input, { key: "Enter" });
+		expect(notPrevented).toBe(false);
+		expect(t.view().state.sliceDoc()).toMatch(/<!--tweak:begin:([^>]+)-->hello<!--tweak:end:\1 @\S+\nnote--> world$/);
+	});
+});
+
+describe("LiveMarkdownEditor comment composer drafts", () => {
+	it("Escape discards the draft so the next composer opens empty", async () => {
+		// catches: cancelled draft text reappearing in the next comment
+		const t = setup("hello world", () => "hello world");
+		await t.open();
+		t.view().focus();
+		t.view().dispatch({ selection: { anchor: 0, head: 5 } });
+		fireEvent.click(await screen.findByText("Comment"));
+		const first = (await screen.findByPlaceholderText("Comment on the selection")) as HTMLInputElement;
+		fireEvent.input(first, { target: { value: "stale" } });
+		fireEvent.keyDown(first, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByPlaceholderText("Comment on the selection")).toBeNull());
+		t.view().dispatch({ selection: { anchor: 0, head: 5 } });
+		fireEvent.click(await screen.findByText("Comment"));
+		expect(((await screen.findByPlaceholderText("Comment on the selection")) as HTMLInputElement).value).toBe("");
+	});
+});
