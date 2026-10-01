@@ -184,13 +184,22 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 	/** Merge a worktree branch into target, then archive/delete based on setting.
 	 *  When the branch has an open PR, uses GitHub API with the configured merge strategy.
 	 *  Falls back to local git merge if no PR is found or GitHub API fails. */
-	/** Close all terminals whose cwd is inside a worktree path. */
+	/** Close all terminals whose cwd is inside a worktree path. One that will not close does not
+	 *  stop the rest; the failures are thrown together once every terminal was tried. */
 	const closeTerminalsInWorktree = async (wtPath: string) => {
+		const failures: unknown[] = [];
 		for (const termId of terminalsStore.getIds()) {
 			const terminal = terminalsStore.get(termId);
 			if (terminal?.cwd && (terminal.cwd === wtPath || terminal.cwd.startsWith(wtPath + "/"))) {
-				await deps.closeTerminal(termId, true);
+				try {
+					await deps.closeTerminal(termId, true);
+				} catch (err) {
+					failures.push(err);
+				}
 			}
+		}
+		if (failures.length > 0) {
+			throw new AggregateError(failures, `${failures.length} terminal(s) could not be closed`);
 		}
 	};
 

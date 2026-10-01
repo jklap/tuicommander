@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import type { OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 
 /** Which button the Enter key activates. Defaults to "confirm" for backward
  *  compatibility; destructive dialogs can set "cancel" so an accidental Enter
@@ -239,7 +240,7 @@ export function useConfirmDialog() {
 	/** Confirm removing orphaned worktrees (detached-HEAD, branch deleted) */
 	async function confirmOrphanCleanup(
 		repoPath: string,
-		assessments: Array<{ path: string; safe: boolean; reason?: string }>,
+		assessments: OrphanAssessment[],
 		countdownSeconds: number,
 	): Promise<boolean> {
 		const allSafe = assessments.every((entry) => entry.safe);
