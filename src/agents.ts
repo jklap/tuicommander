@@ -232,9 +232,10 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 		resumeCommand: "goose session --resume",
 		sessionDiscovery: { resumeWithId: (id) => `goose session --resume --name ${id}` },
 		spawnArgs: (prompt, options = {}) => {
-			const args: string[] = ["session"];
+			// goose 1.49: `session` takes no positional prompt; `run -s -t` runs it, then stays interactive.
+			const args: string[] = ["run", "-s"];
 			if (options.model) args.push("--model", options.model);
-			args.push(prompt);
+			args.push("-t", prompt);
 			return args;
 		},
 		outputFormat: "text",
