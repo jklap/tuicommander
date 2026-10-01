@@ -1,5 +1,5 @@
 // Dev server for the iPad scroll repro: the real app config plus a proxy that sends API
-// calls to a fake backend on :9891. Run from the repo root:
+// calls to a fake backend on :$MOCK_PORT (default 9891). Run from the repo root:
 //   pnpm exec vite --config tools/ipad-repro/vite.config.ts
 import base from "../../vite.config";
 
@@ -15,7 +15,7 @@ export default async (env: { command: "serve" | "build"; mode: string }) => {
       port: 5188,
       host: "127.0.0.1",
       hmr: undefined,
-      proxy: { "^/(?!src/|node_modules/|@|index\\.html|mobile\\.html|tools/|public/|assets/|plugins/|$)": "http://127.0.0.1:9891" },
+      proxy: { "^/(?!src/|node_modules/|@|index\\.html|mobile\\.html|tools/|public/|assets/|plugins/|$)": `http://127.0.0.1:${process.env.MOCK_PORT ?? 9891}` },
     },
   };
 };
