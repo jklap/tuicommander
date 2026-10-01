@@ -1138,7 +1138,7 @@ async fn poll_one_account(
             if let Some((owner, name)) = alias_repo_names.get(alias.as_str()) {
                 settle_truncated_threads(
                     &state.git_cache.settled_review_threads,
-                    owner,
+                    &format!("{}/{owner}", account.host.as_str()),
                     name,
                     &mut statuses,
                     |n| fetch_review_thread_counts(state, account, owner, name, n),
@@ -1198,7 +1198,7 @@ async fn poll_one_account(
                 if let Some((owner, name)) = repo_name.split_once('/') {
                     settle_truncated_threads(
                         &state.git_cache.settled_review_threads,
-                        owner,
+                        &format!("{}/{owner}", account.host.as_str()),
                         name,
                         std::slice::from_mut(&mut pr),
                         |n| fetch_review_thread_counts(state, account, owner, name, n),
@@ -2096,14 +2096,20 @@ async fn fetch_review_thread_counts(
 /// thread is not guaranteed to bump the PR's `updatedAt`.
 const SETTLED_THREADS_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 
+/// A failed walk is not retried before this: one poll interval (`BASE_INTERVAL` in
+/// github_poller.rs), so a rate-limited PR does not pay up to 10 failing calls every poll.
+const FAILED_WALK_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// The batch poll reads 50 threads per PR. For the PRs that have more, walk the remaining pages
 /// (that PR only) so the badge, the readiness verdict and the Ready notice see the real count;
 /// only a PR still truncated after the bound keeps "N+". A failed walk keeps the lower bound.
 /// A walk is reused while the PR's `updatedAt` and head are unchanged (and for at most
-/// [`SETTLED_THREADS_TTL`]), so an idle PR costs one walk, not one per poll.
+/// [`SETTLED_THREADS_TTL`]), so an idle PR costs one walk, not one per poll; a failed walk is
+/// remembered for [`FAILED_WALK_RETRY`]. `repo_scope` is `host/owner` so the same owner and repo
+/// on two hosts never share an entry.
 async fn settle_truncated_threads<W, Fut>(
     cache: &dashmap::DashMap<String, crate::state::SettledReviewThreads>,
-    owner: &str,
+    repo_scope: &str,
     repo: &str,
     statuses: &mut [BranchPrStatus],
     walk: W,
@@ -2116,29 +2122,37 @@ async fn settle_truncated_threads<W, Fut>(
         .iter_mut()
         .filter(|s| s.unresolved_threads_truncated)
     {
-        let key = format!("{owner}/{repo}#{}", pr.number);
+        let key = format!("{repo_scope}/{repo}#{}", pr.number);
         if let Some(hit) = cache.get(&key)
             && hit.updated_at == pr.updated_at
             && hit.head_ref_oid == pr.head_ref_oid
         {
-            pr.settle_review_threads(hit.unresolved, hit.complete);
-            continue;
-        }
-        match walk(pr.number.into()).await {
-            Ok((counts, complete)) => {
-                let unresolved = counts.bot + counts.human;
-                cache.insert(
-                    key,
-                    crate::state::SettledReviewThreads {
-                        updated_at: pr.updated_at.clone(),
-                        head_ref_oid: pr.head_ref_oid.clone(),
-                        unresolved,
-                        complete,
-                        walked_at: Instant::now(),
-                    },
-                );
-                pr.settle_review_threads(unresolved, complete);
+            if !hit.failed {
+                pr.settle_review_threads(hit.unresolved, hit.complete);
+                continue;
             }
+            if hit.walked_at.elapsed() < FAILED_WALK_RETRY {
+                continue;
+            }
+        }
+        let outcome = walk(pr.number.into()).await;
+        let (unresolved, complete, failed) = match &outcome {
+            Ok((counts, complete)) => (counts.bot + counts.human, *complete, false),
+            Err(_) => (pr.unresolved_threads, false, true),
+        };
+        cache.insert(
+            key,
+            crate::state::SettledReviewThreads {
+                updated_at: pr.updated_at.clone(),
+                head_ref_oid: pr.head_ref_oid.clone(),
+                unresolved,
+                complete,
+                failed,
+                walked_at: Instant::now(),
+            },
+        );
+        match outcome {
+            Ok(_) => pr.settle_review_threads(unresolved, complete),
             Err(e) => tracing::warn!(
                 source = "github", pr = pr.number, error = %e,
                 "review thread walk failed; keeping the first-page count"
@@ -7047,6 +7061,7 @@ mod settled_threads_critic4_tests {
             head_ref_oid: head.into(),
             unresolved,
             complete: true,
+            failed: false,
             walked_at: Instant::now()
                 .checked_sub(std::time::Duration::from_secs(age_secs))
                 .expect("monotonic clock older than the test offset"),
@@ -7054,19 +7069,30 @@ mod settled_threads_critic4_tests {
     }
 
     /// Catches: a failed walk cached as a settled result (pinning the lower bound or a zero
-    /// forever), or leaving the PR looking fully counted so it reads Ready.
+    /// forever, or reading Ready), and a failed walk re-run on every poll (up to 10 failing calls
+    /// each) instead of once per poll interval.
     #[tokio::test]
-    async fn failed_walk_keeps_the_truncated_lower_bound_and_is_retried_next_poll() {
+    async fn failed_walk_keeps_the_lower_bound_and_is_not_retried_within_a_poll_interval() {
         let cache = Cache::new();
         let walks = AtomicUsize::new(0);
         let mut prs = vec![truncated(7, "t1", "h1", 2)];
-        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_err(&walks)).await;
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_err(&walks)).await;
         assert!(prs[0].unresolved_threads_truncated);
         assert_eq!(prs[0].unresolved_threads, 2);
-        assert!(cache.is_empty());
 
         let mut prs = vec![truncated(7, "t1", "h1", 2)];
-        settle_truncated_threads(&cache, "o", "r", &mut prs, walk_ok(&walks, 9, true)).await;
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 9, true)).await;
+        assert_eq!(walks.load(Ordering::SeqCst), 1, "retry held back");
+        assert!(prs[0].unresolved_threads_truncated, "still the lower bound");
+
+        // After the retry interval the walk runs again and settles.
+        for entry in cache.iter_mut() {
+            let mut entry = entry;
+            entry.walked_at =
+                Instant::now() - FAILED_WALK_RETRY - std::time::Duration::from_secs(1);
+        }
+        let mut prs = vec![truncated(7, "t1", "h1", 2)];
+        settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 9, true)).await;
         assert_eq!(walks.load(Ordering::SeqCst), 2);
         assert!(!prs[0].unresolved_threads_truncated);
         assert_eq!(prs[0].unresolved_threads, 9);
@@ -7195,6 +7221,36 @@ mod settled_threads_critic4_tests {
         assert!(prs[0].unresolved_threads_truncated);
         assert!(!prs[1].unresolved_threads_truncated);
         assert_eq!(prs[1].unresolved_threads, 2);
-        assert_eq!(cache.len(), 1);
+        // The failed PR is remembered as failed (no retry within a poll interval), not as settled.
+        assert!(cache.get("o/r#7").unwrap().failed);
+        assert!(!cache.get("o/r#8").unwrap().failed);
+    }
+
+    /// Catches: a cache key without the host, so github.com's acme/api#7 serves a GHE
+    /// acme/api#7 (same owner, repo and number, different server).
+    #[tokio::test]
+    async fn same_repo_on_two_hosts_does_not_share_an_entry() {
+        let cache = Cache::new();
+        let walks = AtomicUsize::new(0);
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(
+            &cache,
+            "github.com/o",
+            "r",
+            &mut prs,
+            walk_ok(&walks, 1, true),
+        )
+        .await;
+        let mut prs = vec![truncated(7, "t1", "h1", 0)];
+        settle_truncated_threads(
+            &cache,
+            "ghe.corp/o",
+            "r",
+            &mut prs,
+            walk_ok(&walks, 5, true),
+        )
+        .await;
+        assert_eq!(walks.load(Ordering::SeqCst), 2);
+        assert_eq!(prs[0].unresolved_threads, 5);
     }
 }
