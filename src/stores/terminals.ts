@@ -1229,7 +1229,7 @@ function createTerminalsStore() {
 		 *  treats as authoritative over the idle-shell carve-out (see that function's doc
 		 *  comment in `activitySnapshot.ts`). Any status indicator that used to derive
 		 *  busy/idle from `isBusy`/`shellState` alone (sidebar dots, tab dots, the floating
-		 *  terminal's status pill, Smart Prompts' busy gate) must read this instead, or it
+		 *  terminal's status pill) must read this instead, or it
 		 *  silently renders/treats a session as idle while Claude has declared it's still
 		 *  waiting on background work. Deliberately does NOT also fold in the plain
 		 *  OS-heuristic `backgroundWork` field: that one keeps its idle-shell carve-out (a
