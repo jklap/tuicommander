@@ -306,6 +306,12 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		label: "Toolbar Bell",
 		labelKey: "notifications.label.toolbarBell",
 	},
+	{
+		tab: "notifications",
+		section: "Notification Settings",
+		label: "Pull Requests",
+		labelKey: "notifications.label.prNotifications",
+	},
 	// DictationSettings.tsx — `SpeechRecognition`, `HandsFreeControls` and
 	// `SpeechSetup` each open with their own heading, so `extractSettings`, which
 	// reads source order rather than the render tree, lists them in the order

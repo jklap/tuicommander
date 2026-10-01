@@ -1942,7 +1942,7 @@ screen is never downgraded. Captured live off goose 1.49.0.
 - [x] Send it a prompt: the badge must go to working for the whole turn (the _(verified 2026-09-30: Sent 'reply with the word ok' + Enter to goose session: session status agent_state=working in 46 consecutive 1s samples (spinner text changing) then idle in all following samples once composer returned; no flicker. Turn 58s.)_
   spinner message is whimsical and changes every second — the badge must not
   flicker with it) and back to idle when the composer returns.
-- [ ] Interrupt a turn with Ctrl+C: the badge must return to idle, not stay _(FAILED 2026-09-30 story 1301-87fd: Goose turn then Ctrl+C (\u0003 via /sessions/{id}/write): screen shows composer placeholder 'Interrupted, what should goose work on instead?' (no 'Enter to send' hint); agent_state stays working/shell_state busy for 40+s. detect_goose_screen_activity (pty.rs:3895) needs Enter to send -> Unknown.)_
+- [ ] Interrupt a turn with Ctrl+C: the badge must return to idle, not stay _(FAILED 2026-09-30 story 1301-87fd: Goose turn then Ctrl+C (\u0003 via /sessions/{id}/write): screen shows composer placeholder 'Interrupted, what should goose work on instead?' (no 'Enter to send' hint); agent_state stays working/shell_state busy for 40+s. detect_goose_screen_activity (pty.rs:3895) needs Enter to send -> Unknown.)_ _(fix landed e8043223a 2026-10-01: retest on the next build)_
   working.
 - [x] amp, cursor and droid are still **not** adapted (see the DEFERRED note on _(verified 2026-09-29: by code/test inspection, tests not executed here: Informational note: amp/cursor/droid unadapted, see has_ready_screen_adapter pty.rs:3991 (no adapter listed in pty/tests.rs:512/2418/2530).)_
   `has_ready_screen_adapter`). If you run one of those, expect the old
@@ -4405,3 +4405,19 @@ or credential is touched.
 
 - [ ] After Boss restarts `make dev` or rebuilds the release, query `repo action=branch_integrations` and `repo action=branch_integration` on throwaway fixtures and confirm the new proof fields are available. Check that an integrated squash branch appears in the branch panel and sidebar, and a content-based proof requires an archive of the current tip before safe deletion. Automated real-Git lifecycle, MCP and deletion checks passed; the installed process has not been restarted to load this Rust change.
 - [ ] After a manual `make dev` restart, call `repo action=progress_list` with no input on the live tuicommander journal (2400+ entries). The first page has 8 entries and is under 16384 B (was 17545 B with 10 entries, 2026-09-30). Story 1088-4783 GREEN criterion.
+
+## Click on an underlined relative path (1336-7755)
+
+- [ ] After a desktop rebuild, in a Claude session (and once in a plain shell with `echo docs/x.md`) click an underlined relative path, then read the app log for `link click:` lines (debug level). A click that opens the file logs `link click: opening`; a dead click logs which step ended it (`not opened` with claimed/detail/hasRange, `lookup went stale`, `nothing resolved`, or `does not cover`). Also click an OSC 8 link whose text is no path and hover it first: it opens (press claimed from the hover probe, #1336 fix). Browser mode could not reproduce the dead click; only the desktop can.
+
+## Compose image paste and toolbar marker (1350-a1e6, 1351-69e0)
+
+- [ ] After the next desktop rebuild, paste a screenshot (Cmd+Shift+Ctrl+4) and an image file copied from Finder into Compose: both attach an `[image: ...]` tag, in paste order. Paste plain text: it pastes as text. In auto density mode the toolbar button shows only the letter, no blue marker.
+
+## Question reminder (1354-00ed)
+
+- [ ] After the next desktop rebuild, leave an agent question unanswered for 2 minutes in a background tab: one sound and one OS notification. With the question tab active and the window focused: sound only. With notifications disabled: nothing.
+
+## PR panel (1345-fb71 .. 1349-7546)
+
+- [ ] After the next desktop rebuild, on a repo with open PRs: a PR transition (CI failed, ready, merged) gives one OS notification and its click opens the PR; Merge sends the head the panel showed; a PR with unresolved review threads shows the bot/human split and is not Ready; Update branch on a BEHIND PR, Close PR with confirmation, age marker and Copy reference work on their own row only. Then approve plan steps S1-S5.

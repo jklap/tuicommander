@@ -67,8 +67,8 @@ type MarkdownLinkTarget =
 			open_path: string;
 			is_directory: boolean;
 			same_document: boolean;
-			anchor?: string;
-			line?: number;
+			anchor?: string | null;
+			line?: number | null;
 	  }
 	| { kind: "missing"; path: string }
 	| { kind: "blocked"; reason: string };
@@ -362,7 +362,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				toastsStore.add("Could not open link", resolved.reason, "error");
 				return;
 			}
-			if (resolved.anchor && resolved.same_document && resolved.line === undefined) {
+			if (resolved.anchor && resolved.same_document && resolved.line == null) {
 				scrollToHeading(resolved.anchor);
 				return;
 			}

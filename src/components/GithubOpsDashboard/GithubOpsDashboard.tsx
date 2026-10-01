@@ -6,6 +6,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { type ShellState, terminalsStore } from "../../stores/terminals";
 import type { BranchPrStatus, ImprovementFocus, ImprovementProposal } from "../../types";
 import { pathBasename } from "../../utils/pathUtils";
+import { PR_READINESS_LABELS, PR_READINESS_SEVERITY, prReadinessOf } from "../../utils/prReadiness";
 import s from "./GithubOpsDashboard.module.css";
 
 /** Live auto-fix session derived from the terminals store. */
@@ -35,24 +36,6 @@ function shellStateLabel(state: ShellState): string {
 	if (state === "idle") return t("github.ops.idle", "Idle");
 	if (state === "exited") return t("github.ops.exited", "Exited");
 	return t("github.ops.starting", "Starting");
-}
-
-/** Derive a CI/merge readiness verdict from a PR's checks + mergeable state. */
-function ciVerdict(pr: BranchPrStatus): Verdict {
-	if (pr.mergeable === "CONFLICTING") return "critical";
-	if (pr.checks.failed > 0) return "critical";
-	if (pr.checks.pending > 0) return "warn";
-	if (pr.is_draft) return "muted";
-	return "ok";
-}
-
-/** Short label for a CI/merge verdict. */
-function ciVerdictLabel(pr: BranchPrStatus): string {
-	if (pr.mergeable === "CONFLICTING") return t("github.ops.conflicts", "Conflicts");
-	if (pr.checks.failed > 0) return t("github.ops.ciFailing", "CI failing");
-	if (pr.checks.pending > 0) return t("github.ops.ciPending", "CI pending");
-	if (pr.is_draft) return t("github.ops.draft", "Draft");
-	return t("github.ops.ready", "Ready");
 }
 
 /** Pick the CSS badge class for a verdict. */
@@ -334,7 +317,9 @@ export const GithubOpsDashboard: Component<{ repoPath: string }> = (props) => {
 											<span class={s.cardLabel}>
 												PR #{pr.number} {pr.title}
 											</span>
-											<span class={badgeClass(ciVerdict(pr))}>{ciVerdictLabel(pr)}</span>
+											<span class={badgeClass(PR_READINESS_SEVERITY[prReadinessOf(pr)])}>
+												{PR_READINESS_LABELS[prReadinessOf(pr)]}
+											</span>
 										</div>
 										<span class={s.cardSub}>
 											{pr.checks.passed}/{pr.checks.total} {t("github.ops.checks", "checks")}

@@ -3,6 +3,7 @@ import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import type { WorkspaceLifecycleStatus } from "../stores/workspaceIdentity";
 import type { RepoInfo } from "../types";
+import type { OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 
 // ---------------------------------------------------------------------------
 // TCC (macOS permission) error detection — global, shown once per session
@@ -422,9 +423,7 @@ export function useRepository() {
 		}
 	}
 
-	async function assessOrphanCleanup(
-		repoPath: string,
-	): Promise<Array<{ path: string; safe: boolean; reason?: string }>> {
+	async function assessOrphanCleanup(repoPath: string): Promise<OrphanAssessment[]> {
 		return await invoke("assess_orphan_cleanup", { repoPath });
 	}
 
@@ -441,13 +440,23 @@ export function useRepository() {
 	}
 
 	/** Remove a detached-HEAD worktree by path (no branch to look up). */
-	async function removeOrphanWorktree(repoPath: string, worktreePath: string, safeOnly = false): Promise<void> {
-		await invoke("remove_orphan_worktree", { repoPath, worktreePath, safeOnly });
+	async function removeOrphanWorktree(
+		repoPath: string,
+		worktreePath: string,
+		safeOnly = false,
+		confirmedSessions: string[] = [],
+	): Promise<void> {
+		await invoke("remove_orphan_worktree", { repoPath, worktreePath, safeOnly, confirmedSessions });
 	}
 
 	/** Merge a PR via GitHub REST API. merge_method: "merge" | "squash" | "rebase" */
-	async function mergePrViaGithub(repoPath: string, prNumber: number, mergeMethod: string): Promise<string> {
-		return await invoke<string>("merge_pr_via_github", { repoPath, prNumber, mergeMethod });
+	async function mergePrViaGithub(
+		repoPath: string,
+		prNumber: number,
+		mergeMethod: string,
+		expectedHeadSha: string,
+	): Promise<string> {
+		return await invoke<string>("merge_pr_via_github", { repoPath, prNumber, mergeMethod, expectedHeadSha });
 	}
 
 	/** List local branch names for a repository */

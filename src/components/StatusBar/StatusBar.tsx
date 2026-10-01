@@ -31,6 +31,7 @@ import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { activePrStatus } from "../../utils/mergedPrGrace";
+import { prReadinessOf } from "../../utils/prReadiness";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { AgentIcon } from "../ui/AgentIcon";
 import { CountBadge } from "../ui/CountBadge";
@@ -387,9 +388,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 					<PrBadge
 						number={activePrData()!.number}
 						title={activePrData()!.title}
-						state={activePrData()!.state}
-						mergeable={activePrData()!.mergeable}
-						mergeStateStatus={activePrData()!.merge_state_status}
+						readiness={prReadinessOf(activePrData()!)}
 						onClick={() => setShowPrDetailPopover(true)}
 					/>
 					<Show when={activePrData()!.checks && activePrData()!.checks!.total > 0}>

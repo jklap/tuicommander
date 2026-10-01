@@ -222,3 +222,43 @@ describe("PrDetailContent — ego review result metadata", () => {
 		expect((getByText("Post review") as HTMLButtonElement).disabled).toBe(true);
 	});
 });
+
+describe("PrDetailContent — readiness and unresolved threads", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockGithubStore.getCheckSummary.mockReturnValue(null);
+		mockGithubStore.getCheckDetails.mockReturnValue([]);
+	});
+
+	it("says why an approved PR is not ready and splits the threads by bot and human", async () => {
+		// Bug caught: the panel showed no reason for a PR held back by open review threads.
+		mockGithubStore.getBranchPrData.mockReturnValue({
+			...basePr,
+			conflict_state: "clear",
+			review_decision: "APPROVED",
+			unresolved_threads: 3,
+			unresolved_threads_truncated: false,
+		});
+		mockRpc.mockImplementation(async (cmd: string) => (cmd === "get_pr_review_threads" ? { bot: 2, human: 1 } : null));
+		const repo = nextRepo();
+		const { container, findByText } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		expect(container.querySelector("[data-readiness]")?.getAttribute("data-readiness")).toBe("unresolved-comments");
+		expect(await findByText("1 human, 2 bot unresolved threads")).toBeTruthy();
+		expect(mockRpc).toHaveBeenCalledWith("get_pr_review_threads", { path: repo, prNumber: 42 });
+	});
+
+	it("does not query review threads when there are none", () => {
+		// Bug caught: paying one GraphQL point per panel open on every PR.
+		mockGithubStore.getBranchPrData.mockReturnValue({
+			...basePr,
+			conflict_state: "clear",
+			review_decision: "APPROVED",
+			unresolved_threads: 0,
+			unresolved_threads_truncated: false,
+		});
+		const repo = nextRepo();
+		const { container } = render(() => <PrDetailContent repoPath={repo} branch="feature" />);
+		expect(container.querySelector("[data-readiness]")?.getAttribute("data-readiness")).toBe("ready");
+		expect(mockRpc).not.toHaveBeenCalledWith("get_pr_review_threads", expect.anything());
+	});
+});

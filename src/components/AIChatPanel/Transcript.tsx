@@ -200,6 +200,7 @@ const LinkedPlainText: Component<{ text: string; onOpenFile?: (href: string) => 
 				part.web ? (
 					<a
 						href={part.text}
+						data-tuic-href={part.text}
 						onClick={(event) => {
 							event.preventDefault();
 							handleOpenUrl(part.text);

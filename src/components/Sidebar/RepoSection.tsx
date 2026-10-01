@@ -1,10 +1,10 @@
-import { type Component, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, type JSX, onCleanup, Show } from "solid-js";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
 import type { RepositoryState, WorkspaceState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
-import { terminalsStore } from "../../stores/terminals";
+import { type TerminalState, terminalsStore } from "../../stores/terminals";
 import { writeClipboard } from "../../utils/clipboard";
 import { _resetMergedActivityAccum, activePrStatus } from "../../utils/mergedPrGrace";
 import { effectiveMergeMethod } from "../../utils/prMerge";
@@ -14,6 +14,7 @@ export { effectiveMergeMethod };
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
+import { progressStore } from "../../stores/progress";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import { repoSettingsStore } from "../../stores/repoSettings";
@@ -27,6 +28,19 @@ import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { timeSync } from "../../utils/perfTrace";
+import { useSidebarDensity } from "../../utils/sidebarDensity";
+import {
+	agentFacts,
+	branchFacts,
+	compactAge as compactActivityAge,
+	countWorktrees,
+	createMinuteClock,
+	repoFacts,
+	STALE_AFTER_DAYS,
+	SUBAGENT_COLLAPSE_AFTER,
+	type SubagentRow,
+	subagentRows,
+} from "../../utils/sidebarRich";
 import { terminalVisualState } from "../../utils/terminalVisualState";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
@@ -37,7 +51,7 @@ import b from "../shared/branch.module.css";
 import { AgentIcon } from "../ui/AgentIcon";
 import { ChevronIcon } from "../ui/ChevronIcon";
 import { SubAgentIcon } from "../ui/SubAgentIcon";
-import { PrStateBadge } from "./PrStateBadge";
+import { PR_STATE_LABELS, PrStateBadge, prBadgeKind } from "./PrStateBadge";
 import s from "./Sidebar.module.css";
 import { SidebarPluginSection } from "./SidebarPluginSection";
 
@@ -166,7 +180,7 @@ export const UnmergedMarker: Component = () => (
 	<span
 		class={s.branchUnmergedMarker}
 		aria-label="Unmerged commits"
-		data-tooltip="Branch has commits not merged into the default branch. Merge before deleting the branch."
+		data-tooltip={UNMERGED_TOOLTIP}
 		data-tooltip-pos="bottom"
 		data-tooltip-align="right"
 		tabIndex={0}
@@ -215,100 +229,260 @@ function getBranchTabsAvailable(branch: WorkspaceState): boolean {
 	return settingsStore.state.tabTreeEnabled && branch.terminals.length > 0;
 }
 
-function compactActivityAge(timestamp: number | null, now: number): string {
-	if (!timestamp) return "";
-	const minutes = Math.max(0, Math.floor((now - timestamp) / 60_000));
-	if (minutes < 1) return "<1m";
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h`;
-	return `${Math.floor(hours / 24)}d`;
+type LifecycleStatus = NonNullable<WorkspaceState["lifecycleStatus"]>;
+
+const UNMERGED_TOOLTIP = "Branch has commits not merged into the default branch. Merge before deleting the branch.";
+
+/**
+ * What removing this workspace would lose, in words. Compact puts the whole
+ * sentence on one badge; rich splits it over the dirty chip (`dirty`) and the
+ * commit-verdict chip (`commit`) so each chip explains only itself.
+ */
+function lifecycleTooltip(status: LifecycleStatus, part?: "dirty" | "commit"): string {
+	if (status.commitStatus === "unknown") {
+		const explanation =
+			"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked.";
+		return status.error ? `${explanation} ${status.error}` : explanation;
+	}
+	const lost = status.dirtyFiles ?? 0;
+	if (lost > 0 && part !== "commit") {
+		return `${lost} uncommitted file${lost === 1 ? "" : "s"} (staged, unstaged or untracked) would be discarded by removing this workspace.`;
+	}
+	const commitState =
+		status.commitStatus === "merged"
+			? "HEAD is merged"
+			: status.commitStatus === "in_sync"
+				? "HEAD is the default branch tip — no commits of its own"
+				: status.commitStatus === "pushed_unmerged"
+					? "Not merged, but all commits are pushed to the remote branch"
+					: "Branch has commits not merged into the default branch";
+	const removal =
+		status.commitStatus === "unmerged"
+			? "merge before deleting the branch"
+			: status.removalSafety === "safe"
+				? "safe to remove"
+				: "destructive confirmation required";
+	return `${lost > 0 ? "" : "Clean working tree; "}${commitState}; ${removal}`;
 }
 
+const AGENT_STATE_LABEL = {
+	working: () => t("sidebar.agentWorking", "Working"),
+	idle: () => t("sidebar.agentIdle", "Idle"),
+	input: () => t("sidebar.agentNeedsInput", "Needs input"),
+	error: () => t("sidebar.agentError", "Error"),
+};
+
+/** The facts a rich agent row prints, read from the live terminal. */
+function agentRow(term: TerminalState) {
+	return agentFacts(
+		{
+			awaitingInput: term.awaitingInput,
+			busy: (term.sessionId != null && rateLimitStore.isRateLimited(term.sessionId)) || terminalsStore.isBusy(term.id),
+			agentIntent: term.agentIntent,
+			currentTask: term.currentTask,
+			lastPrompt: term.lastPrompt,
+		},
+		displayTask(term.currentTask, term.agentType),
+	);
+}
+
+/** Compact has no room for the agent's state word and line; they ride the row's tooltip. */
+function agentTooltip(term: TerminalState): string {
+	const facts = agentRow(term);
+	return facts.line ? `${AGENT_STATE_LABEL[facts.state]()}: ${facts.line}` : AGENT_STATE_LABEL[facts.state]();
+}
+
+/** Rich: the live subagents of one agent row; more than a few fold into a count. */
+const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
+	const [open, setOpen] = createSignal(false);
+	const folded = () => props.rows.length > SUBAGENT_COLLAPSE_AFTER && !open();
+	return (
+		<Show when={props.rows.length > 0}>
+			<div class={s.subagentList}>
+				<Show
+					when={!folded()}
+					fallback={
+						<button class={s.subagentFold} onClick={() => setOpen(true)} aria-expanded="false">
+							{t("sidebar.subagentCount", "{count} subagents", { count: String(props.rows.length) })}
+						</button>
+					}
+				>
+					<For each={props.rows}>
+						{(row) => (
+							<div class={s.subagentRow} title={row.title}>
+								<span class={cx(s.branchTabState, row.running && s.branchTabState_working)}>
+									{row.running ? t("sidebar.subagentRunning", "Running") : t("sidebar.subagentDone", "Returned")}
+								</span>
+								<span class={s.branchTabLine}>{row.title}</span>
+								<span class={s.subagentMeta}>
+									{t("sidebar.subagentCalls", "{count} calls", { count: String(row.toolCalls) })}
+									{row.age ? ` · ${row.age}` : ""}
+								</span>
+							</div>
+						)}
+					</For>
+					<Show when={props.rows.length > SUBAGENT_COLLAPSE_AFTER}>
+						<button class={s.subagentFold} onClick={() => setOpen(false)} aria-expanded="true">
+							{t("sidebar.subagentCollapse", "Collapse")}
+						</button>
+					</Show>
+				</Show>
+			</div>
+		</Show>
+	);
+};
+
 /** Collapsible activity card for the terminals attached to a branch. */
-const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
-	const [now, setNow] = createSignal(Date.now());
-	const clock = setInterval(() => setNow(Date.now()), 60_000);
-	onCleanup(() => clearInterval(clock));
+const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (props) => {
+	const density = useSidebarDensity();
+	const rich = () => density() === "rich";
+	// Only rich ticks; compact reads the age once per render, as it always did.
+	const now = createMinuteClock(rich);
+	const clock = () => (rich() ? now() : Date.now());
+	const rawParentOf = (id: string) => {
+		const parent = terminalsStore.get(id)?.parentSession;
+		if (!parent) return null;
+		return (
+			props.terminalIds.find((other) => {
+				const t = terminalsStore.get(other);
+				return other !== id && t && (t.sessionId === parent || t.tuicSession === parent);
+			}) ?? null
+		);
+	};
+	// A member of a parent cycle (A↔B, A→B→C→A) has no root to hang under: it renders
+	// top level, once, instead of vanishing with the rest of its cycle.
+	const inCycle = (id: string) => {
+		const seen = new Set<string>();
+		for (let cur = rawParentOf(id); cur !== null && !seen.has(cur); cur = rawParentOf(cur)) {
+			if (cur === id) return true;
+			seen.add(cur);
+		}
+		return false;
+	};
+	const parentOf = (id: string) => (inCycle(id) ? null : rawParentOf(id));
+	// Rich nests a TUIC child session under the agent that spawned it, when both
+	// are on this branch. A child whose parent is elsewhere stays a top-level row.
+	const topLevel = () => (rich() ? props.terminalIds.filter((id) => parentOf(id) === null) : props.terminalIds);
+	const childrenOf = (id: string) => (rich() ? props.terminalIds.filter((other) => parentOf(other) === id) : []);
+	onCleanup(progressStore.holdSidebarFlow(props.repoPath));
+	// Subagents come from the project flow: ask for it while rich shows an agent,
+	// again on every busy flip and every minute.
+	createEffect(() => {
+		now();
+		if (!rich()) return;
+		// Read every terminal: a short-circuiting some() would stop tracking the busy flips of
+		// the terminals after the first agent.
+		let live = false;
+		for (const id of props.terminalIds) {
+			terminalsStore.isBusy(id);
+			if (terminalsStore.get(id)?.agentType) live = true;
+		}
+		if (live) void progressStore.refreshSidebarFlow(props.repoPath);
+	});
+	const subagents = (term: TerminalState) =>
+		subagentRows(progressStore.sidebarFlow(props.repoPath), term.sessionId, clock());
+	const renderTab = (id: string, nested: boolean): JSX.Element => {
+		const term = () => terminalsStore.get(id);
+		const isActive = () => terminalsStore.state.activeId === id;
+		// The row shows the tab title, as the tab bar does; what the agent is
+		// doing goes in the tooltip.
+		const activity = () => term()?.name ?? null;
+		const detail = () => {
+			const t = term();
+			return t ? (t.agentIntent ?? displayTask(t.currentTask, t.agentType) ?? t.lastPrompt) : null;
+		};
+		const accessibleLabel = () => {
+			const t = term();
+			if (!t) return undefined;
+			const d = detail();
+			return d ? `${t.name}: ${d}` : t.name;
+		};
+		const dotClass = () => {
+			const t = term();
+			if (!t) return s.branchTabDot;
+			const visual = terminalVisualState({
+				error: t.awaitingInput === "error",
+				question: t.awaitingInput === "question",
+				busy: (t.sessionId != null && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isBusy(id),
+				unseen: t.unseen,
+				idle: t.shellState === "idle",
+			});
+			const visualClass = {
+				error: s.branchTabDotError,
+				question: s.branchTabDotQuestion,
+				busy: s.branchTabDotBusy,
+				unseen: s.branchTabDotUnseen,
+				idle: s.branchTabDotIdle,
+				default: undefined,
+			}[visual];
+			return cx(s.branchTabDot, visualClass);
+		};
+
+		return (
+			<Show when={term()}>
+				{(t) => (
+					<>
+						<button
+							class={cx(
+								s.branchTabItem,
+								isActive() && s.active,
+								rich() && s.branchTabItemRich,
+								nested && s.branchTabNested,
+							)}
+							onClick={() => navigateToTerminal(id)}
+							title={accessibleLabel()}
+							aria-label={accessibleLabel()}
+							data-tooltip={!rich() ? agentTooltip(t()) : undefined}
+							data-tooltip-pos="bottom"
+						>
+							<span class={dotClass()} aria-hidden="true" />
+							<Show
+								when={t().agentType}
+								fallback={
+									<span class={s.branchAgentIcon} aria-hidden="true">
+										<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+											<path d="M1 3l5 5-5 5h2l5-5-5-5H1zm7 9h7v2H8v-2z" />
+										</svg>
+									</span>
+								}
+							>
+								{(agent) => (
+									<span class={s.branchAgentIcon} aria-hidden="true">
+										<AgentIcon agent={agent()} size={14} />
+									</span>
+								)}
+							</Show>
+							<Show when={activity()}>{(label) => <span class={s.branchAgentActivity}>{label()}</span>}</Show>
+							<Show when={terminalsStore.getSubAgentTag(id)}>
+								{(parent) => (
+									<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
+								)}
+							</Show>
+							<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, clock())}</span>
+							{/* Rich: what the agent is doing, in words, under the tab title. */}
+							<Show when={rich() ? agentRow(t()) : null}>
+								{(facts) => (
+									<span class={s.branchTabDetail}>
+										<span class={cx(s.branchTabState, s[`branchTabState_${facts().state}`])}>
+											{AGENT_STATE_LABEL[facts().state]()}
+										</span>
+										<Show when={facts().line}>{(line) => <span class={s.branchTabLine}>{line()}</span>}</Show>
+									</span>
+								)}
+							</Show>
+						</button>
+						<Show when={rich()}>
+							<SubagentList rows={subagents(t())} />
+							<For each={childrenOf(id)}>{(child) => renderTab(child, true)}</For>
+						</Show>
+					</>
+				)}
+			</Show>
+		);
+	};
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
-			<For each={props.terminalIds}>
-				{(id) => {
-					const term = () => terminalsStore.get(id);
-					const isActive = () => terminalsStore.state.activeId === id;
-					// The row shows the tab title, as the tab bar does; what the agent is
-					// doing goes in the tooltip.
-					const activity = () => term()?.name ?? null;
-					const detail = () => {
-						const t = term();
-						return t ? (t.agentIntent ?? displayTask(t.currentTask, t.agentType) ?? t.lastPrompt) : null;
-					};
-					const accessibleLabel = () => {
-						const t = term();
-						if (!t) return undefined;
-						const d = detail();
-						return d ? `${t.name}: ${d}` : t.name;
-					};
-					const dotClass = () => {
-						const t = term();
-						if (!t) return s.branchTabDot;
-						const visual = terminalVisualState({
-							error: t.awaitingInput === "error",
-							question: t.awaitingInput === "question",
-							busy: (t.sessionId != null && rateLimitStore.isRateLimited(t.sessionId)) || terminalsStore.isBusy(id),
-							unseen: t.unseen,
-							idle: t.shellState === "idle",
-						});
-						const visualClass = {
-							error: s.branchTabDotError,
-							question: s.branchTabDotQuestion,
-							busy: s.branchTabDotBusy,
-							unseen: s.branchTabDotUnseen,
-							idle: s.branchTabDotIdle,
-							default: undefined,
-						}[visual];
-						return cx(s.branchTabDot, visualClass);
-					};
-
-					return (
-						<Show when={term()}>
-							{(t) => (
-								<button
-									class={cx(s.branchTabItem, isActive() && s.active)}
-									onClick={() => navigateToTerminal(id)}
-									title={accessibleLabel()}
-									aria-label={accessibleLabel()}
-								>
-									<span class={dotClass()} aria-hidden="true" />
-									<Show
-										when={t().agentType}
-										fallback={
-											<span class={s.branchAgentIcon} aria-hidden="true">
-												<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
-													<path d="M1 3l5 5-5 5h2l5-5-5-5H1zm7 9h7v2H8v-2z" />
-												</svg>
-											</span>
-										}
-									>
-										{(agent) => (
-											<span class={s.branchAgentIcon} aria-hidden="true">
-												<AgentIcon agent={agent()} size={14} />
-											</span>
-										)}
-									</Show>
-									<Show when={activity()}>{(label) => <span class={s.branchAgentActivity}>{label()}</span>}</Show>
-									<Show when={terminalsStore.getSubAgentTag(id)}>
-										{(parent) => (
-											<SubAgentIcon parent={parent()} class={s.branchSubAgentTag} iconClass={s.branchSubAgentIcon} />
-										)}
-									</Show>
-									<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, now())}</span>
-								</button>
-							)}
-						</Show>
-					);
-				}}
-			</For>
+			<For each={topLevel()}>{(id) => renderTab(id, false)}</For>
 		</div>
 	);
 };
@@ -361,6 +535,64 @@ export const BranchItem: Component<{
 	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.branchName));
 	const checks = createMemo(() => githubStore.getCheckSummary(props.repoPath, props.branch.branchName));
 	const hasDiff = () => props.branch.additions > 0 || props.branch.deletions > 0;
+	const density = useSidebarDensity();
+	const rich = () => density() === "rich";
+	const now = createMinuteClock(rich);
+	// Ahead/behind is against the upstream: the stores hold nothing against the base branch.
+	const remote = createMemo(() => {
+		const status = githubStore.getRemoteStatus(props.branch.worktreePath ?? props.repoPath);
+		return status?.has_remote && status.current_branch === props.branch.branchName ? status : null;
+	});
+	const facts = createMemo(() =>
+		branchFacts(
+			{
+				lastCommitTs: props.branch.lastCommitTs,
+				ahead: remote()?.ahead,
+				behind: remote()?.behind,
+				additions: props.branch.additions,
+				deletions: props.branch.deletions,
+				dirtyFiles: props.branch.lifecycleStatus?.dirtyFiles,
+				isMerged: props.branch.isMerged,
+				commitStatus: props.branch.lifecycleStatus?.commitStatus,
+				isMain: props.branch.isMain,
+			},
+			// Compact prints no age, so its tooltip reads the clock once instead of subscribing.
+			rich() ? now() : Date.now(),
+		),
+	);
+	// The state word the compact badge keeps in its tooltip, which touch cannot read.
+	const prStateLabel = (p: NonNullable<ReturnType<typeof pr>>) =>
+		PR_STATE_LABELS[
+			prBadgeKind({
+				state: p.state,
+				isDraft: p.is_draft,
+				mergeable: p.mergeable,
+				conflictState: p.conflict_state,
+				reviewDecision: p.review_decision,
+				ciFailed: checks()?.failed,
+				ciPending: checks()?.pending,
+				unresolvedThreads: p.unresolved_threads,
+				unresolvedThreadsTruncated: p.unresolved_threads_truncated,
+			})
+		];
+	const lifecycle = () => props.branch.lifecycleStatus;
+	const tipFor = (part: "dirty" | "commit") => {
+		const status = lifecycle();
+		return status ? lifecycleTooltip(status, part) : undefined;
+	};
+	const staleTooltip = () =>
+		t("sidebar.staleHint", "Stale: no commit for more than {days} days and not merged", {
+			days: String(STALE_AFTER_DAYS),
+		});
+	// Compact has no room for these facts; they ride the branch name's tooltip.
+	const factsTooltip = () =>
+		[
+			facts().commitAge && `${t("sidebar.lastCommit", "Last commit")}: ${facts().commitAge}`,
+			facts().sync && `${t("sidebar.aheadBehind", "Ahead / behind upstream")}: ${facts().sync}`,
+			facts().state === "stale" && staleTooltip(),
+		]
+			.filter(Boolean)
+			.join(" · ");
 	// Select this branch/worktree first so the Git panel targets it (it follows
 	// activeWorktreePath), then open the changes tab — otherwise a chip would
 	// show the active branch's diff instead of this row's.
@@ -596,7 +828,13 @@ export const BranchItem: Component<{
 					</span>
 				</Show>
 				<div class={s.branchContent}>
-					<span class={s.branchName} onDblClick={handleDoubleClick} title={rowTitle()}>
+					<span
+						class={s.branchName}
+						onDblClick={handleDoubleClick}
+						title={rowTitle()}
+						data-tooltip={!rich() ? factsTooltip() || undefined : undefined}
+						data-tooltip-pos="bottom"
+					>
 						{branchLabel() ?? props.branch.branchName}
 					</span>
 					{/* When a custom label replaces the main line, retain the branch
@@ -611,7 +849,7 @@ export const BranchItem: Component<{
 				    lose? A main checkout is never removed here, so it gets no badge at
 				    all: "Dirty" on every main row was noise about a risk that does not
 				    exist. */}
-				<Show when={!props.branch.isMain && props.branch.lifecycleStatus}>
+				<Show when={!rich() && !props.branch.isMain && props.branch.lifecycleStatus}>
 					{(status) => {
 						const lostFiles = () => status().dirtyFiles ?? 0;
 						const label = () => {
@@ -633,31 +871,7 @@ export const BranchItem: Component<{
 						};
 						// Only the dirty count points at a diff; commit verdicts have none to show.
 						const opensChanges = () => !!props.onShowChanges && status().commitStatus !== "unknown" && lostFiles() > 0;
-						const tooltip = () => {
-							if (status().commitStatus === "unknown") {
-								const explanation =
-									"Status unavailable: TUICommander could not verify local changes or merge state, so removal is blocked.";
-								return status().error ? `${explanation} ${status().error}` : explanation;
-							}
-							if (lostFiles() > 0) {
-								return `${lostFiles()} uncommitted file${lostFiles() === 1 ? "" : "s"} (staged, unstaged or untracked) would be discarded by removing this workspace.`;
-							}
-							const commitState =
-								status().commitStatus === "merged"
-									? "HEAD is merged"
-									: status().commitStatus === "in_sync"
-										? "HEAD is the default branch tip — no commits of its own"
-										: status().commitStatus === "pushed_unmerged"
-											? "Not merged, but all commits are pushed to the remote branch"
-											: "Branch has commits not merged into the default branch";
-							const removal =
-								status().commitStatus === "unmerged"
-									? "merge before deleting the branch"
-									: status().removalSafety === "safe"
-										? "safe to remove"
-										: "destructive confirmation required";
-							return `Clean working tree; ${commitState}; ${removal}`;
-						};
+						const tooltip = () => lifecycleTooltip(status());
 						return (
 							<Show when={label()}>
 								<span
@@ -679,9 +893,13 @@ export const BranchItem: Component<{
 						);
 					}}
 				</Show>
-				<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged" || pr() || hasDiff()}>
+				<Show
+					when={
+						(!rich() && props.branch.lifecycleStatus?.commitStatus === "unmerged") || pr() || (!rich() && hasDiff())
+					}
+				>
 					<div class={s.branchBadgeStack}>
-						<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged"}>
+						<Show when={!rich() && props.branch.lifecycleStatus?.commitStatus === "unmerged"}>
 							<UnmergedMarker />
 						</Show>
 						<Show when={pr()}>
@@ -706,19 +924,36 @@ export const BranchItem: Component<{
 									ciPassed={checks()?.passed}
 									ciFailed={checks()?.failed}
 									ciPending={checks()?.pending}
+									unresolvedThreads={pr()!.unresolved_threads}
+									unresolvedThreadsTruncated={pr()!.unresolved_threads_truncated}
 									dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
 								/>
 							</span>
 						</Show>
-						<StatsBadge
-							additions={props.branch.additions}
-							deletions={props.branch.deletions}
-							dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
-							onClick={props.onShowChanges ? showChanges : undefined}
-						/>
+						<Show when={!rich()}>
+							<StatsBadge
+								additions={props.branch.additions}
+								deletions={props.branch.deletions}
+								dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
+								onClick={props.onShowChanges ? showChanges : undefined}
+							/>
+						</Show>
 					</div>
 				</Show>
 				<div class={s.branchActions} style={{ display: props.shortcutIndex !== undefined ? "none" : undefined }}>
+					{/* Touch only (CSS): a long press on a row fires no contextmenu on iPadOS
+					    (measured in the simulator, story 1334-b659), so the menu needs a button. */}
+					<button
+						class={s.branchMoreBtn}
+						onClick={(e) => {
+							e.stopPropagation();
+							const rect = e.currentTarget.getBoundingClientRect();
+							ctxMenu.openAt(rect.right - 160, rect.bottom + 4);
+						}}
+						title={t("sidebar.branchOptions", "Branch options")}
+					>
+						⋯
+					</button>
 					<button
 						class={s.branchAddBtn}
 						onClick={(e) => {
@@ -764,6 +999,94 @@ export const BranchItem: Component<{
 				<span class={s.branchShortcut} style={{ display: props.shortcutIndex !== undefined ? undefined : "none" }}>
 					{props.shortcutIndex !== undefined ? keyFor(`switch-branch-${props.shortcutIndex}`) : ""}
 				</span>
+				{/* Rich: a full-width block under the name line, spending the spare room on what
+				    the compact row leaves to tooltips. */}
+				<Show when={rich() && !props.branch.isShell}>
+					<span class={s.branchBreak} aria-hidden="true" />
+					<div class={s.branchRichDetail}>
+						<Show when={pr()}>
+							{(p) => (
+								<span class={s.branchRichLine} title={p().title}>
+									<Show when={prStateLabel(p())}>{(label) => <span class={s.branchRichPrState}>{label()} </span>}</Show>
+									{p().title}
+								</span>
+							)}
+						</Show>
+						<span class={s.branchRichMeta}>
+							<Show when={facts().commitAge}>
+								{(age) => (
+									<span
+										class={s.richChip}
+										data-tooltip={t("sidebar.lastCommit", "Last commit")}
+										data-tooltip-pos="bottom"
+									>
+										{age()}
+									</span>
+								)}
+							</Show>
+							<Show when={facts().sync}>
+								{(sync) => (
+									<span
+										class={s.richChip}
+										data-tooltip={t("sidebar.aheadBehind", "Ahead / behind upstream")}
+										data-tooltip-pos="bottom"
+									>
+										{sync()}
+									</span>
+								)}
+							</Show>
+							<StatsBadge
+								additions={props.branch.additions}
+								deletions={props.branch.deletions}
+								dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
+								onClick={props.onShowChanges ? showChanges : undefined}
+							/>
+							<Show when={facts().dirtyFiles > 0}>
+								<span
+									class={cx(s.richChip, s.richChipWarn)}
+									data-tooltip={tipFor("dirty")}
+									data-tooltip-pos="bottom"
+									role={props.onShowChanges ? "button" : undefined}
+									tabIndex={props.onShowChanges ? 0 : undefined}
+									onClick={props.onShowChanges ? showChanges : undefined}
+									onKeyDown={props.onShowChanges ? onClickKeyDown(showChanges) : undefined}
+									style={props.onShowChanges ? { cursor: "pointer" } : undefined}
+								>
+									{facts().dirtyFiles} {t("sidebar.dirty", "dirty")}
+								</span>
+							</Show>
+							<Show when={facts().state}>
+								{(state) => {
+									const risky = () =>
+										state() === "unknown" ||
+										(state() === "merged" && !!lifecycle() && lifecycle()?.removalSafety !== "safe");
+									return (
+										<span
+											class={cx(
+												s.richChip,
+												state() === "merged" && !risky() ? s.richChipMerged : s.richChipWarn,
+												risky() && s.richChipRisk,
+											)}
+											data-tooltip={state() === "stale" ? staleTooltip() : tipFor("commit")}
+											data-tooltip-pos="bottom"
+										>
+											{state() === "unknown"
+												? t("sidebar.unknown", "Unknown")
+												: state() === "merged"
+													? t("sidebar.merged", "Merged")
+													: t("sidebar.stale", "Stale")}
+										</span>
+									);
+								}}
+							</Show>
+							<Show when={!props.branch.isMain && lifecycle()?.commitStatus === "unmerged"}>
+								<span class={s.richChip} data-tooltip={UNMERGED_TOOLTIP} data-tooltip-pos="bottom">
+									{t("sidebar.unmerged", "unmerged")}
+								</span>
+							</Show>
+						</span>
+					</div>
+				</Show>
 				<ContextMenu
 					items={contextMenuItems()}
 					x={ctxMenu.position().x}
@@ -810,6 +1133,7 @@ export const RepoSection: Component<{
 	onCreateWorktreeFromBranch?: (branchName: string) => void;
 	onMergeAndArchive?: (branchName: string) => void;
 	onSettings: () => void;
+	onOpenRemoteMachines?: () => void;
 	onRemove: () => void;
 	onToggle: () => void;
 	onToggleCollapsed: () => void;
@@ -841,6 +1165,26 @@ export const RepoSection: Component<{
 	}
 
 	const branches = createMemo(() => Object.values(props.repo.workspaces));
+	const density = useSidebarDensity();
+	const now = createMinuteClock(() => density() === "rich");
+	// Header facts for the rich layout. "Synced" is the last GitHub/remote poll:
+	// the stores keep no timestamp for a plain `git fetch`.
+	const richRepoFacts = createMemo(() =>
+		repoFacts(
+			{
+				currentBranch: props.repo.activeWorkspaceId
+					? (props.repo.workspaces[props.repo.activeWorkspaceId]?.branchName ?? null)
+					: null,
+				openPrs: githubStore.getAllOpenPrs(props.repo.path).length,
+				worktrees: countWorktrees(
+					props.repo.path,
+					branches().map((w) => w.worktreePath),
+				),
+				polledAt: githubStore.getLastPolled(props.repo.path),
+			},
+			now(),
+		),
+	);
 	// Pre-compute PR statuses once per poll cycle; avoids calling getPrStatus inside sort comparator
 	const prStatuses = createMemo(() => {
 		const map = new Map<string, ReturnType<typeof githubStore.getPrStatus>>();
@@ -1021,7 +1365,17 @@ export const RepoSection: Component<{
 						{props.repo.displayName}
 					</span>
 					<Show when={props.repo.connectionId}>
-						<span class={cx(s.remoteBadge, remoteBadgeStatusClass())} title={remoteBadgeTitle()}>
+						<span
+							class={cx(s.remoteBadge, remoteBadgeStatusClass())}
+							data-tooltip={remoteBadgeTitle()}
+							data-tooltip-pos="bottom"
+							onClick={(e) => {
+								// Touch has no tooltip, so the badge itself is the way to the fix.
+								if (!window.matchMedia?.("(hover: none)").matches) return;
+								e.stopPropagation();
+								props.onOpenRemoteMachines?.();
+							}}
+						>
 							{remoteBadgeLabel()}
 						</span>
 					</Show>
@@ -1090,6 +1444,33 @@ export const RepoSection: Component<{
 				</Show>
 			</div>
 
+			<Show when={density() === "rich" && props.repo.isGitRepo !== false && !props.repo.collapsed}>
+				<div class={s.repoRichMeta} data-testid="repo-rich-meta">
+					<Show when={richRepoFacts().currentBranch}>{(name) => <span class={s.richChip}>⎇ {name()}</span>}</Show>
+					<span class={s.richChip}>
+						{richRepoFacts().openPrs}{" "}
+						{richRepoFacts().openPrs === 1 ? t("sidebar.openPrOne", "open PR") : t("sidebar.openPrs", "open PRs")}
+					</span>
+					<span class={s.richChip}>
+						{richRepoFacts().worktrees}{" "}
+						{richRepoFacts().worktrees === 1
+							? t("sidebar.worktreeOne", "worktree")
+							: t("sidebar.worktrees", "worktrees")}
+					</span>
+					<Show when={richRepoFacts().syncedAge}>
+						{(age) => (
+							<span
+								class={s.richChip}
+								data-tooltip={t("sidebar.lastPoll", "Last remote poll")}
+								data-tooltip-pos="bottom"
+							>
+								{t("sidebar.synced", "synced")} {age()}
+							</span>
+						)}
+					</Show>
+				</div>
+			</Show>
+
 			{/* Branches */}
 			<Show when={props.repo.expanded && !props.repo.collapsed}>
 				<div class={s.repoBranches}>
@@ -1142,7 +1523,7 @@ export const RepoSection: Component<{
 									githubBaseUrl={githubBaseUrl()}
 								/>
 								<Show when={!branch.tabsCollapsed && getBranchTabsAvailable(branch)}>
-									<BranchTabList terminalIds={branch.terminals} />
+									<BranchTabList terminalIds={branch.terminals} repoPath={props.repo.path} />
 								</Show>
 							</div>
 						)}

@@ -1194,6 +1194,10 @@ pub(crate) struct NotificationConfig {
     /// toasts stay transient — they appear, they fade, they leave no trace.
     #[serde(default = "default_true")]
     pub(crate) toasts_in_bell: bool,
+    /// OS notification when a PR becomes ready, fails CI, gets changes requested
+    /// or is merged. The bell alone is invisible while another app has focus.
+    #[serde(default = "default_true")]
+    pub(crate) pr_native_notifications: bool,
 }
 
 fn default_true() -> bool {
@@ -1213,6 +1217,7 @@ impl Default for NotificationConfig {
             audio_device: None,
             silence_remote_completions: true,
             toasts_in_bell: true,
+            pr_native_notifications: true,
         }
     }
 }
@@ -1248,6 +1253,9 @@ pub(crate) struct UIPrefsConfig {
     /// File browser listing: "flat" or "tree".
     #[serde(default = "default_file_browser_view_mode")]
     pub(crate) file_browser_view_mode: String,
+    /// Sidebar layout: "auto" (rich for a short list or a finger), "compact" or "rich".
+    #[serde(default = "default_sidebar_density")]
+    pub(crate) sidebar_density: String,
     /// Appearance used by the mobile PWA; independent of the desktop terminal theme.
     #[serde(default = "default_mobile_theme")]
     pub(crate) mobile_theme: String,
@@ -1287,6 +1295,10 @@ fn default_file_browser_view_mode() -> String {
     "tree".to_string()
 }
 
+fn default_sidebar_density() -> String {
+    "auto".to_string()
+}
+
 fn default_mobile_theme() -> String {
     "commander".to_string()
 }
@@ -1306,6 +1318,7 @@ impl Default for UIPrefsConfig {
             references_panel_visible: false,
             ai_chat_panel_visible: false,
             file_browser_view_mode: default_file_browser_view_mode(),
+            sidebar_density: default_sidebar_density(),
             mobile_theme: default_mobile_theme(),
             diff_panel_width: default_panel_width(),
             markdown_panel_width: default_panel_width(),
@@ -5005,6 +5018,7 @@ mod tests {
             audio_device: Some("Test Speaker".to_string()),
             silence_remote_completions: true,
             toasts_in_bell: false,
+            pr_native_notifications: false,
         };
         let loaded: NotificationConfig = round_trip_in_dir(dir.path(), "notifications.json", &cfg);
         assert!(!loaded.enabled);
@@ -5015,6 +5029,15 @@ mod tests {
         assert_eq!(loaded.audio_device.as_deref(), Some("Test Speaker"));
         assert!(loaded.silence_remote_completions);
         assert!(!loaded.toasts_in_bell);
+        assert!(!loaded.pr_native_notifications);
+    }
+
+    /// A config written before the setting existed keeps PR notifications on.
+    #[test]
+    fn pr_native_notifications_defaults_on() {
+        let legacy: NotificationConfig =
+            serde_json::from_str(r#"{"enabled":true,"volume":0.5}"#).unwrap();
+        assert!(legacy.pr_native_notifications);
     }
 
     /// A user who never saw the setting keeps the mirroring, so nothing a toast
@@ -5061,6 +5084,7 @@ mod tests {
             references_panel_visible: false,
             ai_chat_panel_visible: false,
             file_browser_view_mode: "tree".to_string(),
+            sidebar_density: "rich".to_string(),
             mobile_theme: "vscode-light".to_string(),
             diff_panel_width: 500,
             markdown_panel_width: 450,
@@ -5082,6 +5106,7 @@ mod tests {
         let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &cfg);
         assert!(!loaded.sidebar_visible);
         assert_eq!(loaded.sidebar_width, 300);
+        assert_eq!(loaded.sidebar_density, "rich");
         assert_eq!(loaded.mobile_theme, "vscode-light");
         assert_eq!(loaded.diff_panel_width, 500);
         assert_eq!(loaded.markdown_panel_width, 450);
@@ -5169,6 +5194,20 @@ mod tests {
         assert!(!loaded.ai_chat_panel_visible);
         assert_eq!(loaded.file_browser_view_mode, "tree");
         assert_eq!(UIPrefsConfig::default().file_browser_view_mode, "tree");
+    }
+
+    /// Serde drops unknown keys silently: the density choice must survive the
+    /// round trip, and a prefs file from before it existed must load as "auto".
+    #[test]
+    fn ui_prefs_keep_sidebar_density_and_default_to_auto() {
+        let saved: UIPrefsConfig =
+            serde_json::from_str(r#"{"sidebar_density":"compact"}"#).unwrap();
+        assert_eq!(
+            serde_json::to_value(&saved).unwrap()["sidebar_density"],
+            "compact"
+        );
+        let old: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
+        assert_eq!(old.sidebar_density, "auto");
     }
 
     #[test]

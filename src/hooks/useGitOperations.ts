@@ -14,7 +14,7 @@ import type { RepoInfo } from "../types";
 import { openDialog as open } from "../utils/nativeDialog";
 import { findOrphanTerminals } from "../utils/terminalOrphans";
 import { createBranchSelectionCoordinator } from "./git/createBranchSelectionCoordinator";
-import { createRepositoryRefreshCoordinator } from "./git/createRepositoryRefreshCoordinator";
+import { createRepositoryRefreshCoordinator, type OrphanAssessment } from "./git/createRepositoryRefreshCoordinator";
 import { createTerminalWorktreeCoordinator } from "./git/createTerminalWorktreeCoordinator";
 import { createWorktreeCreationCoordinator } from "./git/createWorktreeCreationCoordinator";
 import { createWorktreeRemovalCoordinator } from "./git/createWorktreeRemovalCoordinator";
@@ -113,8 +113,18 @@ export interface GitOperationsDeps {
 		beginOrphanCleanup: (repoPath: string, paths: string[]) => Promise<void>;
 		pendingOrphanCleanupAnswer: (repoPath: string) => Promise<boolean | null>;
 		clearOrphanCleanup: (repoPath: string, kept: boolean) => Promise<void>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string, safeOnly?: boolean) => Promise<void>;
-		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
+		removeOrphanWorktree: (
+			repoPath: string,
+			worktreePath: string,
+			safeOnly?: boolean,
+			confirmedSessions?: string[],
+		) => Promise<void>;
+		mergePrViaGithub: (
+			repoPath: string,
+			prNumber: number,
+			mergeMethod: string,
+			expectedHeadSha: string,
+		) => Promise<string>;
 		getWorkspaceLifecycle: (
 			repoPath: string,
 			workspaceId: string,
@@ -142,7 +152,7 @@ export interface GitOperationsDeps {
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (
 			repoPath: string,
-			assessments: Array<{ path: string; safe: boolean; reason?: string }>,
+			assessments: OrphanAssessment[],
 			countdownSeconds: number,
 		) => Promise<boolean>;
 		answerOrphanCleanup?: (repoPath: string, remove: boolean) => void;

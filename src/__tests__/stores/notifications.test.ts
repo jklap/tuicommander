@@ -413,6 +413,44 @@ describe("notificationsStore", () => {
 		});
 	});
 
+	describe("playQuestionReminder()", () => {
+		async function remind(activeId: string, focused: boolean) {
+			vi.stubGlobal("__TAURI_INTERNALS__", {});
+			const focus = vi.spyOn(document, "hasFocus").mockReturnValue(focused);
+			vi.doMock("../../stores/terminals", () => ({
+				terminalsStore: {
+					get: () => ({ name: "Deploy Agent" }),
+					state: { activeId },
+					isDetached: () => false,
+				},
+			}));
+			try {
+				await store.playQuestionReminder("term-1");
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			} finally {
+				focus.mockRestore();
+				vi.unstubAllGlobals();
+			}
+		}
+
+		it("always plays the question sound", async () => {
+			await remind("term-1", true);
+			expect(mockManager.play).toHaveBeenCalledWith("question");
+		});
+
+		// Catches: reminder silent for a question in a background tab of a focused window.
+		it("sends the OS notice for a background tab of a focused window", async () => {
+			await remind("term-2", true);
+			expect(nativeSend).toHaveBeenCalledWith({ title: "Agent needs input", body: "Deploy Agent" });
+		});
+
+		// Catches: OS notice popping for a question the user is looking at.
+		it("sends no OS notice when the question's tab is active in a focused window", async () => {
+			await remind("term-1", true);
+			expect(nativeSend).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("playError()", () => {
 		it("plays error sound via play()", async () => {
 			await store.playError();
