@@ -343,9 +343,7 @@ describe("RepoSection", () => {
 			globalWorkspaceStore.promote("chevron-wrong-cwd");
 
 			expect(globalWorkspaceStore.getPromotedIds()).toContain("chevron-wrong-cwd");
-			expect(repositoriesStore.get("/chev-repo")?.workspaces["feat-x"]?.terminals).not.toContain(
-				"chevron-wrong-cwd",
-			);
+			expect(repositoriesStore.get("/chev-repo")?.workspaces["feat-x"]?.terminals).not.toContain("chevron-wrong-cwd");
 
 			const onSelect = vi.fn();
 			// terminals.length > 1 is required for getBranchTabsAvailable to render

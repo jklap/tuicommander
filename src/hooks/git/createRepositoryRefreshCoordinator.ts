@@ -3,8 +3,8 @@ import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { type GitOpKind, type RepositoryState, repositoriesStore } from "../../stores/repositories";
-import { terminalsStore } from "../../stores/terminals";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
+import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
 
 interface WorkspaceLifecycleResponse {
