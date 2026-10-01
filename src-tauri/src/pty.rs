@@ -2122,6 +2122,10 @@ pub(crate) struct SilenceState {
     /// Claude Code keeps listing as `running` in every `Stop` payload until it is
     /// shut down — stop holding its lead "working".
     declared_task_summary: Option<DeclaredTaskSummary>,
+    /// When the declaration above was last written. Diagnostics only (the
+    /// state-explain payload reports its age): "declared 20 minutes ago" is the
+    /// first thing you want to know about a tab stuck on background work.
+    declared_background_work_at: Option<std::time::Instant>,
     /// Ranked busy/idle/awaiting evidence for the current turn (#744-138c).
     /// Replaces eight independently-mutated booleans (explicit_busy, hook_busy,
     /// explicit_idle, idle_confirmed, turn_started_by_input, turn_activity_seen,
@@ -2251,6 +2255,7 @@ impl SilenceState {
             declared_background_work: false,
             declared_background_work_turn_epoch: 0,
             declared_task_summary: None,
+            declared_background_work_at: None,
             evidence: TurnEvidence::default(),
             trail: DecisionTrail::new(),
             last_notification_classification: None,
@@ -3123,6 +3128,7 @@ impl SilenceState {
         self.declared_background_work = false;
         self.declared_background_work_turn_epoch = 0;
         self.declared_task_summary = None;
+        self.declared_background_work_at = None;
     }
 
     #[cfg(test)]
@@ -3140,6 +3146,7 @@ impl SilenceState {
     pub(crate) fn set_declared_background_work(&mut self, active: bool, turn_epoch: u64) {
         self.declared_background_work = active;
         self.declared_background_work_turn_epoch = turn_epoch;
+        self.declared_background_work_at = Some(std::time::Instant::now());
         // A fresh `bgtasks` observation invalidates any earlier breakdown; the
         // `bgtasksummary` verb that follows it in the same hook fire restores one.
         self.declared_task_summary = None;
