@@ -360,3 +360,48 @@ async fn degenerate_login_bodies_never_succeed() {
     assert_eq!(empty_pair.status(), StatusCode::UNAUTHORIZED);
     assert!(!empty_pair.headers().contains_key(header::SET_COOKIE));
 }
+
+/// Plausible bug: now that the redirect carries the query, an `&`, `#`-less
+/// delimiter or `//` inside it escapes the `next` value and adds a parameter or an
+/// off-app destination to the login URL.
+#[tokio::test]
+async fn redirect_with_a_hostile_query_stays_one_next_value() {
+    let app = app(&state_with(5, 3600));
+    let response = send(
+        &app,
+        nav("/mobile?x=1&next=//evil.test&y=%5C%5Cevil")
+            .body(empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    let location = response
+        .headers()
+        .get(header::LOCATION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let query = location
+        .strip_prefix("/mobile/login?next=")
+        .expect(location);
+    assert!(
+        !query.contains('&') && !query.contains('?') && !query.contains('\\'),
+        "{location}"
+    );
+}
+
+/// Plausible bug: `safe_next` trusts a query that smuggles an absolute URL or a
+/// scheme-relative one after a legitimate `/mobile?` prefix.
+#[test]
+fn safe_next_rejects_urls_inside_the_query() {
+    for hostile in [
+        "/mobile?next=https://evil.test",
+        "/mobile?x=1&u=http://evil.test/",
+        "/mobile?x=\\\\evil.test",
+        "//evil.test/mobile?x=1",
+        "/\\evil.test",
+    ] {
+        assert_eq!(safe_next(Some(hostile)), "/mobile", "{hostile:?}");
+    }
+    assert_eq!(safe_next(Some("/mobile?shared=abc")), "/mobile?shared=abc");
+}
