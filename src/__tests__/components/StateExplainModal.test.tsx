@@ -134,6 +134,58 @@ describe("StateExplainModal", () => {
 		});
 	});
 
+	it("agrees with a backend 'working' (background_work rung) when the frontend has declaredBackgroundWork, even with an idle shell", async () => {
+		mockInvoke.mockResolvedValue({
+			...EXPLAIN,
+			visible: {
+				...EXPLAIN.visible,
+				shell_state: "idle",
+				agent_state: "working",
+				agent_state_rung: "background_work",
+				declared_background_work: true,
+			},
+		});
+		const props = {
+			...baseProps(),
+			shellState: "idle" as string | null,
+			agentState: "idle" as string | null,
+			declaredBackgroundWork: true,
+		};
+		const { container, getByText } = render(() => <StateExplainModal {...props} />);
+
+		await waitFor(() => {
+			expect(getByText("protocol · hook-busy (1.2s ago)")).not.toBeNull();
+		});
+		expect(container.textContent).not.toContain("disagrees with backend");
+	});
+
+	it("shows the disagreement banner when the backend says working via declared_background_work but the frontend never got declaredBackgroundWork", async () => {
+		// The idle-with-background-work carve-out is keyed on the OS-heuristic
+		// `background_work` only; declared work is deliberately NOT part of it.
+		mockInvoke.mockResolvedValue({
+			...EXPLAIN,
+			visible: {
+				...EXPLAIN.visible,
+				shell_state: "idle",
+				agent_state: "working",
+				agent_state_rung: "background_work",
+				background_work: false,
+				declared_background_work: true,
+			},
+		});
+		const props = {
+			...baseProps(),
+			shellState: "idle" as string | null,
+			agentState: "idle" as string | null,
+			declaredBackgroundWork: false,
+		};
+		const { container } = render(() => <StateExplainModal {...props} />);
+
+		await waitFor(() => {
+			expect(container.textContent).toContain("disagrees with backend");
+		});
+	});
+
 	it("does NOT show the disagreement banner for a rate-limited session, even though the frontend badge always reads rate_limited", async () => {
 		// Code-review regression: rate_limited is orthogonal to agent_state —
 		// every rate-limited session used to show a false-positive mismatch.
