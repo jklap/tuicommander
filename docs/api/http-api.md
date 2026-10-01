@@ -1396,14 +1396,37 @@ These three routes are desktop-only — they are registered on `build_router`, n
 in `shared_routes()`. A `tuic-remote` daemon is the far end of a remote
 connection; it does not hold connections of its own.
 
+### SSH Discovered Hosts
+
+```
+GET /tunnels/ssh-hosts/discovered
+```
+
+Returns `{ "hosts": [{ "host", "target", "user", "port", "source": "config | known_hosts" }], "hashed_count": n }`:
+non-wildcard `~/.ssh/config` aliases plus plain `~/.ssh/known_hosts` names,
+deduplicated by resolved `target` and port (`target` is the alias's `HostName`,
+else the name itself). Names that start with `-`, contain control characters or
+have a port outside 1-65535 are dropped; known_hosts is read up to 4 MiB and at
+most 2000 of its names are listed. Hashed known_hosts entries cannot be
+listed and are only counted. No host is contacted.
+
 ### SSH Host Status
 
 ```
 GET /tunnels/ssh-hosts/status
 ```
 
-Returns deduplicated SSH config hosts as
-`[{ "host": "name", "auth": "shell | no_shell | auth_failed | unreachable" }]`.
+Probes the `~/.ssh/config` aliases (at most 64) and returns
+`[{ "host": "name", "target": "resolved", "port": 22, "auth": "shell | no_shell | auth_failed | unreachable" }]`.
+known_hosts names are never probed in bulk.
+
+```
+POST /tunnels/ssh-hosts/probe   {"target": "10.0.0.5", "port": 2222}
+```
+
+Probes one entry of the discovered list, identified by `target` and `port`
+(404 when it is not in the list). A known_hosts entry is probed with
+`StrictHostKeyChecking=yes`.
 The probe runs only on request, checks at most four hosts concurrently, uses
 batch authentication with a five-second connect timeout, and caches results for
 60 seconds.

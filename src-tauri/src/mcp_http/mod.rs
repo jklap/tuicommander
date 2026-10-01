@@ -841,6 +841,14 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
         .route("/audit/{id}", get(commands::get_tunnel_audit))
         .route("/ssh-hosts", get(commands::list_ssh_config_hosts))
         .route(
+            "/ssh-hosts/discovered",
+            get(commands::list_discovered_ssh_hosts_http),
+        )
+        .route(
+            "/ssh-hosts/probe",
+            post(commands::probe_discovered_host_http),
+        )
+        .route(
             "/ssh-hosts/status",
             get(commands::probe_ssh_config_hosts_http),
         )
@@ -4321,6 +4329,41 @@ mod tests {
                 .is_some_and(|message| message.contains("was added concurrently"))
         );
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
+    }
+
+    /// The SSH host and agent-key listings disclose machine names and key
+    /// fingerprints. Catches: `tunnel_routes()` being merged outside the
+    /// Basic Auth layer so a public address reads them without credentials.
+    #[tokio::test]
+    async fn ssh_host_disclosure_routes_require_auth_from_a_public_address() {
+        let remote = std::net::SocketAddr::from(([203, 0, 113, 1], 4444));
+        let routers = [
+            ("build_router", build_router(test_state(), true, true)),
+            ("build_remote_router", build_remote_router(test_state())),
+        ];
+        for (name, app) in routers {
+            for (method, path) in [
+                ("GET", "/tunnels/ssh-hosts"),
+                ("GET", "/tunnels/ssh-hosts/discovered"),
+                ("GET", "/tunnels/ssh-hosts/status"),
+                ("POST", "/tunnels/ssh-hosts/probe"),
+                ("GET", "/tunnels/agent-keys"),
+            ] {
+                let mut req = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap();
+                req.extensions_mut().insert(ConnectInfo(remote));
+                let response = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "{name} {path} must not answer an unauthenticated public address"
+                );
+            }
+        }
     }
 
     /// A remote client cannot put an `Authorization` header on a WebSocket

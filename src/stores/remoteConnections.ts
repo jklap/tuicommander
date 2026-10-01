@@ -23,8 +23,31 @@ export interface RemoteConnection {
 
 export type DeployMode = "never" | "on_connect" | "installed";
 
+export interface DiscoveredSshHost {
+	/** Name to show and to connect with: the config alias or the known_hosts name. */
+	host: string;
+	/** Resolved machine; with `port` it identifies the entry. */
+	target: string;
+	user: string | null;
+	port: number | null;
+	source: "config" | "known_hosts";
+}
+
+export interface DiscoveredSshHosts {
+	hosts: DiscoveredSshHost[];
+	/** known_hosts entries with hashed names: present on disk, not listable. */
+	hashed_count: number;
+}
+
+export interface SshAgentInfo {
+	keys: { fingerprint: string; comment: string; key_type: string }[];
+	agent_type: string;
+}
+
 export interface SshHostStatus {
 	host: string;
+	target: string;
+	port: number | null;
 	auth: "shell" | "no_shell" | "auth_failed" | "unreachable";
 }
 
@@ -270,6 +293,19 @@ function createRemoteConnectionsStore() {
 			if (!current) return;
 			await invoke("uninstall_remote_daemon", { id });
 			setState("connections", id, "connection", "deploy", "on_connect");
+		},
+
+		async discoverSshHosts(): Promise<DiscoveredSshHosts> {
+			return (await invoke<DiscoveredSshHosts>("list_discovered_ssh_hosts")) ?? { hosts: [], hashed_count: 0 };
+		},
+
+		async sshAgentInfo(): Promise<SshAgentInfo> {
+			return (await invoke<SshAgentInfo>("list_ssh_agent_keys")) ?? { keys: [], agent_type: "" };
+		},
+
+		/** Probe one discovered host on request; known_hosts entries are only ever probed this way. */
+		async probeSshHost(host: DiscoveredSshHost): Promise<SshHostStatus> {
+			return invoke<SshHostStatus>("probe_discovered_ssh_host", { target: host.target, port: host.port });
 		},
 
 		async probeSshHosts(): Promise<SshHostStatus[]> {
