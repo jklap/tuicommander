@@ -3924,7 +3924,9 @@ fn detect_opencode_screen_activity_at(
 /// DEFERRED (2026-10-01) — forms never observed stay Unknown, which delays the queue
 /// instead of typing into a live turn: a cost token (`$0.12`, a free local model prints
 /// none), a lowercase `k`, a user-defined agent label shown bare at narrow width.
-/// Widen only from a live capture of the form.
+/// Widen only from a live capture of the form. Below 46 columns OpenCode paints no
+/// status row at all, so screen evidence cannot release the queue there: it drains
+/// only once the pane is widened.
 fn detect_opencode_mini_screen_activity(
     rows: &[String],
     columns: Option<usize>,
