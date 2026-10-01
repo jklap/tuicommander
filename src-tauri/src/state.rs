@@ -3815,6 +3815,8 @@ pub(crate) struct SettledReviewThreads {
     pub(crate) head_ref_oid: String,
     pub(crate) unresolved: u32,
     pub(crate) complete: bool,
+    /// The walk failed: the entry only stops a re-walk on every poll, it carries no count.
+    pub(crate) failed: bool,
     pub(crate) walked_at: Instant,
 }
 
@@ -3834,7 +3836,7 @@ pub(crate) struct GitCacheState {
     /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
     /// Settled review-thread totals of PRs with more threads than the batch poll reads, keyed by
-    /// "owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
+    /// "host/owner/name#number". Not a TTL cache: an entry is valid while the PR's `updatedAt` and head
     /// are unchanged and it is younger than `SETTLED_THREADS_TTL`.
     pub(crate) settled_review_threads: DashMap<String, SettledReviewThreads>,
     /// Count of entries evicted by TTL expiry (watcher-miss observability).

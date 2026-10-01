@@ -119,7 +119,7 @@ describe("PrSection critic r4", () => {
 			}
 			return Promise.resolve(undefined);
 		});
-		const base = { review_decision: "APPROVED", merge_state_status: "CLEAN" };
+		const base = { review_decision: "APPROVED", merge_state_status: "CLEAN" as const };
 		const a = pr({ number: 12, ...base });
 		const b = pr({ number: 13, url: "https://github.com/acme/api/pull/13", ...base });
 		const { container } = renderSection(() => [a, b], a.branch);

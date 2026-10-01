@@ -24,7 +24,7 @@ vi.mock("../../components/PrDetailPopover/PrDetailContent", () => ({
 }));
 vi.mock("../../components/SmartButtonStrip/SmartButtonStrip", () => ({ SmartButtonStrip: () => null }));
 
-import { PrSection } from "../../components/Sidebar/PrSection";
+import { PrSection, UPDATE_BRANCH_HOLD_MS } from "../../components/Sidebar/PrSection";
 
 const pr = (o: Partial<BranchPrStatus> = {}): BranchPrStatus =>
 	({
@@ -160,7 +160,7 @@ describe("PrSection row actions", () => {
 			fireEvent.click(button(container, "Update branch"));
 			await vi.advanceTimersByTimeAsync(0);
 			expect(button(container, "Update branch")).toBeUndefined();
-			await vi.advanceTimersByTimeAsync(60_000);
+			await vi.advanceTimersByTimeAsync(UPDATE_BRANCH_HOLD_MS);
 			expect(button(container, "Update branch")).toBeDefined();
 		} finally {
 			vi.useRealTimers();
