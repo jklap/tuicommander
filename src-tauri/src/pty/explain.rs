@@ -180,6 +180,11 @@ pub(crate) struct DeclaredWorkExplain {
     /// Whether any teammate owned by this session is busy right now (see
     /// `swarm.teammates`). Only consulted when teammates are the sole declared work.
     pub(crate) teammates_busy: bool,
+    /// Declared running teammates that no linked pane accounts for (an old `tuic`
+    /// binary, a plain `tuic alias` user, an in-process teammate). They cannot be
+    /// shown idle, so any surplus makes the declaration count (fail-safe). `None`
+    /// without a breakdown.
+    pub(crate) unlinked_teammates: Option<u32>,
     /// Whether the declaration held this session "working" at capture time —
     /// the same value `visible.declared_background_work` reports.
     pub(crate) counts_now: bool,
@@ -384,8 +389,9 @@ pub(crate) fn explain_session_state_impl(
             })
             .collect();
     let teammates_busy = teammates.iter().any(|t| t.busy);
+    let linked_teammates = teammates.len() as u32;
     let lead_session_id = crate::mcp_http::tmux_routes::lead_of_teammate(state, session_id);
-    let swarm = (lead_session_id.is_some() || !teammates.is_empty()).then(|| SwarmExplain {
+    let swarm = (lead_session_id.is_some() || !teammates.is_empty()).then_some(SwarmExplain {
         lead_session_id,
         teammates,
     });
@@ -437,8 +443,12 @@ pub(crate) fn explain_session_state_impl(
                 non_teammate_running: summary.map(|s| s.non_teammate_running),
                 teammate_running: summary.map(|s| s.teammate_running),
                 teammates_busy,
+                unlinked_teammates: summary
+                    .map(|s| s.teammate_running.saturating_sub(linked_teammates)),
                 counts_now: sl
-                    .declared_background_work_for_epoch_with(session.turn_epoch, || teammates_busy),
+                    .declared_background_work_for_epoch_with(session.turn_epoch, |declared| {
+                        declared > linked_teammates || teammates_busy
+                    }),
             }
         },
     };
