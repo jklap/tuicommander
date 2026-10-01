@@ -57,6 +57,13 @@ describe("countSidebarRows terminal tabs", () => {
 	});
 });
 
+describe("countSidebarRows plugin panels", () => {
+	// Catches: leaving out the plugin panel rows that every open repo renders, so a short list plus a long panel stays comfortable.
+	it("adds the plugin rows to every open repo only", () => {
+		expect(countSidebarRows([repo(2), repo(2, { expanded: false })], false, 5)).toBe(3 + 5 + 1);
+	});
+});
+
 describe("sidebarDensity", () => {
 	// Catches: off-by-one at the threshold (< instead of <=).
 	// The 16 is the 768px-tablet budget (16 rows x 30px); a change must be deliberate.

@@ -1,22 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { countSidebarRows } from "../utils/sidebarDensity";
 
-// Critic cases for #1334-b659 round 1.
-
-describe("countSidebarRows (critic)", () => {
-	// Catches: the 16-row budget ignoring the terminal-tab rows nested under an expanded
-	// branch (BranchTabList), so one repo with 20 open agents counts as 2 rows and stays "comfortable".
-	it("counts the nested terminal rows of an expanded branch", () => {
-		const terminals = Array.from({ length: 20 }, (_, i) => `t${i}`);
-		const rows = countSidebarRows(
-			[{ expanded: true, collapsed: false, workspaces: { main: { terminals, tabsCollapsed: false } } }],
-			true,
-		);
-		expect(rows).toBeGreaterThan(16);
-	});
-});
+// Critic cases for #1334-b659 round 1 (the row-count case lives in sidebarDensity.test.ts).
 
 describe("touch density CSS cascade (critic)", () => {
 	const css = readFileSync(resolve(__dirname, "../components/Sidebar/Sidebar.module.css"), "utf8");

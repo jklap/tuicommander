@@ -6,6 +6,7 @@ import { remoteConnectionsStore } from "../../stores/remoteConnections";
 import type { RepositoryState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
+import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { tunnelPanelStore } from "../../stores/tunnelPanel";
 import { tunnelsStore } from "../../stores/tunnels";
 import { uiStore } from "../../stores/ui";
@@ -112,9 +113,16 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	const coarsePointer = createCoarsePointer();
 	const density = createMemo(() => {
 		const layout = filteredLayout();
-		const repos = [...layout.ungrouped, ...layout.groups.flatMap((g) => g.repos)];
+		// GroupSection renders nothing for a collapsed group, so its repos take no rows.
+		const repos = [...layout.ungrouped, ...layout.groups.filter((g) => !g.group.collapsed).flatMap((g) => g.repos)];
+		// RepoSection renders each panel with items under every open repo: a header
+		// row, plus one row per item unless the panel is collapsed.
+		const pluginRows = sidebarPluginStore
+			.getPanels()
+			.filter((p) => p.items.length > 0)
+			.reduce((n, p) => n + 1 + (p.collapsed ? 0 : p.items.length), 0);
 		return sidebarDensity(
-			countSidebarRows(repos, settingsStore.state.tabTreeEnabled),
+			countSidebarRows(repos, settingsStore.state.tabTreeEnabled, pluginRows),
 			coarsePointer(),
 			uiStore.state.sidebarDensityMode,
 		);
