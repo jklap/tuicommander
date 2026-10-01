@@ -86,35 +86,12 @@ fn bg_wake_blocks_close(session_id: &str) -> bool {
     matches!(marker["status"].as_str(), Some("failed" | "retrying"))
 }
 
-/// A child whose last mail to its parent starts with BLOCKED waits for the
-/// parent's answer; nothing newer in either inbox means it has not come yet.
-fn blocked_on_parent(state: &AppState, session_id: &str, parent: &str) -> bool {
-    let Some(blocked_at) = state.agent_inbox.get(parent).and_then(|mail| {
-        mail.iter()
-            .rev()
-            .find(|message| {
-                message.from_tuic_session == session_id
-                    && !message
-                        .id
-                        .starts_with(crate::state::LIFECYCLE_MSG_ID_PREFIX)
-            })
-            .filter(|message| message.content.trim_start().starts_with("BLOCKED"))
-            .map(|message| message.timestamp)
-    }) else {
-        return false;
-    };
-    !state
-        .agent_inbox
-        .get(session_id)
-        .is_some_and(|mail| mail.iter().any(|message| message.timestamp > blocked_at))
-}
-
 fn observation(state: &AppState, session_id: &str) -> Option<(Observation, u64)> {
     let parent = state.session_maps.session_parent.get(session_id)?.clone();
     if !state.session_maps.sessions.contains_key(session_id)
         || crate::mcp_http::mcp_transport::is_pending_parent(&parent)
         || state.keep_open_sessions.contains(session_id)
-        || blocked_on_parent(state, session_id, &parent)
+        || state.blocked_children.contains(session_id)
     {
         return None;
     }
@@ -182,6 +159,9 @@ fn sweep_with_snapshot(
     tracker
         .seen
         .retain(|session_id, _| children.contains(session_id));
+    state
+        .blocked_children
+        .retain(|session_id| children.contains(session_id));
     let mut runner_commands: Option<Option<Vec<String>>> = None;
     for session_id in children {
         let candidate = observation(state, &session_id);
