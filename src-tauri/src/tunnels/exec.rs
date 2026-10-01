@@ -252,7 +252,14 @@ mod tests {
         .expect("push succeeds");
 
         let scp_log = std::fs::read_to_string(format!("{}.log", scp.display())).unwrap();
-        assert!(scp_log.contains("-- "), "{scp_log}");
+        let expected = format!(
+            "-- {} -oProxyCommand=evil@example.com:.cache/tuic/bin.tmp-",
+            local.display()
+        );
+        assert!(
+            scp_log.contains(&expected),
+            "scp must take `--`, the local path, then the destination: {scp_log}"
+        );
         let ssh_log = std::fs::read_to_string(format!("{}.log", ssh.display())).unwrap();
         assert!(
             ssh_log.contains("-T -- -oProxyCommand=evil@example.com"),

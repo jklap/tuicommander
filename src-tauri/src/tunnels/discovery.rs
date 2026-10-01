@@ -106,11 +106,15 @@ pub(crate) fn parse_known_hosts(text: &str) -> KnownHosts {
 }
 
 /// A host that is safe to pass to `ssh` as a destination: non-empty, no
-/// leading `-`, no whitespace, control characters or brackets.
+/// leading `-`, and only letters, digits and `. - _ : %`. That excludes `@` and
+/// `/` (ssh would read `user@host` or an `ssh://` URI), whitespace, brackets,
+/// and control or format characters that fake a look-alike name.
 pub(crate) fn is_safe_host(host: &str) -> bool {
     !host.is_empty()
         && !host.starts_with('-')
-        && !host.contains(|c: char| c.is_whitespace() || c.is_control() || c == '[' || c == ']')
+        && host
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '%'))
 }
 
 /// `None` when the name is malformed (bad port, unbalanced bracket).
@@ -152,8 +156,13 @@ pub(crate) fn merge_discovered(config: Vec<ConfigHost>, known: KnownHosts) -> Di
             });
         }
     }
-    for (host, port) in known.hosts.into_iter().take(MAX_KNOWN_HOSTS) {
+    let mut listed_known = 0;
+    for (host, port) in known.hosts {
+        if listed_known == MAX_KNOWN_HOSTS {
+            break;
+        }
         if seen.insert(dedupe_key(&host, port)) {
+            listed_known += 1;
             hosts.push(DiscoveredHost {
                 target: host.clone(),
                 host,
@@ -323,14 +332,22 @@ mod hostile_input_tests {
         assert_eq!(known.hosts, vec![("fine.example".to_string(), None)]);
     }
 
-    /// Catches: a known_hosts flood listing more than the cap.
+    /// Catches: a known_hosts flood listing more than the cap, or the cap
+    /// counting repeated lines (one per key type) instead of distinct hosts.
     #[test]
     fn listed_known_hosts_are_capped() {
         let text: String = (0..MAX_KNOWN_HOSTS + 50)
-            .map(|i| format!("h{i}.example ssh-rsa AAAA\n"))
+            .flat_map(|i| {
+                ["ssh-rsa", "ssh-ed25519", "ecdsa-sha2-nistp256"]
+                    .map(|kind| format!("h{i}.example {kind} AAAA\n"))
+            })
             .collect();
         let merged = merge_discovered(Vec::new(), parse_known_hosts(&text));
         assert_eq!(merged.hosts.len(), MAX_KNOWN_HOSTS);
+        assert_eq!(
+            merged.hosts[MAX_KNOWN_HOSTS - 1].host,
+            format!("h{}.example", MAX_KNOWN_HOSTS - 1)
+        );
     }
 
     /// Catches: a config alias and a known_hosts name that resolve to different

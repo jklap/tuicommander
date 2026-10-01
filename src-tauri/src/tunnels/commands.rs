@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::BufReader;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -181,6 +181,20 @@ struct ProbeCacheEntry {
 static SSH_PROBE_CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<ProbeCacheEntry>>> =
     std::sync::OnceLock::new();
 
+/// One bulk probe runs at a time; a caller that waited re-reads the cache the
+/// first one filled instead of spawning every ssh again.
+static SSH_BULK_FLIGHT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Every ssh probe, bulk or single, holds one permit while it runs.
+static SSH_PROBE_PERMITS: tokio::sync::Semaphore =
+    tokio::sync::Semaphore::const_new(SSH_PROBE_CONCURRENCY);
+
+/// Last single-host result per (target, port); its lock is that host's flight.
+type SingleProbe = std::sync::Arc<tokio::sync::Mutex<Option<(Instant, HostAuth)>>>;
+static SSH_SINGLE_PROBES: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<(String, u16), SingleProbe>>,
+> = std::sync::LazyLock::new(Default::default);
+
 fn ssh_config_path() -> Option<PathBuf> {
     dirs::home_dir().map(|home| home.join(".ssh").join("config"))
 }
@@ -249,11 +263,13 @@ fn read_known_hosts(path: &FsPath) -> Result<discovery::KnownHosts, String> {
 }
 
 /// Lossy text of at most `KNOWN_HOSTS_MAX_BYTES`, cut at the last full line.
+/// Empty when the cut has no newline: the only line is incomplete.
 fn bounded_text(mut bytes: Vec<u8>) -> String {
     if bytes.len() as u64 > KNOWN_HOSTS_MAX_BYTES {
         bytes.truncate(KNOWN_HOSTS_MAX_BYTES as usize);
-        if let Some(last_newline) = bytes.iter().rposition(|b| *b == b'\n') {
-            bytes.truncate(last_newline + 1);
+        match bytes.iter().rposition(|b| *b == b'\n') {
+            Some(last_newline) => bytes.truncate(last_newline + 1),
+            None => bytes.clear(),
         }
     }
     String::from_utf8_lossy(&bytes).into_owned()
@@ -325,7 +341,21 @@ pub(crate) async fn probe_discovered_host(
         .into_iter()
         .find(|host| host.identity() == wanted)
         .ok_or_else(|| "host is not in the discovered list".to_string())?;
-    let auth = probe_host_with_binary(&host, FsPath::new("ssh"), SSH_PROBE_TIMEOUT).await;
+    let flight = SSH_SINGLE_PROBES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(wanted)
+        .or_default()
+        .clone();
+    let mut last = flight.lock().await;
+    let auth = match *last {
+        Some((at, auth)) if at.elapsed() < SSH_PROBE_CACHE_TTL => auth,
+        _ => {
+            let auth = probe_host_with_binary(&host, FsPath::new("ssh"), SSH_PROBE_TIMEOUT).await;
+            *last = Some((Instant::now(), auth));
+            auth
+        }
+    };
     Ok(status_of(host, auth))
 }
 
@@ -346,18 +376,30 @@ fn status_of(host: DiscoveredHost, auth: HostAuth) -> SshHostStatus {
     }
 }
 
-/// The cache lock is held only to read and to store, never across `ssh`.
+async fn fresh_statuses(
+    cache: &tokio::sync::Mutex<Option<ProbeCacheEntry>>,
+    hosts: &[DiscoveredHost],
+) -> Option<Vec<SshHostStatus>> {
+    let guard = cache.lock().await;
+    let entry = guard.as_ref()?;
+    (entry.hosts == hosts && entry.stored_at.elapsed() < SSH_PROBE_CACHE_TTL)
+        .then(|| entry.statuses.clone())
+}
+
+/// The cache lock is held only to read and to store, never across `ssh`;
+/// `SSH_BULK_FLIGHT` keeps concurrent callers from probing the same hosts twice.
 async fn probe_cached(
     cache: &tokio::sync::Mutex<Option<ProbeCacheEntry>>,
     hosts: Vec<DiscoveredHost>,
     binary: &FsPath,
     timeout: Duration,
 ) -> Result<Vec<SshHostStatus>, String> {
-    if let Some(entry) = cache.lock().await.as_ref()
-        && entry.hosts == hosts
-        && entry.stored_at.elapsed() < SSH_PROBE_CACHE_TTL
-    {
-        return Ok(entry.statuses.clone());
+    if let Some(statuses) = fresh_statuses(cache, &hosts).await {
+        return Ok(statuses);
+    }
+    let _flight = SSH_BULK_FLIGHT.lock().await;
+    if let Some(statuses) = fresh_statuses(cache, &hosts).await {
+        return Ok(statuses);
     }
     let statuses = probe_hosts_with_binary(hosts.clone(), binary, timeout).await;
     *cache.lock().await = Some(ProbeCacheEntry {
@@ -414,6 +456,9 @@ async fn probe_host_with_binary(
     let policy = match host.source {
         discovery::HostSource::KnownHosts => "yes",
         discovery::HostSource::Config => "accept-new",
+    };
+    let Ok(_permit) = SSH_PROBE_PERMITS.acquire().await else {
+        return HostAuth::Unreachable;
     };
     let mut command = tokio::process::Command::new(binary);
     command
