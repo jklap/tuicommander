@@ -38,11 +38,11 @@ describe("countSidebarRows tab rows (critic r2)", () => {
 		expect(countSidebarRows([repo(9)], false)).toBe(2);
 	});
 
-	// Catches: off-by-one at the budget edge: 16 rows comfortable, 17 compact, tabs included.
-	it("flips from comfortable to compact exactly past ROOMY_MAX_ROWS with tabs", () => {
+	// Catches: off-by-one at the budget edge: budget rows rich, one more compact, tabs included.
+	it("flips from rich to compact exactly past ROOMY_MAX_ROWS with tabs", () => {
 		const at = countSidebarRows([repo(ROOMY_MAX_ROWS - 2)], true);
 		expect(at).toBe(ROOMY_MAX_ROWS);
-		expect(sidebarDensity(at, false)).toBe("comfortable");
+		expect(sidebarDensity(at, false)).toBe("rich");
 		const over = countSidebarRows([repo(ROOMY_MAX_ROWS - 1)], true);
 		expect(sidebarDensity(over, false)).toBe("compact");
 	});

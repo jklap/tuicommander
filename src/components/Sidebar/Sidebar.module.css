@@ -24,13 +24,14 @@
   overflow: hidden;
 }
 
-/* Density (set by Sidebar.tsx from row count and pointer type). `compact` is the
-   base above. Only variables and hit areas change: no handler, drag or long-press
-   rule depends on them. */
-.sidebar[data-density="comfortable"] {
-  --row-pad-x: 9px;
+/* Density (set by Sidebar.tsx from row count, pointer type and the toolbar
+   toggle). `compact` is the base above. `rich` spends spare room on detail lines
+   under each row: larger type, roomier padding and the chips below. No handler,
+   drag or long-press rule depends on it. */
+.sidebar[data-density="rich"] {
+  --row-pad-x: 10px;
   --row-icon: 16px;
-  --row-gap: 6px;
+  --row-gap: 7px;
   --row-h: 30px;
   --tree-indent: 12px;
   --font-2xs: 11px;
@@ -39,37 +40,119 @@
   --font-md: 14px;
 }
 
-/* Finger: 44px targets (Apple HIG), also under (hover: hover) with a coarse
-   pointer such as an iPad with trackpad. */
-.sidebar[data-density="touch"] {
-  --row-pad-x: 12px;
-  --row-icon: 18px;
-  --row-gap: 8px;
-  --row-h: 44px;
-  --tree-indent: 14px;
-  --font-2xs: 12px;
-  --font-xs: 13px;
-  --font-sm: 15px;
-  --font-md: 16px;
+.sidebar[data-density="rich"] .repoHeader {
+  padding: 9px 10px 3px;
 }
 
-.sidebar[data-density="comfortable"] .repoHeader {
-  padding: 9px 10px 5px;
+.sidebar[data-density="rich"] .branchItem {
+  align-items: flex-start;
+  padding-top: 5px;
+  padding-bottom: 5px;
 }
 
-.sidebar[data-density="touch"] .repoHeader {
-  padding: 10px 12px 6px;
-  min-height: 44px;
+/* A finger: 44px targets (Apple HIG) on every control of a rich row, also with
+   a trackpad that still reports a coarse primary pointer. */
+@media (pointer: coarse) {
+  .sidebar[data-density="rich"] {
+    --row-pad-x: 12px;
+    --row-icon: 18px;
+    --row-gap: 8px;
+    --row-h: 44px;
+    --tree-indent: 14px;
+    --font-2xs: 12px;
+    --font-xs: 13px;
+    --font-sm: 15px;
+    --font-md: 16px;
+  }
+
+  .sidebar[data-density="rich"] .repoHeader {
+    padding: 10px 12px 4px;
+    min-height: 44px;
+  }
+
+  .sidebar[data-density="rich"] .repoSection {
+    margin-bottom: 6px;
+  }
+
+  .sidebar[data-density="rich"] .branchAddBtn,
+  .sidebar[data-density="rich"] .branchRemoveBtn {
+    width: 36px;
+    height: 36px;
+  }
 }
 
-.sidebar[data-density="touch"] .repoSection {
-  margin-bottom: 6px;
+/* Detail lines of a rich branch row. */
+.branchRichLine {
+  display: block;
+  font-size: var(--font-xs);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.sidebar[data-density="touch"] .branchAddBtn,
-.sidebar[data-density="touch"] .branchRemoveBtn {
-  width: 36px;
-  height: 36px;
+.branchRichMeta,
+.repoRichMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+}
+
+.repoRichMeta {
+  padding: 0 10px 4px calc(var(--row-pad-x) + 4px);
+}
+
+.richChip {
+  white-space: nowrap;
+}
+
+.richChipWarn {
+  color: var(--warning, var(--fg-secondary));
+}
+
+.richChipMerged {
+  color: var(--success, var(--fg-secondary));
+}
+
+.branchTabItemRich {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+
+.branchTabDetail {
+  flex-basis: 100%;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 12px;
+  font-size: var(--font-2xs);
+  color: var(--fg-muted);
+}
+
+.branchTabLine {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchTabState {
+  flex-shrink: 0;
+}
+
+.branchTabState_working {
+  color: var(--activity);
+}
+
+.branchTabState_input {
+  color: var(--warning, var(--fg-secondary));
+}
+
+.branchTabState_error {
+  color: var(--error, var(--fg-secondary));
 }
 
 .resizeHandle {
@@ -1028,10 +1111,12 @@
     pointer-events: auto;
   }
 
-  /* Touch density (forced, or an iPad trackpad) has 36px buttons: widen the
-     hover reveal only. Idle, the actions stay collapsed and reserve no space. */
-  .sidebar[data-density="touch"] .branchItem:hover .branchActions {
-    max-width: 84px;
+  /* Coarse pointer (an iPad trackpad) has 36px buttons: widen the hover reveal
+     only. Idle, the actions stay collapsed and reserve no space. */
+  @media (pointer: coarse) {
+    .sidebar[data-density="rich"] .branchItem:hover .branchActions {
+      max-width: 84px;
+    }
   }
 }
 
@@ -1043,7 +1128,7 @@
     pointer-events: auto;
   }
 
-  .sidebar[data-density="touch"] .branchActions {
+  .sidebar[data-density="rich"] .branchActions {
     max-width: 84px;
   }
 }

@@ -120,6 +120,8 @@ vi.mock("../../stores/github", () => ({
 		getRemoteOnlyPrs: vi.fn(() => []),
 		getRepoIssues: vi.fn(() => []),
 		getAllOpenPrs: vi.fn(() => []),
+		getRemoteStatus: vi.fn(() => null),
+		getLastPolled: vi.fn(() => 0),
 		state: { viewerLogin: null, issuesLoading: false, circuitBreakerOpen: false },
 	},
 }));
@@ -244,7 +246,7 @@ describe("Sidebar density: plugin panels and collapsed groups (critic r3)", () =
 		panel(6);
 		setRepos({ "/a": repoAt("/a", 1), "/b": repoAt("/b", 1) });
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
-		// 2 x (1 header + 1 branch + 1 panel header + 6 items) = 18 > 16
+		// 2 x (1 header + 1 branch + 1 panel header + 6 items) = 18 > 12
 		expect(density(container)).toBe("compact");
 	});
 
@@ -253,15 +255,15 @@ describe("Sidebar density: plugin panels and collapsed groups (critic r3)", () =
 		panel(30, true);
 		setRepos({ "/a": repoAt("/a", 1), "/b": repoAt("/b", 1) });
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
-		expect(density(container)).toBe("comfortable");
+		expect(density(container)).toBe("rich");
 	});
 
 	// Catches: a panel with no items counted as a header row although RepoSection filters it out.
 	it("ignores a panel without items", () => {
 		panel(0);
-		setRepos({ "/a": repoAt("/a", 15) }); // 16 rows: exactly the budget
+		setRepos({ "/a": repoAt("/a", 11) }); // 12 rows: exactly the budget
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
-		expect(density(container)).toBe("comfortable");
+		expect(density(container)).toBe("rich");
 	});
 
 	// Catches: density memo not subscribed to panel item changes / disposal.
@@ -269,11 +271,11 @@ describe("Sidebar density: plugin panels and collapsed groups (critic r3)", () =
 		const h = panel(0);
 		setRepos({ "/a": repoAt("/a", 3) });
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
-		expect(density(container)).toBe("comfortable");
+		expect(density(container)).toBe("rich");
 		h.setItems(items(20));
 		expect(density(container)).toBe("compact");
 		h.dispose();
-		expect(density(container)).toBe("comfortable");
+		expect(density(container)).toBe("rich");
 	});
 
 	// Catches: density memo not subscribed to a panel being collapsed/expanded by the user.
@@ -283,13 +285,13 @@ describe("Sidebar density: plugin panels and collapsed groups (critic r3)", () =
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
 		expect(density(container)).toBe("compact");
 		sidebarPluginStore.toggleCollapsed("c3", "p");
-		expect(density(container)).toBe("comfortable");
+		expect(density(container)).toBe("rich");
 	});
 
 	// Catches: repos of a collapsed group (and the panels they would render) still counted.
 	it("ignores repos of a collapsed group, including their panel rows", () => {
-		panel(10); // 11 rows per open repo
-		const small = repoAt("/small", 3); // 4 + 11 = 15
+		panel(5); // 6 rows per open repo
+		const small = repoAt("/small", 3); // 4 + 6 = 10, +1 group header = 11
 		const big = repoAt("/big", 3);
 		setRepos({ "/small": small, "/big": big });
 		mockGetGroupedLayout.mockReturnValue({
@@ -297,12 +299,12 @@ describe("Sidebar density: plugin panels and collapsed groups (critic r3)", () =
 			ungrouped: [small],
 		});
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
-		expect(density(container)).toBe("comfortable");
+		expect(density(container)).toBe("rich");
 	});
 
 	// Catches: the group header row itself missing from the budget (GroupSection renders one per group).
 	it("counts the header row of an expanded group", () => {
-		const repo = repoAt("/a", 14); // 15 rows + 1 group header = 16 -> comfortable; two groups -> 17
+		const repo = repoAt("/a", 10); // 11 rows: rich without headers; two group headers -> 13
 		const repo2 = repoAt("/b", 0); // 1 row
 		setRepos({ "/a": repo, "/b": repo2 });
 		mockGetGroupedLayout.mockReturnValue({
@@ -313,7 +315,7 @@ describe("Sidebar density: plugin panels and collapsed groups (critic r3)", () =
 			ungrouped: [],
 		});
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
-		// rendered rows: 2 group headers + 15 = 17 > 16
+		// rendered rows: 2 group headers + 11 = 13 > 12
 		expect(density(container)).toBe("compact");
 	});
 });

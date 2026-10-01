@@ -11,7 +11,12 @@ import { tunnelPanelStore } from "../../stores/tunnelPanel";
 import { tunnelsStore } from "../../stores/tunnels";
 import { uiStore } from "../../stores/ui";
 import { getRepoTextColor } from "../../utils/repoColor";
-import { countSidebarRows, createCoarsePointer, sidebarDensity } from "../../utils/sidebarDensity";
+import {
+	countSidebarRows,
+	createCoarsePointer,
+	SidebarDensityContext,
+	sidebarDensity,
+} from "../../utils/sidebarDensity";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { PromptDialog } from "../PromptDialog";
@@ -357,380 +362,387 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	};
 
 	return (
-		<aside id="sidebar" class={s.sidebar} data-testid="sidebar" data-density={density()}>
-			{/* Content */}
-			<div class={s.content}>
-				{/* Repo filter status — only rendered while the "active only" filter is
+		<SidebarDensityContext.Provider value={density}>
+			<aside id="sidebar" class={s.sidebar} data-testid="sidebar" data-density={density()}>
+				{/* Content */}
+				<div class={s.content}>
+					{/* Repo filter status — only rendered while the "active only" filter is
 				    engaged (toggled from the toolbar icon). Keeps it unmistakable that
 				    repos are hidden, so nobody panics, while taking zero space at rest. */}
-				<Show when={hasVisibleRepos() && uiStore.state.repoFilterActiveOnly}>
-					<button
-						class={s.filterStatus}
-						onClick={() => uiStore.setRepoFilterActiveOnly(false)}
-						title={t("sidebar.filterShowAll", "Show all")}
-					>
-						<svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-							<path
-								d="M1.5 2.5h13l-5 6v5l-3 1.5v-6.5l-5-6Z"
-								stroke="currentColor"
-								stroke-width="1.3"
-								stroke-linejoin="round"
-							/>
+					<Show when={hasVisibleRepos() && uiStore.state.repoFilterActiveOnly}>
+						<button
+							class={s.filterStatus}
+							onClick={() => uiStore.setRepoFilterActiveOnly(false)}
+							title={t("sidebar.filterShowAll", "Show all")}
+						>
+							<svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+								<path
+									d="M1.5 2.5h13l-5 6v5l-3 1.5v-6.5l-5-6Z"
+									stroke="currentColor"
+									stroke-width="1.3"
+									stroke-linejoin="round"
+								/>
+							</svg>
+							<span>
+								{t("sidebar.filterActiveOnly", "Active only")} · {shownRepoCount()}/{totalRepoCount()}
+							</span>
+							<span class={s.filterStatusClear}>{t("sidebar.filterShowAll", "Show all")}</span>
+						</button>
+					</Show>
+
+					{/* Repository Section */}
+					<div>
+						<div class={s.repoList} data-sidebar-list>
+							{/* Grouped repos */}
+							<For each={filteredLayout().groups}>
+								{(entry) => (
+									<GroupSection
+										group={entry.group}
+										repos={entry.repos}
+										onRename={handleGroupRename}
+										onColorChange={handleGroupColorChange}
+										onMouseDrag={(e) => drag.handleGroupMouseDrag(e, entry.group.id)}
+										dragOverClass={
+											drag.dragOverGroupId() === entry.group.id && drag.dragPayload()?.type !== "repo"
+												? (DRAG_CLASSES[drag.dragOverGroupSide() ?? ""] ?? undefined)
+												: drag.dragOverGroupId() === entry.group.id && drag.dragPayload()?.type === "repo"
+													? DRAG_CLASSES["target"]
+													: undefined
+										}
+									>
+										<For each={entry.repos}>{(repo) => renderRepoSection(repo)}</For>
+									</GroupSection>
+								)}
+							</For>
+							{/* Ungrouped repos */}
+							<For each={filteredLayout().ungrouped}>{(repo) => renderRepoSection(repo)}</For>
+							<Show when={!hasVisibleRepos()}>
+								<div class={s.empty}>
+									<p>{t("sidebar.noRepositories", "No repositories")}</p>
+									<button onClick={handleAddRepoClick}>{t("sidebar.addRepository", "Add Repository")}</button>
+								</div>
+							</Show>
+							{/* Filter hides every repo — offer a way back to "all" */}
+							<Show when={hasVisibleRepos() && !hasFilteredRepos()}>
+								<div class={s.empty}>
+									<p>{t("sidebar.noActiveRepos", "No repositories with open terminals")}</p>
+									<button onClick={() => uiStore.setRepoFilterActiveOnly(false)}>
+										{t("sidebar.filterShowAll", "Show all")}
+									</button>
+								</div>
+							</Show>
+						</div>
+					</div>
+				</div>
+
+				<GlobalWorkspaceEntry />
+
+				{/* Git Quick Actions (Story 050) */}
+				<Show when={repositoriesStore.getActive()}>
+					<div class={s.gitQuickActions}>
+						<svg
+							class={s.gitQuickLabel}
+							width="10"
+							height="28"
+							viewBox="0 0 10 28"
+							aria-hidden="true"
+							onClick={() => uiStore.toggleGitPanelOnTab("branches")}
+							style={{ cursor: "pointer" }}
+						>
+							<text
+								x="5"
+								y="14"
+								transform="rotate(-90 5 14)"
+								text-anchor="middle"
+								dominant-baseline="central"
+								fill="currentColor"
+								font-size="8.5"
+								font-weight="700"
+								letter-spacing="0.12em"
+								font-family="system-ui,-apple-system,sans-serif"
+							>
+								GIT
+							</text>
 						</svg>
-						<span>
-							{t("sidebar.filterActiveOnly", "Active only")} · {shownRepoCount()}/{totalRepoCount()}
-						</span>
-						<span class={s.filterStatusClear}>{t("sidebar.filterShowAll", "Show all")}</span>
-					</button>
+						<div class={s.gitQuickBtns}>
+							<button
+								class={s.gitQuickBtn}
+								classList={{ [s.loading]: props.runningGitOps?.has("pull") }}
+								disabled={props.runningGitOps?.has("pull")}
+								onClick={() => {
+									const repo = repositoriesStore.getActive();
+									if (repo) props.onBackgroundGit?.(repo.path, "pull", ["pull"]);
+								}}
+								title={t("sidebar.gitPull", "Pull latest changes")}
+							>
+								<span class={s.gitQuickIcon}>
+									{/* arrow-down-to-line */}
+									<svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+										<path
+											d="M8 2v9M4 8l4 4 4-4M2 14h12"
+											stroke="currentColor"
+											stroke-width="1.4"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										/>
+									</svg>
+								</span>
+								{t("sidebar.gitPullLabel", "Pull")}
+							</button>
+							<button
+								class={s.gitQuickBtn}
+								classList={{ [s.loading]: props.runningGitOps?.has("push") }}
+								disabled={props.runningGitOps?.has("push")}
+								onClick={() => {
+									const repo = repositoriesStore.getActive();
+									if (repo) props.onBackgroundGit?.(repo.path, "push", ["push"]);
+								}}
+								title={t("sidebar.gitPush", "Push commits")}
+							>
+								<span class={s.gitQuickIcon}>
+									{/* arrow-up-from-line */}
+									<svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+										<path
+											d="M8 14V5M4 8l4-4 4 4M2 2h12"
+											stroke="currentColor"
+											stroke-width="1.4"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										/>
+									</svg>
+								</span>
+								{t("sidebar.gitPushLabel", "Push")}
+							</button>
+							<button
+								class={s.gitQuickBtn}
+								classList={{ [s.loading]: props.runningGitOps?.has("fetch") }}
+								disabled={props.runningGitOps?.has("fetch")}
+								onClick={() => {
+									const repo = repositoriesStore.getActive();
+									if (repo) props.onBackgroundGit?.(repo.path, "fetch", ["fetch", "--all"]);
+								}}
+								title={t("sidebar.gitFetch", "Fetch from all remotes")}
+							>
+								<span class={s.gitQuickIcon}>
+									{/* refresh-cw */}
+									<svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+										<path
+											d="M1 4s.5-1 3-2.5A7 7 0 0 1 15 8"
+											stroke="currentColor"
+											stroke-width="1.4"
+											stroke-linecap="round"
+										/>
+										<path
+											d="M15 12s-.5 1-3 2.5A7 7 0 0 1 1 8"
+											stroke="currentColor"
+											stroke-width="1.4"
+											stroke-linecap="round"
+										/>
+										<path
+											d="M1 1v3h3M15 15v-3h-3"
+											stroke="currentColor"
+											stroke-width="1.4"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										/>
+									</svg>
+								</span>
+								{t("sidebar.gitFetchLabel", "Fetch")}
+							</button>
+							<button
+								class={s.gitQuickBtn}
+								classList={{ [s.loading]: props.runningGitOps?.has("stash") }}
+								disabled={props.runningGitOps?.has("stash")}
+								onClick={() => {
+									const repo = repositoriesStore.getActive();
+									if (repo) props.onBackgroundGit?.(repo.path, "stash", ["stash"]);
+								}}
+								title={t("sidebar.gitStash", "Stash changes")}
+							>
+								<span class={s.gitQuickIcon}>
+									{/* layers/stash */}
+									<svg width="13" height="13" viewBox="0 0 16 16" fill="none">
+										<path
+											d="M1.5 6 8 9.5 14.5 6M1.5 10 8 13.5 14.5 10M8 2.5 14.5 6 8 9.5 1.5 6 8 2.5Z"
+											stroke="currentColor"
+											stroke-width="1.3"
+											stroke-linejoin="round"
+										/>
+									</svg>
+								</span>
+								{t("sidebar.gitStashLabel", "Stash")}
+							</button>
+						</div>
+					</div>
 				</Show>
 
-				{/* Repository Section */}
-				<div>
-					<div class={s.repoList} data-sidebar-list>
-						{/* Grouped repos */}
-						<For each={filteredLayout().groups}>
-							{(entry) => (
-								<GroupSection
-									group={entry.group}
-									repos={entry.repos}
-									onRename={handleGroupRename}
-									onColorChange={handleGroupColorChange}
-									onMouseDrag={(e) => drag.handleGroupMouseDrag(e, entry.group.id)}
-									dragOverClass={
-										drag.dragOverGroupId() === entry.group.id && drag.dragPayload()?.type !== "repo"
-											? (DRAG_CLASSES[drag.dragOverGroupSide() ?? ""] ?? undefined)
-											: drag.dragOverGroupId() === entry.group.id && drag.dragPayload()?.type === "repo"
-												? DRAG_CLASSES["target"]
-												: undefined
-									}
-								>
-									<For each={entry.repos}>{(repo) => renderRepoSection(repo)}</For>
-								</GroupSection>
-							)}
-						</For>
-						{/* Ungrouped repos */}
-						<For each={filteredLayout().ungrouped}>{(repo) => renderRepoSection(repo)}</For>
-						<Show when={!hasVisibleRepos()}>
-							<div class={s.empty}>
-								<p>{t("sidebar.noRepositories", "No repositories")}</p>
-								<button onClick={handleAddRepoClick}>{t("sidebar.addRepository", "Add Repository")}</button>
-							</div>
+				{/* Footer */}
+				<div class={s.footer}>
+					<button class={s.addRepo} onClick={handleAddRepoClick} title={t("sidebar.addRepository", "Add Repository")}>
+						<svg class={s.addRepoIcon} width="14" height="14" viewBox="0 0 16 16" fill="none">
+							<path
+								d="M1.5 2A1.5 1.5 0 0 1 3 .5h3.379a1.5 1.5 0 0 1 1.06.44l1.122 1.12H13A1.5 1.5 0 0 1 14.5 3.5v9a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12.5V2Z"
+								stroke="currentColor"
+								stroke-width="1.2"
+							/>
+						</svg>
+						{t("sidebar.addRepository", "Add Repository")}
+					</button>
+					<div class={s.footerIcons}>
+						<Show when={parkedCount() > 0}>
+							<button
+								class={s.footerAction}
+								onClick={() => setParkedPopoverVisible((v) => !v)}
+								title={t("sidebar.parkedRepos", "Parked repositories")}
+								style={{ position: "relative" }}
+							>
+								<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+									<path d="M2 3h12v2H2zM3 5v8h10V5" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+									<path d="M5 8h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+								</svg>
+								<CountBadge count={parkedCount()} />
+							</button>
 						</Show>
-						{/* Filter hides every repo — offer a way back to "all" */}
-						<Show when={hasVisibleRepos() && !hasFilteredRepos()}>
-							<div class={s.empty}>
-								<p>{t("sidebar.noActiveRepos", "No repositories with open terminals")}</p>
-								<button onClick={() => uiStore.setRepoFilterActiveOnly(false)}>
-									{t("sidebar.filterShowAll", "Show all")}
-								</button>
-							</div>
+						<Show when={repositoriesStore.state.staleTempCandidates.length > 0}>
+							<button
+								class={s.footerAction}
+								onClick={() => setStaleTempPopoverVisible((v) => !v)}
+								title={t("sidebar.staleTempRepos", "Stale repositories awaiting repair")}
+								style={{ position: "relative", color: "var(--error)" }}
+							>
+								<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+									<path
+										d="M8 1.5l6.5 11.5H1.5L8 1.5z"
+										stroke="currentColor"
+										stroke-width="1.2"
+										stroke-linejoin="round"
+									/>
+									<path d="M8 6v3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+									<circle cx="8" cy="11.2" r="0.7" fill="currentColor" />
+								</svg>
+								<CountBadge count={repositoriesStore.state.staleTempCandidates.length} tone="error" />
+							</button>
 						</Show>
-					</div>
-				</div>
-			</div>
-
-			<GlobalWorkspaceEntry />
-
-			{/* Git Quick Actions (Story 050) */}
-			<Show when={repositoriesStore.getActive()}>
-				<div class={s.gitQuickActions}>
-					<svg
-						class={s.gitQuickLabel}
-						width="10"
-						height="28"
-						viewBox="0 0 10 28"
-						aria-hidden="true"
-						onClick={() => uiStore.toggleGitPanelOnTab("branches")}
-						style={{ cursor: "pointer" }}
-					>
-						<text
-							x="5"
-							y="14"
-							transform="rotate(-90 5 14)"
-							text-anchor="middle"
-							dominant-baseline="central"
-							fill="currentColor"
-							font-size="8.5"
-							font-weight="700"
-							letter-spacing="0.12em"
-							font-family="system-ui,-apple-system,sans-serif"
-						>
-							GIT
-						</text>
-					</svg>
-					<div class={s.gitQuickBtns}>
-						<button
-							class={s.gitQuickBtn}
-							classList={{ [s.loading]: props.runningGitOps?.has("pull") }}
-							disabled={props.runningGitOps?.has("pull")}
-							onClick={() => {
-								const repo = repositoriesStore.getActive();
-								if (repo) props.onBackgroundGit?.(repo.path, "pull", ["pull"]);
-							}}
-							title={t("sidebar.gitPull", "Pull latest changes")}
-						>
-							<span class={s.gitQuickIcon}>
-								{/* arrow-down-to-line */}
-								<svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-									<path
-										d="M8 2v9M4 8l4 4 4-4M2 14h12"
-										stroke="currentColor"
-										stroke-width="1.4"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-									/>
-								</svg>
-							</span>
-							{t("sidebar.gitPullLabel", "Pull")}
+						<Show when={tunnelsStore.state.profiles.length > 0}>
+							{(() => {
+								const connectedCount = () =>
+									Object.values(tunnelsStore.state.activeTunnels).filter((t) => t.status.type === "connected").length;
+								return (
+									<button
+										class={s.footerAction}
+										onClick={() => tunnelPanelStore.toggle()}
+										title={`SSH Tunnels (${connectedCount()} connected)`}
+										style={{ position: "relative", color: connectedCount() > 0 ? undefined : "var(--fg-muted)" }}
+									>
+										<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+											<path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z" />
+										</svg>
+										<CountBadge count={connectedCount()} tone="success" />
+									</button>
+								);
+							})()}
+						</Show>
+						<button class={s.footerAction} onClick={props.onOpenHelp} title={t("sidebar.help", "Help")}>
+							<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+								<circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2" />
+								<path
+									d="M6 6.2a2 2 0 0 1 3.9.6c0 1.2-1.9 1.2-1.9 2.2"
+									stroke="currentColor"
+									stroke-width="1.2"
+									stroke-linecap="round"
+								/>
+								<circle cx="8" cy="11.5" r="0.7" fill="currentColor" />
+							</svg>
 						</button>
-						<button
-							class={s.gitQuickBtn}
-							classList={{ [s.loading]: props.runningGitOps?.has("push") }}
-							disabled={props.runningGitOps?.has("push")}
-							onClick={() => {
-								const repo = repositoriesStore.getActive();
-								if (repo) props.onBackgroundGit?.(repo.path, "push", ["push"]);
-							}}
-							title={t("sidebar.gitPush", "Push commits")}
-						>
-							<span class={s.gitQuickIcon}>
-								{/* arrow-up-from-line */}
-								<svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-									<path
-										d="M8 14V5M4 8l4-4 4 4M2 2h12"
-										stroke="currentColor"
-										stroke-width="1.4"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-									/>
-								</svg>
-							</span>
-							{t("sidebar.gitPushLabel", "Push")}
-						</button>
-						<button
-							class={s.gitQuickBtn}
-							classList={{ [s.loading]: props.runningGitOps?.has("fetch") }}
-							disabled={props.runningGitOps?.has("fetch")}
-							onClick={() => {
-								const repo = repositoriesStore.getActive();
-								if (repo) props.onBackgroundGit?.(repo.path, "fetch", ["fetch", "--all"]);
-							}}
-							title={t("sidebar.gitFetch", "Fetch from all remotes")}
-						>
-							<span class={s.gitQuickIcon}>
-								{/* refresh-cw */}
-								<svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-									<path
-										d="M1 4s.5-1 3-2.5A7 7 0 0 1 15 8"
-										stroke="currentColor"
-										stroke-width="1.4"
-										stroke-linecap="round"
-									/>
-									<path
-										d="M15 12s-.5 1-3 2.5A7 7 0 0 1 1 8"
-										stroke="currentColor"
-										stroke-width="1.4"
-										stroke-linecap="round"
-									/>
-									<path
-										d="M1 1v3h3M15 15v-3h-3"
-										stroke="currentColor"
-										stroke-width="1.4"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-									/>
-								</svg>
-							</span>
-							{t("sidebar.gitFetchLabel", "Fetch")}
-						</button>
-						<button
-							class={s.gitQuickBtn}
-							classList={{ [s.loading]: props.runningGitOps?.has("stash") }}
-							disabled={props.runningGitOps?.has("stash")}
-							onClick={() => {
-								const repo = repositoriesStore.getActive();
-								if (repo) props.onBackgroundGit?.(repo.path, "stash", ["stash"]);
-							}}
-							title={t("sidebar.gitStash", "Stash changes")}
-						>
-							<span class={s.gitQuickIcon}>
-								{/* layers/stash */}
-								<svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-									<path
-										d="M1.5 6 8 9.5 14.5 6M1.5 10 8 13.5 14.5 10M8 2.5 14.5 6 8 9.5 1.5 6 8 2.5Z"
-										stroke="currentColor"
-										stroke-width="1.3"
-										stroke-linejoin="round"
-									/>
-								</svg>
-							</span>
-							{t("sidebar.gitStashLabel", "Stash")}
+						<button class={s.footerAction} onClick={props.onOpenSettings} title={t("sidebar.settings", "Settings")}>
+							<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+								<path
+									d="M6.5 1.5h3l.4 1.8a5 5 0 011.2.7l1.7-.6 1.5 2.6-1.3 1.2a5 5 0 010 1.4l1.3 1.2-1.5 2.6-1.7-.6a5 5 0 01-1.2.7l-.4 1.8h-3l-.4-1.8a5 5 0 01-1.2-.7l-1.7.6-1.5-2.6 1.3-1.2a5 5 0 010-1.4L1.7 5.7l1.5-2.6 1.7.6a5 5 0 011.2-.7z"
+									stroke="currentColor"
+									stroke-width="1.2"
+									stroke-linejoin="round"
+								/>
+								<circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2" />
+							</svg>
 						</button>
 					</div>
 				</div>
-			</Show>
 
-			{/* Footer */}
-			<div class={s.footer}>
-				<button class={s.addRepo} onClick={handleAddRepoClick} title={t("sidebar.addRepository", "Add Repository")}>
-					<svg class={s.addRepoIcon} width="14" height="14" viewBox="0 0 16 16" fill="none">
-						<path
-							d="M1.5 2A1.5 1.5 0 0 1 3 .5h3.379a1.5 1.5 0 0 1 1.06.44l1.122 1.12H13A1.5 1.5 0 0 1 14.5 3.5v9a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12.5V2Z"
-							stroke="currentColor"
-							stroke-width="1.2"
+				{/* Parked repos popover */}
+				<Show when={parkedPopoverVisible()}>
+					<ParkedReposPopover
+						onClose={() => setParkedPopoverVisible(false)}
+						onUnpark={(repoPath) => {
+							repositoriesStore.setPark(repoPath, false);
+							setParkedPopoverVisible(false);
+							repositoriesStore.setActive(repoPath);
+							const repo = repositoriesStore.get(repoPath);
+							const branch = repo?.activeWorkspaceId || Object.keys(repo?.workspaces ?? {})[0];
+							if (branch) props.onBranchSelect(repoPath, branch);
+						}}
+					/>
+				</Show>
+
+				{/* Stale-temp repair popover (#763-d219) */}
+				<Show when={staleTempPopoverVisible()}>
+					<StaleTempRepairPopover onClose={() => setStaleTempPopoverVisible(false)} />
+				</Show>
+
+				{/* PR detail popover (triggered from PrStateBadge click) */}
+				<Show when={prDetailTarget()}>
+					{(target) => (
+						<PrDetailPopover
+							repoPath={target().repoPath}
+							branch={target().branch}
+							onClose={() => {
+								setPrDetailTarget(null);
+								setPrDetailIsManual(false);
+							}}
+							onReview={props.onReviewPr}
 						/>
-					</svg>
-					{t("sidebar.addRepository", "Add Repository")}
-				</button>
-				<div class={s.footerIcons}>
-					<Show when={parkedCount() > 0}>
-						<button
-							class={s.footerAction}
-							onClick={() => setParkedPopoverVisible((v) => !v)}
-							title={t("sidebar.parkedRepos", "Parked repositories")}
-							style={{ position: "relative" }}
-						>
-							<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-								<path d="M2 3h12v2H2zM3 5v8h10V5" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
-								<path d="M5 8h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-							</svg>
-							<CountBadge count={parkedCount()} />
-						</button>
-					</Show>
-					<Show when={repositoriesStore.state.staleTempCandidates.length > 0}>
-						<button
-							class={s.footerAction}
-							onClick={() => setStaleTempPopoverVisible((v) => !v)}
-							title={t("sidebar.staleTempRepos", "Stale repositories awaiting repair")}
-							style={{ position: "relative", color: "var(--error)" }}
-						>
-							<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-								<path d="M8 1.5l6.5 11.5H1.5L8 1.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
-								<path d="M8 6v3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
-								<circle cx="8" cy="11.2" r="0.7" fill="currentColor" />
-							</svg>
-							<CountBadge count={repositoriesStore.state.staleTempCandidates.length} tone="error" />
-						</button>
-					</Show>
-					<Show when={tunnelsStore.state.profiles.length > 0}>
-						{(() => {
-							const connectedCount = () =>
-								Object.values(tunnelsStore.state.activeTunnels).filter((t) => t.status.type === "connected").length;
-							return (
-								<button
-									class={s.footerAction}
-									onClick={() => tunnelPanelStore.toggle()}
-									title={`SSH Tunnels (${connectedCount()} connected)`}
-									style={{ position: "relative", color: connectedCount() > 0 ? undefined : "var(--fg-muted)" }}
-								>
-									<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-										<path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z" />
-									</svg>
-									<CountBadge count={connectedCount()} tone="success" />
-								</button>
-							);
-						})()}
-					</Show>
-					<button class={s.footerAction} onClick={props.onOpenHelp} title={t("sidebar.help", "Help")}>
-						<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-							<circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2" />
-							<path
-								d="M6 6.2a2 2 0 0 1 3.9.6c0 1.2-1.9 1.2-1.9 2.2"
-								stroke="currentColor"
-								stroke-width="1.2"
-								stroke-linecap="round"
-							/>
-							<circle cx="8" cy="11.5" r="0.7" fill="currentColor" />
-						</svg>
-					</button>
-					<button class={s.footerAction} onClick={props.onOpenSettings} title={t("sidebar.settings", "Settings")}>
-						<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-							<path
-								d="M6.5 1.5h3l.4 1.8a5 5 0 011.2.7l1.7-.6 1.5 2.6-1.3 1.2a5 5 0 010 1.4l1.3 1.2-1.5 2.6-1.7-.6a5 5 0 01-1.2.7l-.4 1.8h-3l-.4-1.8a5 5 0 01-1.2-.7l-1.7.6-1.5-2.6 1.3-1.2a5 5 0 010-1.4L1.7 5.7l1.5-2.6 1.7.6a5 5 0 011.2-.7z"
-								stroke="currentColor"
-								stroke-width="1.2"
-								stroke-linejoin="round"
-							/>
-							<circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.2" />
-						</svg>
-					</button>
-				</div>
-			</div>
+					)}
+				</Show>
 
-			{/* Parked repos popover */}
-			<Show when={parkedPopoverVisible()}>
-				<ParkedReposPopover
-					onClose={() => setParkedPopoverVisible(false)}
-					onUnpark={(repoPath) => {
-						repositoriesStore.setPark(repoPath, false);
-						setParkedPopoverVisible(false);
-						repositoriesStore.setActive(repoPath);
-						const repo = repositoriesStore.get(repoPath);
-						const branch = repo?.activeWorkspaceId || Object.keys(repo?.workspaces ?? {})[0];
-						if (branch) props.onBranchSelect(repoPath, branch);
+				{/* Group rename dialog */}
+				<PromptDialog
+					visible={renameGroupTarget() !== null}
+					title="Rename Group"
+					placeholder="New group name"
+					confirmLabel="Rename"
+					onClose={() => setRenameGroupTarget(null)}
+					onConfirm={(name) => {
+						const groupId = renameGroupTarget();
+						if (groupId) repositoriesStore.renameGroup(groupId, name);
+						setRenameGroupTarget(null);
 					}}
 				/>
-			</Show>
 
-			{/* Stale-temp repair popover (#763-d219) */}
-			<Show when={staleTempPopoverVisible()}>
-				<StaleTempRepairPopover onClose={() => setStaleTempPopoverVisible(false)} />
-			</Show>
+				{/* Group color dialog */}
+				<ColorPickerDialog
+					visible={colorGroupTarget() !== null}
+					title="Group Color"
+					currentColor={colorGroupTarget() ? (repositoriesStore.state.groups[colorGroupTarget()!]?.color ?? "") : ""}
+					onClose={() => setColorGroupTarget(null)}
+					onConfirm={(color) => {
+						const groupId = colorGroupTarget();
+						if (groupId) repositoriesStore.setGroupColor(groupId, color);
+						setColorGroupTarget(null);
+					}}
+				/>
 
-			{/* PR detail popover (triggered from PrStateBadge click) */}
-			<Show when={prDetailTarget()}>
-				{(target) => (
-					<PrDetailPopover
-						repoPath={target().repoPath}
-						branch={target().branch}
-						onClose={() => {
-							setPrDetailTarget(null);
-							setPrDetailIsManual(false);
-						}}
-						onReview={props.onReviewPr}
-					/>
-				)}
-			</Show>
+				{/* Drag handle for resizing */}
+				<div class={s.resizeHandle} onMouseDown={handleResizeStart} />
 
-			{/* Group rename dialog */}
-			<PromptDialog
-				visible={renameGroupTarget() !== null}
-				title="Rename Group"
-				placeholder="New group name"
-				confirmLabel="Rename"
-				onClose={() => setRenameGroupTarget(null)}
-				onConfirm={(name) => {
-					const groupId = renameGroupTarget();
-					if (groupId) repositoriesStore.renameGroup(groupId, name);
-					setRenameGroupTarget(null);
-				}}
-			/>
-
-			{/* Group color dialog */}
-			<ColorPickerDialog
-				visible={colorGroupTarget() !== null}
-				title="Group Color"
-				currentColor={colorGroupTarget() ? (repositoriesStore.state.groups[colorGroupTarget()!]?.color ?? "") : ""}
-				onClose={() => setColorGroupTarget(null)}
-				onConfirm={(color) => {
-					const groupId = colorGroupTarget();
-					if (groupId) repositoriesStore.setGroupColor(groupId, color);
-					setColorGroupTarget(null);
-				}}
-			/>
-
-			{/* Drag handle for resizing */}
-			<div class={s.resizeHandle} onMouseDown={handleResizeStart} />
-
-			{/* Add repo context menu (local vs remote) */}
-			<ContextMenu
-				items={addRepoMenuItems()}
-				x={addRepoMenu.position().x}
-				y={addRepoMenu.position().y}
-				visible={addRepoMenu.visible()}
-				onClose={addRepoMenu.close}
-			/>
-		</aside>
+				{/* Add repo context menu (local vs remote) */}
+				<ContextMenu
+					items={addRepoMenuItems()}
+					x={addRepoMenu.position().x}
+					y={addRepoMenu.position().y}
+					visible={addRepoMenu.visible()}
+					onClose={addRepoMenu.close}
+				/>
+			</aside>
+		</SidebarDensityContext.Provider>
 	);
 };
 

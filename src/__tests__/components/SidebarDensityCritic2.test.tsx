@@ -119,6 +119,8 @@ vi.mock("../../stores/github", () => ({
 		getRemoteOnlyPrs: vi.fn(() => []),
 		getRepoIssues: vi.fn(() => []),
 		getAllOpenPrs: vi.fn(() => []),
+		getRemoteStatus: vi.fn(() => null),
+		getLastPolled: vi.fn(() => 0),
 		state: { viewerLogin: null, issuesLoading: false, circuitBreakerOpen: false },
 	},
 }));
@@ -248,7 +250,7 @@ describe("Sidebar", () => {
 			ungrouped: [small],
 		});
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
-		expect(aside(container).dataset.density).toBe("comfortable");
+		expect(aside(container).dataset.density).toBe("rich");
 	});
 
 	// Catches: tabTreeEnabled flipped on in settings not reaching the density memo (stale read),
@@ -264,14 +266,14 @@ describe("Sidebar", () => {
 	it("ignores terminals when the tab tree is off", () => {
 		setRepos({ "/r": makeRepo({ workspaces: branches(3, 6) }) });
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
-		expect(aside(container).dataset.density).toBe("comfortable");
+		expect(aside(container).dataset.density).toBe("rich");
 	});
 
 	// Catches: the density not following a live flip of the tab tree setting (memo not reactive to it).
 	it("re-derives density when the tab tree is toggled while mounted", () => {
 		setRepos({ "/r": makeRepo({ workspaces: branches(3, 6) }) });
 		const { container } = render(() => <Sidebar {...defaultProps()} />);
-		expect(aside(container).dataset.density).toBe("comfortable");
+		expect(aside(container).dataset.density).toBe("rich");
 		settingsStore.setTabTreeEnabled(true);
 		expect(aside(container).dataset.density).toBe("compact");
 	});

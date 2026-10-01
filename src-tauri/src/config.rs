@@ -1248,7 +1248,7 @@ pub(crate) struct UIPrefsConfig {
     /// File browser listing: "flat" or "tree".
     #[serde(default = "default_file_browser_view_mode")]
     pub(crate) file_browser_view_mode: String,
-    /// Sidebar row density: "auto" (by row count and pointer), "compact", "comfortable" or "touch".
+    /// Sidebar layout: "auto" (rich for a short list or a finger), "compact" or "rich".
     #[serde(default = "default_sidebar_density")]
     pub(crate) sidebar_density: String,
     /// Appearance used by the mobile PWA; independent of the desktop terminal theme.
@@ -5069,7 +5069,7 @@ mod tests {
             references_panel_visible: false,
             ai_chat_panel_visible: false,
             file_browser_view_mode: "tree".to_string(),
-            sidebar_density: "touch".to_string(),
+            sidebar_density: "rich".to_string(),
             mobile_theme: "vscode-light".to_string(),
             diff_panel_width: 500,
             markdown_panel_width: 450,
@@ -5091,7 +5091,7 @@ mod tests {
         let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &cfg);
         assert!(!loaded.sidebar_visible);
         assert_eq!(loaded.sidebar_width, 300);
-        assert_eq!(loaded.sidebar_density, "touch");
+        assert_eq!(loaded.sidebar_density, "rich");
         assert_eq!(loaded.mobile_theme, "vscode-light");
         assert_eq!(loaded.diff_panel_width, 500);
         assert_eq!(loaded.markdown_panel_width, 450);

@@ -48,18 +48,16 @@ function relativeAge(timestamp: number): string {
 const FULL_APP_NAME_MIN_SIDEBAR_PX = 254;
 
 const DENSITY_TITLES: Record<SidebarDensityMode, () => string> = {
-	auto: () => t("toolbar.densityAuto", "Sidebar density: auto (by list length and pointer) — click for compact"),
-	compact: () => t("toolbar.densityCompact", "Sidebar density: compact — click for comfortable"),
-	comfortable: () => t("toolbar.densityComfortable", "Sidebar density: comfortable — click for touch"),
-	touch: () => t("toolbar.densityTouch", "Sidebar density: touch — click for auto"),
+	auto: () => t("toolbar.densityAuto", "Sidebar layout: auto (rich for a short list or a finger) — click for compact"),
+	compact: () => t("toolbar.densityCompact", "Sidebar layout: compact — click for rich"),
+	rich: () => t("toolbar.densityRich", "Sidebar layout: rich (details on every row) — click for auto"),
 };
 
-/** Row-spacing glyph: tighter lines for compact, fewer and heavier for touch. */
+/** Row glyph: five tight lines for compact, a title with a detail line for rich. */
 const DENSITY_ICON_PATHS: Record<SidebarDensityMode, string> = {
 	auto: "M2 3.5h12M2 8h12M2 12.5h12",
 	compact: "M2 2.5h12M2 5.5h12M2 8.5h12M2 11.5h12M2 14.5h12",
-	comfortable: "M2 3.5h12M2 8h12M2 12.5h12",
-	touch: "M2 4.5h12M2 11.5h12",
+	rich: "M2 3h12M2 5.5h7M2 10.5h12M2 13h7",
 };
 
 const NOTIFICATION_LABELS: Record<PrNotificationType, { label: string; icon: string; cls: string }> = {
@@ -402,7 +400,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 							<path
 								d={DENSITY_ICON_PATHS[uiStore.state.sidebarDensityMode]}
 								stroke="currentColor"
-								stroke-width={uiStore.state.sidebarDensityMode === "touch" ? 1.8 : 1.3}
+								stroke-width="1.3"
 								stroke-linecap="round"
 							/>
 						</svg>

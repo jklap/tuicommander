@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 // Critic cases for #1334-b659 round 1 (the row-count case lives in sidebarDensity.test.ts).
 
-describe("touch density CSS cascade (critic)", () => {
+describe("rich density CSS cascade (critic)", () => {
 	const css = readFileSync(resolve(__dirname, "../components/Sidebar/Sidebar.module.css"), "utf8");
 
 	/** Brace depth at `index`: 0 = top level, >=1 = inside an at-rule/block. */
@@ -17,12 +17,12 @@ describe("touch density CSS cascade (critic)", () => {
 		return depth;
 	};
 
-	// Catches: a top-level `.sidebar[data-density="touch"] .branchActions { max-width: 84px }`.
+	// Catches: a top-level `.sidebar[data-density="rich"] .branchActions { max-width: 84px }`.
 	// It has the same specificity as `.branchItem:hover .branchActions { max-width: 44px }` but comes
 	// earlier, so on a hover-capable pointer (forced touch mode, iPad trackpad) the idle actions
 	// reserve 84px in every row and on hover are clipped back to 44px, cutting off the second 36px button.
 	it("does not set branchActions max-width outside a hover media query", () => {
-		const at = css.indexOf('.sidebar[data-density="touch"] .branchActions');
+		const at = css.indexOf('.sidebar[data-density="rich"] .branchActions');
 		expect(at).toBeGreaterThan(-1);
 		expect(depthAt(at)).toBeGreaterThanOrEqual(1);
 	});

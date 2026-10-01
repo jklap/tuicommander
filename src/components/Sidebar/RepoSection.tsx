@@ -1,10 +1,10 @@
-import { type Component, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { type Component, createMemo, createSignal, For, Show } from "solid-js";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
 import type { RepositoryState, WorkspaceState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
-import { terminalsStore } from "../../stores/terminals";
+import { type TerminalState, terminalsStore } from "../../stores/terminals";
 import { writeClipboard } from "../../utils/clipboard";
 import { _resetMergedActivityAccum, activePrStatus } from "../../utils/mergedPrGrace";
 import { effectiveMergeMethod } from "../../utils/prMerge";
@@ -27,6 +27,14 @@ import { keyFor } from "../../utils/hotkey";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { timeSync } from "../../utils/perfTrace";
+import { useSidebarDensity } from "../../utils/sidebarDensity";
+import {
+	agentFacts,
+	branchFacts,
+	compactAge as compactActivityAge,
+	createMinuteClock,
+	repoFacts,
+} from "../../utils/sidebarRich";
 import { terminalVisualState } from "../../utils/terminalVisualState";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
@@ -215,21 +223,32 @@ function getBranchTabsAvailable(branch: WorkspaceState): boolean {
 	return settingsStore.state.tabTreeEnabled && branch.terminals.length > 0;
 }
 
-function compactActivityAge(timestamp: number | null, now: number): string {
-	if (!timestamp) return "";
-	const minutes = Math.max(0, Math.floor((now - timestamp) / 60_000));
-	if (minutes < 1) return "<1m";
-	if (minutes < 60) return `${minutes}m`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours}h`;
-	return `${Math.floor(hours / 24)}d`;
+const AGENT_STATE_LABEL = {
+	working: () => t("sidebar.agentWorking", "Working"),
+	idle: () => t("sidebar.agentIdle", "Idle"),
+	input: () => t("sidebar.agentNeedsInput", "Needs input"),
+	error: () => t("sidebar.agentError", "Error"),
+};
+
+/** The facts a rich agent row prints, read from the live terminal. */
+function agentRow(term: TerminalState) {
+	return agentFacts(
+		{
+			awaitingInput: term.awaitingInput,
+			busy: (term.sessionId != null && rateLimitStore.isRateLimited(term.sessionId)) || terminalsStore.isBusy(term.id),
+			agentIntent: term.agentIntent,
+			currentTask: term.currentTask,
+			lastPrompt: term.lastPrompt,
+		},
+		displayTask(term.currentTask, term.agentType),
+	);
 }
 
 /** Collapsible activity card for the terminals attached to a branch. */
 const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
-	const [now, setNow] = createSignal(Date.now());
-	const clock = setInterval(() => setNow(Date.now()), 60_000);
-	onCleanup(() => clearInterval(clock));
+	const now = createMinuteClock();
+	const density = useSidebarDensity();
+	const rich = () => density() === "rich";
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
 			<For each={props.terminalIds}>
@@ -274,7 +293,7 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 						<Show when={term()}>
 							{(t) => (
 								<button
-									class={cx(s.branchTabItem, isActive() && s.active)}
+									class={cx(s.branchTabItem, isActive() && s.active, rich() && s.branchTabItemRich)}
 									onClick={() => navigateToTerminal(id)}
 									title={accessibleLabel()}
 									aria-label={accessibleLabel()}
@@ -303,6 +322,17 @@ const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
 										)}
 									</Show>
 									<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, now())}</span>
+									{/* Rich: what the agent is doing, in words, under the tab title. */}
+									<Show when={rich() ? agentRow(t()) : null}>
+										{(facts) => (
+											<span class={s.branchTabDetail}>
+												<span class={cx(s.branchTabState, s[`branchTabState_${facts().state}`])}>
+													{AGENT_STATE_LABEL[facts().state]()}
+												</span>
+												<Show when={facts().line}>{(line) => <span class={s.branchTabLine}>{line()}</span>}</Show>
+											</span>
+										)}
+									</Show>
 								</button>
 							)}
 						</Show>
@@ -361,6 +391,29 @@ export const BranchItem: Component<{
 	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.branchName));
 	const checks = createMemo(() => githubStore.getCheckSummary(props.repoPath, props.branch.branchName));
 	const hasDiff = () => props.branch.additions > 0 || props.branch.deletions > 0;
+	const density = useSidebarDensity();
+	const rich = () => density() === "rich";
+	const now = createMinuteClock();
+	// Ahead/behind is against the upstream: the stores hold nothing against the base branch.
+	const remote = createMemo(() => {
+		const status = githubStore.getRemoteStatus(props.branch.worktreePath ?? props.repoPath);
+		return status?.has_remote && status.current_branch === props.branch.branchName ? status : null;
+	});
+	const facts = createMemo(() =>
+		branchFacts(
+			{
+				lastCommitTs: props.branch.lastCommitTs,
+				ahead: remote()?.ahead,
+				behind: remote()?.behind,
+				additions: props.branch.additions,
+				deletions: props.branch.deletions,
+				dirtyFiles: props.branch.lifecycleStatus?.dirtyFiles,
+				isMerged: props.branch.isMerged,
+				commitStatus: props.branch.lifecycleStatus?.commitStatus,
+			},
+			now(),
+		),
+	);
 	// Select this branch/worktree first so the Git panel targets it (it follows
 	// activeWorktreePath), then open the changes tab — otherwise a chip would
 	// show the active branch's diff instead of this row's.
@@ -606,12 +659,56 @@ export const BranchItem: Component<{
 							{props.branch.branchName}
 						</span>
 					</Show>
+					{/* Rich: spend the spare room on what the compact row leaves to tooltips. */}
+					<Show when={rich() && !props.branch.isShell}>
+						<Show when={pr()}>
+							{(p) => (
+								<span class={s.branchRichLine} title={p().title}>
+									#{p().number} {p().title}
+								</span>
+							)}
+						</Show>
+						<span class={s.branchRichMeta}>
+							<Show when={facts().commitAge}>
+								{(age) => (
+									<span class={s.richChip} title={t("sidebar.lastCommit", "Last commit")}>
+										{age()}
+									</span>
+								)}
+							</Show>
+							<Show when={facts().sync}>
+								{(sync) => (
+									<span class={s.richChip} title={t("sidebar.aheadBehind", "Ahead / behind upstream")}>
+										{sync()}
+									</span>
+								)}
+							</Show>
+							<StatsBadge
+								additions={props.branch.additions}
+								deletions={props.branch.deletions}
+								dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
+								onClick={props.onShowChanges ? showChanges : undefined}
+							/>
+							<Show when={facts().dirtyFiles > 0}>
+								<span class={cx(s.richChip, s.richChipWarn)} title={t("sidebar.dirtyFiles", "Uncommitted files")}>
+									{facts().dirtyFiles} {t("sidebar.dirty", "dirty")}
+								</span>
+							</Show>
+							<Show when={facts().state}>
+								{(state) => (
+									<span class={cx(s.richChip, state() === "merged" ? s.richChipMerged : s.richChipWarn)}>
+										{state() === "merged" ? t("sidebar.merged", "Merged") : t("sidebar.stale", "Stale")}
+									</span>
+								)}
+							</Show>
+						</span>
+					</Show>
 				</div>
 				{/* The badge answers one question — what would removing this workspace
 				    lose? A main checkout is never removed here, so it gets no badge at
 				    all: "Dirty" on every main row was noise about a risk that does not
 				    exist. */}
-				<Show when={!props.branch.isMain && props.branch.lifecycleStatus}>
+				<Show when={!rich() && !props.branch.isMain && props.branch.lifecycleStatus}>
 					{(status) => {
 						const lostFiles = () => status().dirtyFiles ?? 0;
 						const label = () => {
@@ -679,7 +776,7 @@ export const BranchItem: Component<{
 						);
 					}}
 				</Show>
-				<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged" || pr() || hasDiff()}>
+				<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged" || pr() || (!rich() && hasDiff())}>
 					<div class={s.branchBadgeStack}>
 						<Show when={props.branch.lifecycleStatus?.commitStatus === "unmerged"}>
 							<UnmergedMarker />
@@ -710,12 +807,14 @@ export const BranchItem: Component<{
 								/>
 							</span>
 						</Show>
-						<StatsBadge
-							additions={props.branch.additions}
-							deletions={props.branch.deletions}
-							dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
-							onClick={props.onShowChanges ? showChanges : undefined}
-						/>
+						<Show when={!rich()}>
+							<StatsBadge
+								additions={props.branch.additions}
+								deletions={props.branch.deletions}
+								dirtyFiles={props.branch.lifecycleStatus?.dirtyFiles ?? undefined}
+								onClick={props.onShowChanges ? showChanges : undefined}
+							/>
+						</Show>
 					</div>
 				</Show>
 				<div class={s.branchActions} style={{ display: props.shortcutIndex !== undefined ? "none" : undefined }}>
@@ -841,6 +940,23 @@ export const RepoSection: Component<{
 	}
 
 	const branches = createMemo(() => Object.values(props.repo.workspaces));
+	const density = useSidebarDensity();
+	const now = createMinuteClock();
+	// Header facts for the rich layout. "Synced" is the last GitHub/remote poll:
+	// the stores keep no timestamp for a plain `git fetch`.
+	const richRepoFacts = createMemo(() =>
+		repoFacts(
+			{
+				currentBranch: props.repo.activeWorkspaceId
+					? (props.repo.workspaces[props.repo.activeWorkspaceId]?.branchName ?? null)
+					: null,
+				openPrs: githubStore.getAllOpenPrs(props.repo.path).length,
+				worktrees: branches().filter((w) => w.worktreePath && w.worktreePath !== props.repo.path).length,
+				polledAt: githubStore.getLastPolled(props.repo.path),
+			},
+			now(),
+		),
+	);
 	// Pre-compute PR statuses once per poll cycle; avoids calling getPrStatus inside sort comparator
 	const prStatuses = createMemo(() => {
 		const map = new Map<string, ReturnType<typeof githubStore.getPrStatus>>();
@@ -1089,6 +1205,25 @@ export const RepoSection: Component<{
 					</span>
 				</Show>
 			</div>
+
+			<Show when={density() === "rich" && props.repo.isGitRepo !== false && !props.repo.collapsed}>
+				<div class={s.repoRichMeta} data-testid="repo-rich-meta">
+					<Show when={richRepoFacts().currentBranch}>{(name) => <span class={s.richChip}>⎇ {name()}</span>}</Show>
+					<span class={s.richChip}>
+						{richRepoFacts().openPrs} {t("sidebar.openPrs", "open PRs")}
+					</span>
+					<span class={s.richChip}>
+						{richRepoFacts().worktrees} {t("sidebar.worktrees", "worktrees")}
+					</span>
+					<Show when={richRepoFacts().syncedAge}>
+						{(age) => (
+							<span class={s.richChip} title={t("sidebar.lastPoll", "Last remote poll")}>
+								{t("sidebar.synced", "synced")} {age()}
+							</span>
+						)}
+					</Show>
+				</div>
+			</Show>
 
 			{/* Branches */}
 			<Show when={props.repo.expanded && !props.repo.collapsed}>
