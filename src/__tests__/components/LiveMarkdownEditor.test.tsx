@@ -138,3 +138,21 @@ describe("LiveMarkdownEditor comment composer", () => {
 		expect(t.view().state.sliceDoc()).toMatch(/<!--tweak:begin:([^>]+)-->hello<!--tweak:end:\1 @\S+\nnote--> world$/);
 	});
 });
+
+describe("LiveMarkdownEditor comment composer drafts", () => {
+	it("Escape discards the draft so the next composer opens empty", async () => {
+		// catches: cancelled draft text reappearing in the next comment
+		const t = setup("hello world", () => "hello world");
+		await t.open();
+		t.view().focus();
+		t.view().dispatch({ selection: { anchor: 0, head: 5 } });
+		fireEvent.click(await screen.findByText("Comment"));
+		const first = (await screen.findByPlaceholderText("Comment on the selection")) as HTMLInputElement;
+		fireEvent.input(first, { target: { value: "stale" } });
+		fireEvent.keyDown(first, { key: "Escape" });
+		await waitFor(() => expect(screen.queryByPlaceholderText("Comment on the selection")).toBeNull());
+		t.view().dispatch({ selection: { anchor: 0, head: 5 } });
+		fireEvent.click(await screen.findByText("Comment"));
+		expect(((await screen.findByPlaceholderText("Comment on the selection")) as HTMLInputElement).value).toBe("");
+	});
+});

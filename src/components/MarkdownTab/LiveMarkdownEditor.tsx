@@ -264,6 +264,7 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 	};
 
 	const cancelComment = () => {
+		setDraft("");
 		setComposing(false);
 		active?.view.focus();
 	};
@@ -317,6 +318,8 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 						placeholder={t("markdownTab.commentPlaceholder", "Comment on the selection")}
 						onInput={(ev) => setDraft(ev.currentTarget.value)}
 						onKeyDown={(ev) => {
+							// Enter/Escape that confirm an IME candidate are not ours (WebKit reports them as keyCode 229 after compositionend).
+							if (ev.isComposing || ev.keyCode === 229) return;
 							// The key's default action lands where focus is after the handler; keep it out of the editor.
 							if (ev.key === "Enter") {
 								ev.preventDefault();
