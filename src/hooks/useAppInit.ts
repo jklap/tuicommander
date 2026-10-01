@@ -1196,6 +1196,14 @@ export async function initApp(deps: AppInitDeps) {
 		if (isSuspendingOrSuspended(termId)) return;
 
 		const parsedAgentType = parseAgentType(agent_type);
+		// Deliberately a different signal from `hadAgent` below: this one reads
+		// the backend event's OWN agent_type (for the notification decision and
+		// the autoCloseMs timer further down), not the store's current value. The
+		// two usually agree — `handleAgentExitCompletion`'s own `hadAgent ||
+		// terminal?.agentType != null` OR-fallback covers the gap — but don't
+		// collapse them into one variable: if the store's agentType and this
+		// event's agent_type ever disagree, the notification decision and the
+		// field-clearing decision below are each supposed to use their own.
 		handleAgentExitCompletion(termId, parsedAgentType != null);
 		// Mirrors Terminal.tsx's own (non-remote) pty-exit teardown for an agent
 		// tab — this listener is now the sole owner of that teardown for a remote
@@ -1203,6 +1211,8 @@ export async function initApp(deps: AppInitDeps) {
 		// fields it used to clear locally must be cleared here instead, or a
 		// remote agent tab's `agentType` would stay stuck forever once its
 		// sessionId goes null and polling has nothing left to detect against.
+		// Reads the STORE's current agentType (not parsedAgentType above) to
+		// mirror Terminal.tsx's own hadAgent convention exactly.
 		const hadAgent = t0?.agentType != null;
 		terminalsStore.update(termId, {
 			shellState: "exited",

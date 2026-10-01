@@ -54,7 +54,6 @@ vi.mock("../../invoke", () => ({
 	listen: vi.fn().mockResolvedValue(vi.fn()),
 }));
 
-
 vi.mock("../../stores/notifications", () => ({
 	notificationsStore: {
 		play: vi.fn().mockResolvedValue(undefined),
@@ -225,4 +224,3 @@ describe("Terminal remote-tab exit (subscribePty callback)", () => {
 		expect(terminal?.shellState).toBe("exited");
 	});
 });
-
