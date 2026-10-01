@@ -2391,8 +2391,14 @@ impl AppState {
         }
     }
 
-    pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
+    pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) -> u64 {
         self.track_blocked_hold(recipient, &msg);
+        self.store_agent_inbox(recipient, msg)
+    }
+
+    /// `push_agent_inbox` without touching BLOCKED holds, for replaying mail that
+    /// was already seen once (identity handoff).
+    pub(crate) fn store_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
         let gate_entry = self
             .active_agent_waiters
             .entry(recipient.to_string())

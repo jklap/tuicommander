@@ -86,16 +86,14 @@ fn bg_wake_blocks_close(session_id: &str) -> bool {
     matches!(marker["status"].as_str(), Some("failed" | "retrying"))
 }
 
-/// Nobody can answer a child whose parent has no PTY and no MCP session left.
-fn parent_alive(state: &AppState, child: &str) -> bool {
-    let Some(parent) = state.session_maps.session_parent.get(child) else {
-        return false;
-    };
-    state.session_maps.sessions.contains_key(parent.value())
+/// Nobody can answer a child whose parent has no PTY and no MCP session. The
+/// hold is kept meanwhile: a parent that reconnects still owes its answer.
+fn parent_alive(state: &AppState, parent: &str) -> bool {
+    state.session_maps.sessions.contains_key(parent)
         || state
             .mcp
             .session_to_mcp
-            .get(parent.value())
+            .get(parent)
             .is_some_and(|sessions| !sessions.is_empty())
 }
 
@@ -104,7 +102,7 @@ fn observation(state: &AppState, session_id: &str) -> Option<(Observation, u64)>
     if !state.session_maps.sessions.contains_key(session_id)
         || crate::mcp_http::mcp_transport::is_pending_parent(&parent)
         || state.keep_open_sessions.contains(session_id)
-        || state.blocked_children.contains(session_id)
+        || (state.blocked_children.contains(session_id) && parent_alive(state, &parent))
     {
         return None;
     }
@@ -174,7 +172,7 @@ fn sweep_with_snapshot(
         .retain(|session_id, _| children.contains(session_id));
     state
         .blocked_children
-        .retain(|session_id| children.contains(session_id) && parent_alive(state, session_id));
+        .retain(|session_id| children.contains(session_id));
     let mut runner_commands: Option<Option<Vec<String>>> = None;
     for session_id in children {
         let candidate = observation(state, &session_id);
