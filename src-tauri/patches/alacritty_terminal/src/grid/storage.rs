@@ -118,6 +118,21 @@ impl<T> Storage<T> {
         }
     }
 
+    /// Remove the `count` history rows closest to the screen.
+    ///
+    /// Unlike [`shrink_lines`], which drops the oldest rows, this closes the gap
+    /// between the surviving history and the screen.
+    ///
+    /// [`shrink_lines`]: #method.shrink_lines
+    pub fn remove_newest_history(&mut self, count: usize) {
+        debug_assert!(count <= self.len - self.visible_lines);
+
+        self.truncate();
+        self.inner
+            .drain(self.visible_lines..self.visible_lines + count);
+        self.len -= count;
+    }
+
     /// Truncate the invisible elements from the raw buffer.
     #[inline]
     pub fn truncate(&mut self) {
