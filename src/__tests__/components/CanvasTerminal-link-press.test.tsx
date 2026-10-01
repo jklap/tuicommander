@@ -181,6 +181,16 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 		expect(onOpen).not.toHaveBeenCalled();
 	});
 
+	// Catches: a double-click on a path opening the file twice (one open per click event).
+	it("opens once for a double-click", async () => {
+		click(canvas, NAME_COL, NAME_COL, { detail: 1 });
+		click(canvas, NAME_COL, NAME_COL, { detail: 2 });
+		await waitFor(() => expect(onOpen).toHaveBeenCalledTimes(1));
+		await new Promise((r) => setTimeout(r, 200));
+		expect(onOpen).toHaveBeenCalledTimes(1);
+		expect(ptyWrites()).toEqual([]);
+	});
+
 	// Catches: the app receiving a drag (button 32+) for a press the link swallowed.
 	it("reports no drag motion for a claimed press", () => {
 		fire(canvas, "mousedown", NAME_COL, { buttons: 1 });

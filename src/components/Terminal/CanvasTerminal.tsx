@@ -3043,7 +3043,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		bindings.listen(canvasRef, "click", (e: MouseEvent) => {
 			const at = canvasToGrid(e);
 			const claimed = linkPress.release(at.row, at.col);
-			if (!claimed || selection.hasRange()) return;
+			// The first click of a double-click already opened it.
+			if (!claimed || e.detail > 1 || selection.hasRange()) return;
 			void openLinkAt(at.row, at.col);
 		});
 
