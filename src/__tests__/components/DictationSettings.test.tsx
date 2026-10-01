@@ -1064,7 +1064,15 @@ describe("DictationSettings – Edge engine", () => {
 	it("does not mark a language as unspoken just because Pocket ships no bundle for it", async () => {
 		// Catches: "Japanese — no spoken replies" under an engine that speaks it.
 		mockStore.state.speechAssets = [
-			{ id: "italian", display_name: "Italian", kind: "language", language: "it", voices: [], download_bytes: 1, state: "ready" },
+			{
+				id: "italian",
+				display_name: "Italian",
+				kind: "language",
+				language: "it",
+				voices: [],
+				download_bytes: 1,
+				state: "ready",
+			},
 		];
 		const { container } = render(() => <DictationSettings />);
 		const japanese = Array.from(container.querySelectorAll("option")).find((o) => o.value === "ja");

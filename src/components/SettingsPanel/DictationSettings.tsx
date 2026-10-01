@@ -756,50 +756,50 @@ const SpeechSetup: Component = () => {
 			</Show>
 
 			<ExpertSetting configKey="dictation.speech_volume_db" value={dictationStore.state.speechVolumeDb}>
-					<SettingSlider
-						label={t("dictation.voiceVolumeLabel", "Voice volume")}
-						value={volumeDrag() ?? dictationStore.state.speechVolumeDb}
-						onChange={setVolumeDrag}
-						onCommit={(v) => {
-							void dictationStore.setSpeechVolumeDb(v);
-							setVolumeDrag(undefined);
-						}}
-						min={-30}
-						max={-12}
-						step={1}
-						formatValue={(v) => `${v} dB`}
-						hint={t(
-							"dictation.voiceVolumeHint",
-							"How loud every reply is spoken. Peaks are limited, so a high level never clips. Applies to the next reply.",
-						)}
-					/>
-				</ExpertSetting>
+				<SettingSlider
+					label={t("dictation.voiceVolumeLabel", "Voice volume")}
+					value={volumeDrag() ?? dictationStore.state.speechVolumeDb}
+					onChange={setVolumeDrag}
+					onCommit={(v) => {
+						void dictationStore.setSpeechVolumeDb(v);
+						setVolumeDrag(undefined);
+					}}
+					min={-30}
+					max={-12}
+					step={1}
+					formatValue={(v) => `${v} dB`}
+					hint={t(
+						"dictation.voiceVolumeHint",
+						"How loud every reply is spoken. Peaks are limited, so a high level never clips. Applies to the next reply.",
+					)}
+				/>
+			</ExpertSetting>
 
-				<ExpertSetting configKey="dictation.speech_levelling" value={dictationStore.state.speechLevelling}>
-					<SettingSlider
-						label={t("dictation.levellingLabel", "Levelling")}
-						value={levellingDrag() ?? Math.round(dictationStore.state.speechLevelling * 100)}
-						onChange={setLevellingDrag}
-						onCommit={(v) => {
-							void dictationStore.setSpeechLevelling(v / 100);
-							setLevellingDrag(undefined);
-						}}
-						min={0}
-						max={100}
-						step={1}
-						formatValue={(v) =>
-							v === 0
-								? t("dictation.levellingOff", "Off")
-								: v === 100
-									? t("dictation.levellingStrong", "Strong")
-									: `${v}%`
-						}
-						hint={t(
-							"dictation.levellingHint",
-							"Evens out quiet and loud words within a reply. Off keeps the voice as recorded.",
-						)}
-					/>
-				</ExpertSetting>
+			<ExpertSetting configKey="dictation.speech_levelling" value={dictationStore.state.speechLevelling}>
+				<SettingSlider
+					label={t("dictation.levellingLabel", "Levelling")}
+					value={levellingDrag() ?? Math.round(dictationStore.state.speechLevelling * 100)}
+					onChange={setLevellingDrag}
+					onCommit={(v) => {
+						void dictationStore.setSpeechLevelling(v / 100);
+						setLevellingDrag(undefined);
+					}}
+					min={0}
+					max={100}
+					step={1}
+					formatValue={(v) =>
+						v === 0
+							? t("dictation.levellingOff", "Off")
+							: v === 100
+								? t("dictation.levellingStrong", "Strong")
+								: `${v}%`
+					}
+					hint={t(
+						"dictation.levellingHint",
+						"Evens out quiet and loud words within a reply. Off keeps the voice as recorded.",
+					)}
+				/>
+			</ExpertSetting>
 		</>
 	);
 };

@@ -363,7 +363,8 @@ fn audio_body(frame: &[u8]) -> Result<&[u8]> {
 
 /// MP3 to mono PCM at the stream's own rate.
 fn decode_mp3(mp3: Vec<u8>) -> Result<SpeechAudio> {
-    let empty = || SpeechError::Failed("the Microsoft Edge speech service returned no audio".into());
+    let empty =
+        || SpeechError::Failed("the Microsoft Edge speech service returned no audio".into());
     if mp3.is_empty() {
         return Err(empty());
     }
@@ -499,7 +500,9 @@ fn dial_service() -> Result<Box<dyn Socket>> {
     // The handshake may block for as long as the connect did; after it, reads
     // wake every POLL_INTERVAL. The clone shares the socket, so the option set
     // on it applies to the stream the WebSocket owns.
-    let control = tcp.try_clone().map_err(|error| unreachable_service(&error))?;
+    let control = tcp
+        .try_clone()
+        .map_err(|error| unreachable_service(&error))?;
     tcp.set_nodelay(true).ok();
     tcp.set_read_timeout(Some(CONNECT_TIMEOUT))
         .and_then(|()| tcp.set_write_timeout(Some(CONNECT_TIMEOUT)))
@@ -604,8 +607,8 @@ const DEFAULT_VOICES: &[(&str, &str)] = &[
 /// the conversation language can change under Auto, and an Italian voice
 /// reading English is worse than the default for English.
 pub fn choose_voice(language: &str, configured: &str) -> std::result::Result<String, String> {
-    let speaks_language = configured.split('-').next() == Some(language)
-        || configured.contains("Multilingual");
+    let speaks_language =
+        configured.split('-').next() == Some(language) || configured.contains("Multilingual");
     if !configured.is_empty() && speaks_language {
         return Ok(configured.to_string());
     }
@@ -641,17 +644,14 @@ mod tests {
             .iter()
             .map(|frame| match frame["kind"].as_str() {
                 Some("text") => Frame::Text(frame["data"].as_str().unwrap().to_string()),
-                Some("binary") => {
-                    Frame::Binary(base64_decode(frame["b64"].as_str().unwrap()))
-                }
+                Some("binary") => Frame::Binary(base64_decode(frame["b64"].as_str().unwrap())),
                 other => panic!("unknown frame kind {other:?}"),
             })
             .collect()
     }
 
     fn base64_decode(text: &str) -> Vec<u8> {
-        const ALPHABET: &[u8] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut out = Vec::new();
         let (mut buffer, mut bits) = (0u32, 0u32);
         for byte in text.bytes().filter(|b| *b != b'=') {
@@ -783,13 +783,18 @@ mod tests {
             .into_iter()
             .find(|f| matches!(f, Frame::Binary(b) if b.len() > 800))
             .expect("fixture has audio frames");
-        let Frame::Binary(bytes) = frame else { unreachable!() };
+        let Frame::Binary(bytes) = frame else {
+            unreachable!()
+        };
         let endless: fn() -> Frame = || unreachable!();
         let frames = (0..200).map(|_| Frame::Binary(bytes.clone())).collect();
         let (engine, _) = engine_playing(frames, endless);
         let result = engine.synthesize("Sì.", "it-IT-IsabellaNeural", &SpeechCancel::new());
 
-        assert!(matches!(result, Err(SpeechError::Runaway { .. })), "{result:?}");
+        assert!(
+            matches!(result, Err(SpeechError::Runaway { .. })),
+            "{result:?}"
+        );
     }
 
     #[test]
@@ -822,7 +827,12 @@ mod tests {
     fn a_voice_that_could_close_the_ssml_attribute_is_refused_before_dialling() {
         // Catches: SSML injection through the voice setting.
         let engine = EdgeSpeech::with_dial(Box::new(|| unreachable!("must not dial")));
-        for voice in ["", "it-IT x", "a'><break/>", "it-IT-IsabellaNeural\r\nPath:x"] {
+        for voice in [
+            "",
+            "it-IT x",
+            "a'><break/>",
+            "it-IT-IsabellaNeural\r\nPath:x",
+        ] {
             assert_eq!(
                 engine.synthesize(SENTENCE, voice, &SpeechCancel::new()),
                 Err(SpeechError::UnknownVoice(voice.to_string()))
@@ -836,7 +846,11 @@ mod tests {
         // answers with an error) or adding elements of the sender's choosing.
         let (engine, sent) = engine_playing(recorded_frames(), || Frame::Idle);
         engine
-            .synthesize("a < b & <break/> \u{7}c", "it-IT-IsabellaNeural", &SpeechCancel::new())
+            .synthesize(
+                "a < b & <break/> \u{7}c",
+                "it-IT-IsabellaNeural",
+                &SpeechCancel::new(),
+            )
             .expect("synthesizes");
         let sent = sent.lock().unwrap();
         let ssml = sent.iter().find(|m| m.contains("Path:ssml")).unwrap();
@@ -868,7 +882,10 @@ mod tests {
         // Catches: slicing past the end on a truncated frame from the service.
         assert!(audio_body(&[0x00]).is_err());
         assert!(audio_body(&[0x00, 0x10, b'P']).is_err());
-        assert_eq!(audio_body(&[0x00, 0x04, b'a', b'b', b'c', b'd', 9]).unwrap(), &[] as &[u8]);
+        assert_eq!(
+            audio_body(&[0x00, 0x04, b'a', b'b', b'c', b'd', 9]).unwrap(),
+            &[] as &[u8]
+        );
     }
 
     #[test]
@@ -943,7 +960,11 @@ mod tests {
         assert!(voices_for_language(&voices, "i").is_empty());
         assert!(voices_for_language(&voices, "").is_empty());
         assert!(voices_for_language(&voices, "auto").is_empty());
-        assert!(voices_for_language(&voices, "en").iter().all(|v| v.locale == "en-US"));
+        assert!(
+            voices_for_language(&voices, "en")
+                .iter()
+                .all(|v| v.locale == "en-US")
+        );
     }
 
     #[test]
@@ -971,7 +992,10 @@ mod tests {
             choose_voice("en", "it-IT-ElsaNeural").unwrap(),
             "en-US-AriaNeural"
         );
-        assert_eq!(choose_voice("it", "it-IT-ElsaNeural").unwrap(), "it-IT-ElsaNeural");
+        assert_eq!(
+            choose_voice("it", "it-IT-ElsaNeural").unwrap(),
+            "it-IT-ElsaNeural"
+        );
         assert_eq!(choose_voice("it", "").unwrap(), "it-IT-IsabellaNeural");
         assert_eq!(
             choose_voice("en", "it-IT-GiuseppeMultilingualNeural").unwrap(),
@@ -984,7 +1008,10 @@ mod tests {
         // Catches: silently speaking in a voice of another language.
         let error = choose_voice("sv", "").unwrap_err();
         assert!(error.contains("choose one"), "{error}");
-        assert_eq!(choose_voice("sv", "sv-SE-SofieNeural").unwrap(), "sv-SE-SofieNeural");
+        assert_eq!(
+            choose_voice("sv", "sv-SE-SofieNeural").unwrap(),
+            "sv-SE-SofieNeural"
+        );
     }
 
     /// Live check against the real service. Not part of any suite:
@@ -998,6 +1025,10 @@ mod tests {
             .synthesize(SENTENCE, "it-IT-IsabellaNeural", &SpeechCancel::new())
             .expect("the service answers");
         assert_eq!(audio.sample_rate, 24_000);
-        assert!(audio.duration_seconds() > 1.0, "{}s", audio.duration_seconds());
+        assert!(
+            audio.duration_seconds() > 1.0,
+            "{}s",
+            audio.duration_seconds()
+        );
     }
 }
