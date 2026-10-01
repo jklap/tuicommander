@@ -1135,6 +1135,9 @@ async fn poll_one_account(
             let mut statuses: Vec<BranchPrStatus> =
                 nodes.iter().filter_map(parse_pr_node).collect();
             stamp_merge_policy(&mut statuses, repo_json);
+            if let Some((owner, name)) = alias_repo_names.get(alias.as_str()) {
+                settle_truncated_threads(state, account, owner, name, &mut statuses).await;
+            }
 
             if include_merged && statuses.iter().any(|s| s.state == "MERGED") {
                 let branch_tips = local_branch_tips(PathBuf::from(path)).await;
@@ -1182,9 +1185,19 @@ async fn poll_one_account(
                 let Some(paths) = name_to_paths.get(repo_name) else {
                     continue;
                 };
-                let Some(pr) = parse_pr_node(node) else {
+                let Some(mut pr) = parse_pr_node(node) else {
                     continue;
                 };
+                if let Some((owner, name)) = repo_name.split_once('/') {
+                    settle_truncated_threads(
+                        state,
+                        account,
+                        owner,
+                        name,
+                        std::slice::from_mut(&mut pr),
+                    )
+                    .await;
+                }
                 for path in paths {
                     let entry = pr_results.entry(path.to_string()).or_default();
                     if !entry.iter().any(|existing| existing.branch == pr.branch) {
@@ -2042,6 +2055,60 @@ query PRReviewThreads($owner: String!, $repo: String!, $number: Int!, $after: St
 /// this walks every page so its total can only be higher than the badge, never lower.
 const REVIEW_THREADS_MAX_PAGES: usize = 10;
 
+/// Walk every review-thread page of one PR (up to [`REVIEW_THREADS_MAX_PAGES`]). The bool is
+/// false when the bound ran out before the last page, so the counts are only a lower bound.
+async fn fetch_review_thread_counts(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    owner: &str,
+    repo: &str,
+    pr_number: i64,
+) -> Result<(ReviewThreadCounts, bool), String> {
+    let mut total = ReviewThreadCounts::default();
+    let mut after = serde_json::Value::Null;
+    for _ in 0..REVIEW_THREADS_MAX_PAGES {
+        let variables = serde_json::json!({
+            "owner": owner, "repo": repo, "number": pr_number, "after": after
+        });
+        let data = graphql_with_retry(state, account, PR_REVIEW_THREADS_QUERY, variables, None)
+            .await
+            .map_err(|e| format!("GraphQL review threads query failed: {e}"))?;
+        let threads = &data["repository"]["pullRequest"]["reviewThreads"];
+        let page = count_review_threads(&threads["nodes"]);
+        total.bot += page.bot;
+        total.human += page.human;
+        if threads["pageInfo"]["hasNextPage"].as_bool() != Some(true) {
+            return Ok((total, true));
+        }
+        after = threads["pageInfo"]["endCursor"].clone();
+    }
+    Ok((total, false))
+}
+
+/// The batch poll reads 50 threads per PR. For the PRs that have more, walk the remaining pages
+/// (that PR only) so the badge, the readiness verdict and the Ready notice see the real count;
+/// only a PR still truncated after the bound keeps "N+". A failed walk keeps the lower bound.
+async fn settle_truncated_threads(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    owner: &str,
+    repo: &str,
+    statuses: &mut [BranchPrStatus],
+) {
+    for pr in statuses
+        .iter_mut()
+        .filter(|s| s.unresolved_threads_truncated)
+    {
+        match fetch_review_thread_counts(state, account, owner, repo, pr.number.into()).await {
+            Ok((counts, complete)) => pr.settle_review_threads(counts.bot + counts.human, complete),
+            Err(e) => tracing::warn!(
+                source = "github", pr = pr.number, error = %e,
+                "review thread walk failed; keeping the first-page count"
+            ),
+        }
+    }
+}
+
 /// Unresolved review threads of one PR split by bot vs human. One page costs one GraphQL point,
 /// which is why the split is not part of the batch poll.
 pub(crate) async fn get_pr_review_threads_impl(
@@ -2054,31 +2121,9 @@ pub(crate) async fn get_pr_review_threads_impl(
         get_github_remote_url(&repo_path).ok_or_else(|| "No GitHub remote".to_string())?;
     let (owner, repo) =
         parse_remote_url(&remote_url).ok_or_else(|| "Unrecognised GitHub remote".to_string())?;
-    let mut total = ReviewThreadCounts::default();
-    let mut after = serde_json::Value::Null;
-    for _ in 0..REVIEW_THREADS_MAX_PAGES {
-        let variables = serde_json::json!({
-            "owner": owner, "repo": repo, "number": pr_number, "after": after
-        });
-        let data = graphql_with_retry(
-            state,
-            &github_com_account(state),
-            PR_REVIEW_THREADS_QUERY,
-            variables,
-            None,
-        )
+    fetch_review_thread_counts(state, &github_com_account(state), &owner, &repo, pr_number)
         .await
-        .map_err(|e| format!("GraphQL review threads query failed: {e}"))?;
-        let threads = &data["repository"]["pullRequest"]["reviewThreads"];
-        let page = count_review_threads(&threads["nodes"]);
-        total.bot += page.bot;
-        total.human += page.human;
-        if threads["pageInfo"]["hasNextPage"].as_bool() != Some(true) {
-            break;
-        }
-        after = threads["pageInfo"]["endCursor"].clone();
-    }
-    Ok(total)
+        .map(|(counts, _)| counts)
 }
 
 /// Unresolved review threads of a PR, bot vs human (Tauri command).

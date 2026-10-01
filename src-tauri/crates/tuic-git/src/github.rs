@@ -213,7 +213,18 @@ pub struct BranchPrStatus {
     pub unresolved_threads: u32,
     /// More than [`REVIEW_THREADS_LIMIT`] threads exist, so `unresolved_threads` is a lower
     /// bound and 0 does not prove "none open" (GitHub cannot filter threads by resolution).
+    /// The poll fetch walks the remaining pages and clears this ([`Self::settle_review_threads`]);
+    /// it stays set only when that walk failed or ran out of pages.
     pub unresolved_threads_truncated: bool,
+}
+
+impl BranchPrStatus {
+    /// Replace the first-page thread count with the total of a full walk. `complete` is false
+    /// when the walk hit its page bound, so the count stays a lower bound ("N+").
+    pub fn settle_review_threads(&mut self, unresolved: u32, complete: bool) {
+        self.unresolved_threads = unresolved;
+        self.unresolved_threads_truncated = !complete;
+    }
 }
 
 /// Threads inspected per PR in the batch poll.
@@ -979,25 +990,6 @@ mod tests {
         assert!(pr.unresolved_threads_truncated);
     }
 
-    #[test]
-    fn batch_query_selects_review_threads_without_a_nested_connection() {
-        // A nested comments connection per thread multiplied the poll cost 10x (5 -> 51
-        // points for 6 repos, measured with rateLimit dryRun); the plain selection is ~free.
-        let (query, _) = build_unified_batch_query(
-            &[("/r".into(), "o".into(), "r".into())],
-            false,
-            "disabled",
-            "me",
-            false,
-        );
-        assert!(query.contains("reviewThreads(first: 50)"));
-        assert!(query.contains("isResolved"));
-        assert!(
-            !query.contains("comments("),
-            "no nested comments connection in the batch: {query}"
-        );
-    }
-
     // --- statusCheckRollup dedup + classification tests ---
 
     #[test]
@@ -1189,15 +1181,53 @@ mod critic2_tests {
         }
     }
 
-    /// Catches: threads selected with a nested connection (poll cost x10) in the
-    /// worst-case query: 6 repos, viewer search, drafts hidden.
+    /// Catches: threads selected with a nested connection (5 -> 51 points for 6 repos, measured
+    /// with rateLimit dryRun) or the page flag dropped, in the worst-case query: 6 repos,
+    /// viewer search, drafts hidden. The selection must appear once per repo plus viewerPrs.
     #[test]
-    fn worst_case_batch_query_has_no_nested_thread_connection() {
+    fn batch_query_thread_selection_is_flat_and_flags_truncation() {
         let repos: Vec<(String, String, String)> = (0..6)
             .map(|i| (format!("/r{i}"), "o".into(), format!("r{i}")))
             .collect();
         let (q, _) = build_unified_batch_query(&repos, true, "assigned", "me", true);
-        assert_eq!(q.matches("reviewThreads(first: 50)").count(), 7); // 6 repos + viewerPrs
-        assert!(!q.contains("comments(first"));
+        let selection = review_threads_selection();
+        assert_eq!(q.matches(&selection).count(), 7); // 6 repos + viewerPrs
+        assert!(selection.contains("pageInfo") && selection.contains("isResolved"));
+        assert!(
+            !q.contains("comments("),
+            "no nested comments connection: {q}"
+        );
+    }
+
+    /// Catches: a PR with more than 50 threads, all resolved, staying "Comments" forever: once
+    /// the full walk settles the count, the Ready notice fires.
+    #[test]
+    fn settled_truncated_threads_let_ready_fire() {
+        let open_node = |threads: usize, more: bool| {
+            let nodes: Vec<_> = (0..threads)
+                .map(|_| serde_json::json!({"isResolved": false}))
+                .collect();
+            parse_pr_node(&serde_json::json!({
+                "number": 42, "headRefName": "feat/test", "state": "OPEN",
+                "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+                "reviewDecision": "APPROVED",
+                "reviewThreads": {"pageInfo": {"hasNextPage": more}, "nodes": nodes}
+            }))
+            .unwrap()
+        };
+        let old = open_node(1, false);
+        let mut pr = open_node(0, true);
+        assert!(pr.unresolved_threads_truncated);
+        pr.settle_review_threads(0, true);
+        assert!(!pr.unresolved_threads_truncated);
+        assert!(
+            crate::github_poller::detect_transitions("/repo", &old, &pr)
+                .iter()
+                .any(|x| matches!(x, crate::github_poller::PrTransition::Ready { .. }))
+        );
+        // Walk bound exhausted: still a lower bound, never Ready.
+        let mut capped = open_node(0, true);
+        capped.settle_review_threads(0, false);
+        assert!(capped.unresolved_threads_truncated);
     }
 }
