@@ -4711,29 +4711,46 @@ impl AppState {
             .is_some_and(|silence| {
                 silence
                     .lock()
-                    .declared_background_work_for_epoch_with(turn_epoch, || {
-                        self.lead_teammates_busy(session_id)
+                    .declared_background_work_for_epoch_with(turn_epoch, |declared| {
+                        self.lead_teammates_may_be_working(session_id, declared)
                     })
             })
     }
 
-    /// True if any Agent Teams teammate owned by `lead_session_id` is actually
-    /// working right now. A teammate is owned when its tmux pane recorded this
-    /// session as its lead (`TmuxPane::lead_session_id`); "working" is its own
-    /// terminal's shell state being busy. Reads only the tmux topology and the
-    /// shell-state atomics — never a `SilenceState` lock — so it is safe to call
-    /// while holding the lead's own.
-    pub(crate) fn lead_teammates_busy(&self, lead_session_id: &str) -> bool {
-        crate::mcp_http::tmux_routes::teammate_session_ids(self, lead_session_id)
-            .iter()
-            .any(|teammate| {
-                self.session_maps
-                    .shell_states
-                    .get(teammate)
-                    .is_some_and(|atom| {
-                        atom.load(std::sync::atomic::Ordering::Acquire) == crate::pty::SHELL_BUSY
-                    })
+    /// Whether a teammate's own terminal is busy right now (its shell-state atomic;
+    /// a hook-instrumented Claude session sets it from `Stop`/`UserPromptSubmit`).
+    pub(crate) fn teammate_terminal_busy(&self, teammate_session_id: &str) -> bool {
+        self.session_maps
+            .shell_states
+            .get(teammate_session_id)
+            .is_some_and(|atom| {
+                atom.load(std::sync::atomic::Ordering::Acquire) == crate::pty::SHELL_BUSY
             })
+    }
+
+    /// Whether any of the `declared_teammates` the lead's `Stop` hook reported
+    /// running may be working right now.
+    ///
+    /// A teammate is *linked* when its tmux pane recorded this session as its lead
+    /// (`TmuxPane::lead_session_id`). Fail-safe: if the hook declared more
+    /// teammates than we can link to a pane (an old `tuic` binary that doesn't send
+    /// `origin_session_id`, a plain `tuic alias` user, an in-process teammate, a
+    /// pane made before the link existed), the surplus cannot be shown idle, so the
+    /// answer is "yes" — never worse than before idle teammates were recognized.
+    /// Otherwise it is "yes" only if a linked teammate's terminal is busy.
+    ///
+    /// Reads only the tmux topology and shell-state atomics — never a
+    /// `SilenceState` lock — so it is safe to call while holding the lead's own.
+    pub(crate) fn lead_teammates_may_be_working(
+        &self,
+        lead_session_id: &str,
+        declared_teammates: u32,
+    ) -> bool {
+        let linked = crate::mcp_http::tmux_routes::teammate_session_ids(self, lead_session_id);
+        (linked.len() as u64) < u64::from(declared_teammates)
+            || linked
+                .iter()
+                .any(|teammate| self.teammate_terminal_busy(teammate))
     }
 
     /// Get a SessionState snapshot with shell_state from the PTY reader's state machine.
@@ -10867,7 +10884,7 @@ mod tests {
 
         // Teammate terminal idle (or unknown): the lead is idle.
         set_shell_state(&state, "mate-1", crate::pty::SHELL_IDLE);
-        assert!(!state.lead_teammates_busy("s1"));
+        assert!(!state.lead_teammates_may_be_working("s1", 1));
         assert!(!state.declared_background_work_for("s1", 0));
         let (snapshot, rung, ..) = state
             .session_state_with_shell_detailed("s1")
@@ -10881,7 +10898,7 @@ mod tests {
 
         // Teammate goes busy: the lead reads working on the background_work rung.
         set_shell_state(&state, "mate-1", crate::pty::SHELL_BUSY);
-        assert!(state.lead_teammates_busy("s1"));
+        assert!(state.lead_teammates_may_be_working("s1", 1));
         assert!(state.declared_background_work_for("s1", 0));
         let (snapshot, rung, ..) = state
             .session_state_with_shell_detailed("s1")
@@ -10905,7 +10922,10 @@ mod tests {
     }
 
     #[test]
-    fn test_teammates_of_a_different_lead_do_not_count() {
+    fn test_another_leads_teammate_cannot_vouch_for_mine_so_mine_stays_working() {
+        // `other-lead` owns the only linked teammate. `s1` declares one teammate
+        // running but has none linked, so it cannot be shown idle: fail-safe
+        // "working" (the pre-change behavior), not a borrowed verdict.
         let state = fresh_state();
         crate::mcp_http::tmux_routes::link_teammate_for_test(
             &state,
@@ -10913,20 +10933,41 @@ mod tests {
             "other-lead",
             "mate-3",
         );
-        set_shell_state(&state, "mate-3", crate::pty::SHELL_BUSY);
+        set_shell_state(&state, "mate-3", crate::pty::SHELL_IDLE);
         declare_task_summary(&state, "s1", 0, 0, 1);
-        assert!(!state.lead_teammates_busy("s1"));
-        assert!(!state.declared_background_work_for("s1", 0));
-        assert!(state.lead_teammates_busy("other-lead"));
+        assert!(state.declared_background_work_for("s1", 0));
+        // ...and a busy teammate of the OTHER lead is not mine.
+        set_shell_state(&state, "mate-3", crate::pty::SHELL_BUSY);
+        assert!(state.lead_teammates_may_be_working("other-lead", 1));
+        assert!(
+            !crate::mcp_http::tmux_routes::teammate_session_ids(&state, "s1")
+                .contains(&"mate-3".to_string())
+        );
     }
 
     #[test]
-    fn test_a_teammate_only_declaration_with_no_linked_pane_is_not_working() {
-        // No `lead_session_id` link recorded (plain `tuic alias`, older cli, or a
-        // pane created before the lead was known): nothing can be busy on its behalf.
+    fn test_a_teammate_declaration_with_no_linked_pane_is_fail_safe_working() {
+        // No `lead_session_id` link recorded (plain `tuic alias`, an old cli that does
+        // not send `origin_session_id`, an in-process teammate, a pane made before the
+        // link existed): the teammate cannot be shown idle, so the lead keeps reading
+        // working exactly as it did before idle teammates were recognized. The fix
+        // must never be *worse* than the bug it replaces.
         let state = fresh_state();
         declare_task_summary(&state, "s1", 0, 0, 2);
-        assert!(!state.lead_teammates_busy("s1"));
+        assert!(state.lead_teammates_may_be_working("s1", 2));
+        assert!(state.declared_background_work_for("s1", 0));
+    }
+
+    #[test]
+    fn test_declared_teammates_beyond_the_linked_panes_keep_the_lead_working() {
+        let state = fresh_state();
+        crate::mcp_http::tmux_routes::link_teammate_for_test(&state, "swarm-d", "s1", "mate-4");
+        set_shell_state(&state, "mate-4", crate::pty::SHELL_IDLE);
+        // Two declared, one linked and idle: the second is unaccounted for.
+        declare_task_summary(&state, "s1", 0, 0, 2);
+        assert!(state.declared_background_work_for("s1", 0));
+        // One declared, one linked and idle: fully accounted for and idle.
+        declare_task_summary(&state, "s1", 0, 0, 1);
         assert!(!state.declared_background_work_for("s1", 0));
     }
 

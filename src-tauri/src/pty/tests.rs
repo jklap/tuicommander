@@ -21370,11 +21370,11 @@ fn bgtasksummary_makes_an_idle_teammate_stop_counting_but_keeps_other_work() {
             "conservative read counts it"
         );
         assert!(
-            !sl.declared_background_work_for_epoch_with(0, || false),
+            !sl.declared_background_work_for_epoch_with(0, |_| false),
             "idle teammate"
         );
         assert!(
-            sl.declared_background_work_for_epoch_with(0, || true),
+            sl.declared_background_work_for_epoch_with(0, |_| true),
             "busy teammate"
         );
     }
@@ -21391,7 +21391,7 @@ fn bgtasksummary_makes_an_idle_teammate_stop_counting_but_keeps_other_work() {
     assert!(
         silence
             .lock()
-            .declared_background_work_for_epoch_with(0, || false)
+            .declared_background_work_for_epoch_with(0, |_| false)
     );
 }
 
@@ -21412,7 +21412,7 @@ fn bgtasksummary_is_lazy_about_the_teammate_check() {
     assert!(
         silence
             .lock()
-            .declared_background_work_for_epoch_with(0, || {
+            .declared_background_work_for_epoch_with(0, |_| {
                 panic!("teammate check must not run when non-teammate work is declared")
             })
     );
@@ -21464,14 +21464,14 @@ fn a_new_bgtasks_without_a_summary_falls_back_to_counting_every_running_task() {
     assert!(
         !silence
             .lock()
-            .declared_background_work_for_epoch_with(0, || false)
+            .declared_background_work_for_epoch_with(0, |_| false)
     );
 
     feed_bgtasks(&state, "test-bgsummary-fallback", &silence, "running");
     assert!(
         silence
             .lock()
-            .declared_background_work_for_epoch_with(0, || false),
+            .declared_background_work_for_epoch_with(0, |_| false),
         "no fresh summary -> legacy behavior, every running task counts"
     );
 }
@@ -21568,6 +21568,11 @@ fn explain_an_idle_teammate_is_declared_but_does_not_count() {
     assert_eq!(flag.teammate_running, Some(1));
     assert_eq!(flag.non_teammate_running, Some(0));
     assert!(!flag.teammates_busy);
+    assert_eq!(
+        flag.unlinked_teammates,
+        Some(0),
+        "every declared teammate is linked"
+    );
     assert!(
         !flag.counts_now,
         "an idle teammate must not hold the lead working"
@@ -21684,6 +21689,34 @@ fn explain_serializes_the_declared_work_keys_the_old_shape_had_plus_the_new_ones
     assert_eq!(w["non_teammate_running"], 1);
     assert_eq!(w["teammate_running"], 2);
     assert_eq!(w["teammates_busy"], false);
+    assert_eq!(w["unlinked_teammates"], 1, "two declared, one linked pane");
     assert_eq!(w["counts_now"], true, "real background work still counts");
     assert_eq!(v["swarm"]["teammates"][0]["session_id"], "explain-mate-ser");
+}
+
+#[test]
+fn explain_declared_teammates_no_linked_pane_accounts_for_are_reported_and_count() {
+    // Two teammates declared running but only one has a linked pane (and it is idle):
+    // the other cannot be shown idle, so the declaration counts — and the payload says
+    // why, instead of leaving `counts_now: true` unexplained next to an idle teammate.
+    let state = crate::state::tests_support::make_test_app_state();
+    explain_lead_with_teammate(
+        &state,
+        "explain-unlinked",
+        "explain-mate-un",
+        SHELL_IDLE,
+        0,
+        2,
+    );
+
+    let explain = explain_session_state_impl(&state, "explain-unlinked").expect("explain");
+    let flag = &explain.epoch_flags.declared_background_work;
+    assert_eq!(flag.teammate_running, Some(2));
+    assert_eq!(flag.unlinked_teammates, Some(1));
+    assert!(!flag.teammates_busy, "the one linked teammate is idle");
+    assert!(
+        flag.counts_now,
+        "the unaccounted-for teammate keeps the lead working (fail-safe)"
+    );
+    assert_eq!(flag.counts_now, explain.visible.declared_background_work);
 }
