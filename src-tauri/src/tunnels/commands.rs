@@ -543,7 +543,10 @@ mod hostile_probe_tests {
     #[test]
     fn probe_args_cannot_let_a_host_become_an_option() {
         let args = probe_args("-oProxyCommand=evil", None);
-        let host_at = args.iter().position(|a| a == "-oProxyCommand=evil").unwrap();
+        let host_at = args
+            .iter()
+            .position(|a| a == "-oProxyCommand=evil")
+            .unwrap();
         assert_eq!(args[host_at - 1], "--", "host must follow `--`: {args:?}");
     }
 }
