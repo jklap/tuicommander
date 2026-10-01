@@ -359,6 +359,7 @@ describe("progressStore", () => {
 			expect(invokeMock).toHaveBeenCalledTimes(1);
 			expect(invokeMock).toHaveBeenCalledWith("progress_flow", { project: "/repo", input: {} });
 			expect(store.sidebarFlow("/repo")).toEqual(flow);
+			store.resetForTests();
 		});
 
 		// Catches: a failed read blanking the subagent lines that were already on screen.

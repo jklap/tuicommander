@@ -145,6 +145,7 @@ vi.mock("../../components/PrDetailPopover/PrDetailPopover", () => ({
 
 import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection";
 import { Sidebar } from "../../components/Sidebar/Sidebar";
+import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 
@@ -229,7 +230,10 @@ describe("rich agent rows: nesting and clicks (critic r5)", () => {
 		settingsStore.setTabTreeEnabled(true);
 		_resetMergedActivityAccum();
 	});
-	afterEach(() => settingsStore.setTabTreeEnabled(false));
+	afterEach(() => {
+		settingsStore.setTabTreeEnabled(false);
+		progressStore.resetForTests();
+	});
 
 	const withTerms = (terms: ReturnType<typeof term>[]) => {
 		mockTerminalsGet.mockImplementation((id: string) => terms.find((x) => x.id === id) ?? null);

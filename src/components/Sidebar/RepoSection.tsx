@@ -339,7 +339,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	// Only rich ticks; compact reads the age once per render, as it always did.
 	const now = createMinuteClock(rich);
 	const clock = () => (rich() ? now() : Date.now());
-	const parentOf = (id: string) => {
+	const rawParentOf = (id: string) => {
 		const parent = terminalsStore.get(id)?.parentSession;
 		if (!parent) return null;
 		return (
@@ -349,6 +349,17 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 			}) ?? null
 		);
 	};
+	// A member of a parent cycle (A↔B, A→B→C→A) has no root to hang under: it renders
+	// top level, once, instead of vanishing with the rest of its cycle.
+	const inCycle = (id: string) => {
+		const seen = new Set<string>();
+		for (let cur = rawParentOf(id); cur !== null && !seen.has(cur); cur = rawParentOf(cur)) {
+			if (cur === id) return true;
+			seen.add(cur);
+		}
+		return false;
+	};
+	const parentOf = (id: string) => (inCycle(id) ? null : rawParentOf(id));
 	// Rich nests a TUIC child session under the agent that spawned it, when both
 	// are on this branch. A child whose parent is elsewhere stays a top-level row.
 	const topLevel = () => (rich() ? props.terminalIds.filter((id) => parentOf(id) === null) : props.terminalIds);
@@ -358,10 +369,13 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	createEffect(() => {
 		now();
 		if (!rich()) return;
-		const live = props.terminalIds.some((id) => {
+		// Read every terminal: a short-circuiting some() would stop tracking the busy flips of
+		// the terminals after the first agent.
+		let live = false;
+		for (const id of props.terminalIds) {
 			terminalsStore.isBusy(id);
-			return terminalsStore.get(id)?.agentType;
-		});
+			if (terminalsStore.get(id)?.agentType) live = true;
+		}
 		if (live) void progressStore.refreshSidebarFlow(props.repoPath);
 	});
 	const subagents = (term: TerminalState) =>
