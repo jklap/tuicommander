@@ -4,6 +4,11 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComposePanel } from "../../components/ComposePanel/ComposePanel";
 import type { QueuedCommand } from "../../hooks/usePty";
+import { invoke } from "../../invoke";
+
+vi.mock("../../invoke", () => ({
+	invoke: vi.fn().mockResolvedValue(undefined),
+}));
 
 afterEach(async () => {
 	cleanup();
@@ -294,5 +299,51 @@ describe("ComposePanel", () => {
 			setRequest(1);
 			await waitFor(() => expect(document.activeElement).toBe(content));
 		});
+	});
+
+	function pasteEvent(items: { type: string; file: File | null }[], text = ""): Event {
+		const event = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(event, "clipboardData", {
+			value: {
+				items: items.map((i) => ({ type: i.type, getAsFile: () => i.file })),
+				getData: (type: string) => (type === "text/plain" ? text : ""),
+			},
+		});
+		return event;
+	}
+
+	// Catches: Compose ignoring clipboard images (story 1350-a1e6) — the paste fell
+	// through to CodeMirror's text paste and the image was lost.
+	it("saves a pasted image and inserts its [image: path] reference", async () => {
+		vi.mocked(invoke).mockResolvedValueOnce("/data/note-images/n1/pic.png");
+		const { container } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		typeIntoEditor(container, "look at ");
+		const content = container.querySelector(".cm-content") as HTMLElement;
+
+		const event = pasteEvent([{ type: "image/png", file: new File(["x"], "pic.png", { type: "image/png" }) }]);
+		content.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(true);
+		await waitFor(() => expect(editorText(container)).toContain("[image: /data/note-images/n1/pic.png]"));
+		expect(invoke).toHaveBeenCalledWith(
+			"save_note_image",
+			expect.objectContaining({ extension: "png", dataBase64: btoa("x") }),
+		);
+	});
+
+	// Catches: the image handler swallowing every paste, breaking plain text paste.
+	it("leaves a text-only paste to the editor", async () => {
+		vi.mocked(invoke).mockClear();
+		const { container } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		const content = container.querySelector(".cm-content") as HTMLElement;
+
+		const event = pasteEvent([{ type: "text/plain", file: null }], "plain words");
+		content.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(true); // CodeMirror's own text paste claims it
+		expect(editorText(container)).toBe("plain words");
+		expect(invoke).not.toHaveBeenCalled();
 	});
 });
