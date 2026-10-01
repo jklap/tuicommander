@@ -232,7 +232,10 @@ export function createProgressStore() {
 	/// pending trailing refresh once no row is left.
 	function holdSidebarFlow(project: string): () => void {
 		sidebarFlowHolds.set(project, (sidebarFlowHolds.get(project) ?? 0) + 1);
+		let released = false;
 		return () => {
+			if (released) return;
+			released = true;
 			const left = (sidebarFlowHolds.get(project) ?? 1) - 1;
 			if (left > 0) {
 				sidebarFlowHolds.set(project, left);
