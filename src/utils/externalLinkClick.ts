@@ -20,7 +20,8 @@ export function handleExternalLinkClick(e: MouseEvent): void {
 	if (!anchor || anchor.hasAttribute("data-tuic-href")) return;
 	// `anchor.href` used to trim this; the attribute keeps surrounding whitespace.
 	const href = anchor.getAttribute("href")?.trim();
-	if (href && /^https?:\/\//i.test(href)) {
+	// Scheme only: `https:example.com` and `http:/x` also resolve to http URLs; handleOpenUrl validates.
+	if (href && /^https?:/i.test(href)) {
 		e.preventDefault();
 		handleOpenUrl(href);
 	}
