@@ -136,6 +136,30 @@ describe("useAgentPolling", () => {
 		expect(store.get(id)?.backgroundWork).toBe(false);
 	});
 
+	/**
+	 * A remote tab's session can silently disappear from `list_active_sessions`
+	 * (the backend already forgot it — process died while this client wasn't
+	 * listening) with no `session-closed` event ever observed. Before this was
+	 * wired up, that left the tab `shellState: "exited"` with a clean name and
+	 * no countdown — permanently stuck, since nothing else would ever remove it.
+	 */
+	it("starts the remote-tab auto-close countdown for a remote terminal omitted from a successful snapshot", async () => {
+		const id = store.add({ ...makeTerminal({ name: "Agent" }), sessionId: "lost-remote-session", isRemote: true });
+		mockInvoke.mockResolvedValueOnce([]);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+		const { REMOTE_TAB_AUTOCLOSE_MS } = await import("../../stores/remoteAutoClose");
+
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.shellState).toBe("exited");
+		expect(store.get(id)?.name).toBe(`Agent (${Math.round(REMOTE_TAB_AUTOCLOSE_MS / 1000)}s)`);
+
+		vi.advanceTimersByTime(REMOTE_TAB_AUTOCLOSE_MS - 1);
+		expect(store.get(id)).toBeDefined();
+
+		vi.advanceTimersByTime(2);
+		expect(store.get(id)).toBeUndefined();
+	});
+
 	it("does not close an omitted terminal after a newer PTY event", async () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 		let resolveSnapshot!: (value: unknown) => void;
