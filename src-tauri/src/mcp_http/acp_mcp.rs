@@ -1001,4 +1001,78 @@ mod tests {
         tokio::time::sleep(WAKE_DEBOUNCE + COALESCE).await;
         assert_eq!(woken.lock().len(), 1, "mail already read wakes nothing");
     }
+
+    /// ego admits the session only if every answer the host gives parses under
+    /// the 2026-07-28 result envelope: it calls `server/discover`, `tools/list`
+    /// and `resources/list`, and refuses `session/new` when any of them is
+    /// malformed. A `resources/list` without `resultType`/`ttlMs`/`cacheScope`
+    /// passed every test of our own answers and still made AI Chat unusable
+    /// (#1318-abd7).
+    ///
+    /// Needs a real ego binary, which this repository does not build: run with
+    /// `TUIC_EGO_BIN=<path to ego> cargo nextest run --run-ignored only -E
+    /// 'test(ego_admits_the_session)'`. ego runs under a throwaway
+    /// `HOME`/`EGO_HOME` so it reads none of the developer's configuration.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore = "needs a real ego binary: set TUIC_EGO_BIN"]
+    async fn ego_admits_the_session_the_host_answers() {
+        use crate::acp::{AcpConnectRequest, AcpSessionAuthority, EgoAcpConfig};
+        use std::os::unix::fs::PermissionsExt;
+
+        let ego = std::env::var("TUIC_EGO_BIN").expect("TUIC_EGO_BIN names a real ego binary");
+        let root = tempfile::TempDir::new_in(tuic_test_support::test_temp_root()).expect("root");
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let launcher = root.path().join("ego-isolated.sh");
+        std::fs::write(
+            &launcher,
+            format!(
+                "#!/bin/sh\nHOME='{home}' EGO_HOME='{home}' exec '{ego}' \"$@\"\n",
+                home = home.display()
+            ),
+        )
+        .expect("launcher");
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755))
+            .expect("launcher mode");
+
+        let state = test_state();
+        install(&state);
+        let connection = state
+            .acp
+            .connect_with_peer(
+                &EgoAcpConfig {
+                    executable: launcher,
+                    profile: String::new(),
+                },
+                AcpConnectRequest {
+                    root: workspace.clone(),
+                },
+                PEER.to_owned(),
+            )
+            .await
+            .expect("connect to ego");
+
+        let session = state
+            .acp
+            .new_session(
+                connection.connection_id,
+                AcpSessionAuthority {
+                    cwd: workspace,
+                    additional_directories: Vec::new(),
+                    mcp_servers: Vec::new(),
+                },
+            )
+            .await
+            .expect("ego admits the tuicommander MCP server");
+        assert!(!session.session_id.to_string().is_empty());
+
+        state
+            .acp
+            .disconnect(connection.connection_id)
+            .await
+            .expect("disconnect");
+    }
 }
