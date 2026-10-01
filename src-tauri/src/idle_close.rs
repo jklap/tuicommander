@@ -824,7 +824,10 @@ mod tests {
         let temp = critic_temp();
         let _config = crate::config::set_config_dir_override(temp.path().join("config"));
         critic_child(&state, "quiet", temp.path());
-        state.push_agent_inbox("parent", critic_mail("m1", "other", "BLOCKED: box down", 10));
+        state.push_agent_inbox(
+            "parent",
+            critic_mail("m1", "other", "BLOCKED: box down", 10),
+        );
         critic_sweep_to_maturity(&state);
         assert!(!state.session_maps.sessions.contains_key("quiet"));
     }
@@ -843,7 +846,12 @@ mod tests {
         for index in 0..crate::state::AGENT_INBOX_CAPACITY {
             state.push_agent_inbox(
                 "parent",
-                critic_mail(&format!("noise-{index}"), "other", "RESULT: x", 11 + index as u64),
+                critic_mail(
+                    &format!("noise-{index}"),
+                    "other",
+                    "RESULT: x",
+                    11 + index as u64,
+                ),
             );
         }
         critic_sweep_to_maturity(&state);
