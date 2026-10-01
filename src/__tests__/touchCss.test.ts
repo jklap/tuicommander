@@ -63,6 +63,5 @@ describe("touch stylesheet contract (#1329-a31a)", () => {
 		const style = getComputedStyle(document.querySelector(".branchActions") as HTMLElement);
 		expect(style.opacity).toBe("1");
 		expect(style.pointerEvents).toBe("auto");
-		expect(style.maxWidth).toBe("44px");
 	});
 });

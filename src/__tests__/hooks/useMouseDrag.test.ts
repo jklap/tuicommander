@@ -41,6 +41,7 @@ describe("initMouseDrag", () => {
 		document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
 		document.body.innerHTML = "";
 		vi.useRealTimers();
+		vi.unstubAllGlobals();
 	});
 
 	const start = (x = 100, y = 100, opts?: Parameters<typeof initMouseDrag>[3], pointerType = "mouse") =>
@@ -150,13 +151,25 @@ describe("initMouseDrag", () => {
 		expect(cbs.onStart).not.toHaveBeenCalled();
 	});
 
+	const stubHover = (hover: boolean) =>
+		vi.stubGlobal("matchMedia", (q: string) => ({ matches: hover && q === "(hover: hover)" }));
+
 	// Catches: a pen swipe starting a drag after 5px like a mouse (a scroll then drops the item).
-	it("pen: a move beyond slop before the hold bails out as a scroll", () => {
+	it("pen without hover: a move beyond slop before the hold bails out as a scroll", () => {
+		stubHover(false);
 		vi.useFakeTimers();
 		start(0, 0, undefined, "pen");
 		move(0, 20, "pen");
 		vi.advanceTimersByTime(350);
 		expect(cbs.onStart).not.toHaveBeenCalled();
 		expect(cbs.onMove).not.toHaveBeenCalled();
+	});
+
+	// Catches: a hover-capable desktop pen (Wacom/Surface) forced into the 350 ms hold.
+	it("pen on a hover device drags immediately like a mouse", () => {
+		stubHover(true);
+		start(0, 0, undefined, "pen");
+		move(0, 20, "pen");
+		expect(cbs.onStart).toHaveBeenCalledTimes(1);
 	});
 });

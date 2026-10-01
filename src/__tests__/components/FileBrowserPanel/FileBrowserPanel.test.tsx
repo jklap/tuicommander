@@ -128,6 +128,7 @@ beforeEach(() => {
 // The view-mode toggle persists prefs on a 500 ms debounce; let that timer fire
 // before teardown so it does not leak into the next test file.
 afterEach(async () => {
+	vi.unstubAllGlobals();
 	setBrowserMode(false);
 	uiStore.setFileBrowserViewMode("flat");
 	await new Promise((resolve) => setTimeout(resolve, 600));
@@ -616,6 +617,7 @@ describe("FileBrowserPanel pointer drag (#1329-a31a)", () => {
 	// Catches: a swipe that outruns pointercancel dropping the file onto a folder
 	// (an irreversible move started by a scroll gesture).
 	it.each(["touch", "pen"])("never moves a file when a %s swipe ends over a folder", async (pointerType) => {
+		vi.stubGlobal("matchMedia", () => ({ matches: false }));
 		await dragFileOntoDir(pointerType);
 		expect(renameCalls()).toHaveLength(0);
 	});

@@ -2,7 +2,7 @@ import { type Component, createEffect, createMemo, createSignal, For, on, onClea
 import { createStore, produce } from "solid-js/store";
 import type { ContentSearchOptions } from "../../hooks/useFileBrowser";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
-import { initMouseDrag } from "../../hooks/useMouseDrag";
+import { initMouseDrag, isHoldPointer } from "../../hooks/useMouseDrag";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { t } from "../../i18n";
 import { invoke, listen } from "../../invoke";
@@ -854,6 +854,9 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	// Touch and pen: a swipe is a scroll, never a file move (the move is irreversible).
 	// initMouseDrag arms the drag only after a hold and bails out on movement before that.
 	const handleHoldDragStart = (absPath: string, e: PointerEvent) => {
+		// The hold arms the drag without movement: a release in place (the
+		// context-menu gesture) must not drop the file on the folder under the finger.
+		let moved = false;
 		const end = () => {
 			markInternalDragEnd();
 			ptrCleanup();
@@ -864,12 +867,14 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 				markInternalDragStart();
 				_ptrSrc = absPath;
 			},
-			onMove: ptrHighlight,
+			onMove: (x, y) => {
+				moved = true;
+				ptrHighlight(x, y);
+			},
 			onDrop: (x, y) => {
-				const src = _ptrSrc;
-				const target = findDropFolder(x, y);
+				const target = moved ? findDropFolder(x, y) : null;
 				end();
-				if (src && target?.dataset.absPath) performFileMove(src, target.dataset.absPath);
+				if (target?.dataset.absPath) performFileMove(absPath, target.dataset.absPath);
 				_ptrSuppressClick = true;
 				requestAnimationFrame(() => {
 					_ptrSuppressClick = false;
@@ -880,7 +885,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	};
 
 	const handlePointerDragStart = (absPath: string, e: PointerEvent) => {
-		if (e.pointerType === "touch" || e.pointerType === "pen") return handleHoldDragStart(absPath, e);
+		if (isHoldPointer(e)) return handleHoldDragStart(absPath, e);
 		if (e.button !== 0) return;
 		// Must mark before drag threshold — Tauri's onDragDropEvent fires on any pointer
 		// hold, and without this flag the OS drop handler in dragDrop.ts would treat an
