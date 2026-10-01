@@ -13,20 +13,24 @@ export function sectionToRawDiff(section: DiffFileSection): string {
 
 /** A single collapsible file diff. The chevron and header toggle collapse; the
  *  file path opens the file when `onOpen` is provided (working-tree view). */
-const FileSection: Component<{ file: DiffFileSection; mode: DiffViewMode; onOpen?: () => void }> = (props) => {
-	const [collapsed, setCollapsed] = createSignal(false);
-
+const FileSection: Component<{
+	file: DiffFileSection;
+	mode: DiffViewMode;
+	collapsed: boolean;
+	onToggle: () => void;
+	onOpen?: () => void;
+}> = (props) => {
 	return (
 		<div class={s.fileSection}>
 			<div
 				class={s.fileHeader}
 				role="button"
 				tabIndex={0}
-				onClick={() => setCollapsed(!collapsed())}
-				onKeyDown={onClickKeyDown(() => setCollapsed(!collapsed()))}
+				onClick={() => props.onToggle()}
+				onKeyDown={onClickKeyDown(() => props.onToggle())}
 			>
 				<svg
-					class={cx(s.chevron, collapsed() && s.chevronCollapsed)}
+					class={cx(s.chevron, props.collapsed && s.chevronCollapsed)}
 					width="12"
 					height="12"
 					viewBox="0 0 16 16"
@@ -54,7 +58,7 @@ const FileSection: Component<{ file: DiffFileSection; mode: DiffViewMode; onOpen
 					</Show>
 				</span>
 			</div>
-			<Show when={!collapsed()}>
+			<Show when={!props.collapsed}>
 				<div class={s.fileDiff}>
 					<DiffViewer diff={sectionToRawDiff(props.file)} mode={props.mode} />
 				</div>
@@ -72,6 +76,8 @@ export interface DiffFileListProps {
 	scrollRef?: (el: HTMLElement) => void;
 	/** Optional content rendered above the list (sticky summary header). */
 	header?: JSX.Element;
+	/** Files that start collapsed; a click expands them. */
+	collapsedByDefault?: (file: DiffFileSection) => boolean;
 }
 
 /**
@@ -87,6 +93,16 @@ export interface DiffFileListProps {
  */
 export const DiffFileList: Component<DiffFileListProps> = (props) => {
 	let scrollEl: HTMLDivElement | undefined;
+	// The virtualizer unmounts off-screen sections, so collapse state lives here, not in FileSection.
+	const [toggled, setToggled] = createSignal<ReadonlySet<string>>(new Set());
+	const isCollapsed = (file: DiffFileSection) =>
+		(props.collapsedByDefault?.(file) ?? false) !== toggled().has(file.path);
+	const toggle = (path: string) =>
+		setToggled((prev) => {
+			const next = new Set(prev);
+			if (!next.delete(path)) next.add(path);
+			return next;
+		});
 
 	const virtualizer = createVirtualizer({
 		get count() {
@@ -118,6 +134,8 @@ export const DiffFileList: Component<DiffFileListProps> = (props) => {
 							<FileSection
 								file={props.files[vi.index]}
 								mode={props.mode}
+								collapsed={isCollapsed(props.files[vi.index])}
+								onToggle={() => toggle(props.files[vi.index].path)}
 								onOpen={props.onOpenFile ? () => props.onOpenFile?.(props.files[vi.index].path) : undefined}
 							/>
 						</div>

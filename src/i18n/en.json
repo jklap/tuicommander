@@ -629,6 +629,8 @@
 	"prDetail.runReview": "Run",
 	"prDetail.updated": "Updated",
 	"prDetail.viewDiff": "View Diff",
+	"prDiff.collapsed": "collapsed",
+	"prDiff.collapsedHint": "Lockfiles, generated and test files; click a file to expand",
 	"prDiff.empty": "No changes",
 	"prDiff.files": "files",
 	"promptDialog.cancel": "Cancel",
