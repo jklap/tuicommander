@@ -917,8 +917,10 @@ The fix has three parts, all additive and fail-safe:
    a late `running` to the 512-byte payload cap the way the joined-status `bgtasks` can.
 2. `pty.rs` stores it as `SilenceState::declared_task_summary` (`DeclaredTaskSummary {
    non_teammate_running, teammate_running }`), written right after the `bgtasks` declaration
-   in the same hook fire and under the same turn epoch; a fresh `bgtasks` drops it, a summary
-   with no matching declaration is ignored, and `reset_declared_background_work` clears it. **No
+   in the same hook fire and under the same turn epoch. It is authoritative for that fire —
+   it sets or clears the declaration itself, repairing a `bgtasks` whose joined statuses were
+   cut at the OSC payload cap and lost a late `running`; a fresh `bgtasks` drops it, and
+   `reset_declared_background_work` clears it. **No
    summary (an older hook) means every running task counts, as before.**
 3. `SilenceState::declared_background_work_for_epoch_with(epoch, teammates_may_be_working)` is
    the teammate-aware read every consumer uses (`AppState::declared_background_work_for`, the
