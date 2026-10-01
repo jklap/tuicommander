@@ -10,6 +10,7 @@ import { type Component, createEffect, createMemo, Index, onCleanup, Show } from
 import { appLogger } from "../../stores/appLogger";
 import { type MarkdownSegment, type StreamSplit, splitStream } from "../../utils/incrementalMarkdown";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { isAbsolutePath } from "../../utils/pathUtils";
 import { stripAnsi } from "../../utils/stripAnsi";
 import {
 	findTweakCommentBlocks,
@@ -322,8 +323,11 @@ function renderMarkdownSegment(
 		if (baseDir || opts.imageSrc) {
 			html = html.replace(
 				/(<img\b[^>]*\ssrc=")(?!https?:\/\/|data:|asset:\/\/)([^"]+)"/gi,
-				(_, prefix, relativePath) =>
-					`${prefix}${opts.imageSrc ? opts.imageSrc(relativePath) : convertFileSrc(`${baseDir}/${relativePath}`)}"`,
+				(_, prefix, relativePath) => {
+					if (opts.imageSrc) return `${prefix}${opts.imageSrc(relativePath)}"`;
+					const local = isAbsolutePath(relativePath) ? relativePath : `${baseDir}/${relativePath}`;
+					return `${prefix}${convertFileSrc(local)}"`;
+				},
 			);
 		}
 
