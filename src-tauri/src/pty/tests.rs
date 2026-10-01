@@ -17220,16 +17220,24 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
         "the completed turn must retract Claude's dismissed question"
     );
 
-    // The captured composer is ready after Claude finishes. Model the normal
-    // idle settlement, then exercise the same PTY write used by MCP submit.
-    #[cfg(unix)]
-    {
+    // Catches: Esc ends the turn with no Stop hook, so the hook-driven BUSY
+    // stays latched and queued input never flushes. Nothing here stores IDLE by
+    // hand: the dismissal itself must have released the session.
+    assert_eq!(
         state
             .session_maps
             .shell_states
             .get(sid)
             .unwrap()
-            .store(SHELL_IDLE, Ordering::Release);
+            .load(Ordering::Acquire),
+        SHELL_IDLE,
+        "the dismissed AskUserQuestion must return the session to idle"
+    );
+
+    // The captured composer is ready after Claude finishes; exercise the same
+    // PTY write used by MCP submit.
+    #[cfg(unix)]
+    {
         silence.lock().confirm_idle();
         let bytes = insert_recording_session(&state, sid);
         assert!(matches!(

@@ -108,6 +108,18 @@ esac
     )
 }
 
+/// Boot-time entry shared by the desktop and both headless binaries: a
+/// `claude` spawn points at `agent-hooks/claude.json`, so every process that can
+/// spawn agents must write it before serving. A failure is logged, not fatal.
+pub(crate) fn regenerate_launch_assets_at_boot(config_dir: &Path) {
+    if let Err(error) = regenerate_launch_assets(config_dir) {
+        tracing::error!(
+            source = "agent_hooks",
+            "Failed to generate launch-scoped agent status assets: {error}"
+        );
+    }
+}
+
 pub(crate) fn regenerate_launch_assets(config_dir: &Path) -> Result<(), String> {
     let dir = config_dir.join("agent-hooks");
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;

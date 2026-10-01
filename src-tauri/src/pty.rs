@@ -7301,6 +7301,11 @@ impl ChunkProcessor {
                 })
                 .into(),
             });
+            // Esc ends the turn without a Stop hook (live capture: busy, busy,
+            // awaiting, then nothing), so the hook-driven BUSY would stay latched
+            // with the queue stuck until the next input. The ready composer under
+            // the fresh cancellation is the Stop it never sent.
+            transition_explicit_shell_state(state, session_id, SHELL_IDLE, "idle", true);
         }
 
         // Update silence state for fallback question detection.
