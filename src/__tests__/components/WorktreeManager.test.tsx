@@ -62,6 +62,7 @@ function mockPr(
 		squash_merge_allowed: true,
 		rebase_merge_allowed: true,
 		unresolved_threads: 0,
+		unresolved_threads_truncated: false,
 		...overrides,
 	};
 }

@@ -188,6 +188,7 @@ describe("useGitOperations", () => {
 		squash_merge_allowed: true,
 		rebase_merge_allowed: true,
 		unresolved_threads: 0,
+		unresolved_threads_truncated: false,
 	};
 
 	// Catches: a PR row without head_ref_oid reaches the backend as "", the backend refuses

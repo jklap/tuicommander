@@ -48,6 +48,7 @@ const basePr: BranchPrStatus = {
 	squash_merge_allowed: true,
 	rebase_merge_allowed: true,
 	unresolved_threads: 0,
+	unresolved_threads_truncated: false,
 };
 
 /** Derive merge_state_label from mergeable/merge_state_status when not explicitly set.

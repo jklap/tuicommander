@@ -152,6 +152,8 @@ export interface BranchPrStatus {
 	rebase_merge_allowed: boolean;
 	/** Unresolved review threads (first 50 per PR). Counts only; the bot/human split is fetched on demand. */
 	unresolved_threads: number;
+	/** More than 50 threads exist: `unresolved_threads` is a lower bound, 0 does not mean none open. */
+	unresolved_threads_truncated: boolean;
 }
 
 /** A single match from cross-terminal buffer search */

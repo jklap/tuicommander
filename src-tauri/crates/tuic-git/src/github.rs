@@ -211,6 +211,9 @@ pub struct BranchPrStatus {
     /// needs a nested connection per thread and is fetched on demand
     /// (`get_pr_review_threads`).
     pub unresolved_threads: u32,
+    /// More than [`REVIEW_THREADS_LIMIT`] threads exist, so `unresolved_threads` is a lower
+    /// bound and 0 does not prove "none open" (GitHub cannot filter threads by resolution).
+    pub unresolved_threads_truncated: bool,
 }
 
 /// Threads inspected per PR in the batch poll.
@@ -218,7 +221,9 @@ pub const REVIEW_THREADS_LIMIT: u32 = 50;
 
 /// GraphQL selection for [`BranchPrStatus::unresolved_threads`], shared by every PR query.
 pub fn review_threads_selection() -> String {
-    format!("reviewThreads(first: {REVIEW_THREADS_LIMIT}) {{ nodes {{ isResolved }} }}")
+    format!(
+        "reviewThreads(first: {REVIEW_THREADS_LIMIT}) {{ pageInfo {{ hasNextPage }} nodes {{ isResolved }} }}"
+    )
 }
 
 /// Unresolved review threads split by who opened them.
@@ -374,6 +379,9 @@ pub fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
     let review_decision = v["reviewDecision"].as_str().unwrap_or("").to_string();
     let viewer_did_approve = v["viewerLatestReview"]["state"].as_str() == Some("APPROVED");
     let is_draft = v["isDraft"].as_bool().unwrap_or(false);
+    let unresolved_threads_truncated = v["reviewThreads"]["pageInfo"]["hasNextPage"]
+        .as_bool()
+        .unwrap_or(false);
     let unresolved_threads = v["reviewThreads"]["nodes"]
         .as_array()
         .map(|nodes| {
@@ -460,6 +468,7 @@ pub fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
         squash_merge_allowed: true,
         rebase_merge_allowed: true,
         unresolved_threads,
+        unresolved_threads_truncated,
     })
 }
 
@@ -673,6 +682,10 @@ pub fn build_multi_repo_issues_query(
 /// Build a batched GraphQL query fetching PRs and (optionally) Issues for all
 /// repos in a single HTTP request.  When `filter_mode` is "disabled" the issues
 /// section is omitted entirely, saving GraphQL points.
+///
+/// DEFERRED (2026-10-01) — no chunking: each repo requests about 6.5k nodes at 40 PRs (4.5k before
+/// `reviewThreads`), so more than ~75 repos in one query would pass GitHub's 500,000 node limit.
+/// Split the repo list into chunks when a user reaches that many repositories.
 pub fn build_unified_batch_query(
     repos: &[(String, String, String)],
     include_merged: bool,
@@ -953,6 +966,19 @@ mod tests {
         assert_eq!(parse_pr_node(&node).unwrap().unresolved_threads, 0);
     }
 
+    /// Catches: a PR whose first 50 threads are resolved and later ones open reporting a
+    /// clean 0 — the flag says the count is only a lower bound.
+    #[test]
+    fn pr_node_flags_truncated_thread_pages() {
+        let node = serde_json::json!({
+            "number": 7, "headRefName": "feat/x", "state": "OPEN",
+            "reviewThreads": {"pageInfo": {"hasNextPage": true}, "nodes": [{"isResolved": true}]}
+        });
+        let pr = parse_pr_node(&node).unwrap();
+        assert_eq!(pr.unresolved_threads, 0);
+        assert!(pr.unresolved_threads_truncated);
+    }
+
     #[test]
     fn batch_query_selects_review_threads_without_a_nested_connection() {
         // A nested comments connection per thread multiplied the poll cost 10x (5 -> 51
@@ -964,7 +990,12 @@ mod tests {
             "me",
             false,
         );
-        assert!(query.contains("reviewThreads(first: 50) { nodes { isResolved } }"));
+        assert!(query.contains("reviewThreads(first: 50)"));
+        assert!(query.contains("isResolved"));
+        assert!(
+            !query.contains("comments("),
+            "no nested comments connection in the batch: {query}"
+        );
     }
 
     // --- statusCheckRollup dedup + classification tests ---

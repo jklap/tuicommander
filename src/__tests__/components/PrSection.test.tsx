@@ -1,4 +1,5 @@
 import { fireEvent, render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BranchPrStatus } from "../../types";
 import { mockInvoke } from "../mocks/tauri";
@@ -111,5 +112,43 @@ describe("PrSection row actions", () => {
 		const { container } = renderSection(pr({ merge_state_status: "CLEAN" }));
 		expect(container.querySelector(".ghAgeMarker")?.textContent).toBe("3m");
 		expect(button(container, "Update branch")).toBeUndefined();
+	});
+
+	it("keeps Update branch out of reach after the request was accepted, until the head changes", async () => {
+		// Catches: 202 clearing the busy flag while the row still reads BEHIND, so a second click
+		// is sent against a stale head and answered with a misleading "PR head changed".
+		const { container } = renderSection(pr());
+		fireEvent.click(button(container, "Update branch"));
+		await vi.waitFor(() => expect(button(container, "Update branch")).toBeUndefined());
+		expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "update_pr_branch")).toHaveLength(1);
+	});
+
+	it("shows a failed row action only on its own row and clears it when another row opens", async () => {
+		// Catches: one shared error slot printing PR #12's failure under every expanded PR.
+		mockInvoke.mockRejectedValueOnce(new Error("boom"));
+		const first = pr();
+		const other = pr({ number: 13, branch: "feat/other", head_ref_oid: "headsha2", merge_state_status: "CLEAN" });
+		const [key, setKey] = createSignal<string | null>(first.branch);
+		const { container } = render(() => (
+			<PrSection
+				title="PRs"
+				prs={[first, other]}
+				repoPath="/repo"
+				collapsed={false}
+				onToggleCollapsed={vi.fn()}
+				expandedKey={key()}
+				onToggleExpanded={vi.fn()}
+				activeKey={null}
+				dismissedCount={0}
+				onDismiss={vi.fn()}
+				onShowDismissed={vi.fn()}
+				onCheckout={vi.fn()}
+				onMerged={vi.fn()}
+			/>
+		));
+		fireEvent.click(button(container, "Update branch"));
+		await vi.waitFor(() => expect(container.textContent).toContain("boom"));
+		setKey(other.branch);
+		await vi.waitFor(() => expect(container.textContent).not.toContain("boom"));
 	});
 });

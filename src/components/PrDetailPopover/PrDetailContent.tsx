@@ -216,6 +216,16 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 		if (isTerminalState()) return null;
 		const label = prData()?.merge_state_label;
 		if (!label) return null;
+		// GitHub's CLEAN knows nothing of unresolved threads or running checks: while the shared
+		// verdict names a blocker, "Ready to merge" would contradict the chip beside it.
+		const kind = readiness();
+		if (
+			label.css_class === "clean" &&
+			kind &&
+			PR_READINESS_SEVERITY[kind] !== "ok" &&
+			PR_READINESS_SEVERITY[kind] !== "muted"
+		)
+			return null;
 		return { label: label.label, cssClass: label.css_class };
 	};
 
@@ -236,7 +246,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 	const [threadSplit] = createResource(
 		() => {
 			const pr = prData();
-			return pr && pr.unresolved_threads > 0 && !isTerminalState()
+			return pr && (pr.unresolved_threads > 0 || pr.unresolved_threads_truncated) && !isTerminalState()
 				? { path: props.repoPath, prNumber: pr.number, unresolved: pr.unresolved_threads }
 				: null;
 		},
@@ -247,7 +257,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 			}),
 	);
 
-	const isConflicting = () => mergeState()?.cssClass === "conflicting";
+	const isConflicting = () => readiness() === "conflict";
 
 	/** Local worktree path for this PR's head branch, if one exists (e.g. after
 	 *  conflict-assist created it). Drives the Push button's visibility. */
@@ -296,7 +306,7 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 						</div>
 					</Show>
 
-					<Show when={!isTerminalState() && pr().unresolved_threads > 0}>
+					<Show when={!isTerminalState() && (pr().unresolved_threads > 0 || pr().unresolved_threads_truncated)}>
 						<div class={s.statusRow} data-testid="unresolved-threads">
 							<span class={s.reviewStateBadge}>
 								{threadSplit()
@@ -304,7 +314,9 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 											human: String(threadSplit()?.human),
 											bot: String(threadSplit()?.bot),
 										})
-									: t("prDetail.unresolved", "{count} unresolved threads", { count: String(pr().unresolved_threads) })}
+									: t("prDetail.unresolved", "{count} unresolved threads", {
+											count: `${pr().unresolved_threads}${pr().unresolved_threads_truncated ? "+" : ""}`,
+										})}
 							</span>
 						</div>
 					</Show>

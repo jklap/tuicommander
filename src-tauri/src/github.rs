@@ -2023,10 +2023,11 @@ fn merge_failure_message(status: u16, raw: &str) -> String {
 }
 
 const PR_REVIEW_THREADS_QUERY: &str = r#"
-query PRReviewThreads($owner: String!, $repo: String!, $number: Int!) {
+query PRReviewThreads($owner: String!, $repo: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           isResolved
           comments(first: 1) { nodes { author { __typename login } } }
@@ -2037,8 +2038,12 @@ query PRReviewThreads($owner: String!, $repo: String!, $number: Int!) {
 }
 "#;
 
-/// Unresolved review threads of one PR split by bot vs human. One PR costs one
-/// GraphQL point, which is why the split is not part of the batch poll.
+/// Pages read for the split (100 threads each). The batch badge stops at 50 threads and says so;
+/// this walks every page so its total can only be higher than the badge, never lower.
+const REVIEW_THREADS_MAX_PAGES: usize = 10;
+
+/// Unresolved review threads of one PR split by bot vs human. One page costs one GraphQL point,
+/// which is why the split is not part of the batch poll.
 pub(crate) async fn get_pr_review_threads_impl(
     path: &str,
     pr_number: i64,
@@ -2049,19 +2054,31 @@ pub(crate) async fn get_pr_review_threads_impl(
         get_github_remote_url(&repo_path).ok_or_else(|| "No GitHub remote".to_string())?;
     let (owner, repo) =
         parse_remote_url(&remote_url).ok_or_else(|| "Unrecognised GitHub remote".to_string())?;
-    let variables = serde_json::json!({ "owner": owner, "repo": repo, "number": pr_number });
-    let data = graphql_with_retry(
-        state,
-        &github_com_account(state),
-        PR_REVIEW_THREADS_QUERY,
-        variables,
-        None,
-    )
-    .await
-    .map_err(|e| format!("GraphQL review threads query failed: {e}"))?;
-    Ok(count_review_threads(
-        &data["repository"]["pullRequest"]["reviewThreads"]["nodes"],
-    ))
+    let mut total = ReviewThreadCounts::default();
+    let mut after = serde_json::Value::Null;
+    for _ in 0..REVIEW_THREADS_MAX_PAGES {
+        let variables = serde_json::json!({
+            "owner": owner, "repo": repo, "number": pr_number, "after": after
+        });
+        let data = graphql_with_retry(
+            state,
+            &github_com_account(state),
+            PR_REVIEW_THREADS_QUERY,
+            variables,
+            None,
+        )
+        .await
+        .map_err(|e| format!("GraphQL review threads query failed: {e}"))?;
+        let threads = &data["repository"]["pullRequest"]["reviewThreads"];
+        let page = count_review_threads(&threads["nodes"]);
+        total.bot += page.bot;
+        total.human += page.human;
+        if threads["pageInfo"]["hasNextPage"].as_bool() != Some(true) {
+            break;
+        }
+        after = threads["pageInfo"]["endCursor"].clone();
+    }
+    Ok(total)
 }
 
 /// Unresolved review threads of a PR, bot vs human (Tauri command).
@@ -6799,7 +6816,10 @@ mod critic2_tests {
     fn multi_repo_query_selects_review_threads() {
         let repos = vec![("/r".to_string(), "o".to_string(), "r".to_string())];
         let (q, _) = build_multi_repo_pr_query(&repos, false);
-        assert!(q.contains("reviewThreads(first: 50) { nodes { isResolved } }"), "{q}");
+        assert!(
+            q.contains("reviewThreads(first: 50)") && q.contains("isResolved"),
+            "{q}"
+        );
     }
 
     /// Catches: a real merge conflict on update-branch reported as "head changed"
@@ -6810,7 +6830,8 @@ mod critic2_tests {
         assert!(!msg.contains(MERGE_HEAD_CHANGED), "{msg}");
         assert!(msg.contains("422"), "{msg}");
         // Capitalised variant of the real head-moved message is still recognised.
-        let moved = update_branch_failure_message(422, "Expected head sha didn't match current head ref.");
+        let moved =
+            update_branch_failure_message(422, "Expected head sha didn't match current head ref.");
         assert!(moved.starts_with(MERGE_HEAD_CHANGED), "{moved}");
     }
 
@@ -6828,10 +6849,20 @@ mod critic2_tests {
     /// or the head-moved 409 matched case-insensitively away from GitHub's exact text.
     #[test]
     fn merge_409_variants() {
-        assert!(!merge_failure_message(409, "Pull Request is not mergeable").contains(MERGE_HEAD_CHANGED));
-        assert!(merge_failure_message(409, "Head branch was modified. Review and try the merge again.")
-            .starts_with(MERGE_HEAD_CHANGED));
+        assert!(
+            !merge_failure_message(409, "Pull Request is not mergeable")
+                .contains(MERGE_HEAD_CHANGED)
+        );
+        assert!(
+            merge_failure_message(
+                409,
+                "Head branch was modified. Review and try the merge again."
+            )
+            .starts_with(MERGE_HEAD_CHANGED)
+        );
         // 422/405 with that phrase is not the pin mismatch GitHub documents (409 only).
-        assert!(!merge_failure_message(405, "Head branch was modified").contains(MERGE_HEAD_CHANGED));
+        assert!(
+            !merge_failure_message(405, "Head branch was modified").contains(MERGE_HEAD_CHANGED)
+        );
     }
 }

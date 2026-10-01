@@ -13,6 +13,8 @@ export interface PrReadinessInput {
 	ciFailed?: number;
 	ciPending?: number;
 	unresolvedThreads?: number;
+	/** The thread count covers only the first page: 0 is then "unknown", never "none". */
+	unresolvedThreadsTruncated?: boolean;
 }
 
 export type PrReadinessKind =
@@ -43,7 +45,7 @@ export function prReadiness(pr: PrReadinessInput): PrReadinessKind {
 	if (pr.conflictState === "checking") return "checking";
 	if ((pr.ciFailed ?? 0) > 0) return "ci-failed";
 	if (pr.reviewDecision === "CHANGES_REQUESTED") return "changes-requested";
-	if ((pr.unresolvedThreads ?? 0) > 0) return "unresolved-comments";
+	if ((pr.unresolvedThreads ?? 0) > 0 || pr.unresolvedThreadsTruncated) return "unresolved-comments";
 	if (pr.reviewDecision === "REVIEW_REQUIRED") return "review-required";
 	if ((pr.ciPending ?? 0) > 0) return "ci-pending";
 	if (pr.mergeable === "MERGEABLE" && pr.reviewDecision === "APPROVED") return "ready";
@@ -91,5 +93,6 @@ export function prReadinessOf(pr: BranchPrStatus): PrReadinessKind {
 		ciFailed: pr.checks?.failed,
 		ciPending: pr.checks?.pending,
 		unresolvedThreads: pr.unresolved_threads,
+		unresolvedThreadsTruncated: pr.unresolved_threads_truncated,
 	});
 }
