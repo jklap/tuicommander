@@ -2310,6 +2310,24 @@ describe("initApp", () => {
 			expect(terminalsStore.get(termId)).toBeUndefined();
 		});
 
+		// Suspend closes the PTY, so the backend reports session-closed; for a tab opened over
+		// HTTP/MCP that started the countdown and deleted the tab the user had just parked.
+		it("keeps a suspended remote tab when its session closes", async () => {
+			const { getCreated, getClosed } = captureCreatedAndClosed();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCreated()!({ payload: { session_id: "parked-sess", cwd: null, agent_type: "claude" } });
+			const termId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "parked-sess")!;
+			terminalsStore.update(termId, { suspended: true });
+
+			getClosed()!({ payload: { session_id: "parked-sess", reason: "closed", agent_type: "claude" } });
+			vi.advanceTimersByTime(60_000);
+
+			expect(terminalsStore.get(termId)).toBeDefined();
+			expect(terminalsStore.get(termId)?.name).not.toMatch(/\(\d+s\)/);
+		});
+
 		it("records the spawning agent on a sub-agent tab and nothing on a plain one", async () => {
 			const { getCreated } = captureCreatedAndClosed();
 			const deps = createMockDeps();

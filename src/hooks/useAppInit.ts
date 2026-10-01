@@ -809,6 +809,8 @@ export async function initApp(deps: AppInitDeps) {
 		// guard aborts on the first tick and the setTimeout's isRemote guard skips removal.
 		const t0 = terminalsStore.get(termId);
 		if (!t0?.isRemote) return;
+		// A suspended tab ended its PTY on purpose and must stay, restorable.
+		if (t0.suspended) return;
 
 		const parsedAgentType = parseAgentType(agent_type);
 		handleAgentExitCompletion(termId, parsedAgentType != null);
