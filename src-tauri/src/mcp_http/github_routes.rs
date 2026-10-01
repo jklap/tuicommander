@@ -87,6 +87,39 @@ pub(super) async fn repo_approve_pr(
     )
 }
 
+pub(super) async fn repo_update_pr_branch(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::UpdatePrBranchRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    upstream_json_result(
+        crate::github::update_pr_branch_impl(
+            &body.repo_path,
+            body.pr_number,
+            &body.expected_head_sha,
+            &state,
+        )
+        .await
+        .map(|()| serde_json::json!({"ok": true})),
+    )
+}
+
+pub(super) async fn repo_close_pr(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::ApprovePrRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    upstream_json_result(
+        crate::github::close_pr_impl(&body.repo_path, body.pr_number, &state)
+            .await
+            .map(|()| serde_json::json!({"ok": true})),
+    )
+}
+
 pub(super) async fn repo_create_pr(
     State(state): State<Arc<AppState>>,
     Json(body): Json<super::types::CreatePrRequest>,

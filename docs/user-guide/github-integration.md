@@ -258,6 +258,18 @@ Expand an issue to see:
 | Close / Reopen | Changes issue state via GitHub API |
 | Copy number | Copies `#123` to clipboard |
 
+### PR Row Actions (panel)
+
+Expand a PR in the GitHub panel for these actions, next to Checkout, Merge and Diff:
+
+| Action | When Shown | What It Does |
+|--------|------------|--------------|
+| **Update branch** | PR is open and GitHub reports it behind its base | Merges the base branch into the PR branch, pinned to the head the panel showed (refuses with "PR head changed" if the agent pushed meanwhile). The merge commit lands on the remote: pull it in any local clone |
+| **Close** | PR is open | Closes the PR without merging, after a confirmation |
+| **Copy ref** | PR has a GitHub URL | Copies `owner/repo#number` for pasting into prompts |
+
+Open PRs older than two weeks carry an age marker on the row: `2w`, `1m`, `3m` or `6m`, measured from the creation date.
+
 ## Panel Keyboard Navigation
 
 The GitHub panel is keyboard-navigable without ever moving focus off the panel itself:

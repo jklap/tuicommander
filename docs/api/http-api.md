@@ -1082,6 +1082,28 @@ Content-Type: application/json
 
 Submits an approving review on a PR via the GitHub API.
 
+### Update PR Branch
+
+```
+POST /repo/update-pr-branch
+Content-Type: application/json
+
+{ "repoPath": "/path/to/repo", "prNumber": 42, "expectedHeadSha": "<head sha the caller saw>" }
+```
+
+Merges the base branch into the PR branch (GitHub update-branch, 202 accepted; the merge commit lands asynchronously). `expectedHeadSha` is required: if the PR head moved, the route returns an error starting with `PR head changed`. Returns `{"ok": true}`.
+
+### Close PR
+
+```
+POST /repo/close-pr
+Content-Type: application/json
+
+{ "repoPath": "/path/to/repo", "prNumber": 42 }
+```
+
+Closes the PR without merging. Returns `{"ok": true}`.
+
 ### CI Checks
 
 ```

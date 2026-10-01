@@ -68,6 +68,8 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `get_ci_checks` | `(path: String, pr_number: i64) -> Vec<Value>` | Detailed CI check list for one PR |
 | `get_repo_pr_statuses` | `(path: String, include_merged: Option<bool>) -> Vec<BranchPrStatus>` | PR status for every branch of one repo (TTL-cached unless `include_merged`) |
 | `approve_pr` | `(repo_path: String, pr_number: i64) -> ()` | Submit approving review via the REST reviews endpoint |
+| `update_pr_branch` | `(repo_path: String, pr_number: i64, expected_head_sha: String) -> ()` | Merge the base branch into the PR branch (REST `PUT /pulls/{n}/update-branch`, same operation as GraphQL `updatePullRequestBranch`), pinned to the head the UI showed; 422 head mismatch → `PR head changed` |
+| `close_pr` | `(repo_path: String, pr_number: i64) -> ()` | Close a PR without merging (REST `PATCH /pulls/{n}` `state=closed`) |
 | `get_all_pr_statuses` | `(paths: Vec<String>, include_merged: bool) -> HashMap<String, Vec<BranchPrStatus>>` | Batch PR status across many repos in one GraphQL call |
 | `get_pr_diff` | `(repo_path: String, pr_number: i64) -> String` | Get PR diff content; falls back to a local-clone `git diff` when GitHub rejects oversized diffs |
 | `merge_pr_via_github` | `(repo_path: String, pr_number: i64, merge_method: String, expected_head_sha: String) -> String` | Merge PR via GitHub API, pinned to the reviewed head (409 → `PR head changed`) |

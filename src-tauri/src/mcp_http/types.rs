@@ -203,6 +203,17 @@ pub(super) struct CreateIssueFromProposalRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct UpdatePrBranchRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    #[serde(rename = "prNumber")]
+    pub pr_number: i64,
+    /// Head commit the user saw; GitHub refuses the update if the PR head moved.
+    #[serde(rename = "expectedHeadSha")]
+    pub expected_head_sha: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct ApprovePrRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,

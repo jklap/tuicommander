@@ -2014,6 +2014,8 @@ pub fn run() {
             github::merge_pr_via_github,
             github::get_pr_diff,
             github::approve_pr,
+            github::update_pr_branch,
+            github::close_pr,
             github::create_pr,
             github::create_issue,
             github::post_pr_review,

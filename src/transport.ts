@@ -1654,6 +1654,20 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { repoPath: args.repoPath, prNumber: args.prNumber },
 		}),
 	},
+	update_pr_branch: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/update-pr-branch",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber, expectedHeadSha: args.expectedHeadSha },
+		}),
+	},
+	close_pr: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/close-pr",
+			body: { repoPath: args.repoPath, prNumber: args.prNumber },
+		}),
+	},
 	list_local_branches: {
 		map: (_args, p) => ({ method: "GET", path: `/repo/local-branches?path=${p("repoPath")}` }),
 	},

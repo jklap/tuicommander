@@ -139,7 +139,9 @@ describe("head moved during merge", () => {
 		mockInvoke.mockReset();
 	});
 
-	const headMoved = new Error("PR head changed: new commits were pushed after you reviewed it. Refresh and review before merging.");
+	const headMoved = new Error(
+		"PR head changed: new commits were pushed after you reviewed it. Refresh and review before merging.",
+	);
 
 	it("is not retried with another method or a newer head", async () => {
 		// Catches: a generic fallback loop (or silent retry) merging commits the user never saw.
