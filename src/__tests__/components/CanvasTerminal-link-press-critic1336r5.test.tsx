@@ -157,10 +157,6 @@ describe("CanvasTerminal link context menu, critic 1336 round 5", () => {
 	afterEach(() => {
 		unmount();
 		invoke.mockClear();
-	});
-
-	afterEach(() => {
-		unmount();
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 	});
