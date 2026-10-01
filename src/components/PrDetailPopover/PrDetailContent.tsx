@@ -257,7 +257,9 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 			}),
 	);
 
-	const isConflicting = () => readiness() === "conflict";
+	// Keyed on the conflict state, not the readiness verdict: the verdict ranks "draft" above
+	// "conflict", but a conflicting draft PR still needs Resolve conflicts / Push.
+	const isConflicting = () => prData()?.conflict_state === "conflicting";
 
 	/** Local worktree path for this PR's head branch, if one exists (e.g. after
 	 *  conflict-assist created it). Drives the Push button's visibility. */
@@ -285,9 +287,10 @@ export const PrDetailContent: Component<PrDetailContentProps> = (props) => {
 			{(pr) => (
 				<>
 					{/* Merge + review status pills */}
-					<Show when={readiness()}>
+					{/* Terminal PRs show no pill, so the row would be empty */}
+					<Show when={!isTerminalState() && readiness()}>
 						<div class={s.statusRow}>
-							<Show when={isTerminalState() ? null : readiness()}>
+							<Show when={readiness()}>
 								{(kind) => (
 									<span
 										class={cx(s.readinessBadge, READINESS_CLASSES[PR_READINESS_SEVERITY[kind()]])}
