@@ -42,6 +42,7 @@ flags exactly as they did before derivation existed.
 | `PostToolUseFailure` | *(none)* | `tool_name` | from `exit_code` if present, else sentinel `1` — suppressed entirely if `is_interrupt` is `true` |
 | `Notification` | `awaiting` | `message`, `notification_type` | — |
 | `Stop` | `idle` | `background_tasks` | — |
+| `background_tasks` (summary) | Same `Stop`/`StopFailure` scrape (and `--emit-background-tasks`), emitted as the `bgtasksummary` verb right after `bgtasks`. The array grouped into distinct `type/status` pairs with counts, first-appearance order: `teammate/running*2,shell/completed`. An entry without a string `status` is dropped (as in `bgtasks`); a missing `type` becomes the empty string. Unlike `bgtasks` (whose joined statuses are cut at 512 bytes, so a late `running` in a long list can be lost), it is bounded by distinct pairs. Still a pure extractor — `pty.rs` decides what is a teammate and what is running. |
 | `StopFailure` | `idle` | `background_tasks` | fixed `1` |
 | `SessionEnd` | `idle` | `session_id`, `cwd`, `transcript_path`, `session_title`, `reason` | — |
 | `Elicitation` | `awaiting` | — | — |
@@ -178,7 +179,7 @@ ESC ] 7770 ; verb=payload ESC \
 
 One sequence per verb, all verbs for one fire concatenated into a single buffer and
 delivered in one `write_all`. `state` and `toolfail` are emitted verbatim (fixed
-enum/numeric values); `ccsession`/`cwd`/`transcript`/`tool`/`notify`/`notifytype`/`bgtasks`/`cctitle`/`ccend`
+enum/numeric values); `ccsession`/`cwd`/`transcript`/`tool`/`notify`/`notifytype`/`bgtasks`/`bgtasksummary`/`cctitle`/`ccend`
 are percent-encoded (RFC 3986 unreserved set) since they carry free text that could
 otherwise contain the OSC `;` delimiter or control bytes. `toolfail` is always
 partitioned ahead of every other verb on the wire, regardless of derivation/argv

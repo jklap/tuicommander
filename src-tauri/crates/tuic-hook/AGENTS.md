@@ -65,6 +65,16 @@ for `notify`'s message text (see `notification_awaiting_outcome`,
 "what did Claude Code say" extractor, with no policy logic to keep in sync across
 two repos' worth of Claude Code documentation as its enums evolve.
 
+## `bgtasks` vs `bgtasksummary`: never build parallel lists from the same array
+
+`bgtasks` (joined `status` strings) is cut at `payload::MAX_PAYLOAD_LEN` (512 bytes) *before*
+encoding, so a long task list can lose a late `running` and read as all-terminal, and entries
+without a string `status` are dropped (so a second, independently-built `type` list would
+misalign). `bgtasksummary` groups the array into distinct `type/status[*N]` pairs in one pass —
+bounded by distinct pairs, aligned by construction. If you add another per-task field, extend the
+summary's grouping key; do not add a sibling joined list. Wire order is
+`toolfail`, `bgtasks`, `bgtasksummary`, `state`.
+
 ## Startup ordering
 
 `hook_binary::ensure_current()` MUST run before
