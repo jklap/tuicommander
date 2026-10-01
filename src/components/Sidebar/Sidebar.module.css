@@ -1203,6 +1203,13 @@
     display: contents;
   }
 
+  /* The name never gives way to the PR badge: it keeps its full width and the
+     badge wraps to the next line when the two do not fit together. */
+  .sidebar[data-density="rich"] .branchItem .branchContent {
+    flex: 1 0 auto;
+    max-width: calc(100% - var(--row-icon) - var(--row-gap));
+  }
+
   .sidebar[data-density="rich"] .branchRichLine {
     flex: 0 0 calc(100% - var(--row-icon) - var(--row-gap));
     margin-left: calc(var(--row-icon) + var(--row-gap));
