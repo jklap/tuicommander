@@ -368,6 +368,22 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "dictation.no_speech_threshold",
 	},
+	{
+		tab: "dictation",
+		section: "Spoken replies",
+		label: "Speech engine",
+		labelKey: "dictation.speechEngineLabel",
+		expert: true,
+		configKey: "dictation.speech_engine",
+	},
+	{
+		tab: "dictation",
+		section: "Spoken replies",
+		label: "Speech command",
+		labelKey: "dictation.speechCommandLabel",
+		expert: true,
+		configKey: "dictation.speech_command",
+	},
 	{ tab: "dictation", section: "Spoken replies", label: "Voice", labelKey: "dictation.voiceLabel" },
 	{
 		tab: "dictation",
