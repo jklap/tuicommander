@@ -23,4 +23,4 @@ for r in range(6):
     repos[p] = dict(path=p, displayName=f"repo{r}", initials=f"R{r}", expanded=True, collapsed=False, parked=False, workspaces=w, activeWorkspaceId=f"{p}#0")
 files = [dict(name=f"file{i:03}.txt", path=f"file{i:03}.txt", is_dir=(i%7==0), size=100, modified_at=1790000000, git_status="", is_ignored=False) for i in range(120)]
 ROUTES = {'/config/repositories': dict(repos=repos, repoOrder=list(repos), activeRepoPath='/fake/repo0', groups={}, groupOrder=[]), '/fs/list': files}
-ThreadingHTTPServer(('127.0.0.1', 9891), H).serve_forever()
+ThreadingHTTPServer(('127.0.0.1', int(__import__('os').environ.get('MOCK_PORT', 9891))), H).serve_forever()
