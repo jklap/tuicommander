@@ -115,6 +115,7 @@
 /dictation/speech/assets/cancel
 /dictation/speech/assets/delete
 /dictation/speech/assets/download
+/dictation/speech/edge-voices
 /dictation/speech/speak
 /dictation/speech/status
 /dictation/speech/stop

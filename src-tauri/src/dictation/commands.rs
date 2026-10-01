@@ -611,6 +611,14 @@ pub fn get_speech_voices(language: String) -> Result<Vec<speech::library::VoiceC
     Ok(speech::library::available_voices(asset))
 }
 
+/// The Microsoft Edge voices that speak a language (`language` is its Whisper
+/// code), from the service's own list. Needs the network the first time and
+/// says so when it is missing; what the voice picker lists under the Edge engine.
+#[tauri::command]
+pub async fn get_edge_voices(language: String) -> Result<Vec<speech::edge::EdgeVoice>, String> {
+    super::edge_voices::voices_for_language(&language).await
+}
+
 /// Import a voice file the user chose into a language (`language` is its
 /// Whisper code). The file travels as base64 so the payload is the same JSON
 /// over IPC and over HTTP. See [`speech::library::import_speech_voice`] for
@@ -649,6 +657,57 @@ pub fn delete_speech_voice(language: String, name: String) -> Result<String, Str
 // Spoken replies (817-f67c)
 // ---------------------------------------------------------------------------
 
+/// The engine that speaks replies. Edge is the default; Pocket TTS and the
+/// external command live in the Expert section of the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpeechEngine {
+    Edge,
+    Pocket,
+    External,
+}
+
+/// What a configuration written before `speech_engine` existed meant, and
+/// what a fresh one means.
+///
+/// A configured command or a chosen Pocket voice is a choice, and so is a
+/// Pocket runtime on disk: nobody downloads 100+ MB they do not intend to use.
+/// Those keep their engine; everyone else gets Edge. Only read while
+/// `speech_engine` is unset, and the settings panel writes it as soon as the
+/// user picks one, so installing Pocket later never flips a fresh install.
+fn legacy_speech_engine(config: &DictationConfig, pocket_installed: bool) -> SpeechEngine {
+    if !config.speech_command.is_empty() {
+        SpeechEngine::External
+    } else if !config.speech_voice.is_empty() || pocket_installed {
+        SpeechEngine::Pocket
+    } else {
+        SpeechEngine::Edge
+    }
+}
+
+fn speech_engine(config: &DictationConfig) -> SpeechEngine {
+    match config.speech_engine.as_str() {
+        "pocket" => SpeechEngine::Pocket,
+        "external" => SpeechEngine::External,
+        _ => SpeechEngine::Edge,
+    }
+}
+
+/// `config` with `speech_engine` filled in, so every reader — the engine
+/// choice here and the settings panel — sees one answer.
+fn with_resolved_engine(mut config: DictationConfig) -> DictationConfig {
+    if !matches!(config.speech_engine.as_str(), "edge" | "pocket" | "external") {
+        let pocket_installed = speech::assets::status(speech::assets::runtime())
+            != speech::assets::Status::Absent;
+        config.speech_engine = match legacy_speech_engine(&config, pocket_installed) {
+            SpeechEngine::Edge => "edge",
+            SpeechEngine::Pocket => "pocket",
+            SpeechEngine::External => "external",
+        }
+        .to_string();
+    }
+    config
+}
+
 /// The engine and voice a reply would be spoken with, or why there is none.
 ///
 /// Every `Err` here is a setup problem stated in the user's terms, because
@@ -659,12 +718,19 @@ fn open_voice(
     library: &speech::library::SpeechLibrary,
     language: &str,
 ) -> Result<(Arc<dyn speech::Speech>, String), String> {
-    if !config.speech_command.is_empty() {
-        // The user's own engine. It names its own voices inside its template,
-        // so there is nothing here to choose between and the voice is empty.
-        let engine = speech::external::ExternalSpeech::new(config.speech_command.clone())
-            .map_err(|error| error.to_string())?;
-        return Ok((Arc::new(engine), String::new()));
+    match speech_engine(config) {
+        SpeechEngine::External => {
+            // The user's own engine. It names its own voices inside its template,
+            // so there is nothing here to choose between and the voice is empty.
+            let engine = speech::external::ExternalSpeech::new(config.speech_command.clone())
+                .map_err(|error| error.to_string())?;
+            return Ok((Arc::new(engine), String::new()));
+        }
+        SpeechEngine::Edge => {
+            let voice = speech::edge::choose_voice(language, &config.speech_edge_voice)?;
+            return Ok((Arc::new(speech::edge::EdgeSpeech::new()), voice));
+        }
+        SpeechEngine::Pocket => {}
     }
 
     let asset = speech::assets::for_language_code(language).ok_or_else(|| {
@@ -774,7 +840,7 @@ fn conversation_language(config: &DictationConfig, dictation: &DictationState) -
 /// there is nothing for us to choose and nothing that a change of detected
 /// language invalidates.
 fn speech_language(config: &DictationConfig, dictation: &DictationState) -> Result<String, String> {
-    if !config.speech_command.is_empty() {
+    if speech_engine(config) == SpeechEngine::External {
         return Ok(String::new());
     }
     conversation_language(config, dictation).ok_or_else(|| {
@@ -1291,15 +1357,36 @@ pub(crate) fn preview_voice(
     text: &str,
 ) -> Result<(), String> {
     let text = preview_text(text)?;
-    // Named first, so an unknown voice is reported as such rather than as a
-    // missing download of the language.
-    choose_voice(voice_language(language)?, voice)?;
-    let config = DictationConfig {
-        // The bundled engine and the voice asked for, in a copy of the
-        // configuration only: previewing a voice does not select it.
-        speech_command: Vec::new(),
-        speech_voice: voice.to_string(),
-        ..get_dictation_config()
+    // The voice asked for, in a copy of the configuration only: previewing a
+    // voice does not select it.
+    let current = get_dictation_config();
+    let config = match speech_engine(&current) {
+        SpeechEngine::Edge => {
+            // A preview plays the voice that was asked for or says why not; the
+            // fallback to the language default is for replies, not for a
+            // button labelled with a voice name.
+            if !voice.is_empty() && speech::edge::choose_voice(language, voice)? != voice {
+                return Err(format!("The voice {voice} does not speak \"{language}\""));
+            }
+            DictationConfig {
+                speech_edge_voice: voice.to_string(),
+                ..current
+            }
+        }
+        SpeechEngine::Pocket => {
+            // Named first, so an unknown voice is reported as such rather than
+            // as a missing download of the language.
+            choose_voice(voice_language(language)?, voice)?;
+            DictationConfig {
+                speech_voice: voice.to_string(),
+                ..current
+            }
+        }
+        SpeechEngine::External => {
+            return Err(
+                "An external command names its own voices; there is nothing to preview".to_string(),
+            );
+        }
     };
     let (engine, voice) = open_voice(&config, &dictation.speech, language)?;
     let device = open_reply_output(dictation, None)?;
@@ -2475,6 +2562,18 @@ fn dictation_config_from_value(value: serde_json::Value) -> DictationConfig {
             defaults.speech_voice,
             &mut recovered,
         ),
+        speech_engine: recovered_field(
+            &object,
+            "speech_engine",
+            defaults.speech_engine,
+            &mut recovered,
+        ),
+        speech_edge_voice: recovered_field(
+            &object,
+            "speech_edge_voice",
+            defaults.speech_edge_voice,
+            &mut recovered,
+        ),
         speech_volume_db: recovered_field(
             &object,
             "speech_volume_db",
@@ -2515,6 +2614,10 @@ pub fn get_hands_free_default_notice() -> String {
 
 #[tauri::command]
 pub fn get_dictation_config() -> DictationConfig {
+    with_resolved_engine(read_dictation_config())
+}
+
+fn read_dictation_config() -> DictationConfig {
     let path = crate::config::config_dir().join(DICTATION_CONFIG_FILE);
     let content = match std::fs::read_to_string(&path) {
         Ok(content) => content,
@@ -2590,8 +2693,10 @@ pub(crate) fn save_dictation_config(
     // hotkey, and cutting a reply off mid-word because somebody moved a slider
     // would be a worse bug than the one this prevents.
     let voice_changed = previous.language != config.language
+        || previous.speech_engine != config.speech_engine
         || previous.speech_command != config.speech_command
-        || previous.speech_voice != config.speech_voice;
+        || previous.speech_voice != config.speech_voice
+        || previous.speech_edge_voice != config.speech_edge_voice;
     if let Some(dictation) = dictation {
         let mut slot = dictation.speaker.lock();
         if voice_changed {
@@ -3840,6 +3945,7 @@ mod tests {
     ) {
         let config = config_of_this_test(DictationConfig {
             language: "it".to_string(),
+            speech_engine: "pocket".to_string(),
             ..Default::default()
         });
         let dictation = DictationState::new();
@@ -4215,6 +4321,7 @@ mod tests {
     fn under_auto_there_is_no_language_and_so_no_voice_until_somebody_speaks() {
         let _config = config_of_this_test(DictationConfig {
             language: "auto".to_string(),
+            speech_engine: "pocket".to_string(),
             ..Default::default()
         });
         let dictation = DictationState::new();
@@ -4271,6 +4378,7 @@ mod tests {
     fn a_language_no_bundle_speaks_is_named_rather_than_replaced() {
         let _config = config_of_this_test(DictationConfig {
             language: "ko".to_string(),
+            speech_engine: "pocket".to_string(),
             ..Default::default()
         });
         let dictation = DictationState::new();
@@ -4307,6 +4415,7 @@ mod tests {
             get_dictation_config(),
             DictationConfig {
                 language: "en".to_string(),
+                speech_engine: "pocket".to_string(),
                 ..Default::default()
             },
             Some(&dictation),
@@ -4542,6 +4651,7 @@ mod tests {
             get_dictation_config(),
             DictationConfig {
                 language: "it".to_string(),
+                speech_engine: "pocket".to_string(),
                 speech_voice: "giovanni".to_string(),
                 ..Default::default()
             },
@@ -4567,6 +4677,7 @@ mod tests {
             get_dictation_config(),
             DictationConfig {
                 language: "it".to_string(),
+                speech_engine: "pocket".to_string(),
                 rms_threshold: 0.05,
                 ..Default::default()
             },
@@ -4641,6 +4752,7 @@ mod tests {
 
         let config = DictationConfig {
             language: "it".to_string(),
+            speech_engine: "pocket".to_string(),
             speech_volume_db: -24.0,
             speech_levelling: 0.2,
             ..Default::default()
@@ -5186,6 +5298,7 @@ mod tests {
     fn previewing_an_unknown_voice_names_it_and_selects_nothing() {
         let _config = config_of_this_test(DictationConfig {
             language: "it".to_string(),
+            speech_engine: "pocket".to_string(),
             ..Default::default()
         });
         let dictation = DictationState::new();
@@ -5199,5 +5312,121 @@ mod tests {
             "a preview selected the voice"
         );
         assert!(preview_voice(&dictation, "xx", "", "ciao").is_err());
+    }
+
+    // --- Edge as the default engine (1357-7d37) -----------------------------
+
+    fn engine_of_file(content: &str) -> String {
+        let (dir, guard) = speech_root();
+        std::fs::write(dir.path().join(DICTATION_CONFIG_FILE), content).unwrap();
+        let engine = get_dictation_config().speech_engine;
+        drop(guard);
+        engine
+    }
+
+    #[test]
+    fn a_fresh_install_speaks_with_edge() {
+        // Catches: the default staying Pocket, which needs a 100+ MB download
+        // before the first word.
+        {
+            // The override lock is not reentrant: this scope ends before the next.
+            let (_dir, _guard) = speech_root();
+            assert_eq!(get_dictation_config().speech_engine, "edge");
+        }
+        assert_eq!(engine_of_file("{}"), "edge");
+    }
+
+    #[test]
+    fn an_existing_pocket_user_keeps_pocket_without_touching_the_settings() {
+        // Catches: the upgrade silently switching someone who chose Pocket to a
+        // cloud engine. Evidence of the choice: a voice, or the runtime on disk.
+        assert_eq!(engine_of_file(r#"{"speech_voice":"giovanni"}"#), "pocket");
+        let (_dir, _guard) = speech_root();
+        install_asset(speech::assets::runtime());
+        assert_eq!(get_dictation_config().speech_engine, "pocket");
+    }
+
+    #[test]
+    fn an_existing_external_command_keeps_the_external_engine() {
+        assert_eq!(
+            engine_of_file(r#"{"speech_command":["piper","--output_file","{out}"]}"#),
+            "external"
+        );
+    }
+
+    #[test]
+    fn an_explicit_engine_beats_what_the_installation_holds() {
+        // Catches: the legacy rule overriding a choice made in the Expert
+        // section (a fresh user who downloaded Pocket and stayed on Edge).
+        assert_eq!(
+            engine_of_file(r#"{"speech_engine":"edge","speech_voice":"giovanni"}"#),
+            "edge"
+        );
+        let (_dir, _guard) = speech_root();
+        install_asset(speech::assets::runtime());
+        save_dictation_config(
+            get_dictation_config(),
+            DictationConfig {
+                speech_engine: "edge".to_string(),
+                ..get_dictation_config()
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(get_dictation_config().speech_engine, "edge");
+    }
+
+    #[test]
+    fn edge_opens_a_voice_without_any_download() {
+        // Catches: Edge still gated on Pocket assets ("is not downloaded").
+        let (_dir, _guard) = speech_root();
+        let library = speech::library::SpeechLibrary::new();
+        let config = DictationConfig {
+            speech_engine: "edge".to_string(),
+            ..Default::default()
+        };
+
+        let (_engine, voice) = open_voice(&config, &library, "it").expect("edge opens");
+
+        assert_eq!(voice, "it-IT-IsabellaNeural");
+    }
+
+    #[test]
+    fn switching_engine_or_edge_voice_takes_the_voice_away_from_queued_replies() {
+        // Catches: a reply queued for Pocket finishing in the Edge voice (or
+        // the reverse) after the setting moved.
+        let (dictation, _gate, _config) = armed_with_a_voice("session-a");
+        speak(&dictation, Caller::Owner, "pronto", None).expect("accepted");
+
+        save_dictation_config(
+            get_dictation_config(),
+            DictationConfig {
+                language: "it".to_string(),
+                speech_engine: "edge".to_string(),
+                ..Default::default()
+            },
+            Some(&dictation),
+        )
+        .expect("config save");
+
+        assert!(dictation.speaker.lock().is_none());
+    }
+
+    #[test]
+    fn previewing_an_edge_voice_of_another_language_is_refused_not_replaced() {
+        // Catches: a "Listen" button that plays the default voice when the
+        // chosen one does not speak the language.
+        let _config = config_of_this_test(DictationConfig {
+            language: "it".to_string(),
+            speech_engine: "edge".to_string(),
+            ..Default::default()
+        });
+        let dictation = DictationState::new();
+
+        let error = preview_voice(&dictation, "it", "en-US-AriaNeural", "ciao")
+            .expect_err("wrong language");
+
+        assert!(error.contains("en-US-AriaNeural"), "{error}");
+        assert_eq!(get_dictation_config().speech_edge_voice, "");
     }
 }

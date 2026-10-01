@@ -2101,6 +2101,7 @@ pub fn run() {
             dictation::commands::cancel_speech_download,
             dictation::commands::delete_speech_asset,
             dictation::commands::get_speech_voices,
+            dictation::commands::get_edge_voices,
             dictation::commands::import_speech_voice,
             dictation::commands::delete_speech_voice,
             dictation::commands::preview_speech_voice,

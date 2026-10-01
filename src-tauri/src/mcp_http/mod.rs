@@ -2017,6 +2017,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(dictation_routes::get_speech_voices_http),
         )
         .route(
+            "/dictation/speech/edge-voices",
+            get(dictation_routes::get_edge_voices_http),
+        )
+        .route(
             "/dictation/speech/voices/import",
             post(dictation_routes::import_speech_voice_http).layer(
                 axum::extract::DefaultBodyLimit::max(SPEECH_VOICE_IMPORT_BODY_BYTES),

@@ -1,0 +1,1003 @@
+//! Microsoft Edge neural voices behind the speech port.
+//!
+//! The service is the one the Edge browser calls for "Read aloud": a WebSocket
+//! that takes SSML and answers with MP3 frames. It needs no model on disk and
+//! speaks Italian well, which is why it is the default engine; it needs the
+//! network, which is why Pocket TTS and the external command remain.
+//!
+//! ## Why this is not the `msedge-tts` crate
+//!
+//! `msedge-tts` 0.4.0 was evaluated first (MIT OR Apache-2.0, maintained, small).
+//! Its blocking client loops on a read from a socket it owns privately, so a
+//! [`SpeechCancel`] raised mid-request cannot reach it, and it brings `ureq` plus
+//! a second certificate-verifier setup beside the `rustls` and `tungstenite`
+//! the application already ships. This file is the part of it that is needed —
+//! the handshake token, two messages, a frame parser — with a read timeout on
+//! the socket so the request is abandoned within [`POLL_INTERVAL`].
+//!
+//! ## What is assumed about the service
+//!
+//! Nothing here is ours, and all of it was recorded rather than guessed
+//! (`fixtures/edge_stream.json`, recorded from the live service):
+//!
+//! * the handshake wants `Sec-MS-GEC`, a SHA-256 of the clock rounded to five
+//!   minutes and the public client token, plus the browser's `Origin`;
+//! * a request is `speech.config` then `ssml`; the answer is text frames
+//!   (`turn.start`, `response`, `turn.end`) around binary frames;
+//! * a binary frame is a big-endian `u16` header length, the headers, then the
+//!   MP3 body. Only `Path:audio` frames carry audio.
+//!
+//! The service is unofficial and can change. A change shows up as a typed
+//! [`SpeechError::Failed`] naming what the service did, never as silence.
+
+use std::io::Cursor;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use rodio::Source;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use tungstenite::client::IntoClientRequest;
+use tungstenite::http::header;
+use tungstenite::stream::MaybeTlsStream;
+use tungstenite::{Message, WebSocket};
+
+use super::{Speech, SpeechAudio, SpeechCancel, SpeechError, budget_seconds};
+
+type Result<T> = std::result::Result<T, SpeechError>;
+
+const HOST: &str = "speech.platform.bing.com";
+const CLIENT_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+const WSS_PATH: &str = "/consumer/speech/synthesize/readaloud/edge/v1";
+const ORIGIN: &str = "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold";
+const USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 10; HD1913) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.7499.193 Mobile Safari/537.36 EdgA/143.0.3650.125";
+const GEC_VERSION: &str = "1-130.0.2849.68";
+
+/// Where the voice list lives. Fetched by the caller, which already has an
+/// HTTP client; this module only parses what comes back.
+pub const VOICE_LIST_URL: &str = "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=6A5AA1D4EAFF4E9FB37E23D68491D6F4";
+pub const VOICE_LIST_USER_AGENT: &str = USER_AGENT;
+
+/// 24 kHz mono MP3 at 48 kbit/s. Chosen here, so the audio rate is a constant
+/// the budget can be computed from: 6000 bytes of MP3 are one second of speech.
+const OUTPUT_FORMAT: &str = "audio-24khz-48kbitrate-mono-mp3";
+const BYTES_PER_SECOND: f32 = 6000.0;
+
+/// The service refuses SSML past about 4 KB. Longer text is sent as several
+/// requests and the MP3 streams are joined, which decoders accept.
+const MAX_TEXT_BYTES: usize = 3000;
+
+/// How often a blocked read gives control back to look at the cancel flag and
+/// the clock. This is the worst-case latency of a cancel.
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Connecting and the handshake share this ceiling; offline machines fail here.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The smallest overall timeout, whatever the text. Measured on the live
+/// service: 63 s of speech arrived in about 7 s, so the floor is generous.
+const TIMEOUT_FLOOR: Duration = Duration::from_secs(30);
+
+/// One thing the service sent, as far as this module cares.
+#[derive(Debug)]
+enum Frame {
+    Text(String),
+    Binary(Vec<u8>),
+    /// The service ended the conversation.
+    Closed,
+    /// Nothing arrived within [`POLL_INTERVAL`].
+    Idle,
+}
+
+/// The connection, as the synthesis loop sees it. A trait so the loop is
+/// exercised against recorded frames without a network.
+trait Socket: Send {
+    fn send(&mut self, text: String) -> Result<()>;
+    fn recv(&mut self) -> Result<Frame>;
+}
+
+type Dial = Box<dyn Fn() -> Result<Box<dyn Socket>> + Send + Sync>;
+
+/// What bounds one synthesis, shared by every request it makes.
+struct Limits {
+    deadline: Instant,
+    /// MP3 bytes the text can justify; see [`budget_seconds`].
+    max_bytes: usize,
+    budget: f32,
+}
+
+/// Edge neural voices as a speech engine.
+pub struct EdgeSpeech {
+    dial: Dial,
+    /// Set only by [`EdgeSpeech::with_timeout`]; otherwise derived from the text.
+    timeout: Option<Duration>,
+}
+
+impl Default for EdgeSpeech {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EdgeSpeech {
+    pub fn new() -> Self {
+        Self {
+            dial: Box::new(dial_service),
+            timeout: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_dial(dial: Dial) -> Self {
+        Self {
+            dial,
+            timeout: None,
+        }
+    }
+
+    /// The tests use this so a timeout is proven in a fraction of a second.
+    #[cfg(test)]
+    fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    fn timeout_for(&self, budget: f32) -> Duration {
+        self.timeout
+            .unwrap_or_else(|| Duration::from_secs_f32(budget).max(TIMEOUT_FLOOR))
+    }
+
+    /// One request on its own connection: the MP3 bytes for `text`, appended
+    /// to `mp3`.
+    fn request(
+        &self,
+        text: &str,
+        voice: &str,
+        cancel: &SpeechCancel,
+        limits: &Limits,
+        mp3: &mut Vec<u8>,
+    ) -> Result<()> {
+        let mut socket = (self.dial)()?;
+        if cancel.is_cancelled() {
+            return Err(SpeechError::Cancelled);
+        }
+        socket.send(config_message())?;
+        socket.send(ssml_message(voice, text))?;
+        loop {
+            if cancel.is_cancelled() {
+                return Err(SpeechError::Cancelled);
+            }
+            if Instant::now() >= limits.deadline {
+                return Err(SpeechError::Failed(
+                    "the Microsoft Edge speech service did not finish in time".to_string(),
+                ));
+            }
+            match socket.recv()? {
+                Frame::Idle => {}
+                Frame::Closed => {
+                    return Err(SpeechError::Failed(
+                        "the Microsoft Edge speech service closed the connection before the end of the reply"
+                            .to_string(),
+                    ));
+                }
+                Frame::Text(message) => {
+                    if message_path(&message) == Some("turn.end") {
+                        return Ok(());
+                    }
+                }
+                Frame::Binary(frame) => {
+                    mp3.extend_from_slice(audio_body(&frame)?);
+                    if mp3.len() > limits.max_bytes {
+                        return Err(SpeechError::Runaway {
+                            budget_seconds: limits.budget,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Speech for EdgeSpeech {
+    fn synthesize(&self, text: &str, voice: &str, cancel: &SpeechCancel) -> Result<SpeechAudio> {
+        if cancel.is_cancelled() {
+            return Err(SpeechError::Cancelled);
+        }
+        check_voice(voice)?;
+        let budget = budget_seconds(text);
+        let limits = Limits {
+            deadline: Instant::now() + self.timeout_for(budget),
+            max_bytes: (budget * BYTES_PER_SECOND) as usize,
+            budget,
+        };
+        let mut mp3 = Vec::new();
+        for piece in split_text(text) {
+            self.request(piece, voice, cancel, &limits, &mut mp3)?;
+        }
+        decode_mp3(mp3)
+    }
+}
+
+/// A voice id reaches SSML as an attribute, so it is a name or it is refused:
+/// letters, digits and hyphens, nothing that could close the attribute.
+fn check_voice(voice: &str) -> Result<()> {
+    let plain = !voice.is_empty()
+        && voice.len() <= 64
+        && voice.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if plain {
+        Ok(())
+    } else {
+        Err(SpeechError::UnknownVoice(voice.to_string()))
+    }
+}
+
+fn timestamp() -> String {
+    // The format the Edge client itself sends.
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    format_timestamp(seconds)
+}
+
+/// `Thu Oct 01 2026 19:36:00 GMT+0000 (Coordinated Universal Time)`.
+fn format_timestamp(unix_seconds: u64) -> String {
+    const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let days = unix_seconds / 86_400;
+    let rest = unix_seconds % 86_400;
+    // Civil-from-days, valid for every date after 1970.
+    let z = days as i64 + 719_468;
+    let era = z / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{} {} {day:02} {year} {:02}:{:02}:{:02} GMT+0000 (Coordinated Universal Time)",
+        DAYS[(days % 7) as usize],
+        MONTHS[(month - 1) as usize],
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60,
+    )
+}
+
+fn request_id() -> String {
+    format!("{:032x}", rand::random::<u128>())
+}
+
+fn config_message() -> String {
+    format!(
+        "X-Timestamp:{}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n\
+         {{\"context\":{{\"synthesis\":{{\"audio\":{{\"metadataoptions\":{{\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"}},\"outputFormat\":\"{OUTPUT_FORMAT}\"}}}}}}}}",
+        timestamp()
+    )
+}
+
+fn ssml_message(voice: &str, text: &str) -> String {
+    format!(
+        "X-RequestId:{}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:{}\r\nPath:ssml\r\n\r\n\
+         <speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>\
+         <voice name='{voice}'><prosody pitch='+0Hz' rate='+0%' volume='+0%'>{}</prosody></voice></speak>",
+        request_id(),
+        timestamp(),
+        escape_xml(text)
+    )
+}
+
+/// A transcript is arbitrary text: `<` and `&` must not become markup, and
+/// control characters are not legal XML at all.
+fn escape_xml(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            '\t' | '\n' | '\r' => out.push(c),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Pieces of at most [`MAX_TEXT_BYTES`], cut at whitespace where there is one.
+fn split_text(text: &str) -> Vec<&str> {
+    let mut pieces = Vec::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() {
+        if rest.len() <= MAX_TEXT_BYTES {
+            pieces.push(rest);
+            break;
+        }
+        let mut cut = MAX_TEXT_BYTES;
+        while !rest.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let cut = rest[..cut]
+            .rfind(char::is_whitespace)
+            .filter(|&at| at > 0)
+            .unwrap_or(cut);
+        pieces.push(rest[..cut].trim_end());
+        rest = rest[cut..].trim_start();
+    }
+    pieces
+}
+
+/// The `Path:` header of a text frame.
+fn message_path(message: &str) -> Option<&str> {
+    let headers = message.split("\r\n\r\n").next()?;
+    headers
+        .lines()
+        .find_map(|line| line.strip_prefix("Path:"))
+        .map(str::trim)
+}
+
+/// The MP3 bytes of a binary frame; empty for a frame that is not audio.
+fn audio_body(frame: &[u8]) -> Result<&[u8]> {
+    let malformed = || {
+        SpeechError::Failed("the Microsoft Edge speech service sent a malformed audio frame".into())
+    };
+    let length = frame.get(..2).ok_or_else(malformed)?;
+    let header_end = 2 + usize::from(u16::from_be_bytes([length[0], length[1]]));
+    let headers = frame.get(2..header_end).ok_or_else(malformed)?;
+    if String::from_utf8_lossy(headers).contains("Path:audio") {
+        Ok(&frame[header_end..])
+    } else {
+        Ok(&[])
+    }
+}
+
+/// MP3 to mono PCM at the stream's own rate.
+fn decode_mp3(mp3: Vec<u8>) -> Result<SpeechAudio> {
+    let empty = || SpeechError::Failed("the Microsoft Edge speech service returned no audio".into());
+    if mp3.is_empty() {
+        return Err(empty());
+    }
+    let decoder = rodio::Decoder::new_mp3(Cursor::new(mp3)).map_err(|error| {
+        SpeechError::Failed(format!("could not decode the service audio: {error}"))
+    })?;
+    let channels = usize::from(decoder.channels().get());
+    let sample_rate = decoder.sample_rate().get();
+    let mut samples = Vec::new();
+    let mut frame_sum = 0.0f32;
+    let mut in_frame = 0usize;
+    for sample in decoder {
+        frame_sum += sample;
+        in_frame += 1;
+        if in_frame == channels {
+            samples.push(frame_sum / channels as f32);
+            frame_sum = 0.0;
+            in_frame = 0;
+        }
+    }
+    if samples.is_empty() {
+        return Err(empty());
+    }
+    Ok(SpeechAudio {
+        samples,
+        sample_rate,
+    })
+}
+
+/// `Sec-MS-GEC`: SHA-256 of the Windows file-time clock rounded down to five
+/// minutes, followed by the client token, upper-case hex.
+fn sec_ms_gec(now: SystemTime) -> String {
+    const WINDOWS_EPOCH_OFFSET_SECONDS: u64 = 11_644_473_600;
+    const FIVE_MINUTES_IN_TICKS: u128 = 3_000_000_000;
+    let since_unix = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let ticks = (since_unix + Duration::from_secs(WINDOWS_EPOCH_OFFSET_SECONDS)).as_nanos() / 100;
+    let ticks = ticks - ticks % FIVE_MINUTES_IN_TICKS;
+    Sha256::digest(format!("{ticks}{CLIENT_TOKEN}"))
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// The real connection
+// ---------------------------------------------------------------------------
+
+struct WsSocket(WebSocket<MaybeTlsStream<TcpStream>>);
+
+impl Socket for WsSocket {
+    fn send(&mut self, text: String) -> Result<()> {
+        self.0
+            .send(Message::Text(text.into()))
+            .map_err(|error| connection_failed(&error))
+    }
+
+    fn recv(&mut self) -> Result<Frame> {
+        use tungstenite::Error;
+        match self.0.read() {
+            Ok(Message::Text(text)) => Ok(Frame::Text(text.as_str().to_string())),
+            Ok(Message::Binary(bytes)) => Ok(Frame::Binary(bytes.to_vec())),
+            Ok(Message::Close(_)) => Ok(Frame::Closed),
+            Ok(_) => Ok(Frame::Idle),
+            Err(Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                Ok(Frame::Idle)
+            }
+            Err(Error::ConnectionClosed | Error::AlreadyClosed) => Ok(Frame::Closed),
+            Err(error) => Err(connection_failed(&error)),
+        }
+    }
+}
+
+fn connection_failed(error: &tungstenite::Error) -> SpeechError {
+    SpeechError::Failed(format!(
+        "the connection to the Microsoft Edge speech service failed: {error}"
+    ))
+}
+
+fn unreachable_service(reason: &dyn std::fmt::Display) -> SpeechError {
+    SpeechError::Failed(format!(
+        "cannot reach the Microsoft Edge speech service ({reason}); it needs an internet connection"
+    ))
+}
+
+fn handshake_request() -> Result<tungstenite::handshake::client::Request> {
+    let url = format!(
+        "wss://{HOST}{WSS_PATH}?TrustedClientToken={CLIENT_TOKEN}&ConnectionId={}&Sec-MS-GEC={}&Sec-MS-GEC-Version={GEC_VERSION}",
+        request_id(),
+        sec_ms_gec(SystemTime::now()),
+    );
+    let mut request = url
+        .into_client_request()
+        .map_err(|error| SpeechError::Failed(format!("bad speech service address: {error}")))?;
+    let headers = request.headers_mut();
+    headers.insert(header::PRAGMA, header::HeaderValue::from_static("no-cache"));
+    headers.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-cache"),
+    );
+    headers.insert(
+        header::USER_AGENT,
+        header::HeaderValue::from_static(USER_AGENT),
+    );
+    headers.insert(header::ORIGIN, header::HeaderValue::from_static(ORIGIN));
+    Ok(request)
+}
+
+fn dial_service() -> Result<Box<dyn Socket>> {
+    let request = handshake_request()?;
+    let addresses = (HOST, 443)
+        .to_socket_addrs()
+        .map_err(|error| unreachable_service(&error))?;
+    let mut last_error = None;
+    let mut tcp = None;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
+            Ok(stream) => {
+                tcp = Some(stream);
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let tcp = tcp.ok_or_else(|| match last_error {
+        Some(error) => unreachable_service(&error),
+        None => unreachable_service(&"no address"),
+    })?;
+    // The handshake may block for as long as the connect did; after it, reads
+    // wake every POLL_INTERVAL. The clone shares the socket, so the option set
+    // on it applies to the stream the WebSocket owns.
+    let control = tcp.try_clone().map_err(|error| unreachable_service(&error))?;
+    tcp.set_nodelay(true).ok();
+    tcp.set_read_timeout(Some(CONNECT_TIMEOUT))
+        .and_then(|()| tcp.set_write_timeout(Some(CONNECT_TIMEOUT)))
+        .map_err(|error| unreachable_service(&error))?;
+    let (socket, _) = tungstenite::client_tls(request, tcp).map_err(|error| match error {
+        tungstenite::HandshakeError::Failure(tungstenite::Error::Http(response)) => {
+            SpeechError::Failed(format!(
+                "the Microsoft Edge speech service rejected the request (HTTP {}); \
+                 if this persists, check that the system clock is correct",
+                response.status().as_u16()
+            ))
+        }
+        tungstenite::HandshakeError::Failure(error) => unreachable_service(&error),
+        tungstenite::HandshakeError::Interrupted(_) => {
+            unreachable_service(&"the handshake timed out")
+        }
+    })?;
+    control
+        .set_read_timeout(Some(POLL_INTERVAL))
+        .map_err(|error| unreachable_service(&error))?;
+    Ok(Box::new(WsSocket(socket)))
+}
+
+// ---------------------------------------------------------------------------
+// Voices
+// ---------------------------------------------------------------------------
+
+/// One entry of the service's voice list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EdgeVoice {
+    /// What a configuration stores and the SSML names: `it-IT-IsabellaNeural`.
+    pub id: String,
+    pub locale: String,
+    pub gender: String,
+    /// The label for a picker: `Microsoft Isabella Online (Natural) - Italian (Italy)`.
+    pub label: String,
+}
+
+/// Parse the service's voice list.
+pub fn parse_voices(json: &str) -> std::result::Result<Vec<EdgeVoice>, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Entry {
+        short_name: String,
+        locale: String,
+        #[serde(default)]
+        gender: String,
+        #[serde(default)]
+        friendly_name: String,
+    }
+    let entries: Vec<Entry> =
+        serde_json::from_str(json).map_err(|e| format!("unreadable voice list: {e}"))?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| EdgeVoice {
+            label: if entry.friendly_name.is_empty() {
+                entry.short_name.clone()
+            } else {
+                entry.friendly_name
+            },
+            id: entry.short_name,
+            locale: entry.locale,
+            gender: entry.gender,
+        })
+        .collect())
+}
+
+/// The voices that speak a dictation language (`it`, `en`, …). The match is on
+/// the whole language subtag, so `i` or `it-` do not select Italian and `iu`
+/// does not.
+pub fn voices_for_language(voices: &[EdgeVoice], language: &str) -> Vec<EdgeVoice> {
+    if language.is_empty() {
+        return Vec::new();
+    }
+    voices
+        .iter()
+        .filter(|voice| voice.locale.split('-').next() == Some(language))
+        .cloned()
+        .collect()
+}
+
+/// The voice a language speaks with when none is chosen. Verified against the
+/// live list on 2026-10-01; a language not listed has no default and the user
+/// is asked to choose from the service list.
+const DEFAULT_VOICES: &[(&str, &str)] = &[
+    ("it", "it-IT-IsabellaNeural"),
+    ("en", "en-US-AriaNeural"),
+    ("fr", "fr-FR-DeniseNeural"),
+    ("de", "de-DE-KatjaNeural"),
+    ("es", "es-ES-ElviraNeural"),
+    ("pt", "pt-BR-FranciscaNeural"),
+    ("ja", "ja-JP-NanamiNeural"),
+    ("zh", "zh-CN-XiaoxiaoNeural"),
+    ("ko", "ko-KR-SunHiNeural"),
+    ("ru", "ru-RU-SvetlanaNeural"),
+];
+
+/// Which voice speaks `language`.
+///
+/// The configured voice is used when it speaks that language (or is
+/// multilingual). Otherwise the language default: the setting holds one voice,
+/// the conversation language can change under Auto, and an Italian voice
+/// reading English is worse than the default for English.
+pub fn choose_voice(language: &str, configured: &str) -> std::result::Result<String, String> {
+    let speaks_language = configured.split('-').next() == Some(language)
+        || configured.contains("Multilingual");
+    if !configured.is_empty() && speaks_language {
+        return Ok(configured.to_string());
+    }
+    DEFAULT_VOICES
+        .iter()
+        .find(|(code, _)| *code == language)
+        .map(|(_, voice)| (*voice).to_string())
+        .ok_or_else(|| {
+            format!(
+                "No default Microsoft Edge voice for language \"{language}\"; choose one in Settings → Voice"
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    const STREAM: &str = include_str!("fixtures/edge_stream.json");
+    const VOICES: &str = include_str!("fixtures/edge_voices.json");
+
+    /// The recorded conversation, as frames in the order the service sent them.
+    fn recorded_frames() -> Vec<Frame> {
+        #[derive(serde::Deserialize)]
+        struct Recording {
+            frames: Vec<serde_json::Value>,
+        }
+        let recording: Recording = serde_json::from_str(STREAM).expect("fixture parses");
+        recording
+            .frames
+            .iter()
+            .map(|frame| match frame["kind"].as_str() {
+                Some("text") => Frame::Text(frame["data"].as_str().unwrap().to_string()),
+                Some("binary") => {
+                    Frame::Binary(base64_decode(frame["b64"].as_str().unwrap()))
+                }
+                other => panic!("unknown frame kind {other:?}"),
+            })
+            .collect()
+    }
+
+    fn base64_decode(text: &str) -> Vec<u8> {
+        const ALPHABET: &[u8] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = Vec::new();
+        let (mut buffer, mut bits) = (0u32, 0u32);
+        for byte in text.bytes().filter(|b| *b != b'=') {
+            let value = ALPHABET.iter().position(|a| *a == byte).unwrap() as u32;
+            buffer = buffer << 6 | value;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((buffer >> bits) as u8);
+                buffer &= (1 << bits) - 1;
+            }
+        }
+        out
+    }
+
+    /// A scripted connection: plays `frames`, then `then`, and records what was sent.
+    struct Script {
+        frames: VecDeque<Frame>,
+        then: fn() -> Frame,
+        sent: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Socket for Script {
+        fn send(&mut self, text: String) -> Result<()> {
+            self.sent.lock().unwrap().push(text);
+            Ok(())
+        }
+        fn recv(&mut self) -> Result<Frame> {
+            Ok(self.frames.pop_front().unwrap_or_else(|| {
+                std::thread::sleep(Duration::from_millis(5));
+                (self.then)()
+            }))
+        }
+    }
+
+    fn engine_playing(
+        frames: Vec<Frame>,
+        then: fn() -> Frame,
+    ) -> (EdgeSpeech, Arc<Mutex<Vec<String>>>) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let shared = Arc::clone(&sent);
+        let frames = Arc::new(Mutex::new(Some(frames)));
+        let engine = EdgeSpeech::with_dial(Box::new(move || {
+            let frames = frames.lock().unwrap().take().unwrap_or_default();
+            Ok(Box::new(Script {
+                frames: frames.into(),
+                then,
+                sent: Arc::clone(&shared),
+            }))
+        }));
+        (engine, sent)
+    }
+
+    const SENTENCE: &str = "Ciao Boss, il pannello è su main.";
+
+    #[test]
+    fn the_recorded_stream_decodes_to_audible_mono_speech_at_the_streams_rate() {
+        // Catches: feeding the frame headers to the MP3 decoder (wrong body
+        // offset), which yields a decode error or noise instead of speech.
+        let (engine, _) = engine_playing(recorded_frames(), || Frame::Idle);
+        let audio = engine
+            .synthesize(SENTENCE, "it-IT-IsabellaNeural", &SpeechCancel::new())
+            .expect("the recorded stream decodes");
+
+        assert_eq!(audio.sample_rate, 24_000);
+        let seconds = audio.duration_seconds();
+        assert!((1.5..6.0).contains(&seconds), "{seconds}s for one sentence");
+        let peak = audio.samples.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+        assert!((0.05..=1.0).contains(&peak), "peak {peak}");
+        assert!(seconds < budget_seconds(SENTENCE));
+    }
+
+    #[test]
+    fn cancelling_while_the_service_is_silent_stops_the_request() {
+        // Catches: a read loop that only checks the flag between frames, so an
+        // abandoned reply on a stalled connection hangs until the deadline.
+        let (engine, _) = engine_playing(vec![recorded_frames().remove(0)], || Frame::Idle);
+        let cancel = SpeechCancel::new();
+        let from_another_thread = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            from_another_thread.cancel();
+        });
+        let started = Instant::now();
+        let result = engine.synthesize(SENTENCE, "it-IT-IsabellaNeural", &cancel);
+
+        assert_eq!(result, Err(SpeechError::Cancelled));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_request_already_cancelled_never_dials() {
+        // Catches: opening a TLS connection for a reply nobody wants.
+        let dialled = Arc::new(Mutex::new(false));
+        let flag = Arc::clone(&dialled);
+        let engine = EdgeSpeech::with_dial(Box::new(move || {
+            *flag.lock().unwrap() = true;
+            Err(SpeechError::Failed("must not dial".into()))
+        }));
+        let cancel = SpeechCancel::new();
+        cancel.cancel();
+
+        assert_eq!(
+            engine.synthesize(SENTENCE, "it-IT-IsabellaNeural", &cancel),
+            Err(SpeechError::Cancelled)
+        );
+        assert!(!*dialled.lock().unwrap());
+    }
+
+    #[test]
+    fn a_service_that_never_finishes_fails_instead_of_hanging() {
+        // Catches: no deadline on the read loop — the user hears nothing and
+        // the reply queue stays "rendering" forever.
+        let (engine, _) = engine_playing(Vec::new(), || Frame::Idle);
+        let engine = engine.with_timeout(Duration::from_millis(200));
+        let result = engine.synthesize(SENTENCE, "it-IT-IsabellaNeural", &SpeechCancel::new());
+
+        match result {
+            Err(SpeechError::Failed(reason)) => assert!(reason.contains("did not finish")),
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audio_that_outgrows_the_text_is_stopped_as_a_runaway() {
+        // Catches: an unbounded download when the service loops on one reply;
+        // "Sì." may not produce more than the budget's worth of audio.
+        let frame = recorded_frames()
+            .into_iter()
+            .find(|f| matches!(f, Frame::Binary(b) if b.len() > 800))
+            .expect("fixture has audio frames");
+        let Frame::Binary(bytes) = frame else { unreachable!() };
+        let endless: fn() -> Frame = || unreachable!();
+        let frames = (0..200).map(|_| Frame::Binary(bytes.clone())).collect();
+        let (engine, _) = engine_playing(frames, endless);
+        let result = engine.synthesize("Sì.", "it-IT-IsabellaNeural", &SpeechCancel::new());
+
+        assert!(matches!(result, Err(SpeechError::Runaway { .. })), "{result:?}");
+    }
+
+    #[test]
+    fn a_connection_closed_before_the_end_is_an_error_not_truncated_speech() {
+        // Catches: speaking half a sentence when the service drops the socket.
+        let mut frames = recorded_frames();
+        frames.truncate(5);
+        let (engine, _) = engine_playing(frames, || Frame::Closed);
+        let result = engine.synthesize(SENTENCE, "it-IT-IsabellaNeural", &SpeechCancel::new());
+
+        match result {
+            Err(SpeechError::Failed(reason)) => assert!(reason.contains("closed the connection")),
+            other => panic!("expected a closed-connection error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_dial_failure_reaches_the_caller_unchanged() {
+        // Catches: swallowing the offline message into silence.
+        let engine = EdgeSpeech::with_dial(Box::new(|| {
+            Err(SpeechError::Failed("cannot reach it".into()))
+        }));
+        assert_eq!(
+            engine.synthesize(SENTENCE, "it-IT-IsabellaNeural", &SpeechCancel::new()),
+            Err(SpeechError::Failed("cannot reach it".into()))
+        );
+    }
+
+    #[test]
+    fn a_voice_that_could_close_the_ssml_attribute_is_refused_before_dialling() {
+        // Catches: SSML injection through the voice setting.
+        let engine = EdgeSpeech::with_dial(Box::new(|| unreachable!("must not dial")));
+        for voice in ["", "it-IT x", "a'><break/>", "it-IT-IsabellaNeural\r\nPath:x"] {
+            assert_eq!(
+                engine.synthesize(SENTENCE, voice, &SpeechCancel::new()),
+                Err(SpeechError::UnknownVoice(voice.to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn the_spoken_text_is_escaped_so_a_transcript_cannot_inject_markup() {
+        // Catches: `<` or `&` in a reply breaking the SSML (the service
+        // answers with an error) or adding elements of the sender's choosing.
+        let (engine, sent) = engine_playing(recorded_frames(), || Frame::Idle);
+        engine
+            .synthesize("a < b & <break/> \u{7}c", "it-IT-IsabellaNeural", &SpeechCancel::new())
+            .expect("synthesizes");
+        let sent = sent.lock().unwrap();
+        let ssml = sent.iter().find(|m| m.contains("Path:ssml")).unwrap();
+
+        assert!(ssml.contains(">a &lt; b &amp; &lt;break/&gt; c<"), "{ssml}");
+        assert!(sent.iter().any(|m| m.contains("Path:speech.config")));
+        assert!(sent[0].contains(OUTPUT_FORMAT));
+    }
+
+    #[test]
+    fn long_text_is_split_on_char_boundaries_below_the_service_limit() {
+        // Catches: a byte-offset cut inside "è" (panic) and a request over the
+        // service's size limit (rejected reply).
+        let text = "perché è così. ".repeat(500);
+        let pieces = split_text(&text);
+
+        assert!(pieces.len() > 1);
+        assert!(pieces.iter().all(|p| p.len() <= MAX_TEXT_BYTES));
+        let rejoined = pieces.join(" ");
+        assert_eq!(
+            rejoined.split_whitespace().count(),
+            text.split_whitespace().count()
+        );
+        assert!(split_text("   ").is_empty());
+    }
+
+    #[test]
+    fn a_frame_too_short_for_its_own_header_is_an_error_not_a_panic() {
+        // Catches: slicing past the end on a truncated frame from the service.
+        assert!(audio_body(&[0x00]).is_err());
+        assert!(audio_body(&[0x00, 0x10, b'P']).is_err());
+        assert_eq!(audio_body(&[0x00, 0x04, b'a', b'b', b'c', b'd', 9]).unwrap(), &[] as &[u8]);
+    }
+
+    #[test]
+    fn only_path_audio_frames_contribute_bytes() {
+        // Catches: a metadata or unknown binary frame being decoded as MP3.
+        let mut frame = vec![0x00, 10];
+        frame.extend_from_slice(b"Path:audio");
+        frame.extend_from_slice(&[1, 2, 3]);
+        assert_eq!(audio_body(&frame).unwrap(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn the_end_of_the_turn_is_recognised_by_its_path_header() {
+        let frames = recorded_frames();
+        let paths: Vec<_> = frames
+            .iter()
+            .filter_map(|f| match f {
+                Frame::Text(t) => message_path(t),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths, ["turn.start", "response", "turn.end"]);
+    }
+
+    #[test]
+    fn the_handshake_token_matches_the_reference_implementation() {
+        // Reference value computed with the Python `edge-tts` algorithm for
+        // 2026-10-01T19:36:20Z. A wrong rounding or epoch makes the service
+        // answer 403 for everybody.
+        let at = UNIX_EPOCH + Duration::from_secs(1_790_883_380);
+        assert_eq!(
+            sec_ms_gec(at),
+            "A95E984BF41D3C7B98C20460112A5DD785722A04FC99D8110F2ED9703A010F73"
+        );
+    }
+
+    #[test]
+    fn timestamps_use_the_browser_format() {
+        assert_eq!(
+            format_timestamp(1_790_883_380),
+            "Thu Oct 01 2026 19:36:20 GMT+0000 (Coordinated Universal Time)"
+        );
+        assert_eq!(
+            format_timestamp(0),
+            "Thu Jan 01 1970 00:00:00 GMT+0000 (Coordinated Universal Time)"
+        );
+        assert_eq!(
+            format_timestamp(1_709_164_800),
+            "Thu Feb 29 2024 00:00:00 GMT+0000 (Coordinated Universal Time)"
+        );
+    }
+
+    #[test]
+    fn the_recorded_voice_list_filters_by_whole_language_subtag() {
+        // Catches: prefix matching, where "i" or "it-" selects Italian and "en"
+        // swallows other languages whose code starts the same way.
+        let voices = parse_voices(VOICES).expect("recorded list parses");
+        let italian: Vec<_> = voices_for_language(&voices, "it")
+            .into_iter()
+            .map(|v| v.id)
+            .collect();
+
+        assert_eq!(
+            italian,
+            [
+                "it-IT-GiuseppeMultilingualNeural",
+                "it-IT-DiegoNeural",
+                "it-IT-ElsaNeural",
+                "it-IT-IsabellaNeural"
+            ]
+        );
+        assert!(voices_for_language(&voices, "i").is_empty());
+        assert!(voices_for_language(&voices, "").is_empty());
+        assert!(voices_for_language(&voices, "auto").is_empty());
+        assert!(voices_for_language(&voices, "en").iter().all(|v| v.locale == "en-US"));
+    }
+
+    #[test]
+    fn an_unreadable_voice_list_is_reported() {
+        assert!(parse_voices("<html>").is_err());
+    }
+
+    #[test]
+    fn every_default_voice_is_in_the_recorded_list_where_the_list_covers_its_language() {
+        // Catches: a default that the service does not offer (typo, rename).
+        let voices = parse_voices(VOICES).unwrap();
+        for (language, voice) in DEFAULT_VOICES {
+            let offered = voices_for_language(&voices, language);
+            if !offered.is_empty() {
+                assert!(offered.iter().any(|v| v.id == *voice), "{voice}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_configured_voice_for_another_language_falls_back_to_the_language_default() {
+        // Catches: an Italian voice reading an English reply after the
+        // conversation language changed under Auto.
+        assert_eq!(
+            choose_voice("en", "it-IT-ElsaNeural").unwrap(),
+            "en-US-AriaNeural"
+        );
+        assert_eq!(choose_voice("it", "it-IT-ElsaNeural").unwrap(), "it-IT-ElsaNeural");
+        assert_eq!(choose_voice("it", "").unwrap(), "it-IT-IsabellaNeural");
+        assert_eq!(
+            choose_voice("en", "it-IT-GiuseppeMultilingualNeural").unwrap(),
+            "it-IT-GiuseppeMultilingualNeural"
+        );
+    }
+
+    #[test]
+    fn a_language_without_a_default_asks_the_user_to_choose() {
+        // Catches: silently speaking in a voice of another language.
+        let error = choose_voice("sv", "").unwrap_err();
+        assert!(error.contains("choose one"), "{error}");
+        assert_eq!(choose_voice("sv", "sv-SE-SofieNeural").unwrap(), "sv-SE-SofieNeural");
+    }
+
+    /// Live check against the real service. Not part of any suite:
+    /// `cargo nextest run -E 'test(live_edge_service)' --run-ignored only`.
+    #[test]
+    #[ignore = "needs the internet"]
+    fn live_edge_service_speaks_one_italian_sentence() {
+        // The application installs this at startup (`lib.rs`); a test binary has no such step.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let audio = EdgeSpeech::new()
+            .synthesize(SENTENCE, "it-IT-IsabellaNeural", &SpeechCancel::new())
+            .expect("the service answers");
+        assert_eq!(audio.sample_rate, 24_000);
+        assert!(audio.duration_seconds() > 1.0, "{}s", audio.duration_seconds());
+    }
+}

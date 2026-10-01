@@ -1211,7 +1211,10 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 - **Auto-send** — Enable in Settings > Voice to automatically submit (press Enter) after transcription completes.
 - Spoken-reply voice, hands-free activation phrase and hold-back delay — see 9.11.
 
-### 9.7 Speech Assets
+### 9.7 Speech Engines and Assets
+- **Microsoft Edge voices are the default engine.** No download; the voice list comes from the service, filtered by the dictation language, with a Listen button, and the chosen voice persists. It needs the internet and sends the reply text to Microsoft's speech service (stated in the settings). Offline or a service error shows a clear message in the Voice section, never silence or a hang; a cancelled or over-budget reply stops promptly.
+- **Expert > Speech engine** switches to Pocket TTS (local) or an external command. A fresh install gets Edge; an installation with a chosen Pocket voice, the Pocket runtime on disk or a configured speech command keeps that engine. Echo cancellation, hush, volume, levelling and the voice choice apply to all engines.
+- The rest of this section describes the Pocket engine's assets.
 - Spoken replies need two downloads beside the Whisper models: a **language bundle** (ONNX graphs, tokenizer, voice — about 130 MB, French about 390 MB) and **ONNX Runtime** itself (42 MB). Neither ships with the app.
 - Bundled languages: English, French, German, Italian, Portuguese and Spanish, each with the voice Kyutai lists as native to it (alba, estelle, juergen, giovanni, rafael, lola). French exists upstream only as the larger 24-layer model.
 - The catalogue is an **allowlist compiled into the binary**, not a fetched manifest: every file is pinned to an immutable upstream revision and to a sha256, and a download whose bytes do not match that hash is refused instead of installed.
