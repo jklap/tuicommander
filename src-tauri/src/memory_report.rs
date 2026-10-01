@@ -143,8 +143,22 @@ pub(crate) const LARGE_BLOCK_BYTES: u64 = 8 * 1024 * 1024;
 /// (`force_lock`/`force_unlock`) — so a concurrent resize of the allocator's own
 /// tables cannot be observed half-done. Other threads' `malloc` calls wait for
 /// it, and the recorder therefore never allocates.
-#[cfg(target_os = "macos")]
+///
+/// `None` means the census is not available or the walk failed part-way; a
+/// partial count is never returned as if it were the whole heap.
 pub(crate) fn large_malloc_blocks() -> Option<(u64, u64)> {
+    #[cfg(target_os = "macos")]
+    {
+        walk_zones().map(|(count, bytes, _)| (count, bytes))
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// The walk behind [`large_malloc_blocks`], plus the longest time any one zone
+/// stayed locked: that is how long every allocating thread waited.
+#[cfg(target_os = "macos")]
+fn walk_zones() -> Option<(u64, u64, std::time::Duration)> {
     // Declared here rather than taken from `libc`, which exposes none of it.
     // Layouts are `<malloc/malloc.h>`; only the prefix this walk reads is spelled.
     #[repr(C)]
@@ -203,7 +217,7 @@ pub(crate) fn large_malloc_blocks() -> Option<(u64, u64)> {
             count: *mut libc::c_uint,
         ) -> libc::c_int;
     }
-    const MALLOC_PTR_IN_USE_RANGE_TYPE: libc::c_uint = 2;
+    const MALLOC_PTR_IN_USE_RANGE_TYPE: libc::c_uint = 1;
 
     unsafe extern "C" fn record(
         _task: u32,
@@ -236,6 +250,7 @@ pub(crate) fn large_malloc_blocks() -> Option<(u64, u64)> {
     }
 
     let mut census = Census::default();
+    let mut longest = std::time::Duration::ZERO;
     for i in 0..zone_count as usize {
         let zone = unsafe { *addresses.add(i) } as *mut Zone;
         let introspect = unsafe { zone.as_ref() }.map(|z| z.introspect)?;
@@ -249,9 +264,10 @@ pub(crate) fn large_malloc_blocks() -> Option<(u64, u64)> {
         ) else {
             continue;
         };
-        unsafe {
+        let started = std::time::Instant::now();
+        let rc = unsafe {
             lock(zone);
-            enumerate(
+            let rc = enumerate(
                 task,
                 std::ptr::addr_of_mut!(census).cast(),
                 MALLOC_PTR_IN_USE_RANGE_TYPE,
@@ -260,14 +276,14 @@ pub(crate) fn large_malloc_blocks() -> Option<(u64, u64)> {
                 record,
             );
             unlock(zone);
+            rc
+        };
+        longest = longest.max(started.elapsed());
+        if rc != 0 {
+            return None;
         }
     }
-    Some((census.count, census.bytes))
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn large_malloc_blocks() -> Option<(u64, u64)> {
-    None
+    Some((census.count, census.bytes, longest))
 }
 
 /// Just the bytes half of [`malloc_zone_stats`], for callers weighing a
@@ -404,7 +420,8 @@ pub(crate) fn report(state: &Arc<AppState>) -> serde_json::Value {
     let maps = maps(state);
     let accounted: usize = maps.iter().filter_map(|m| m.bytes).sum();
     let (blocks, heap_bytes) = malloc_zone_stats().unzip();
-    let (large_count, large_bytes) = large_malloc_blocks().unzip();
+    let large = large_malloc_blocks();
+    let (large_count, large_bytes) = large.unzip();
     serde_json::json!({
         "phys_footprint_bytes": phys_footprint_bytes(),
         // What the maps below explain. A footprint far above this is memory no
@@ -422,6 +439,9 @@ pub(crate) fn report(state: &Arc<AppState>) -> serde_json::Value {
         // a gap with none is small allocations.
         "malloc_large_blocks": {
             "min_bytes": LARGE_BLOCK_BYTES,
+            // false: the walk failed or is unsupported, so count/bytes are null
+            // rather than a low number that reads as a real answer.
+            "complete": large.is_some(),
             "count": large_count,
             "bytes": large_bytes,
         },
@@ -549,6 +569,28 @@ mod tests {
         drop(std::hint::black_box(block));
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_zone_walk_over_a_gigabyte_of_small_blocks_does_not_stall_allocators_for_long() {
+        // The bug this guards: every zone stays force-locked for its whole walk,
+        // so on a big heap each allocating thread in the app waits that long.
+        // 1 GiB in a million blocks is the shape of the heap this report is for.
+        let blocks: Vec<Vec<u8>> = (0..1_000_000).map(|_| vec![1u8; 1024]).collect();
+        let longest = (0..5)
+            .map(|_| walk_zones().expect("the walk completes").2)
+            .max()
+            .unwrap();
+        eprintln!(
+            "longest single-zone walk over {} blocks: {longest:?}",
+            blocks.len()
+        );
+        drop(std::hint::black_box(blocks));
+        assert!(
+            longest < std::time::Duration::from_millis(50),
+            "a zone stayed locked for {longest:?}"
+        );
+    }
+
     #[test]
     fn the_report_carries_the_large_block_census() {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
@@ -557,7 +599,14 @@ mod tests {
             report["malloc_large_blocks"]["min_bytes"],
             LARGE_BLOCK_BYTES
         );
-        assert!(report["malloc_large_blocks"].get("count").is_some());
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(report["malloc_large_blocks"]["complete"], true);
+            assert!(report["malloc_large_blocks"]["count"].is_u64());
+            assert!(report["malloc_large_blocks"]["bytes"].is_u64());
+        }
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(report["malloc_large_blocks"]["complete"], false);
     }
 
     #[test]
