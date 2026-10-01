@@ -123,7 +123,7 @@ describe("PrSection row actions", () => {
 		expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "update_pr_branch")).toHaveLength(1);
 	});
 
-	it("shows a failed row action only on its own row and clears it when another row opens", async () => {
+	it("shows a failed row action only on its own row and keeps it when another row opens", async () => {
 		// Catches: one shared error slot printing PR #12's failure under every expanded PR.
 		mockInvoke.mockRejectedValueOnce(new Error("boom"));
 		const first = pr();
@@ -150,6 +150,16 @@ describe("PrSection row actions", () => {
 		await vi.waitFor(() => expect(container.textContent).toContain("boom"));
 		setKey(other.branch);
 		await vi.waitFor(() => expect(container.textContent).not.toContain("boom"));
+		setKey(first.branch);
+		await vi.waitFor(() => expect(container.textContent).toContain("boom"));
+	});
+
+	it("shows a fallback text when the rejection message is empty", async () => {
+		// Catches: an empty rejection rendering an empty error line.
+		mockInvoke.mockRejectedValueOnce("");
+		const { container } = renderSection(pr());
+		fireEvent.click(button(container, "Update branch"));
+		await vi.waitFor(() => expect(container.textContent).toContain("Update branch failed"));
 	});
 
 	it("brings Update branch back after one poll interval when the head did not change", async () => {

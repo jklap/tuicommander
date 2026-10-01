@@ -49,6 +49,10 @@ export interface PrSectionProps {
 	onMerged: (branchName: string, baseBranch: string, hasDirtyFiles: boolean) => void;
 }
 
+/** Text of a failed action; an empty rejection must not render an empty line. */
+const failureMessage = (error: unknown, action: string) =>
+	(error instanceof Error ? error.message : String(error)).trim() || `${action} failed`;
+
 const createPrSet = () => {
 	const [prs, setPrs] = createSignal<ReadonlySet<number>>(new Set());
 	const set = (prNumber: number, on: boolean) =>
@@ -102,10 +106,16 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 		}, UPDATE_BRANCH_HOLD_MS);
 		updateHoldTimers.add(timer);
 	};
+	// An error lives until its PR starts its next action or leaves the list; expanding or
+	// collapsing rows never clears it.
 	createEffect(
 		on(
-			() => props.expandedKey,
-			() => setRowErrors(new Map()),
+			() => props.prs.map((pr) => pr.number),
+			(numbers) =>
+				setRowErrors((errors) => {
+					if ([...errors.keys()].every((n) => numbers.includes(n))) return errors;
+					return new Map([...errors].filter(([n]) => numbers.includes(n)));
+				}),
 			{ defer: true },
 		),
 	);
@@ -151,7 +161,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			}
 			props.onMerged(pr.branch, baseBranch, hasDirtyFiles);
 		} catch (e) {
-			const msg = String(e);
+			const msg = failureMessage(e, "Merge");
 			setRowError(pr.number, msg);
 			appLogger.error("github", `Failed to merge PR #${pr.number}`, { error: msg });
 		} finally {
@@ -167,7 +177,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			appLogger.info("github", `Approved PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
-			const msg = String(e);
+			const msg = failureMessage(e, "Approve");
 			setRowError(pr.number, msg);
 			appLogger.error("github", `Failed to approve PR #${pr.number}`, { error: msg });
 		} finally {
@@ -193,7 +203,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			appLogger.info("github", `Requested branch update for PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
-			const msg = String(e);
+			const msg = failureMessage(e, "Update branch");
 			setRowError(pr.number, msg);
 			appLogger.error("github", `Failed to update branch of PR #${pr.number}`, { error: msg });
 		} finally {
@@ -213,7 +223,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 			appLogger.info("github", `Closed PR #${pr.number}`);
 			githubStore.pollRepo(props.repoPath);
 		} catch (e) {
-			const msg = String(e);
+			const msg = failureMessage(e, "Close PR");
 			setRowError(pr.number, msg);
 			appLogger.error("github", `Failed to close PR #${pr.number}`, { error: msg });
 		} finally {
