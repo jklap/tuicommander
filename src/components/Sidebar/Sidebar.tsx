@@ -113,7 +113,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	const coarsePointer = createCoarsePointer();
 	const density = createMemo(() => {
 		const layout = filteredLayout();
-		// GroupSection renders nothing for a collapsed group, so its repos take no rows.
+		// A collapsed group keeps its header row (counted below) but renders no repos.
 		const repos = [...layout.ungrouped, ...layout.groups.filter((g) => !g.group.collapsed).flatMap((g) => g.repos)];
 		// RepoSection renders each panel with items under every open repo: a header
 		// row, plus one row per item unless the panel is collapsed.
@@ -122,7 +122,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 			.filter((p) => p.items.length > 0)
 			.reduce((n, p) => n + 1 + (p.collapsed ? 0 : p.items.length), 0);
 		return sidebarDensity(
-			countSidebarRows(repos, settingsStore.state.tabTreeEnabled, pluginRows),
+			countSidebarRows(repos, settingsStore.state.tabTreeEnabled, pluginRows) + layout.groups.length,
 			coarsePointer(),
 			uiStore.state.sidebarDensityMode,
 		);
