@@ -85,4 +85,28 @@ describe("IdeasPanel paste after the shared-helper refactor (critic 1350)", () =
 		expect(e.defaultPrevented).toBe(false);
 		expect(invoke).not.toHaveBeenCalled();
 	});
+
+	it("attaches the image when text/plain is only the image's file name — catches a Finder file copy pasting the name", async () => {
+		const { container } = render(() => (
+			<IdeasPanel visible={true} repoPath={null} onClose={() => {}} onSendToTerminal={() => {}} />
+		));
+		const ta = container.querySelector("textarea") as HTMLTextAreaElement;
+		const e = new Event("paste", { bubbles: true, cancelable: true });
+		Object.defineProperty(e, "clipboardData", {
+			value: {
+				items: [
+					{ kind: "string", type: "text/plain", getAsFile: () => null },
+					{
+						kind: "file",
+						type: "image/png",
+						getAsFile: () => new File([new Uint8Array([1])], "x", { type: "image/png" }),
+					},
+				],
+				getData: (t: string) => (t === "text/plain" ? "/Users/me/Desktop/shot.png" : ""),
+			},
+		});
+		ta.dispatchEvent(e);
+		expect(e.defaultPrevented).toBe(true);
+		await waitFor(() => expect(container.querySelectorAll("img").length).toBe(1));
+	});
 });

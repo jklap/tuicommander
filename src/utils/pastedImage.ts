@@ -17,11 +17,20 @@ async function blobToBase64(blob: Blob): Promise<string> {
 	return btoa(binary);
 }
 
+const IMAGE_FILE_NAME = /^[^\r\n]*\.(png|jpe?g|webp|gif)$/i;
+
+/** Finder puts the copied image file's name or path on the clipboard as text/plain
+ *  next to the image itself; that text is not something the user means to paste. */
+function isImageFileName(e: ClipboardEvent): boolean {
+	return IMAGE_FILE_NAME.test(e.clipboardData?.getData?.("text/plain").trim() ?? "");
+}
+
 /** Save the first accepted image on a paste event and return its path.
  *
  *  Returns null when the paste carries no accepted image (the default text paste
- *  proceeds), when it also carries text/plain (a spreadsheet cell copy puts a
- *  rendered picture next to its text; the text wins), or when saving failed
+ *  proceeds), when it also carries text/plain that is more than the image's own
+ *  file name (a spreadsheet cell copy puts a rendered picture next to its text;
+ *  the text wins), or when saving failed
  *  (logged). The default action is cancelled
  *  synchronously, before the first await, so the caller may rely on
  *  `event.defaultPrevented` to know the paste was claimed.
@@ -30,7 +39,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
 export async function savePastedImage(e: ClipboardEvent, getNoteId: () => string): Promise<string | null> {
 	const items = e.clipboardData?.items;
 	if (!items) return null;
-	if (Array.from(items).some((item) => item.type === "text/plain")) return null;
+	if (Array.from(items).some((item) => item.type === "text/plain") && !isImageFileName(e)) return null;
 
 	for (const item of items) {
 		const extension = IMAGE_EXTENSIONS.get(item.type);

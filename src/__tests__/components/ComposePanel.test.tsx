@@ -367,4 +367,24 @@ describe("ComposePanel", () => {
 		expect(invoke).not.toHaveBeenCalled();
 		expect(editorText(container)).toBe("A1\tB1");
 	});
+
+	// Catches: a Finder image-file copy (file name as text/plain + image/png) pasting the file name instead of the image.
+	it("attaches the image when text/plain is only the image's file name", async () => {
+		vi.mocked(invoke).mockResolvedValueOnce("/data/note-images/n1/shot.png");
+		const { container } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		const content = container.querySelector(".cm-content") as HTMLElement;
+
+		const event = pasteEvent(
+			[
+				{ type: "text/plain", file: null },
+				{ type: "image/png", file: new File(["x"], "shot.png", { type: "image/png" }) },
+			],
+			"shot.png",
+		);
+		content.dispatchEvent(event);
+
+		expect(event.defaultPrevented).toBe(true);
+		await waitFor(() => expect(editorText(container)).toBe("[image: /data/note-images/n1/shot.png]"));
+	});
 });
