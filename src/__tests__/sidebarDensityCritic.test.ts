@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { countSidebarRows, ROOMY_MAX_ROWS } from "../utils/sidebarDensity";
+import { countSidebarRows } from "../utils/sidebarDensity";
 
 // Critic cases for #1334-b659 round 1.
 
@@ -10,10 +10,11 @@ describe("countSidebarRows (critic)", () => {
 	// branch (BranchTabList), so one repo with 20 open agents counts as 2 rows and stays "comfortable".
 	it("counts the nested terminal rows of an expanded branch", () => {
 		const terminals = Array.from({ length: 20 }, (_, i) => `t${i}`);
-		const rows = countSidebarRows([
-			{ expanded: true, collapsed: false, workspaces: { main: { terminals, tabsCollapsed: false } } },
-		]);
-		expect(rows).toBeGreaterThan(ROOMY_MAX_ROWS);
+		const rows = countSidebarRows(
+			[{ expanded: true, collapsed: false, workspaces: { main: { terminals, tabsCollapsed: false } } }],
+			true,
+		);
+		expect(rows).toBeGreaterThan(16);
 	});
 });
 

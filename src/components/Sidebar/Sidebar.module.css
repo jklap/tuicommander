@@ -72,10 +72,6 @@
   height: 36px;
 }
 
-.sidebar[data-density="touch"] .branchActions {
-  max-width: 84px;
-}
-
 .resizeHandle {
   position: absolute;
   top: 0;
@@ -1031,6 +1027,12 @@
     opacity: 1;
     pointer-events: auto;
   }
+
+  /* Touch density (forced, or an iPad trackpad) has 36px buttons: widen the
+     hover reveal only. Idle, the actions stay collapsed and reserve no space. */
+  .sidebar[data-density="touch"] .branchItem:hover .branchActions {
+    max-width: 84px;
+  }
 }
 
 /* No hover on touch: the actions (+ with its long-press agent list) stay visible. */
@@ -1039,6 +1041,10 @@
     max-width: 44px;
     opacity: 1;
     pointer-events: auto;
+  }
+
+  .sidebar[data-density="touch"] .branchActions {
+    max-width: 84px;
   }
 }
 

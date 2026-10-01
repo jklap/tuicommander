@@ -24,12 +24,21 @@ export const ROOMY_MAX_ROWS = 16;
 export interface DensityRepoShape {
 	collapsed: boolean;
 	expanded: boolean;
-	workspaces: Record<string, unknown>;
+	workspaces: Record<string, { terminals: readonly unknown[]; tabsCollapsed?: boolean }>;
 }
 
-/** Rows the sidebar would render: one header per repo plus its branch rows when open. */
-export function countSidebarRows(repos: readonly DensityRepoShape[]): number {
-	return repos.reduce((n, r) => n + 1 + (r.expanded && !r.collapsed ? Object.keys(r.workspaces).length : 0), 0);
+/**
+ * Rows the sidebar would render: one header per repo, one row per branch when the
+ * repo is open, and one row per terminal tab under a branch whose tab list is shown
+ * (`tabTreeEnabled` on and the branch not collapsed).
+ */
+export function countSidebarRows(repos: readonly DensityRepoShape[], tabTreeEnabled: boolean): number {
+	return repos.reduce((n, r) => {
+		if (!r.expanded || r.collapsed) return n + 1;
+		const branches = Object.values(r.workspaces);
+		const tabs = tabTreeEnabled ? branches.reduce((t, w) => t + (w.tabsCollapsed ? 0 : w.terminals.length), 0) : 0;
+		return n + 1 + branches.length + tabs;
+	}, 0);
 }
 
 /**

@@ -5185,8 +5185,12 @@ mod tests {
     /// round trip, and a prefs file from before it existed must load as "auto".
     #[test]
     fn ui_prefs_keep_sidebar_density_and_default_to_auto() {
-        let saved: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_density":"compact"}"#).unwrap();
-        assert_eq!(serde_json::to_value(&saved).unwrap()["sidebar_density"], "compact");
+        let saved: UIPrefsConfig =
+            serde_json::from_str(r#"{"sidebar_density":"compact"}"#).unwrap();
+        assert_eq!(
+            serde_json::to_value(&saved).unwrap()["sidebar_density"],
+            "compact"
+        );
         let old: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
         assert_eq!(old.sidebar_density, "auto");
     }

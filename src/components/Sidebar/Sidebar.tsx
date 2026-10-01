@@ -113,7 +113,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	const density = createMemo(() => {
 		const layout = filteredLayout();
 		const repos = [...layout.ungrouped, ...layout.groups.flatMap((g) => g.repos)];
-		return sidebarDensity(countSidebarRows(repos), coarsePointer(), uiStore.state.sidebarDensityMode);
+		return sidebarDensity(
+			countSidebarRows(repos, settingsStore.state.tabTreeEnabled),
+			coarsePointer(),
+			uiStore.state.sidebarDensityMode,
+		);
 	});
 
 	const drag = useSidebarDragDrop();
