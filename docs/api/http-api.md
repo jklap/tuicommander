@@ -751,18 +751,23 @@ Adds a window (with one virtual initial pane) to an existing session.
 
 ```
 POST /tmux/panes
-{ "label": "...", "window_id": "@0", "cwd": "/optional/path" }
+{ "label": "...", "window_id": "@0", "cwd": "/optional/path", "origin_session_id": "<uuid, optional>" }
 → 201 { "pane_id": "%2", "tuic_session_id": "<uuid>" }
 ```
 Adds a pane to an existing window — unlike the initial panes above, this one **materialises
-immediately** (spawns a real PTY): a split is always about to be used.
+immediately** (spawns a real PTY): a split is always about to be used. `origin_session_id` is
+the calling `tuic`'s own `TUIC_SESSION` (the Claude Code lead whose swarm this pane belongs
+to); it is recorded as the pane's `lead_session_id` only if it names a live session, and
+ignored otherwise.
 
 ```
 POST /tmux/panes/:id/materialize?label=<label>
-{ "cwd": "/optional/path" }
+{ "cwd": "/optional/path", "origin_session_id": "<uuid, optional>" }
 → 200 { "tuic_session_id": "<uuid>" }
 ```
 Idempotent lazy spawn for a still-virtual pane; returns the existing id if already materialised.
+`origin_session_id` behaves as on `POST /tmux/panes` and is how a swarm's first (initially
+virtual) teammate learns its lead; a lead already recorded is never overwritten.
 
 ```
 PUT /tmux/panes/:id?label=<label>

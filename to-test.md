@@ -1215,6 +1215,33 @@ test can reach is the live process: these are the checks that need one.
 - [ ] Switch repository and back. Only one ego process per root (`ps ax | grep ego`), and the first conversation must still be there. _(NOT VERIFIED 2026-09-29: Needs real ego processes (ps ax | grep ego) per repo root.)_
 - [ ] A live prompt: check whether ego echoes the user message back as `user_message_chunk`. _(NOTE: the panel now renders server `promptSent` rather than a local optimistic message; if ego also sends a live user chunk, the two sources could duplicate it.)_
 
+## An idle Agent-Teams teammate no longer holds its lead "working" (2026-10-01)
+
+Rust change, needs a `make dev` restart. Claude Code lists a teammate as `running` in every
+`Stop` payload until it is shut down, so a lead with any teammate used to stay
+`declared_background_work=true` forever (and the tab read "working", with completion/suggest/
+standby held). The lead now counts as working only for non-teammate background work, or while a
+teammate it owns (tmux pane `lead_session_id`, sent by `tuic-cli` as `origin_session_id`) has a
+busy terminal. Needs the rebuilt `tuic-hook` sidecar (it now also emits `bgtasksummary`): run
+`cargo build --package tuic-hook` and let the app re-install hooks.
+
+- [ ] Spawn an Agent Teams swarm from a Claude Code lead, let every teammate finish and go idle.
+  Once the lead's own turn ends, the lead's tab reads **idle** (not "working"); before this
+  change it stayed working until the next prompt.
+- [ ] While a teammate is actually working, the lead's tab reads **working**; the moment that
+  teammate finishes it returns to idle without any input in the lead.
+- [ ] A lead with a teammate idle AND a `run_in_background` shell task still running reads
+  working; it goes idle when the shell task's completion ends the turn.
+- [ ] `GET /sessions/{lead}/explain-state`: `epoch_flags.declared_background_work` shows
+  `breakdown_source: "summary"`, `teammate_running`, `teammates_busy`, `counts_now`, `age_ms`,
+  and a `swarm.teammates` list with each teammate's `shell_state`. On a teammate's session,
+  `swarm.lead_session_id` names the lead.
+- [ ] Smart Prompt injection into a lead whose only remaining work is an idle teammate works (no
+  "Agent is busy").
+- [ ] Older installed `tuic-hook` (no `bgtasksummary`): the lead still reads working while a
+  teammate exists (old behavior, not worse). `explain-state` shows `breakdown_source:
+  "statuses_only"`.
+
 ## `is_remote` now means "created by an agent", not "created via HTTP/MCP" (2026-09-30)
 
 Every `POST /sessions`/`/sessions/worktree` call from our own HTTP client (the browser UI's
