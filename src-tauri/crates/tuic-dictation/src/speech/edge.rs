@@ -1092,7 +1092,7 @@ mod critic_round1 {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    const VOICE: &str = "it-IT-IsabellaNeural";
+    pub(super) const VOICE: &str = "it-IT-IsabellaNeural";
 
     /// What a fake connection does on each `recv`; once the script is empty
     /// it behaves like a mute service (a read timeout every 10 ms).
@@ -1118,7 +1118,7 @@ mod critic_round1 {
     }
 
     /// A dial whose n-th connection plays `script(n)`; counts the dials.
-    fn dial_with(
+    pub(super) fn dial_with(
         script: impl Fn(usize) -> Vec<Result<Frame>> + Send + Sync + 'static,
     ) -> (EdgeSpeech, Arc<AtomicUsize>, Arc<Mutex<Vec<String>>>) {
         let dials = Arc::new(AtomicUsize::new(0));
@@ -1134,7 +1134,7 @@ mod critic_round1 {
         (speech, dials, sent)
     }
 
-    fn audio_frame(body: &[u8]) -> Result<Frame> {
+    pub(super) fn audio_frame(body: &[u8]) -> Result<Frame> {
         let headers =
             b"X-RequestId:abc\r\nContent-Type:audio/mpeg\r\nX-StreamId:1\r\nPath:audio\r\n";
         let mut frame = (headers.len() as u16).to_be_bytes().to_vec();
@@ -1143,7 +1143,7 @@ mod critic_round1 {
         Ok(Frame::Binary(frame))
     }
 
-    fn turn_end() -> Result<Frame> {
+    pub(super) fn turn_end() -> Result<Frame> {
         Ok(Frame::Text(
             "X-RequestId:abc\r\nPath:turn.end\r\n\r\n{}".to_string(),
         ))
@@ -1172,7 +1172,7 @@ mod critic_round1 {
     }
 
     /// The MP3 of the recorded stream, parsed here without the code under test.
-    fn recorded_mp3() -> Vec<u8> {
+    pub(super) fn recorded_mp3() -> Vec<u8> {
         let doc: serde_json::Value =
             serde_json::from_str(include_str!("fixtures/edge_stream.json")).unwrap();
         let mut mp3 = Vec::new();
@@ -1190,7 +1190,7 @@ mod critic_round1 {
         mp3
     }
 
-    fn synth(speech: &EdgeSpeech, text: &str) -> Result<SpeechAudio> {
+    pub(super) fn synth(speech: &EdgeSpeech, text: &str) -> Result<SpeechAudio> {
         speech.synthesize(text, VOICE, &SpeechCancel::new())
     }
 
@@ -1514,5 +1514,177 @@ mod critic_round1 {
             choose_voice("it", "it-IT-IsabellaNeural").unwrap(),
             "it-IT-IsabellaNeural"
         );
+    }
+}
+
+/// Adversarial cases from the critic of 1357-7d37 (round 2: dial thread, escaped split).
+#[cfg(test)]
+mod critic_round2 {
+    use super::critic_round1::{VOICE, audio_frame, dial_with, recorded_mp3, synth, turn_end};
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn plain(text: &str) -> String {
+        text.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    #[test]
+    fn an_abandoned_dial_neither_sends_nor_serves_the_next_reply() {
+        // Catches: the late connection of a cancelled reply being picked up by
+        // the next request (shared channel) or writing the old text to the service.
+        let mp3 = recorded_mp3();
+        let (speech, dials, sent) = dial_with(move |n| {
+            if n == 0 {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            vec![audio_frame(&mp3), turn_end()]
+        });
+        let cancel = SpeechCancel::new();
+        let remote = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            remote.cancel();
+        });
+        let first = speech.synthesize("vecchio testo", VOICE, &cancel);
+        assert!(matches!(first, Err(SpeechError::Cancelled)), "{first:?}");
+
+        let second = synth(&speech, "nuovo testo").expect("the second reply is served");
+        assert!(!second.samples.is_empty());
+        std::thread::sleep(Duration::from_millis(500)); // the abandoned dial finishes
+        let sent = sent.lock().unwrap();
+        assert_eq!(dials.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            sent.len(),
+            2,
+            "config + ssml of the second reply only: {sent:?}"
+        );
+        assert!(sent.iter().all(|m| !m.contains("vecchio")), "{sent:?}");
+    }
+
+    #[test]
+    fn a_dial_that_panics_is_a_typed_failure_not_a_hang() {
+        // Catches: the poll loop waiting forever on a channel whose sender died.
+        let speech = EdgeSpeech::with_dial(Box::new(|| panic!("resolver blew up")));
+        let start = Instant::now();
+        let result = synth(&speech, "ciao");
+        assert!(
+            matches!(&result, Err(SpeechError::Failed(m)) if m.contains("cannot reach")),
+            "{result:?}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn the_deadline_is_not_re_armed_after_a_slow_dial() {
+        // Catches: the time limit restarting once connected, so a 200 ms dial plus
+        // a 300 ms limit lets a mute service hold the reply for 500 ms.
+        let speech = EdgeSpeech::with_dial(Box::new(|| {
+            std::thread::sleep(Duration::from_millis(200));
+            struct Mute;
+            impl Socket for Mute {
+                fn send(&mut self, _: String) -> Result<()> {
+                    Ok(())
+                }
+                fn recv(&mut self) -> Result<Frame> {
+                    std::thread::sleep(Duration::from_millis(10));
+                    Ok(Frame::Idle)
+                }
+            }
+            Ok(Box::new(Mute))
+        }))
+        .with_timeout(Duration::from_millis(300));
+        let start = Instant::now();
+        let result = synth(&speech, "ciao");
+        assert!(
+            matches!(&result, Err(SpeechError::Failed(m)) if m.contains("in time")),
+            "{result:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_millis(450),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_mixed_text_is_cut_into_pieces_that_fit_and_lose_nothing() {
+        // Catches: a cut that drops or repeats text, splits an entity's source
+        // character, or lets a piece exceed the escaped limit (apostrophes,
+        // ampersands, angle brackets, accents, CJK, astral emoji).
+        let tokens = [
+            "l'altro",
+            "&",
+            "è",
+            "日本語",
+            "<b>",
+            "😀",
+            "x".repeat(50).leak(),
+            "dell'uomo",
+        ];
+        let text: String = (0..3000)
+            .map(|i| tokens[(i * 7) % tokens.len()])
+            .collect::<Vec<_>>()
+            .join(" ");
+        let pieces = split_text(&text);
+        assert!(pieces.len() > 3);
+        for piece in &pieces {
+            assert!(!piece.is_empty());
+            assert!(
+                escape_xml(piece).len() <= MAX_TEXT_BYTES,
+                "{}",
+                escape_xml(piece).len()
+            );
+        }
+        assert_eq!(plain(&pieces.concat()), plain(&text));
+    }
+
+    #[test]
+    fn a_token_with_no_whitespace_is_cut_by_character_and_kept_whole() {
+        // Catches: no-whitespace input looping forever, panicking inside a
+        // multi-byte character, or losing the tail.
+        for unit in ["&", "'", "😀", "è", "<"] {
+            let text = unit.repeat(5000);
+            let pieces = split_text(&text);
+            assert!(pieces.len() >= 2, "{unit}");
+            assert!(
+                pieces.iter().all(|p| escape_xml(p).len() <= MAX_TEXT_BYTES),
+                "{unit}"
+            );
+            assert_eq!(pieces.concat(), text, "{unit}");
+        }
+    }
+
+    #[test]
+    fn the_limit_is_inclusive_at_exactly_the_escaped_maximum() {
+        // Catches: an off-by-one at the boundary (needless extra request, or a
+        // piece one byte over).
+        let exact = "'".repeat(MAX_TEXT_BYTES / 6);
+        assert_eq!(escape_xml(&exact).len(), MAX_TEXT_BYTES);
+        assert_eq!(split_text(&exact), vec![exact.as_str()]);
+        let over = "'".repeat(MAX_TEXT_BYTES / 6 + 1);
+        assert_eq!(split_text(&over).len(), 2);
+    }
+
+    #[test]
+    fn every_request_the_service_receives_fits_its_text_limit() {
+        // Catches: split and ssml_message disagreeing end to end: what is sent,
+        // not what is cut, is what the service limits.
+        let mp3 = recorded_mp3();
+        let (speech, dials, sent) = dial_with(move |_| vec![audio_frame(&mp3), turn_end()]);
+        let text = "Dell'uomo & l'altro ".repeat(600);
+        let result = synth(&speech, &text);
+        assert!(result.is_ok(), "{result:?}");
+        assert!(dials.load(Ordering::SeqCst) >= 4);
+        for message in sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| m.contains("Path:ssml"))
+        {
+            let open = message.find("<prosody").unwrap();
+            let body = &message[open + message[open..].find('>').unwrap() + 1..];
+            let body = body.trim_end_matches("</prosody></voice></speak>");
+            assert!(body.len() <= 4096, "{} bytes of SSML text", body.len());
+        }
     }
 }

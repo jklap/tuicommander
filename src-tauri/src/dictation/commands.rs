@@ -5509,4 +5509,38 @@ mod critic_round1 {
             "{result:?}"
         );
     }
+
+    #[test]
+    fn listen_resolves_a_voice_exactly_as_a_reply_does() {
+        // Catches: Listen and replies diverging again: a hostile or foreign
+        // stored voice must preview as the language default, a multilingual one
+        // must be kept.
+        let library = speech::library::SpeechLibrary::new();
+        let edge = || DictationConfig {
+            speech_engine: "edge".to_string(),
+            ..Default::default()
+        };
+        for (asked, expected) in [
+            ("evil'><x", "it-IT-IsabellaNeural"),
+            ("en-US-AriaNeural", "it-IT-IsabellaNeural"),
+            ("", "it-IT-IsabellaNeural"),
+            ("en-US-AvaMultilingualNeural", "en-US-AvaMultilingualNeural"),
+        ] {
+            let config = preview_config(edge(), "it", asked).expect("not refused");
+            assert_eq!(config.speech_edge_voice, asked);
+            let (_engine, voice) = open_voice(&config, &library, "it").expect("opens");
+            assert_eq!(voice, expected, "{asked:?}");
+        }
+    }
+
+    #[test]
+    fn listen_has_nothing_to_preview_under_an_external_command() {
+        // Catches: Listen running the user's command with a made-up voice.
+        let config = DictationConfig {
+            speech_engine: "external".to_string(),
+            speech_command: vec!["piper".to_string()],
+            ..Default::default()
+        };
+        assert!(preview_config(config, "it", "x").is_err());
+    }
 }
