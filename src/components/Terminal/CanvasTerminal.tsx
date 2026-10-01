@@ -2849,7 +2849,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		/** Buttons this canvas reported down, so their release is owed to the app. */
 		const reportedDown = new Set<number>();
 
+		/** Bumped by every press and every context menu request; a menu lookup older than the counter is stale. */
+		let pressSeq = 0;
+
 		bindings.listen(canvasRef, "mousedown", (e: MouseEvent) => {
+			pressSeq++;
 			keyInputRef.focus({ preventScroll: true });
 			{
 				const at = canvasToGrid(e);
@@ -3134,7 +3138,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// Suppression is synchronous; the target is resolved again here, so a link whose
 			// hyperlink changed or vanished under the same text opens what is there now, or no menu.
 			// The lookup's own answer, never the shared hover: a newer probe for another cell owns that.
-			const link = await resolveLinkAt(pos.row, pos.col, () => !alive);
+			const seq = ++pressSeq;
+			const link = await resolveLinkAt(pos.row, pos.col, () => !alive || pressSeq !== seq);
 			if (!link || link === STALE || !linkCovers(link, pos.row, pos.col)) return;
 			setLinkMenuTarget({ path: link.path, line: link.line, col: link.col });
 			linkMenu.openAt(e.clientX, e.clientY);
