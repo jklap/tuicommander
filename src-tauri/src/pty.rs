@@ -7258,7 +7258,7 @@ impl ChunkProcessor {
         // otherwise stays latched after the completed turn. Require the newly
         // painted result and a ready composer; a dialog still on screen must
         // retain its badge, including while Claude repaints its status line.
-        let declined_claude_question = if agent_type.as_deref() == Some("claude")
+        let declined_screen = agent_type.as_deref() == Some("claude")
             && screen_activity == AgentScreenActivity::Ready
             && changed_rows.iter().any(|row| {
                 row.text.contains("User declined") && row.text.contains("answer questions")
@@ -7270,37 +7270,33 @@ impl ChunkProcessor {
                     event,
                     ParsedEvent::Question { .. } | ParsedEvent::ChoicePrompt { .. }
                 )
-            }) {
-            state
-                .session_maps
-                .session_states
-                .get(session_id)
-                .and_then(|session| {
-                    if session.awaiting_input
-                        && session.question_confident
-                        && session.choice_prompt.is_none()
-                    {
-                        session
-                            .question_text
-                            .as_ref()
-                            .map(|text| (text.clone(), session.turn_epoch))
-                    } else {
-                        None
-                    }
-                })
-        } else {
-            None
-        };
-        if let Some((expected_question_text, turn_epoch)) = declined_claude_question {
-            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
-                session_id: session_id.to_string(),
-                parsed: serde_json::json!({
-                    "type": "protocol-question-cleared",
-                    "expected_question_text": expected_question_text,
-                    "_turn_epoch": turn_epoch,
-                })
-                .into(),
             });
+        let declined_session = declined_screen
+            .then(|| state.session_maps.session_states.get(session_id))
+            .flatten()
+            .filter(|session| session.awaiting_input && session.question_confident)
+            .map(|session| {
+                // A live choice overlay owns its own clear; only the shell
+                // state below is ours then.
+                let question = if session.choice_prompt.is_none() {
+                    session.question_text.clone()
+                } else {
+                    None
+                };
+                (question, session.turn_epoch)
+            });
+        if let Some((question, turn_epoch)) = declined_session {
+            if let Some(expected_question_text) = question {
+                state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                    session_id: session_id.to_string(),
+                    parsed: serde_json::json!({
+                        "type": "protocol-question-cleared",
+                        "expected_question_text": expected_question_text,
+                        "_turn_epoch": turn_epoch,
+                    })
+                    .into(),
+                });
+            }
             // Esc ends the turn without a Stop hook (live capture: busy, busy,
             // awaiting, then nothing), so the hook-driven BUSY would stay latched
             // with the queue stuck until the next input. The ready composer under

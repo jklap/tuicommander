@@ -17135,6 +17135,8 @@ async fn confident_awaiting_is_never_retracted() {
 /// Live Claude 2.1.280 capture: AskUserQuestion notified a confident wait,
 /// Esc dismissed it without a typed line, and the turn ended at the composer.
 /// The badge must follow that completed turn, not the historical notification.
+/// The mobile choice overlay is still set when the decline paints, and the shell
+/// state must still leave BUSY: Claude sends no Stop hook after Esc.
 #[tokio::test(flavor = "current_thread")]
 async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
     let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
