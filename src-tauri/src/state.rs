@@ -2103,6 +2103,10 @@ pub struct AppState {
     pub peer_agents: DashMap<String, PeerAgent>,
     /// Explicit opt-out for managed children; removed with the PTY.
     pub(crate) keep_open_sessions: DashSet<String>,
+    /// Managed children whose last mail to their parent starts with BLOCKED and
+    /// that nothing has mailed since. Kept outside the bounded inboxes so
+    /// overflow cannot drop the hold; removed by the idle sweep with the PTY.
+    pub(crate) blocked_children: DashSet<String>,
     /// Message inbox per agent (tuic_session → VecDeque<AgentMessage>).
     /// Capped at AGENT_INBOX_CAPACITY messages per agent. Matching lifecycle
     /// notices coalesce; other messages evict FIFO at capacity.
@@ -2358,7 +2362,25 @@ impl AppState {
     /// Buffer a message into `recipient`'s bounded inbox. Replace an older
     /// lifecycle notice for the same child and kind, except question waits;
     /// otherwise evict FIFO at capacity.
+    /// Mail to a child ends its BLOCKED hold; the child's own BLOCKED mail to
+    /// its parent starts one. Lifecycle notices are TUIC's, not either party's.
+    fn track_blocked_hold(&self, recipient: &str, msg: &AgentMessage) {
+        if msg.id.starts_with(LIFECYCLE_MSG_ID_PREFIX) {
+            return;
+        }
+        self.blocked_children.remove(recipient);
+        let to_parent = self
+            .session_maps
+            .session_parent
+            .get(&msg.from_tuic_session)
+            .is_some_and(|parent| parent.value() == recipient);
+        if to_parent && msg.content.trim_start().starts_with("BLOCKED") {
+            self.blocked_children.insert(msg.from_tuic_session.clone());
+        }
+    }
+
     pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
+        self.track_blocked_hold(recipient, &msg);
         let gate_entry = self
             .active_agent_waiters
             .entry(recipient.to_string())
@@ -3317,6 +3339,7 @@ impl AppState {
             relay: RelayState::new(),
             peer_agents: DashMap::new(),
             keep_open_sessions: DashSet::new(),
+            blocked_children: DashSet::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
