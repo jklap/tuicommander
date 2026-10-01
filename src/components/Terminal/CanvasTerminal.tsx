@@ -3131,6 +3131,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// Stop the App-level terminal context menu (#terminal-panes onContextMenu)
 			// from also opening and covering our Open/Copy-link menu.
 			e.stopPropagation();
+			// A hover-only link has no dashed span to re-probe from, and suppression cannot wait
+			// for an async probe: the hover already resolved it, so its menu opens from that.
+			if (hoveredLink && !isOverSpan(detectedLinks.get(pos.row), pos.col)) {
+				setLinkMenuTarget({ path: hoveredLink.path, line: hoveredLink.line, col: hoveredLink.col });
+				linkMenu.openAt(e.clientX, e.clientY);
+				return;
+			}
 			await checkLinksAtRow(pos.row, pos.col);
 			if (!hoveredLink) return;
 			setLinkMenuTarget({ path: hoveredLink.path, line: hoveredLink.line, col: hoveredLink.col });
