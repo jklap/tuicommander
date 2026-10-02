@@ -16,6 +16,8 @@
     "tauri": "tauri",
     "build:sidecar": "node src-tauri/build-sidecar.mjs",
     "test": "vitest",
+    "notices": "node scripts/third-party-notices.mjs",
+    "notices:check": "node scripts/third-party-notices.mjs --check",
     "test:plugins": "node --test \"plugins/**/*.test.js\"",
     "test:coverage": "vitest run --coverage"
   },
