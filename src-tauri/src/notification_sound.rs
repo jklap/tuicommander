@@ -376,10 +376,16 @@ pub(crate) fn play_notification_sound(
     play(sound, volume, device);
 }
 
-/// Tauri command: list available audio output devices.
+/// Tauri command: list available audio output devices. Shared by
+/// `GET /audio/output-devices`.
 #[tauri::command]
-pub(crate) fn list_audio_output_devices() -> Vec<AudioOutputDevice> {
-    list_output_devices()
+pub(crate) async fn list_audio_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
+    crate::audio_enumeration::run_bounded(
+        "listing audio output devices",
+        crate::audio_enumeration::ENUMERATION_TIMEOUT,
+        list_output_devices,
+    )
+    .await
 }
 
 #[cfg(test)]
