@@ -26,4 +26,19 @@ describe("rich density CSS cascade (critic)", () => {
 		expect(at).toBeGreaterThan(-1);
 		expect(depthAt(at)).toBeGreaterThanOrEqual(1);
 	});
+
+	// Catches (#1381-9689): `flex: 1 0 auto` on the rich repo name. It cannot shrink, so a long repo
+	// name is as wide as its text, never ellipsizes, and the sidebar list scrolls sideways on touch.
+	it("lets the rich repo name shrink", () => {
+		const rule = css.match(/\.sidebar\[data-density="rich"\] \.repoName \{([^}]*)\}/);
+		expect(rule).not.toBeNull();
+		expect(rule?.[1]).toMatch(/flex:\s*1 1 auto/);
+	});
+
+	// Catches (#1381-9689): the list container only setting overflow-y, which makes overflow-x compute
+	// to `auto` and shows a horizontal scrollbar for any child wider than the sidebar.
+	it("never scrolls the sidebar list horizontally", () => {
+		const rule = css.match(/\n\.content \{([^}]*)\}/);
+		expect(rule?.[1]).toMatch(/overflow-x:\s*hidden/);
+	});
 });
