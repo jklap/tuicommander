@@ -9040,6 +9040,39 @@ branch refs/heads/feat
         assert!(path.exists());
     }
 
+    // Catches: a Keep that cannot tell "still the same edits" from "edited again
+    // or cleaned", because the assessment carries no fingerprint (orphan-dialog-repeats).
+    #[test]
+    fn orphan_assessment_fingerprint_follows_the_checkout_state() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-fingerprint");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let fingerprint = |repo: &Path| {
+            assess_orphan_worktrees(&repo.to_string_lossy())
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.path.ends_with("orphan-fingerprint"))
+                .expect("the orphan is listed")
+        };
+
+        let clean = fingerprint(&repo);
+        assert!(clean.safe, "{clean:?}");
+        fs::write(path.join("note.txt"), "one\n").unwrap();
+        let dirty = fingerprint(&repo);
+        assert!(!dirty.safe, "{dirty:?}");
+        assert_eq!(
+            dirty,
+            fingerprint(&repo),
+            "unchanged edits keep the fingerprint"
+        );
+        fs::write(path.join("second.txt"), "x\n").unwrap();
+        let grown = fingerprint(&repo);
+
+        assert!(clean.dirty_fingerprint.is_some());
+        assert_ne!(clean.dirty_fingerprint, dirty.dirty_fingerprint);
+        assert_ne!(dirty.dirty_fingerprint, grown.dirty_fingerprint);
+    }
+
     /// The directory was moved away but git still lists the worktree. Spawning
     /// git in the missing cwd used to surface as "Failed to spawn git".
     #[test]
@@ -9489,6 +9522,11 @@ pub struct OrphanCleanupAssessment {
     pub safe: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Same fingerprint `worktree_lifecycle` reports (status + HEAD + submodules).
+    /// A remembered Keep holds only while it is unchanged. None when the
+    /// checkout is gone or cannot be inspected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dirty_fingerprint: Option<String>,
 }
 
 /// Assess each current detached worktree. Only a clean checkout whose HEAD is
@@ -9497,17 +9535,24 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     detect_orphan_worktrees_blocking(repo_path.to_string()).map(|paths| {
         paths
             .into_iter()
-            .map(|path| match orphan_cleanup_safety(repo_path, &path) {
-                Ok(()) => OrphanCleanupAssessment {
-                    reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
-                    path,
-                    safe: true,
-                },
-                Err(reason) => OrphanCleanupAssessment {
-                    path,
-                    safe: false,
-                    reason: Some(reason),
-                },
+            .map(|path| {
+                let dirty_fingerprint = dirty_fingerprint_at(Path::new(&path))
+                    .ok()
+                    .map(|(fingerprint, _)| fingerprint);
+                match orphan_cleanup_safety(repo_path, &path) {
+                    Ok(()) => OrphanCleanupAssessment {
+                        reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
+                        path,
+                        safe: true,
+                        dirty_fingerprint,
+                    },
+                    Err(reason) => OrphanCleanupAssessment {
+                        path,
+                        safe: false,
+                        reason: Some(reason),
+                        dirty_fingerprint,
+                    },
+                }
             })
             .collect()
     })
