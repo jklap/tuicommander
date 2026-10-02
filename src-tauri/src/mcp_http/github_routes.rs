@@ -217,7 +217,7 @@ pub(super) async fn repo_merged_prs(
 ///
 /// Which servers answer them is not what "desktop-only" would suggest, and the
 /// distinction is between two *binaries*, not two features. They are mounted in
-/// `build_router`, so the desktop app and `run_headless` both serve them —
+/// `build_router`, so the desktop app serves them —
 /// nothing here needs a window, since the work happens in an ego process
 /// reached over ACP. They are **not** in `shared_routes`, so
 /// `build_remote_router` does not carry them and the `tuic-remote` daemon
