@@ -4,6 +4,20 @@ import { testInScope, testInScopeAsync } from "../helpers/store";
 const mockInvoke = vi.fn().mockResolvedValue(undefined);
 const mockSetBadgeCount = vi.fn().mockResolvedValue(undefined);
 const nativeSend = vi.fn();
+// Hoisted so the terminals module is mocked before any import, whatever the load or test order.
+const terminalsState = vi.hoisted(() => ({ activeId: "" }));
+
+vi.mock("../../stores/terminals", () => ({
+	terminalsStore: {
+		get: () => ({ name: "Deploy Agent" }),
+		state: {
+			get activeId() {
+				return terminalsState.activeId;
+			},
+		},
+		isDetached: () => false,
+	},
+}));
 
 vi.mock("@tauri-apps/plugin-notification", () => ({
 	isPermissionGranted: vi.fn().mockResolvedValue(true),
@@ -389,9 +403,6 @@ describe("notificationsStore", () => {
 			const focus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
 			const oldNotification = window.Notification;
 			vi.stubGlobal("Notification", { permission: "denied" });
-			vi.doMock("../../stores/terminals", () => ({
-				terminalsStore: { get: () => ({ name: "Deploy Agent" }) },
-			}));
 			try {
 				await store.playQuestion("term-1");
 				await vi.waitFor(() =>
@@ -417,13 +428,7 @@ describe("notificationsStore", () => {
 		async function remind(activeId: string, focused: boolean) {
 			vi.stubGlobal("__TAURI_INTERNALS__", {});
 			const focus = vi.spyOn(document, "hasFocus").mockReturnValue(focused);
-			vi.doMock("../../stores/terminals", () => ({
-				terminalsStore: {
-					get: () => ({ name: "Deploy Agent" }),
-					state: { activeId },
-					isDetached: () => false,
-				},
-			}));
+			terminalsState.activeId = activeId;
 			try {
 				await store.playQuestionReminder("term-1");
 				await new Promise((resolve) => setTimeout(resolve, 20));
