@@ -294,7 +294,7 @@ describe("rich agent rows: nesting and clicks (critic r5)", () => {
 		withTerms([term("Alpha", "sA")]);
 		const onBranchSelect = vi.fn();
 		const { container } = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
-		const more = container.querySelector('button[title="Branch options"]') as HTMLElement;
+		const more = container.querySelector('button[aria-label="Branch options"]') as HTMLElement;
 		fireEvent.click(more);
 		expect(onBranchSelect).not.toHaveBeenCalled();
 	});

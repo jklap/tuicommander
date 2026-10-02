@@ -553,13 +553,27 @@ describe("Sidebar", () => {
 			try {
 				withBranch(richBranch({ lastCommitTs: OLD_TS() }));
 				const { container } = render(() => <Sidebar {...defaultProps()} />);
-				const tip = container.querySelector(".branchName")?.getAttribute("data-tooltip") ?? "";
+				const name = container.querySelector(".branchName");
+				const tip = name?.getAttribute("data-tooltip") ?? "";
 				expect(tip).toContain("Last commit: 90d");
 				expect(tip).toContain("Stale");
+				// Catches: the name dropped from the overlay once the native title that carried it is gone.
+				expect(tip.startsWith("feat")).toBe(true);
+				// Catches: the native tooltip stacking on the overlay (the 2026-10-02 double tooltip).
+				expect(name?.hasAttribute("title")).toBe(false);
 			} finally {
 				uiStore.cycleSidebarDensityMode();
 				uiStore.cycleSidebarDensityMode();
 			}
+		});
+
+		// Catches: rich keeping a native title on the row, or losing the full name when the facts moved inline.
+		it("gives the rich branch name one overlay with the full name and no native title", () => {
+			withBranch(richBranch({ branchName: "feature/a-very-long-branch-name" }));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const name = container.querySelector(".branchName");
+			expect(name?.getAttribute("data-tooltip")).toBe("feature/a-very-long-branch-name");
+			expect(container.querySelector(".branchItem [title]")).toBeNull();
 		});
 
 		// Catches: "1 open PRs" and "1 worktrees".
@@ -725,7 +739,7 @@ describe("Sidebar", () => {
 			const onOpenSettings = vi.fn();
 			const { container } = render(() => <Sidebar {...defaultProps({ onOpenSettings })} />);
 
-			const settingsBtn = container.querySelector('.footerAction[title="Settings"]');
+			const settingsBtn = container.querySelector('.footerAction[aria-label="Settings"]');
 			expect(settingsBtn).not.toBeNull();
 			fireEvent.click(settingsBtn!);
 			expect(onOpenSettings).toHaveBeenCalledOnce();
@@ -735,7 +749,7 @@ describe("Sidebar", () => {
 			const onOpenHelp = vi.fn();
 			const { container } = render(() => <Sidebar {...defaultProps({ onOpenHelp })} />);
 
-			const helpBtn = container.querySelector('.footerAction[title="Help"]');
+			const helpBtn = container.querySelector('.footerAction[aria-label="Help"]');
 			expect(helpBtn).not.toBeNull();
 			fireEvent.click(helpBtn!);
 			expect(onOpenHelp).toHaveBeenCalledOnce();
@@ -743,8 +757,8 @@ describe("Sidebar", () => {
 
 		it("does not render unimplemented Notifications and Tasks buttons", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			expect(container.querySelector('.footerAction[title="Notifications"]')).toBeNull();
-			expect(container.querySelector('.footerAction[title="Tasks"]')).toBeNull();
+			expect(container.querySelector('.footerAction[aria-label="Notifications"]')).toBeNull();
+			expect(container.querySelector('.footerAction[aria-label="Tasks"]')).toBeNull();
 		});
 	});
 
