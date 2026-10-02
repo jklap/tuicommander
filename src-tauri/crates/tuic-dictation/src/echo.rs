@@ -99,6 +99,9 @@ pub struct FarEnd {
     /// hidden: a climbing count means playback and capture have lost step,
     /// which shows up as an echo that stops being cancelled.
     dropped: u64,
+    /// The speaker is held silent mid-reply. What is queued has not left it, so
+    /// capture is matched against silence until playback continues.
+    paused: bool,
 }
 
 impl FarEnd {
@@ -144,6 +147,9 @@ impl FarEnd {
     /// what keeps the canceller converged through the gaps between replies:
     /// skipping the call instead would make it lose its place.
     pub fn take(&mut self, count: usize) -> Vec<f32> {
+        if self.paused {
+            return vec![0.0; count];
+        }
         let mut frame: Vec<f32> = self
             .samples
             .drain(..count.min(self.samples.len()))
@@ -157,6 +163,12 @@ impl FarEnd {
     /// would subtract a sound that is not there.
     pub fn clear(&mut self) {
         self.samples.clear();
+        self.paused = false;
+    }
+
+    /// Hold the queued reply back from capture, or let it flow again.
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
     }
 
     /// Is any reply audio still waiting to be matched?
@@ -248,11 +260,24 @@ impl EchoGuard {
     /// A reply queued behind one still playing follows it with no gap,
     /// because that is how the device plays it.
     pub fn note_rendered(&mut self, audio: &SpeechAudio) {
-        if self.far_end.is_empty() {
+        // Not while paused: the reply starts when playback continues, and the
+        // capture recorded until then is not ahead of it.
+        if self.far_end.is_empty() && !self.far_end.paused {
             let pending = self.backlog.as_ref().map_or(0, |backlog| backlog());
             self.far_end.pad(self.remainder.len() + pending);
         }
         self.far_end.push(audio);
+    }
+
+    /// The speaker was paused: nothing reaches the microphone until
+    /// [`note_resumed`](Self::note_resumed), and the queued reply must not be
+    /// consumed meanwhile.
+    pub fn note_paused(&mut self) {
+        self.far_end.set_paused(true);
+    }
+
+    pub fn note_resumed(&mut self) {
+        self.far_end.set_paused(false);
     }
 
     /// Playback was stopped. Drop the queued reply and the partial frame with
@@ -342,6 +367,19 @@ impl super::speaker::Output for FarEndTap {
         // echo cannot be subtracted from it.
         self.guard.lock().note_rendered(audio);
         self.inner.play(audio)
+    }
+
+    fn pause(&self) {
+        // Device first, for the same reason as `stop`: the far end is what the
+        // microphone has yet to hear.
+        self.inner.pause();
+        self.guard.lock().note_paused();
+    }
+
+    fn resume(&self) {
+        // Far end first: it may run ahead of the microphone, never behind.
+        self.guard.lock().note_resumed();
+        self.inner.resume();
     }
 
     fn stop(&self) {
@@ -787,5 +825,51 @@ mod tests {
             played_peak > input_peak * 2.0,
             "the loudness stage did not run, so this proves nothing: peak {played_peak}"
         );
+    }
+
+    /// Capture goes on while the speaker is paused, and the reply it will play
+    /// next has not left it. Consuming it meanwhile pairs the reply's start
+    /// with audio recorded before it, so the canceller subtracts the wrong
+    /// seconds the moment playback continues.
+    #[test]
+    fn a_paused_reply_is_matched_against_silence_and_kept_for_later() {
+        let mut probe = Probe::new();
+        probe
+            .guard
+            .note_rendered(&audio(vec![1.0; SAMPLE_RATE as usize], SAMPLE_RATE));
+
+        probe.guard.note_paused();
+        probe.guard.clean(&vec![0.0; FRAME_SAMPLES * 3]);
+        assert!(
+            probe.far_end_seen().iter().all(|sample| *sample == 0.0),
+            "a paused reply reached the canceller"
+        );
+
+        probe.guard.note_resumed();
+        probe.guard.clean(&vec![0.0; FRAME_SAMPLES]);
+        assert_eq!(
+            probe.far_end_seen().last().copied(),
+            Some(1.0),
+            "the paused reply was consumed while it was held"
+        );
+    }
+
+    /// A stop while paused must not leave the next reply muted in the
+    /// reference.
+    #[test]
+    fn the_reply_after_a_stop_that_interrupted_a_pause_reaches_the_canceller() {
+        let mut probe = Probe::new();
+        probe
+            .guard
+            .note_rendered(&audio(vec![1.0; SAMPLE_RATE as usize], SAMPLE_RATE));
+        probe.guard.note_paused();
+        probe.guard.note_stopped();
+
+        probe
+            .guard
+            .note_rendered(&audio(vec![1.0; SAMPLE_RATE as usize], SAMPLE_RATE));
+        probe.guard.clean(&vec![0.0; FRAME_SAMPLES]);
+
+        assert_eq!(probe.far_end_seen().last().copied(), Some(1.0));
     }
 }

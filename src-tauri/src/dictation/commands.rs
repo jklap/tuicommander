@@ -963,6 +963,24 @@ fn open_speaker_for(
 struct ArmedSpeaker(Arc<parking_lot::Mutex<Option<speaker::Armed>>>);
 
 impl continuous::Interruptible for ArmedSpeaker {
+    // `try_lock` for the same reason as `hush`: a missed `pause` is a reply
+    // that talks on until the verdict. `resume` below waits for the lock
+    // instead, because a missed one is a reply left silent and nobody asks
+    // again; the only writer is a rebuild, which is brief.
+    fn pause(&self) {
+        if let Some(slot) = self.0.try_lock()
+            && let Some(armed) = slot.as_ref()
+        {
+            armed.speaker.pause();
+        }
+    }
+
+    fn resume(&self) {
+        if let Some(armed) = self.0.lock().as_ref() {
+            armed.speaker.resume();
+        }
+    }
+
     fn hush(&self) {
         // `try_lock`, because this runs on the capture loop and anything it
         // waits for delays the next chunk of the user's own voice. The only
