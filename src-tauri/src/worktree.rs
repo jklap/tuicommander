@@ -518,6 +518,39 @@ pub(crate) fn get_worktree_paths_cached(
     .clone()
 }
 
+/// Remove an orphan checkout by path after the shared guard. Both the desktop
+/// command and the MCP `worktree_remove` call this.
+pub(crate) fn remove_orphan_checkout(
+    state: &AppState,
+    repo_path: &str,
+    worktree_path: &str,
+    safe_only: bool,
+    confirmed_sessions: &[String],
+) -> Result<(), String> {
+    validate_worktree_path(repo_path, worktree_path)?;
+    orphan_removal_guard(
+        state,
+        repo_path,
+        worktree_path,
+        safe_only,
+        confirmed_sessions,
+    )?;
+
+    let path = PathBuf::from(worktree_path);
+    let worktree = WorktreeInfo {
+        name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| worktree_path.to_string()),
+        path,
+        branch: None,
+        base_repo: PathBuf::from(repo_path),
+    };
+    tuic_git::worktree::remove_orphan_worktree_internal(&worktree)?;
+    state.invalidate_repo_caches(repo_path);
+    Ok(())
+}
+
 /// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
 ///
 /// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
@@ -531,29 +564,13 @@ pub(crate) fn remove_orphan_worktree(
     safe_only: Option<bool>,
     confirmed_sessions: Option<Vec<String>>,
 ) -> Result<(), String> {
-    validate_worktree_path(&repo_path, &worktree_path)?;
-    orphan_removal_guard(
+    remove_orphan_checkout(
         &state,
         &repo_path,
         &worktree_path,
         safe_only.unwrap_or(false),
         &confirmed_sessions.unwrap_or_default(),
-    )?;
-
-    let base_repo = PathBuf::from(&repo_path);
-    let path = PathBuf::from(&worktree_path);
-    let worktree = WorktreeInfo {
-        name: path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| worktree_path.clone()),
-        path,
-        branch: None,
-        base_repo,
-    };
-    tuic_git::worktree::remove_orphan_worktree_internal(&worktree)?;
-    state.invalidate_repo_caches(&repo_path);
-    Ok(())
+    )
 }
 
 /// Result of switching the main worktree to a different branch.
@@ -1247,6 +1264,9 @@ pub(crate) async fn assess_orphan_cleanup(
 pub(crate) struct PendingOrphanCleanup {
     pub(crate) paths: Vec<String>,
     pub(crate) answer: Option<bool>,
+    /// The dialog has ended. A Keep stays readable for other clients that still
+    /// show it, but nothing is left to answer.
+    pub(crate) settled: bool,
 }
 
 pub(crate) fn begin_orphan_cleanup_internal(
@@ -1267,6 +1287,7 @@ pub(crate) fn begin_orphan_cleanup_internal(
         PendingOrphanCleanup {
             paths,
             answer: None,
+            settled: false,
         },
     );
     Ok(())
@@ -1280,6 +1301,7 @@ pub(crate) fn answer_orphan_cleanup_internal(
     let pending = state
         .pending_orphan_cleanup
         .get(repo_path)
+        .filter(|entry| !entry.settled)
         .ok_or("No pending orphan cleanup for this repository")?
         .paths
         .clone();
@@ -1330,6 +1352,7 @@ pub(crate) fn pending_orphan_cleanup_answer(
 pub(crate) fn clear_orphan_cleanup_internal(state: &AppState, repo_path: &str, kept: bool) {
     if kept && let Some(mut entry) = state.pending_orphan_cleanup.get_mut(repo_path) {
         entry.answer = Some(false);
+        entry.settled = true;
         return;
     }
     state.pending_orphan_cleanup.remove(repo_path);
@@ -1390,6 +1413,7 @@ mod tests {
             PendingOrphanCleanup {
                 paths: vec!["/wt/a".into()],
                 answer: None,
+                settled: false,
             },
         );
     }
@@ -1410,6 +1434,21 @@ mod tests {
 
         clear_orphan_cleanup_internal(&state, "/repo", true);
 
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
+    // Catches: a Keep left on the shared entry turning every later answer into
+    // "changed while it was being answered", so an agent could never remove the
+    // orphan that had since become clean (orphan-dialog-repeats).
+    #[test]
+    fn answering_a_dialog_that_was_already_kept_reports_nothing_pending() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+        clear_orphan_cleanup_internal(&state, "/repo", true);
+
+        let error = answer_orphan_cleanup_internal(&state, "/repo", true).unwrap_err();
+
+        assert_eq!(error, "No pending orphan cleanup for this repository");
         assert_eq!(pending_answer(&state, "/repo"), Some(false));
     }
 

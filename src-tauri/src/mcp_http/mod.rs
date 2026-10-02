@@ -6110,6 +6110,61 @@ mod tests {
         );
     }
 
+    // Catches: worktree_remove demanding `branch`, so a detached checkout could
+    // not be removed through MCP at all; and the path route skipping the orphan
+    // safety verdict (untracked files must survive).
+    #[tokio::test]
+    async fn test_repo_worktree_remove_by_path_removes_clean_detached_and_refuses_untracked() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        let add = |name: &str| {
+            let linked = repo.path().join(name);
+            crate::git_cli::git_cmd(repo.path())
+                .args([
+                    "worktree",
+                    "add",
+                    "--detach",
+                    linked.to_str().unwrap(),
+                    "HEAD",
+                ])
+                .run()
+                .unwrap();
+            linked
+        };
+        let clean = add("clean");
+        let dirty = add("dirty");
+        std::fs::write(dirty.join("untracked.txt"), "keep me").unwrap();
+
+        let removed = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": repo.path().to_str().unwrap(),
+                "worktree_path": clean.to_str().unwrap()
+            }),
+        )
+        .await;
+        assert_eq!(removed["ok"], true, "{removed}");
+        assert!(!clean.exists());
+
+        let refused = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": repo.path().to_str().unwrap(),
+                "worktree_path": dirty.to_str().unwrap()
+            }),
+        )
+        .await;
+        assert!(
+            refused["error"].as_str().unwrap().contains("untracked"),
+            "{refused}"
+        );
+        assert!(dirty.join("untracked.txt").exists());
+    }
+
     #[tokio::test]
     async fn test_repo_worktree_remove_rejects_renamed_workspace_id() {
         let repo = create_temp_git_repo();
