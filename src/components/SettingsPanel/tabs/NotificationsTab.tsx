@@ -106,12 +106,17 @@ export const NotificationsTab: Component = () => {
 		if (!isTauri()) return;
 		setLoadingDevices(true);
 		try {
-			setDevices(await invoke<AudioOutputDevice[]>("list_audio_output_devices"));
-		} catch (err) {
-			// Don't conflate a real failure (CoreAudio error, mic-permission
-			// denial) with "zero devices installed" — log so it's diagnosable.
-			appLogger.warn("settings", "Failed to enumerate audio output devices", err);
-			setDevices([]);
+			// The scan can wait on the microphone prompt until the backend times
+			// out. A failure keeps the previous list (never "no devices") and one
+			// more try picks up the answer that arrived late.
+			for (let attempt = 0; attempt < 2; attempt++) {
+				try {
+					setDevices(await invoke<AudioOutputDevice[]>("list_audio_output_devices"));
+					return;
+				} catch (err) {
+					appLogger.warn("settings", "Failed to enumerate audio output devices", err);
+				}
+			}
 		} finally {
 			setLoadingDevices(false);
 		}
