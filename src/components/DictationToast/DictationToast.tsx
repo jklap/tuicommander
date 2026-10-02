@@ -1,6 +1,6 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
-import { dictationStore } from "../../stores/dictation";
+import { dictationStore, playbackState } from "../../stores/dictation";
 import styles from "./DictationToast.module.css";
 import { handsFreePhaseLabel } from "./handsFreePhaseLabel";
 
@@ -32,10 +32,13 @@ export function DictationToast() {
 	const handsFreeArmed = () => dictationStore.state.handsFree?.armed === true;
 	const active = () => dictationStore.state.recording || handsFreeArmed();
 
+	const playback = () => playbackState(dictationStore.state.speech);
+
 	/** What the toast says when no partial transcript is showing. */
 	const statusText = () => {
 		if (!handsFreeArmed()) return "Listening";
-		if (dictationStore.state.speech?.speaking) return t("dictation.phaseSpeaking", "Speaking");
+		if (playback() === "paused") return t("dictation.phasePaused", "Paused");
+		if (playback() === "speaking") return t("dictation.phaseSpeaking", "Speaking");
 		return handsFreePhaseLabel(dictationStore.state.handsFree?.phase);
 	};
 
@@ -112,6 +115,47 @@ export function DictationToast() {
 						<span class={styles.dots} />
 					</Show>
 				</span>
+				<Show when={handsFreeArmed() && playback() !== "idle"}>
+					<span class={styles.controls}>
+						<Show
+							when={playback() === "paused"}
+							fallback={
+								<button
+									type="button"
+									class={styles.control}
+									aria-label={t("dictation.pauseReply", "Pause reply")}
+									onClick={() => void dictationStore.pauseSpeech()}
+								>
+									<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+										<rect x="3" y="2" width="3.5" height="12" rx="1" />
+										<rect x="9.5" y="2" width="3.5" height="12" rx="1" />
+									</svg>
+								</button>
+							}
+						>
+							<button
+								type="button"
+								class={styles.control}
+								aria-label={t("dictation.resumeReply", "Resume reply")}
+								onClick={() => void dictationStore.resumeSpeech()}
+							>
+								<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+									<path d="M4 2.5v11a.5.5 0 0 0 .76.43l9-5.5a.5.5 0 0 0 0-.86l-9-5.5A.5.5 0 0 0 4 2.5z" />
+								</svg>
+							</button>
+						</Show>
+						<button
+							type="button"
+							class={styles.control}
+							aria-label={t("dictation.stopReply", "Stop reply")}
+							onClick={() => void dictationStore.stopSpeech()}
+						>
+							<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+								<rect x="3" y="3" width="10" height="10" rx="1.5" />
+							</svg>
+						</button>
+					</span>
+				</Show>
 			</div>
 		</Show>
 	);

@@ -79,7 +79,7 @@ describe("DictationToast", () => {
 		});
 
 		/** Answer each command the arm path and the monitor issue. */
-		const backend = (hands: { armed: boolean; phase: string }, level: number, speaking = false) =>
+		const backend = (hands: { armed: boolean; phase: string }, level: number, speaking = false, paused = false) =>
 			mockInvoke.mockImplementation((cmd: string) => {
 				if (cmd === "arm_hands_free_dictation" || cmd === "get_hands_free_status") {
 					return Promise.resolve(status(hands.armed, hands.phase));
@@ -88,7 +88,7 @@ describe("DictationToast", () => {
 					return Promise.resolve({ status: status(false, "disarmed") });
 				}
 				if (cmd === "get_dictation_status") return Promise.resolve({ audio_level: level });
-				if (cmd === "get_speech_status") return Promise.resolve({ speaking });
+				if (cmd === "get_speech_status") return Promise.resolve({ speaking, paused });
 				return Promise.resolve(undefined);
 			});
 
@@ -139,6 +139,73 @@ describe("DictationToast", () => {
 				backend(hands, 0.1, true);
 				await vi.advanceTimersByTimeAsync(400);
 				expect(container.textContent).toContain("Speaking");
+
+				await dictationStore.disarmHandsFree();
+			});
+		});
+
+		const labels = (container: HTMLElement) =>
+			Array.from(container.querySelectorAll("button")).map((b) => b.getAttribute("aria-label"));
+
+		/** Bug caught: controls shown for the wrong state (Pause while paused), or while nothing speaks. */
+		it("offers pause and stop while speaking, play and stop while paused, nothing otherwise", async () => {
+			vi.useFakeTimers();
+			const hands = { armed: true, phase: "waiting" };
+			backend(hands, 0.1);
+
+			await testInScopeAsync(async () => {
+				const { container } = render(() => <DictationToast />);
+				await dictationStore.armHandsFree("s1");
+				await vi.advanceTimersByTimeAsync(400);
+				expect(labels(container)).toEqual([]);
+
+				backend(hands, 0.1, true);
+				await vi.advanceTimersByTimeAsync(400);
+				expect(labels(container)).toEqual(["Pause reply", "Stop reply"]);
+
+				backend(hands, 0.1, false, true);
+				await vi.advanceTimersByTimeAsync(400);
+				expect(labels(container)).toEqual(["Resume reply", "Stop reply"]);
+				expect(container.textContent).toContain("Paused");
+
+				await dictationStore.disarmHandsFree();
+			});
+		});
+
+		/** Bug caught: a click that does not reach the backend, or wires Stop to pause. */
+		it("sends pause, resume and stop to the backend and shows the answer", async () => {
+			vi.useFakeTimers();
+			const hands = { armed: true, phase: "waiting" };
+			backend(hands, 0.1, true);
+
+			await testInScopeAsync(async () => {
+				const { container } = render(() => <DictationToast />);
+				await dictationStore.armHandsFree("s1");
+				await vi.advanceTimersByTimeAsync(400);
+
+				const click = async (label: string) => {
+					(container.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement).click();
+					await vi.advanceTimersByTimeAsync(0);
+				};
+				const answer = (command: string, speech: object) =>
+					mockInvoke.mockImplementation((cmd: string) =>
+						cmd === command ? Promise.resolve(speech) : Promise.resolve(undefined),
+					);
+
+				answer("pause_speech", { speaking: false, paused: true });
+				await click("Pause reply");
+				expect(mockInvoke).toHaveBeenCalledWith("pause_speech");
+				expect(labels(container)).toEqual(["Resume reply", "Stop reply"]);
+
+				answer("resume_speech", { speaking: true, paused: false });
+				await click("Resume reply");
+				expect(mockInvoke).toHaveBeenCalledWith("resume_speech");
+				expect(labels(container)).toEqual(["Pause reply", "Stop reply"]);
+
+				answer("stop_speech", { speaking: false, paused: false });
+				await click("Stop reply");
+				expect(mockInvoke).toHaveBeenCalledWith("stop_speech");
+				expect(labels(container)).toEqual([]);
 
 				await dictationStore.disarmHandsFree();
 			});

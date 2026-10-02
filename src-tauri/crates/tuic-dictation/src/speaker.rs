@@ -209,9 +209,10 @@ pub struct SpeakerStatus {
     pub queued: usize,
     /// Is a reply being rendered right now?
     pub rendering: bool,
-    /// Is audio coming out of the speaker right now? Not while held.
+    /// Is a reply being played? Stays true while the capture loop briefly holds
+    /// it for a verdict on a voice: that is not something the user did.
     pub speaking: bool,
-    /// A reply is held where it is, by the user or by the capture loop.
+    /// The user holds the reply, and only the user: `speaking` is false then.
     pub paused: bool,
     /// The last synthesis or device failure, if any. Cleared by the next
     /// reply that succeeds.
@@ -385,9 +386,6 @@ pub struct Speaker {
     shared: Arc<Shared>,
     output: Arc<dyn Output>,
     worker: Option<std::thread::JoinHandle<()>>,
-    /// The output is held by someone: the capture loop waiting for a verdict on
-    /// voice, or the user.
-    held: std::sync::atomic::AtomicBool,
     /// The user holds it. The capture loop's own resume must not undo this; a
     /// stop still ends it.
     user_held: std::sync::atomic::AtomicBool,
@@ -432,7 +430,6 @@ impl Speaker {
             shared,
             output,
             worker: Some(worker),
-            held: std::sync::atomic::AtomicBool::new(false),
             user_held: std::sync::atomic::AtomicBool::new(false),
             loop_held: std::sync::atomic::AtomicBool::new(false),
         }
@@ -555,7 +552,6 @@ impl Speaker {
             .store(false, std::sync::atomic::Ordering::SeqCst);
         self.loop_held
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        self.held.store(false, std::sync::atomic::Ordering::SeqCst);
         self.shared.wake.notify_all();
         self.shared.notify();
         generation
@@ -576,8 +572,6 @@ impl Speaker {
         self.loop_held
             .store(can_pause, std::sync::atomic::Ordering::SeqCst);
         self.output.pause();
-        self.held
-            .store(can_pause, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Carry on from where [`pause`](Self::pause) stopped. A no-op when not
@@ -589,7 +583,6 @@ impl Speaker {
             return;
         }
         self.output.resume();
-        self.held.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The user holds the reply. A no-op with nothing playing, or on an output
@@ -601,7 +594,6 @@ impl Speaker {
         self.output.pause();
         self.user_held
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        self.held.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The user lets the reply go on. A no-op unless the user held it, and the
@@ -613,12 +605,11 @@ impl Speaker {
             && !self.loop_held.load(std::sync::atomic::Ordering::SeqCst)
         {
             self.output.resume();
-            self.held.store(false, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
     pub fn status(&self) -> SpeakerStatus {
-        let paused = self.held.load(std::sync::atomic::Ordering::SeqCst);
+        let paused = self.user_held.load(std::sync::atomic::Ordering::SeqCst);
         let state = self.shared.state.lock();
         SpeakerStatus {
             generation: state.generation,
@@ -2045,8 +2036,8 @@ mod tests {
         speaker.pause();
         speaker.resume_by_user();
         assert!(
-            output.held.load(Ordering::SeqCst) && speaker.status().paused,
-            "the user's resume lifted the loop's hold"
+            output.held.load(Ordering::SeqCst) && !speaker.status().paused,
+            "the user's resume lifted the loop's hold, or the pill still says paused"
         );
         speaker.resume();
         assert!(
@@ -2054,6 +2045,22 @@ mod tests {
             "the verdict did not release it"
         );
         assert!(!speaker.status().paused);
+    }
+
+    /// 1377: the loop's own hold is not the user's pause. Catches: auto-hold
+    /// shows Play — a mic hearing a voice flips the pill to "paused" with a
+    /// Play button for audio the user never held.
+    #[test]
+    fn the_capture_loops_hold_is_not_reported_as_a_pause() {
+        let output = Arc::new(HoldableOutput::default());
+        output.playing.store(true, Ordering::SeqCst);
+        let speaker = speaker_over(&output);
+
+        speaker.pause();
+        assert!(output.held.load(Ordering::SeqCst), "the loop did not hold");
+        let status = speaker.status();
+        assert!(!status.paused, "auto-hold shows Play");
+        assert!(status.speaking, "auto-hold hides the pause button");
     }
 
     /// Pause with nothing playing, or on an output that cannot hold: nothing

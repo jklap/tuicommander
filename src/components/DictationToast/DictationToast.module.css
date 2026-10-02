@@ -121,3 +121,38 @@
   transform-origin: left center;
   transition: transform 120ms ease-out;
 }
+
+.controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm, 4px);
+  background: transparent;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.control:hover,
+.control:focus-visible {
+  background: var(--bg-highlight, var(--border));
+  color: var(--fg-primary);
+}
+
+/* Touch: 44px is the smallest target a thumb hits reliably. */
+@media (pointer: coarse) {
+  .control {
+    width: 44px;
+    height: 44px;
+  }
+}

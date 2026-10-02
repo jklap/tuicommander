@@ -1380,6 +1380,45 @@ describe("dictationStore", () => {
 				expect(store.state.speech?.queued).toBe(3);
 			});
 		});
+
+		/** Bug caught: Play stays on the pill after the held reply was dropped, and resumes nothing. */
+		it("clears a held pause when the reply ends", async () => {
+			const handler = await subscribed("speech-utterance");
+			const { playbackState } = await import("../../stores/dictation");
+
+			await testInScopeAsync(async () => {
+				mockInvoke.mockImplementation((command: string) =>
+					Promise.resolve(
+						command === "get_speech_status" ? { available: true, queued: 0, speaking: false, paused: true } : undefined,
+					),
+				);
+				await store.refreshSpeechStatus();
+				expect(playbackState(store.state.speech)).toBe("paused");
+
+				handler?.({ payload: { utteranceId: "4", state: "rendering", error: null, turn: 9 } });
+				expect(store.state.speech?.paused, "a queued reply says nothing about the held one").toBe(true);
+
+				handler?.({ payload: { utteranceId: "4", state: "interrupted", error: null, turn: 9 } });
+				expect(store.state.speech?.paused).toBe(false);
+				expect(playbackState(store.state.speech)).toBe("idle");
+			});
+		});
+
+		/** Bug caught: a pause the backend refused leaves the pill showing Play for audio still playing. */
+		it("re-reads the speaker when pause is refused", async () => {
+			const { playbackState } = await import("../../stores/dictation");
+			await testInScopeAsync(async () => {
+				mockInvoke.mockImplementation((command: string) => {
+					if (command === "pause_speech") return Promise.reject("nothing is playing");
+					if (command === "get_speech_status")
+						return Promise.resolve({ available: true, speaking: false, paused: false });
+					return Promise.resolve(undefined);
+				});
+				await store.pauseSpeech();
+				expect(mockInvoke).toHaveBeenCalledWith("get_speech_status");
+				expect(playbackState(store.state.speech)).toBe("idle");
+			});
+		});
 	});
 
 	describe("hands-free earcons", () => {
