@@ -11965,7 +11965,7 @@ fn ignored_codex_enter_with_text_still_in_composer_retries_once_and_submits() {
 
 /// Real Codex 0.159 PTY capture (2026-09-30): a 1967-character brief typed into
 /// a fresh composer collapses to `[Pasted Content 1967 chars]`. The first Enter
-/// (200 ms after the text, as `CODEX_ENTER_GAP` does) is swallowed and the
+/// (200 ms after the plain text, as the old Codex gap did) is swallowed and the
 /// placeholder stays in the composer; a bare Enter 5 s later submits and Codex
 /// prints `Working` 0.18 s after it. The composer never shows the text, so the
 /// retry must recognise the placeholder as the queued text.
@@ -11994,6 +11994,10 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     // Ctrl-U, brief, first Enter, second Enter.
     assert_eq!(inputs.len(), 4);
     let brief = String::from_utf8(records[inputs[1]].data.clone()).unwrap();
+    // The capture predates the bracketed long-Codex payload: the brief was typed
+    // as plain characters and its Enter was swallowed. Replaying it still proves
+    // the retry from the placeholder; the write is now the framed paste.
+    let framed_brief = format!("\x1b[200~{brief}\x1b[201~");
     let second_enter = inputs[3];
 
     let state = crate::state::tests_support::make_test_app_state();
@@ -12036,7 +12040,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, &brief).unwrap());
-        for expected in [b"\x15".as_slice(), brief.as_bytes(), b"\r"] {
+        for expected in [b"\x15".as_slice(), framed_brief.as_bytes(), b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -13676,9 +13680,15 @@ impl std::io::Write for TimedWriter {
 /// a 584-char submission stayed unsent even with a 500ms Enter gap. Ctrl-U
 /// must reach the child in its own read, so it goes out a real gap before the
 /// text, and the text a real gap before the Enter.
+///
+/// Codex is the other half of the same defect (story 1163): it ingests a long
+/// plain write as a paste burst and swallows an Enter that lands inside it
+/// (live, 0.159.0: 1000 chars at a 200ms gap stayed in the composer). The long
+/// single-line wake is therefore framed as one bracketed paste, so no gap has to
+/// outlast a length-dependent ingestion time.
 #[cfg(unix)]
 #[test]
-fn agent_submission_keeps_ctrl_u_gap_and_waits_out_codex_paste_window() {
+fn agent_submission_keeps_ctrl_u_gap_and_brackets_a_long_single_line_codex_wake() {
     let state = crate::state::tests_support::make_test_app_state();
     let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
     insert_session_with_writer(
@@ -13698,6 +13708,8 @@ fn agent_submission_keeps_ctrl_u_gap_and_waits_out_codex_paste_window() {
         .agent_type = Some("codex".into());
     let text = "dictated text ".repeat(50);
     let text = text.trim();
+    assert!(!text.contains('\n'), "the bug needs a single-line payload");
+    let framed = format!("\x1b[200~{text}\x1b[201~");
 
     write_agent_command_to_pty(&state, "timed-submit", text).unwrap();
 
@@ -13705,23 +13717,30 @@ fn agent_submission_keeps_ctrl_u_gap_and_waits_out_codex_paste_window() {
     let chunks: Vec<&[u8]> = writes.iter().map(|(_, bytes)| bytes.as_slice()).collect();
     assert_eq!(
         chunks,
-        vec![b"\x15".as_slice(), text.as_bytes(), b"\r".as_slice()]
+        vec![b"\x15".as_slice(), framed.as_bytes(), b"\r".as_slice()]
     );
     assert!(
-        writes[1].0 - writes[0].0 >= INJECT_ENTER_GAP,
+        writes[1].0 - writes[0].0 >= std::time::Duration::from_millis(45),
         "Ctrl-U and the text must not share a read"
     );
     assert!(
-        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
-        "Codex Enter must arrive after its 120ms paste suppression window"
+        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(45),
+        "the CR must not share a read with the paste"
     );
 
-    assert_eq!(injection_enter_gap(Some("claude")), INJECT_ENTER_GAP);
+    assert_eq!(
+        injection_enter_gap(Some("codex")),
+        std::time::Duration::from_millis(50)
+    );
+    assert_eq!(
+        injection_enter_gap(Some("claude")),
+        std::time::Duration::from_millis(50)
+    );
 }
 
 #[cfg(unix)]
 #[test]
-fn agent_submission_with_unrecognized_type_waits_out_codex_paste_window() {
+fn agent_submission_with_unrecognized_type_keeps_the_unverified_gap_and_plain_payload() {
     let state = crate::state::tests_support::make_test_app_state();
     let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
     insert_session_with_writer(
@@ -13756,7 +13775,75 @@ fn agent_submission_with_unrecognized_type_waits_out_codex_paste_window() {
     );
     assert!(
         writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
-        "unknown agent must tolerate Codex paste suppression"
+        "an unverified agent keeps the long Enter gap"
+    );
+}
+
+/// Critic (1163): only Codex is framed, and only a verified agent gets the
+/// short gap. Catches: the Codex branch leaking to another agent, or an agent
+/// losing its >=50ms gap (Claude swallows a CR that shares the payload's read).
+#[test]
+fn long_single_line_payload_is_framed_for_codex_only_and_every_known_gap_is_at_least_50ms() {
+    let long = "x".repeat(1000);
+    for agent in [
+        "claude",
+        "gemini",
+        "opencode",
+        "aider",
+        "goose",
+        "grok",
+        "pi",
+        "amp",
+        "cursor",
+        "droid",
+        "future-agent",
+    ] {
+        let profile = agent_submit_profile(Some(agent));
+        assert_eq!((profile.payload)(&long), long, "{agent} must stay plain");
+        assert!(
+            profile.enter_gap >= std::time::Duration::from_millis(50),
+            "{agent} gap"
+        );
+    }
+    assert_eq!((agent_submit_profile(None).payload)(&long), long);
+    assert!(agent_submit_profile(None).enter_gap >= std::time::Duration::from_millis(50));
+    let codex = agent_submit_profile(Some("codex"));
+    assert_eq!((codex.payload)(&long), format!("\x1b[200~{long}\x1b[201~"));
+    // Short text, a slash command and a one-key answer stay plain keystrokes.
+    for short in ["y", "/status", &"x".repeat(500)] {
+        assert_eq!((codex.payload)(short), short);
+    }
+    assert!(codex.enter_gap >= std::time::Duration::from_millis(50));
+}
+
+/// Critic (1163): a human answer to a Codex question is a keypress, not prose.
+/// Codex's approval/choice overlays take key events and ignore a paste event, so
+/// a bracketed `y` is dropped and the following CR selects the default option.
+/// Catches: `write_human_reply_to_pty` framing a short reply as a bracketed paste.
+#[cfg(unix)]
+#[test]
+fn a_short_human_reply_to_a_codex_question_is_typed_not_pasted() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "codex-human-question", SHELL_IDLE);
+    let bytes = insert_recording_session(&state, "codex-human-question");
+    {
+        let mut session = state
+            .session_maps
+            .session_states
+            .get_mut("codex-human-question")
+            .unwrap();
+        session.agent_type = Some("codex".into());
+    }
+
+    assert!(matches!(
+        write_human_reply_to_pty(&state, "codex-human-question", "y"),
+        AgentSubmissionWrite::Complete { .. }
+    ));
+    let written = bytes.lock().unwrap();
+    assert!(
+        !written.windows(4).any(|w| w == b"\x1b[20"),
+        "a one-key answer must not be framed as a paste: {:?}",
+        String::from_utf8_lossy(&written)
     );
 }
 

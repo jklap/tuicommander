@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetPlatformCache } from "../../platform";
 import {
 	AGENT_ENTER_GAP_MS,
-	CODEX_ENTER_GAP_MS,
 	containsShellMetacharacters,
 	sendCommand,
 	shouldAutoSubmitSuggestion,
+	UNVERIFIED_ENTER_GAP_MS,
 } from "../../utils/sendCommand";
 
 /**
@@ -164,11 +164,24 @@ describe("sendCommand", () => {
 		const writeFn = async (): Promise<void> => {
 			stamps.push(performance.now());
 		};
-		await sendCommand(writeFn, "run the tests", "codex", "posix");
+		await sendCommand(writeFn, "run the tests", "claude", "posix");
 		expect(stamps.length).toBe(3);
 		// setTimeout never fires early; allow a small scheduler tolerance.
-		// Codex keeps Enter in newline mode for 120ms after the last burst char.
-		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(195);
+		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
+	});
+
+	/**
+	 * Regression (story 1163): Codex consumes a long plain write as a paste burst
+	 * and swallows an Enter that arrives while it is still ingesting — a 1000-char
+	 * wake left in the composer at a 200ms gap, live on 0.159.0. A bracketed paste
+	 * arrives as one event, so the same CR is an ordinary Enter.
+	 */
+	it("frames a long single-line Codex payload as a bracketed paste", async () => {
+		setPlatform("MacIntel");
+		const { writeFn, calls } = makeRecorder();
+		const longLine = "BG DONE exit=100 ".repeat(100).trim();
+		await sendCommand(writeFn, longLine, "codex", "posix");
+		expect(calls).toEqual(["\x15", `\x1b[200~${longLine}\x1b[201~`, "\r"]);
 	});
 
 	it("keeps the existing Enter gap for Claude", async () => {
@@ -179,7 +192,7 @@ describe("sendCommand", () => {
 			await sendCommand(async () => {}, "run tests", "claude", "posix");
 			const delays = timeout.mock.calls.map(([, ms]) => ms);
 			expect(delays).toContain(AGENT_ENTER_GAP_MS);
-			expect(delays).not.toContain(CODEX_ENTER_GAP_MS);
+			expect(delays).not.toContain(UNVERIFIED_ENTER_GAP_MS);
 		} finally {
 			timeout.mockRestore();
 		}
@@ -278,5 +291,41 @@ describe("shouldAutoSubmitSuggestion", () => {
 				expect(shouldAutoSubmitSuggestion(agentType, s)).toBe(true);
 			}
 		}
+	});
+});
+
+describe("sendCommand framing (critic 1163)", () => {
+	// Catches: the Codex bracketed branch leaking to other agents or to a plain
+	// shell, which would paste "ls" into a shell prompt as literal escape bytes.
+	it("frames a long single-line payload for codex only, and keeps short text plain", async () => {
+		const long = "x".repeat(1000);
+		for (const agent of ["claude", "gemini", "opencode", "grok", "pi", "future-agent", null]) {
+			const { writeFn, calls } = makeRecorder();
+			await sendCommand(writeFn, long, agent, "posix");
+			expect(calls[calls.length - 2], String(agent)).not.toContain("\x1b[200~");
+		}
+		const { writeFn, calls } = makeRecorder();
+		await sendCommand(writeFn, long, "codex", "posix");
+		expect(calls).toEqual(["\x15", `\x1b[200~${long}\x1b[201~`, "\r"]);
+		for (const short of ["y", "/status", "x".repeat(500)]) {
+			const rec = makeRecorder();
+			await sendCommand(rec.writeFn, short, "codex", "posix");
+			expect(rec.calls).toEqual(["\x15", short, "\r"]);
+		}
+	});
+
+	// Catches: the framed Codex prefill (submit=false) still sending Enter.
+	it("types a framed codex prefill without Enter", async () => {
+		const { writeFn, calls } = makeRecorder();
+		const draft = "d".repeat(600);
+		await sendCommand(writeFn, draft, "codex", "posix", false);
+		expect(calls).toEqual(["\x15", `\x1b[200~${draft}\x1b[201~`]);
+	});
+
+	// Catches: an unverified agent losing its longer Enter gap (the constant is
+	// asserted against a literal, not against itself).
+	it("keeps an unverified gap longer than the verified one", () => {
+		expect(AGENT_ENTER_GAP_MS).toBe(50);
+		expect(UNVERIFIED_ENTER_GAP_MS).toBe(200);
 	});
 });
