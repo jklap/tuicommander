@@ -349,6 +349,9 @@ impl WorkflowStore {
         }
         validate_graph(&draft.graph, draft.kind)?;
         validate_checks(&draft.required_checks)?;
+        if draft.kind == WorkflowKind::Story && draft.required_checks.is_empty() {
+            return Err("a story workflow needs at least one required check to publish".into());
+        }
         if draft.closure == WorkflowClosure::Automatic {
             return Err(
                 "automatic closure cannot be published until its evidence gate exists".into(),
@@ -393,6 +396,7 @@ impl WorkflowStore {
                 WorkflowKind::Story,
                 "story_delivery",
                 story_template_graph(),
+                &default_story_checks(),
             )?;
             insert_seed(
                 &tx,
@@ -402,6 +406,7 @@ impl WorkflowStore {
                 WorkflowKind::Plan,
                 "resolve_plan",
                 resolve_plan_graph(&story_id),
+                &[],
             )?;
         }
         let ids = {
@@ -510,6 +515,19 @@ fn validate_pinned_templates(conn: &Connection, draft: &WorkflowDraft) -> Result
     Ok(())
 }
 
+/// Project-independent default policy for seeded story workflows: the repository
+/// object graph must be intact at the checked commit. Projects pin their own
+/// build/test checks in a new revision.
+fn default_story_checks() -> Vec<CheckDefinition> {
+    vec![CheckDefinition {
+        id: "repository-integrity".into(),
+        argv: ["git", "fsck", "--connectivity-only", "--no-progress"]
+            .map(String::from)
+            .into(),
+        timeout_secs: 300,
+    }]
+}
+
 fn insert_seed(
     conn: &Connection,
     id: &str,
@@ -518,14 +536,18 @@ fn insert_seed(
     kind: WorkflowKind,
     key: &str,
     graph: WorkflowGraph,
+    checks: &[CheckDefinition],
 ) -> Result<(), String> {
     validate_graph(&graph, kind)?;
+    validate_checks(checks)?;
     let raw = encode_graph(&graph)?;
-    conn.execute("INSERT INTO workflow_definitions(id,project,name,kind,graph_json,draft_revision,latest_published_revision,last_published_draft_revision,builtin_key)
-                  VALUES (?1,?2,?3,?4,?5,1,1,1,?6)", params![id, project, name, kind_str(kind), raw, key])
+    let checks_raw =
+        serde_json::to_string(checks).map_err(|e| format!("encode workflow checks: {e}"))?;
+    conn.execute("INSERT INTO workflow_definitions(id,project,name,kind,graph_json,draft_revision,latest_published_revision,last_published_draft_revision,builtin_key,checks_json)
+                  VALUES (?1,?2,?3,?4,?5,1,1,1,?6,?7)", params![id, project, name, kind_str(kind), raw, key, checks_raw])
         .map_err(|e| format!("insert built-in workflow: {e}"))?;
-    conn.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json) VALUES (?1,1,?2,?3,?4,?5)",
-        params![id, project, name, kind_str(kind), raw]).map_err(|e| format!("publish built-in workflow: {e}"))?;
+    conn.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json,checks_json) VALUES (?1,1,?2,?3,?4,?5,?6)",
+        params![id, project, name, kind_str(kind), raw, checks_raw]).map_err(|e| format!("publish built-in workflow: {e}"))?;
     Ok(())
 }
 
