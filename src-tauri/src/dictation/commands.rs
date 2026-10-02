@@ -1003,6 +1003,16 @@ impl ArmedSpeaker {
     }
 }
 
+/// A command still waiting for the slot belongs to the arm that issued it. The
+/// thread that will apply it holds only the shared state, not the port, so the
+/// port going away is the signal to forget it: otherwise it lands on the voice
+/// of the next arm.
+impl Drop for ArmedSpeaker {
+    fn drop(&mut self) {
+        *self.pending.lock() = None;
+    }
+}
+
 fn apply_pending(
     slot: &Option<speaker::Armed>,
     pending: &parking_lot::Mutex<Option<SpeakerCommand>>,
@@ -5077,6 +5087,24 @@ mod tests {
         assert!(
             eventually(|| !output.0.load(std::sync::atomic::Ordering::SeqCst)),
             "the resume came while the slot was busy and the reply stayed paused"
+        );
+    }
+
+    /// The command waiting for a busy slot belongs to the arm that gave it.
+    /// Catches: a pending `Pause` surviving a disarm and holding the first
+    /// reply of the next conversation.
+    #[test]
+    fn a_pause_waiting_for_the_slot_is_dropped_when_the_arm_ends() {
+        let (dictation, output, port) = a_voice_behind_the_port();
+        let busy = dictation.speaker.lock();
+        continuous::Interruptible::pause(&*port);
+        drop(port);
+        drop(busy);
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            !output.0.load(std::sync::atomic::Ordering::SeqCst),
+            "a pause from the previous arm held the new voice"
         );
     }
 

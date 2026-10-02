@@ -102,13 +102,13 @@ pub struct FarEnd {
     /// Capture samples handed out so far, which is what the pause positions
     /// below are measured in.
     position: usize,
-    /// The speaker was held silent from this capture position. What is queued
-    /// has not left it, so capture is matched against silence until playback
-    /// continues. A position, not a flag: capture recorded before the pause
-    /// but not yet cleaned still heard the reply.
-    paused_from: Option<usize>,
-    /// ... and continued from this one, once it is known.
-    resumed_at: Option<usize>,
+    /// Capture positions `(from, until)` where the speaker was held silent.
+    /// What is queued has not left it, so capture is matched against silence
+    /// inside a window; `until` is `None` while the pause lasts. Positions, not
+    /// a flag: capture recorded before the pause but not yet cleaned still
+    /// heard the reply. A list, because a second pause can open while the
+    /// backlog still holds the first.
+    pauses: VecDeque<(usize, Option<usize>)>,
 }
 
 impl FarEnd {
@@ -156,11 +156,17 @@ impl FarEnd {
     pub fn take(&mut self, count: usize) -> Vec<f32> {
         let mut frame = Vec::with_capacity(count);
         for _ in 0..count {
-            if self.resumed_at.is_some_and(|at| self.position >= at) {
-                self.paused_from = None;
-                self.resumed_at = None;
+            while self
+                .pauses
+                .front()
+                .is_some_and(|&(_, until)| until.is_some_and(|at| self.position >= at))
+            {
+                self.pauses.pop_front();
             }
-            let silent = self.paused_from.is_some_and(|from| self.position >= from);
+            let silent = self
+                .pauses
+                .front()
+                .is_some_and(|&(from, _)| self.position >= from);
             self.position += 1;
             frame.push(if silent {
                 0.0
@@ -176,8 +182,7 @@ impl FarEnd {
     /// would subtract a sound that is not there.
     pub fn clear(&mut self) {
         self.samples.clear();
-        self.paused_from = None;
-        self.resumed_at = None;
+        self.pauses.clear();
     }
 
     /// Where the next sample handed out will sit in the capture stream, plus
@@ -188,7 +193,9 @@ impl FarEnd {
 
     /// Is the reply held back right now, with no continuation yet?
     fn is_paused(&self) -> bool {
-        self.paused_from.is_some() && self.resumed_at.is_none()
+        self.pauses
+            .back()
+            .is_some_and(|&(_, until)| until.is_none())
     }
 
     /// Is any reply audio still waiting to be matched?
@@ -297,8 +304,8 @@ impl EchoGuard {
     /// now, and everything the microphone recorded until now heard the reply.
     pub fn note_paused(&mut self) {
         if !self.far_end.is_paused() {
-            self.far_end.paused_from = Some(self.far_end.position_after(self.recorded()));
-            self.far_end.resumed_at = None;
+            let from = self.far_end.position_after(self.recorded());
+            self.far_end.pauses.push_back((from, None));
         }
     }
 
@@ -306,7 +313,10 @@ impl EchoGuard {
     /// silence, and the reply continues with what is recorded from now on.
     pub fn note_resumed(&mut self) {
         if self.far_end.is_paused() {
-            self.far_end.resumed_at = Some(self.far_end.position_after(self.recorded()));
+            let until = self.far_end.position_after(self.recorded());
+            if let Some(window) = self.far_end.pauses.back_mut() {
+                window.1 = Some(until);
+            }
         }
     }
 
