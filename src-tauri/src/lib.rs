@@ -1799,15 +1799,25 @@ pub fn run() {
 
             #[cfg(feature = "desktop")]
             {
+                // One instance per config directory owns dictation and the
+                // global hotkey; a second one must not register or open either.
+                let dictation_state = app.state::<dictation::DictationState>();
+                dictation_state.claim_ownership(&config::config_dir());
+                let input_plan = dictation::ownership::GlobalInputPlan::for_ownership(
+                    dictation_state.is_owner(),
+                );
+
                 // Install global hotkey plugin (registers handler, no shortcuts yet)
                 if let Err(e) = global_hotkey::init(app.handle()) {
                     tracing::warn!(source = "global-hotkey", "Failed to init plugin: {e}");
-                } else {
+                } else if input_plan.restore_hotkey {
                     global_hotkey::restore_from_config(app.handle());
                 }
 
                 // Install Fn/Globe key monitor for push-to-talk dictation
-                dictation::fn_key_monitor::install(app.handle().clone());
+                if input_plan.install_fn_monitor {
+                    dictation::fn_key_monitor::install(app.handle().clone());
+                }
                 dictation::spawn_idle_unload_sweeper(app.handle().clone());
                 // Before any conversation can be armed: a speaker built without
                 // this one reports its replies to nobody but a poller.

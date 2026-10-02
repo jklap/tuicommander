@@ -96,6 +96,10 @@ pub async fn set_global_hotkey(
     combo: Option<String>,
 ) -> std::result::Result<(), String> {
     let state = app.state::<Arc<AppState>>();
+    if combo.is_some() {
+        app.state::<crate::dictation::DictationState>()
+            .ensure_owner()?;
+    }
 
     // Unregister current hotkey (if any)
     let current = state.config.read().global_hotkey.clone();
