@@ -507,6 +507,8 @@ These commands stay in the root `dictation/commands.rs` adapter; their audio and
 | `preview_speech_voice` | `language`, `voice`, `text` | `()` | Speak `text` (max 200 characters) in `voice` on this machine's speaker with the saved loudness. Needs no hands-free conversation and does not change `speech_voice`. Refused while a hands-free reply is queued, rendering or playing |
 | `speak_reply` | `text`, `turn?` | `SpokenReply` | Queue one spoken reply, max 2000 characters. Returns `state: "queued"` — never `"finished"`; poll `get_speech_status` with the id. `turn` refuses a reply written for a turn the user talked over |
 | `stop_speech` | -- | `SpeechStatus` | Stop now, drop the queue, open a new turn. Returns the status so the caller learns that turn |
+| `pause_speech` | -- | `SpeechStatus` | Hold the reply where it is; `paused` true, `speaking` false. No-op with nothing playing |
+| `resume_speech` | -- | `SpeechStatus` | Continue a reply the user held |
 | `get_speech_status` | `utterance?` | `SpeechStatus` | Whether anything can be spoken, and optionally what became of one reply. An id no longer remembered reports `state: "unknown"`. `language` is the conversation's language — empty under `auto` before the first turn, which is the one state in which nothing can be spoken |
 | `get_correction_map` | -- | `HashMap<String,String>` | Load corrections |
 | `set_correction_map` | `map` | `()` | Save corrections |

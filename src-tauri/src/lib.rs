@@ -2157,6 +2157,8 @@ pub fn run() {
             dictation::commands::preview_speech_voice,
             dictation::commands::speak_reply,
             dictation::commands::stop_speech,
+            dictation::commands::pause_speech,
+            dictation::commands::resume_speech,
             dictation::commands::get_speech_status,
             dictation::commands::start_dictation,
             dictation::commands::stop_dictation_and_transcribe,

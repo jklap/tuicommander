@@ -960,20 +960,86 @@ fn open_speaker_for(
 /// speaks. Holding the slot means the loop interrupts whatever is speaking on
 /// the tick the user talks over it, including a voice built minutes later and a
 /// voice rebuilt because the language changed.
-struct ArmedSpeaker(Arc<parking_lot::Mutex<Option<speaker::Armed>>>);
+struct ArmedSpeaker {
+    slot: Arc<parking_lot::Mutex<Option<speaker::Armed>>>,
+    /// The command waiting for the slot, latest first: only the net state of a
+    /// pause, a resume and a hush matters, and the order they are applied in
+    /// is the order they were given.
+    pending: Arc<parking_lot::Mutex<Option<SpeakerCommand>>>,
+}
+
+#[derive(Clone, Copy)]
+enum SpeakerCommand {
+    Pause,
+    Resume,
+    Hush,
+}
+
+impl ArmedSpeaker {
+    fn new(slot: Arc<parking_lot::Mutex<Option<speaker::Armed>>>) -> Self {
+        Self {
+            slot,
+            pending: Arc::new(parking_lot::Mutex::new(None)),
+        }
+    }
+
+    /// Run `command` against whatever is speaking, without ever making the
+    /// capture loop wait for the slot.
+    ///
+    /// The only writer is a rebuild in `speak`, which holds the slot while it
+    /// loads a voice and opens a device. A command that meets it is not
+    /// dropped — the verdict on a pause arrives after the pause, and a lost
+    /// one leaves the reply paused — and it does not block: it is recorded and
+    /// a thread applies it when the slot frees.
+    fn send(&self, command: SpeakerCommand) {
+        *self.pending.lock() = Some(command);
+        if let Some(slot) = self.slot.try_lock() {
+            apply_pending(&slot, &self.pending);
+            return;
+        }
+        let slot = Arc::clone(&self.slot);
+        let pending = Arc::clone(&self.pending);
+        std::thread::spawn(move || apply_pending(&slot.lock(), &pending));
+    }
+}
+
+/// A command still waiting for the slot belongs to the arm that issued it. The
+/// thread that will apply it holds only the shared state, not the port, so the
+/// port going away is the signal to forget it: otherwise it lands on the voice
+/// of the next arm.
+impl Drop for ArmedSpeaker {
+    fn drop(&mut self) {
+        *self.pending.lock() = None;
+    }
+}
+
+fn apply_pending(
+    slot: &Option<speaker::Armed>,
+    pending: &parking_lot::Mutex<Option<SpeakerCommand>>,
+) {
+    let command = pending.lock().take();
+    if let (Some(command), Some(armed)) = (command, slot.as_ref()) {
+        match command {
+            SpeakerCommand::Pause => armed.speaker.pause(),
+            SpeakerCommand::Resume => armed.speaker.resume(),
+            SpeakerCommand::Hush => {
+                armed.speaker.hush();
+            }
+        }
+    }
+}
 
 impl continuous::Interruptible for ArmedSpeaker {
+    fn pause(&self) {
+        self.send(SpeakerCommand::Pause);
+    }
+
+    fn resume(&self) {
+        self.send(SpeakerCommand::Resume);
+    }
+
     fn hush(&self) {
-        // `try_lock`, because this runs on the capture loop and anything it
-        // waits for delays the next chunk of the user's own voice. The only
-        // writer is a rebuild in `speak`, which has already hushed the queue it
-        // is replacing and has not started the new one — so a missed lock here
-        // is a tick with nothing to interrupt, not a missed interruption.
-        if let Some(slot) = self.0.try_lock()
-            && let Some(armed) = slot.as_ref()
-        {
-            armed.speaker.hush();
-        }
+        self.send(SpeakerCommand::Hush);
     }
 }
 
@@ -1053,6 +1119,9 @@ pub struct SpeechStatus {
     pub queued: usize,
     pub rendering: bool,
     pub speaking: bool,
+    /// A reply is held where it is, by the user or while the microphone hears
+    /// somebody. `speaking` is false meanwhile.
+    pub paused: bool,
     /// The last synthesis or device failure, cleared by the next reply that
     /// works.
     pub last_error: Option<String>,
@@ -1204,6 +1273,33 @@ pub(crate) fn stop_speaking(
     Ok(speech_status(dictation, None))
 }
 
+/// Hold the reply being spoken where it is, until [`resume_speaking`]. Nothing
+/// playing is not an error: the status says it is not paused.
+pub(crate) fn pause_speaking(
+    dictation: &DictationState,
+    caller: Caller<'_>,
+) -> Result<SpeechStatus, String> {
+    let session_id = bound_session(dictation)?;
+    caller.may_drive(&session_id)?;
+    if let Some(armed) = dictation.speaker.lock().as_ref() {
+        armed.speaker.pause_by_user();
+    }
+    Ok(speech_status(dictation, None))
+}
+
+/// Let a reply the user held go on from where it stopped.
+pub(crate) fn resume_speaking(
+    dictation: &DictationState,
+    caller: Caller<'_>,
+) -> Result<SpeechStatus, String> {
+    let session_id = bound_session(dictation)?;
+    caller.may_drive(&session_id)?;
+    if let Some(armed) = dictation.speaker.lock().as_ref() {
+        armed.speaker.resume_by_user();
+    }
+    Ok(speech_status(dictation, None))
+}
+
 /// The longest reply that will be accepted, in characters.
 ///
 /// Well past a conversational answer and well short of a model pasting a file.
@@ -1269,6 +1365,7 @@ pub(crate) fn speech_status(dictation: &DictationState, utterance: Option<&str>)
             queued: 0,
             rendering: false,
             speaking: false,
+            paused: false,
             last_error: None,
             utterance: None,
         };
@@ -1299,6 +1396,7 @@ pub(crate) fn speech_status(dictation: &DictationState, utterance: Option<&str>)
         queued: status.queued,
         rendering: status.rendering,
         speaking: status.speaking,
+        paused: status.paused,
         last_error: status.last_error,
         utterance: asked_about,
     }
@@ -1323,6 +1421,18 @@ pub fn speak_reply(
 #[tauri::command]
 pub fn stop_speech(dictation: tauri::State<'_, DictationState>) -> Result<SpeechStatus, String> {
     stop_speaking(&dictation, Caller::Owner)
+}
+
+/// Hold the reply being spoken where it is.
+#[tauri::command]
+pub fn pause_speech(dictation: tauri::State<'_, DictationState>) -> Result<SpeechStatus, String> {
+    pause_speaking(&dictation, Caller::Owner)
+}
+
+/// Continue a reply the user held.
+#[tauri::command]
+pub fn resume_speech(dictation: tauri::State<'_, DictationState>) -> Result<SpeechStatus, String> {
+    resume_speaking(&dictation, Caller::Owner)
 }
 
 /// Whether anything can be spoken, and what became of a reply already sent.
@@ -2360,7 +2470,7 @@ pub(crate) fn arm_hands_free_with(
     // Auto conversation — and barge-in would stay dead for the whole session
     // even once a later reply opened a voice.
     let interruptible: Option<Arc<dyn continuous::Interruptible>> =
-        Some(Arc::new(ArmedSpeaker(Arc::clone(&dictation.speaker))));
+        Some(Arc::new(ArmedSpeaker::new(Arc::clone(&dictation.speaker))));
 
     // DEFERRED (2026-09-21) — the segmenter runs on its compiled defaults.
     // Hold-back is read from user config just above; pre-roll, trailing
@@ -4847,7 +4957,7 @@ mod tests {
     #[test]
     fn barge_in_interrupts_the_voice_that_is_open_at_the_time() {
         let (dictation, _gate, _config) = armed_with_a_voice("session-a");
-        let port = ArmedSpeaker(Arc::clone(&dictation.speaker));
+        let port = ArmedSpeaker::new(Arc::clone(&dictation.speaker));
         let before = speech_status(&dictation, None).turn;
 
         continuous::Interruptible::hush(&port);
@@ -4863,6 +4973,145 @@ mod tests {
         // never opened a voice.
         *dictation.speaker.lock() = None;
         continuous::Interruptible::hush(&port);
+    }
+
+    #[derive(Default)]
+    struct PausableOutput(std::sync::atomic::AtomicBool);
+
+    impl speaker::Output for PausableOutput {
+        fn play(&self, _audio: &speech::SpeechAudio) -> Result<(), String> {
+            Ok(())
+        }
+        fn stop(&self) {
+            // The real device un-pauses on stop, so the next reply is heard.
+            self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn pause(&self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn resume(&self) {
+            self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn is_speaking(&self) -> bool {
+            false
+        }
+    }
+
+    /// An armed voice whose output records whether it is paused, and the port
+    /// the capture loop uses to reach it.
+    fn a_voice_behind_the_port() -> (DictationState, Arc<PausableOutput>, Arc<ArmedSpeaker>) {
+        let (dictation, gate, _config) = armed_with_a_voice("session-a");
+        let output = Arc::new(PausableOutput::default());
+        let generation = dictation.hands_free.lock().generation();
+        *dictation.speaker.lock() = Some(speaker::Armed {
+            speaker: Arc::new(speaker::Speaker::new(
+                Arc::new(HeldSpeech { gate }),
+                Arc::clone(&output) as Arc<dyn speaker::Output>,
+                generation,
+            )),
+            voice: "giovanni".to_string(),
+            language: "it".to_string(),
+        });
+        let port = Arc::new(ArmedSpeaker::new(Arc::clone(&dictation.speaker)));
+        (dictation, output, port)
+    }
+
+    /// Issue `command` while a rebuild holds the slot: the call must return
+    /// without waiting for it, and the command must still land once it frees.
+    fn command_while_the_slot_is_busy(
+        dictation: &DictationState,
+        port: &Arc<ArmedSpeaker>,
+        command: fn(&ArmedSpeaker),
+    ) {
+        let busy = dictation.speaker.lock();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let contender = {
+            let port = Arc::clone(port);
+            std::thread::spawn(move || {
+                command(&port);
+                let _ = done_tx.send(());
+            })
+        };
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the capture loop waited for a rebuild");
+        drop(busy);
+        contender.join().expect("the contender panicked");
+    }
+
+    /// Applied from another thread once the slot frees.
+    fn eventually(condition: impl Fn() -> bool) -> bool {
+        for _ in 0..200 {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        condition()
+    }
+
+    /// The verdict arrives after the pause, so a `hush` that misses the slot
+    /// lock (`speak` holds it while it rebuilds the voice) is no longer "a tick
+    /// with nothing to interrupt": nothing resumes the reply afterwards, and
+    /// the next one is queued into a silent device. Catches: `hush` giving up
+    /// on a contended slot while the output is paused.
+    #[test]
+    fn a_hush_that_meets_a_busy_slot_does_not_leave_the_reply_paused() {
+        let (dictation, output, port) = a_voice_behind_the_port();
+        continuous::Interruptible::pause(&*port);
+        assert!(output.0.load(std::sync::atomic::Ordering::SeqCst));
+
+        command_while_the_slot_is_busy(&dictation, &port, |port| {
+            continuous::Interruptible::hush(port)
+        });
+
+        assert!(
+            eventually(|| !output.0.load(std::sync::atomic::Ordering::SeqCst)),
+            "the verdict came while the slot was busy and the reply stayed paused"
+        );
+    }
+
+    /// The same for a reply that was not for us: the resume that meets a busy
+    /// slot must not be lost either. Catches: `resume` dropped on a contended
+    /// slot.
+    #[test]
+    fn a_resume_that_meets_a_busy_slot_does_not_leave_the_reply_paused() {
+        let (dictation, output, port) = a_voice_behind_the_port();
+        continuous::Interruptible::pause(&*port);
+        assert!(output.0.load(std::sync::atomic::Ordering::SeqCst));
+
+        command_while_the_slot_is_busy(&dictation, &port, |port| {
+            continuous::Interruptible::resume(port)
+        });
+
+        assert!(
+            eventually(|| !output.0.load(std::sync::atomic::Ordering::SeqCst)),
+            "the resume came while the slot was busy and the reply stayed paused"
+        );
+    }
+
+    /// The command waiting for a busy slot belongs to the arm that gave it.
+    /// Catches: a pending `Pause` surviving a disarm and holding the first
+    /// reply of the next conversation.
+    #[test]
+    fn a_pause_waiting_for_the_slot_is_dropped_when_the_arm_ends() {
+        let (dictation, output, port) = a_voice_behind_the_port();
+        let busy = dictation.speaker.lock();
+        continuous::Interruptible::pause(&*port);
+        // The applier thread holds a clone of `pending` until it has run, so
+        // the count says when it is done: no sleeping on a thread that may not
+        // have been scheduled yet.
+        let pending = Arc::clone(&port.pending);
+        drop(port);
+        drop(busy);
+        assert!(
+            eventually(|| Arc::strong_count(&pending) == 1),
+            "the applier thread never finished"
+        );
+        assert!(
+            !output.0.load(std::sync::atomic::Ordering::SeqCst),
+            "a pause from the previous arm held the new voice"
+        );
     }
 
     /// Disarming takes the voice away before the engine goes, so a reply

@@ -2108,6 +2108,14 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(dictation_routes::stop_speech_http),
         )
         .route(
+            "/dictation/speech/pause",
+            post(dictation_routes::pause_speech_http),
+        )
+        .route(
+            "/dictation/speech/resume",
+            post(dictation_routes::resume_speech_http),
+        )
+        .route(
             "/dictation/speech/status",
             get(dictation_routes::get_speech_status_http),
         )

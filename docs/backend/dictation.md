@@ -146,6 +146,8 @@ than failing, so a caller can always ask.
 |---------|------|-------------|
 | `speak_reply(text, turn?)` | `POST /dictation/speech/speak` | Queue one reply, at most 2000 characters. Returns `SpokenReply { utteranceId, state, error?, turn }` with `state: "queued"` — never `"finished"`. `turn` refuses a reply written for a turn the user has already talked over; omitting it means "now". |
 | `stop_speech()` | `POST /dictation/speech/stop` | Stop now, drop the queue, open a new turn. Returns the `SpeechStatus` afterwards, so the caller learns the new turn. |
+| `pause_speech()` | `POST /dictation/speech/pause` | Hold the reply where it is (`paused: true`, `speaking: false`). No-op with nothing playing. Sticky: the capture loop's own resume never lifts it; a stop still drops it. |
+| `resume_speech()` | `POST /dictation/speech/resume` | Continue a reply the user held. |
 | `get_speech_status(utterance?)` | `GET /dictation/speech/status?utterance=` | `SpeechStatus`. With `utterance` it also carries that one reply's `SpokenReply`; an id this conversation no longer remembers comes back as `state: "unknown"` rather than as an absent field. |
 
 A model does not call these. It calls the `voice` MCP tool, which supplies its
@@ -1412,36 +1414,41 @@ module has no microphone and no opinion. The split is deliberate — the queue's
 correctness is provable without audio hardware, and an audio-hardware test
 cannot prove the queue. It lives in `echo.rs`, below.
 
-### Barge-in: who actually calls `hush`
+### Barge-in: pause on voice, stop on the wake word (1376-f33e)
 
-The capture loop in `continuous.rs` does, through the `Interruptible` port it
-holds for the armed conversation. The rule is three lines and each one is
-load-bearing:
+Voice activity alone does not stop a reply: a turn needs the activation phrase,
+and so does interrupting one. The capture loop in `continuous.rs` drives the
+`Interruptible` port it holds for the armed conversation:
 
-- **After the canceller.** `capture.echo.lock().clean(...)` runs first, so
-  whatever opens the energy gate is the user and not the reply coming back
-  through the microphone. Wired the other way round, every reply interrupts
-  itself on its own first word.
-- **On the edge, not the level.** `hush` opens a new turn on *every* call, so a
-  level trigger would open one per 50 ms tick and every reply the model wrote
-  for the turn in progress would be refused as stale while the user was still
-  speaking one sentence.
-- **On sustained speech, not the first frame.** The edge is the tick where the
-  open utterance first holds `min_speech_ms` of speech (`Segmenter::has_speech`,
-  the same rule `close` uses to decide whether to send it). AEC3 removes the
-  linear echo but not all of it: with laptop speakers a few residual frames sit
-  above `activity_rms`, and one 20 ms frame opens the gate, so hushing on the
-  open edge stopped every reply on its first syllable. The gate still opens on
-  the first frame, so the pre-roll keeps the user's first words. One rule,
-  whether a reply is playing or not.
-- **The slot, not the queue.** The port is `commands::ArmedSpeaker`, which holds
-  `DictationState.speaker` itself rather than the `Speaker` that was in it when
-  the loop started. Under Auto there *is* no queue at arm time — the language is
-  unknown until somebody speaks — so a port bound to one queue would be bound to
-  nothing for the whole conversation. It `try_lock`s, because this runs on the
-  capture loop and anything it waits for delays the next chunk of the user's own
-  voice; the only writer is a rebuild in `speak`, which has already hushed the
-  queue it is replacing.
+- **Voice pauses.** When the open utterance first holds a voice, `pause()` holds
+  the reply where it is. Nothing queued is dropped and no turn changes.
+- **The transcript decides.** An accepted turn (`HeldBack`, or `Activated` for
+  the phrase alone) calls `hush()`: the reply stops and the turn begins. Any
+  other verdict (`Rejected`, `Empty`, `Stale`), an utterance dropped for too
+  little speech, the end of the loop, or `PAUSE_LIMIT_MS` (8 s) calls
+  `resume()`. Measured on the log of 2026-10-02, voice edge to accepted turn is
+  2.2 s for a short command, plus the length of longer speech.
+- **A voice is a run, not a sum.** `Segmenter::has_voice` needs `min_speech_ms`
+  of activity with dips of at most `VOICE_GAP_MS` (60 ms). `has_speech` adds up
+  every active frame of an utterance that stays open until 1.5 s of quiet, so
+  scattered residual echo (a frame in every 200 ms) reached the bar within a
+  second and hushed replies 600-900 ms in. Speech keeps the `has_speech` rule
+  for sending.
+- **After the canceller, on the edge.** `capture.echo.lock().clean(...)` runs
+  first; the trigger is the edge of the voice, not its level.
+- **The echo reference follows the pause.** `FarEndTap` marks the far end paused
+  only when the output holds its audio (`Output::can_pause`), from the position
+  the microphone had recorded when it paused and symmetrically on resume; capture
+  recorded before the pause heard the reply.
+- **The slot, not the queue, and never lost.** The port is
+  `commands::ArmedSpeaker`, which holds `DictationState.speaker` rather than the
+  `Speaker` that was in it when the loop started. A command that meets a rebuild
+  in `speak` is recorded (latest wins) and applied by a thread once the slot
+  frees; the capture loop never waits for it, and the verdict on a pause is
+  never dropped.
+- **Outputs.** `DeviceOutput` pauses the rodio `Player`; `BrowserOutput` sends
+  `pause`/`resume` frames and the client stops the audio node and continues from
+  the same position, keeping a reply that arrives while held.
 
 The queue is built in `arm_hands_free_with` **before** the runtime is spawned
 whenever a language is already known, for this reason alone: a loop started
