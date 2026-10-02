@@ -41,6 +41,8 @@ pub(crate) mod design_mode;
 #[path = "../build_sidecars.rs"]
 mod build_sidecars;
 #[cfg(feature = "desktop")]
+pub(crate) mod audio_enumeration;
+#[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod dir_watcher;
 pub(crate) mod ego_cli;

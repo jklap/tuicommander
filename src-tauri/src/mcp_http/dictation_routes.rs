@@ -289,12 +289,16 @@ pub(super) async fn start_dictation_http(
     let Some(app) = app_handle else {
         return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
     };
-    let dictation = app.state::<DictationState>();
-    json_result(dictation::commands::start_dictation(
-        app.clone(),
-        dictation,
-        body.and_then(|body| body.0.source),
-    ))
+    let source = body.and_then(|body| body.0.source);
+    // Opening the capture stream is a synchronous CoreAudio call; keep it off
+    // the async workers.
+    let result = tokio::task::spawn_blocking(move || {
+        let dictation = app.state::<DictationState>();
+        dictation::commands::start_dictation(app.clone(), dictation, source)
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("starting dictation failed: {error}")));
+    json_result(result)
 }
 
 pub(super) async fn stop_dictation_http(State(state): State<Arc<AppState>>) -> Response {
@@ -331,8 +335,8 @@ pub(super) async fn set_correction_map_http(
     json_result(dictation::commands::set_correction_map(dictation, body.map))
 }
 
-pub(super) async fn list_audio_devices_http() -> impl IntoResponse {
-    Json(dictation::commands::list_audio_devices())
+pub(super) async fn list_audio_devices_http() -> Response {
+    json_result(dictation::commands::list_audio_devices().await)
 }
 
 #[derive(serde::Deserialize)]
@@ -367,17 +371,18 @@ pub(super) async fn arm_hands_free_http(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ArmHandsFreeRequest>,
 ) -> Response {
-    let app_handle = state.app_handle.read();
-    let Some(app) = app_handle.as_ref() else {
+    let Some(app) = state.app_handle.read().clone() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
     };
-    let dictation = app.state::<DictationState>();
-    json_result(dictation::commands::arm_hands_free(
-        &state,
-        &dictation,
-        &body.session_id,
-        &body.owner,
-    ))
+    // Arming opens the capture stream (synchronous CoreAudio); keep it off the
+    // async workers.
+    let result = tokio::task::spawn_blocking(move || {
+        let dictation = app.state::<DictationState>();
+        dictation::commands::arm_hands_free(&state, &dictation, &body.session_id, &body.owner)
+    })
+    .await
+    .unwrap_or_else(|error| Err(format!("arming hands-free failed: {error}")));
+    json_result(result)
 }
 
 pub(super) async fn disarm_hands_free_http(State(state): State<Arc<AppState>>) -> Response {

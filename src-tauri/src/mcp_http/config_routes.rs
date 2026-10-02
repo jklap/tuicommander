@@ -967,10 +967,10 @@ pub(super) async fn list_audio_output_devices_http() -> impl IntoResponse {
     // `notification_sound` is desktop-only; a headless remote daemon has no audio
     // output context, so it reports an empty device list.
     #[cfg(feature = "desktop")]
-    let devices = crate::notification_sound::list_output_devices();
+    let devices = crate::notification_sound::list_audio_output_devices().await;
     #[cfg(not(feature = "desktop"))]
-    let devices: Vec<serde_json::Value> = Vec::new();
-    Json(devices)
+    let devices: Result<Vec<serde_json::Value>, String> = Ok(Vec::new());
+    json_result(devices)
 }
 
 pub(super) async fn discover_agent_session_http(
