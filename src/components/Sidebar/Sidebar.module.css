@@ -1689,6 +1689,12 @@
   border-top: 1px solid var(--border);
 }
 
+/* The global [data-tooltip] rule sets position: relative at equal specificity; keep these anchored to the corner. */
+.remoteOnlyDetailDismiss[data-tooltip],
+.ghItemDismiss[data-tooltip] {
+	position: absolute;
+}
+
 .remoteOnlyDetailDismiss {
   position: absolute;
   top: 6px;
