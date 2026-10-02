@@ -382,45 +382,58 @@ describe("acpClient: talking to a session", () => {
 	// Shape recorded from ego session 01a0dc79 (journal seq 4-53, ~/.ego/sessions):
 	// one finished glob, then an exec that asked for permission and was never
 	// decided — ToolCallStarted + PermissionRequested, no ToolCallCompleted, no
-	// TurnCompleted. ego's replay projects it as tool_call, in_progress and stops.
-	// Catches: the replayed exec card keeps status in_progress forever, so its
-	// dot pulses (candidate 1 of story 1153).
-	it("settles a replayed call that never finished once the replay has been delivered", async () => {
-		await client.connect(ROOT);
-		mockInvoke.mockImplementation(answering({ acp_connection_snapshot: snapshot({ latestSequence: 8 }) }));
-		await client.loadSession(CONNECTION, SESSION, ROOT);
+	// TurnCompleted. ego's replay (serve.rs emit_attachment) projects it as
+	// tool_call, in_progress and ends with a session_info_update.
+	describe("replay of a session that ended mid-call", () => {
 		const update = (sequence: number, body: Record<string, unknown>) =>
 			streams.deliver({ ...frame(sequence), event: { kind: "sessionUpdate", update: body as never } });
-		update(2, { sessionUpdate: "tool_call", toolCallId: "glob", title: "glob", status: "pending" });
-		update(3, { sessionUpdate: "tool_call_update", toolCallId: "glob", status: "in_progress" });
-		update(4, { sessionUpdate: "tool_call_update", toolCallId: "glob", status: "completed" });
-		update(5, { sessionUpdate: "tool_call", toolCallId: "exec", title: "exec", status: "pending" });
-		update(6, { sessionUpdate: "tool_call_update", toolCallId: "exec", status: "in_progress" });
 		const statuses = () =>
 			acpTranscript.entries(SESSION).flatMap((entry) => (entry.kind === "tool" ? [entry.call.status] : []));
-		// Frames 7-8 of the journal are not here yet: the replay is still arriving.
-		expect(statuses()).toEqual(["completed", "in_progress"]);
+		const replay = async () => {
+			await client.connect(ROOT);
+			await client.loadSession(CONNECTION, SESSION, ROOT);
+			update(2, { sessionUpdate: "tool_call", toolCallId: "glob", title: "glob", status: "pending" });
+			update(3, { sessionUpdate: "tool_call_update", toolCallId: "glob", status: "in_progress" });
+			update(4, { sessionUpdate: "tool_call_update", toolCallId: "glob", status: "completed" });
+			update(5, { sessionUpdate: "tool_call", toolCallId: "exec", title: "exec", status: "pending" });
+			update(6, { sessionUpdate: "tool_call_update", toolCallId: "exec", status: "in_progress" });
+		};
 
-		streams.deliver({ ...frame(8), event: { kind: "turnStarted" } });
+		// Catches: the replayed exec card keeps status in_progress forever, so its
+		// dot pulses (candidate 1 of story 1153).
+		it("settles the unfinished call when the replay ends, and only then", async () => {
+			await replay();
+			expect(statuses()).toEqual(["completed", "in_progress"]);
 
-		expect(statuses()).toEqual(["completed", "failed"]);
-	});
+			update(7, { sessionUpdate: "session_info_update", title: null });
 
-	// Catches: settling at the moment the load call returns, which is before the
-	// stream has delivered the replay, and then letting a late in_progress frame
-	// bring the card back to life.
-	it("does not settle a replayed call while the stream is still behind the journal", async () => {
-		await client.connect(ROOT);
-		mockInvoke.mockImplementation(answering({ acp_connection_snapshot: snapshot({ latestSequence: 9 }) }));
-		await client.loadSession(CONNECTION, SESSION, ROOT);
-		streams.deliver({
-			...frame(2),
-			event: { kind: "sessionUpdate", update: { sessionUpdate: "tool_call", toolCallId: "exec", title: "exec" } },
+			expect(statuses()).toEqual(["completed", "failed"]);
 		});
 
-		expect(acpTranscript.entries(SESSION)).toEqual([
-			expect.objectContaining({ kind: "tool", call: expect.not.objectContaining({ status: "failed" }) }),
-		]);
+		// ego does not say on session/load whether a turn is still running, so the
+		// settle can hit a live call. Catches: a settled status that sticks over
+		// live data (failed instead of the call's real outcome).
+		it("lets a later update of the same call win over the settled status", async () => {
+			await replay();
+			update(7, { sessionUpdate: "session_info_update", title: null });
+
+			update(8, { sessionUpdate: "tool_call_update", toolCallId: "exec", status: "in_progress" });
+			expect(statuses()).toEqual(["completed", "in_progress"]);
+			update(9, { sessionUpdate: "tool_call_update", toolCallId: "exec", status: "completed" });
+			expect(statuses()).toEqual(["completed", "completed"]);
+		});
+
+		// Catches: a title update of a running session, long after the load,
+		// failing its live calls.
+		it("settles once per load", async () => {
+			await replay();
+			update(7, { sessionUpdate: "session_info_update", title: null });
+			update(8, { sessionUpdate: "tool_call_update", toolCallId: "exec", status: "in_progress" });
+
+			update(9, { sessionUpdate: "session_info_update", title: "renamed" });
+
+			expect(statuses()).toEqual(["completed", "in_progress"]);
+		});
 	});
 
 	// ego does not replay inherited history for a fork child, so the child's
