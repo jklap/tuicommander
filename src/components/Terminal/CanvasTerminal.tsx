@@ -18,7 +18,7 @@ import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { AnswersPanel } from "./AnswersPanel";
-import { type AnswersTurn, buildAnswersTurn, readTurnRows, turnStart } from "./answersTurn";
+import { type AnswersTurn, newTurnCache, readAnswersHistory, sameAnswersHistory } from "./answersTurn";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
 import {
 	createCanvasLinkController,
@@ -1364,11 +1364,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	// --- Answers-only view ---
-	// A panel above the canvas listing the user's last prompt and the 💬 answers of
-	// its turn, read from the backend grid (scrollback included) through the same
+	// A panel above the canvas listing every user prompt of the session, each with the
+	// 💬 answers of its turn, read from the backend grid (scrollback included) through the same
 	// `terminal_styled_rows` reader as the scroll row cache. The PTY and the grid
 	// are untouched; closing the panel returns to the live terminal as it was.
-	const [answersView, setAnswersView] = createSignal<AnswersTurn | null>(null);
+	const [answersView, setAnswersView] = createSignal<AnswersTurn[] | null>(null, {
+		equals: sameAnswersHistory,
+	});
+	const answersCache = newTurnCache();
 	let answersGeneration = 0;
 	let answersTimer: ReturnType<typeof setTimeout> | undefined;
 	const answersOnly = () => terminalsStore.get(props.terminalId)?.answersOnly === true;
@@ -1391,15 +1394,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!alive || !frame) return;
 		const generation = ++answersGeneration;
 		const endAbs = frame.historyBase + frame.historySize + frame.screenRows;
-		const { startAbs, hasPrompt } = turnStart(
+		const turns = await readAnswersHistory(
+			fetchStyledRange,
 			terminalsStore.get(props.terminalId)?.userPromptLines ?? [],
 			frame.historyBase,
 			endAbs,
+			answersCache,
 		);
-		const rows = await readTurnRows(fetchStyledRange, startAbs, endAbs);
 		// A newer refresh, the toggle going off, or unmount during the await wins.
-		if (!rows || generation !== answersGeneration || !alive || !answersOnly()) return;
-		setAnswersView(buildAnswersTurn(rows, hasPrompt));
+		if (!turns || generation !== answersGeneration || !alive || !answersOnly()) return;
+		setAnswersView(turns);
 	}
 
 	/** New output while the panel is open: re-read the turn, at most every 400 ms. */

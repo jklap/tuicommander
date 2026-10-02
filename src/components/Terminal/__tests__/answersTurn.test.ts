@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildAnswersTurn, readTurnRows, rowCopyText, TURN_FETCH_CHUNK, turnStart } from "../answersTurn";
+import {
+	buildAnswersTurn,
+	newTurnCache,
+	PROMPT_MAX_ROWS,
+	promptStarts,
+	readAnswersHistory,
+	readTurnRows,
+	rowCopyText,
+	sameAnswersHistory,
+	TURN_FETCH_CHUNK,
+} from "../answersTurn";
 import type { DecodedRow, StyledRange } from "../canvasTerminalUtils";
 import type { RowSnapshot } from "../suggestOverlay";
 
@@ -23,7 +33,7 @@ describe("buildAnswersTurn", () => {
 		const turn = buildAnswersTurn(
 			[
 				row("❯ is it green?"),
-				row("Read(package.json)"),
+				row("⏺ Read(package.json)"),
 				row("💬 Yes, the long answer wraps and"),
 				row(" continues here.   ", true),
 				row("Bash(pnpm test)"),
@@ -59,6 +69,46 @@ describe("buildAnswersTurn", () => {
 		expect(buildAnswersTurn([row("❯ q"), row("⏺ 💬 Done.")], true).answers).toEqual(["💬 Done."]);
 	});
 
+	it("keeps a 300-character prompt whole whether the terminal soft-wrapped it or the agent hard-wrapped it", () => {
+		// catches: the prompt cut to its first logical line (CONTEXT line truncation)
+		const full = Array.from({ length: 300 }, (_, i) => String.fromCharCode(97 + (i % 26))).join("");
+		const chunks = full.match(/.{1,80}/g) ?? [];
+		const soft = buildAnswersTurn(
+			[row(`❯ ${chunks[0]}`), ...chunks.slice(1).map((c) => row(c, true)), row("💬 ok")],
+			true,
+		);
+		expect(soft.prompt).toBe(`❯ ${full}`);
+		const hard = buildAnswersTurn(
+			[row(`❯ ${chunks[0]}`), ...chunks.slice(1).map((c) => row(`  ${c}`)), row(""), row("⏺ Read(a)"), row("💬 ok")],
+			true,
+		);
+		expect(hard.prompt).toBe(
+			`❯ ${chunks[0]}\n${chunks
+				.slice(1)
+				.map((c) => `  ${c}`)
+				.join("\n")}`,
+		);
+		expect(hard.answers).toEqual(["💬 ok"]);
+	});
+
+	it("keeps blank lines inside a pasted prompt but trims the trailing ones", () => {
+		// catches: a pasted multi-paragraph prompt losing everything after its first blank line
+		const turn = buildAnswersTurn([row("❯ CONTEXT"), row(""), row("Prompt: Lavori"), row(""), row("⏺ done")], true);
+		expect(turn.prompt).toBe("❯ CONTEXT\n\nPrompt: Lavori");
+	});
+
+	it("stops the prompt at the first 💬 row when the agent prints no bullet", () => {
+		// catches: the prompt block swallowing the answers of an agent without a bullet glyph
+		const turn = buildAnswersTurn([row("❯ q"), row("plain tool output"), row("💬 a")], true);
+		expect(turn.answers).toEqual(["💬 a"]);
+	});
+
+	it("bounds the prompt block", () => {
+		// catches: a turn without any bullet or marker being swallowed whole into its prompt
+		const rows = [row("❯ q"), ...Array.from({ length: 200 }, (_, i) => row(`out ${i}`))];
+		expect(buildAnswersTurn(rows, true).prompt?.split("\n")).toHaveLength(PROMPT_MAX_ROWS);
+	});
+
 	it("has no prompt when none is known", () => {
 		expect(buildAnswersTurn([row("💬 a")], false)).toEqual({ prompt: null, answers: ["💬 a"] });
 	});
@@ -78,17 +128,13 @@ describe("rowCopyText", () => {
 	});
 });
 
-describe("turnStart", () => {
-	it("starts at the last prompt, shifted to the all-time index", () => {
-		expect(turnStart([3, 40, 90], 1000, 1200)).toEqual({ startAbs: 1090, hasPrompt: true });
+describe("promptStarts", () => {
+	it("shifts the prompts to all-time rows, ascending and unique", () => {
+		expect(promptStarts([90, 3, 40, 40], 1000, 1200)).toEqual([1003, 1040, 1090]);
 	});
 
 	it("ignores prompts beyond the end and negative ones", () => {
-		expect(turnStart([-1, 500], 1000, 1200)).toEqual({ startAbs: 1000, hasPrompt: false });
-	});
-
-	it("falls back to a bounded window of the end when no prompt is known", () => {
-		expect(turnStart([], 0, 20000)).toEqual({ startAbs: 15000, hasPrompt: false });
+		expect(promptStarts([-1, 500], 1000, 1200)).toEqual([]);
 	});
 });
 
@@ -138,5 +184,84 @@ describe("readTurnRows", () => {
 			4,
 		);
 		expect(rows?.map((r) => r.text)).toEqual(["", "", "c", ""]);
+	});
+});
+
+describe("readAnswersHistory", () => {
+	// An independent oracle: the session as literal rows, served the way the backend serves them.
+	const SESSION = [
+		"❯ first question", // 0
+		"⏺ Read(a)",
+		"💬 Answer one.",
+		"❯ second question", // 3
+		"⏺ Bash(b)",
+		"💬 Answer two.",
+		"❯ third question, still running", // 6
+		"⏺ Read(c)",
+	];
+	const serve =
+		(log: Array<[number, number]> = [], base = 0) =>
+		async (start: number, count: number) => {
+			log.push([start, count]);
+			const rows = SESSION.slice(start - base, start - base + count).map((text, i) => ({
+				abs: start + i,
+				row: decoded(text),
+			}));
+			return { startAbs: start, historySize: 0, cols: 40, rows } as StyledRange;
+		};
+
+	it("lists every question in order, the running one with no answers yet", async () => {
+		// catches: the view scoped to the last turn only
+		const turns = await readAnswersHistory(serve(), [0, 3, 6], 0, SESSION.length, newTurnCache());
+		expect(turns).toEqual([
+			{ prompt: "❯ first question", answers: ["💬 Answer one."] },
+			{ prompt: "❯ second question", answers: ["💬 Answer two."] },
+			{ prompt: "❯ third question, still running", answers: [] },
+		]);
+	});
+
+	it("re-reads only the running turn on a later refresh and hands back the same finished turns", async () => {
+		// catches: the whole scrollback being re-read every 400 ms while the agent streams
+		const cache = newTurnCache();
+		const first = await readAnswersHistory(serve(), [0, 3, 6], 0, SESSION.length, cache);
+		const log: Array<[number, number]> = [];
+		const second = await readAnswersHistory(serve(log), [0, 3, 6], 0, SESSION.length, cache);
+		expect(log).toEqual([[6, 2]]);
+		expect(second?.[0]).toBe(first?.[0]);
+		expect(second?.[1]).toBe(first?.[1]);
+	});
+
+	it("drops cached turns when the scrollback base moves", async () => {
+		// catches: stale finished turns shown after eviction shifted every row index
+		const cache = newTurnCache();
+		await readAnswersHistory(serve(), [0, 3, 6], 0, SESSION.length, cache);
+		const log: Array<[number, number]> = [];
+		// two rows evicted: the old line 3 now sits two rows earlier in the grid and base is 2
+		const turns = await readAnswersHistory(serve(log, 0), [1, 4], 2, SESSION.length, cache);
+		expect(log.length).toBe(2);
+		expect(turns?.map((t) => t.prompt)).toEqual(["❯ second question", "❯ third question, still running"]);
+	});
+
+	it("falls back to one prompt-less turn when no prompt is known", async () => {
+		const turns = await readAnswersHistory(serve(), [], 0, SESSION.length, newTurnCache());
+		expect(turns).toEqual([{ prompt: null, answers: ["💬 Answer one.", "💬 Answer two."] }]);
+	});
+
+	it("aborts the whole build when a read fails", async () => {
+		// catches: a history with a turn missing, rendered as if it were complete
+		const turns = await readAnswersHistory(async () => null, [0, 3], 0, SESSION.length, newTurnCache());
+		expect(turns).toBeNull();
+	});
+});
+
+describe("sameAnswersHistory", () => {
+	it("compares by content", () => {
+		// catches: every refresh replacing the panel DOM and dropping the user's text selection
+		const a = [{ prompt: "q", answers: ["💬 a"] }];
+		expect(sameAnswersHistory(a, [{ prompt: "q", answers: ["💬 a"] }])).toBe(true);
+		expect(sameAnswersHistory(a, [{ prompt: "q", answers: ["💬 b"] }])).toBe(false);
+		expect(sameAnswersHistory(a, [])).toBe(false);
+		expect(sameAnswersHistory(null, null)).toBe(true);
+		expect(sameAnswersHistory(null, a)).toBe(false);
 	});
 });
