@@ -668,6 +668,18 @@ pub struct TerminalGrid {
     /// visible screen untouched. Preserves TUI cursor positioning on screen
     /// while keeping scrollback readable across resize cycles.
     pub reflow_history: bool,
+    /// Armed by a resize of the primary screen: `total_scrolled` at that moment.
+    /// While armed, [`Self::merge_reprinted_history_tail`] runs after every chunk.
+    reprint_merge_armed_at: Option<usize>,
+    /// Tail of the previous chunk, so a frame end split across chunks is seen.
+    frame_end_carry: Vec<u8>,
+    /// Screen rows at the last frame end seen while armed (or at the resize). A
+    /// merge needs every compared row to differ from these, with no scroll in
+    /// between: that is the proof the frame rewrote them, as opposed to history
+    /// that already repeated them or output that moved them.
+    reprint_head_snapshot: Vec<String>,
+    /// `total_scrolled` when `reprint_head_snapshot` was taken.
+    reprint_snapshot_scrolled: usize,
 }
 
 impl TerminalGrid {
@@ -715,6 +727,10 @@ impl TerminalGrid {
             bell_flag,
             events,
             reflow_history: true,
+            reprint_merge_armed_at: None,
+            frame_end_carry: Vec::new(),
+            reprint_head_snapshot: Vec::new(),
+            reprint_snapshot_scrolled: 0,
         }
     }
 
@@ -723,7 +739,14 @@ impl TerminalGrid {
     /// Returns changed rows. OSC 133 events are delivered via `drain_events()`
     /// as `TermEvent::Osc133` (parsed natively by the patched VTE handler).
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
-        self.processor.advance(&mut self.term, data);
+        if self.reprint_merge_armed_at.is_some() {
+            if self.advance_frame_by_frame(data) {
+                // History shrank: the cached rows and the frame bookkeeping are stale.
+                self.prev_rows.clear();
+            }
+        } else {
+            self.processor.advance(&mut self.term, data);
+        }
 
         // Prefer the alacritty parse-damage set: read+diff ONLY the lines whose
         // content actually changed, instead of rebuilding+diffing the whole screen
@@ -1189,9 +1212,116 @@ impl TerminalGrid {
             cols: cols as usize,
             lines: rows as usize,
         };
+        let was_alt = self.is_alternate_screen();
         self.term.resize_reflow(size, mode);
+        self.reprint_merge_armed_at = (!was_alt).then(|| self.term.grid().total_scrolled());
+        self.frame_end_carry.clear();
+        self.reprint_head_snapshot = self.armed_screen_rows();
+        self.reprint_snapshot_scrolled = self.term.grid().total_scrolled();
         self.prev_rows.clear();
         self.term.mark_fully_damaged();
+    }
+
+    /// Feed `data`, trying [`Self::merge_reprinted_history_tail`] at the end of
+    /// every synchronized-update frame. Claude Code draws a repaint inside one,
+    /// so that is the moment its reprinted rows are complete whatever the chunk
+    /// boundaries were. Returns true when history rows were dropped.
+    fn advance_frame_by_frame(&mut self, data: &[u8]) -> bool {
+        const FRAME_END: &[u8] = b"\x1b[?2026l";
+        let carried = self.frame_end_carry.len();
+        let mut window = std::mem::take(&mut self.frame_end_carry);
+        window.extend_from_slice(data);
+        let mut merged = false;
+        let mut fed = 0;
+        let mut from = 0;
+        while let Some(at) = window[from..]
+            .windows(FRAME_END.len())
+            .position(|w| w == FRAME_END)
+        {
+            let end = from + at + FRAME_END.len();
+            from = end;
+            // A match that ended in the carried bytes was already fed.
+            let Some(end_in_data) = end.checked_sub(carried).filter(|&e| e > fed) else {
+                continue;
+            };
+            self.processor
+                .advance(&mut self.term, &data[fed..end_in_data]);
+            fed = end_in_data;
+            merged |= self.merge_reprinted_history_tail();
+            if self.reprint_merge_armed_at.is_none() {
+                break;
+            }
+        }
+        self.processor.advance(&mut self.term, &data[fed..]);
+        self.frame_end_carry = if self.reprint_merge_armed_at.is_some() {
+            window[window.len().saturating_sub(FRAME_END.len() - 1)..].to_vec()
+        } else {
+            Vec::new()
+        };
+        merged
+    }
+
+    fn armed_screen_rows(&self) -> Vec<String> {
+        let lines = self.term.grid().screen_lines() as i32;
+        (0..lines)
+            .map(|line| self.row_to_text(Line(line)).unwrap_or_default())
+            .collect()
+    }
+
+    /// Undo the duplicate a resize leaves behind in scrollback.
+    ///
+    /// A resize that shrinks the screen scrolls its top rows into history so no
+    /// row is lost. Claude Code then wipes the visible screen and prints its
+    /// last rows again, beginning with rows that were just scrolled out, so
+    /// the same rows are in history and on screen. When the newest history
+    /// rows are the first rows of the screen, drop them from history.
+    ///
+    /// Armed by [`Self::resize_with_mode`]; a program that draws without synchronized
+    /// updates keeps the duplicate. Disarms on the first merge, or once
+    /// the output has scrolled a screenful, which ends the repaint window.
+    /// Returns true when history rows were dropped.
+    fn merge_reprinted_history_tail(&mut self) -> bool {
+        const MIN_ROWS: usize = 2;
+        let Some(armed_at) = self.reprint_merge_armed_at else {
+            return false;
+        };
+        let (history, lines, scrolled) = {
+            let grid = self.term.grid();
+            (
+                grid.history_size(),
+                grid.screen_lines(),
+                grid.total_scrolled(),
+            )
+        };
+        if self.is_alternate_screen() || scrolled.saturating_sub(armed_at) > lines {
+            self.reprint_merge_armed_at = None;
+            return false;
+        }
+        let m = history.min(lines) as i32;
+        let text = |line: i32| self.row_to_text(Line(line)).unwrap_or_default();
+        let tail: Vec<String> = (-m..0).map(text).collect();
+        let head = self.armed_screen_rows();
+        let snapshot = std::mem::replace(&mut self.reprint_head_snapshot, head.clone());
+        // A screen that scrolled since the snapshot shifted every row, so a
+        // difference proves nothing about what was rewritten.
+        let unscrolled =
+            std::mem::replace(&mut self.reprint_snapshot_scrolled, scrolled) == scrolled;
+        let overlap = (MIN_ROWS..=m as usize)
+            .rev()
+            .find(|&k| {
+                tail[m as usize - k..] == head[..k]
+                    && head[..k].iter().filter(|row| !row.is_empty()).count() >= MIN_ROWS
+                    && unscrolled
+                    && snapshot.len() >= k
+                    && (0..k).all(|i| snapshot[i] != head[i])
+            })
+            .unwrap_or(0);
+        if overlap == 0 {
+            return false;
+        }
+        self.term.grid_mut().drop_newest_history(overlap);
+        self.reprint_merge_armed_at = None;
+        true
     }
 
     /// Override ANSI colors 0-15 with theme values.
@@ -3705,6 +3835,65 @@ mod tests {
             Err(_) => println!("{out}"),
         }
         eprintln!("replayed {} bytes → {} history lines", data.len(), history);
+    }
+
+    /// Real Claude Code (v2.1.286, Haiku) capture of "print LINE 001..250", taken
+    /// while the PTY was resized 20x100 -> 14x100 -> 26x100 -> 10x80 -> 24x100 ->
+    /// 16x100 -> 20x100 (byte offsets in `CLAUDE_LINES_RESIZES`). Claude answers each
+    /// SIGWINCH by wiping the visible screen and printing its last rows again.
+    ///
+    /// Every numbered line must survive exactly once, in order. Catches both
+    /// failures of the shrink: the top-clamped shrink keeps no row the wipe
+    /// erases (lines 1-3, 75-76 and 148-150 vanish), and a bottom-anchored shrink
+    /// that never takes back what the reprint repeats puts 77 and 78 in twice.
+    const CLAUDE_LINES_RESIZES: [(usize, u16, u16); 6] = [
+        (9146, 14, 100),
+        (21500, 26, 100),
+        (34739, 10, 80),
+        (45525, 24, 100),
+        (62285, 16, 100),
+        (86115, 20, 100),
+    ];
+
+    #[test]
+    fn resized_claude_repaint_keeps_every_line_once_in_order() {
+        let data = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/terminal_resize/claude-lines-resized.raw"),
+        )
+        .expect("fixture claude-lines-resized.raw");
+        for chunk in [4096, 61] {
+            let mut grid = TerminalGrid::new(20, 100, 10_000);
+            let mut pos = 0;
+            while pos < data.len() {
+                let mut end = (pos + chunk).min(data.len());
+                let next = CLAUDE_LINES_RESIZES.iter().find(|r| r.0 > pos);
+                if let Some(&(at, rows, cols)) = next {
+                    end = end.min(at);
+                    let _ = grid.process(&data[pos..end]);
+                    pos = end;
+                    if pos == at {
+                        grid.resize_with_mode(rows, cols, ReflowMode::All);
+                    }
+                } else {
+                    let _ = grid.process(&data[pos..end]);
+                    pos = end;
+                }
+            }
+            let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+            rows.extend(grid.screen_text_rows());
+            let numbers: Vec<u32> = rows
+                .iter()
+                .filter_map(|row| {
+                    row.find("LINE ")?
+                        .checked_add(5)
+                        .and_then(|i| row.get(i..i + 3))
+                })
+                .filter_map(|n| n.parse().ok())
+                .collect();
+            let expected: Vec<u32> = (1..=250).collect();
+            assert_eq!(numbers, expected, "chunk size {chunk}");
+        }
     }
 
     #[test]
@@ -6324,6 +6513,265 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, TermEvent::Title(t) if t == "after-the-panic")),
             "event delivery stopped after a panic under the lock; drained: {drained:?}"
+        );
+    }
+}
+
+/// Adversarial cases for the post-resize reprint merge (#1264).
+#[cfg(test)]
+mod reprint_merge_critic_tests {
+    use super::*;
+
+    const IDLE_FRAME: &[u8] = b"\x1b[?2026h\x1b[?2026l";
+
+    fn all_rows(grid: &TerminalGrid) -> Vec<String> {
+        let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+        rows.extend(grid.screen_text_rows());
+        rows
+    }
+
+    fn non_empty(grid: &TerminalGrid) -> usize {
+        all_rows(grid)
+            .iter()
+            .filter(|r| !r.trim().is_empty())
+            .count()
+    }
+
+    /// Scenario shared by the cases below: 6x20 grid holding L01..L10, shrunk to
+    /// 4 rows, so history ends L06,L07 and the screen starts L08.
+    fn shrunk_numbered_grid() -> TerminalGrid {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for i in 1..=10 {
+            grid.process(format!("L{i:02}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        grid
+    }
+
+    /// The program's repaint: home, then the last rows, inside one sync frame.
+    const REPAINT: &[u8] =
+        b"\x1b[?2026h\x1b[HL06\x1b[K\r\nL07\x1b[K\r\nL08\x1b[K\r\nL09\x1b[K\x1b[?2026l";
+
+    /// Catches: the merge fires on any frame end after a shrink whose history
+    /// tail happens to equal the screen head, with no repaint having happened.
+    /// A program that legitimately printed the same block twice (separators,
+    /// repeated `alpha/beta` records) loses real history rows.
+    #[test]
+    fn repeated_block_survives_an_idle_sync_frame_after_shrink() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..6 {
+            grid.process(b"alpha\r\nbeta\r\n");
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = non_empty(&grid);
+        grid.process(IDLE_FRAME);
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "an empty sync frame deleted printed rows"
+        );
+    }
+
+    /// Catches: same as above for a run of identical separator rows.
+    #[test]
+    fn identical_separator_rows_survive_an_idle_sync_frame_after_shrink() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..12 {
+            grid.process(b"--------------------\r\n");
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = non_empty(&grid);
+        grid.process(IDLE_FRAME);
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "an empty sync frame deleted separator rows"
+        );
+    }
+
+    /// Catches: the merge drops history rows but leaves `display_offset`
+    /// unchanged, so a user scrolled up (the #1264 situation) sees the view jump
+    /// by the dropped row count.
+    #[test]
+    fn scrolled_up_view_does_not_jump_when_rows_are_merged() {
+        let mut grid = shrunk_numbered_grid();
+        grid.scroll(4);
+        let d = grid.display_offset();
+        let top_before = grid.row_to_text(Line(-(d as i32))).unwrap();
+        grid.process(REPAINT);
+        assert_eq!(grid.scrollback_count(), 5, "scenario must merge L06,L07");
+        let d = grid.display_offset();
+        let top_after = grid.row_to_text(Line(-(d as i32))).unwrap();
+        assert_eq!(
+            top_after, top_before,
+            "viewport top row changed under a scrolled-up user"
+        );
+    }
+
+    /// Catches: the frame-end carry mishandles a FRAME_END split across chunks,
+    /// so the merge result depends on chunk boundaries.
+    #[test]
+    fn merge_result_does_not_depend_on_chunk_boundaries() {
+        let mut whole = shrunk_numbered_grid();
+        whole.process(REPAINT);
+        let expected = all_rows(&whole);
+        for chunk in 1..=REPAINT.len() {
+            let mut grid = shrunk_numbered_grid();
+            for piece in REPAINT.chunks(chunk) {
+                grid.process(piece);
+            }
+            assert_eq!(all_rows(&grid), expected, "chunk size {chunk}");
+        }
+    }
+
+    /// Catches: the rewind of `total_scrolled` breaks the eviction-stable base
+    /// (`total_scrolled - history_size`) the frontend keys rows by, when the
+    /// scrollback cap is already evicting.
+    #[test]
+    fn merge_keeps_the_eviction_base_when_the_cap_is_full() {
+        let mut grid = TerminalGrid::new(6, 20, 3);
+        for i in 1..=10 {
+            grid.process(format!("L{i:02}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let base = grid.screen_origin() - grid.scrollback_count();
+        grid.process(REPAINT);
+        assert_eq!(
+            grid.screen_origin() - grid.scrollback_count(),
+            base,
+            "evicted-row base moved"
+        );
+    }
+
+    /// Catches: a merge on the alternate screen, or a resize made on it, arms
+    /// the merge and eats primary history after the program exits.
+    #[test]
+    fn alt_screen_resize_never_merges_primary_history() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..12 {
+            grid.process(b"--------------------\r\n");
+        }
+        grid.process(b"\x1b[?1049h");
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = grid.primary_scrollback_count();
+        grid.process(IDLE_FRAME);
+        grid.process(b"\x1b[?1049l");
+        grid.process(IDLE_FRAME);
+        assert_eq!(grid.primary_scrollback_count(), before);
+    }
+}
+
+/// Round-2 adversarial cases for the "head rows changed since the last frame end" evidence rule (#1264).
+#[cfg(test)]
+mod reprint_merge_evidence_critic_tests {
+    use super::*;
+
+    fn non_empty(grid: &TerminalGrid) -> usize {
+        let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+        rows.extend(grid.screen_text_rows());
+        rows.iter().filter(|r| !r.trim().is_empty()).count()
+    }
+
+    /// Catches: the evidence rule is satisfied by any change in the head rows, so
+    /// new output that merely continues a repeating block (alpha/beta records)
+    /// scrolls the screen, changes the head versus the snapshot, matches the
+    /// periodic history tail and is "merged" away although nothing was reprinted.
+    #[test]
+    fn output_continuing_a_repeating_block_is_not_merged() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for _ in 0..6 {
+            grid.process(b"alpha\r\nbeta\r\n");
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        grid.process(b"alpha\r\n");
+        let before = non_empty(&grid);
+        grid.process(b"\x1b[?2026h\x1b[?2026l");
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "continued output lost rows at the frame end"
+        );
+    }
+
+    /// Catches: an unrelated in-place edit of one head row (status/spinner line)
+    /// that happens to produce text equal to the history tail counts as a repaint.
+    #[test]
+    fn unrelated_head_row_edit_equal_to_history_tail_is_not_merged() {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for row in ["Z1", "Z2", "Z3", "A", "B", "A", "C", "Q"] {
+            grid.process(format!("{row}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        let before = non_empty(&grid);
+        grid.process(b"\x1b[?2026h\x1b[2;1HB\x1b[K\x1b[?2026l");
+        assert_eq!(
+            non_empty(&grid),
+            before,
+            "an in-place edit deleted history rows"
+        );
+    }
+}
+
+/// Round-3 guards for the unscrolled-full-rewrite evidence rule (#1264).
+#[cfg(test)]
+mod reprint_merge_round3_critic_tests {
+    use super::*;
+
+    fn all_rows(grid: &TerminalGrid) -> Vec<String> {
+        let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+        rows.extend(grid.screen_text_rows());
+        rows
+    }
+
+    fn numbered_shrunk() -> TerminalGrid {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for i in 1..=10 {
+            grid.process(format!("L{i:02}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        grid
+    }
+
+    /// Catches: a full-screen redraw that starts with ESC[2J (the fork pushes the
+    /// screen into history and raises total_scrolled) combined with the merge
+    /// drops a row that exists nowhere else. Every printed line must stay
+    /// reachable, however the chunks are cut.
+    #[test]
+    fn clear_screen_repaint_after_shrink_loses_no_line() {
+        let frame: &[u8] = b"\x1b[?2026h\x1b[2J\x1b[HL06\r\nL07\r\nL08\r\nL09\x1b[?2026l";
+        for chunk in [frame.len(), 7, 1] {
+            let mut grid = numbered_shrunk();
+            for piece in frame.chunks(chunk) {
+                grid.process(piece);
+            }
+            let rows = all_rows(&grid);
+            for i in 1..=10 {
+                let want = format!("L{i:02}");
+                assert!(
+                    rows.contains(&want),
+                    "{want} lost (chunk {chunk}): {rows:?}"
+                );
+            }
+        }
+    }
+
+    /// Catches: an in-place full-screen redraw on the primary screen (htop/less
+    /// style cursor addressing, new data in every row, no scroll) is read as a
+    /// reprint and takes history rows with it.
+    #[test]
+    fn in_place_redraw_with_new_data_keeps_history() {
+        let mut grid = numbered_shrunk();
+        let before = all_rows(&grid).iter().filter(|r| !r.is_empty()).count();
+        grid.process(b"\x1b[?2026h\x1b[HP1\x1b[K\r\nP2\x1b[K\r\nP3\x1b[K\r\nP4\x1b[K\x1b[?2026l");
+        let rows = all_rows(&grid);
+        // P1..P4 replaced L08,L09,L10 and a blank row; history keeps L01..L07.
+        for i in 1..=7 {
+            let want = format!("L{i:02}");
+            assert!(rows.contains(&want), "{want} lost: {rows:?}");
+        }
+        assert_eq!(
+            rows.iter().filter(|r| !r.is_empty()).count(),
+            before - 3 + 4
         );
     }
 }
