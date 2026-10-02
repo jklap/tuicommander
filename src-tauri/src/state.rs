@@ -7239,6 +7239,173 @@ mod tests {
         );
     }
 
+    #[cfg(test)]
+    fn insert_named_peer(state: &AppState, key: &str, name: &str, registered_at: u64) {
+        state.peer_agents.insert(
+            key.to_string(),
+            PeerAgent {
+                tuic_session: key.to_string(),
+                mcp_session_id: format!("mcp-{key}"),
+                name: name.to_string(),
+                project: None,
+                registered_at,
+            },
+        );
+    }
+
+    /// Critic 1372. Catches: a peer that registers the name `tu-1` captures mail
+    /// meant for the terminal whose alias is `tu-1` (name checked before alias,
+    /// silently, with no ambiguity error).
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_peer_name_equal_to_another_terminals_alias_is_not_silently_preferred() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-owner");
+        state.bind_live_pty("owner-uuid", "pty-owner");
+        let alias = state.assign_term_alias("pty-owner", None);
+        insert_named_peer(&state, "owner-uuid", "worker", 1);
+        insert_named_peer(&state, "squatter-uuid", &alias, 2);
+
+        let resolved = state.resolve_peer_ref_checked(&alias);
+
+        assert_ne!(
+            resolved,
+            Ok(Some("squatter-uuid".to_string())),
+            "alias '{alias}' of the owner's terminal was captured by a peer that merely registered that name"
+        );
+    }
+
+    /// Critic 1372. Catches: a peer named like another terminal's PTY key captures
+    /// mail addressed to that PTY key.
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_peer_name_equal_to_another_terminals_pty_key_is_not_silently_preferred() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-owner");
+        state.bind_live_pty("owner-uuid", "pty-owner");
+        insert_named_peer(&state, "owner-uuid", "worker", 1);
+        insert_named_peer(&state, "squatter-uuid", "pty-owner", 2);
+
+        assert_ne!(
+            state.resolve_peer_ref_checked("pty-owner"),
+            Ok(Some("squatter-uuid".to_string())),
+            "PTY key of the owner's terminal was captured by a peer that merely registered that name"
+        );
+    }
+
+    /// Critic 1372. Catches: an exact peer key losing to a name, i.e. a peer named
+    /// with another peer's full UUID redirecting UUID-addressed mail.
+    #[test]
+    fn critic_1372_exact_peer_key_beats_a_name_equal_to_it() {
+        let state = tests_support::make_test_app_state();
+        insert_named_peer(&state, "uuid-real", "real", 1);
+        insert_named_peer(&state, "uuid-squat", "uuid-real", 2);
+
+        assert_eq!(
+            state.resolve_peer_ref_checked("uuid-real"),
+            Ok(Some("uuid-real".to_string()))
+        );
+    }
+
+    /// Critic 1372. Catches: the name branch matching an empty reference against a
+    /// peer registered with an empty name (workflow wake path passes whatever
+    /// string the run log holds).
+    #[test]
+    fn critic_1372_empty_reference_never_matches_an_empty_peer_name() {
+        let state = tests_support::make_test_app_state();
+        insert_named_peer(&state, "peer-empty", "", 1);
+
+        assert_ne!(
+            state.resolve_peer_ref_checked(""),
+            Ok(Some("peer-empty".to_string()))
+        );
+    }
+
+    /// Critic 1372. Catches: names compared case-insensitively or trimmed, which
+    /// would merge `Coordinator` and `coordinator` into one ambiguous address, or
+    /// route to the wrong one.
+    #[test]
+    fn critic_1372_name_match_is_exact_not_case_folded() {
+        let state = tests_support::make_test_app_state();
+        insert_named_peer(&state, "peer-upper", "Coordinator", 1);
+        insert_named_peer(&state, "peer-lower", "coordinator", 2);
+
+        assert_eq!(
+            state.resolve_peer_ref_checked("coordinator"),
+            Ok(Some("peer-lower".to_string()))
+        );
+        assert_eq!(
+            state.resolve_peer_ref_checked("Coordinator"),
+            Ok(Some("peer-upper".to_string()))
+        );
+        assert_eq!(state.resolve_peer_ref_checked("coordinator "), Ok(None));
+    }
+
+    /// Critic 1372. Catches: two identities of one live terminal (persisted tab
+    /// UUID + PTY key, 1246-46e3) sharing a register name being reported as an
+    /// ambiguous address although both files lead to the same mailbox owner.
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_two_identities_of_one_terminal_with_one_name_are_not_ambiguous() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-shared");
+        state.bind_live_pty("tab-uuid", "pty-shared");
+        insert_named_peer(&state, "tab-uuid", "coordinator", 1);
+        insert_named_peer(&state, "pty-shared", "coordinator", 2);
+
+        let resolved = state.resolve_peer_ref_checked("coordinator");
+
+        assert!(
+            resolved.is_ok(),
+            "same terminal, same name: not ambiguous, got {resolved:?}"
+        );
+    }
+
+    /// Critic 1372. Catches: a dead peer (its terminal and MCP session gone, entry
+    /// not yet reaped) making the live peer's name ambiguous after a restart that
+    /// reuses the name.
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_stale_peer_with_the_same_name_does_not_make_the_live_one_ambiguous() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-live");
+        state.bind_live_pty("live-uuid", "pty-live");
+        insert_named_peer(&state, "live-uuid", "coordinator", 2);
+        // Dead: no live PTY, MCP session unknown to the state.
+        insert_named_peer(&state, "dead-uuid", "coordinator", 1);
+
+        assert_eq!(
+            state.resolve_peer_ref_checked("coordinator"),
+            Ok(Some("live-uuid".to_string()))
+        );
+    }
+
+    /// Critic 1372. Catches: the ambiguity error leaking when a name matches a
+    /// single peer but the same string is also a unique session display name of a
+    /// different terminal (name silently wins, display name unreachable).
+    #[cfg(unix)]
+    #[test]
+    fn critic_1372_name_equal_to_another_terminals_display_name_is_not_silently_preferred() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-display");
+        state.bind_live_pty("display-uuid", "pty-display");
+        state
+            .session_maps
+            .sessions
+            .get("pty-display")
+            .unwrap()
+            .lock()
+            .set_display_name(Some("build".to_string()), true);
+        insert_named_peer(&state, "display-uuid", "worker", 1);
+        insert_named_peer(&state, "squatter-uuid", "build", 2);
+
+        assert_ne!(
+            state.resolve_peer_ref_checked("build"),
+            Ok(Some("squatter-uuid".to_string())),
+            "display name of another terminal captured by a registered name"
+        );
+    }
+
     #[test]
     fn test_utf8_buffer_ascii() {
         let mut buf = Utf8ReadBuffer::new();
