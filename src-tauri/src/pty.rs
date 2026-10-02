@@ -8851,9 +8851,27 @@ fn write_submission_to_pty(
 /// stayed unsent even with a 500ms Enter gap.
 fn injection_payload(text: &str) -> String {
     if text.contains('\n') {
-        format!("\x1b[200~{text}\x1b[201~")
+        bracketed_payload(text)
     } else {
         text.to_string()
+    }
+}
+
+fn bracketed_payload(text: &str) -> String {
+    format!("\x1b[200~{text}\x1b[201~")
+}
+
+/// Single-line length above which Codex gets a bracketed paste: see
+/// `agent_submit_profile`. Measured: 600 chars submit at a 200ms gap, 1000 do
+/// not; the margin below 600 absorbs a slower machine. Shorter text stays plain
+/// keystrokes, so slash commands and one-key answers keep working.
+const CODEX_PASTE_FRAME_MIN_CHARS: usize = 500;
+
+fn codex_payload(text: &str) -> String {
+    if text.chars().count() > CODEX_PASTE_FRAME_MIN_CHARS {
+        bracketed_payload(text)
+    } else {
+        injection_payload(text)
     }
 }
 
@@ -8879,12 +8897,11 @@ pub(crate) fn prefill_agent_input(
 /// microsecond-apart back-to-back write — even with a flush in between — is
 /// coalesced into one read and the CR is swallowed as part of the typed buffer,
 /// so the message just sits at the prompt unsubmitted (verified live against
-/// Codex: back-to-back hangs, CR after a gap submits).
-/// 50ms clears the child's read-scheduling latency for known non-Codex agents. Codex
-/// suppresses Enter for 120ms after rapid payload characters, so it needs a
-/// 200ms post-payload gap. An undetected agent uses the same safe 200ms gap.
-/// Ctrl-U is a control key before those characters.
-/// See https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs.
+/// Claude Code 2.1.286: plain text + CR with no gap stays in the composer
+/// with "Removed 1 invisible character"; 50ms submits).
+/// 50ms clears the child's read-scheduling latency for every verified agent.
+/// An agent TUICommander cannot identify, or has not verified, keeps a 200ms gap
+/// and the plain payload; Ctrl-U is a control key before those characters.
 ///
 /// This comment used to claim the frontend `sendCommand.ts` recipe "gets this
 /// gap for free — its two `writeFn` calls are separate IPC round-trips". It does
@@ -8894,16 +8911,47 @@ pub(crate) fn prefill_agent_input(
 /// and before non-Codex Enter. Keep both frontend
 /// timing rules in step — separate flushes never guaranteed separate reads.
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
-const CODEX_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
+const UNVERIFIED_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(200);
 // A Codex stop hook delayed Working by four seconds. A live Claude notice took
 // 3.8 seconds to leave its internal queue after Enter. Allow both delayed
 // agents to publish a positive signal before reporting uncertain delivery.
 const DELAYED_AGENT_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
     std::time::Duration::from_secs(6);
 
-/// The same framed multiline payload works for every supported agent; only the
-/// Enter delay and observable turn signal vary. The frontend's `sendCommand.ts`
-/// keeps the Enter-delay mapping in step for user-originated PTY writes.
+/// Per-agent submit recipe: payload form, Enter gap and the signal that
+/// confirms the turn started. One table for every injection path.
+///
+/// Measured live 2026-10-02 in a PTY driven with the exact injection bytes
+/// (Ctrl-U, 50ms, payload, gap, CR). `ok` = the turn started on the first Enter.
+///
+/// | agent    | version | plain, short (<= 200 chars) | plain, 1000-2000 chars | bracketed paste |
+/// |----------|---------|-----------------------------|------------------------|-----------------|
+/// | codex    | 0.159.0 | ok at 0/50/200ms | Enter SWALLOWED at 200ms (1000, 1400, 2000 chars); ok at 600ms gap | ok at 0ms (190, 1000 chars) and 50ms (2000) |
+/// | claude   | 2.1.286 | CR swallowed at 0ms ("Removed 1 invisible character"); ok at 50ms | ok at 50ms | ok at 0/50ms |
+/// | grok     | 1.0.44  | ok at 0ms | ok at 50ms | ok at 0/50ms |
+/// | pi       | 0.84.2  | ok at 0ms | ok at 50ms | ok at 0/50ms |
+/// | opencode | 1.18.30 | ok at 50ms | ok at 50ms | ok at 50ms |
+/// | goose    | 1.49.0  | ok at 50ms | ok at 50ms | ok at 50ms |
+/// | gemini, aider, amp, cursor, droid | not installed: UNVERIFIED |
+///
+/// Ground truth of the probe was an answer token that exists only if the turn
+/// ran; the `confirmation` signals below were NOT re-measured against the screen
+/// classifiers (the adapters keep their own captured fixtures). opencode needs
+/// `OPENCODE_DISABLE_AUTOUPDATE=true` under such a probe: its "Update Available"
+/// modal turns an injected Enter into "Confirm".
+///
+/// Codex consumes a long plain write as a paste burst and keeps ingesting for
+/// hundreds of milliseconds (a 1967-char brief took ~680ms in the real capture
+/// `codex-0.159-long-brief-swallowed-enter.tcap`); an Enter that lands inside
+/// that burst becomes part of the paste and the text stays in the composer.
+/// A fixed gap cannot cover a payload whose ingestion time grows with its
+/// length, so a Codex payload over `CODEX_PASTE_FRAME_MIN_CHARS` (or multiline)
+/// is a bracketed paste: Codex takes it as one paste event and the later CR is
+/// an ordinary Enter. Short text stays plain: Codex's approval and choice
+/// overlays act on key presses and ignore a paste event.
+///
+/// The frontend's `sendCommand.ts` keeps the same table for user-originated
+/// PTY writes.
 #[derive(Clone, Copy)]
 struct AgentSubmitProfile {
     payload: fn(&str) -> String,
@@ -8922,14 +8970,18 @@ enum SubmitConfirmation {
 fn agent_submit_profile(agent_type: Option<&str>) -> AgentSubmitProfile {
     use SubmitConfirmation::{HookOnly, LegacyWrite, PromptGone, WorkingScreen};
     let (enter_gap, confirmation) = match agent_type {
-        Some("codex") => (CODEX_ENTER_GAP, WorkingScreen),
+        Some("codex") => (INJECT_ENTER_GAP, WorkingScreen),
         Some("claude" | "opencode" | "goose" | "grok" | "pi") => (INJECT_ENTER_GAP, WorkingScreen),
         Some("gemini" | "aider") => (INJECT_ENTER_GAP, PromptGone),
         Some("amp" | "cursor" | "droid") => (INJECT_ENTER_GAP, LegacyWrite),
-        _ => (CODEX_ENTER_GAP, HookOnly),
+        _ => (UNVERIFIED_ENTER_GAP, HookOnly),
     };
     AgentSubmitProfile {
-        payload: injection_payload,
+        payload: if agent_type == Some("codex") {
+            codex_payload
+        } else {
+            injection_payload
+        },
         enter_gap,
         confirmation,
     }
