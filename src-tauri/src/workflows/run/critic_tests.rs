@@ -86,15 +86,25 @@ fn accepted_flow(legacy: bool) -> (Flow, impl Drop) {
     git(&worktree, &["commit", "-qm", "story"]);
 
     let store = RunStore::open().expect("run store");
-    let run = store
-        .start_plan(
+    // A legacy run was started before the start-time guard existed.
+    let run = if legacy {
+        store.start_plan_pre_policy(
             &project_path,
             &plan.id,
             &definition_id,
             1,
             RunLimits::default(),
         )
-        .expect("run");
+    } else {
+        store.start_plan(
+            &project_path,
+            &plan.id,
+            &definition_id,
+            1,
+            RunLimits::default(),
+        )
+    }
+    .expect("run");
     let started = store
         .command(
             &run.id,

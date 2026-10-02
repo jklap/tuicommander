@@ -95,6 +95,46 @@ impl RunStore {
         definition_revision: i64,
         limits: RunLimits,
     ) -> Result<RunSnapshot, String> {
+        self.start_plan_with(
+            project,
+            plan_id,
+            definition_id,
+            definition_revision,
+            limits,
+            true,
+        )
+    }
+
+    /// Starts a run the way a pre-policy build did, so tests can model an
+    /// in-flight run pinned to an unchecked story definition.
+    #[cfg(test)]
+    pub(crate) fn start_plan_pre_policy(
+        &self,
+        project: &str,
+        plan_id: &str,
+        definition_id: &str,
+        definition_revision: i64,
+        limits: RunLimits,
+    ) -> Result<RunSnapshot, String> {
+        self.start_plan_with(
+            project,
+            plan_id,
+            definition_id,
+            definition_revision,
+            limits,
+            false,
+        )
+    }
+
+    fn start_plan_with(
+        &self,
+        project: &str,
+        plan_id: &str,
+        definition_id: &str,
+        definition_revision: i64,
+        limits: RunLimits,
+        enforce_check_policy: bool,
+    ) -> Result<RunSnapshot, String> {
         limits.validate()?;
         let owner = crate::progress::resolve_owning_project(Some(project))?
             .to_string_lossy()
@@ -131,6 +171,9 @@ impl RunStore {
             .get_published(&story_definition_id, story_definition_revision)?;
         if story_definition.kind != WorkflowKind::Story || story_definition.project != owner {
             return Err("pinned story workflow does not belong to project".into());
+        }
+        if enforce_check_policy {
+            require_nonempty_policy(&story_definition)?;
         }
         let initial = RunSnapshot {
             id: Uuid::now_v7().to_string(),
@@ -594,6 +637,7 @@ impl RunStore {
             &snapshot.story_definition_id,
             snapshot.story_definition_revision,
         )?;
+        require_nonempty_policy(&definition)?;
         require_current_checks(
             &definition.required_checks,
             &execution.check_receipts,
@@ -613,7 +657,6 @@ impl RunStore {
             return Err("canonical HEAD is not a merge of the checked story commit".into());
         }
         let base_commit = parts[1].to_owned();
-        require_nonempty_policy(&definition)?;
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
             let receipt = execute_pinned_check(check, canonical)?;
