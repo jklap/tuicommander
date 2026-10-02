@@ -3496,10 +3496,7 @@ mod tests {
     #[test]
     fn every_boot_path_writes_the_launch_assets_through_the_shared_helper() {
         let source = include_str!("lib.rs");
-        for entry in [
-            "pub fn run()",
-            "pub async fn run_remote(",
-        ] {
+        for entry in ["pub fn run()", "pub async fn run_remote("] {
             let body = source
                 .split(entry)
                 .nth(1)
