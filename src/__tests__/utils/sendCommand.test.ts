@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetPlatformCache } from "../../platform";
 import {
 	AGENT_ENTER_GAP_MS,
-	CODEX_ENTER_GAP_MS,
+	UNVERIFIED_ENTER_GAP_MS,
 	containsShellMetacharacters,
 	sendCommand,
 	shouldAutoSubmitSuggestion,
@@ -164,11 +164,24 @@ describe("sendCommand", () => {
 		const writeFn = async (): Promise<void> => {
 			stamps.push(performance.now());
 		};
-		await sendCommand(writeFn, "run the tests", "codex", "posix");
+		await sendCommand(writeFn, "run the tests", "claude", "posix");
 		expect(stamps.length).toBe(3);
 		// setTimeout never fires early; allow a small scheduler tolerance.
-		// Codex keeps Enter in newline mode for 120ms after the last burst char.
-		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(195);
+		expect(stamps[2] - stamps[1]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
+	});
+
+	/**
+	 * Regression (story 1163): Codex consumes a long plain write as a paste burst
+	 * and swallows an Enter that arrives while it is still ingesting — a 1000-char
+	 * wake left in the composer at a 200ms gap, live on 0.159.0. A bracketed paste
+	 * arrives as one event, so the same CR is an ordinary Enter.
+	 */
+	it("frames even a short single-line Codex payload as a bracketed paste", async () => {
+		setPlatform("MacIntel");
+		const { writeFn, calls } = makeRecorder();
+		const longLine = "BG DONE exit=100 ".repeat(100).trim();
+		await sendCommand(writeFn, longLine, "codex", "posix");
+		expect(calls).toEqual(["\x15", `\x1b[200~${longLine}\x1b[201~`, "\r"]);
 	});
 
 	it("keeps the existing Enter gap for Claude", async () => {
@@ -179,7 +192,7 @@ describe("sendCommand", () => {
 			await sendCommand(async () => {}, "run tests", "claude", "posix");
 			const delays = timeout.mock.calls.map(([, ms]) => ms);
 			expect(delays).toContain(AGENT_ENTER_GAP_MS);
-			expect(delays).not.toContain(CODEX_ENTER_GAP_MS);
+			expect(delays).not.toContain(UNVERIFIED_ENTER_GAP_MS);
 		} finally {
 			timeout.mockRestore();
 		}
@@ -236,7 +249,7 @@ describe("sendCommand", () => {
 		const started = performance.now();
 		const { writeFn, calls } = makeRecorder();
 		await sendCommand(writeFn, "run the tests", "codex", "posix", false);
-		expect(calls).toEqual(["\x15", "run the tests"]);
+		expect(calls).toEqual(["\x15", "\x1b[200~run the tests\x1b[201~"]);
 		// Only the Ctrl-U gap elapses; a second gap would mean the Enter's was paid too.
 		expect(performance.now() - started).toBeLessThan(2 * AGENT_ENTER_GAP_MS);
 	});

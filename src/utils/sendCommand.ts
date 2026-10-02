@@ -11,7 +11,7 @@ export type ShellFamily = "posix" | "windows-native" | "unknown";
 const shellFamilyCache = new Map<string, ShellFamily>();
 
 /** Real-time gap between Ctrl-U and payload, and between payload and Enter
- *  for agents other than Codex. Mirrors `INJECT_ENTER_GAP` in `pty.rs`.
+ *  for every verified agent. Mirrors `INJECT_ENTER_GAP` in `pty.rs`.
  *
  *  That constant's comment used to claim the frontend "gets this gap for free —
  *  its two `writeFn` calls are separate IPC round-trips". It does not: a Tauri
@@ -20,15 +20,22 @@ const shellFamilyCache = new Map<string, ShellFamily>();
  *  instead of submitting. Separate flushes never guaranteed separate reads —
  *  only elapsed time does. */
 export const AGENT_ENTER_GAP_MS = 50;
-/** Codex suppresses Enter for 120ms after a paste burst. Its burst detector
- *  sees rapid payload characters, not the earlier Ctrl-U control key.
- *  Source: https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/paste_burst.rs */
-export const CODEX_ENTER_GAP_MS = 200;
+/** Gap for an agent type whose input semantics are not verified. Mirrors
+ *  `UNVERIFIED_ENTER_GAP` in `pty.rs`. */
+export const UNVERIFIED_ENTER_GAP_MS = 200;
 
-// Keep in step with Rust's injection_enter_gap: an unrecognized type must use
-// the Codex-safe default until its input semantics are known.
+/** Codex ingests a long plain write as a paste burst for hundreds of
+ *  milliseconds, and an Enter inside that burst is swallowed (measured live on
+ *  0.159.0: 1000 chars at a 200ms gap stay in the composer). No fixed gap
+ *  covers a payload whose ingestion time grows with its length, so Codex always
+ *  gets a bracketed paste. Mirrors `agent_submit_profile` in `pty.rs`. */
+const ALWAYS_BRACKETED_AGENTS = new Set(["codex"]);
+
+// Keep in step with Rust's agent_submit_profile: an unrecognized type must use
+// the longer gap until its input semantics are known.
 const SHORT_ENTER_GAP_AGENTS = new Set([
 	"claude",
+	"codex",
 	"gemini",
 	"opencode",
 	"aider",
@@ -42,9 +49,9 @@ const SHORT_ENTER_GAP_AGENTS = new Set([
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Keep Enter out of the agent's paste-burst window after the last input write. */
+/** Keep Enter in its own read after the last input write. */
 export function waitForAgentEnterGap(agentType?: string | null): Promise<void> {
-	return delay(agentType && SHORT_ENTER_GAP_AGENTS.has(agentType) ? AGENT_ENTER_GAP_MS : CODEX_ENTER_GAP_MS);
+	return delay(agentType && SHORT_ENTER_GAP_AGENTS.has(agentType) ? AGENT_ENTER_GAP_MS : UNVERIFIED_ENTER_GAP_MS);
 }
 
 /** Fetch (and cache) the shell family for a PTY session. Returns "unknown"
@@ -122,7 +129,8 @@ export async function sendCommand(
 	const agentInput = Boolean(agentType) || unknownForeground;
 	const skipPrefix = !agentInput && isWindowsNative(shellFamily);
 	const prefix = skipPrefix ? "" : "\x15";
-	const payload = text.includes("\n") ? `\x1b[200~${text}\x1b[201~` : text;
+	const bracketed = text.includes("\n") || (agentType != null && ALWAYS_BRACKETED_AGENTS.has(agentType));
+	const payload = bracketed ? `\x1b[200~${text}\x1b[201~` : text;
 	if (agentInput) {
 		// Ctrl-U must reach an agent in its own read. Claude Code treats a long
 		// input chunk as a paste: a Ctrl-U inside it is stripped as an invisible
@@ -135,8 +143,7 @@ export async function sendCommand(
 		await writeFn(prefix + payload);
 	}
 	if (!submit) return;
-	// Two writes are not two reads. Keep a scheduling gap for raw-mode agents;
-	// Codex also treats Enter as a newline for 120ms after a rapid paste burst.
+	// Two writes are not two reads. Keep a scheduling gap for raw-mode agents.
 	if (agentInput || foregroundProbeFailed) await waitForAgentEnterGap(agentType);
 	await writeFn("\r");
 }
