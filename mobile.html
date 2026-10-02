@@ -2,6 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Opened as http://user:pass@host/mobile.html the document URL keeps the
+      // credentials (document.baseURI) while fetched modules drop them, so a lazy
+      // screen chunk imports the entry under a different key and evaluates it a
+      // second time (second shell). Same guard as index.html (story 1292), kept
+      // as an inline copy there: a shared script would add a blocking request to
+      // every page load. Keep both in step, and ahead of the first URL-bearing element.
+      (function () {
+        var u = new URL(document.baseURI);
+        if (u.username || u.password) {
+          var base = document.createElement('base');
+          base.href = u.origin + u.pathname + u.search;
+          document.head.appendChild(base);
+        }
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover" />
     <meta name="theme-color" content="#1e1e1e" />
     <meta name="apple-mobile-web-app-capable" content="yes" />

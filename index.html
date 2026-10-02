@@ -38,7 +38,8 @@
       // resolve "./main-*.js" WITHOUT: the browser evaluates the entry a second
       // time and mounts the App twice (story 1292). A <base> without credentials
       // makes every URL of the page resolve the same way. This must stay ahead of
-      // the first element that carries a URL.
+      // the first element that carries a URL. mobile.html holds an inline copy of
+      // this guard: keep both in step.
       (function () {
         var u = new URL(document.baseURI);
         if (u.username || u.password) {
