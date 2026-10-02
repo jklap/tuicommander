@@ -165,16 +165,22 @@ struct OpenUtterance {
     speech_ms: u32,
     silence_ms: u32,
     /// The current run of activity and the longest so far, in milliseconds. A
-    /// dip of up to [`VOICE_GAP_MS`] does not end a run.
+    /// dip of up to [`VOICE_GAP_MS`] does not end a run, provided the activity
+    /// after it lasts at least two frames.
     run_ms: u32,
     longest_run_ms: u32,
+    /// The dip and the one active frame after it, not yet part of the run: a
+    /// lone frame after a dip is as likely residual echo as speech, so it only
+    /// joins the run once a second consecutive frame confirms it.
+    bridge_ms: u32,
     /// Quiet frames since the last active one, in milliseconds.
     gap_ms: u32,
 }
 
 /// The longest dip inside a voice: a plosive closure is 40-100 ms of quiet in
 /// the middle of a word. Scattered residual echo, a frame in every 200 ms,
-/// stays well past it.
+/// stays well past it; a denser scatter (one frame in four) is closed out by
+/// the two-frame confirmation after the dip.
 const VOICE_GAP_MS: u32 = 60;
 
 impl Segmenter {
@@ -276,6 +282,7 @@ impl Segmenter {
                         silence_ms: 0,
                         run_ms: FRAME_MS,
                         longest_run_ms: FRAME_MS,
+                        bridge_ms: 0,
                         gap_ms: 0,
                     });
                 } else {
@@ -292,17 +299,23 @@ impl Segmenter {
                 if active {
                     open.speech_ms += FRAME_MS;
                     open.silence_ms = 0;
-                    // A short dip is part of the run, and counts as time in it.
-                    open.run_ms = if open.gap_ms <= VOICE_GAP_MS {
-                        open.run_ms + open.gap_ms + FRAME_MS
+                    // A short dip is part of the run, and counts as time in it,
+                    // once a second active frame follows it.
+                    if open.gap_ms == 0 {
+                        open.run_ms += open.bridge_ms + FRAME_MS;
+                        open.bridge_ms = 0;
+                    } else if open.gap_ms <= VOICE_GAP_MS {
+                        open.bridge_ms = open.gap_ms + FRAME_MS;
                     } else {
-                        FRAME_MS
-                    };
+                        open.run_ms = FRAME_MS;
+                        open.bridge_ms = 0;
+                    }
                     open.gap_ms = 0;
                     open.longest_run_ms = open.longest_run_ms.max(open.run_ms);
                 } else {
                     open.silence_ms += FRAME_MS;
                     open.gap_ms += FRAME_MS;
+                    open.bridge_ms = 0;
                 }
                 let end = if open.audio.len() >= ms_to_samples(self.config.max_utterance_ms) {
                     Some(UtteranceEnd::MaxLength)
