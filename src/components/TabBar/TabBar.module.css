@@ -261,39 +261,6 @@
   color: var(--fg-primary);
 }
 
-.answersBtn {
-  width: 28px;
-  min-width: 28px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  align-self: stretch;
-  background: transparent;
-  border: none;
-  font-size: var(--font-md);
-  cursor: pointer;
-  opacity: 0.55;
-  touch-action: manipulation;
-  user-select: none;
-  -webkit-user-select: none;
-  transition: background 0.15s, opacity 0.15s;
-}
-
-.answersBtn:hover,
-.answersBtnOn {
-  background: var(--bg-highlight);
-  opacity: 1;
-}
-
-/* Touch screens: finger-sized target. */
-@media (pointer: coarse) {
-  .answersBtn {
-    width: 44px;
-    min-width: 44px;
-  }
-}
-
 /* Globe icon for promoted terminal tabs */
 .globeIcon {
   background: none;
