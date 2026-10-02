@@ -101,6 +101,7 @@ const client = vi.hoisted(() => ({
 	pause: vi.fn(),
 	resumeTurn: vi.fn(),
 	compact: vi.fn(),
+	forkSession: vi.fn(),
 }));
 
 vi.mock("../../services/acpClient", () => ({ acpClient: client }));
@@ -133,6 +134,8 @@ const SECOND_SESSION = "01932d5e-0000-7000-8000-0000000000bb";
 // A real 1x1 PNG admitted by ego's ACP prompt tests.
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 let supportsImages = false;
+let supportsFork = false;
+const CHILD_SESSION = "01932d5e-0000-7000-8000-0000000000dd";
 
 function pasteFile(textarea: HTMLTextAreaElement, file: File): Event {
 	const event = new Event("paste", { bubbles: true, cancelable: true });
@@ -181,7 +184,7 @@ function snapshot(overrides: Partial<AcpConnectionSnapshot> = {}): AcpConnection
 			load: true,
 			list: true,
 			resume: true,
-			fork: false,
+			fork: supportsFork,
 			delete: false,
 			close: true,
 			additionalDirectories: true,
@@ -265,6 +268,7 @@ beforeEach(() => {
 	});
 	sequence = 0;
 	supportsImages = false;
+	supportsFork = false;
 	settings.egoExecutable = "/usr/local/bin/ego";
 	acpStore.reset();
 	acpTranscript.reset();
@@ -2636,6 +2640,60 @@ describe("AIChatPanel: the session's own knobs", () => {
 		await settle();
 		expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Model unavailable");
 		expect(picker.value).toBe("opus");
+	});
+});
+
+describe("AIChatPanel: fork", () => {
+	const forkButton = (container: HTMLElement) =>
+		container.querySelector<HTMLButtonElement>('button[aria-label="Fork the conversation"]');
+
+	beforeEach(() => {
+		supportsFork = true;
+		// The real client attaches the child and refreshes the store before it returns.
+		client.forkSession.mockImplementation(async () => {
+			acpStore.applySnapshot(snapshot({ attachments: [attachment(), attachment({ sessionId: CHILD_SESSION })] }));
+			return CHILD_SESSION;
+		});
+	});
+
+	// Catches: fork replacing the parent binding instead of adding a tab.
+	it("opens the child in a new tab and keeps the parent tab", async () => {
+		const { container } = await renderPanel();
+		await settle();
+
+		forkButton(container)?.click();
+		await settle();
+
+		expect(client.forkSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT);
+		expect(aiChatTabs.ids("global")).toEqual([SESSION, CHILD_SESSION]);
+		expect(aiChatTabs.active("global")).toBe(CHILD_SESSION);
+		expect(acpStore.attachment(CONNECTION, SESSION)).not.toBeNull();
+		// The fork already attached the child; a load would be refused as a duplicate.
+		expect(client.loadSession).not.toHaveBeenCalledWith(CONNECTION, CHILD_SESSION, expect.anything());
+	});
+
+	// Catches: a fork request hitting ego's busy refusal while a turn streams.
+	it("is disabled while a turn streams", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await settle();
+
+		const button = forkButton(container);
+		expect(button?.disabled).toBe(true);
+		button?.click();
+		await settle();
+
+		expect(client.forkSession).not.toHaveBeenCalled();
+	});
+
+	// Catches: fork offered to an agent that cannot serve it.
+	it("shows no button when the agent lacks the fork capability", async () => {
+		supportsFork = false;
+		const { container } = await renderPanel();
+		await settle();
+
+		expect(forkButton(container)).toBeNull();
 	});
 });
 
