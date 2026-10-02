@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetPlatformCache } from "../../platform";
 import {
 	AGENT_ENTER_GAP_MS,
-	UNVERIFIED_ENTER_GAP_MS,
 	containsShellMetacharacters,
 	sendCommand,
 	shouldAutoSubmitSuggestion,
+	UNVERIFIED_ENTER_GAP_MS,
 } from "../../utils/sendCommand";
 
 /**

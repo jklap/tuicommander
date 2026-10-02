@@ -10011,7 +10011,11 @@ fn a_prompt_that_lands_after_the_warning_closes_the_loop() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| flush_pending_injections_blocking(&state, child_id));
-        for expected in [b"\x15".as_slice(), b"\x1b[200~review the draft\x1b[201~", b"\r"] {
+        for expected in [
+            b"\x15".as_slice(),
+            b"\x1b[200~review the draft\x1b[201~",
+            b"\r",
+        ] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -11386,7 +11390,11 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     tokio::task::yield_now().await;
     running.store(false, Ordering::Release);
 
-    for expected in [b"\x15".as_slice(), b"\x1b[200~resume queued work\x1b[201~", b"\r"] {
+    for expected in [
+        b"\x15".as_slice(),
+        b"\x1b[200~resume queued work\x1b[201~",
+        b"\r",
+    ] {
         let actual = received
             .recv_timeout(std::time::Duration::from_secs(15))
             .expect("ready confirmation must submit queued command without a new shell edge");
@@ -11762,7 +11770,11 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [b"\x15".as_slice(), b"\x1b[200~wake the agent\x1b[201~", b"\r"] {
+        for expected in [
+            b"\x15".as_slice(),
+            b"\x1b[200~wake the agent\x1b[201~",
+            b"\r",
+        ] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -11840,7 +11852,11 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [b"\x15".as_slice(), b"\x1b[200~wake the agent\x1b[201~", b"\r"] {
+        for expected in [
+            b"\x15".as_slice(),
+            b"\x1b[200~wake the agent\x1b[201~",
+            b"\r",
+        ] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -11918,7 +11934,11 @@ fn run_codex_queued_delivery(
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [b"\x15".as_slice(), b"\x1b[200~wake the agent\x1b[201~", b"\r"] {
+        for expected in [
+            b"\x15".as_slice(),
+            b"\x1b[200~wake the agent\x1b[201~",
+            b"\r",
+        ] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -12288,7 +12308,11 @@ fn queued_codex_accepts_ready_then_working_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [b"\x15".as_slice(), b"\x1b[200~wake the agent\x1b[201~", b"\r"] {
+        for expected in [
+            b"\x15".as_slice(),
+            b"\x1b[200~wake the agent\x1b[201~",
+            b"\r",
+        ] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
