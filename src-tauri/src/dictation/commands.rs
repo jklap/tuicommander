@@ -2091,7 +2091,7 @@ pub fn set_correction_map(
 pub async fn list_audio_devices() -> Result<Vec<audio::AudioDevice>, String> {
     crate::audio_enumeration::run_bounded(
         "listing audio input devices",
-        crate::audio_enumeration::ENUMERATION_TIMEOUT,
+        crate::audio_enumeration::enumeration_timeout(),
         audio::list_input_devices,
     )
     .await

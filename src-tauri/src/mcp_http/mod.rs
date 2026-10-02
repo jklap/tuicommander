@@ -7477,6 +7477,37 @@ mod tests {
         }
     }
 
+    /// Catches: a device route answering 200 with an error body (a plain `Json(..)`
+    /// instead of `json_result`) when the enumeration fails, which the client
+    /// would parse as a device list. A zero bound makes the real enumeration
+    /// time out; no mock layer.
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn the_device_routes_answer_500_when_the_enumeration_fails() {
+        crate::audio_enumeration::override_timeout_for_test(std::time::Duration::ZERO);
+        let app = build_router(test_state(), false, true);
+        for path in ["/dictation/devices", "/audio/output-devices"] {
+            let response = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GET {path}"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert!(
+                json["error"].as_str().is_some_and(|e| e.contains("timed out")),
+                "GET {path}: {json}"
+            );
+        }
+    }
+
     /// Drift guard for `API_PREFIXES`: the catch-all decides 404-vs-index.html
     /// from that list, so a route family nobody adds to it silently goes back to
     /// answering HTML for its own typos. Derive the truth from the registered

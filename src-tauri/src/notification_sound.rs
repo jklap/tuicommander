@@ -382,7 +382,7 @@ pub(crate) fn play_notification_sound(
 pub(crate) async fn list_audio_output_devices() -> Result<Vec<AudioOutputDevice>, String> {
     crate::audio_enumeration::run_bounded(
         "listing audio output devices",
-        crate::audio_enumeration::ENUMERATION_TIMEOUT,
+        crate::audio_enumeration::enumeration_timeout(),
         list_output_devices,
     )
     .await

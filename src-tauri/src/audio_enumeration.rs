@@ -8,8 +8,35 @@
 
 use std::time::Duration;
 
-/// How long a device query may take before the caller gets an error.
-pub(crate) const ENUMERATION_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a device query may take before the caller gets an error. The first
+/// query on macOS can sit on the microphone permission prompt until the user
+/// answers it, so the bound has to outlast a human.
+const ENUMERATION_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[cfg(test)]
+static TIMEOUT_OVERRIDE_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// Test seam: a route test makes the real enumeration time out by shrinking the
+/// bound, instead of mocking the enumeration.
+#[cfg(test)]
+pub(crate) fn override_timeout_for_test(timeout: Duration) {
+    TIMEOUT_OVERRIDE_MS.store(
+        timeout.as_millis() as u64,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+}
+
+pub(crate) fn enumeration_timeout() -> Duration {
+    #[cfg(test)]
+    {
+        let ms = TIMEOUT_OVERRIDE_MS.load(std::sync::atomic::Ordering::SeqCst);
+        if ms != u64::MAX {
+            return Duration::from_millis(ms);
+        }
+    }
+    ENUMERATION_TIMEOUT
+}
 
 /// Runs `f` on the blocking pool and gives up after `timeout`. A stalled `f`
 /// cannot be cancelled: its thread stays parked until the OS call returns, but
@@ -64,7 +91,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_fast_enumeration_returns_its_value() {
-        let result = run_bounded("fast", ENUMERATION_TIMEOUT, || vec![1, 2]).await;
+        let result = run_bounded("fast", enumeration_timeout(), || vec![1, 2]).await;
         assert_eq!(result.unwrap(), vec![1, 2]);
     }
 }
