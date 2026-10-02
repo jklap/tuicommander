@@ -376,12 +376,16 @@ mod tests {
         let path = dir.path().join("audit.db");
         let wal = dir.path().join("audit.db-wal");
 
+        let t0 = std::time::Instant::now();
         let pages: i64 = {
             let log = AuditLog::open(&path).expect("open");
+            log.conn().expect("connect");
+            eprintln!("PHASE connect {:?}", t0.elapsed());
             for i in 0..5_000_i64 {
                 log.insert("bulk", EventKind::Connected, serde_json::json!({"i": i}))
                     .expect("insert");
             }
+            eprintln!("PHASE inserts {:?}", t0.elapsed());
             let auto: i64 = log
                 .conn()
                 .expect("connect")
@@ -401,8 +405,10 @@ mod tests {
                 wal_len < auto * page_size * 4,
                 "WAL grew to {wal_len} bytes with autocheckpoint at {auto} pages of {page_size}"
             );
+            eprintln!("PHASE asserts {:?}", t0.elapsed());
             auto
         };
+        eprintln!("PHASE close {:?}", t0.elapsed());
         assert!(pages > 0);
 
         // Closing the last connection checkpoints and removes the sidecar.
