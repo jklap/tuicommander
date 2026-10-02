@@ -4883,6 +4883,71 @@ mod tests {
         continuous::Interruptible::hush(&port);
     }
 
+    /// The verdict arrives after the pause, so a `hush` that misses the slot
+    /// lock (`speak` holds it while it rebuilds the voice) is no longer "a tick
+    /// with nothing to interrupt": nothing resumes the reply afterwards, and
+    /// the next one is queued into a silent device. Catches: `hush` giving up
+    /// on a contended slot while the output is paused.
+    #[test]
+    fn a_hush_that_meets_a_busy_slot_does_not_leave_the_reply_paused() {
+        #[derive(Default)]
+        struct PausableOutput(std::sync::atomic::AtomicBool);
+        impl speaker::Output for PausableOutput {
+            fn play(&self, _audio: &speech::SpeechAudio) -> Result<(), String> {
+                Ok(())
+            }
+            fn stop(&self) {
+                // The real device un-pauses on stop, so the next reply is heard.
+                self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            fn pause(&self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            fn resume(&self) {
+                self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            fn is_speaking(&self) -> bool {
+                false
+            }
+        }
+
+        let (dictation, gate, _config) = armed_with_a_voice("session-a");
+        let output = Arc::new(PausableOutput::default());
+        let generation = dictation.hands_free.lock().generation();
+        *dictation.speaker.lock() = Some(speaker::Armed {
+            speaker: Arc::new(speaker::Speaker::new(
+                Arc::new(HeldSpeech { gate }),
+                Arc::clone(&output) as Arc<dyn speaker::Output>,
+                generation,
+            )),
+            voice: "giovanni".to_string(),
+            language: "it".to_string(),
+        });
+        let port = Arc::new(ArmedSpeaker(Arc::clone(&dictation.speaker)));
+        continuous::Interruptible::pause(&*port);
+        assert!(output.0.load(std::sync::atomic::Ordering::SeqCst));
+
+        let busy = dictation.speaker.lock();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let contender = {
+            let port = Arc::clone(&port);
+            std::thread::spawn(move || {
+                continuous::Interruptible::hush(&*port);
+                let _ = done_tx.send(());
+            })
+        };
+        // Either the call gave up at once, or it is waiting for the slot and
+        // needs it released. Both are then asserted the same way.
+        let _ = done_rx.recv_timeout(std::time::Duration::from_millis(300));
+        drop(busy);
+        contender.join().expect("the contender panicked");
+
+        assert!(
+            !output.0.load(std::sync::atomic::Ordering::SeqCst),
+            "the verdict came while the slot was busy and the reply stayed paused"
+        );
+    }
+
     /// Disarming takes the voice away before the engine goes, so a reply
     /// queued against the old conversation cannot be spoken into the next one.
     #[test]

@@ -4766,4 +4766,103 @@ mod tests {
         );
         assert_eq!(*mode.lock().phase(), Phase::Waiting);
     }
+
+    /// Probes by the critic of 1376-f33e.
+    mod critic_1376 {
+        use super::*;
+
+        /// Catches: `paused_at_ms` left set after a stop, so the next time the
+        /// user talks over the reply it is never paused again.
+        #[test]
+        fn the_reply_is_paused_again_by_the_next_speech_after_a_verdict() {
+            for transcript in ["what a nice day", "computer, stop"] {
+                let (mut capture, speaker, mode) = capture_with_a_voice_and_a_phrase();
+                let mut endpoint = FakeEndpoint::new(transcript);
+                let target = FakeTarget(std::cell::Cell::new(true));
+                let queue = FakeSink::default();
+
+                endpoint.feed(speech(300));
+                tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+                endpoint.feed(silence(500));
+                tick(&mut capture, &mode, &mut endpoint, &target, &queue, 700);
+                endpoint.feed(speech(300));
+                tick(&mut capture, &mode, &mut endpoint, &target, &queue, 800);
+
+                assert_eq!(
+                    speaker.pauses(),
+                    2,
+                    "{transcript}: the second speech did not pause"
+                );
+            }
+        }
+
+        /// Catches: the wake word, spoken after the pause limit already let the
+        /// reply carry on, being treated as a no-op because nothing is paused.
+        #[test]
+        fn the_wake_word_still_stops_a_reply_the_pause_limit_let_go_on() {
+            let (mut capture, speaker, mode) = capture_with_a_voice_and_a_phrase();
+            let mut endpoint = FakeEndpoint::new("computer, stop");
+            let target = FakeTarget(std::cell::Cell::new(true));
+            let queue = FakeSink::default();
+
+            endpoint.feed(speech(300));
+            tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+            endpoint.feed(speech(300));
+            let late = 100 + PAUSE_LIMIT_MS + 1;
+            tick(&mut capture, &mode, &mut endpoint, &target, &queue, late);
+            assert_eq!(speaker.resumes(), 1);
+            endpoint.feed(silence(500));
+            tick(
+                &mut capture,
+                &mode,
+                &mut endpoint,
+                &target,
+                &queue,
+                late + 600,
+            );
+
+            assert_eq!(
+                speaker.hushes(),
+                1,
+                "the reply played on over the wake word"
+            );
+            assert_eq!(speaker.resumes(), 1, "resumed twice");
+        }
+
+        /// Catches: an arm added for `Empty`/`Stale`/`NotArmed` that stops the
+        /// reply, or drops the resume, when nothing was recognised.
+        #[test]
+        fn nothing_recognised_resumes_the_reply_and_does_not_stop_it() {
+            let (mut capture, speaker, mode) = capture_with_a_voice_and_a_phrase();
+            let mut endpoint = FakeEndpoint::new("");
+            let target = FakeTarget(std::cell::Cell::new(true));
+            let queue = FakeSink::default();
+
+            endpoint.feed(speech(300));
+            tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+            endpoint.feed(silence(500));
+            tick(&mut capture, &mode, &mut endpoint, &target, &queue, 700);
+
+            assert_eq!(endpoint.calls.get(), 1, "the test needs a transcription");
+            assert_eq!((speaker.resumes(), speaker.hushes()), (1, 0));
+        }
+
+        /// Speech has dips: a plosive closure is 40-100 ms of quiet inside one
+        /// word. A voice that is only "unbroken" never reaches the 200 ms bar
+        /// when its bursts are shorter than that, so the reply talks on over a
+        /// user who is plainly speaking. Scattered echo (20 ms in 200) must stay
+        /// out. Catches: `has_voice` requiring a gapless run.
+        #[test]
+        fn speech_with_short_dips_is_a_voice() {
+            let mut segmenter = Segmenter::new(SegmenterConfig::default());
+            for _ in 0..8 {
+                segmenter.push(&speech(140));
+                segmenter.push(&silence(40));
+            }
+            assert!(
+                segmenter.has_voice(),
+                "1.4 s of speech with 40 ms dips was not a voice"
+            );
+        }
+    }
 }
