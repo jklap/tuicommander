@@ -1,28 +1,66 @@
 import { render } from "@solidjs/testing-library";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AnswersPanel } from "../AnswersPanel";
 
+const panelOf = (container: HTMLElement) => container.querySelector("[data-answers-only]") as HTMLElement;
+
 describe("AnswersPanel", () => {
-	it("lists the prompt then each answer as selectable text", () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it("lists each prompt followed by its answers as selectable text", () => {
 		const { container } = render(() => (
-			<AnswersPanel view={{ prompt: "❯ q", answers: ["💬 one", "💬 two"] }} fontFamily="monospace" fontSize={13} />
+			<AnswersPanel
+				view={[
+					{ prompt: "❯ q1", answers: ["💬 one", "💬 two"] },
+					{ prompt: "❯ q2", answers: ["💬 three"] },
+				]}
+				fontFamily="monospace"
+				fontSize={13}
+			/>
 		));
-		const panel = container.querySelector("[data-answers-only]") as HTMLElement;
-		expect(panel.textContent).toBe("❯ q💬 one💬 two");
-		expect(Array.from(container.querySelectorAll("[data-answer]")).map((n) => n.textContent)).toEqual([
-			"💬 one",
-			"💬 two",
-		]);
-		// catches: the layer blocking selection/copy, or being unable to scroll a long turn
+		const panel = panelOf(container);
+		expect(panel.textContent).toBe("❯ q1💬 one💬 two❯ q2💬 three");
+		expect(Array.from(container.querySelectorAll("[data-prompt]")).map((n) => n.textContent)).toEqual(["❯ q1", "❯ q2"]);
+		// catches: the layer blocking selection/copy, or being unable to scroll a long history
 		expect(panel.style.userSelect).toBe("text");
 		expect(panel.style.overflow).toBe("auto");
 	});
 
-	it("says so when the turn has no answers", () => {
-		// catches: an empty, unexplained panel that looks like a hung terminal
+	it("keeps a question without answers visible with a note", () => {
+		// catches: a running or unmarked turn showing nothing, hiding the question
 		const { container } = render(() => (
-			<AnswersPanel view={{ prompt: null, answers: [] }} fontFamily="monospace" fontSize={13} />
+			<AnswersPanel
+				view={[
+					{ prompt: "❯ old", answers: [] },
+					{ prompt: "❯ asked just now", answers: [] },
+				]}
+				fontFamily="monospace"
+				fontSize={13}
+			/>
 		));
-		expect(container.textContent).toContain("No 💬 answers");
+		const prompts = Array.from(container.querySelectorAll("[data-prompt]")).map((n) => n.textContent);
+		expect(prompts).toEqual(["❯ old", "❯ asked just now"]);
+		expect(Array.from(container.querySelectorAll("[data-no-answer]")).map((n) => n.textContent)).toEqual([
+			"No 💬 answer in this turn.",
+			"No 💬 answer yet.",
+		]);
+	});
+
+	it("renders a 300-character multi-line prompt in full", () => {
+		// catches: the prompt truncated to one line
+		const prompt = `❯ ${"a".repeat(100)}\n  ${"b".repeat(100)}\n  ${"c".repeat(96)}`;
+		const { container } = render(() => (
+			<AnswersPanel view={[{ prompt, answers: [] }]} fontFamily="monospace" fontSize={13} />
+		));
+		expect(container.querySelector("[data-prompt]")?.textContent).toBe(prompt);
+	});
+
+	it("opens scrolled to the newest entry", () => {
+		// catches: the panel opening at the oldest question of a long history
+		vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(1000);
+		const { container } = render(() => (
+			<AnswersPanel view={[{ prompt: "❯ q", answers: ["💬 a"] }]} fontFamily="monospace" fontSize={13} />
+		));
+		expect(panelOf(container).scrollTop).toBe(1000);
 	});
 });

@@ -2,7 +2,7 @@ import type { DecodedRow, StyledRange } from "./canvasTerminalUtils";
 import { cellText } from "./canvasTerminalUtils";
 import { ANSWER_MARKER_RE, type RowSnapshot } from "./suggestOverlay";
 
-/** The compact view of the last assistant turn: what the user asked, then only the 💬 answers. */
+/** One turn of the answers-only view: what the user asked, then only the 💬 answers. */
 export interface AnswersTurn {
 	prompt: string | null;
 	answers: string[];
@@ -33,6 +33,11 @@ export function rowCopyText(row: DecodedRow): string {
 	return text;
 }
 
+/** An agent output row (bullet glyph) ends the prompt block, as does a 💬 row. */
+const OUTPUT_START_RE = /^\s*[●⏺]/;
+/** Rows a prompt may span, so a turn whose output never starts with a bullet is not swallowed whole. */
+export const PROMPT_MAX_ROWS = 50;
+
 /** Join the soft-wrapped rows starting at `from` into one logical line; returns it and the next row. */
 function joinLogicalLine(rows: readonly RowSnapshot[], from: number): { text: string; next: number } {
 	let text = rows[from].text;
@@ -45,17 +50,35 @@ function joinLogicalLine(rows: readonly RowSnapshot[], from: number): { text: st
 }
 
 /**
- * Build the answers-only view from the rows of one turn. With `hasPrompt` the
- * first row is the user's prompt line; every logical line after it that starts
- * with the 💬 marker is an answer, in order, wrapped rows joined.
+ * The prompt block at the top of a turn: the prompt row plus every following row
+ * up to the first agent output (bullet) or 💬 row. A multi-line or hard-wrapped
+ * prompt spans several logical lines, so reading one logical line cut it short
+ * (#1369). Soft-wrapped rows are concatenated, hard lines joined with a newline.
+ */
+function readPrompt(rows: readonly RowSnapshot[]): { text: string; next: number } {
+	let text = rows[0].text;
+	let next = 1;
+	while (next < rows.length && next < PROMPT_MAX_ROWS) {
+		const row = rows[next];
+		if (!row.isWrapped && (OUTPUT_START_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text))) break;
+		text = row.isWrapped ? text + row.text : `${text.replace(/[ \t]+$/, "")}\n${row.text}`;
+		next++;
+	}
+	return { text: text.trimEnd(), next };
+}
+
+/**
+ * Build one turn of the answers-only view from its rows. With `hasPrompt` the
+ * first row starts the user's prompt (see `readPrompt`); every logical line after
+ * it that starts with the 💬 marker is an answer, in order, wrapped rows joined.
  */
 export function buildAnswersTurn(rows: readonly RowSnapshot[], hasPrompt: boolean): AnswersTurn {
 	let i = 0;
 	let prompt: string | null = null;
 	if (hasPrompt && rows.length > 0) {
-		const line = joinLogicalLine(rows, 0);
-		prompt = line.text;
-		i = line.next;
+		const block = readPrompt(rows);
+		prompt = block.text;
+		i = block.next;
 	}
 	const answers: string[] = [];
 	while (i < rows.length) {
@@ -90,18 +113,76 @@ export async function readTurnRows(
 }
 
 /**
- * Where the last turn starts, as an all-time row index: the last user prompt at
- * or after the oldest retained row, else the oldest row within `TURN_MAX_ROWS`
- * of the end. `promptLines` are grid-relative; `historyBase` shifts them to all-time.
+ * All-time row indexes of the user prompts still in the scrollback, ascending and
+ * unique. `promptLines` are grid-relative; `historyBase` shifts them to all-time.
  */
-export function turnStart(
+export function promptStarts(promptLines: readonly number[], historyBase: number, endAbs: number): number[] {
+	const total = endAbs - historyBase;
+	const starts = new Set<number>();
+	for (const line of promptLines) if (line >= 0 && line < total) starts.add(historyBase + line);
+	return [...starts].sort((a, b) => a - b);
+}
+
+/** Finished turns by start row, valid for one `historyBase` (eviction moves every row index). */
+export interface TurnCache {
+	base: number;
+	turns: Map<number, { endAbs: number; turn: AnswersTurn }>;
+}
+
+export const newTurnCache = (): TurnCache => ({ base: -1, turns: new Map() });
+
+type RangeReader = (start: number, count: number) => Promise<StyledRange | null>;
+
+/**
+ * The whole session as turns: one per user prompt still in the scrollback, each
+ * with its full prompt and its 💬 answers; the last one is the running turn. With
+ * no known prompt the last `TURN_MAX_ROWS` rows form a single prompt-less turn.
+ * Finished turns come from `cache` (same object each time, so the view keeps their
+ * DOM); a failed read aborts the whole build (null).
+ */
+export async function readAnswersHistory(
+	fetchRange: RangeReader,
 	promptLines: readonly number[],
 	historyBase: number,
 	endAbs: number,
-): { startAbs: number; hasPrompt: boolean } {
-	const total = endAbs - historyBase;
-	let last = -1;
-	for (const line of promptLines) if (line >= 0 && line < total) last = Math.max(last, line);
-	if (last >= 0) return { startAbs: historyBase + last, hasPrompt: true };
-	return { startAbs: Math.max(historyBase, endAbs - TURN_MAX_ROWS), hasPrompt: false };
+	cache: TurnCache,
+): Promise<AnswersTurn[] | null> {
+	const starts = promptStarts(promptLines, historyBase, endAbs);
+	if (starts.length === 0) {
+		const rows = await readTurnRows(fetchRange, Math.max(historyBase, endAbs - TURN_MAX_ROWS), endAbs);
+		return rows && [buildAnswersTurn(rows, false)];
+	}
+	if (cache.base !== historyBase) {
+		cache.base = historyBase;
+		cache.turns.clear();
+	}
+	const turns: AnswersTurn[] = [];
+	for (let i = 0; i < starts.length; i++) {
+		const start = starts[i];
+		const end = i + 1 < starts.length ? starts[i + 1] : endAbs;
+		const finished = i + 1 < starts.length;
+		const hit = cache.turns.get(start);
+		if (finished && hit?.endAbs === end) {
+			turns.push(hit.turn);
+			continue;
+		}
+		const rows = await readTurnRows(fetchRange, start, end);
+		if (!rows) return null;
+		const turn = buildAnswersTurn(rows, true);
+		if (finished) cache.turns.set(start, { endAbs: end, turn });
+		turns.push(turn);
+	}
+	return turns;
+}
+
+/** Structural equality, so an unchanged refresh keeps the panel DOM (and the user's selection). */
+export function sameAnswersHistory(a: readonly AnswersTurn[] | null, b: readonly AnswersTurn[] | null): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.length !== b.length) return false;
+	return a.every(
+		(t, i) =>
+			t.prompt === b[i].prompt &&
+			t.answers.length === b[i].answers.length &&
+			t.answers.every((x, j) => x === b[i].answers[j]),
+	);
 }
