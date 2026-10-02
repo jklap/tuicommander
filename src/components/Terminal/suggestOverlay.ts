@@ -100,37 +100,7 @@ export function isSuggestBlock(
 /** One row the overlay masks, and why. */
 export interface OverlayBlock {
 	row: number;
-	kind: "suggest" | "continuation" | "intent" | "answer" | "collapsed";
-}
-
-/** The answers-only view: which rows of the screen belong to the turn to collapse. */
-export interface AnswersOnlyScope {
-	/** First row of the turn (inclusive). */
-	startRow: number;
-	/** End of the turn (exclusive) — the row of the live cursor, so the prompt stays visible. */
-	endRow: number;
-}
-
-/**
- * Screen row where the last turn begins: the row after the last user prompt on
- * screen, or 0 when the prompt has scrolled off the top (or none is known).
- *
- * `promptLines` are grid-relative lines (history included); the screen shows
- * lines `historySize - displayOffset` onwards.
- */
-export function lastTurnStartRow(
-	promptLines: readonly number[],
-	historySize: number,
-	displayOffset: number,
-	totalRows: number,
-): number {
-	const firstVisibleLine = historySize - displayOffset;
-	let start = 0;
-	for (const line of promptLines) {
-		const row = line - firstVisibleLine;
-		if (row >= 0 && row < totalRows) start = Math.max(start, row + 1);
-	}
-	return start;
+	kind: "suggest" | "continuation" | "intent" | "answer";
 }
 
 /**
@@ -146,7 +116,6 @@ export function lastTurnStartRow(
 export function planSuggestOverlay(
 	totalRows: number,
 	getRow: (i: number) => RowSnapshot | null,
-	answersOnly?: AnswersOnlyScope,
 ): { key: string; blocks: OverlayBlock[] } {
 	const blocks: OverlayBlock[] = [];
 	const parts: string[] = [];
@@ -175,9 +144,6 @@ export function planSuggestOverlay(
 				blocks.push({ row, kind: "answer" });
 				parts.push(`a${row}`);
 			}
-		} else if (answersOnly && row >= answersOnly.startRow && row < answersOnly.endRow && text.trim() !== "") {
-			blocks.push({ row, kind: "collapsed" });
-			parts.push(`x${row}`);
 		} else if (INTENT_HIGHLIGHT_RE.test(text)) {
 			blocks.push({ row, kind: "intent" });
 			parts.push(`i${row}`);
@@ -194,7 +160,7 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
- * planned block. Masks (`suggest`, `continuation`, `collapsed`) paint the terminal
+ * planned block. Masks (`suggest`, `continuation`) paint the terminal
  * background over the row; `intent` and `answer` are translucent tints, so the
  * row's text stays readable underneath. An answer also gets a solid gutter bar.
  */
