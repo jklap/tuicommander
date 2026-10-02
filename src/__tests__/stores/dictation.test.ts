@@ -1114,6 +1114,41 @@ describe("dictationStore", () => {
 			});
 		});
 
+		// Bug caught: a refused hands-free arm on a non-owner instance is shown as
+		// a generic failure and the Settings notice never appears.
+		it("flags ownedElsewhere when hands-free is refused by a non-owner", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				command === "arm_hands_free_dictation"
+					? Promise.reject("Dictation is owned by another TUICommander instance. Restart this instance.")
+					: Promise.resolve(undefined),
+			);
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				expect(await store.armHandsFree("sess-1")).toBe(false);
+				expect(store.state.ownedElsewhere).toBe(true);
+				expect(store.state.handsFreeError).toContain("owned by another TUICommander instance");
+				consoleSpy.mockRestore();
+			});
+		});
+
+		// Bug caught: status.owned_elsewhere is never mapped, so opening Settings
+		// on a non-owner shows no notice.
+		it("maps status.owned_elsewhere into the store", async () => {
+			mockInvoke.mockResolvedValue({
+				model_status: "ready",
+				model_name: "m",
+				model_size_mb: 1,
+				recording: false,
+				processing: false,
+				owned_elsewhere: true,
+			});
+			await testInScopeAsync(async () => {
+				await store.refreshStatus();
+				expect(store.state.ownedElsewhere).toBe(true);
+			});
+		});
+
 		/**
 		 * Criterion 2 of 832-e730, from the side that decides it.
 		 *

@@ -182,7 +182,7 @@ export const DictationSettings: Component = () => {
 				<p class={s.hint}>
 					{t(
 						"dictation.ownedElsewhere",
-						"Dictation is owned by another TUICommander instance on this configuration. Use it there; this instance does not register the global hotkey or open the microphone.",
+						"Dictation is owned by another TUICommander instance on this configuration. Use it there; this instance does not register the global hotkey, watch the Fn key or open the microphone. Restart this instance after the other one quits to take dictation over.",
 					)}
 				</p>
 			</Show>

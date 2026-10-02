@@ -8,15 +8,38 @@
 //!
 //! A named instance (`TUIC_APP_INSTANCE`) has its own config directory and so
 //! its own lock.
+//!
+//! The lock guards OS-global input, not only dictation: the window-toggle
+//! hotkey, the Fn key monitor and the microphone. A second instance registering
+//! the same hotkey combo is one candidate cause of the 2026-09-30 incident.
+//!
+//! Ownership is decided once, at startup. A non-owner stays one after the owner
+//! quits and must be restarted to take dictation over.
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 
 /// Refusal text; the frontend matches on `OWNED_ELSEWHERE_MARKER`.
-pub const OWNED_ELSEWHERE: &str = "Dictation is owned by another TUICommander instance";
+pub const OWNED_ELSEWHERE: &str = "Dictation is owned by another TUICommander instance. Restart this instance after the other one quits to take dictation over.";
 pub const OWNED_ELSEWHERE_MARKER: &str = "owned by another TUICommander instance";
 
 const LOCK_FILE: &str = "dictation.lock";
+
+/// What setup registers with the OS, decided by ownership alone.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GlobalInputPlan {
+    pub restore_hotkey: bool,
+    pub install_fn_monitor: bool,
+}
+
+impl GlobalInputPlan {
+    pub fn for_ownership(is_owner: bool) -> Self {
+        Self {
+            restore_hotkey: is_owner,
+            install_fn_monitor: is_owner,
+        }
+    }
+}
 
 /// Result of one lock attempt. Holds the lock for as long as it lives.
 #[derive(Debug)]
@@ -99,6 +122,29 @@ mod tests {
         let secondary = Ownership::acquire(dir.path());
         assert!(primary.is_owner());
         assert!(!secondary.is_owner());
+    }
+
+    #[test]
+    fn second_instance_does_not_register_dictation_shortcut() {
+        // Bug caught: a secondary instance registers the global hotkey and the
+        // Fn monitor, taking input from the primary.
+        let dir = dir();
+        let _primary = Ownership::acquire(dir.path());
+        let secondary = Ownership::acquire(dir.path());
+        assert_eq!(
+            GlobalInputPlan::for_ownership(secondary.is_owner()),
+            GlobalInputPlan {
+                restore_hotkey: false,
+                install_fn_monitor: false
+            }
+        );
+        assert_eq!(
+            GlobalInputPlan::for_ownership(true),
+            GlobalInputPlan {
+                restore_hotkey: true,
+                install_fn_monitor: true
+            }
+        );
     }
 
     #[test]
