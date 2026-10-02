@@ -1082,11 +1082,12 @@ fn source_is_ancestor(canonical: &Path, source: &str, head: &str) -> Result<bool
 
 /// An integration with no pinned checks would record an empty `post_checks`
 /// list and release dependents without validating anything.
-pub(super) fn require_nonempty_policy(required: &[CheckDefinition]) -> Result<(), String> {
-    if required.is_empty() {
-        return Err(
-            "story workflow pins no required checks; integration cannot be validated".into(),
-        );
+pub(super) fn require_nonempty_policy(definition: &PublishedWorkflow) -> Result<(), String> {
+    if definition.required_checks.is_empty() {
+        return Err(format!(
+            "story workflow {} revision {} pins no required checks; publish a revision with at least one check",
+            definition.name, definition.revision
+        ));
     }
     Ok(())
 }
