@@ -533,21 +533,6 @@ fn mcp_session_routes_to(state: &AppState, mcp_sid: &str, tuic_session: &str) ->
         .is_some_and(|bound| bound.value() == tuic_session)
 }
 
-/// A managed PTY has one mailbox even if two bridges assert different UUIDs
-/// for it (for example, a persisted tab UUID and the PTY key). Choose the
-/// first registered peer so the mailbox address stays stable on reconnect.
-/// Callers that create a binding hold PEER_IDENTITY_BIND_LOCK while using it.
-fn peer_identity_for_live_pty(state: &AppState, asserted: &str) -> Option<String> {
-    let pty = state.live_pty_for_peer(asserted)?;
-    state
-        .peer_agents
-        .iter()
-        .filter(|peer| state.live_pty_for_peer(peer.key()).as_deref() == Some(pty.as_str()))
-        .map(|peer| (peer.registered_at, peer.key().clone()))
-        .min()
-        .map(|(_, identity)| identity)
-}
-
 /// A short-lived bridge can exit without DELETE /mcp. Retire its protocol
 /// metadata and routes when another bridge for the same identity arrives,
 /// while preserving subscribed and recently active sibling bridges.
@@ -782,7 +767,7 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
         return true;
     }
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
-    let canonical = peer_identity_for_live_pty(state, asserted);
+    let canonical = state.peer_identity_for_live_pty(asserted);
     let tuic = canonical.as_deref().unwrap_or(asserted);
     retire_stale_identity_sessions_locked(state, tuic, mcp_sid);
     // Only a process that inherited this PTY's `$TUIC_SESSION` can assert the
@@ -4920,7 +4905,9 @@ fn resolve_registration_identity(
             }
         }
         return Ok((
-            peer_identity_for_live_pty(state, explicit).unwrap_or_else(|| explicit.to_string()),
+            state
+                .peer_identity_for_live_pty(explicit)
+                .unwrap_or_else(|| explicit.to_string()),
             false,
         ));
     }
@@ -5015,8 +5002,10 @@ fn handle_messaging(
                         .as_ref()
                         .is_some_and(|prior| state.orchestrator_peers.contains(prior))
             });
+            // An empty name is unset: it would otherwise be an address nothing can use.
             let name = args["name"]
                 .as_str()
+                .filter(|name| !name.is_empty())
                 .map(str::to_string)
                 .or_else(|| existing.as_ref().map(|(name, _)| name.clone()))
                 .unwrap_or_else(|| "agent".to_string());
@@ -5160,7 +5149,7 @@ fn handle_messaging(
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
                     "monitor": "Use blocking waits instead of polling: agent action=wait (wakes on new mail; the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
                     "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited|awaiting_input, session_id, exit_code?, prompt?}. This is not task output. awaiting_input means the child hit an interactive prompt and is parked with nobody at its keyboard — it will NOT progress until you answer it with session action=input (the `prompt` field carries the question). Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
-                    "send": "agent action=send to=<peer tuic_session | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB> [urgency=normal|urgent]. Normal is the default; urgent writes only a payload-free inbox notice to a safe busy Claude/Codex composer for its next tool boundary and returns urgent_delivered or urgent_fallback_reason. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle, or a confirmed-ready empty composer held working only by background work, may submit one coalesced, payload-free wake instructing `agent action=inbox`. Busy, questioning, partially typed, external without a subscribed ACP inbox, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
+                    "send": "agent action=send to=<peer tuic_session | its registered name | its PTY id | that terminal's alias, e.g. tu-1> message=<text, max 64KB> [urgency=normal|urgent]. Normal is the default; urgent writes only a payload-free inbox notice to a safe busy Claude/Codex composer for its next tool boundary and returns urgent_delivered or urgent_fallback_reason. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle, or a confirmed-ready empty composer held working only by background work, may submit one coalesced, payload-free wake instructing `agent action=inbox`. Busy, questioning, partially typed, external without a subscribed ACP inbox, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); a message reaching the inbox is not delivery.",
                     "list_peers": "agent action=list_peers path=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
@@ -5247,7 +5236,7 @@ fn handle_messaging(
             let requested_to = match args["to"].as_str() {
                 Some(s) if !s.is_empty() => s,
                 _ => {
-                    return serde_json::json!({"error": "Action 'send' requires 'to' — the recipient's tuic_session, the id of the PTY it runs in, or that terminal's alias (e.g. 'tu-1')"});
+                    return serde_json::json!({"error": "Action 'send' requires 'to' — the recipient's tuic_session, registered name, the id of the PTY it runs in, or that terminal's alias (e.g. 'tu-1')"});
                 }
             };
             // Mail is filed under the peer key, so an address that names the
@@ -5326,7 +5315,7 @@ fn handle_messaging(
                 let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
                 if !state.peer_agents.contains_key(to) {
                     return serde_json::json!({"error": format!(
-                        "Recipient '{requested_to}' is not registered — it matched no tuic_session, PTY id or terminal alias. Use list_peers to find valid targets."
+                        "Recipient '{requested_to}' is not registered — it matched no tuic_session, registered name, PTY id or terminal alias. Use list_peers to find valid targets."
                     )});
                 }
                 state.push_agent_inbox(to, msg)
@@ -6467,15 +6456,22 @@ fn handle_workflow_report(
                 if let Ok(Some(coordinator_session)) =
                     crate::workflows::active_coordinator_session(&receipt.snapshot)
                 {
-                    if let Ok(Some(peer)) = state.resolve_peer_ref_checked(&coordinator_session) {
-                        queue_workflow_coordinator_wake(
-                            state,
-                            &peer,
-                            &pty,
-                            &receipt.snapshot.id,
-                            &reported_story_id,
-                            receipt.sequence,
-                        );
+                    match state.resolve_peer_ref_checked(&coordinator_session) {
+                        Ok(Some(peer)) => {
+                            queue_workflow_coordinator_wake(
+                                state,
+                                &peer,
+                                &pty,
+                                &receipt.snapshot.id,
+                                &reported_story_id,
+                                receipt.sequence,
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => tracing::warn!(
+                            "workflow coordinator wake skipped for run {}: {error}",
+                            receipt.snapshot.id
+                        ),
                     }
                 }
             }
@@ -12152,6 +12148,99 @@ mod tests {
             1,
             "a repeated assertion must not restore a second recipient: {peers}"
         );
+    }
+
+    /// 1246-46e3 / 1246n: a child mails its coordinator by UUID and by the
+    /// register name list_peers prints. Catches: the name resolving to nothing
+    /// ("matched no tuic_session"), or mail filed where one bridge cannot read it.
+    #[cfg(unix)]
+    #[test]
+    fn mail_identity_child_reaches_coordinator_by_uuid_and_register_name() {
+        let state = test_state();
+        insert_managed_test_session(&state, TEST_UUID_B, TEST_SPAWN_CWD);
+        state.bind_live_pty(TEST_UUID_A, TEST_UUID_B);
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-durable",
+            Some(TEST_UUID_A)
+        ));
+        live_mcp_session(&state, "mcp-durable");
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-pty-key",
+            Some(TEST_UUID_B)
+        ));
+        register_peer(&state, TEST_UUID_A, "coordinator", "mcp-durable");
+        register_peer(&state, TEST_UUID_B, "coordinator", "mcp-pty-key");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-4466554400c1",
+            "child",
+            "mcp-child",
+        );
+
+        for (address, content) in [
+            (TEST_UUID_A, "by uuid"),
+            ("coordinator", "by register name"),
+        ] {
+            let sent = handle_messaging(
+                &state,
+                &serde_json::json!({"action": "send", "to": address, "message": content}),
+                Some("mcp-child"),
+            );
+            assert!(sent.get("error").is_none(), "send to {address}: {sent}");
+        }
+
+        for reader in ["mcp-durable", "mcp-pty-key"] {
+            let inbox = handle_messaging(
+                &state,
+                &serde_json::json!({"action": "inbox", "since": 0}),
+                Some(reader),
+            );
+            let contents: Vec<&str> = inbox["messages"]
+                .as_array()
+                .expect("registered recipient inbox")
+                .iter()
+                .filter_map(|message| message["content"].as_str())
+                .collect();
+            assert_eq!(
+                contents,
+                ["by uuid", "by register name"],
+                "reader {reader}: {inbox}"
+            );
+        }
+
+        let peers = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "list_peers"}),
+            Some("mcp-child"),
+        );
+        let listed = peers["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|peer| peer["name"] == "coordinator")
+            .count();
+        assert_eq!(listed, 1, "one coordinator must be listed: {peers}");
+    }
+
+    /// Catches: register accepting an empty name, leaving a peer that list_peers
+    /// shows with a blank name no address can reach.
+    #[test]
+    fn register_with_an_empty_name_falls_back_to_the_default_name() {
+        let state = test_state();
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-4466554400c2",
+            "",
+            "mcp-blank",
+        );
+
+        let name = state
+            .peer_agents
+            .get("550e8400-e29b-41d4-a716-4466554400c2")
+            .map(|peer| peer.name.clone());
+        assert_eq!(name.as_deref(), Some("agent"));
     }
 
     #[cfg(unix)]
