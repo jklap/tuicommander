@@ -112,6 +112,9 @@ pub struct Utterance {
     pub end: UtteranceEnd,
     /// Milliseconds of *active* audio, pre-roll and trailing silence excluded.
     pub speech_ms: u32,
+    /// The longest unbroken run of active frames. `speech_ms` adds up frames
+    /// that may be seconds apart; this is what a voice looks like.
+    pub longest_run_ms: u32,
 }
 
 /// Utterance boundaries, all in milliseconds except the energy floor.
@@ -160,6 +163,9 @@ struct OpenUtterance {
     audio: Vec<f32>,
     speech_ms: u32,
     silence_ms: u32,
+    /// Consecutive active frames up to now, and the longest such run so far.
+    run_ms: u32,
+    longest_run_ms: u32,
 }
 
 impl Segmenter {
@@ -185,6 +191,24 @@ impl Segmenter {
         self.open
             .as_ref()
             .is_some_and(|open| self.is_speech(open.speech_ms))
+    }
+
+    /// True once the open utterance holds an unbroken `min_speech_ms` of
+    /// activity. [`has_speech`](Self::has_speech) cannot say this: it adds up
+    /// every active frame since the utterance opened, and an utterance stays
+    /// open until a whole `trailing_silence_ms` of quiet, so the scattered
+    /// frames of residual echo from a reply that is still playing add up to a
+    /// "sustained" voice within a second.
+    pub fn has_voice(&self) -> bool {
+        self.open
+            .as_ref()
+            .is_some_and(|open| self.is_speech(open.longest_run_ms))
+    }
+
+    /// Does this closed utterance hold an unbroken `min_speech_ms` of
+    /// activity? See [`has_voice`](Self::has_voice).
+    pub fn is_voice(&self, utterance: &Utterance) -> bool {
+        self.is_speech(utterance.longest_run_ms)
     }
 
     fn is_speech(&self, speech_ms: u32) -> bool {
@@ -241,6 +265,8 @@ impl Segmenter {
                         audio,
                         speech_ms: FRAME_MS,
                         silence_ms: 0,
+                        run_ms: FRAME_MS,
+                        longest_run_ms: FRAME_MS,
                     });
                 } else {
                     let cap = ms_to_samples(self.config.pre_roll_ms);
@@ -256,8 +282,11 @@ impl Segmenter {
                 if active {
                     open.speech_ms += FRAME_MS;
                     open.silence_ms = 0;
+                    open.run_ms += FRAME_MS;
+                    open.longest_run_ms = open.longest_run_ms.max(open.run_ms);
                 } else {
                     open.silence_ms += FRAME_MS;
+                    open.run_ms = 0;
                 }
                 let end = if open.audio.len() >= ms_to_samples(self.config.max_utterance_ms) {
                     Some(UtteranceEnd::MaxLength)
@@ -282,6 +311,7 @@ impl Segmenter {
             audio: open.audio,
             end,
             speech_ms: open.speech_ms,
+            longest_run_ms: open.longest_run_ms,
         })
     }
 }
@@ -834,6 +864,18 @@ impl HandsFree {
         }
     }
 
+    /// An utterance ended without reaching the transcriber, for too little
+    /// speech: the capture is over, and the phase it set must not outlive it.
+    pub fn note_capture_discarded(&mut self) {
+        if self.phase == Phase::Capturing {
+            self.phase = if self.pending.is_some() {
+                Phase::HoldingBack
+            } else {
+                Phase::Waiting
+            };
+        }
+    }
+
     /// An utterance closed and went to the transcriber.
     pub fn note_transcribing(&mut self) {
         if self.binding.is_some() {
@@ -1344,6 +1386,13 @@ pub const DEVICE_SILENCE_TIMEOUT_MS: u64 = 5_000;
 /// loaded synthesis graph, and barge-in is a rule about *when* to interrupt,
 /// not about what interrupting does.
 pub trait Interruptible: Send + Sync {
+    /// Go quiet now, keeping the reply: somebody is talking and it is not yet
+    /// known whether they are talking to us. Same constraint as `hush`.
+    fn pause(&self);
+
+    /// Carry on from where `pause` stopped: it was not for us.
+    fn resume(&self);
+
     /// Stop talking now and open a new turn.
     ///
     /// Called from the capture loop on the tick where the user starts speaking,
@@ -1366,6 +1415,9 @@ pub struct Capture {
     /// armed without a voice, which is ordinary dictation and has nothing to
     /// interrupt.
     speaker: Option<std::sync::Arc<dyn Interruptible>>,
+    /// When the speaker was paused for voice activity and has had no verdict
+    /// yet. Every way out of this state is a verdict on the speech or a limit.
+    paused_at_ms: Option<u64>,
 }
 
 impl Capture {
@@ -1382,7 +1434,24 @@ impl Capture {
             device_silence_timeout_ms,
             echo,
             speaker,
+            paused_at_ms: None,
         }
+    }
+
+    /// Carry on speaking if the reply is held for a verdict that will no
+    /// longer come: the loop is ending, or the speech outlasted
+    /// [`PAUSE_LIMIT_MS`].
+    fn resume_speaker(&mut self) {
+        if self.paused_at_ms.take().is_some()
+            && let Some(speaker) = self.speaker.as_ref()
+        {
+            speaker.resume();
+        }
+    }
+
+    /// Call when the loop ends, so a reply is never left paused behind it.
+    pub fn release(&mut self) {
+        self.resume_speaker();
     }
 
     /// Retained audio. Nothing in production needs this number; it exists so
@@ -1463,29 +1532,47 @@ pub fn tick(
     let samples = capture.echo.lock().clean(&samples);
 
     // The other half of barge-in. Read before the push, because the edge is
-    // what matters: `hush` opens a new turn on every call, so a level trigger
-    // would open one per tick and refuse every reply the model wrote for the
-    // turn in progress.
-    let had_speech = capture.segmenter.has_speech();
+    // what matters: a level trigger would pause once per tick.
+    let had_voice = capture.segmenter.has_voice();
     let closed = capture.segmenter.push(&samples);
-    // Started talking — sustained, not merely over the floor. The canceller
-    // removes the linear echo and not all of it: a real room with laptop
-    // speakers leaves a few frames of residual, and one 20 ms frame opens the
-    // gate, so hushing on the open edge stopped every reply on its first
-    // syllable. The edge is therefore the one where the utterance first holds
-    // `min_speech_ms` of speech — the length below which it would not be sent
-    // as a turn either. The first words are not lost to the wait: the gate
-    // still opens on the first frame, with its pre-roll. A closed utterance
-    // has passed that same bar, so one that opened and closed inside a single
-    // chunk counts too.
-    if !had_speech
-        && (capture.segmenter.has_speech() || !closed.is_empty())
+    // Somebody is talking — an unbroken `min_speech_ms`, not merely a few
+    // frames over the floor and not frames added up over seconds: the
+    // canceller removes the linear echo and not all of it, so a real room
+    // leaves scattered residual frames. The first words are not lost to the
+    // wait: the gate opens on the first frame, with its pre-roll. A closed
+    // utterance has passed the same bar, so one that opened and closed inside
+    // a single chunk counts too.
+    //
+    // The reply is only *paused*. Whether this is for us is the activation
+    // rule's to say, and it needs the transcript: voice activity alone is also
+    // a remark across the room and whatever echo was left. The verdict comes
+    // from the loop below, and the pause never outlives it.
+    if !had_voice
+        && capture.paused_at_ms.is_none()
+        && (capture.segmenter.has_voice()
+            || closed
+                .iter()
+                .any(|utterance| capture.segmenter.is_voice(utterance)))
         && let Some(speaker) = capture.speaker.as_ref()
     {
-        speaker.hush();
+        speaker.pause();
+        capture.paused_at_ms = Some(now_ms);
     }
-    if closed.is_empty() && capture.segmenter.is_capturing() {
-        mode.lock().note_capturing();
+    if closed.is_empty() {
+        if capture.segmenter.is_capturing() {
+            mode.lock().note_capturing();
+        } else {
+            // An utterance that opened and closed on too little speech never
+            // reaches the recogniser, so nothing else would end its phase.
+            mode.lock().note_capture_discarded();
+            capture.resume_speaker();
+        }
+    }
+    if capture
+        .paused_at_ms
+        .is_some_and(|at| now_ms.saturating_sub(at) > PAUSE_LIMIT_MS)
+    {
+        capture.resume_speaker();
     }
 
     for utterance in closed {
@@ -1510,6 +1597,17 @@ pub fn tick(
                 // wrote. Only the first words go to the log, and only at DEBUG:
                 // enough to see how the phrase was spelled, not the remark
                 // the user did not address here.
+                // The verdict on the pause. Addressed here: the reply is over and
+                // the user's turn begins. Anything else: not for us, carry on.
+                match outcome {
+                    TranscriptOutcome::HeldBack { .. } | TranscriptOutcome::Activated { .. } => {
+                        capture.paused_at_ms = None;
+                        if let Some(speaker) = capture.speaker.as_ref() {
+                            speaker.hush();
+                        }
+                    }
+                    _ => capture.resume_speaker(),
+                }
                 match outcome {
                     TranscriptOutcome::Rejected => tracing::debug!(
                         source = "dictation",
@@ -1562,6 +1660,11 @@ pub fn tick(
         },
     }
 }
+
+/// How long a reply stays paused for voice activity before it carries on
+/// without a verdict. A whole turn is a sentence, 1.5 s of quiet and one
+/// recognition pass; a pause past this is a noisy room, not a turn.
+const PAUSE_LIMIT_MS: u64 = 8_000;
 
 /// How often the driver thread ticks. Short enough that end-of-speech is not
 /// noticeably late, long enough to cost nothing while nobody is speaking.
@@ -1660,6 +1763,7 @@ pub fn spawn_runtime(
                 }
                 std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
             }
+            capture.release();
         })
         .expect("Failed to spawn hands-free thread");
     HandsFreeRuntime {
@@ -3325,19 +3429,42 @@ mod tests {
         Capture::new(test_config(), 5_000, 0, echo_guard(), None)
     }
 
-    /// A reply queue that only records being told to stop.
+    /// A reply queue that only records what it was told to do.
     #[derive(Default)]
-    struct CountingSpeaker(std::sync::atomic::AtomicUsize);
+    struct CountingSpeaker {
+        pauses: std::sync::atomic::AtomicUsize,
+        resumes: std::sync::atomic::AtomicUsize,
+        hushes: std::sync::atomic::AtomicUsize,
+    }
 
     impl CountingSpeaker {
+        fn pauses(&self) -> usize {
+            self.pauses.load(std::sync::atomic::Ordering::Relaxed)
+        }
+
+        fn resumes(&self) -> usize {
+            self.resumes.load(std::sync::atomic::Ordering::Relaxed)
+        }
+
         fn hushes(&self) -> usize {
-            self.0.load(std::sync::atomic::Ordering::Relaxed)
+            self.hushes.load(std::sync::atomic::Ordering::Relaxed)
         }
     }
 
     impl Interruptible for CountingSpeaker {
+        fn pause(&self) {
+            self.pauses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        fn resume(&self) {
+            self.resumes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+
         fn hush(&self) {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.hushes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -3397,7 +3524,7 @@ mod tests {
     /// without this they have to sit through a sentence they have already
     /// decided against, and their own words land in the turn after it.
     #[test]
-    fn the_user_starting_to_talk_stops_the_reply_in_progress() {
+    fn the_user_starting_to_talk_silences_the_reply_in_progress() {
         let mode = armed_shared();
         let (mut capture, speaker) = capture_with_a_voice();
         let mut endpoint = FakeEndpoint::new("actually, no");
@@ -3407,7 +3534,7 @@ mod tests {
         endpoint.feed(silence(200));
         tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
         assert_eq!(
-            speaker.hushes(),
+            speaker.pauses(),
             0,
             "a quiet room must not interrupt the reply"
         );
@@ -3415,9 +3542,14 @@ mod tests {
         endpoint.feed(speech(500));
         tick(&mut capture, &mode, &mut endpoint, &target, &queue, 400);
         assert_eq!(
-            speaker.hushes(),
+            speaker.pauses(),
             1,
             "the reply was talked over and survived"
+        );
+        assert_eq!(
+            speaker.hushes(),
+            0,
+            "the reply was dropped before anybody knew the speech was for us"
         );
     }
 
@@ -3426,7 +3558,7 @@ mod tests {
     /// progress would then be refused as stale while the user was still
     /// speaking one sentence.
     #[test]
-    fn a_reply_is_interrupted_once_per_turn_not_once_per_tick() {
+    fn a_reply_is_paused_once_per_utterance_not_once_per_tick() {
         let mode = armed_shared();
         let (mut capture, speaker) = capture_with_a_voice();
         let mut endpoint = FakeEndpoint::new("one long sentence");
@@ -3442,14 +3574,14 @@ mod tests {
             capture.segmenter.is_capturing(),
             "the test needs one utterance that is still open"
         );
-        assert_eq!(speaker.hushes(), 1);
+        assert_eq!(speaker.pauses(), 1);
     }
 
     /// A short sentence can open and close inside one device chunk. The gate is
     /// shut again by the end of the tick, so the hush has to come from the
     /// closed utterance — once, not zero times and not once per rule.
     #[test]
-    fn an_utterance_opened_and_closed_in_one_chunk_stops_the_reply_once() {
+    fn an_utterance_opened_and_closed_in_one_chunk_pauses_and_then_stops_the_reply_once() {
         let mode = armed_shared();
         let (mut capture, speaker) = capture_with_a_voice();
         let mut endpoint = FakeEndpoint::new("no");
@@ -3465,7 +3597,9 @@ mod tests {
             !capture.segmenter.is_capturing() && endpoint.calls.get() == 1,
             "the test needs one utterance that opened and closed inside the chunk"
         );
-        assert_eq!(speaker.hushes(), 1);
+        // No activation phrase: the turn is accepted, so the pause becomes a stop.
+        assert_eq!((speaker.pauses(), speaker.hushes()), (1, 1));
+        assert_eq!(speaker.resumes(), 0);
     }
 
     /// The edge is only trustworthy because the canceller runs before it. Our
@@ -3499,7 +3633,7 @@ mod tests {
         tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
 
         assert_eq!(
-            speaker.hushes(),
+            speaker.pauses(),
             0,
             "the reply interrupted itself as soon as the microphone heard it"
         );
@@ -3510,7 +3644,7 @@ mod tests {
         let (mut capture, speaker) = capture_with_a_voice();
         endpoint.feed(speech(500));
         tick(&mut capture, &mode, &mut endpoint, &target, &queue, 200);
-        assert_eq!(speaker.hushes(), 1);
+        assert_eq!(speaker.pauses(), 1);
     }
 
     /// The failure the echo path exists to stop: the microphone hears the reply
@@ -4123,8 +4257,8 @@ mod tests {
     /// opposite directions: one asks how *well* the canceller did, the other
     /// asks whether the same room breaks without it.
     struct Run {
-        /// The tick at the end of which each `hush()` was issued, in order.
-        hushes: Vec<usize>,
+        /// The tick at the end of which each `pause()` was issued, in order.
+        pauses: Vec<usize>,
         /// Every utterance that reached the recogniser: the tick at the end of
         /// which it closed, and its audio.
         utterances: Vec<(usize, Vec<f32>)>,
@@ -4138,10 +4272,10 @@ mod tests {
     /// inside the bounds is still worth seeing move.
     #[derive(Debug)]
     struct BargeIn {
-        /// Milliseconds from the user's first sample to the tick that hushed
+        /// Milliseconds from the user's first sample to the tick that paused
         /// the speaker.
         stop_latency_ms: u32,
-        /// Times the speaker was hushed while only the reply was audible.
+        /// Times the speaker was paused while only the reply was audible.
         false_triggers: usize,
         /// Milliseconds the utterance kept from *before* the user's first
         /// sample — what the pre-roll ring saved while the gate was still shut.
@@ -4254,12 +4388,12 @@ mod tests {
         let onset = ms_to_samples(USER_ONSET_MS);
 
         // How much of the reply the speaker has actually emitted. Unbounded
-        // until it is hushed; after that the room goes quiet one delay later.
-        // A hush the user did not ask for stops playback just the same — that
+        // until it is paused; after that the room goes quiet one delay later.
+        // A pause the user did not ask for stops playback just the same — that
         // is what makes a false trigger cost them the rest of the answer.
         let mut emitted = usize::MAX;
         let mut run = Run {
-            hushes: Vec::new(),
+            pauses: Vec::new(),
             utterances: Vec::new(),
             onset,
         };
@@ -4287,7 +4421,7 @@ mod tests {
                 .collect();
 
             endpoint.feed(chunk);
-            let hushes = speaker.hushes();
+            let pauses = speaker.pauses();
             let transcriptions = endpoint.calls.get();
             tick(
                 &mut capture,
@@ -4298,11 +4432,11 @@ mod tests {
                 tick_index as u64 * POLL_INTERVAL_MS,
             );
 
-            if speaker.hushes() > hushes {
-                run.hushes.push(tick_index);
+            if speaker.pauses() > pauses {
+                run.pauses.push(tick_index);
                 if emitted == usize::MAX {
                     emitted = (tick_index + 1) * TICK_SAMPLES;
-                    echo.lock().note_stopped();
+                    echo.lock().note_paused();
                 }
             }
             if endpoint.calls.get() > transcriptions {
@@ -4332,7 +4466,7 @@ mod tests {
         fn measured(&self) -> BargeIn {
             let onset = self.onset;
             let hushed_at = *self
-                .hushes
+                .pauses
                 .iter()
                 .find(|tick| !self.before_the_user(**tick))
                 .expect("the user talked over the reply and it kept playing");
@@ -4358,7 +4492,7 @@ mod tests {
             BargeIn {
                 stop_latency_ms: samples_to_ms(stopped_at - onset),
                 false_triggers: self
-                    .hushes
+                    .pauses
                     .iter()
                     .filter(|tick| self.before_the_user(**tick))
                     .count(),
@@ -4394,7 +4528,7 @@ mod tests {
             "the reply interrupted itself {} times before the user said anything",
             measured.false_triggers
         );
-        // The hush waits for `min_speech_ms` of speech, so that is the floor;
+        // The pause waits for `min_speech_ms` of speech, so that is the floor;
         // one poll interval on top is the tick the threshold lands inside.
         let bound = SegmenterConfig::default().min_speech_ms + POLL_INTERVAL_MS as u32;
         assert!(
@@ -4431,7 +4565,7 @@ mod tests {
     fn without_the_canceller_the_same_room_interrupts_the_reply_on_its_own_echo() {
         let run = play_over_the_user(Box::new(super::super::echo::PassThrough), linear_room());
         let spurious = run
-            .hushes
+            .pauses
             .iter()
             .filter(|tick| run.before_the_user(**tick))
             .count();
@@ -4489,5 +4623,147 @@ mod tests {
             measured.false_triggers, 0,
             "the reply stopped itself on its own residual echo"
         );
+    }
+
+    // --- Barge-in obeys the wake word (1376-f33e) -------------------------
+
+    fn capture_with_a_voice_and_a_phrase() -> (
+        Capture,
+        std::sync::Arc<CountingSpeaker>,
+        parking_lot::Mutex<HandsFree>,
+    ) {
+        let (capture, speaker) = capture_with_a_voice();
+        (
+            capture,
+            speaker,
+            parking_lot::Mutex::new(armed_with_phrase("computer")),
+        )
+    }
+
+    /// The log of 2026-10-02: replies cut with no turn accepted after them,
+    /// because voice activity alone stopped them while a turn needs the wake
+    /// word. Speech that is not addressed to us may only pause the reply.
+    #[test]
+    fn speech_without_the_wake_word_pauses_the_reply_and_lets_it_carry_on() {
+        let (mut capture, speaker, mode) = capture_with_a_voice_and_a_phrase();
+        let mut endpoint = FakeEndpoint::new("what a nice day");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeSink::default();
+
+        endpoint.feed(speech(500));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        assert_eq!((speaker.pauses(), speaker.resumes()), (1, 0));
+
+        endpoint.feed(silence(600));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 800);
+
+        assert_eq!(speaker.resumes(), 1, "the reply stayed paused");
+        assert_eq!(
+            speaker.hushes(),
+            0,
+            "speech for somebody else ended the reply"
+        );
+    }
+
+    #[test]
+    fn the_wake_word_over_a_reply_stops_it_and_takes_the_turn() {
+        let (mut capture, speaker, mode) = capture_with_a_voice_and_a_phrase();
+        let mut endpoint = FakeEndpoint::new("computer, stop");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeSink::default();
+
+        endpoint.feed(speech(500));
+        endpoint.feed(silence(600));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 800);
+
+        assert_eq!((speaker.pauses(), speaker.hushes()), (1, 1));
+        assert_eq!(speaker.resumes(), 0, "a stopped reply was resumed");
+    }
+
+    /// A pause is held for a verdict. A speech that never closes (a noisy
+    /// room) or a loop that ends must not leave the reply silent for good.
+    #[test]
+    fn a_pause_never_outlives_the_loop_or_the_pause_limit() {
+        let (mut capture, speaker, mode) = capture_with_a_voice_and_a_phrase();
+        let mut endpoint = FakeEndpoint::new("noise");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeSink::default();
+
+        endpoint.feed(speech(300));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        assert_eq!(speaker.pauses(), 1);
+
+        endpoint.feed(speech(300));
+        tick(
+            &mut capture,
+            &mode,
+            &mut endpoint,
+            &target,
+            &queue,
+            100 + PAUSE_LIMIT_MS + 1,
+        );
+        assert_eq!(speaker.resumes(), 1, "still paused past the limit");
+
+        capture.release();
+        assert_eq!(speaker.resumes(), 1, "released twice");
+
+        let (mut capture, speaker, mode) = capture_with_a_voice_and_a_phrase();
+        endpoint.feed(speech(300));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        capture.release();
+        assert_eq!(speaker.resumes(), 1, "the loop ended with the reply paused");
+    }
+
+    /// Residual echo from a reply that is still playing: a 20 ms frame over
+    /// the floor every 200 ms. It keeps one utterance open and its frames add
+    /// up to `min_speech_ms` inside a second, which stopped every reply 600-900
+    /// ms in. A voice is an unbroken run.
+    #[test]
+    fn scattered_residual_echo_frames_do_not_add_up_to_a_voice() {
+        let mut segmenter = Segmenter::new(test_config());
+        for _ in 0..6 {
+            segmenter.push(&speech(20));
+            segmenter.push(&silence(180));
+        }
+        assert!(
+            segmenter.is_capturing(),
+            "the test needs one open utterance"
+        );
+        assert!(
+            segmenter.has_speech(),
+            "the frames do add up for the send rule"
+        );
+        assert!(!segmenter.has_voice(), "echo frames counted as a voice");
+
+        segmenter.push(&speech(120));
+        assert!(segmenter.has_voice(), "an unbroken run is a voice");
+    }
+
+    /// The pill stuck on "capturing" (or showing the last state) after an
+    /// utterance that was too short to transcribe.
+    #[test]
+    fn an_utterance_dropped_for_too_little_speech_ends_the_capturing_phase() {
+        let mode = armed_shared();
+        let mut capture = runtime_capture();
+        let mut endpoint = FakeEndpoint::new("unused");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeSink::default();
+
+        let mut chunk = speech(20);
+        chunk.extend(silence(100));
+        endpoint.feed(chunk);
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        assert_eq!(*mode.lock().phase(), Phase::Capturing);
+
+        endpoint.feed(silence(500));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 700);
+
+        assert_eq!(
+            endpoint.calls.get(),
+            0,
+            "the test needs a dropped utterance"
+        );
+        assert_eq!(*mode.lock().phase(), Phase::Waiting);
     }
 }

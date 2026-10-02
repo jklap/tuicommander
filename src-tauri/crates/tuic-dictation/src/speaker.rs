@@ -181,6 +181,16 @@ pub trait Output: Send + Sync {
 
     /// Is audio still coming out?
     fn is_speaking(&self) -> bool;
+
+    /// Go silent without forgetting anything: what is queued, and what is
+    /// appended while paused, plays from here on [`resume`](Self::resume).
+    ///
+    /// The default does nothing, for an output with no way to hold audio. A
+    /// browser's speaker is such an output, and cancels its own echo.
+    fn pause(&self) {}
+
+    /// Continue from where [`pause`](Self::pause) stopped.
+    fn resume(&self) {}
 }
 
 /// What the UI and the status endpoints need to know.
@@ -524,6 +534,25 @@ impl Speaker {
         generation
     }
 
+    /// Go quiet because somebody is talking, without ending the turn: nothing
+    /// queued or rendering is dropped, and a reply that finishes rendering
+    /// meanwhile waits for [`resume`](Self::resume).
+    ///
+    /// For the user talking over a reply when it is not yet known whether they
+    /// are talking to us. Once it is known, `hush` ends the turn or `resume`
+    /// carries on.
+    pub fn pause(&self) {
+        tracing::info!(source = "dictation", "speech: paused, voice activity");
+        self.output.pause();
+    }
+
+    /// Carry on from where [`pause`](Self::pause) stopped. A no-op when not
+    /// paused.
+    pub fn resume(&self) {
+        tracing::info!(source = "dictation", "speech: resumed");
+        self.output.resume();
+    }
+
     pub fn status(&self) -> SpeakerStatus {
         let state = self.shared.state.lock();
         SpeakerStatus {
@@ -758,6 +787,17 @@ impl Output for DeviceOutput {
         // start talking. `stop` only sets an atomic, and a later `append`
         // resumes the player by itself.
         self.player.stop();
+        // A paused player stays paused through `stop`, and the next reply
+        // would be appended into silence.
+        self.player.play();
+    }
+
+    fn pause(&self) {
+        self.player.pause();
+    }
+
+    fn resume(&self) {
+        self.player.play();
     }
 
     fn is_speaking(&self) -> bool {
