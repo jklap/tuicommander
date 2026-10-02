@@ -6711,3 +6711,67 @@ mod reprint_merge_evidence_critic_tests {
         );
     }
 }
+
+/// Round-3 guards for the unscrolled-full-rewrite evidence rule (#1264).
+#[cfg(test)]
+mod reprint_merge_round3_critic_tests {
+    use super::*;
+
+    fn all_rows(grid: &TerminalGrid) -> Vec<String> {
+        let mut rows = grid.read_scrollback_lines(0, grid.scrollback_count());
+        rows.extend(grid.screen_text_rows());
+        rows
+    }
+
+    fn numbered_shrunk() -> TerminalGrid {
+        let mut grid = TerminalGrid::new(6, 20, 1000);
+        for i in 1..=10 {
+            grid.process(format!("L{i:02}\r\n").as_bytes());
+        }
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+        grid
+    }
+
+    /// Catches: a full-screen redraw that starts with ESC[2J (the fork pushes the
+    /// screen into history and raises total_scrolled) combined with the merge
+    /// drops a row that exists nowhere else. Every printed line must stay
+    /// reachable, however the chunks are cut.
+    #[test]
+    fn clear_screen_repaint_after_shrink_loses_no_line() {
+        let frame: &[u8] = b"\x1b[?2026h\x1b[2J\x1b[HL06\r\nL07\r\nL08\r\nL09\x1b[?2026l";
+        for chunk in [frame.len(), 7, 1] {
+            let mut grid = numbered_shrunk();
+            for piece in frame.chunks(chunk) {
+                grid.process(piece);
+            }
+            let rows = all_rows(&grid);
+            for i in 1..=10 {
+                let want = format!("L{i:02}");
+                assert!(
+                    rows.contains(&want),
+                    "{want} lost (chunk {chunk}): {rows:?}"
+                );
+            }
+        }
+    }
+
+    /// Catches: an in-place full-screen redraw on the primary screen (htop/less
+    /// style cursor addressing, new data in every row, no scroll) is read as a
+    /// reprint and takes history rows with it.
+    #[test]
+    fn in_place_redraw_with_new_data_keeps_history() {
+        let mut grid = numbered_shrunk();
+        let before = all_rows(&grid).iter().filter(|r| !r.is_empty()).count();
+        grid.process(b"\x1b[?2026h\x1b[HP1\x1b[K\r\nP2\x1b[K\r\nP3\x1b[K\r\nP4\x1b[K\x1b[?2026l");
+        let rows = all_rows(&grid);
+        // P1..P4 replaced L08,L09,L10 and a blank row; history keeps L01..L07.
+        for i in 1..=7 {
+            let want = format!("L{i:02}");
+            assert!(rows.contains(&want), "{want} lost: {rows:?}");
+        }
+        assert_eq!(
+            rows.iter().filter(|r| !r.is_empty()).count(),
+            before - 3 + 4
+        );
+    }
+}
