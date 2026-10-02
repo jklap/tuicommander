@@ -118,7 +118,8 @@ describe("mobile session output links", () => {
 			expect(editor.selectionStart).toBe(guide.indexOf("Third line"));
 		});
 		await fireEvent.click(view.getByRole("button", { name: "Back to session" }));
-		await fireEvent.click(view.getByRole("button", { name: "/secret/private.md" }));
+		// Back remounts the output, which refetches before the links render again.
+		await fireEvent.click(await waitFor(() => view.getByRole("button", { name: "/secret/private.md" })));
 		await waitFor(() => expect(view.getByRole("alert").textContent).toMatch(/outside.*registered repository/i));
 		expect(view.getByText("/secret/private.md", { selector: "[class*='message']" })).toBeTruthy();
 		expect(rpc).not.toHaveBeenCalledWith("fs_read_file", expect.objectContaining({ file: "/secret/private.md" }));
