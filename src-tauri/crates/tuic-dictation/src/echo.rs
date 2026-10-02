@@ -872,4 +872,81 @@ mod tests {
 
         assert_eq!(probe.far_end_seen().last().copied(), Some(1.0));
     }
+
+    /// Probes by the critic of 1376-f33e.
+    mod critic_1376 {
+        use super::*;
+        use crate::speaker::Output;
+        use std::sync::Arc;
+
+        /// The browser's output cannot pause: `Output::pause` defaults to a
+        /// no-op and the client keeps playing. A tap that mutes the reference
+        /// anyway leaves the canceller blind to a reply that is still coming
+        /// out of the speaker, and the far end falls a whole pause behind it.
+        /// Catches: `FarEndTap::pause` marking the far end paused whatever the
+        /// inner output did.
+        #[test]
+        fn a_pause_the_output_cannot_honour_does_not_mute_the_reference() {
+            let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let guard = Arc::new(parking_lot::Mutex::new(EchoGuard::new(Box::new(Tee(
+                Arc::clone(&seen),
+            )))));
+            let device = Arc::new(PlayedOutput::default());
+            let tapped = FarEndTap::new(Arc::clone(&device) as _, Arc::clone(&guard));
+            tapped
+                .play(&audio(vec![1.0; SAMPLE_RATE as usize], SAMPLE_RATE))
+                .expect("played");
+
+            tapped.pause();
+            guard.lock().clean(&vec![0.0; FRAME_SAMPLES * 3]);
+
+            let far_end: Vec<f32> = seen.lock().iter().flatten().copied().collect();
+            assert_eq!(far_end.len(), FRAME_SAMPLES * 3);
+            assert!(
+                far_end.iter().all(|sample| *sample == 1.0),
+                "the reference went silent while the device kept playing"
+            );
+        }
+
+        /// Capture that was recorded before the pause but not yet cleaned heard
+        /// the reply. Matching it against silence throws that much reference
+        /// away, and after `resume` the far end replays audio the device has
+        /// already played: behind its own echo by the backlog, which
+        /// `note_rendered` documents as the one direction that cannot be
+        /// cancelled. Catches: `note_paused` taking effect at the cleaned
+        /// position instead of the recorded one.
+        #[test]
+        fn capture_recorded_before_a_pause_is_matched_against_the_reply_it_heard() {
+            let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let backlog = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut guard = EchoGuard::new(Box::new(Tee(Arc::clone(&seen))));
+            let probe = Arc::clone(&backlog);
+            guard.attach_capture(Box::new(move || {
+                probe.load(std::sync::atomic::Ordering::Relaxed)
+            }));
+            let ramp: Vec<f32> = (0..SAMPLE_RATE).map(|n| n as f32 + 1.0).collect();
+            guard.note_rendered(&audio(ramp.clone(), SAMPLE_RATE));
+            guard.clean(&vec![0.0; FRAME_SAMPLES]);
+
+            // Three frames are recorded and waiting when the speaker is paused.
+            backlog.store(FRAME_SAMPLES * 3, std::sync::atomic::Ordering::Relaxed);
+            guard.note_paused();
+            backlog.store(0, std::sync::atomic::Ordering::Relaxed);
+            guard.clean(&vec![0.0; FRAME_SAMPLES * 3]);
+            guard.note_resumed();
+            guard.clean(&vec![0.0; FRAME_SAMPLES]);
+
+            let far_end: Vec<f32> = seen.lock().iter().flatten().copied().collect();
+            assert_eq!(
+                far_end[FRAME_SAMPLES..FRAME_SAMPLES * 4],
+                ramp[FRAME_SAMPLES..FRAME_SAMPLES * 4],
+                "the capture that heard the reply was matched against something else"
+            );
+            assert_eq!(
+                far_end[FRAME_SAMPLES * 4..],
+                ramp[FRAME_SAMPLES * 4..FRAME_SAMPLES * 5],
+                "after the resume the reference is not where the speaker is"
+            );
+        }
+    }
 }
