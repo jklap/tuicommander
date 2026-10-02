@@ -5098,10 +5098,16 @@ mod tests {
         let (dictation, output, port) = a_voice_behind_the_port();
         let busy = dictation.speaker.lock();
         continuous::Interruptible::pause(&*port);
+        // The applier thread holds a clone of `pending` until it has run, so
+        // the count says when it is done: no sleeping on a thread that may not
+        // have been scheduled yet.
+        let pending = Arc::clone(&port.pending);
         drop(port);
         drop(busy);
-
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            eventually(|| Arc::strong_count(&pending) == 1),
+            "the applier thread never finished"
+        );
         assert!(
             !output.0.load(std::sync::atomic::Ordering::SeqCst),
             "a pause from the previous arm held the new voice"

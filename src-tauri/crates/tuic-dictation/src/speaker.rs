@@ -570,10 +570,12 @@ impl Speaker {
     /// carries on.
     pub fn pause(&self) {
         tracing::info!(source = "dictation", "speech: paused, voice activity");
-        self.output.pause();
+        // The loop's hold is recorded before the output pauses, so a user's
+        // resume arriving in between already sees it and leaves it alone.
         let can_pause = self.output.can_pause();
         self.loop_held
             .store(can_pause, std::sync::atomic::Ordering::SeqCst);
+        self.output.pause();
         self.held
             .store(can_pause, std::sync::atomic::Ordering::SeqCst);
     }
