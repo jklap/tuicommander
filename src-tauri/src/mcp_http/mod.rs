@@ -6690,6 +6690,187 @@ mod tests {
         );
     }
 
+    fn critic_detached_checkout(repo: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let linked = repo.join(name);
+        crate::git_cli::git_cmd(repo)
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        linked
+    }
+
+    async fn critic_remove_by_path(
+        state: &Arc<AppState>,
+        repo: &std::path::Path,
+        worktree_path: &str,
+    ) -> serde_json::Value {
+        call_mcp_tool(
+            state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": repo.to_str().unwrap(),
+                "worktree_path": worktree_path
+            }),
+        )
+        .await
+    }
+
+    // Catches (critic-1367): the path route reaching `git worktree remove` for the main
+    // checkout when it is the detached one (rebase/bisect/`checkout --detach` leave it
+    // so), naming it from the repo itself or from a linked worktree as `path`.
+    #[tokio::test]
+    async fn worktree_remove_by_path_never_removes_the_main_checkout_even_when_detached() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        crate::git_cli::git_cmd(repo.path())
+            .args(["checkout", "--detach"])
+            .run()
+            .unwrap();
+        // The linked checkout lives inside the main one; hide it from `git status` so
+        // the main checkout is clean and only the removal guard can stop the call.
+        std::fs::write(repo.path().join(".git/info/exclude"), "caller/\n").unwrap();
+        let caller = critic_detached_checkout(repo.path(), "caller");
+        let main = repo.path().to_str().unwrap();
+
+        let by_itself = critic_remove_by_path(&state, repo.path(), main).await;
+        let by_a_linked_caller = critic_remove_by_path(&state, &caller, main).await;
+
+        assert!(by_itself["error"].is_string(), "{by_itself}");
+        assert!(
+            by_a_linked_caller["error"].is_string(),
+            "{by_a_linked_caller}"
+        );
+        assert!(repo.path().join("README.md").exists());
+        assert!(repo.path().join(".git").exists());
+        assert!(caller.exists());
+    }
+
+    // Catches (critic-1367): the path route skipping a check the sweep applies, so a
+    // checkout with staged work, a commit no branch holds, or a branch attached to it
+    // is removed through MCP.
+    #[tokio::test]
+    async fn worktree_remove_by_path_refuses_staged_work_unreachable_commits_and_branch_checkouts()
+    {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        let staged = critic_detached_checkout(repo.path(), "staged");
+        std::fs::write(staged.join("new.txt"), "x").unwrap();
+        crate::git_cli::git_cmd(&staged)
+            .args(["add", "new.txt"])
+            .run()
+            .unwrap();
+        let unreachable = critic_detached_checkout(repo.path(), "unreachable");
+        std::fs::write(unreachable.join("only-here.txt"), "x").unwrap();
+        crate::git_cli::git_cmd(&unreachable)
+            .args(["add", "."])
+            .run()
+            .unwrap();
+        crate::git_cli::git_cmd(&unreachable)
+            .args(["commit", "-m", "only here"])
+            .run()
+            .unwrap();
+        let attached = repo.path().join("attached");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "attached",
+                attached.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+
+        for (dir, needle) in [
+            (&staged, "uncommitted"),
+            (&unreachable, "unreachable"),
+            (&attached, "not detached"),
+        ] {
+            let result = critic_remove_by_path(&state, repo.path(), dir.to_str().unwrap()).await;
+            assert!(
+                result["error"].as_str().is_some_and(|e| e.contains(needle)),
+                "{}: {result}",
+                dir.display()
+            );
+            assert!(dir.exists(), "{} must survive", dir.display());
+        }
+    }
+
+    // Catches (critic-1367): `worktree_path` accepted without being matched against the
+    // repo's own worktree list (a stranger directory, a relative path, an empty string,
+    // a `..` hop out of a real checkout), which would delete anything the caller names.
+    #[tokio::test]
+    async fn worktree_remove_by_path_refuses_anything_that_is_not_a_registered_worktree() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        let linked = critic_detached_checkout(repo.path(), "linked");
+        std::fs::create_dir(linked.join("sub")).unwrap();
+        let stranger = tempfile::tempdir().unwrap();
+        std::fs::write(stranger.path().join("precious.txt"), "x").unwrap();
+        let candidates = [
+            stranger.path().display().to_string(),
+            "linked".to_string(),
+            String::new(),
+            format!("{}/..", linked.display()),
+            linked.join("sub").display().to_string(),
+        ];
+
+        for candidate in candidates {
+            let result = critic_remove_by_path(&state, repo.path(), &candidate).await;
+            assert!(result["error"].is_string(), "{candidate:?}: {result}");
+        }
+
+        assert!(stranger.path().join("precious.txt").exists());
+        assert!(linked.join("sub").exists());
+        assert!(repo.path().join("README.md").exists());
+    }
+
+    // Catches (critic-1367): the path route bypassing the session registry, so an agent
+    // working in the checkout loses its directory to another agent's cleanup.
+    #[tokio::test]
+    async fn worktree_remove_by_path_refuses_a_checkout_with_a_live_session() {
+        let (repo, linked, state) = orphan_with_live_session();
+
+        let result = critic_remove_by_path(&state, repo.path(), linked.to_str().unwrap()).await;
+
+        assert!(
+            result["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("live session")),
+            "{result}"
+        );
+        assert!(linked.exists());
+    }
+
+    // Catches (critic-1367): a checkout whose directory vanished being refused with
+    // "needs force confirmation" on the path route, so the stale registration that
+    // keeps the orphan listed can never be dropped through MCP.
+    #[tokio::test]
+    async fn worktree_remove_by_path_drops_the_registration_of_a_vanished_checkout() {
+        let repo = create_temp_git_repo();
+        let state = test_state();
+        let linked = critic_detached_checkout(repo.path(), "vanished");
+        std::fs::remove_dir_all(&linked).unwrap();
+
+        let result = critic_remove_by_path(&state, repo.path(), linked.to_str().unwrap()).await;
+
+        assert_eq!(result["ok"], true, "{result}");
+        let listed = crate::git_cli::git_cmd(repo.path())
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(!listed.contains(linked.to_str().unwrap()), "{listed}");
+    }
+
     #[tokio::test]
     async fn test_repo_worktree_create_cc_agent_hint_present_for_claude_code() {
         let repo = create_temp_git_repo();

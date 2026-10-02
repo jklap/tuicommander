@@ -2385,4 +2385,70 @@ mod tests {
             assert!(reason.contains("live session"), "{reason}");
         }
     }
+
+    mod orphan_keep_settled_critic {
+        use super::*;
+
+        fn detached(repo: &Path, name: &str) -> PathBuf {
+            let path = repo.join(name);
+            let out = std::process::Command::new("git")
+                .current_dir(repo)
+                .args(["worktree", "add", "--detach"])
+                .arg(&path)
+                .arg("HEAD")
+                .output()
+                .expect("run git");
+            assert!(out.status.success(), "{out:?}");
+            path
+        }
+
+        // Catches (critic-1367): the settled filter applied only to a "remove" answer, so a
+        // "keep" answer after a Keep still reports "changed while it was being answered".
+        #[test]
+        fn a_keep_answer_after_a_keep_reports_nothing_pending() {
+            let state = crate::state::tests_support::make_test_app_state();
+            pending_cleanup(&state, "/repo");
+            clear_orphan_cleanup_internal(&state, "/repo", true);
+
+            let error = answer_orphan_cleanup_internal(&state, "/repo", false).unwrap_err();
+
+            assert_eq!(error, "No pending orphan cleanup for this repository");
+        }
+
+        // Catches (critic-1367): a new dialog inheriting the settled flag (or the old
+        // Keep) from the entry it replaces, so after one Keep every later dialog is
+        // unanswerable by agents and closes at once on the stale Keep.
+        #[test]
+        fn a_dialog_begun_after_a_keep_is_pending_and_answerable_again() {
+            let repo = setup_test_repo();
+            let linked = detached(repo.path(), "linked");
+            let repo_path = repo.path().to_string_lossy().to_string();
+            let paths = vec![linked.to_string_lossy().to_string()];
+            let state = crate::state::tests_support::make_test_app_state();
+            begin_orphan_cleanup_internal(&state, &repo_path, paths.clone()).unwrap();
+            clear_orphan_cleanup_internal(&state, &repo_path, true);
+
+            begin_orphan_cleanup_internal(&state, &repo_path, paths).unwrap();
+
+            assert_eq!(pending_answer(&state, &repo_path), None);
+            answer_orphan_cleanup_internal(&state, &repo_path, false)
+                .expect("a fresh dialog is answerable");
+            assert_eq!(pending_answer(&state, &repo_path), Some(false));
+        }
+
+        // Catches (critic-1367): a confirmed removal that settles the entry like a Keep, or
+        // a Keep on a repo with no dialog creating a phantom entry that a later "remove"
+        // answer would then trip over.
+        #[test]
+        fn clearing_without_a_dialog_leaves_nothing_to_answer() {
+            let state = crate::state::tests_support::make_test_app_state();
+
+            clear_orphan_cleanup_internal(&state, "/repo", true);
+            clear_orphan_cleanup_internal(&state, "/repo", false);
+
+            let error = answer_orphan_cleanup_internal(&state, "/repo", true).unwrap_err();
+            assert_eq!(error, "No pending orphan cleanup for this repository");
+            assert_eq!(pending_answer(&state, "/repo"), None);
+        }
+    }
 }
