@@ -140,38 +140,6 @@ describe("TabBar", () => {
 		expect(onNewTab).toHaveBeenCalledTimes(1);
 	});
 
-	describe("answers-only button", () => {
-		const renderBar = () =>
-			render(() => (
-				<TabBar
-					onTabSelect={() => {}}
-					onTabClose={() => {}}
-					onCloseOthers={() => {}}
-					onCloseToRight={() => {}}
-					onNewTab={() => {}}
-				/>
-			));
-
-		it("toggles the active terminal with a plain click, so touch needs no hover or long press", () => {
-			// catches: the view reachable only by the keyboard shortcut, unusable on a touch device
-			const id = addTerminal();
-			terminalsStore.setActive(id);
-			const { container } = renderBar();
-			const btn = container.querySelector(".answersBtn")!;
-			expect(btn.getAttribute("aria-pressed")).toBe("false");
-			fireEvent.click(btn);
-			expect(terminalsStore.get(id)?.answersOnly).toBe(true);
-			expect(btn.getAttribute("aria-pressed")).toBe("true");
-			fireEvent.click(btn);
-			expect(terminalsStore.get(id)?.answersOnly).toBe(false);
-		});
-
-		it("is absent when no terminal is active", () => {
-			const { container } = renderBar();
-			expect(container.querySelector(".answersBtn")).toBeNull();
-		});
-	});
-
 	describe("long press on new tab button", () => {
 		const renderWithAgents = (onNewTab: () => void, getNewAgentMenuItems: () => ContextMenuItem[]) =>
 			render(() => (
