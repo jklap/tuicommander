@@ -454,7 +454,7 @@ static LOG_GUARD: Mutex<Option<tracing_appender::non_blocking::WorkerGuard>> = M
 /// Flush and drop the file appender's `WorkerGuard`, forcing
 /// `tracing_appender::non_blocking`'s buffered writes to disk before the
 /// process exits. Idempotent — call from every graceful shutdown path
-/// (desktop `RunEvent::Exit`, the end of `run_headless`, the end of
+/// (desktop `RunEvent::Exit`, the end of
 /// `run_remote`); a call after the guard was already taken is a no-op
 /// (story #672-c1a3).
 pub(crate) fn flush_logs_on_exit() {

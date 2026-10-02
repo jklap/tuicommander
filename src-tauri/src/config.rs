@@ -1030,6 +1030,10 @@ fn default_session_token_duration_secs() -> u64 {
     2_592_000
 }
 
+/// The default before it became 30 days. A config still holding exactly this value
+/// was written by the old default and is moved to the new one on load.
+const LEGACY_SESSION_TOKEN_DURATION_SECS: u64 = 86_400;
+
 fn default_index_strategy() -> String {
     "active_and_switch".to_string()
 }
@@ -2624,8 +2628,8 @@ pub(crate) fn persist_session_token(token: &str) -> Result<(), String> {
 /// The caller decides the locking span because both `load_app_config` and the
 /// delta commit path must keep the cross-process lock from this read through a
 /// possible rewrite. The boolean reports that plaintext credentials were moved
-/// to the vault and the redacted document must be persisted before releasing
-/// that lock.
+/// to the vault, or the legacy session duration was migrated, and the document
+/// must be persisted before releasing that lock.
 fn read_app_config_unlocked(
     path: &std::path::Path,
 ) -> Result<(AppConfig, bool), AppConfigReadError> {
@@ -2658,7 +2662,8 @@ fn read_app_config_unlocked(
     match serde_json::from_value(val) {
         Ok(mut config) => {
             let migrated_secret = hydrate_app_config_secrets(&mut config);
-            Ok((config, migrated_secret))
+            let migrated_duration = migrate_legacy_session_token_duration(&mut config);
+            Ok((config, migrated_secret || migrated_duration))
         }
         Err(e) => {
             tracing::error!(path = %path.display(), "Config deserialization failed after migration: {e}");
@@ -2668,6 +2673,18 @@ fn read_app_config_unlocked(
             )))
         }
     }
+}
+
+/// Move the old 24h default to the new 30-day default. Returns `true` when changed.
+/// Any other value is a deliberate choice and stays. Once persisted the value no
+/// longer matches, so this runs once.
+fn migrate_legacy_session_token_duration(config: &mut AppConfig) -> bool {
+    let auth = &mut config.services.auth;
+    if auth.session_token_duration_secs != LEGACY_SESSION_TOKEN_DURATION_SECS {
+        return false;
+    }
+    auth.session_token_duration_secs = default_session_token_duration_secs();
+    true
 }
 
 /// Why `read_app_config_unlocked` could not produce a config.
@@ -2748,7 +2765,8 @@ pub(crate) fn load_app_config() -> AppConfig {
         }
     };
     if migrated_secret {
-        // A plaintext secret was just moved into the vault. Rewrite immediately —
+        // A plaintext secret was just moved into the vault, or the legacy session
+        // duration was migrated. Rewrite immediately —
         // config_for_disk strips the cleartext — otherwise it stays readable in
         // config.json until some unrelated setting happens to be saved.
         //
@@ -4561,6 +4579,104 @@ mod tests {
             corrupt_backups(dir.path()).is_empty(),
             "the removed keys must be ignored, not treated as a corrupt document"
         );
+    }
+
+    /// Write a config whose `services.auth` carries `duration` (or no key at all).
+    fn write_config_with_duration(dir: &std::path::Path, duration: Option<u64>) -> PathBuf {
+        let path = dir.join(APP_CONFIG_FILE);
+        let auth = match duration {
+            Some(d) => serde_json::json!({ "session_token_duration_secs": d }),
+            None => serde_json::json!({}),
+        };
+        let doc = serde_json::json!({
+            "shell": null,
+            "font_family": "Menlo",
+            "font_size": 17,
+            "theme": "dark",
+            "services": { "auth": auth },
+        });
+        fs::write(&path, doc.to_string()).unwrap();
+        path
+    }
+
+    fn duration_on_disk(path: &std::path::Path) -> serde_json::Value {
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        doc["services"]["auth"]["session_token_duration_secs"].clone()
+    }
+
+    /// Catches: configs written by the old 24h default keep logging devices out daily
+    /// because the new default only applies to a missing key.
+    #[test]
+    #[serial_test::serial]
+    fn legacy_86400_session_duration_migrates_to_30_days_and_persists() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = write_config_with_duration(dir.path(), Some(86_400));
+
+        assert_eq!(
+            load_app_config().services.auth.session_token_duration_secs,
+            2_592_000
+        );
+        assert_eq!(
+            duration_on_disk(&path),
+            serde_json::json!(2_592_000),
+            "the migration must be written back, not only applied in memory"
+        );
+    }
+
+    /// Catches: the migration rewriting every deliberate non-default value
+    /// (a range check or a "less than new default" test would clobber these).
+    #[test]
+    #[serial_test::serial]
+    fn non_legacy_session_durations_are_left_untouched() {
+        crate::credentials::reset_test_faults();
+        for value in [3_600u64, 604_800] {
+            let dir = TempDir::new().expect("temp dir");
+            let _guard = set_config_dir_override(dir.path().to_path_buf());
+            let path = write_config_with_duration(dir.path(), Some(value));
+
+            assert_eq!(
+                load_app_config().services.auth.session_token_duration_secs,
+                value
+            );
+            assert_eq!(duration_on_disk(&path), serde_json::json!(value));
+        }
+    }
+
+    /// Catches: the migration treating an absent key (deserialized to the new default)
+    /// as a legacy value, or the default regressing to the old 24h.
+    #[test]
+    #[serial_test::serial]
+    fn missing_session_duration_gets_the_new_default() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        write_config_with_duration(dir.path(), None);
+
+        assert_eq!(
+            load_app_config().services.auth.session_token_duration_secs,
+            2_592_000
+        );
+    }
+
+    /// Catches: the migration re-running or re-writing the file on every load
+    /// (the second load must see 2592000 and leave the file byte-identical).
+    #[test]
+    #[serial_test::serial]
+    fn session_duration_migration_is_idempotent() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let path = write_config_with_duration(dir.path(), Some(86_400));
+
+        load_app_config();
+        let after_first = fs::read_to_string(&path).unwrap();
+        let second = load_app_config();
+
+        assert_eq!(second.services.auth.session_token_duration_secs, 2_592_000);
+        assert_eq!(fs::read_to_string(&path).unwrap(), after_first);
     }
 
     #[test]
