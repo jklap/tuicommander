@@ -379,7 +379,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 						<button
 							class={s.filterStatus}
 							onClick={() => uiStore.setRepoFilterActiveOnly(false)}
-							title={t("sidebar.filterShowAll", "Show all")}
+							data-tooltip={t("sidebar.filterShowAll", "Show all")}
+							data-tooltip-pos="bottom"
 						>
 							<svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
 								<path
@@ -479,7 +480,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 									const repo = repositoriesStore.getActive();
 									if (repo) props.onBackgroundGit?.(repo.path, "pull", ["pull"]);
 								}}
-								title={t("sidebar.gitPull", "Pull latest changes")}
+								data-tooltip={t("sidebar.gitPull", "Pull latest changes")}
 							>
 								<span class={s.gitQuickIcon}>
 									{/* arrow-down-to-line */}
@@ -503,7 +504,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 									const repo = repositoriesStore.getActive();
 									if (repo) props.onBackgroundGit?.(repo.path, "push", ["push"]);
 								}}
-								title={t("sidebar.gitPush", "Push commits")}
+								data-tooltip={t("sidebar.gitPush", "Push commits")}
 							>
 								<span class={s.gitQuickIcon}>
 									{/* arrow-up-from-line */}
@@ -527,7 +528,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 									const repo = repositoriesStore.getActive();
 									if (repo) props.onBackgroundGit?.(repo.path, "fetch", ["fetch", "--all"]);
 								}}
-								title={t("sidebar.gitFetch", "Fetch from all remotes")}
+								data-tooltip={t("sidebar.gitFetch", "Fetch from all remotes")}
 							>
 								<span class={s.gitQuickIcon}>
 									{/* refresh-cw */}
@@ -563,7 +564,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 									const repo = repositoriesStore.getActive();
 									if (repo) props.onBackgroundGit?.(repo.path, "stash", ["stash"]);
 								}}
-								title={t("sidebar.gitStash", "Stash changes")}
+								data-tooltip={t("sidebar.gitStash", "Stash changes")}
 							>
 								<span class={s.gitQuickIcon}>
 									{/* layers/stash */}
@@ -584,7 +585,12 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
 				{/* Footer */}
 				<div class={s.footer}>
-					<button class={s.addRepo} onClick={handleAddRepoClick} title={t("sidebar.addRepository", "Add Repository")}>
+					<button
+						class={s.addRepo}
+						onClick={handleAddRepoClick}
+						data-tooltip={t("sidebar.addRepository", "Add Repository")}
+						data-tooltip-align="left"
+					>
 						<svg class={s.addRepoIcon} width="14" height="14" viewBox="0 0 16 16" fill="none">
 							<path
 								d="M1.5 2A1.5 1.5 0 0 1 3 .5h3.379a1.5 1.5 0 0 1 1.06.44l1.122 1.12H13A1.5 1.5 0 0 1 14.5 3.5v9a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12.5V2Z"
@@ -599,7 +605,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 							<button
 								class={s.footerAction}
 								onClick={() => setParkedPopoverVisible((v) => !v)}
-								title={t("sidebar.parkedRepos", "Parked repositories")}
+								aria-label={t("sidebar.parkedRepos", "Parked repositories")}
+								data-tooltip={t("sidebar.parkedRepos", "Parked repositories")}
 								style={{ position: "relative" }}
 							>
 								<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
@@ -613,7 +620,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 							<button
 								class={s.footerAction}
 								onClick={() => setStaleTempPopoverVisible((v) => !v)}
-								title={t("sidebar.staleTempRepos", "Stale repositories awaiting repair")}
+								aria-label={t("sidebar.staleTempRepos", "Stale repositories awaiting repair")}
+								data-tooltip={t("sidebar.staleTempRepos", "Stale repositories awaiting repair")}
 								style={{ position: "relative", color: "var(--error)" }}
 							>
 								<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
@@ -637,7 +645,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 									<button
 										class={s.footerAction}
 										onClick={() => tunnelPanelStore.toggle()}
-										title={`SSH Tunnels (${connectedCount()} connected)`}
+										aria-label={`SSH Tunnels (${connectedCount()} connected)`}
+										data-tooltip={`SSH Tunnels (${connectedCount()} connected)`}
 										style={{ position: "relative", color: connectedCount() > 0 ? undefined : "var(--fg-muted)" }}
 									>
 										<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
@@ -648,7 +657,13 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 								);
 							})()}
 						</Show>
-						<button class={s.footerAction} onClick={props.onOpenHelp} title={t("sidebar.help", "Help")}>
+						<button
+							class={s.footerAction}
+							onClick={props.onOpenHelp}
+							aria-label={t("sidebar.help", "Help")}
+							data-tooltip={t("sidebar.help", "Help")}
+							data-tooltip-align="right"
+						>
 							<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
 								<circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.2" />
 								<path
@@ -660,7 +675,13 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 								<circle cx="8" cy="11.5" r="0.7" fill="currentColor" />
 							</svg>
 						</button>
-						<button class={s.footerAction} onClick={props.onOpenSettings} title={t("sidebar.settings", "Settings")}>
+						<button
+							class={s.footerAction}
+							onClick={props.onOpenSettings}
+							aria-label={t("sidebar.settings", "Settings")}
+							data-tooltip={t("sidebar.settings", "Settings")}
+							data-tooltip-align="right"
+						>
 							<svg width="15" height="15" viewBox="0 0 16 16" fill="none">
 								<path
 									d="M6.5 1.5h3l.4 1.8a5 5 0 011.2.7l1.7-.6 1.5 2.6-1.3 1.2a5 5 0 010 1.4l1.3 1.2-1.5 2.6-1.7-.6a5 5 0 01-1.2.7l-.4 1.8h-3l-.4-1.8a5 5 0 01-1.2-.7l-1.7.6-1.5-2.6 1.3-1.2a5 5 0 010-1.4L1.7 5.7l1.5-2.6 1.7.6a5 5 0 011.2-.7z"

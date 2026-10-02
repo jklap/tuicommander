@@ -70,7 +70,7 @@ export const StaleTempRepairPopover: Component<StaleTempRepairPopoverProps> = (p
 			<For each={candidates()}>
 				{(candidate) => (
 					<div class={s.parkedPopoverItem}>
-						<span class={s.parkedPopoverName} title={candidate.path}>
+						<span class={s.parkedPopoverName} data-tooltip={candidate.path} data-tooltip-pos="bottom">
 							{candidate.displayName}
 						</span>
 					</div>
