@@ -1540,6 +1540,43 @@ pub fn strip_plain_prefix_tokens(text: &str) -> std::borrow::Cow<'_, str> {
     PLAIN_PREFIX_RE.replace_all(text, "$1")
 }
 
+/// How many rows after `head` are the wrapped tail of the bracketed
+/// `suggest: [ … ]` token that `head` opens (#1380-05d8).
+///
+/// [`strip_plain_prefix_tokens`] works one row at a time, so on a narrow
+/// terminal it removed the head row and left the continuation rows — the
+/// `Federico Coletto ]` tail — as plain text. The parser reads the same token
+/// bracket-bounded ([`dewrap_suggest_brackets`]); this applies the same bounds
+/// to the rows to hide: the token must close with `]` within
+/// [`MAX_WRAP_ROWS`] rows, with no nested `[`, blank row or new token before it.
+/// An unclosed token is not parsed, so none of its rows are hidden either.
+pub fn suggest_tail_rows<'a>(head: &str, following: impl IntoIterator<Item = &'a str>) -> usize {
+    if structured_token_anchor(head) != Some(StructuredTokenAnchor::Suggest) {
+        return 0;
+    }
+    let Some(keyword) = head.find("suggest:") else {
+        return 0;
+    };
+    let Some(items) = head[keyword + "suggest:".len()..]
+        .trim_start()
+        .strip_prefix('[')
+    else {
+        return 0;
+    };
+    if items.contains(['[', ']']) {
+        return 0;
+    }
+    for (index, row) in following.into_iter().take(MAX_WRAP_ROWS).enumerate() {
+        if row.trim().is_empty() || row.contains('[') || structured_token_anchor(row).is_some() {
+            return 0;
+        }
+        if row.contains(']') {
+            return index + 1;
+        }
+    }
+    0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StructuredTokenAnchor {
     Intent,
@@ -1860,6 +1897,11 @@ fn dewrap_suggest_content(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(SUGGEST_TRAILING_RE.replace_all(text, "$1").to_string())
 }
 
+/// Continuation rows a wrapped `suggest: [ … ]` token may span. 4 physical rows
+/// comfortably hold a max-size token (4 items × ≤40 chars + separators +
+/// brackets ≈ 170 cols ≈ 3 wraps at a typical narrow width).
+const MAX_WRAP_ROWS: usize = 4;
+
 /// Rejoin a `suggest: [ … ]` token whose bracketed content wrapped across
 /// physical terminal rows. The single-row [`SUGGEST_RE`] cannot match once the
 /// VT buffer has split the list with `\n` (a token wider than the terminal,
@@ -1894,10 +1936,6 @@ fn dewrap_suggest_brackets(text: &str) -> std::borrow::Cow<'_, str> {
         // A newline plus the horizontal whitespace surrounding it.
         static ref WRAP_WS_RE: regex::Regex = regex::Regex::new(r"[\t ]*\n[\t ]*").unwrap();
     }
-    // 4 physical rows comfortably hold a max-size token (4 items × ≤40 chars +
-    // separators + brackets ≈ 170 cols ≈ 3 wraps at a typical narrow width).
-    const MAX_WRAP_ROWS: usize = 4;
-
     let Some(m) = SUGGEST_OPEN_RE.find(text) else {
         return std::borrow::Cow::Borrowed(text);
     };
