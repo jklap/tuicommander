@@ -9,6 +9,7 @@ import { type FileTab, mdTabsStore } from "../stores/mdTabs";
 import { uiStore } from "../stores/ui";
 import { openFileAction } from "../utils/filePreview";
 import { markdownDocumentPanelId } from "../utils/markdownDocumentPanelId";
+import { setPendingHeading } from "../utils/pendingHeadings";
 
 const MarkdownTab = lazy(() => import("../components/MarkdownTab").then((module) => ({ default: module.MarkdownTab })));
 
@@ -78,6 +79,7 @@ export function createMarkdownDocumentPanelAdapter(tabId: string, onSelect?: (id
 			}
 			const source = mdTabsStore.get(tabId);
 			if (source?.type !== "file") return;
+			setPendingHeading(source.fsRoot || source.repoPath, target);
 			openFileAction(target.open_path, source.repoPath, source.fsRoot, target.line);
 		},
 	};
