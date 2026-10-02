@@ -97,6 +97,11 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
+      - name: Third-party notices (JavaScript)
+        run: |
+          node scripts/third-party-notices.mjs --self-test
+          node scripts/third-party-notices.mjs --check --only js
+
       - name: Tests
         run: bash scripts/with-test-tmp.sh pnpm exec vitest run --reporter=verbose
 
@@ -167,6 +172,9 @@ jobs:
           target=$(rustc --print host-tuple)
           touch "src-tauri/binaries/tuic-bridge-${target}"
           touch "src-tauri/binaries/tuic-${target}"
+
+      - name: Third-party notices (Rust)
+        run: node scripts/third-party-notices.mjs --check --only rust
 
       - name: Clippy
         working-directory: src-tauri
