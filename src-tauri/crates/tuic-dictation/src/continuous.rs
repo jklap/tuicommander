@@ -505,11 +505,16 @@ impl Activation {
         self.open_until_ms = None;
     }
 
-    fn admit<'a>(&mut self, text: &'a str, now_ms: u64) -> Admission<'a> {
+    /// `continuing` is true while an addressed turn is still held back: the
+    /// text belongs to it whatever the clock says. The window is read at the
+    /// moment the recogniser *returns*, so a long second phrase (whisper runs
+    /// after the speech ends) would otherwise find it already shut and be
+    /// dropped as unaddressed, while its first half is sent alone.
+    fn admit<'a>(&mut self, text: &'a str, now_ms: u64, continuing: bool) -> Admission<'a> {
         if self.phrase.is_empty() {
             return Admission::Ungated;
         }
-        let open = self.open_until_ms.is_some_and(|until| now_ms < until);
+        let open = continuing || self.open_until_ms.is_some_and(|until| now_ms < until);
         // The phrase is stripped even inside an open window: saying it again is
         // still addressing the tool, and the model may not read it either way.
         match strip_leading_phrase(&self.phrase, text) {
@@ -864,7 +869,7 @@ impl HandsFree {
         // The gate sits here on purpose: after the local recogniser, before the
         // send slot. Everything past this point is on its way to a model, and
         // the send slot is the only thing `poll_send` can hand to the sink.
-        let text = match self.activation.admit(text, now_ms) {
+        let text = match self.activation.admit(text, now_ms, self.pending.is_some()) {
             Admission::Ungated => text,
             Admission::Accept(rest) => rest,
             Admission::PhraseOnly { window_until_ms } => {
@@ -3204,6 +3209,9 @@ mod tests {
         let mut mode = armed_with_phrase("ciao tuic");
         let generation = mode.generation();
         mode.accept_transcript(generation, "ciao tuic, esegui i test", Some("it"), 0);
+        // Sent, as it is in the runtime long before the window shuts; a turn
+        // still held back would make the next transcript its continuation.
+        assert!(mode.poll_send(5_000).is_some());
 
         // Past the window the first turn opened: inside it every turn is
         // addressed here, which is a different rule and a different test.
@@ -3687,6 +3695,66 @@ mod tests {
         assert_eq!(
             queue.written.borrow().as_slice(),
             [written("appena faccio una pausa la frase continua")]
+        );
+    }
+
+    /// catches: a long second phrase dropped as unaddressed because whisper
+    /// returned after the activation window shut, so only the first phrase of
+    /// the sentence reached the agent while the whole sentence was spoken.
+    #[test]
+    fn a_long_second_phrase_finished_after_the_window_still_reaches_the_agent() {
+        let mut armed = HandsFree::new(1_500);
+        armed.set_activation("computer", ACTIVATION_WINDOW_MS);
+        armed.arm("target", "desktop", true).expect("arm");
+        armed.accept_transcript(armed.generation(), "computer open the file", None, 0);
+        let mode = parking_lot::Mutex::new(armed);
+        let mut capture = Capture::new(SegmenterConfig::default(), 5_000, 0, echo_guard(), None);
+        let mut endpoint = FakeEndpoint::new("and then run the tests");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeSink::default();
+
+        // Speech opens before the five-second deadline and runs well past the
+        // fifteen-second window, which was opened when the first phrase was
+        // accepted at t=0.
+        endpoint.feed(speech(500));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 4_900);
+        for second in 5..=16u64 {
+            endpoint.feed(speech(1_000));
+            tick(
+                &mut capture,
+                &mode,
+                &mut endpoint,
+                &target,
+                &queue,
+                second * 1_000,
+            );
+        }
+        endpoint.feed(silence(1_600));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 18_000);
+        assert_eq!(
+            mode.lock().pending_text(),
+            Some("open the file and then run the tests"),
+            "the second phrase was dropped; the first would be sent alone"
+        );
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 23_000);
+        assert_eq!(
+            queue.written.borrow().as_slice(),
+            [written("open the file and then run the tests")]
+        );
+    }
+
+    /// The continuation rule must not become an open door: with nothing held
+    /// back, an unaddressed phrase after the window is still dropped.
+    #[test]
+    fn an_unaddressed_phrase_with_nothing_held_back_is_still_dropped() {
+        let mut mode = armed_with_phrase("computer");
+        let generation = mode.generation();
+        mode.accept_transcript(generation, "computer open the file", None, 0);
+        assert!(mode.poll_send(5_000).is_some());
+
+        assert_eq!(
+            mode.accept_transcript(generation, "unrelated chatter", None, 30_000),
+            TranscriptOutcome::Rejected
         );
     }
 
