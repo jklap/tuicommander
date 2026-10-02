@@ -10011,7 +10011,7 @@ fn a_prompt_that_lands_after_the_warning_closes_the_loop() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| flush_pending_injections_blocking(&state, child_id));
-        for expected in [b"\x15".as_slice(), b"review the draft", b"\r"] {
+        for expected in [b"\x15".as_slice(), b"\x1b[200~review the draft\x1b[201~", b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -11386,7 +11386,7 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     tokio::task::yield_now().await;
     running.store(false, Ordering::Release);
 
-    for expected in [b"\x15".as_slice(), b"resume queued work", b"\r"] {
+    for expected in [b"\x15".as_slice(), b"\x1b[200~resume queued work\x1b[201~", b"\r"] {
         let actual = received
             .recv_timeout(std::time::Duration::from_secs(15))
             .expect("ready confirmation must submit queued command without a new shell edge");
@@ -11762,7 +11762,7 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"\x15".as_slice(), b"\x1b[200~wake the agent\x1b[201~", b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -11840,7 +11840,7 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"\x15".as_slice(), b"\x1b[200~wake the agent\x1b[201~", b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -11918,7 +11918,7 @@ fn run_codex_queued_delivery(
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"\x15".as_slice(), b"\x1b[200~wake the agent\x1b[201~", b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -11965,7 +11965,7 @@ fn ignored_codex_enter_with_text_still_in_composer_retries_once_and_submits() {
 
 /// Real Codex 0.159 PTY capture (2026-09-30): a 1967-character brief typed into
 /// a fresh composer collapses to `[Pasted Content 1967 chars]`. The first Enter
-/// (200 ms after the text, as `CODEX_ENTER_GAP` does) is swallowed and the
+/// (200 ms after the plain text, as the old Codex gap did) is swallowed and the
 /// placeholder stays in the composer; a bare Enter 5 s later submits and Codex
 /// prints `Working` 0.18 s after it. The composer never shows the text, so the
 /// retry must recognise the placeholder as the queued text.
@@ -11994,6 +11994,10 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     // Ctrl-U, brief, first Enter, second Enter.
     assert_eq!(inputs.len(), 4);
     let brief = String::from_utf8(records[inputs[1]].data.clone()).unwrap();
+    // The capture predates the bracketed Codex payload: the brief was typed as
+    // plain characters and its Enter was swallowed. Replaying it still proves
+    // the retry from the placeholder; the write is now the framed paste.
+    let framed_brief = bracketed_payload(&brief);
     let second_enter = inputs[3];
 
     let state = crate::state::tests_support::make_test_app_state();
@@ -12036,7 +12040,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, &brief).unwrap());
-        for expected in [b"\x15".as_slice(), brief.as_bytes(), b"\r"] {
+        for expected in [b"\x15".as_slice(), framed_brief.as_bytes(), b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -12284,7 +12288,7 @@ fn queued_codex_accepts_ready_then_working_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"\x15".as_slice(), b"\x1b[200~wake the agent\x1b[201~", b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -13676,9 +13680,15 @@ impl std::io::Write for TimedWriter {
 /// a 584-char submission stayed unsent even with a 500ms Enter gap. Ctrl-U
 /// must reach the child in its own read, so it goes out a real gap before the
 /// text, and the text a real gap before the Enter.
+///
+/// Codex is the other half of the same defect (story 1163): it ingests a long
+/// plain write as a paste burst and swallows an Enter that lands inside it
+/// (live, 0.159.0: 1000 chars at a 200ms gap stayed in the composer). The long
+/// single-line wake is therefore framed as one bracketed paste, so no gap has to
+/// outlast a length-dependent ingestion time.
 #[cfg(unix)]
 #[test]
-fn agent_submission_keeps_ctrl_u_gap_and_waits_out_codex_paste_window() {
+fn agent_submission_keeps_ctrl_u_gap_and_brackets_a_long_single_line_codex_wake() {
     let state = crate::state::tests_support::make_test_app_state();
     let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
     insert_session_with_writer(
@@ -13698,6 +13708,8 @@ fn agent_submission_keeps_ctrl_u_gap_and_waits_out_codex_paste_window() {
         .agent_type = Some("codex".into());
     let text = "dictated text ".repeat(50);
     let text = text.trim();
+    assert!(!text.contains('\n'), "the bug needs a single-line payload");
+    let framed = format!("\x1b[200~{text}\x1b[201~");
 
     write_agent_command_to_pty(&state, "timed-submit", text).unwrap();
 
@@ -13705,23 +13717,24 @@ fn agent_submission_keeps_ctrl_u_gap_and_waits_out_codex_paste_window() {
     let chunks: Vec<&[u8]> = writes.iter().map(|(_, bytes)| bytes.as_slice()).collect();
     assert_eq!(
         chunks,
-        vec![b"\x15".as_slice(), text.as_bytes(), b"\r".as_slice()]
+        vec![b"\x15".as_slice(), framed.as_bytes(), b"\r".as_slice()]
     );
     assert!(
         writes[1].0 - writes[0].0 >= INJECT_ENTER_GAP,
         "Ctrl-U and the text must not share a read"
     );
     assert!(
-        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
-        "Codex Enter must arrive after its 120ms paste suppression window"
+        writes[2].0 - writes[1].0 >= INJECT_ENTER_GAP,
+        "the CR must not share a read with the paste"
     );
 
+    assert_eq!(injection_enter_gap(Some("codex")), INJECT_ENTER_GAP);
     assert_eq!(injection_enter_gap(Some("claude")), INJECT_ENTER_GAP);
 }
 
 #[cfg(unix)]
 #[test]
-fn agent_submission_with_unrecognized_type_waits_out_codex_paste_window() {
+fn agent_submission_with_unrecognized_type_keeps_the_unverified_gap_and_plain_payload() {
     let state = crate::state::tests_support::make_test_app_state();
     let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
     insert_session_with_writer(
@@ -13756,7 +13769,7 @@ fn agent_submission_with_unrecognized_type_waits_out_codex_paste_window() {
     );
     assert!(
         writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
-        "unknown agent must tolerate Codex paste suppression"
+        "an unverified agent keeps the long Enter gap"
     );
 }
 
