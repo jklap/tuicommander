@@ -65,6 +65,16 @@ interface Live {
 
 export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 	const live = new Map<AcpConnectionId, Live>();
+	/** Loaded sessions waiting for the stream to deliver the last frame of their replay. */
+	const replaying = new Map<AcpSessionId, { connectionId: AcpConnectionId; sequence: number }>();
+
+	function settleReplays(connectionId: AcpConnectionId): void {
+		for (const [sessionId, replay] of replaying) {
+			if (replay.connectionId !== connectionId || acpStore.cursor(connectionId) < replay.sequence) continue;
+			replaying.delete(sessionId);
+			acpTranscript.settleReplayed(sessionId);
+		}
+	}
 
 	async function subscribe(connectionId: AcpConnectionId, entry: Live): Promise<void> {
 		const handle = await open({
@@ -99,6 +109,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		entry.spent = 0;
 		acpStore.applyFrame(connectionId, frame);
 		acpTranscript.applyFrame(frame);
+		settleReplays(connectionId);
 		if (frame.kind !== "event") {
 			// `gap` and `end` are both terminal and neither is recoverable by
 			// reading again: a gap means the journal no longer holds what the
@@ -130,6 +141,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		entry.abandoned = true;
 		entry.handle?.close();
 		live.delete(connectionId);
+		for (const [sessionId, replay] of replaying) if (replay.connectionId === connectionId) replaying.delete(sessionId);
 	}
 
 	/**
@@ -247,6 +259,14 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 				throw error;
 			}
 			await this.refresh(connectionId);
+			// A fresh attachment has no live turn, so once the stream has
+			// delivered everything the journal held at this point, whatever
+			// call is still open can never be advanced by a later frame.
+			replaying.set(sessionId, {
+				connectionId,
+				sequence: acpStore.connection(connectionId)?.latestSequence ?? 0,
+			});
+			settleReplays(connectionId);
 		},
 
 		/**
