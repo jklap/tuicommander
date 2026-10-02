@@ -374,7 +374,7 @@ mod tests {
         );
         // GREEN: second load is a no-op.
         let (story_again, plan_again) = seeds(&store);
-        assert_eq!((story_again, plan_again), (story, plan));
+        assert_eq!((&story_again, &plan_again), (&story, &plan));
         assert_eq!(
             store.get_published(&plan.id, 3).unwrap_err(),
             "published workflow revision not found"
