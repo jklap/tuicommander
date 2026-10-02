@@ -738,7 +738,43 @@ describe("dictationStore", () => {
 			});
 		});
 
+		it("a timeout empties the device list", async () => {
+			// Bug: the first enumeration times out (macOS mic prompt still open);
+			// the list must keep its previous content and the retry must pick up
+			// the late answer.
+			const before = [{ name: "Old", is_default: true }];
+			const after = [{ name: "New", is_default: true }];
+			mockInvoke.mockResolvedValueOnce(before);
+			mockInvoke.mockRejectedValueOnce(new Error("listing audio input devices timed out after 30s"));
+			mockInvoke.mockResolvedValueOnce(after);
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await store.refreshDevices();
+				expect(store.state.devices).toEqual(before);
+				await store.refreshDevices();
+				expect(store.state.devices).toEqual(after);
+				consoleSpy.mockRestore();
+			});
+		});
+
+		it("keeps the previous list when the retry also fails", async () => {
+			const before = [{ name: "Old", is_default: true }];
+			mockInvoke.mockResolvedValueOnce(before);
+			mockInvoke.mockRejectedValueOnce(new Error("timed out"));
+			mockInvoke.mockRejectedValueOnce(new Error("timed out"));
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await store.refreshDevices();
+				await store.refreshDevices();
+				expect(store.state.devices).toEqual(before);
+				consoleSpy.mockRestore();
+			});
+		});
+
 		it("handles error gracefully", async () => {
+			mockInvoke.mockRejectedValueOnce(new Error("failed"));
 			mockInvoke.mockRejectedValueOnce(new Error("failed"));
 			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 

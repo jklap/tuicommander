@@ -868,11 +868,16 @@ function createDictationStore() {
 
 		/** List available audio devices */
 		async refreshDevices(): Promise<void> {
-			try {
-				const devices = await invoke<AudioDevice[]>("list_audio_devices");
-				setState("devices", devices);
-			} catch (err) {
-				appLogger.error("dictation", "Failed to list audio devices", err);
+			// The first enumeration can wait on the macOS microphone prompt until the
+			// backend gives up. A failure keeps the previous list, and one more try
+			// picks up the answer that arrived late.
+			for (let attempt = 0; attempt < 2; attempt++) {
+				try {
+					setState("devices", await invoke<AudioDevice[]>("list_audio_devices"));
+					return;
+				} catch (err) {
+					appLogger.error("dictation", "Failed to list audio devices", err);
+				}
 			}
 		},
 

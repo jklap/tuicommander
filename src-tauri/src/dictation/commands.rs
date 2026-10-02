@@ -2086,9 +2086,15 @@ pub fn set_correction_map(
     corrections.save_to_file(&corrections::TextCorrector::default_path())
 }
 
+/// Shared by the IPC command and `GET /dictation/devices`.
 #[tauri::command]
-pub fn list_audio_devices() -> Vec<audio::AudioDevice> {
-    audio::list_input_devices()
+pub async fn list_audio_devices() -> Result<Vec<audio::AudioDevice>, String> {
+    crate::audio_enumeration::run_bounded(
+        "listing audio input devices",
+        crate::audio_enumeration::enumeration_timeout(),
+        audio::list_input_devices,
+    )
+    .await
 }
 
 /// Shell integration: inject text into active terminal.
