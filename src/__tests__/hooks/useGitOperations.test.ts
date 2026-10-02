@@ -4124,7 +4124,9 @@ describe("useGitOperations", () => {
 			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
 		});
 
-		const askOps = (confirmOrphanCleanup: ReturnType<typeof vi.fn>) =>
+		const askOps = (
+			confirmOrphanCleanup: NonNullable<Parameters<typeof useGitOperations>[0]["dialogs"]["confirmOrphanCleanup"]>,
+		) =>
 			useGitOperations({
 				repo: mockRepo,
 				pty: mockPty,
