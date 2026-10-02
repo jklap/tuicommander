@@ -213,6 +213,24 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         };
     }
 
+    /// Discard the `count` history rows closest to the screen (clamped to the
+    /// history size) and return how many were removed.
+    ///
+    /// For a caller that learns a row it already scrolled out is about to be
+    /// printed again. Keeps a scrolled-up viewport on the same rows. Rewinds `total_scrolled` by the same amount, so the
+    /// eviction base (`total_scrolled() - history_size()`) is unchanged.
+    pub fn drop_newest_history(&mut self, count: usize) -> usize {
+        let count = min(count, self.history_size());
+        if count != 0 {
+            self.raw.remove_newest_history(count);
+            self.lines_scrolled = self.lines_scrolled.saturating_sub(count);
+            // The oldest rows keep their place, so a viewport scrolled up keeps
+            // its top row by moving `count` rows closer to the screen.
+            self.display_offset = self.display_offset.saturating_sub(count);
+        }
+        count
+    }
+
     fn increase_scroll_limit(&mut self, count: usize) {
         let count = min(count, self.max_scroll_limit - self.history_size());
         if count != 0 {
