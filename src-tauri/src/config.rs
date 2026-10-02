@@ -1024,8 +1024,10 @@ fn default_update_channel() -> String {
     "stable".to_string()
 }
 
+/// 30 days. The cookie slides on every authenticated request, so this is the
+/// longest a device may sit unused before it must log in again.
 fn default_session_token_duration_secs() -> u64 {
-    86400
+    2_592_000
 }
 
 fn default_index_strategy() -> String {
@@ -2600,6 +2602,21 @@ pub(crate) fn rotate_session_token(state: &crate::AppState) -> Result<String, St
 
     *state.session_token.write() = new_token.clone();
     Ok(new_token)
+}
+
+/// Store a session token generated at startup, so the next start reuses it.
+///
+/// `tuic-remote` used to keep its generated token in memory only: every restart
+/// changed it and logged out every paired phone. The change goes through a fresh
+/// load, not the caller's in-memory config, because that one carries runtime
+/// overrides (forced port, forced `lan_auth_bypass = false`) that must not reach
+/// the file. Best effort for the caller: a host without a usable vault keeps the
+/// old in-memory behaviour.
+pub(crate) fn persist_session_token(token: &str) -> Result<(), String> {
+    let mut stored = load_app_config();
+    stored.services.auth.session_token = token.to_string();
+    stored.services.auth.session_token_exists = true;
+    save_app_config(stored)
 }
 
 /// Read and hydrate `config.json` without taking either config lock.
@@ -4473,6 +4490,30 @@ mod tests {
         );
     }
 
+    /// A `tuic-remote` restart used to change the generated session token and log
+    /// out every paired phone. The token written at startup must come back from
+    /// the next `load_app_config`, and the stored port must stay untouched.
+    #[test]
+    #[serial_test::serial]
+    fn persisted_session_token_is_loaded_by_the_next_start() {
+        crate::credentials::reset_test_faults();
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        fs::write(
+            dir.path().join(APP_CONFIG_FILE),
+            r#"{"shell": null, "font_family": "Menlo", "font_size": 14, "theme": "dark",
+                "services": {"server": {"port": 4321}}}"#,
+        )
+        .unwrap();
+
+        persist_session_token("tok-restart").unwrap();
+
+        let loaded = load_app_config();
+        assert_eq!(loaded.services.auth.session_token, "tok-restart");
+        assert!(loaded.services.auth.session_token_exists);
+        assert_eq!(loaded.services.server.port, 4321);
+    }
+
     /// Deleting the embedded AI engine (#784-0aec) removed `ai_chat_enabled`,
     /// `ai_triage_enabled` and `ai_watchers_enabled` from `AppConfig`. Every
     /// `config.json` written before that upgrade still carries them, so the
@@ -4702,7 +4743,6 @@ mod tests {
         assert!(loaded.auto_update_enabled);
         assert_eq!(loaded.language, "en");
         assert_eq!(loaded.update_channel, "stable");
-        assert_eq!(loaded.services.auth.session_token_duration_secs, 86400);
         assert!(!loaded.services.server.ipv6_enabled);
         assert!(!loaded.services.auth.lan_auth_bypass);
         assert!(loaded.intent_tab_title); // defaults to true

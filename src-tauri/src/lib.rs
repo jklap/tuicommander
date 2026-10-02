@@ -2822,6 +2822,15 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     } else if app_config.services.auth.session_token.is_empty() {
         app_config.services.auth.session_token = uuid::Uuid::new_v4().to_string();
         app_config.services.auth.session_token_exists = true;
+        // Keep it across restarts so paired phones stay logged in. A host with
+        // no usable vault falls back to a token that lives for this run only.
+        if let Err(e) = config::persist_session_token(&app_config.services.auth.session_token) {
+            tracing::warn!(
+                source = "remote",
+                error = %e,
+                "Could not persist the session token; it changes on every restart"
+            );
+        }
     }
 
     let data_dir = config::config_dir();
