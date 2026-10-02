@@ -10,6 +10,9 @@ pub use model::*;
 pub use store::*;
 
 #[cfg(test)]
+mod critic_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::stories::{NewPlan, NewStory, StoryCommand, StoryOrigin, StoryStore};
@@ -578,6 +581,23 @@ mod tests {
             integrated.sequence
         );
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
+        // catches: a receipt with an empty post_checks list passing `all()` vacuously and releasing dependents.
+        let mut vacuous = integrated.snapshot.clone();
+        vacuous
+            .stories
+            .iter_mut()
+            .find(|item| item.story_id == story_id)
+            .unwrap()
+            .integration_receipt
+            .as_mut()
+            .unwrap()
+            .post_checks
+            .clear();
+        assert!(
+            super::store::receipt_current(&integrated.snapshot, &story_id, story.revision).unwrap()
+        );
+        assert!(!super::store::receipt_current(&vacuous, &story_id, story.revision).unwrap());
+
         let mut verification_snapshot = integrated.snapshot.clone();
         verification_snapshot.planning_fingerprint = Some("closed".into());
         assert!(super::store::ready_to_verify(&verification_snapshot, &[story.clone()]).is_ok());
