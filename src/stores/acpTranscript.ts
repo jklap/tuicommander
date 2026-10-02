@@ -397,8 +397,10 @@ export const acpTranscript = {
 	 * A session that ended mid-call — a permission never answered, a crashed
 	 * process — has `tool_call` and `in_progress` in its journal and nothing
 	 * after, so no `turnSettled` ever arrives to close them. `failed` because
-	 * ACP has no "unknown" status and the call certainly did not complete;
-	 * it is the status `settleToolCalls` already gives a turn that did not end.
+	 * ACP has no "unknown" status and the call did not complete; it is the status
+	 * `settleToolCalls` already gives a turn that did not end. ego does not say
+	 * on `session/load` whether a turn is still running, so this is a reading of
+	 * the journal, not of the session: a live call's next update overwrites it.
 	 */
 	settleReplayed(sessionId: AcpSessionId): void {
 		setState(
