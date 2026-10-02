@@ -176,7 +176,7 @@ describe("sendCommand", () => {
 	 * wake left in the composer at a 200ms gap, live on 0.159.0. A bracketed paste
 	 * arrives as one event, so the same CR is an ordinary Enter.
 	 */
-	it("frames even a short single-line Codex payload as a bracketed paste", async () => {
+	it("frames a long single-line Codex payload as a bracketed paste", async () => {
 		setPlatform("MacIntel");
 		const { writeFn, calls } = makeRecorder();
 		const longLine = "BG DONE exit=100 ".repeat(100).trim();
@@ -249,7 +249,7 @@ describe("sendCommand", () => {
 		const started = performance.now();
 		const { writeFn, calls } = makeRecorder();
 		await sendCommand(writeFn, "run the tests", "codex", "posix", false);
-		expect(calls).toEqual(["\x15", "\x1b[200~run the tests\x1b[201~"]);
+		expect(calls).toEqual(["\x15", "run the tests"]);
 		// Only the Ctrl-U gap elapses; a second gap would mean the Enter's was paid too.
 		expect(performance.now() - started).toBeLessThan(2 * AGENT_ENTER_GAP_MS);
 	});
@@ -297,22 +297,29 @@ describe("shouldAutoSubmitSuggestion", () => {
 describe("sendCommand framing (critic 1163)", () => {
 	// Catches: the Codex bracketed branch leaking to other agents or to a plain
 	// shell, which would paste "ls" into a shell prompt as literal escape bytes.
-	it("frames a single-line payload for codex only", async () => {
+	it("frames a long single-line payload for codex only, and keeps short text plain", async () => {
+		const long = "x".repeat(1000);
 		for (const agent of ["claude", "gemini", "opencode", "grok", "pi", "future-agent", null]) {
 			const { writeFn, calls } = makeRecorder();
-			await sendCommand(writeFn, "y", agent, "posix");
+			await sendCommand(writeFn, long, agent, "posix");
 			expect(calls[calls.length - 2], String(agent)).not.toContain("\x1b[200~");
 		}
 		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "y", "codex", "posix");
-		expect(calls).toEqual(["\x15", "\x1b[200~y\x1b[201~", "\r"]);
+		await sendCommand(writeFn, long, "codex", "posix");
+		expect(calls).toEqual(["\x15", `\x1b[200~${long}\x1b[201~`, "\r"]);
+		for (const short of ["y", "/status", "x".repeat(500)]) {
+			const rec = makeRecorder();
+			await sendCommand(rec.writeFn, short, "codex", "posix");
+			expect(rec.calls).toEqual(["\x15", short, "\r"]);
+		}
 	});
 
 	// Catches: the framed Codex prefill (submit=false) still sending Enter.
 	it("types a framed codex prefill without Enter", async () => {
 		const { writeFn, calls } = makeRecorder();
-		await sendCommand(writeFn, "draft", "codex", "posix", false);
-		expect(calls).toEqual(["\x15", "\x1b[200~draft\x1b[201~"]);
+		const draft = "d".repeat(600);
+		await sendCommand(writeFn, draft, "codex", "posix", false);
+		expect(calls).toEqual(["\x15", `\x1b[200~${draft}\x1b[201~`]);
 	});
 
 	// Catches: an unverified agent losing its longer Enter gap (the constant is
