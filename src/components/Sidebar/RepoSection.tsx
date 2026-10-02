@@ -309,7 +309,7 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 				>
 					<For each={props.rows}>
 						{(row) => (
-							<div class={s.subagentRow} title={row.title}>
+							<div class={s.subagentRow} data-tooltip={row.title} data-tooltip-pos="bottom">
 								<span class={cx(s.branchTabState, row.running && s.branchTabState_working)}>
 									{row.running ? t("sidebar.subagentRunning", "Running") : t("sidebar.subagentDone", "Returned")}
 								</span>
@@ -430,9 +430,8 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 								nested && s.branchTabNested,
 							)}
 							onClick={() => navigateToTerminal(id)}
-							title={accessibleLabel()}
 							aria-label={accessibleLabel()}
-							data-tooltip={!rich() ? agentTooltip(t()) : undefined}
+							data-tooltip={rich() ? accessibleLabel() : `${t().name} · ${agentTooltip(t())}`}
 							data-tooltip-pos="bottom"
 						>
 							<span class={dotClass()} aria-hidden="true" />
@@ -584,7 +583,7 @@ export const BranchItem: Component<{
 		t("sidebar.staleHint", "Stale: no commit for more than {days} days and not merged", {
 			days: String(STALE_AFTER_DAYS),
 		});
-	// Compact has no room for these facts; they ride the branch name's tooltip.
+	// Compact has no room for these facts; they ride the branch name's tooltip (see nameTooltip).
 	const factsTooltip = () =>
 		[
 			facts().commitAge && `${t("sidebar.lastCommit", "Last commit")}: ${facts().commitAge}`,
@@ -593,6 +592,8 @@ export const BranchItem: Component<{
 		]
 			.filter(Boolean)
 			.join(" · ");
+	// The one overlay of the name: the full name, plus (compact only) the facts the row has no room for.
+	const nameTooltip = () => [rowTitle(), !rich() && factsTooltip()].filter(Boolean).join(" · ");
 	// Select this branch/worktree first so the Git panel targets it (it follows
 	// activeWorktreePath), then open the changes tab — otherwise a chip would
 	// show the active branch's diff instead of this row's.
@@ -809,7 +810,8 @@ export const BranchItem: Component<{
 						tabIndex={0}
 						aria-expanded={!props.branch.tabsCollapsed}
 						aria-label={`${t("sidebar.toggleAgents", "Show or hide agents")} (${props.branch.terminals.length})`}
-						title={t("sidebar.toggleAgents", "Show or hide agents")}
+						data-tooltip={t("sidebar.toggleAgents", "Show or hide agents")}
+						data-tooltip-pos="bottom"
 						onClick={toggleAgents}
 						onKeyDown={onClickKeyDown(toggleAgents)}
 					>
@@ -831,8 +833,7 @@ export const BranchItem: Component<{
 					<span
 						class={s.branchName}
 						onDblClick={handleDoubleClick}
-						title={rowTitle()}
-						data-tooltip={!rich() ? factsTooltip() || undefined : undefined}
+						data-tooltip={nameTooltip()}
 						data-tooltip-pos="bottom"
 					>
 						{branchLabel() ?? props.branch.branchName}
@@ -840,7 +841,7 @@ export const BranchItem: Component<{
 					{/* When a custom label replaces the main line, retain the branch
 					    underneath it so Git-facing identity remains visible. */}
 					<Show when={branchLabel()}>
-						<span class={b.subLabel} title={rowTitle()}>
+						<span class={b.subLabel} data-tooltip={rowTitle()} data-tooltip-pos="bottom">
 							{props.branch.branchName}
 						</span>
 					</Show>
@@ -950,7 +951,10 @@ export const BranchItem: Component<{
 							const rect = e.currentTarget.getBoundingClientRect();
 							ctxMenu.openAt(rect.right - 160, rect.bottom + 4);
 						}}
-						title={t("sidebar.branchOptions", "Branch options")}
+						aria-label={t("sidebar.branchOptions", "Branch options")}
+						data-tooltip={t("sidebar.branchOptions", "Branch options")}
+						data-tooltip-pos="bottom"
+						data-tooltip-align="right"
 					>
 						⋯
 					</button>
@@ -962,7 +966,10 @@ export const BranchItem: Component<{
 							props.onAddTerminal();
 						}}
 						{...agentLaunchMenu.buttonHandlers}
-						title={t("sidebar.addTerminal", "Add terminal")}
+						aria-label={t("sidebar.addTerminal", "Add terminal")}
+						data-tooltip={t("sidebar.addTerminal", "Add terminal")}
+						data-tooltip-pos="bottom"
+						data-tooltip-align="right"
 					>
 						+
 					</button>
@@ -986,11 +993,18 @@ export const BranchItem: Component<{
 								e.stopPropagation();
 								props.onRemove();
 							}}
-							title={
+							aria-label={
 								props.isRemoving
 									? t("sidebar.removingWorktree", "Removing…")
 									: t("sidebar.removeWorktree", "Remove worktree")
 							}
+							data-tooltip={
+								props.isRemoving
+									? t("sidebar.removingWorktree", "Removing…")
+									: t("sidebar.removeWorktree", "Remove worktree")
+							}
+							data-tooltip-pos="bottom"
+							data-tooltip-align="right"
 						>
 							{props.isRemoving ? "…" : "×"}
 						</button>
@@ -1006,7 +1020,7 @@ export const BranchItem: Component<{
 					<div class={s.branchRichDetail}>
 						<Show when={pr()}>
 							{(p) => (
-								<span class={s.branchRichLine} title={p().title}>
+								<span class={s.branchRichLine} data-tooltip={p().title} data-tooltip-pos="bottom">
 									<Show when={prStateLabel(p())}>{(label) => <span class={s.branchRichPrState}>{label()} </span>}</Show>
 									{p().title}
 								</span>
@@ -1355,7 +1369,8 @@ export const RepoSection: Component<{
 							e.stopPropagation();
 							props.onToggleCollapsed();
 						}}
-						title={t("sidebar.clickToExpand", "Click to expand")}
+						data-tooltip={t("sidebar.clickToExpand", "Click to expand")}
+						data-tooltip-pos="bottom"
 					>
 						{props.repo.initials}
 					</span>
@@ -1383,7 +1398,10 @@ export const RepoSection: Component<{
 						<button
 							class={s.repoActionBtn}
 							onClick={handleMenuToggle}
-							title={t("sidebar.repoOptions", "Repository options")}
+							aria-label={t("sidebar.repoOptions", "Repository options")}
+							data-tooltip={t("sidebar.repoOptions", "Repository options")}
+							data-tooltip-pos="bottom"
+							data-tooltip-align="right"
 						>
 							⋯
 						</button>
@@ -1402,11 +1420,18 @@ export const RepoSection: Component<{
 									e.stopPropagation();
 									props.onAddWorktree();
 								}}
-								title={
+								aria-label={
 									props.isCreatingWorktree
 										? t("sidebar.creatingWorktree", "Creating worktree…")
 										: t("sidebar.addWorktree", "Add worktree")
 								}
+								data-tooltip={
+									props.isCreatingWorktree
+										? t("sidebar.creatingWorktree", "Creating worktree…")
+										: t("sidebar.addWorktree", "Add worktree")
+								}
+								data-tooltip-pos="bottom"
+								data-tooltip-align="right"
 							>
 								{props.isCreatingWorktree ? "…" : "+"}
 							</button>
@@ -1420,7 +1445,10 @@ export const RepoSection: Component<{
 									e.stopPropagation();
 									setRemoteOnlyPopoverVisible((v) => !v);
 								}}
-								title={t("sidebar.githubPanelTitle", "GitHub: PRs & Issues")}
+								aria-label={t("sidebar.githubPanelTitle", "GitHub: PRs & Issues")}
+								data-tooltip={t("sidebar.githubPanelTitle", "GitHub: PRs & Issues")}
+								data-tooltip-pos="bottom"
+								data-tooltip-align="right"
 							>
 								<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
 									<path

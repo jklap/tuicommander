@@ -309,7 +309,8 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 											{(age) => (
 												<span
 													class={s.ghAgeMarker}
-													title={t("sidebar.prAge", "Open for {age} or more", { age: age() })}
+													data-tooltip={t("sidebar.prAge", "Open for {age} or more", { age: age() })}
+													data-tooltip-pos="bottom"
 												>
 													{age()}
 												</span>
@@ -333,7 +334,10 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 											<button
 												class={s.ghItemDismiss}
 												onClick={() => props.onDismiss(pr.number)}
-												title={t("sidebar.dismissPr", "Hide this PR from view")}
+												aria-label={t("sidebar.dismissPr", "Hide this PR from view")}
+												data-tooltip={t("sidebar.dismissPr", "Hide this PR from view")}
+												data-tooltip-pos="bottom"
+												data-tooltip-align="right"
 											>
 												&times;
 											</button>
@@ -347,7 +351,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 													<button
 														class={s.ghActionBtn}
 														onClick={() => props.onCheckout(pr.branch)}
-														title={t("sidebar.checkoutBranch", "Check out this branch locally")}
+														data-tooltip={t("sidebar.checkoutBranch", "Check out this branch locally")}
+														data-tooltip-pos="bottom"
+														data-tooltip-align="right"
 													>
 														{t("sidebar.checkout", "Checkout")}
 													</button>
@@ -355,7 +361,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 														<button
 															class={s.ghActionBtn}
 															onClick={() => props.onCreateWorktree?.(pr.branch)}
-															title={t("sidebar.createWorktreeFromBranch", "Create worktree from this branch")}
+															data-tooltip={t("sidebar.createWorktreeFromBranch", "Create worktree from this branch")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{t("sidebar.worktree", "Worktree")}
 														</button>
@@ -365,7 +373,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															class={cx(s.ghActionBtn, s.ghApproveBtn)}
 															onClick={() => handleApprove(pr)}
 															disabled={approvingPrs().has(pr.number)}
-															title={t("sidebar.approvePr", "Approve this pull request")}
+															data-tooltip={t("sidebar.approvePr", "Approve this pull request")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{approvingPrs().has(pr.number)
 																? t("sidebar.approving", "Approving...")
@@ -377,7 +387,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															class={s.ghActionBtn}
 															onClick={() => handleUpdateBranch(pr)}
 															disabled={busyPrs().has(pr.number)}
-															title={t("sidebar.updateBranchTitle", "Merge the base branch into this PR branch")}
+															data-tooltip={t("sidebar.updateBranchTitle", "Merge the base branch into this PR branch")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{t("sidebar.updateBranch", "Update branch")}
 														</button>
@@ -387,7 +399,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															class={cx(s.ghActionBtn, s.ghMergeBtn)}
 															onClick={() => handleMerge(pr)}
 															disabled={mergingPrs().has(pr.number)}
-															title={t("sidebar.mergePr", "Merge this pull request")}
+															data-tooltip={t("sidebar.mergePr", "Merge this pull request")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{mergingPrs().has(pr.number) ? t("sidebar.merging", "Merging...") : mergeLabel(pr)}
 														</button>
@@ -396,7 +410,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 														class={s.ghActionBtn}
 														onClick={() => handleViewDiff(pr)}
 														disabled={diffLoadingPr() === pr.number}
-														title={t("sidebar.viewDiff", "View PR diff")}
+														data-tooltip={t("sidebar.viewDiff", "View PR diff")}
+														data-tooltip-pos="bottom"
+														data-tooltip-align="right"
 													>
 														{diffLoadingPr() === pr.number
 															? t("sidebar.loadingDiff", "Loading...")
@@ -406,7 +422,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 														<button
 															class={s.ghActionBtn}
 															onClick={() => handleCopyReference(pr)}
-															title={t("sidebar.copyReference", "Copy owner/repo#number")}
+															data-tooltip={t("sidebar.copyReference", "Copy owner/repo#number")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{t("sidebar.copyRef", "Copy ref")}
 														</button>
@@ -416,7 +434,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															class={cx(s.ghActionBtn, s.ghCloseBtn)}
 															onClick={() => handleClosePr(pr)}
 															disabled={busyPrs().has(pr.number)}
-															title={t("sidebar.closePr", "Close this pull request without merging")}
+															data-tooltip={t("sidebar.closePr", "Close this pull request without merging")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{t("sidebar.close", "Close")}
 														</button>
@@ -425,7 +445,9 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 														<button
 															class={cx(s.ghActionBtn, s.ghLinkBtn)}
 															onClick={() => handleOpenUrl(pr.url)}
-															title={t("prDetail.openOnGithub", "Open on GitHub")}
+															data-tooltip={t("prDetail.openOnGithub", "Open on GitHub")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															GitHub {"↗"}
 														</button>

@@ -410,7 +410,9 @@ export const GitHubPanel: Component<{
 						<button
 							class={s.ghChangelogBtn}
 							onClick={() => mdTabsStore.addGithubOps(props.repoPath)}
-							title={t("github.opsDashboard", "Ops Dashboard")}
+							aria-label={t("github.opsDashboard", "Ops Dashboard")}
+							data-tooltip={t("github.opsDashboard", "Ops Dashboard")}
+							data-tooltip-pos="bottom"
 						>
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 								<path d="M1.5 1a.5.5 0 0 0-.5.5v13a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5v-13a.5.5 0 0 0-.5-.5h-13ZM2 14V2h12v12H2Zm2.5-3a.5.5 0 0 1 .5.5v.5a.5.5 0 0 1-1 0v-.5a.5.5 0 0 1 .5-.5Zm2.5-3a.5.5 0 0 1 .5.5V12a.5.5 0 0 1-1 0V8.5a.5.5 0 0 1 .5-.5Zm3-3a.5.5 0 0 1 .5.5V12a.5.5 0 0 1-1 0V5.5a.5.5 0 0 1 .5-.5Z" />
@@ -419,7 +421,9 @@ export const GitHubPanel: Component<{
 						<button
 							class={s.ghChangelogBtn}
 							onClick={() => setShowChangelog(true)}
-							title={t("github.changelog", "Changelog")}
+							aria-label={t("github.changelog", "Changelog")}
+							data-tooltip={t("github.changelog", "Changelog")}
+							data-tooltip-pos="bottom"
 						>
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 								<path d="M4 1.5A1.5 1.5 0 0 0 2.5 3v10A1.5 1.5 0 0 0 4 14.5h8a1.5 1.5 0 0 0 1.5-1.5V5.5L9.5 1.5H4Zm5 1.06L12.44 6H9.5a.5.5 0 0 1-.5-.5V2.56ZM5 8h6v1H5V8Zm0 2.5h6v1H5v-1ZM5 5.5h2v1H5v-1Z" />
@@ -569,11 +573,13 @@ export const GitHubPanel: Component<{
 																				)}
 																				onClick={() => handleCloseReopenIssue(issue)}
 																				disabled={closingIssue() === issue.number}
-																				title={
+																				data-tooltip={
 																					issue.state?.toUpperCase() === "OPEN"
 																						? t("github.closeIssue", "Close issue")
 																						: t("github.reopenIssue", "Reopen issue")
 																				}
+																				data-tooltip-pos="bottom"
+																				data-tooltip-align="right"
 																			>
 																				{closingIssue() === issue.number
 																					? "..."
@@ -584,7 +590,9 @@ export const GitHubPanel: Component<{
 																			<button
 																				class={s.ghActionBtn}
 																				onClick={() => handleCopyIssueNumber(issue)}
-																				title={t("github.copyNumber", "Copy issue number")}
+																				data-tooltip={t("github.copyNumber", "Copy issue number")}
+																				data-tooltip-pos="bottom"
+																				data-tooltip-align="right"
 																			>
 																				#{issue.number}
 																			</button>
@@ -592,7 +600,9 @@ export const GitHubPanel: Component<{
 																				<button
 																					class={cx(s.ghActionBtn, s.ghLinkBtn)}
 																					onClick={() => handleOpenUrl(issue.url)}
-																					title={t("prDetail.openOnGithub", "Open on GitHub")}
+																					data-tooltip={t("prDetail.openOnGithub", "Open on GitHub")}
+																					data-tooltip-pos="bottom"
+																					data-tooltip-align="right"
 																				>
 																					GitHub {"↗"}
 																				</button>
@@ -601,7 +611,9 @@ export const GitHubPanel: Component<{
 																				<button
 																					class={s.ghActionBtn}
 																					onClick={() => setAutofixIssue(issue.number)}
-																					title={t("github.autofixTooltip", "Auto-fix in a worktree agent")}
+																					data-tooltip={t("github.autofixTooltip", "Auto-fix in a worktree agent")}
+																					data-tooltip-pos="bottom"
+																					data-tooltip-align="right"
 																				>
 																					{t("github.autofix", "Auto-fix")}
 																				</button>
@@ -609,7 +621,12 @@ export const GitHubPanel: Component<{
 																					class={s.ghActionBtn}
 																					onClick={() => handleCreatePr(issue)}
 																					disabled={creatingPr() === issue.number}
-																					title={t("github.createPrTooltip", "Create draft PR from auto-fix branch")}
+																					data-tooltip={t(
+																						"github.createPrTooltip",
+																						"Create draft PR from auto-fix branch",
+																					)}
+																					data-tooltip-pos="bottom"
+																					data-tooltip-align="right"
 																				>
 																					{creatingPr() === issue.number ? "..." : t("github.createPr", "Create PR")}
 																				</button>

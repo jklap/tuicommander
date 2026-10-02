@@ -306,7 +306,10 @@ export const RemoteOnlyPrPopover: Component<{
 											<button
 												class={s.remoteOnlyDetailDismiss}
 												onClick={() => handleDismiss(pr.number)}
-												title={t("sidebar.dismissPr", "Hide this PR from view")}
+												aria-label={t("sidebar.dismissPr", "Hide this PR from view")}
+												data-tooltip={t("sidebar.dismissPr", "Hide this PR from view")}
+												data-tooltip-pos="bottom"
+												data-tooltip-align="right"
 											>
 												&times;
 											</button>
@@ -315,7 +318,9 @@ export const RemoteOnlyPrPopover: Component<{
 													<button
 														class={s.remoteOnlyCheckout}
 														onClick={() => props.onCheckout(pr.branch)}
-														title={t("sidebar.checkoutBranch", "Check out this branch locally")}
+														data-tooltip={t("sidebar.checkoutBranch", "Check out this branch locally")}
+														data-tooltip-pos="bottom"
+														data-tooltip-align="right"
 													>
 														{t("sidebar.checkout", "Checkout")}
 													</button>
@@ -323,7 +328,9 @@ export const RemoteOnlyPrPopover: Component<{
 														<button
 															class={s.remoteOnlyWorktree}
 															onClick={() => props.onCreateWorktree?.(pr.branch)}
-															title={t("sidebar.createWorktreeFromBranch", "Create worktree from this branch")}
+															data-tooltip={t("sidebar.createWorktreeFromBranch", "Create worktree from this branch")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{t("sidebar.worktree", "Worktree")}
 														</button>
@@ -333,7 +340,9 @@ export const RemoteOnlyPrPopover: Component<{
 															class={s.remoteOnlyApprove}
 															onClick={() => handleApprove(pr)}
 															disabled={approvingPr() === pr.number}
-															title={t("sidebar.approvePr", "Approve this pull request")}
+															data-tooltip={t("sidebar.approvePr", "Approve this pull request")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{approvingPr() === pr.number
 																? t("sidebar.approving", "Approving...")
@@ -345,7 +354,9 @@ export const RemoteOnlyPrPopover: Component<{
 															class={s.remoteOnlyMerge}
 															onClick={() => handleMerge(pr)}
 															disabled={mergingPr() === pr.number}
-															title={t("sidebar.mergePr", "Merge this pull request")}
+															data-tooltip={t("sidebar.mergePr", "Merge this pull request")}
+															data-tooltip-pos="bottom"
+															data-tooltip-align="right"
 														>
 															{mergingPr() === pr.number ? t("sidebar.merging", "Merging...") : mergeLabel(pr)}
 														</button>
@@ -354,7 +365,9 @@ export const RemoteOnlyPrPopover: Component<{
 														class={s.remoteOnlyViewDiff}
 														onClick={() => handleViewDiff(pr)}
 														disabled={diffLoadingPr() === pr.number}
-														title={t("sidebar.viewDiff", "View PR diff")}
+														data-tooltip={t("sidebar.viewDiff", "View PR diff")}
+														data-tooltip-pos="bottom"
+														data-tooltip-align="right"
 													>
 														{diffLoadingPr() === pr.number
 															? t("sidebar.loadingDiff", "Loading...")

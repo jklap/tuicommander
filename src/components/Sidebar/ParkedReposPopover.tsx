@@ -51,7 +51,8 @@ export const ParkedReposPopover: Component<ParkedReposPopoverProps> = (props) =>
 						<button
 							class={s.parkedPopoverName}
 							onClick={() => props.onUnpark(repo.path)}
-							title={`Unpark and switch to ${repo.displayName}`}
+							data-tooltip={`Unpark and switch to ${repo.displayName}`}
+							data-tooltip-pos="bottom"
 						>
 							{repo.displayName}
 						</button>
@@ -60,7 +61,10 @@ export const ParkedReposPopover: Component<ParkedReposPopoverProps> = (props) =>
 							onClick={() => {
 								repositoriesStore.setPark(repo.path, false);
 							}}
-							title="Unpark"
+							aria-label="Unpark"
+							data-tooltip="Unpark"
+							data-tooltip-pos="bottom"
+							data-tooltip-align="right"
 						>
 							<svg width="12" height="12" viewBox="0 0 16 16" fill="none">
 								<path
