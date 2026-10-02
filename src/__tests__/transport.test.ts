@@ -626,6 +626,8 @@ describe("transport", () => {
 				["get_model_info", {}, "GET", "/dictation/models"],
 				["get_speech_assets", {}, "GET", "/dictation/speech/assets"],
 				["stop_speech", {}, "POST", "/dictation/speech/stop"],
+				["pause_speech", {}, "POST", "/dictation/speech/pause"],
+				["resume_speech", {}, "POST", "/dictation/speech/resume"],
 				["get_speech_status", {}, "GET", "/dictation/speech/status"],
 				// Asking about one reply is a query parameter rather than a
 				// second route: it is the same question with a narrower answer,

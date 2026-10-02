@@ -99,6 +99,16 @@ pub struct FarEnd {
     /// hidden: a climbing count means playback and capture have lost step,
     /// which shows up as an echo that stops being cancelled.
     dropped: u64,
+    /// Capture samples handed out so far, which is what the pause positions
+    /// below are measured in.
+    position: usize,
+    /// Capture positions `(from, until)` where the speaker was held silent.
+    /// What is queued has not left it, so capture is matched against silence
+    /// inside a window; `until` is `None` while the pause lasts. Positions, not
+    /// a flag: capture recorded before the pause but not yet cleaned still
+    /// heard the reply. A list, because a second pause can open while the
+    /// backlog still holds the first.
+    pauses: VecDeque<(usize, Option<usize>)>,
 }
 
 impl FarEnd {
@@ -144,11 +154,26 @@ impl FarEnd {
     /// what keeps the canceller converged through the gaps between replies:
     /// skipping the call instead would make it lose its place.
     pub fn take(&mut self, count: usize) -> Vec<f32> {
-        let mut frame: Vec<f32> = self
-            .samples
-            .drain(..count.min(self.samples.len()))
-            .collect();
-        frame.resize(count, 0.0);
+        let mut frame = Vec::with_capacity(count);
+        for _ in 0..count {
+            while self
+                .pauses
+                .front()
+                .is_some_and(|&(_, until)| until.is_some_and(|at| self.position >= at))
+            {
+                self.pauses.pop_front();
+            }
+            let silent = self
+                .pauses
+                .front()
+                .is_some_and(|&(from, _)| self.position >= from);
+            self.position += 1;
+            frame.push(if silent {
+                0.0
+            } else {
+                self.samples.pop_front().unwrap_or(0.0)
+            });
+        }
         frame
     }
 
@@ -157,6 +182,31 @@ impl FarEnd {
     /// would subtract a sound that is not there.
     pub fn clear(&mut self) {
         self.samples.clear();
+        self.pauses.clear();
+    }
+
+    /// Where the next sample handed out will sit in the capture stream, plus
+    /// `recorded` samples that capture already holds but this has not seen.
+    fn position_after(&self, recorded: usize) -> usize {
+        self.position + recorded
+    }
+
+    /// How many of the next `count` capture positions lie inside a closed
+    /// pause window.
+    fn silent_within(&self, count: usize) -> usize {
+        let (start, end) = (self.position, self.position + count);
+        self.pauses
+            .iter()
+            .filter_map(|&(from, until)| Some((from, until?)))
+            .map(|(from, until)| until.min(end).saturating_sub(from.max(start)))
+            .sum()
+    }
+
+    /// Is the reply held back right now, with no continuation yet?
+    fn is_paused(&self) -> bool {
+        self.pauses
+            .back()
+            .is_some_and(|&(_, until)| until.is_none())
     }
 
     /// Is any reply audio still waiting to be matched?
@@ -248,11 +298,47 @@ impl EchoGuard {
     /// A reply queued behind one still playing follows it with no gap,
     /// because that is how the device plays it.
     pub fn note_rendered(&mut self, audio: &SpeechAudio) {
-        if self.far_end.is_empty() {
-            let pending = self.backlog.as_ref().map_or(0, |backlog| backlog());
-            self.far_end.pad(self.remainder.len() + pending);
+        // Not while paused: the reply starts when playback continues, and the
+        // capture recorded until then is not ahead of it.
+        if self.far_end.is_empty() && !self.far_end.is_paused() {
+            // Pad up to where the reply starts, minus what a closed pause
+            // window already covers: `take` hands out silence inside a window
+            // without using the pad, so counting it twice starts the reply late.
+            let recorded = self.recorded();
+            let covered = self.far_end.silent_within(recorded);
+            self.far_end.pad(recorded - covered);
         }
         self.far_end.push(audio);
+    }
+
+    /// The speaker was paused: nothing reaches the microphone until
+    /// [`note_resumed`](Self::note_resumed), and the queued reply must not be
+    /// consumed meanwhile.
+    ///
+    /// Takes effect after the capture already recorded: the device went quiet
+    /// now, and everything the microphone recorded until now heard the reply.
+    pub fn note_paused(&mut self) {
+        if !self.far_end.is_paused() {
+            let from = self.far_end.position_after(self.recorded());
+            self.far_end.pauses.push_back((from, None));
+        }
+    }
+
+    /// The same offset on the way out: what was recorded while paused heard
+    /// silence, and the reply continues with what is recorded from now on.
+    pub fn note_resumed(&mut self) {
+        if self.far_end.is_paused() {
+            let until = self.far_end.position_after(self.recorded());
+            if let Some(window) = self.far_end.pauses.back_mut() {
+                window.1 = Some(until);
+            }
+        }
+    }
+
+    /// Capture recorded but not yet cleaned: the carried partial frame and the
+    /// endpoint's backlog.
+    fn recorded(&self) -> usize {
+        self.remainder.len() + self.backlog.as_ref().map_or(0, |backlog| backlog())
     }
 
     /// Playback was stopped. Drop the queued reply and the partial frame with
@@ -342,6 +428,30 @@ impl super::speaker::Output for FarEndTap {
         // echo cannot be subtracted from it.
         self.guard.lock().note_rendered(audio);
         self.inner.play(audio)
+    }
+
+    fn pause(&self) {
+        // Device first, for the same reason as `stop`: the far end is what the
+        // microphone has yet to hear.
+        self.inner.pause();
+        // Only if the output actually holds its audio. One that keeps playing
+        // would leave the reference silent while the microphone still hears
+        // the reply, and the far end a whole pause behind it afterwards.
+        if self.inner.can_pause() {
+            self.guard.lock().note_paused();
+        }
+    }
+
+    fn resume(&self) {
+        // Far end first: it may run ahead of the microphone, never behind.
+        if self.inner.can_pause() {
+            self.guard.lock().note_resumed();
+        }
+        self.inner.resume();
+    }
+
+    fn can_pause(&self) -> bool {
+        self.inner.can_pause()
     }
 
     fn stop(&self) {
@@ -787,5 +897,128 @@ mod tests {
             played_peak > input_peak * 2.0,
             "the loudness stage did not run, so this proves nothing: peak {played_peak}"
         );
+    }
+
+    /// Capture goes on while the speaker is paused, and the reply it will play
+    /// next has not left it. Consuming it meanwhile pairs the reply's start
+    /// with audio recorded before it, so the canceller subtracts the wrong
+    /// seconds the moment playback continues.
+    #[test]
+    fn a_paused_reply_is_matched_against_silence_and_kept_for_later() {
+        let mut probe = Probe::new();
+        probe
+            .guard
+            .note_rendered(&audio(vec![1.0; SAMPLE_RATE as usize], SAMPLE_RATE));
+
+        probe.guard.note_paused();
+        probe.guard.clean(&vec![0.0; FRAME_SAMPLES * 3]);
+        assert!(
+            probe.far_end_seen().iter().all(|sample| *sample == 0.0),
+            "a paused reply reached the canceller"
+        );
+
+        probe.guard.note_resumed();
+        probe.guard.clean(&vec![0.0; FRAME_SAMPLES]);
+        assert_eq!(
+            probe.far_end_seen().last().copied(),
+            Some(1.0),
+            "the paused reply was consumed while it was held"
+        );
+    }
+
+    /// A stop while paused must not leave the next reply muted in the
+    /// reference.
+    #[test]
+    fn the_reply_after_a_stop_that_interrupted_a_pause_reaches_the_canceller() {
+        let mut probe = Probe::new();
+        probe
+            .guard
+            .note_rendered(&audio(vec![1.0; SAMPLE_RATE as usize], SAMPLE_RATE));
+        probe.guard.note_paused();
+        probe.guard.note_stopped();
+
+        probe
+            .guard
+            .note_rendered(&audio(vec![1.0; SAMPLE_RATE as usize], SAMPLE_RATE));
+        probe.guard.clean(&vec![0.0; FRAME_SAMPLES]);
+
+        assert_eq!(probe.far_end_seen().last().copied(), Some(1.0));
+    }
+
+    /// Probes by the critic of 1376-f33e.
+    mod critic_1376 {
+        use super::*;
+        use crate::speaker::Output;
+        use std::sync::Arc;
+
+        /// The browser's output cannot pause: `Output::pause` defaults to a
+        /// no-op and the client keeps playing. A tap that mutes the reference
+        /// anyway leaves the canceller blind to a reply that is still coming
+        /// out of the speaker, and the far end falls a whole pause behind it.
+        /// Catches: `FarEndTap::pause` marking the far end paused whatever the
+        /// inner output did.
+        #[test]
+        fn a_pause_the_output_cannot_honour_does_not_mute_the_reference() {
+            let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let guard = Arc::new(parking_lot::Mutex::new(EchoGuard::new(Box::new(Tee(
+                Arc::clone(&seen),
+            )))));
+            let device = Arc::new(PlayedOutput::default());
+            let tapped = FarEndTap::new(Arc::clone(&device) as _, Arc::clone(&guard));
+            tapped
+                .play(&audio(vec![1.0; SAMPLE_RATE as usize], SAMPLE_RATE))
+                .expect("played");
+
+            tapped.pause();
+            guard.lock().clean(&vec![0.0; FRAME_SAMPLES * 3]);
+
+            let far_end: Vec<f32> = seen.lock().iter().flatten().copied().collect();
+            assert_eq!(far_end.len(), FRAME_SAMPLES * 3);
+            assert!(
+                far_end.iter().all(|sample| *sample == 1.0),
+                "the reference went silent while the device kept playing"
+            );
+        }
+
+        /// Capture that was recorded before the pause but not yet cleaned heard
+        /// the reply. Matching it against silence throws that much reference
+        /// away, and after `resume` the far end replays audio the device has
+        /// already played: behind its own echo by the backlog, which
+        /// `note_rendered` documents as the one direction that cannot be
+        /// cancelled. Catches: `note_paused` taking effect at the cleaned
+        /// position instead of the recorded one.
+        #[test]
+        fn capture_recorded_before_a_pause_is_matched_against_the_reply_it_heard() {
+            let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let backlog = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut guard = EchoGuard::new(Box::new(Tee(Arc::clone(&seen))));
+            let probe = Arc::clone(&backlog);
+            guard.attach_capture(Box::new(move || {
+                probe.load(std::sync::atomic::Ordering::Relaxed)
+            }));
+            let ramp: Vec<f32> = (0..SAMPLE_RATE).map(|n| n as f32 + 1.0).collect();
+            guard.note_rendered(&audio(ramp.clone(), SAMPLE_RATE));
+            guard.clean(&vec![0.0; FRAME_SAMPLES]);
+
+            // Three frames are recorded and waiting when the speaker is paused.
+            backlog.store(FRAME_SAMPLES * 3, std::sync::atomic::Ordering::Relaxed);
+            guard.note_paused();
+            backlog.store(0, std::sync::atomic::Ordering::Relaxed);
+            guard.clean(&vec![0.0; FRAME_SAMPLES * 3]);
+            guard.note_resumed();
+            guard.clean(&vec![0.0; FRAME_SAMPLES]);
+
+            let far_end: Vec<f32> = seen.lock().iter().flatten().copied().collect();
+            assert_eq!(
+                far_end[FRAME_SAMPLES..FRAME_SAMPLES * 4],
+                ramp[FRAME_SAMPLES..FRAME_SAMPLES * 4],
+                "the capture that heard the reply was matched against something else"
+            );
+            assert_eq!(
+                far_end[FRAME_SAMPLES * 4..],
+                ramp[FRAME_SAMPLES * 4..FRAME_SAMPLES * 5],
+                "after the resume the reference is not where the speaker is"
+            );
+        }
     }
 }

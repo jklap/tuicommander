@@ -1687,4 +1687,74 @@ mod critic_round2 {
             assert!(body.len() <= 4096, "{} bytes of SSML text", body.len());
         }
     }
+
+    /// Real TTS speech through the shipping canceller (1376-f33e). The
+    /// recorded Edge reply is the far end; the same audio, 40 ms late and at
+    /// 0.35 gain, is what the microphone hears. Catches: echo of a reply
+    /// opening the voice gate, which hushed hands-free replies 600-900 ms in
+    /// — and, over the same room, a user talking over it still being heard.
+    #[test]
+    fn recorded_speech_heard_back_is_not_a_voice_and_a_user_over_it_is() {
+        use crate::continuous::{Segmenter, SegmenterConfig};
+        use crate::echo::{EchoGuard, SAMPLE_RATE, webrtc::WebRtc};
+
+        let reply = decode_mp3(recorded_mp3()).expect("the recorded stream decodes");
+        let ratio = f64::from(SAMPLE_RATE) / f64::from(reply.sample_rate);
+        let one: Vec<f32> = (0..(reply.samples.len() as f64 * ratio) as usize)
+            .map(|n| {
+                let at = n as f64 / ratio;
+                let left = (at.floor() as usize).min(reply.samples.len() - 1);
+                let right = (left + 1).min(reply.samples.len() - 1);
+                let fraction = (at - left as f64) as f32;
+                reply.samples[left] * (1.0 - fraction) + reply.samples[right] * fraction
+            })
+            .collect();
+        // A long reply, as the real ones are: the canceller has to hold.
+        let mut far: Vec<f32> = Vec::new();
+        for _ in 0..4 {
+            far.extend_from_slice(&one);
+        }
+
+        let run = |user: Option<std::ops::Range<usize>>| -> bool {
+            let mut guard = EchoGuard::new(Box::new(WebRtc::new().expect("the APM starts")));
+            guard.note_rendered(&SpeechAudio {
+                samples: far.clone(),
+                sample_rate: SAMPLE_RATE,
+            });
+            let delay = SAMPLE_RATE as usize * 40 / 1_000;
+            let total = far.len() + delay;
+            let near: Vec<f32> = (0..total)
+                .map(|n| {
+                    let echo = n
+                        .checked_sub(delay)
+                        .and_then(|i| far.get(i))
+                        .unwrap_or(&0.0)
+                        * 0.35;
+                    let voice =
+                        user.as_ref()
+                            .filter(|range| range.contains(&n))
+                            .map_or(0.0, |_| {
+                                0.5 * (2.0 * std::f32::consts::PI * 220.0 * n as f32
+                                    / SAMPLE_RATE as f32)
+                                    .sin()
+                            });
+                    echo + voice
+                })
+                .collect();
+            let mut segmenter = Segmenter::new(SegmenterConfig::default());
+            let mut heard = false;
+            for chunk in near.chunks(SAMPLE_RATE as usize / 20) {
+                segmenter.push(&guard.clean(chunk));
+                heard |= segmenter.has_voice();
+            }
+            heard
+        };
+
+        assert!(!run(None), "the reply heard back counted as a voice");
+        let from = one.len() * 2;
+        assert!(
+            run(Some(from..from + SAMPLE_RATE as usize)),
+            "a user talking over the reply was not heard"
+        );
+    }
 }
