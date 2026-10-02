@@ -328,6 +328,89 @@ mod tests {
         );
     }
 
+    fn seeds(store: &WorkflowStore) -> (WorkflowDraft, WorkflowDraft) {
+        let all = store.seed_templates("/project").expect("seed");
+        let pick = |kind| all.iter().find(|d| d.kind == kind).expect("seed").clone();
+        (pick(WorkflowKind::Story), pick(WorkflowKind::Plan))
+    }
+
+    #[test]
+    fn unmodified_pre_policy_seed_is_migrated_once() {
+        let dir = tempfile::tempdir().expect("db dir");
+        let store = WorkflowStore::open_at(&dir.path().join("workflow.sqlite3")).expect("store");
+        store
+            .seed_pre_policy_templates("/project")
+            .expect("legacy seed");
+        let (story, plan) = seeds(&store);
+        // catches: seeded projects keep an empty-check story rev 1 and every integration fails.
+        assert_eq!(story.latest_published_revision, 2);
+        assert!(!story.required_checks.is_empty());
+        assert_eq!(
+            store
+                .get_published(&story.id, 2)
+                .expect("rev 2")
+                .required_checks,
+            story.required_checks
+        );
+        assert!(
+            store
+                .get_published(&story.id, 1)
+                .expect("rev 1")
+                .required_checks
+                .is_empty()
+        );
+        // the plan must dispatch the migrated revision or new runs still pin rev 1.
+        assert_eq!(plan.latest_published_revision, 2);
+        assert!(
+            store
+                .get_published(&plan.id, 2)
+                .expect("plan rev 2")
+                .graph
+                .nodes
+                .iter()
+                .any(|node| matches!(&node.kind,
+            NodeKind::StoryDispatch { story_template_id, story_revision }
+            if story_template_id == &story.id && *story_revision == 2))
+        );
+        // GREEN: second load is a no-op.
+        let (story_again, plan_again) = seeds(&store);
+        assert_eq!((story_again, plan_again), (story, plan));
+        assert_eq!(
+            store.get_published(&plan.id, 3).unwrap_err(),
+            "published workflow revision not found"
+        );
+    }
+
+    #[test]
+    fn edited_pre_policy_seed_is_untouched() {
+        let dir = tempfile::tempdir().expect("db dir");
+        let store = WorkflowStore::open_at(&dir.path().join("workflow.sqlite3")).expect("store");
+        store
+            .seed_pre_policy_templates("/project")
+            .expect("legacy seed");
+        let story = store
+            .list_drafts("/project")
+            .expect("list")
+            .into_iter()
+            .find(|d| d.kind == WorkflowKind::Story)
+            .expect("story");
+        let mut graph = story.graph.clone();
+        if let NodeKind::Agent {
+            prompt_template, ..
+        } = &mut graph.nodes[1].kind
+        {
+            *prompt_template = "User edit".into();
+        }
+        let edited = store
+            .update_draft(&story.id, story.draft_revision, graph)
+            .expect("edit");
+        let (after, plan) = seeds(&store);
+        // catches: the migration overwriting a user-edited definition.
+        assert_eq!(after, edited);
+        assert_eq!(plan.latest_published_revision, 1);
+        assert!(after.required_checks.is_empty());
+    }
+
     #[test]
     fn seeded_resolve_plan_pins_the_story_delivery_template() {
         let dir = tempfile::tempdir().expect("db dir");

@@ -304,6 +304,27 @@ mod tests {
     }
 
     #[test]
+    fn empty_policy_error_names_the_definition_and_revision() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = WorkflowStore::open_at(&dir.path().join("workflow.sqlite3")).unwrap();
+        store.seed_pre_policy_templates("/project").unwrap();
+        let story = store
+            .list_drafts("/project")
+            .unwrap()
+            .into_iter()
+            .find(|draft| draft.kind == WorkflowKind::Story)
+            .unwrap();
+        let published = store.get_published(&story.id, 1).unwrap();
+        // catches: a bare "no checks" error that does not tell the user which definition to fix.
+        let error = super::store::require_nonempty_policy(&published).unwrap_err();
+        assert!(
+            error.contains("Story delivery")
+                && error.contains("revision 1")
+                && error.contains("required checks")
+        );
+    }
+
+    #[test]
     fn recorded_merge_releases_dependents_and_ref_movement_invalidates_receipts() {
         let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
         let definitions = WorkflowStore::open().unwrap();
@@ -594,7 +615,7 @@ mod tests {
             super::store::receipt_current(&integrated.snapshot, &story_id, story.revision).unwrap()
         );
         assert!(!super::store::receipt_current(&vacuous, &story_id, story.revision).unwrap());
-        assert!(super::store::require_nonempty_policy(&[]).is_err());
+
         let mut verification_snapshot = integrated.snapshot.clone();
         verification_snapshot.planning_fingerprint = Some("closed".into());
         assert!(super::store::ready_to_verify(&verification_snapshot, &[story.clone()]).is_ok());
