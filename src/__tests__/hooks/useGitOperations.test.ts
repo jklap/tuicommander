@@ -3748,6 +3748,16 @@ describe("useGitOperations", () => {
 			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
 		});
 
+		// The ask-mode dialog only reviews what the backend judged unsafe: a safe orphan is removed unasked.
+		const dirtyOrphans = () =>
+			mockRepo.assessOrphanCleanup.mockImplementation(async (repoPath: string) =>
+				(await mockRepo.detectOrphanWorktrees(repoPath)).map((path: string) => ({
+					path,
+					safe: false,
+					reason: "untracked files",
+				})),
+			);
+
 		it("never auto-removes a dirty orphan", async () => {
 			repoSettingsStore.getOrCreate("/repo", "Repo");
 			repoSettingsStore.update("/repo", { orphanCleanup: "on" });
@@ -3889,11 +3899,16 @@ describe("useGitOperations", () => {
 			});
 			// orphanCleanup defaults to "ask" when no per-repo override
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+			dirtyOrphans();
 
 			await askGitOps.refreshAllBranchStats();
 
-			expect(confirmOrphanCleanup).toHaveBeenCalledWith("/repo", [{ path: "/wt/detached-1", safe: true }], 10);
-			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/detached-1", true);
+			expect(confirmOrphanCleanup).toHaveBeenCalledWith(
+				"/repo",
+				[{ path: "/wt/detached-1", safe: false, reason: "untracked files" }],
+				10,
+			);
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/detached-1", false, []);
 			expect(mockRepo.beginOrphanCleanup).toHaveBeenCalledWith("/repo", ["/wt/detached-1"]);
 			expect(mockRepo.clearOrphanCleanup).toHaveBeenCalledWith("/repo", false);
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Removed 1 orphaned worktree(s)");
@@ -3919,6 +3934,7 @@ describe("useGitOperations", () => {
 				getMaxTabNameLength: () => 25,
 			});
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+			dirtyOrphans();
 			mockRepo.pendingOrphanCleanupAnswer.mockResolvedValue(false);
 			const refresh = askGitOps.refreshAllBranchStats();
 			await vi.advanceTimersByTimeAsync(500);
@@ -3942,6 +3958,7 @@ describe("useGitOperations", () => {
 				getMaxTabNameLength: () => 25,
 			});
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+			dirtyOrphans();
 
 			await askGitOps.refreshAllBranchStats();
 
@@ -3961,6 +3978,7 @@ describe("useGitOperations", () => {
 				getMaxTabNameLength: () => 25,
 			});
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+			dirtyOrphans();
 			mockRepo.pendingOrphanCleanupAnswer.mockResolvedValue(false);
 			await askGitOps.refreshAllBranchStats();
 			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
@@ -3968,6 +3986,7 @@ describe("useGitOperations", () => {
 
 		it("keeps an orphan when Ask mode has no confirmation dialog", async () => {
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+			dirtyOrphans();
 			mockRepo.getRepoDiffStats.mockResolvedValue({
 				diff_stats: { "/repo": { additions: 3, deletions: 1 } },
 				last_commit_ts: {},
@@ -4018,11 +4037,16 @@ describe("useGitOperations", () => {
 				getMaxTabNameLength: () => 25,
 			});
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/blocked"]);
+			dirtyOrphans();
 			mockRepo.removeOrphanWorktree.mockRejectedValueOnce(new Error("permission denied"));
 
 			await askGitOps.refreshAllBranchStats();
 
-			expect(confirmOrphanCleanup).toHaveBeenCalledWith("/repo", [{ path: "/wt/blocked", safe: true }], 10);
+			expect(confirmOrphanCleanup).toHaveBeenCalledWith(
+				"/repo",
+				[{ path: "/wt/blocked", safe: false, reason: "untracked files" }],
+				10,
+			);
 			expect(mockSetStatusInfo).not.toHaveBeenCalledWith(expect.stringContaining("Removed"));
 		});
 
@@ -4039,6 +4063,7 @@ describe("useGitOperations", () => {
 				getMaxTabNameLength: () => 25,
 			});
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+			dirtyOrphans();
 
 			const termInOrphan = terminalsStore.add(makeTerminal({ name: "In orphan", cwd: "/wt/detached-1" }));
 			const termElsewhere = terminalsStore.add(makeTerminal({ name: "Elsewhere", cwd: "/other" }));
@@ -4065,6 +4090,7 @@ describe("useGitOperations", () => {
 				getMaxTabNameLength: () => 25,
 			});
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+			dirtyOrphans();
 
 			await askGitOps.refreshAllBranchStats();
 
@@ -4086,6 +4112,7 @@ describe("useGitOperations", () => {
 			});
 			// Same orphan detected on every refresh
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+			dirtyOrphans();
 
 			// First refresh: user clicks "Keep" (cancel)
 			await askGitOps.refreshAllBranchStats();
@@ -4095,6 +4122,71 @@ describe("useGitOperations", () => {
 
 			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
 			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
+		});
+
+		const askOps = (
+			confirmOrphanCleanup: NonNullable<Parameters<typeof useGitOperations>[0]["dialogs"]["confirmOrphanCleanup"]>,
+		) =>
+			useGitOperations({
+				repo: mockRepo,
+				pty: mockPty,
+				dialogs: { ...mockDialogs, confirmOrphanCleanup },
+				closeTerminal: mockCloseTerminal,
+				createNewTerminal: mockCreateNewTerminal,
+				setStatusInfo: mockSetStatusInfo,
+				getDefaultFontSize: () => 14,
+				getMaxTabNameLength: () => 25,
+			});
+		const dirty = (fingerprint: string) => ({
+			path: "/wt/hooked",
+			safe: false,
+			reason: "untracked files",
+			dirty_fingerprint: fingerprint,
+		});
+
+		// Catches: "ask" mode opening a dialog for a clean, merged detached checkout, so a worktree that holds
+		// nothing keeps interrupting the user until they click Keep or Remove (orphan-dialog-repeats).
+		it("removes a safe orphan without asking when orphanCleanup=ask", async () => {
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(false);
+			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/clean", safe: true }]);
+
+			await askOps(confirmOrphanCleanup).refreshAllBranchStats();
+
+			expect(confirmOrphanCleanup).not.toHaveBeenCalled();
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/clean", true);
+		});
+
+		// Catches: a Keep that is forgotten when the dirty state is unchanged, or that outlives a change:
+		// the same fingerprint stays quiet, a different one is judged afresh.
+		it("a Keep holds only while the orphan's dirty fingerprint is unchanged", async () => {
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(false);
+			const ops = askOps(confirmOrphanCleanup);
+			mockRepo.assessOrphanCleanup.mockResolvedValue([dirty("fp-1")]);
+
+			await ops.refreshAllBranchStats();
+			await ops.refreshAllBranchStats();
+			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
+
+			mockRepo.assessOrphanCleanup.mockResolvedValue([dirty("fp-2")]);
+			await ops.refreshAllBranchStats();
+			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(2);
+		});
+
+		// Catches: a kept orphan that has since become clean staying parked behind its old Keep instead of
+		// being re-evaluated and removed.
+		it("a kept orphan that became clean is removed without asking", async () => {
+			const confirmOrphanCleanup = vi.fn().mockResolvedValue(false);
+			const ops = askOps(confirmOrphanCleanup);
+			mockRepo.assessOrphanCleanup.mockResolvedValue([dirty("fp-1")]);
+			await ops.refreshAllBranchStats();
+
+			mockRepo.assessOrphanCleanup.mockResolvedValue([
+				{ path: "/wt/hooked", safe: true, dirty_fingerprint: "fp-clean" },
+			]);
+			await ops.refreshAllBranchStats();
+
+			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
+			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/hooked", true);
 		});
 
 		it("offers a newly found orphan after the user kept an earlier one", async () => {
@@ -4110,12 +4202,18 @@ describe("useGitOperations", () => {
 				getMaxTabNameLength: () => 25,
 			});
 			mockRepo.detectOrphanWorktrees.mockResolvedValueOnce(["/wt/kept"]).mockResolvedValueOnce(["/wt/kept", "/wt/new"]);
+			dirtyOrphans();
 
 			await askGitOps.refreshAllBranchStats();
 			await askGitOps.refreshAllBranchStats();
 
 			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(2);
-			expect(confirmOrphanCleanup).toHaveBeenNthCalledWith(2, "/repo", [{ path: "/wt/new", safe: true }], 10);
+			expect(confirmOrphanCleanup).toHaveBeenNthCalledWith(
+				2,
+				"/repo",
+				[{ path: "/wt/new", safe: false, reason: "untracked files" }],
+				10,
+			);
 		});
 
 		it("does nothing when orphanCleanup=off", async () => {
@@ -4156,6 +4254,7 @@ describe("useGitOperations", () => {
 			mockRepo.getRepoStructure.mockResolvedValue({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
 			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
 			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+			dirtyOrphans();
 
 			// Single refresh processes both repos in parallel via Promise.all
 			const p = askGitOps.refreshAllBranchStats();

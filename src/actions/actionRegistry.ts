@@ -11,6 +11,7 @@ import { dictationStore } from "../stores/dictation";
 import { keybindingsStore } from "../stores/keybindings";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
+import { terminalsStore } from "../stores/terminals";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
 import { isTauri } from "../transport";
 import { comboToDisplay } from "../utils/hotkey";
@@ -102,6 +103,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"block-next": { label: "Next command block", category: "Terminal" },
 	"block-fold-toggle": { label: "Toggle block fold", category: "Terminal" },
 	"block-search-toggle": { label: "Search in block", category: "Terminal" },
+	"answers-only": { label: "Toggle answers-only view", category: "Terminal" },
 	"toggle-compose-panel": { label: "Toggle compose panel", category: "Panels" },
 	// Label is replaced per build by what the toggle will do — see getActionEntries.
 	"toggle-hands-free": { label: "Start hands-free conversation", category: "Dictation" },
@@ -180,6 +182,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"block-next": handlers.blockNext,
 		"block-fold-toggle": handlers.blockFoldToggle,
 		"block-search-toggle": handlers.blockSearchToggle,
+		"answers-only": () => terminalsStore.toggleAnswersOnly(),
 		"toggle-compose-panel": handlers.toggleComposePanel,
 		"toggle-hands-free": () => void toggleHandsFreeConversation(),
 	};

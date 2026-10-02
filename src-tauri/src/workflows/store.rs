@@ -349,6 +349,9 @@ impl WorkflowStore {
         }
         validate_graph(&draft.graph, draft.kind)?;
         validate_checks(&draft.required_checks)?;
+        if draft.kind == WorkflowKind::Story && draft.required_checks.is_empty() {
+            return Err("a story workflow needs at least one required check to publish".into());
+        }
         if draft.closure == WorkflowClosure::Automatic {
             return Err(
                 "automatic closure cannot be published until its evidence gate exists".into(),
@@ -372,6 +375,34 @@ impl WorkflowStore {
         read_published(&self.connect()?, id, revision)
     }
 
+    /// Seed the pre-check-policy built-ins (story_delivery rev 1 with no checks).
+    #[cfg(test)]
+    pub(crate) fn seed_pre_policy_templates(&self, project: &str) -> Result<(), String> {
+        let conn = self.connect()?;
+        let story_id = Uuid::now_v7().to_string();
+        let plan_id = Uuid::now_v7().to_string();
+        insert_seed(
+            &conn,
+            &story_id,
+            project,
+            "Story delivery",
+            WorkflowKind::Story,
+            "story_delivery",
+            frozen_graph(FROZEN_STORY_SEED),
+            &[],
+        )?;
+        insert_seed(
+            &conn,
+            &plan_id,
+            project,
+            "Resolve plan",
+            WorkflowKind::Plan,
+            "resolve_plan",
+            frozen_graph(&FROZEN_PLAN_SEED.replace("STORY_ID", &story_id)),
+            &[],
+        )
+    }
+
     /// Seed the two built-in templates atomically and only once per project.
     pub fn seed_templates(&self, project: &str) -> Result<Vec<WorkflowDraft>, String> {
         validate_identity(project, "Resolve plan")?;
@@ -393,6 +424,7 @@ impl WorkflowStore {
                 WorkflowKind::Story,
                 "story_delivery",
                 story_template_graph(),
+                &default_story_checks(),
             )?;
             insert_seed(
                 &tx,
@@ -401,8 +433,11 @@ impl WorkflowStore {
                 "Resolve plan",
                 WorkflowKind::Plan,
                 "resolve_plan",
-                resolve_plan_graph(&story_id),
+                resolve_plan_graph(&story_id, 1),
+                &[],
             )?;
+        } else {
+            migrate_unchecked_story_seed(&tx, project)?;
         }
         let ids = {
             let mut stmt = tx.prepare("SELECT id FROM workflow_definitions WHERE project=?1 AND builtin_key IS NOT NULL ORDER BY builtin_key")
@@ -420,6 +455,69 @@ impl WorkflowStore {
             .map_err(|e| format!("commit template seed: {e}"))?;
         Ok(templates)
     }
+}
+
+/// Seeds created before the check policy shipped hold story_delivery rev 1 with
+/// no checks, which makes every integration fail. When that definition (and the
+/// resolve_plan seed pinning it) is byte-for-byte the original seed, publish
+/// revision 2 with the default policy. Anything the user edited is left alone;
+/// integration then reports the missing checks by name.
+fn migrate_unchecked_story_seed(conn: &Connection, project: &str) -> Result<(), String> {
+    let seed_id = |key: &str| -> Result<Option<String>, String> {
+        conn.query_row(
+            "SELECT id FROM workflow_definitions WHERE project=?1 AND builtin_key=?2",
+            params![project, key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("find built-in workflow: {e}"))
+    };
+    let (Some(story_id), Some(plan_id)) = (seed_id("story_delivery")?, seed_id("resolve_plan")?)
+    else {
+        return Ok(());
+    };
+    let is_original = |id: &str, graph: &WorkflowGraph, checks: &[CheckDefinition]| {
+        let draft = read_draft(conn, id)?;
+        let published = read_published(conn, id, 1)?;
+        Ok::<_, String>(
+            draft.draft_revision == 1
+                && draft.latest_published_revision == 1
+                && draft.closure == WorkflowClosure::Human
+                && draft.graph == *graph
+                && draft.required_checks == checks
+                && published.graph == *graph
+                && published.closure == WorkflowClosure::Human
+                && published.required_checks == checks,
+        )
+    };
+    if !is_original(&story_id, &story_template_graph(), &[])?
+        || !is_original(&plan_id, &resolve_plan_graph(&story_id, 1), &[])?
+    {
+        return Ok(());
+    }
+    republish_seed(
+        conn,
+        &story_id,
+        &story_template_graph(),
+        &default_story_checks(),
+    )?;
+    republish_seed(conn, &plan_id, &resolve_plan_graph(&story_id, 2), &[])
+}
+
+fn republish_seed(
+    conn: &Connection,
+    id: &str,
+    graph: &WorkflowGraph,
+    checks: &[CheckDefinition],
+) -> Result<(), String> {
+    let raw = encode_graph(graph)?;
+    let checks_raw =
+        serde_json::to_string(checks).map_err(|e| format!("encode workflow checks: {e}"))?;
+    conn.execute("UPDATE workflow_definitions SET graph_json=?1,checks_json=?2,draft_revision=2,latest_published_revision=2,last_published_draft_revision=2 WHERE id=?3",
+        params![raw, checks_raw, id]).map_err(|e| format!("migrate built-in workflow: {e}"))?;
+    conn.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json,closure,checks_json) SELECT id,2,project,name,kind,?1,closure,?2 FROM workflow_published WHERE id=?3 AND revision=1",
+        params![raw, checks_raw, id]).map_err(|e| format!("publish migrated built-in workflow: {e}"))?;
+    Ok(())
 }
 
 fn validate_identity(project: &str, name: &str) -> Result<(), String> {
@@ -510,6 +608,19 @@ fn validate_pinned_templates(conn: &Connection, draft: &WorkflowDraft) -> Result
     Ok(())
 }
 
+/// Project-independent default policy for seeded story workflows: the repository
+/// object graph must be intact at the checked commit. Projects pin their own
+/// build/test checks in a new revision.
+fn default_story_checks() -> Vec<CheckDefinition> {
+    vec![CheckDefinition {
+        id: "repository-integrity".into(),
+        argv: ["git", "fsck", "--connectivity-only", "--no-progress"]
+            .map(String::from)
+            .into(),
+        timeout_secs: 300,
+    }]
+}
+
 fn insert_seed(
     conn: &Connection,
     id: &str,
@@ -518,14 +629,18 @@ fn insert_seed(
     kind: WorkflowKind,
     key: &str,
     graph: WorkflowGraph,
+    checks: &[CheckDefinition],
 ) -> Result<(), String> {
     validate_graph(&graph, kind)?;
+    validate_checks(checks)?;
     let raw = encode_graph(&graph)?;
-    conn.execute("INSERT INTO workflow_definitions(id,project,name,kind,graph_json,draft_revision,latest_published_revision,last_published_draft_revision,builtin_key)
-                  VALUES (?1,?2,?3,?4,?5,1,1,1,?6)", params![id, project, name, kind_str(kind), raw, key])
+    let checks_raw =
+        serde_json::to_string(checks).map_err(|e| format!("encode workflow checks: {e}"))?;
+    conn.execute("INSERT INTO workflow_definitions(id,project,name,kind,graph_json,draft_revision,latest_published_revision,last_published_draft_revision,builtin_key,checks_json)
+                  VALUES (?1,?2,?3,?4,?5,1,1,1,?6,?7)", params![id, project, name, kind_str(kind), raw, key, checks_raw])
         .map_err(|e| format!("insert built-in workflow: {e}"))?;
-    conn.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json) VALUES (?1,1,?2,?3,?4,?5)",
-        params![id, project, name, kind_str(kind), raw]).map_err(|e| format!("publish built-in workflow: {e}"))?;
+    conn.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json,checks_json) VALUES (?1,1,?2,?3,?4,?5,?6)",
+        params![id, project, name, kind_str(kind), raw, checks_raw]).map_err(|e| format!("publish built-in workflow: {e}"))?;
     Ok(())
 }
 
@@ -586,7 +701,7 @@ fn story_template_graph() -> WorkflowGraph {
         ],
     }
 }
-fn resolve_plan_graph(story_template_id: &str) -> WorkflowGraph {
+fn resolve_plan_graph(story_template_id: &str, story_revision: i64) -> WorkflowGraph {
     WorkflowGraph {
         nodes: vec![
             node("start", NodeKind::Start),
@@ -603,7 +718,7 @@ fn resolve_plan_graph(story_template_id: &str) -> WorkflowGraph {
                 "dispatch",
                 NodeKind::StoryDispatch {
                     story_template_id: story_template_id.into(),
-                    story_revision: 1,
+                    story_revision,
                 },
             ),
             node("judge", NodeKind::Judge),
@@ -624,4 +739,53 @@ fn resolve_plan_graph(story_template_id: &str) -> WorkflowGraph {
             edge("replan", "pause", Some("exhausted")),
         ],
     }
+}
+
+/// The rev-1 seed graphs as shipped before the check policy, frozen as literals
+/// so a later edit of the templates cannot silently make real legacy seeds
+/// non-migratable while the migration test stays green.
+#[cfg(test)]
+const FROZEN_STORY_SEED: &str = r#"{"nodes":[
+{"id":"start","kind":{"type":"start"}},
+{"id":"implement","kind":{"type":"agent","role":"implementer","capabilities":["story_read","story_report"],"prompt_template":"Implement {{story.title}} and report evidence for {{story.id}}."}},
+{"id":"review","kind":{"type":"agent","role":"reviewer","capabilities":["story_read","story_report"],"prompt_template":"Review {{story.id}} against its criteria and report findings."}},
+{"id":"judge","kind":{"type":"judge"}},
+{"id":"repair","kind":{"type":"loop","max_iterations":3}},
+{"id":"pause","kind":{"type":"pause"}},
+{"id":"end","kind":{"type":"end"}}],
+"edges":[
+{"from":"start","to":"implement","outcome":null},
+{"from":"implement","to":"review","outcome":null},
+{"from":"review","to":"judge","outcome":null},
+{"from":"judge","to":"end","outcome":"yes"},
+{"from":"judge","to":"repair","outcome":"no"},
+{"from":"judge","to":"pause","outcome":"uncertain"},
+{"from":"repair","to":"implement","outcome":"repeat"},
+{"from":"repair","to":"pause","outcome":"exhausted"}]}"#;
+
+#[cfg(test)]
+const FROZEN_PLAN_SEED: &str = r#"{"nodes":[
+{"id":"start","kind":{"type":"start"}},
+{"id":"coordinate","kind":{"type":"agent","role":"coordinator","capabilities":["story_read","story_create","agent_spawn"],"prompt_template":"Resolve plan {{plan.id}} from the current snapshot."}},
+{"id":"create","kind":{"type":"create_stories"}},
+{"id":"dispatch","kind":{"type":"story_dispatch","story_template_id":"STORY_ID","story_revision":1}},
+{"id":"judge","kind":{"type":"judge"}},
+{"id":"replan","kind":{"type":"loop","max_iterations":8}},
+{"id":"pause","kind":{"type":"pause"}},
+{"id":"end","kind":{"type":"end"}}],
+"edges":[
+{"from":"start","to":"coordinate","outcome":null},
+{"from":"coordinate","to":"create","outcome":null},
+{"from":"create","to":"dispatch","outcome":null},
+{"from":"dispatch","to":"judge","outcome":"completed"},
+{"from":"dispatch","to":"pause","outcome":"blocked"},
+{"from":"judge","to":"end","outcome":"yes"},
+{"from":"judge","to":"replan","outcome":"no"},
+{"from":"judge","to":"pause","outcome":"uncertain"},
+{"from":"replan","to":"create","outcome":"repeat"},
+{"from":"replan","to":"pause","outcome":"exhausted"}]}"#;
+
+#[cfg(test)]
+fn frozen_graph(raw: &str) -> WorkflowGraph {
+    serde_json::from_str(raw).expect("frozen seed graph")
 }
