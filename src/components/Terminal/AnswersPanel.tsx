@@ -1,4 +1,4 @@
-import { type Component, createEffect, For, on, Show } from "solid-js";
+import { type Component, createEffect, createMemo, For, on, Show } from "solid-js";
 import type { AnswersTurn } from "./answersTurn";
 
 interface AnswersPanelProps {
@@ -12,20 +12,19 @@ const STICK_SLACK_PX = 8;
 
 /**
  * The answers-only view: an opaque layer over the terminal canvas with every user
- * prompt of the session in full, each followed by the 💬 answers of its turn. Plain
+ * prompt of the session in full, each followed by the 💬 answers of its turn; a turn
+ * without a 💬 answer is left out. Plain
  * DOM text, so it is selectable and copyable. It opens at the newest entry and keeps
  * following it until the user scrolls up.
  */
 export const AnswersPanel: Component<AnswersPanelProps> = (props) => {
 	let panel!: HTMLDivElement;
 	let stickToBottom = true;
+	const answered = createMemo(() => props.view.filter((turn) => turn.answers.length > 0));
 	createEffect(
-		on(
-			() => props.view,
-			() => {
-				if (stickToBottom) panel.scrollTop = panel.scrollHeight;
-			},
-		),
+		on(answered, () => {
+			if (stickToBottom) panel.scrollTop = panel.scrollHeight;
+		}),
 	);
 	return (
 		<div
@@ -52,8 +51,8 @@ export const AnswersPanel: Component<AnswersPanelProps> = (props) => {
 				cursor: "text",
 			}}
 		>
-			<For each={props.view}>
-				{(turn, index) => (
+			<For each={answered()}>
+				{(turn) => (
 					<div data-turn style={{ "margin-bottom": "14px" }}>
 						<Show when={turn.prompt}>
 							{(prompt) => (
@@ -62,30 +61,21 @@ export const AnswersPanel: Component<AnswersPanelProps> = (props) => {
 								</div>
 							)}
 						</Show>
-						<Show
-							when={turn.answers.length > 0}
-							fallback={
-								<div data-no-answer style={{ color: "var(--fg-muted)", "font-style": "italic" }}>
-									{index() === props.view.length - 1 ? "No 💬 answer yet." : "No 💬 answer in this turn."}
+						<For each={turn.answers}>
+							{(answer) => (
+								<div
+									data-answer
+									style={{
+										padding: "2px 0 2px 8px",
+										"margin-bottom": "6px",
+										"border-left": "3px solid rgba(94,190,140,0.9)",
+										background: "rgba(94,190,140,0.14)",
+									}}
+								>
+									{answer}
 								</div>
-							}
-						>
-							<For each={turn.answers}>
-								{(answer) => (
-									<div
-										data-answer
-										style={{
-											padding: "2px 0 2px 8px",
-											"margin-bottom": "6px",
-											"border-left": "3px solid rgba(94,190,140,0.9)",
-											background: "rgba(94,190,140,0.14)",
-										}}
-									>
-										{answer}
-									</div>
-								)}
-							</For>
-						</Show>
+							)}
+						</For>
 					</div>
 				)}
 			</For>
