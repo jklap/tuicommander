@@ -4,7 +4,6 @@ import { rowText } from "../canvasTerminalUtils";
 import {
 	continuationRowsAfterSuggest,
 	isSuggestBlock,
-	lastTurnStartRow,
 	paintOverlayBlocks,
 	planSuggestOverlay,
 	type RowSnapshot,
@@ -281,103 +280,22 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 	});
 });
 
-describe("planSuggestOverlay — answers-only view", () => {
-	const turn = rows([
-		["❯ question", false], // 0 user prompt, outside the turn
-		["thinking about it", false], // 1
-		["💬 Yes, it works.", false], // 2
-		["more tool output that is long and", false], // 3
-		["wraps onto a second row", true], // 4
-		["", false], // 5 blank
-		["💬 Second point that wraps", false], // 6
-		["onto another row.", true], // 7
-		["❯ ", false], // 8 live prompt (cursor row)
-	]);
-
-	it("masks the non-marker rows of the turn and keeps the marker lines", () => {
-		const { blocks } = planSuggestOverlay(9, turn, { startRow: 1, endRow: 8 });
-		expect(blocks).toEqual([
-			{ row: 1, kind: "collapsed" },
-			{ row: 2, kind: "answer" },
-			{ row: 3, kind: "collapsed" },
-			{ row: 4, kind: "collapsed" },
-			{ row: 6, kind: "answer" },
-			{ row: 7, kind: "answer" },
-		]);
-	});
-
-	it("leaves rows outside the turn and the live prompt untouched", () => {
-		// catches: the user's own prompt, or the input line, being collapsed with the output
-		const rowsMasked = planSuggestOverlay(9, turn, { startRow: 1, endRow: 8 }).blocks.map((b) => b.row);
-		expect(rowsMasked).not.toContain(0);
-		expect(rowsMasked).not.toContain(8);
-	});
-
-	it("expands back: without the scope nothing is collapsed", () => {
-		const kinds = planSuggestOverlay(9, turn).blocks.map((b) => b.kind);
-		expect(kinds).not.toContain("collapsed");
-	});
-
-	it("keeps the marker highlight and a distinct key in both modes", () => {
-		const on = planSuggestOverlay(9, turn, { startRow: 1, endRow: 8 });
-		const off = planSuggestOverlay(9, turn);
-		expect(on.key).not.toBe(off.key);
-		expect(off.blocks.filter((b) => b.kind === "answer").map((b) => b.row)).toEqual([2, 6, 7]);
-	});
-
-	it("collapses an intent line inside the turn instead of tinting it", () => {
-		const get = rows([
-			["intent: doing work (Work)", false],
-			["💬 ok", false],
-		]);
-		expect(planSuggestOverlay(2, get, { startRow: 0, endRow: 2 }).blocks).toEqual([
-			{ row: 0, kind: "collapsed" },
-			{ row: 1, kind: "answer" },
-		]);
-	});
-});
-
-describe("lastTurnStartRow", () => {
-	it("starts after the last prompt visible on screen", () => {
-		// grid lines 10 and 14 are prompts; the screen shows lines 10.. (history 10, offset 0)
-		expect(lastTurnStartRow([10, 14], 10, 0, 24)).toBe(5);
-	});
-
-	it("starts at the top when the prompt has scrolled off", () => {
-		expect(lastTurnStartRow([3], 10, 0, 24)).toBe(0);
-	});
-
-	it("starts at the top when no prompt is known", () => {
-		expect(lastTurnStartRow([], 10, 0, 24)).toBe(0);
-	});
-
-	it("follows the scrollback offset", () => {
-		// scrolled up 4 lines: the screen now begins at line 6, so a prompt at line 8 is row 2
-		expect(lastTurnStartRow([8], 10, 4, 24)).toBe(3);
-	});
-
-	it("ignores prompts below the visible screen", () => {
-		// scrolled far up: the prompt at line 40 maps to row 30, below row 23
-		expect(lastTurnStartRow([40], 10, 0, 24)).toBe(0);
-	});
-});
-
 describe("paintOverlayBlocks", () => {
-	it("masks collapsed rows with the background and keeps answer rows translucent with a gutter", () => {
-		// catches: a collapsed row left see-through, or an answer row masked along with the rest of the turn
+	it("masks suggest rows with the background and keeps answer rows translucent with a gutter", () => {
+		// catches: an answer row masked like a suggest row, hiding the answer text
 		const container = document.createElement("div");
 		paintOverlayBlocks(
 			container,
 			[
-				{ row: 1, kind: "collapsed" },
+				{ row: 1, kind: "suggest" },
 				{ row: 2, kind: "answer" },
 			],
 			20,
 			"rgb(10, 10, 10)",
 		);
-		const [collapsed, answer] = Array.from(container.children) as HTMLElement[];
-		expect(collapsed.style.top).toBe("20px");
-		expect(collapsed.style.background).toBe("rgb(10, 10, 10)");
+		const [masked, answer] = Array.from(container.children) as HTMLElement[];
+		expect(masked.style.top).toBe("20px");
+		expect(masked.style.background).toBe("rgb(10, 10, 10)");
 		expect(answer.style.top).toBe("40px");
 		expect(answer.style.background).toContain("0.14");
 		expect(answer.style.boxShadow).toContain("inset 3px");
