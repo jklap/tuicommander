@@ -421,6 +421,19 @@ describe("dictationStore", () => {
 				consoleSpy.mockRestore();
 			});
 		});
+
+		// Bug caught: a secondary instance's refused start looks like a broken
+		// microphone instead of "the other instance owns dictation".
+		it("flags ownedElsewhere when another instance owns dictation", async () => {
+			mockInvoke.mockRejectedValueOnce("Dictation is owned by another TUICommander instance");
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await expect(store.startRecording()).rejects.toBeDefined();
+				expect(store.state.ownedElsewhere).toBe(true);
+				consoleSpy.mockRestore();
+			});
+		});
 	});
 
 	describe("saveConfig()", () => {

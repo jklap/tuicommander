@@ -103,6 +103,8 @@ pub struct DictationStatus {
     pub processing: bool,
     /// Normalized 0.0–1.0 microphone level while recording.
     pub audio_level: f32,
+    /// Another instance holds dictation for this config directory.
+    pub owned_elsewhere: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -259,6 +261,7 @@ pub fn get_dictation_status(
         recording: dictation.recording.load(Ordering::Acquire),
         processing: dictation.processing.load(Ordering::Acquire),
         audio_level: capture_level(push_to_talk_level, hands_free_level),
+        owned_elsewhere: !dictation.is_owner(),
     })
 }
 
@@ -1548,6 +1551,7 @@ pub fn start_dictation(
     dictation: State<'_, DictationState>,
     source: Option<String>,
 ) -> Result<(), String> {
+    dictation.ensure_owner()?;
     let from_fn = source.as_deref() == Some("fn");
     if from_fn && !dictation.fn_down.load(Ordering::Acquire) {
         return Err("Fn was released before recording started".to_string());
@@ -2267,6 +2271,7 @@ pub(crate) fn arm_hands_free_with(
         &str,
     ) -> Result<Box<dyn continuous::VoiceEndpoint>, String>,
 ) -> Result<HandsFreeStatus, String> {
+    dictation.ensure_owner()?;
     check_binding_field(session_id, "Session id")?;
     check_binding_field(owner, "Audio owner")?;
     if !crate::pty::session_accepts_voice(state, session_id) {
@@ -3238,6 +3243,30 @@ mod tests {
             "speech without the activation phrase must not reach the model"
         );
         disarm_hands_free(&state, &dictation);
+    }
+
+    /// Bug caught: a second desktop instance on the same config directory arms
+    /// hands-free and opens the microphone the owner is using. `start_dictation`
+    /// runs the same `ensure_owner` as its first statement.
+    #[test]
+    fn a_non_owner_instance_refuses_to_arm_and_never_opens_the_microphone() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _held_by_the_other_instance =
+            crate::dictation::ownership::Ownership::acquire(dir.path());
+        let dictation = DictationState::new();
+        dictation.claim_ownership(dir.path());
+        assert!(!dictation.is_owner());
+        let opened = std::sync::atomic::AtomicBool::new(false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let result = arm_hands_free_with(&state, &dictation, "s", "desktop", &|_, _| {
+            opened.store(true, Ordering::SeqCst);
+            Err("endpoint opened".to_string())
+        });
+        assert_eq!(
+            result.unwrap_err(),
+            crate::dictation::ownership::OWNED_ELSEWHERE
+        );
+        assert!(!opened.load(Ordering::SeqCst), "the microphone was opened");
     }
 
     /// The whole feature, once, against a real session: arm binds, the status
