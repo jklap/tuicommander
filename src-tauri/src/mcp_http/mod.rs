@@ -7502,7 +7502,9 @@ mod tests {
                 .unwrap();
             let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert!(
-                json["error"].as_str().is_some_and(|e| e.contains("timed out")),
+                json["error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("timed out")),
                 "GET {path}: {json}"
             );
         }
