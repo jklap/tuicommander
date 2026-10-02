@@ -388,7 +388,7 @@ impl WorkflowStore {
             "Story delivery",
             WorkflowKind::Story,
             "story_delivery",
-            story_template_graph(),
+            frozen_graph(FROZEN_STORY_SEED),
             &[],
         )?;
         insert_seed(
@@ -398,7 +398,7 @@ impl WorkflowStore {
             "Resolve plan",
             WorkflowKind::Plan,
             "resolve_plan",
-            resolve_plan_graph(&story_id, 1),
+            frozen_graph(&FROZEN_PLAN_SEED.replace("STORY_ID", &story_id)),
             &[],
         )
     }
@@ -739,4 +739,53 @@ fn resolve_plan_graph(story_template_id: &str, story_revision: i64) -> WorkflowG
             edge("replan", "pause", Some("exhausted")),
         ],
     }
+}
+
+/// The rev-1 seed graphs as shipped before the check policy, frozen as literals
+/// so a later edit of the templates cannot silently make real legacy seeds
+/// non-migratable while the migration test stays green.
+#[cfg(test)]
+const FROZEN_STORY_SEED: &str = r#"{"nodes":[
+{"id":"start","kind":{"type":"start"}},
+{"id":"implement","kind":{"type":"agent","role":"implementer","capabilities":["story_read","story_report"],"prompt_template":"Implement {{story.title}} and report evidence for {{story.id}}."}},
+{"id":"review","kind":{"type":"agent","role":"reviewer","capabilities":["story_read","story_report"],"prompt_template":"Review {{story.id}} against its criteria and report findings."}},
+{"id":"judge","kind":{"type":"judge"}},
+{"id":"repair","kind":{"type":"loop","max_iterations":3}},
+{"id":"pause","kind":{"type":"pause"}},
+{"id":"end","kind":{"type":"end"}}],
+"edges":[
+{"from":"start","to":"implement","outcome":null},
+{"from":"implement","to":"review","outcome":null},
+{"from":"review","to":"judge","outcome":null},
+{"from":"judge","to":"end","outcome":"yes"},
+{"from":"judge","to":"repair","outcome":"no"},
+{"from":"judge","to":"pause","outcome":"uncertain"},
+{"from":"repair","to":"implement","outcome":"repeat"},
+{"from":"repair","to":"pause","outcome":"exhausted"}]}"#;
+
+#[cfg(test)]
+const FROZEN_PLAN_SEED: &str = r#"{"nodes":[
+{"id":"start","kind":{"type":"start"}},
+{"id":"coordinate","kind":{"type":"agent","role":"coordinator","capabilities":["story_read","story_create","agent_spawn"],"prompt_template":"Resolve plan {{plan.id}} from the current snapshot."}},
+{"id":"create","kind":{"type":"create_stories"}},
+{"id":"dispatch","kind":{"type":"story_dispatch","story_template_id":"STORY_ID","story_revision":1}},
+{"id":"judge","kind":{"type":"judge"}},
+{"id":"replan","kind":{"type":"loop","max_iterations":8}},
+{"id":"pause","kind":{"type":"pause"}},
+{"id":"end","kind":{"type":"end"}}],
+"edges":[
+{"from":"start","to":"coordinate","outcome":null},
+{"from":"coordinate","to":"create","outcome":null},
+{"from":"create","to":"dispatch","outcome":null},
+{"from":"dispatch","to":"judge","outcome":"completed"},
+{"from":"dispatch","to":"pause","outcome":"blocked"},
+{"from":"judge","to":"end","outcome":"yes"},
+{"from":"judge","to":"replan","outcome":"no"},
+{"from":"judge","to":"pause","outcome":"uncertain"},
+{"from":"replan","to":"create","outcome":"repeat"},
+{"from":"replan","to":"pause","outcome":"exhausted"}]}"#;
+
+#[cfg(test)]
+fn frozen_graph(raw: &str) -> WorkflowGraph {
+    serde_json::from_str(raw).expect("frozen seed graph")
 }
