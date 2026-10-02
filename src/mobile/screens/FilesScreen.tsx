@@ -3,6 +3,7 @@ import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
+import { isAbsolutePath, pathStripPrefix } from "../../utils/pathUtils";
 import { repoImageUrl } from "../../utils/repoImageUrl";
 import styles from "./FilesScreen.module.css";
 
@@ -252,6 +253,11 @@ export function FilesScreen(props: FilesScreenProps) {
 		const repoPath = repo();
 		const currentFile = file();
 		if (!repoPath || !currentFile) return relativePath;
+		if (isAbsolutePath(relativePath)) {
+			// Inside the open repository the route can serve it; outside there is no route by design.
+			const inRepo = pathStripPrefix(relativePath, repoPath);
+			return inRepo ? repoImageUrl(repoPath, inRepo) : relativePath;
+		}
 		return repoImageUrl(repoPath, `${currentFile.split("/").slice(0, -1).join("/")}/${relativePath}`);
 	}
 
