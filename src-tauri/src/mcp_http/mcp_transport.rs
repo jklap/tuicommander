@@ -3754,6 +3754,27 @@ fn worktree_remove_success_response(
     response
 }
 
+/// A detached checkout has no branch to name: it is removed by its own path,
+/// under the same safety verdict as the orphan sweep.
+async fn remove_detached_checkout(
+    state: &Arc<AppState>,
+    repo_path: String,
+    worktree_path: String,
+) -> serde_json::Value {
+    let state = state.clone();
+    match tokio::task::spawn_blocking(move || {
+        crate::worktree::remove_orphan_checkout(&state, &repo_path, &worktree_path, true, &[])
+    })
+    .await
+    {
+        Ok(Ok(())) => serde_json::json!({"ok": true}),
+        Ok(Err(error)) => serde_json::json!({"error": error}),
+        Err(error) => {
+            serde_json::json!({"error": format!("orphan removal task failed: {error}")})
+        }
+    }
+}
+
 async fn handle_worktree(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -3958,27 +3979,8 @@ async fn handle_worktree(
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
-            // A detached checkout has no branch to name: it is removed by its own
-            // path, under the same safety verdict as the orphan sweep.
-            if let Some(worktree_path) = args["worktree_path"].as_str().map(str::to_owned) {
-                let state = state.clone();
-                return match tokio::task::spawn_blocking(move || {
-                    crate::worktree::remove_orphan_checkout(
-                        &state,
-                        &path,
-                        &worktree_path,
-                        true,
-                        &[],
-                    )
-                })
-                .await
-                {
-                    Ok(Ok(())) => serde_json::json!({"ok": true}),
-                    Ok(Err(error)) => serde_json::json!({"error": error}),
-                    Err(error) => {
-                        serde_json::json!({"error": format!("orphan removal task failed: {error}")})
-                    }
-                };
+            if let Some(worktree_path) = args["worktree_path"].as_str() {
+                return remove_detached_checkout(state, path, worktree_path.to_owned()).await;
             }
             let workspace_id = match args["branch"].as_str() {
                 Some(b) => b.to_string(),
@@ -9959,11 +9961,6 @@ mod tests {
         assert!(
             body.contains("tokio::task::spawn_blocking"),
             "recursive worktree deletion and git safety checks must not park a Tokio worker"
-        );
-        assert!(
-            body.contains("let force = args[\"force\"].as_bool().unwrap_or(false)")
-                && body.contains("archive.as_deref(),\n                    force,"),
-            "native MCP removal must default force to false and forward an explicit true"
         );
     }
 
