@@ -20783,3 +20783,139 @@ fn session_exit_records_task_error_or_result_from_the_exit_code() {
         }
     }
 }
+
+fn rows_of(lines: &[&str]) -> Vec<String> {
+    lines.iter().map(|line| (*line).to_string()).collect()
+}
+
+/// Catches: the three mutants of the `take_while` clause that bounds the composer block
+/// in `composer_holds_paste_placeholder`.
+/// - `||` -> `&&` and delete `!`: the block shrinks to the `›` row, so a placeholder on a
+///   continuation row of a wrapped composer is missed and the swallowed Enter is not retried.
+/// - `==` -> `!=`: the block no longer stops at the first blank row, so a stale placeholder in
+///   the history below the composer draws a second Enter.
+#[test]
+fn paste_placeholder_detection_each_clause() {
+    let on_prompt_row = rows_of(&["› [Pasted Content 1967 chars]", "", "  gpt-5 · ~/repo"]);
+    assert!(composer_holds_paste_placeholder(&on_prompt_row));
+
+    let on_continuation_row = rows_of(&[
+        "› summarise this",
+        "  [Pasted Content 1967 chars]",
+        "  gpt-5 · ~/repo",
+    ]);
+    assert!(
+        composer_holds_paste_placeholder(&on_continuation_row),
+        "a wrapped composer keeps the placeholder below the › row"
+    );
+
+    let behind_a_blank_row = rows_of(&["› run", "", "  [Pasted Content 1967 chars]"]);
+    assert!(
+        !composer_holds_paste_placeholder(&behind_a_blank_row),
+        "the composer block ends at the first blank row"
+    );
+
+    let no_prompt_row = rows_of(&["  [Pasted Content 1967 chars]"]);
+    assert!(composer_holds_paste_placeholder(&no_prompt_row));
+}
+
+#[cfg(unix)]
+enum RetryWriterFault {
+    None,
+    Write,
+    Flush,
+}
+
+/// A PTY writer that, on Enter, makes the screen show Codex working and the output
+/// advance, i.e. everything `wait_for_queued_submission` needs to confirm. Only the
+/// `fault` decides whether `retry_enter_for_retained_composer` may reach that wait.
+#[cfg(unix)]
+struct WorkingOnEnterWriter {
+    state: Arc<AppState>,
+    sid: &'static str,
+    fault: RetryWriterFault,
+}
+
+#[cfg(unix)]
+impl std::io::Write for WorkingOnEnterWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.state
+            .grid
+            .vt_log_buffers
+            .get(self.sid)
+            .unwrap()
+            .lock()
+            .process(
+                b"\x1b[2J\x1b[H\xe2\x80\xa2 Working (2s \xe2\x80\xa2 esc to interrupt)\r\n\r\n\xe2\x80\xba run the next step please\r\n\r\n  gpt-5 \xc2\xb7 ~/repo",
+            );
+        self.state
+            .session_maps
+            .output_buffers
+            .get(self.sid)
+            .unwrap()
+            .lock()
+            .write(b"working");
+        match self.fault {
+            RetryWriterFault::Write => Err(std::io::Error::other("write failed")),
+            _ => Ok(bytes.len()),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self.fault {
+            RetryWriterFault::Flush => Err(std::io::Error::other("flush failed")),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Catches: `||` -> `&&` on the write-or-flush failure check of
+/// `retry_enter_for_retained_composer`. A failed write (or flush) of the retry Enter must
+/// report false at once; with `&&` it falls through and claims the submission was confirmed.
+/// The healthy writer proves the fixture does reach the confirmation otherwise.
+#[cfg(unix)]
+#[test]
+fn retry_enter_only_when_composer_retained_and_clause_two() {
+    let text = "run the next step please";
+    let retry = |sid: &'static str, fault: RetryWriterFault| {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        agent_session(&state, sid, SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("codex".into());
+        let mut vt = VtLogBuffer::new(24, 100, 1000);
+        vt.process("› run the next step please\r\n\r\n  gpt-5 · ~/repo".as_bytes());
+        state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), Mutex::new(OutputRingBuffer::new(4096)));
+        insert_session_with_writer(
+            &state,
+            sid,
+            Box::new(WorkingOnEnterWriter {
+                state: Arc::clone(&state),
+                sid,
+                fault,
+            }),
+            TtyMode::Raw,
+        );
+        retry_enter_for_retained_composer(&state, sid, text, "ready_screen")
+    };
+
+    assert!(
+        retry("retry-healthy", RetryWriterFault::None),
+        "a delivered Enter that makes Codex work is confirmed"
+    );
+    assert!(
+        !retry("retry-write-fails", RetryWriterFault::Write),
+        "a failed write is not a confirmed submission"
+    );
+    assert!(
+        !retry("retry-flush-fails", RetryWriterFault::Flush),
+        "a failed flush is not a confirmed submission"
+    );
+}

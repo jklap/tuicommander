@@ -337,3 +337,184 @@ impl StoryStore {
         Ok(story)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store_with_story(dir: &std::path::Path, criteria: usize) -> (StoryStore, Story) {
+        let store = StoryStore::open_at(&dir.join("stories.sqlite3")).expect("store");
+        let plan = store
+            .create_plan(NewPlan {
+                project: "/project".into(),
+                title: "Transitions".into(),
+                source: "plan.md".into(),
+            })
+            .expect("plan");
+        let story = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Story".into(),
+                criteria: (0..criteria).map(|n| format!("Criterion {n}")).collect(),
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .expect("story");
+        (store, story)
+    }
+
+    /// Catches: wrong_status returning an empty or placeholder string (mutants
+    /// `String::new()` and `"xyzzy"` at the format! call), which would leave an agent
+    /// refused with no hint of the status it needs.
+    #[test]
+    fn wrong_status_names_required_and_current_status() {
+        let dir = tempfile::tempdir().expect("dir");
+        let (store, story) = store_with_story(dir.path(), 1);
+
+        let err = store
+            .transition(&story.id, story.revision, StoryCommand::Approve)
+            .expect_err("approve needs review");
+        assert_eq!(err, "story must be review for this command (status: ready)");
+        let err = store
+            .transition(&story.id, story.revision, StoryCommand::CheckCriterion(0))
+            .expect_err("check needs in_progress");
+        assert_eq!(
+            err,
+            "story must be in_progress for this command (status: ready)"
+        );
+    }
+
+    /// Catches: deleting the `CheckCriterion | UncheckCriterion | SubmitReview` arm of the
+    /// actor guard. The rightful claim holder would fall into the user-only refusal, and the
+    /// exact "another session" / "not claimed" causes would be lost.
+    #[test]
+    fn criterion_commands_refuse_an_actor_that_does_not_hold_the_claim() {
+        let dir = tempfile::tempdir().expect("dir");
+        let (store, story) = store_with_story(dir.path(), 1);
+
+        let err = store
+            .transition_for_actor(
+                &story.id,
+                story.revision,
+                StoryCommand::CheckCriterion(0),
+                Some("impl"),
+            )
+            .expect_err("unclaimed story");
+        assert_eq!(err, "story is not claimed (status: ready); claim it first");
+
+        let claimed = store
+            .claim(&story.id, "impl", story.revision)
+            .expect("claim");
+        for command in [
+            StoryCommand::CheckCriterion(0),
+            StoryCommand::UncheckCriterion(0),
+            StoryCommand::SubmitReview,
+        ] {
+            let err = store
+                .transition_for_actor(&story.id, claimed.revision, command, Some("other"))
+                .expect_err("claimed by someone else");
+            assert_eq!(err, "story is claimed by another session");
+        }
+
+        let checked = store
+            .transition_for_actor(
+                &story.id,
+                claimed.revision,
+                StoryCommand::CheckCriterion(0),
+                Some("impl"),
+            )
+            .expect("holder checks");
+        assert_eq!(checked.checked, vec![true]);
+        let unchecked = store
+            .transition_for_actor(
+                &story.id,
+                checked.revision,
+                StoryCommand::UncheckCriterion(0),
+                Some("impl"),
+            )
+            .expect("holder unchecks");
+        assert_eq!(unchecked.checked, vec![false]);
+        let checked = store
+            .transition_for_actor(
+                &story.id,
+                unchecked.revision,
+                StoryCommand::CheckCriterion(0),
+                Some("impl"),
+            )
+            .expect("holder checks again");
+        let review = store
+            .transition_for_actor(
+                &story.id,
+                checked.revision,
+                StoryCommand::SubmitReview,
+                Some("impl"),
+            )
+            .expect("holder submits");
+        assert_eq!(review.status, StoryStatus::Review);
+    }
+
+    /// Catches: deleting the `!` in the unchecked-criteria filter, which would report the
+    /// checked indexes as the ones still open.
+    #[test]
+    fn pending_criteria_lists_only_unchecked_indices() {
+        let dir = tempfile::tempdir().expect("dir");
+        let (store, story) = store_with_story(dir.path(), 3);
+        let started = store
+            .transition(&story.id, story.revision, StoryCommand::StartManual)
+            .expect("start");
+        let s = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .expect("check 0");
+        let s = store
+            .transition(&story.id, s.revision, StoryCommand::CheckCriterion(2))
+            .expect("check 2");
+
+        let err = store
+            .transition(&story.id, s.revision, StoryCommand::SubmitReview)
+            .expect_err("criterion 1 is open");
+        assert_eq!(err, "criteria are incomplete: unchecked indexes 1");
+    }
+
+    /// Catches: `!=` flipped to `==` on the RejectReview (needs Review) and Unblock (needs
+    /// Blocked) guards: either command would refuse its only valid status and run anywhere else.
+    #[test]
+    fn reject_review_outside_review_is_refused_and_unblock_outside_blocked_is_refused() {
+        let dir = tempfile::tempdir().expect("dir");
+        let (store, story) = store_with_story(dir.path(), 1);
+
+        let err = store
+            .transition(&story.id, story.revision, StoryCommand::RejectReview)
+            .expect_err("ready story has no review to reject");
+        assert_eq!(err, "story must be review for this command (status: ready)");
+        let err = store
+            .transition(&story.id, story.revision, StoryCommand::Unblock)
+            .expect_err("ready story is not blocked");
+        assert_eq!(
+            err,
+            "story must be blocked for this command (status: ready)"
+        );
+
+        let started = store
+            .transition(&story.id, story.revision, StoryCommand::StartManual)
+            .expect("start");
+        let checked = store
+            .transition(&story.id, started.revision, StoryCommand::CheckCriterion(0))
+            .expect("check");
+        let review = store
+            .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
+            .expect("review");
+        let rejected = store
+            .transition(&story.id, review.revision, StoryCommand::RejectReview)
+            .expect("review is rejectable");
+        assert_eq!(rejected.status, StoryStatus::Ready);
+
+        let blocked = store
+            .transition(&story.id, rejected.revision, StoryCommand::Block)
+            .expect("block");
+        let unblocked = store
+            .transition(&story.id, blocked.revision, StoryCommand::Unblock)
+            .expect("blocked story unblocks");
+        assert_eq!(unblocked.status, StoryStatus::Ready);
+    }
+}
