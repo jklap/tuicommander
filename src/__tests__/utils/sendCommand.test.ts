@@ -293,3 +293,32 @@ describe("shouldAutoSubmitSuggestion", () => {
 		}
 	});
 });
+
+describe("sendCommand framing (critic 1163)", () => {
+	// Catches: the Codex bracketed branch leaking to other agents or to a plain
+	// shell, which would paste "ls" into a shell prompt as literal escape bytes.
+	it("frames a single-line payload for codex only", async () => {
+		for (const agent of ["claude", "gemini", "opencode", "grok", "pi", "future-agent", null]) {
+			const { writeFn, calls } = makeRecorder();
+			await sendCommand(writeFn, "y", agent, "posix");
+			expect(calls[calls.length - 2], String(agent)).not.toContain("\x1b[200~");
+		}
+		const { writeFn, calls } = makeRecorder();
+		await sendCommand(writeFn, "y", "codex", "posix");
+		expect(calls).toEqual(["\x15", "\x1b[200~y\x1b[201~", "\r"]);
+	});
+
+	// Catches: the framed Codex prefill (submit=false) still sending Enter.
+	it("types a framed codex prefill without Enter", async () => {
+		const { writeFn, calls } = makeRecorder();
+		await sendCommand(writeFn, "draft", "codex", "posix", false);
+		expect(calls).toEqual(["\x15", "\x1b[200~draft\x1b[201~"]);
+	});
+
+	// Catches: an unverified agent losing its longer Enter gap (the constant is
+	// asserted against a literal, not against itself).
+	it("keeps an unverified gap longer than the verified one", () => {
+		expect(AGENT_ENTER_GAP_MS).toBe(50);
+		expect(UNVERIFIED_ENTER_GAP_MS).toBe(200);
+	});
+});
