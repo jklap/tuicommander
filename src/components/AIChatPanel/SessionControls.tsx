@@ -144,6 +144,7 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 	const [settingsOpen, setSettingsOpen] = createSignal(false);
 	const holdOffered = () => props.chat.capabilities()?.egoHoldVersion != null;
 	const compactOffered = () => props.chat.capabilities()?.egoCompactVersion != null;
+	const forkOffered = () => props.chat.capabilities()?.fork === true;
 	const sessions = () => props.chat.sessions();
 	const selectOptions = () =>
 		props.chat.configOptions().filter((option): option is SelectOption => option.type === "select");
@@ -245,6 +246,21 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 				>
 					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
 						<path d="M2 6h5V1H5v2.6L1.7.3.3 1.7 3.6 5H2zm12 4H9v5h2v-2.6l3.3 3.3 1.4-1.4L12.4 11H14z" />
+					</svg>
+				</button>
+			</Show>
+
+			<Show when={forkOffered()}>
+				<button
+					type="button"
+					class={s.headerBtn}
+					aria-label="Fork the conversation"
+					title="Fork the conversation"
+					disabled={props.chat.busy()}
+					onClick={() => void props.chat.fork()}
+				>
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+						<path d="M3 1.5a1.75 1.75 0 0 1 .75 3.33V6.5h4.5V4.83a1.75 1.75 0 1 1 1.5 0V6.5A1.5 1.5 0 0 1 8.25 8H8v3.17a1.75 1.75 0 1 1-1.5 0V8H3.75A1.5 1.5 0 0 1 2.25 6.5V4.83A1.75 1.75 0 0 1 3 1.5zm0 1.5a.25.25 0 1 0 0 .5.25.25 0 0 0 0-.5z" />
 					</svg>
 				</button>
 			</Show>

@@ -379,6 +379,28 @@ describe("acpClient: talking to a session", () => {
 		expect(acpTranscript.entries(SESSION)).toEqual([]);
 	});
 
+	// ego does not replay inherited history for a fork child, so the child's
+	// transcript is the parent's copy. The parent's own must stay untouched: it
+	// is still a live tab.
+	it("forks into a child that carries the parent's transcript and leaves the parent's intact", async () => {
+		await client.connect(ROOT);
+		acpTranscript.noteUserMessage(SESSION, "what was said before");
+		const CHILD = "01932d5e-0000-7000-8000-0000000000dd";
+		mockInvoke.mockImplementation(answering({ acp_session_fork: { sessionId: CHILD, state: "idle", cwd: ROOT } }));
+
+		const forked = await client.forkSession(CONNECTION, SESSION, ROOT);
+
+		expect(forked).toBe(CHILD);
+		expect(mockInvoke).toHaveBeenCalledWith("acp_session_fork", {
+			connectionId: CONNECTION,
+			sessionId: SESSION,
+			authority: { cwd: ROOT, additionalDirectories: [] },
+		});
+		const said = [expect.objectContaining({ kind: "user", text: "what was said before" })];
+		expect(acpTranscript.entries(CHILD)).toEqual(said);
+		expect(acpTranscript.entries(SESSION)).toEqual(said);
+	});
+
 	// The ids are the agent's. Answering with an Allow/Deny of this client's own
 	// invention would answer a question nobody asked.
 	it("answers a permission with one of the option ids the agent published", async () => {
