@@ -53,9 +53,14 @@ function session(cwd: string | null, worktreePath: string | null = null): Sessio
 }
 
 beforeAll(async () => {
-	// MobileApp loads Files lazily after Browse. Finish its transform before
-	// behavior waits; the unrelated initial Chat route is mocked above.
-	await import("../screens/FilesScreen");
+	// MobileApp loads its screens lazily. Finish every transform before behavior
+	// waits, so a cold Vite transform on a loaded machine is not mistaken for a
+	// missing screen by waitFor's UI deadline; the Chat route is mocked above.
+	await Promise.all([
+		import("../screens/FilesScreen"),
+		import("../screens/SessionDetailScreen"),
+		import("../screens/SettingsScreen"),
+	]);
 });
 
 beforeEach(() => {
@@ -123,7 +128,8 @@ describe("session Files navigation", () => {
 				subdir: "",
 			}),
 		);
-		expect(view.getByRole("button", { name: "README.md" })).toBeTruthy();
+		// The listing renders after the rpc resolves, not when it is called.
+		await waitFor(() => expect(view.getByRole("button", { name: "README.md" })).toBeTruthy());
 		expect(view.queryByRole("button", { name: /repo\/nested/ })).toBeNull();
 		expect(rpc.mock.calls.filter(([command]) => command === "write_pty")).toHaveLength(writesBeforeBrowse);
 		await fireEvent.click(view.getByRole("button", { name: "Back to session" }));
