@@ -146,6 +146,16 @@ fn empty_final_response(
     })
 }
 
+/// The utterance boundaries both voice modes use. Frame activity follows the
+/// Settings > Voice floor, so a quiet microphone tuned there opens utterances
+/// in push-to-talk and hands-free alike.
+fn segmenter_config(gates: transcribe::VoiceGates) -> continuous::SegmenterConfig {
+    continuous::SegmenterConfig {
+        activity_rms: gates.rms_threshold,
+        ..continuous::SegmenterConfig::default()
+    }
+}
+
 /// Run the final push-to-talk pass after capture has assembled the recording.
 fn transcribe_final_ptt_audio(
     transcriber: &dyn transcribe::Transcriber,
@@ -153,10 +163,7 @@ fn transcribe_final_ptt_audio(
     language: Option<&str>,
     gates: transcribe::VoiceGates,
 ) -> Result<transcribe::TranscribeResult, String> {
-    let activity = continuous::SegmenterConfig {
-        activity_rms: gates.rms_threshold,
-        ..continuous::SegmenterConfig::default()
-    };
+    let activity = segmenter_config(gates);
     if !continuous::has_sustained_speech(audio, activity) {
         return Ok(transcribe::TranscribeResult {
             text: String::new(),
@@ -2473,20 +2480,18 @@ pub(crate) fn arm_hands_free_with(
     let interruptible: Option<Arc<dyn continuous::Interruptible>> =
         Some(Arc::new(ArmedSpeaker::new(Arc::clone(&dictation.speaker))));
 
-    // DEFERRED (2026-09-21) — the segmenter runs on its compiled defaults.
-    // Hold-back is read from user config just above; pre-roll, trailing
-    // silence, minimum speech and the utterance cap are not reachable from
-    // `DictationConfig`, so `SegmenterConfig` is parameterised without being
-    // tunable by anyone but a recompile. Left as-is because no measurement has
-    // yet shown a default that needs moving, and a knob nobody has asked for is
-    // a knob that has to be documented, persisted and migrated. Wire it when
-    // Step 8 (#818-2a29) gives Dictation settings a place to put it, or sooner
-    // if trailing silence proves wrong for a real speaker.
+    // Frame activity follows the Settings > Voice floor (1164-ee4b: the compiled
+    // 0.01 sat 10x above push-to-talk's 0.001, and ordinary speech at a normal
+    // distance measures 0.1-1% RMS, so only a close mouth opened an utterance).
+    // Pre-roll, trailing silence, minimum speech and the utterance cap are not
+    // reachable from `DictationConfig`; no measurement has shown a default that
+    // needs moving, and a knob nobody asked for must be documented, persisted
+    // and migrated. Wire them when Step 8 (#818-2a29) gives Settings a place.
     *dictation.hands_free_runtime.lock() = Some(continuous::spawn_runtime(
         Arc::new(super::adapters::PtyVoicePort(state.clone())),
         dictation.hands_free.clone(),
         endpoint,
-        continuous::SegmenterConfig::default(),
+        segmenter_config(config.gates()),
         dictation.echo.clone(),
         interruptible,
     ));
@@ -3909,6 +3914,98 @@ mod tests {
         let gates = config.gates();
         assert_eq!(gates.rms_threshold, 0.004);
         assert_eq!(gates.no_speech_threshold, 0.35);
+    }
+
+    /// Voiced-speech stand-in: a 120 Hz harmonic stack under a 4 Hz syllable
+    /// envelope, scaled to the requested whole-signal RMS. Synthetic: the
+    /// repository holds no recorded speech to feed instead.
+    fn speech_at(rms: f32, seconds: usize) -> Vec<f32> {
+        let rate = 16_000.0_f32;
+        let mut samples: Vec<f32> = (0..16_000 * seconds)
+            .map(|i| {
+                let t = i as f32 / rate;
+                let envelope = 0.5 + 0.5 * (2.0 * std::f32::consts::PI * 4.0 * t).sin();
+                let voice: f32 = (1..=8)
+                    .map(|h| (2.0 * std::f32::consts::PI * 120.0 * h as f32 * t).sin() / h as f32)
+                    .sum();
+                envelope * voice
+            })
+            .collect();
+        let level = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
+        samples.iter_mut().for_each(|s| *s *= rms / level);
+        samples
+    }
+
+    /// Does one second of speech at `rms`, then two seconds of quiet, close an
+    /// utterance in a segmenter built from `config`?
+    fn opens_an_utterance(config: continuous::SegmenterConfig, rms: f32) -> bool {
+        let mut audio = speech_at(rms, 1);
+        audio.extend(std::iter::repeat_n(0.0, 32_000));
+        !continuous::Segmenter::new(config).push(&audio).is_empty()
+    }
+
+    /// Catches: hands-free ignoring the Settings > Voice floor and running on a
+    /// compiled 0.01, so a voice at a normal distance (0.1-1% RMS) never opens
+    /// an utterance while push-to-talk, on the 0.001 floor, transcribes it.
+    #[test]
+    fn hands_free_hears_the_levels_push_to_talk_hears() {
+        let gates = DictationConfig::default().gates();
+        for rms in [0.002, 0.004, 0.008] {
+            let audio = speech_at(rms, 1);
+            assert!(
+                continuous::has_sustained_speech(&audio, segmenter_config(gates)),
+                "push-to-talk must hear speech at RMS {rms}"
+            );
+            assert!(
+                opens_an_utterance(segmenter_config(gates), rms),
+                "hands-free must hear speech at RMS {rms}"
+            );
+        }
+        // The compiled default is what hands-free used to run on.
+        assert!(!opens_an_utterance(
+            continuous::SegmenterConfig::default(),
+            0.004
+        ));
+    }
+
+    /// Catches: the configured floor not reaching hands-free (raising it in
+    /// Settings to reject a noisy room would do nothing there).
+    #[test]
+    fn a_raised_floor_silences_quiet_speech_in_hands_free() {
+        let gates = DictationConfig {
+            rms_threshold: 0.02,
+            ..Default::default()
+        }
+        .gates();
+        assert!(!opens_an_utterance(segmenter_config(gates), 0.004));
+    }
+
+    /// Catches: echo cancellation ducking the near end while nothing plays,
+    /// which would make hands-free quieter than push-to-talk. Prints the level
+    /// at each stage so the measurement can be read with `--no-capture`.
+    #[test]
+    fn the_echo_canceller_leaves_the_voice_level_alone_when_nothing_plays() {
+        use crate::dictation::echo::{Canceller, FRAME_SAMPLES, webrtc::WebRtc};
+        let rms_of = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+        for rms in [0.002_f32, 0.005, 0.01, 0.05] {
+            let input = speech_at(rms, 4);
+            let mut canceller = WebRtc::new().expect("the bundled APM starts");
+            let silence = vec![0.0_f32; FRAME_SAMPLES];
+            let mut output = input.clone();
+            for frame in output.chunks_exact_mut(FRAME_SAMPLES) {
+                canceller.cancel(&silence, frame);
+            }
+            // Skip the first second: the filter may still be settling.
+            let (before, after) = (rms_of(&input[16_000..]), rms_of(&output[16_000..]));
+            eprintln!(
+                "aec3 silent far end: in {before:.5} out {after:.5} ratio {:.3}",
+                after / before
+            );
+            assert!(
+                after / before > 0.9,
+                "AEC3 ducked the voice at RMS {rms}: {before} -> {after}"
+            );
+        }
     }
 
     #[test]
