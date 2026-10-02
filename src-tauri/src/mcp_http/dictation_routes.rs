@@ -242,6 +242,24 @@ pub(super) async fn stop_speech_http(State(state): State<Arc<AppState>>) -> Resp
     json_result(dictation::commands::stop_speech(dictation))
 }
 
+pub(super) async fn pause_speech_http(State(state): State<Arc<AppState>>) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    json_result(dictation::commands::pause_speech(dictation))
+}
+
+pub(super) async fn resume_speech_http(State(state): State<Arc<AppState>>) -> Response {
+    let app_handle = state.app_handle.read();
+    let Some(app) = app_handle.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "App not initialized").into_response();
+    };
+    let dictation = app.state::<DictationState>();
+    json_result(dictation::commands::resume_speech(dictation))
+}
+
 pub(super) async fn get_speech_status_http(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(query): axum::extract::Query<SpeechStatusQuery>,
@@ -488,6 +506,12 @@ async fn serve_hands_free_audio(
                     }
                     dictation::browser::Downlink::Stop => {
                         Message::Text(r#"{"type":"stop"}"#.into())
+                    }
+                    dictation::browser::Downlink::Pause => {
+                        Message::Text(r#"{"type":"pause"}"#.into())
+                    }
+                    dictation::browser::Downlink::Resume => {
+                        Message::Text(r#"{"type":"resume"}"#.into())
                     }
                 };
                 if sender.send(frame).await.is_err() {

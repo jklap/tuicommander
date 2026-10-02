@@ -185,12 +185,19 @@ pub trait Output: Send + Sync {
     /// Go silent without forgetting anything: what is queued, and what is
     /// appended while paused, plays from here on [`resume`](Self::resume).
     ///
-    /// The default does nothing, for an output with no way to hold audio. A
-    /// browser's speaker is such an output, and cancels its own echo.
+    /// The default does nothing, for an output with no way to hold audio; such
+    /// an output answers `false` to [`can_pause`](Self::can_pause), and a
+    /// caller that keeps a reference of what is playing must not mark it
+    /// paused.
     fn pause(&self) {}
 
     /// Continue from where [`pause`](Self::pause) stopped.
     fn resume(&self) {}
+
+    /// Does [`pause`](Self::pause) hold the audio? Constant per output.
+    fn can_pause(&self) -> bool {
+        false
+    }
 }
 
 /// What the UI and the status endpoints need to know.
@@ -202,8 +209,10 @@ pub struct SpeakerStatus {
     pub queued: usize,
     /// Is a reply being rendered right now?
     pub rendering: bool,
-    /// Is audio coming out of the speaker right now?
+    /// Is audio coming out of the speaker right now? Not while held.
     pub speaking: bool,
+    /// A reply is held where it is, by the user or by the capture loop.
+    pub paused: bool,
     /// The last synthesis or device failure, if any. Cleared by the next
     /// reply that succeeds.
     pub last_error: Option<String>,
@@ -376,6 +385,12 @@ pub struct Speaker {
     shared: Arc<Shared>,
     output: Arc<dyn Output>,
     worker: Option<std::thread::JoinHandle<()>>,
+    /// The output is held by someone: the capture loop waiting for a verdict on
+    /// voice, or the user.
+    held: std::sync::atomic::AtomicBool,
+    /// The user holds it. The capture loop's own resume must not undo this; a
+    /// stop still ends it.
+    user_held: std::sync::atomic::AtomicBool,
 }
 
 impl Speaker {
@@ -414,6 +429,8 @@ impl Speaker {
             shared,
             output,
             worker: Some(worker),
+            held: std::sync::atomic::AtomicBool::new(false),
+            user_held: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -529,6 +546,10 @@ impl Speaker {
         // Outside the lock: the render thread takes it when synthesis returns,
         // and an interruption must not wait for that.
         self.output.stop();
+        // Stopping un-pauses the output, whoever held it.
+        self.user_held
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.held.store(false, std::sync::atomic::Ordering::SeqCst);
         self.shared.wake.notify_all();
         self.shared.notify();
         generation
@@ -544,22 +565,52 @@ impl Speaker {
     pub fn pause(&self) {
         tracing::info!(source = "dictation", "speech: paused, voice activity");
         self.output.pause();
+        self.held
+            .store(self.output.can_pause(), std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Carry on from where [`pause`](Self::pause) stopped. A no-op when not
-    /// paused.
+    /// paused, and when the user is the one holding the reply.
     pub fn resume(&self) {
-        tracing::info!(source = "dictation", "speech: resumed");
+        if self.user_held.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         self.output.resume();
+        self.held.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The user holds the reply. A no-op with nothing playing, or on an output
+    /// that cannot hold audio. Survives the capture loop's resume.
+    pub fn pause_by_user(&self) {
+        if !self.output.can_pause() || !self.output.is_speaking() {
+            return;
+        }
+        self.output.pause();
+        self.user_held
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.held.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The user lets the reply go on. A no-op unless the user held it.
+    pub fn resume_by_user(&self) {
+        if self
+            .user_held
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.output.resume();
+            self.held.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     pub fn status(&self) -> SpeakerStatus {
+        let paused = self.held.load(std::sync::atomic::Ordering::SeqCst);
         let state = self.shared.state.lock();
         SpeakerStatus {
             generation: state.generation,
             queued: state.queue.len(),
             rendering: state.in_flight.is_some(),
-            speaking: self.output.is_speaking(),
+            speaking: self.output.is_speaking() && !paused,
+            paused,
             last_error: state.last_error.clone(),
         }
     }
@@ -800,6 +851,10 @@ impl Output for DeviceOutput {
         self.player.play();
     }
 
+    fn can_pause(&self) -> bool {
+        true
+    }
+
     fn is_speaking(&self) -> bool {
         // Reads rodio's queue length, which the mixer thread decrements. After
         // `stop` it stays true for about one mixer tick — a status field, not
@@ -827,7 +882,7 @@ fn source_parameters(audio: &SpeechAudio) -> Result<(NonZero<u16>, NonZero<u32>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     /// Long enough for the render thread to get somewhere, short enough that a
@@ -1877,6 +1932,107 @@ mod tests {
         assert!(
             speaker.shared.state.lock().changes.is_empty(),
             "the drain runs whether or not anybody is listening"
+        );
+    }
+
+    /// An output that can hold its audio and says so.
+    #[derive(Default)]
+    struct HoldableOutput {
+        playing: AtomicBool,
+        held: AtomicBool,
+    }
+
+    impl Output for HoldableOutput {
+        fn play(&self, _audio: &SpeechAudio) -> Result<(), String> {
+            self.playing.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        fn stop(&self) {
+            self.playing.store(false, Ordering::SeqCst);
+            self.held.store(false, Ordering::SeqCst);
+        }
+        fn pause(&self) {
+            self.held.store(true, Ordering::SeqCst);
+        }
+        fn resume(&self) {
+            self.held.store(false, Ordering::SeqCst);
+        }
+        fn can_pause(&self) -> bool {
+            true
+        }
+        fn is_speaking(&self) -> bool {
+            self.playing.load(Ordering::SeqCst)
+        }
+    }
+
+    fn speaker_over(output: &Arc<HoldableOutput>) -> Speaker {
+        Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(output) as _, 0)
+    }
+
+    /// 1377: the user's pause is theirs. Catches: the capture loop's resume
+    /// (a voice that was not for us) letting a reply the user paused carry on.
+    #[test]
+    fn a_pause_by_the_user_survives_the_capture_loops_resume() {
+        let output = Arc::new(HoldableOutput::default());
+        output.playing.store(true, Ordering::SeqCst);
+        let speaker = speaker_over(&output);
+
+        speaker.pause_by_user();
+        assert!(speaker.status().paused);
+        assert!(!speaker.status().speaking, "a held reply is not speaking");
+        speaker.pause();
+        speaker.resume();
+        assert!(
+            output.held.load(Ordering::SeqCst),
+            "the loop undid the user's pause"
+        );
+        assert!(speaker.status().paused);
+
+        speaker.resume_by_user();
+        assert!(!output.held.load(Ordering::SeqCst));
+        assert!(!speaker.status().paused);
+    }
+
+    /// The other direction: the user's resume does not undo a hold the loop
+    /// put on for a verdict, and a stop still ends a user's pause.
+    #[test]
+    fn the_users_resume_leaves_the_loops_hold_and_a_stop_ends_the_users() {
+        let output = Arc::new(HoldableOutput::default());
+        output.playing.store(true, Ordering::SeqCst);
+        let speaker = speaker_over(&output);
+
+        speaker.pause();
+        speaker.resume_by_user();
+        assert!(
+            output.held.load(Ordering::SeqCst),
+            "the user's resume lifted the loop's hold"
+        );
+        speaker.resume();
+        assert!(!output.held.load(Ordering::SeqCst));
+
+        speaker.pause_by_user();
+        speaker.hush();
+        assert!(!speaker.status().paused, "a stop left the reply paused");
+        assert!(!output.held.load(Ordering::SeqCst));
+    }
+
+    /// Pause with nothing playing, or on an output that cannot hold: nothing
+    /// is held and nothing is reported held.
+    #[test]
+    fn pausing_with_nothing_to_hold_is_a_no_op() {
+        let output = Arc::new(HoldableOutput::default());
+        let speaker = speaker_over(&output);
+        speaker.pause_by_user();
+        assert!(!speaker.status().paused);
+        assert!(!output.held.load(Ordering::SeqCst));
+
+        let fake = Arc::new(FakeOutput::default());
+        fake.recorded.lock().speaking = true;
+        let speaker = Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&fake) as _, 0);
+        speaker.pause_by_user();
+        assert!(
+            !speaker.status().paused,
+            "an output that cannot hold reported held"
         );
     }
 }

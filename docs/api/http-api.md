@@ -1934,6 +1934,8 @@ POST /dictation/speech/voices/preview   { "language": "it", "voice": "...", "tex
 POST /dictation/speech/speak     { "text": "...", "turn": 3 }
                                                     -> SpokenReply
 POST /dictation/speech/stop                         -> SpeechStatus
+POST /dictation/speech/pause                        -> SpeechStatus
+POST /dictation/speech/resume                       -> SpeechStatus
 GET  /dictation/speech/status?utterance=7           -> SpeechStatus
 POST /dictation/start          { "source": "fn" | "hotkey" | "ui" } -> null
 POST /dictation/stop                                -> TranscribeResponse
@@ -2121,6 +2123,8 @@ carries capture up and replies down on one socket, in both directions at once.
 | up | `{"type":"playback-ended"}` | the reply finished playing |
 | down | binary | `u32` little-endian sample rate, then `f32` little-endian samples |
 | down | `{"type":"stop"}` | stop playing and drop anything queued |
+| down | `{"type":"pause"}` | hold the reply where it is, and any that arrives |
+| down | `{"type":"resume"}` | continue from where it was held |
 
 The downlink carries its own rate because it is not the uplink's: the engine
 renders at 24 kHz and the client resamples. A reply decoded at the capture rate

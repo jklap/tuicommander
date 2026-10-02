@@ -17,6 +17,8 @@
  * | up | `{"type":"playback-ended"}` | the reply finished playing |
  * | down | binary | `u32` little-endian sample rate, then `f32` samples |
  * | down | `{"type":"stop"}` | stop playing and drop the queue |
+ * | down | `{"type":"pause"}` | hold the reply where it is, and any that arrives |
+ * | down | `{"type":"resume"}` | carry on from where it was held |
  *
  * Resampling happens here rather than on the server: the `AudioContext` is
  * created at 16 kHz and resamples the device's native rate for free, and
@@ -138,14 +140,57 @@ export async function connectBrowserVoice(
 	capture.connect(context.destination);
 
 	let playing: AudioBufferSourceNode | null = null;
-	const stopPlayback = () => {
-		playing?.stop();
+	// The reply being played or held, where it started and whether it is held.
+	// Pausing stops the node and remembers the position: suspending the
+	// context instead would stop the microphone with it.
+	let current: AudioBuffer | null = null;
+	let startedAt = 0;
+	let offset = 0;
+	let paused = false;
+
+	const detach = () => {
+		const node = playing;
 		playing = null;
+		node?.stop();
+	};
+	const stopPlayback = () => {
+		detach();
+		current = null;
+		offset = 0;
+		paused = false;
+	};
+	const startPlayback = (buffer: AudioBuffer, from: number) => {
+		const node = context.createBufferSource();
+		node.buffer = buffer;
+		node.connect(context.destination);
+		node.onended = () => {
+			if (playing !== node) return;
+			playing = null;
+			current = null;
+			// The server cannot see the end of playback, and without this the
+			// reply stays `speaking` until its rendered duration elapses.
+			if (socket.readyState === WebSocket.OPEN) {
+				socket.send(JSON.stringify({ type: "playback-ended" }));
+			}
+		};
+		startedAt = context.currentTime - from;
+		node.start(0, from);
+		playing = node;
 	};
 
 	socket.onmessage = (event) => {
 		if (typeof event.data === "string") {
-			if (JSON.parse(event.data).type === "stop") stopPlayback();
+			const type = JSON.parse(event.data).type;
+			if (type === "stop") stopPlayback();
+			if (type === "pause" && !paused) {
+				paused = true;
+				if (playing) offset = context.currentTime - startedAt;
+				detach();
+			}
+			if (type === "resume" && paused) {
+				paused = false;
+				if (current) startPlayback(current, offset);
+			}
 			return;
 		}
 		const { sampleRate, samples } = decodeReply(event.data as ArrayBuffer);
@@ -155,21 +200,12 @@ export async function connectBrowserVoice(
 		// reply 50% slow.
 		const buffer = context.createBuffer(1, samples.length, sampleRate);
 		buffer.getChannelData(0).set(samples);
+		// A reply that arrives while held waits for the resume.
+		const held = paused;
 		stopPlayback();
-		const node = context.createBufferSource();
-		node.buffer = buffer;
-		node.connect(context.destination);
-		node.onended = () => {
-			if (playing !== node) return;
-			playing = null;
-			// The server cannot see the end of playback, and without this the
-			// reply stays `speaking` until its rendered duration elapses.
-			if (socket.readyState === WebSocket.OPEN) {
-				socket.send(JSON.stringify({ type: "playback-ended" }));
-			}
-		};
-		node.start();
-		playing = node;
+		paused = held;
+		current = buffer;
+		if (!held) startPlayback(buffer, 0);
 	};
 
 	socket.onerror = () => {

@@ -189,6 +189,8 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		}),
 	},
 	stop_speech: { map: () => ({ method: "POST", path: "/dictation/speech/stop" }) },
+	pause_speech: { map: () => ({ method: "POST", path: "/dictation/speech/pause" }) },
+	resume_speech: { map: () => ({ method: "POST", path: "/dictation/speech/resume" }) },
 	get_speech_status: {
 		map: (args) => ({
 			method: "GET",

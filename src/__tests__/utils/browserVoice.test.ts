@@ -37,13 +37,18 @@ function fakeContext() {
 		connect: vi.fn(),
 		disconnect: vi.fn(),
 	};
-	const played: { rate: number; samples: Float32Array; started: boolean }[] = [];
+	const played: { rate: number; samples: Float32Array; started: boolean; from?: number }[] = [];
+	const clock = { now: 0 };
 	const sources: { stop: ReturnType<typeof vi.fn> }[] = [];
 	return {
 		capture,
 		played,
 		sources,
+		clock,
 		context: {
+			get currentTime() {
+				return clock.now;
+			},
 			destination,
 			createMediaStreamSource: () => ({ connect: vi.fn(), disconnect: vi.fn() }),
 			createScriptProcessor: () => capture,
@@ -60,11 +65,12 @@ function fakeContext() {
 					buffer: null as { __rate: number; __samples: Float32Array } | null,
 					connect: vi.fn(),
 					onended: null as (() => void) | null,
-					start: () => {
+					start: (_when?: number, from?: number) => {
 						played.push({
 							rate: node.buffer?.__rate ?? 0,
 							samples: node.buffer?.__samples ?? new Float32Array(),
 							started: true,
+							from,
 						});
 					},
 					stop: vi.fn(),
@@ -181,6 +187,45 @@ describe("a browser voice session", () => {
 		expect(nodes.sources[0].stop).toHaveBeenCalled();
 		// The socket stays open: the turn ended, not the conversation.
 		expect(socket.closed).toBe(false);
+	});
+
+	/**
+	 * A voice over the reply that is not for us: the reply holds where it is and
+	 * goes on from there. Catches: a pause that restarts the reply from the
+	 * beginning, or one that suspends the context and takes the microphone with
+	 * it.
+	 */
+	it("holds the reply on pause and continues from the same position on resume", async () => {
+		await connectBrowserVoice("b1", deps);
+		const frame = new ArrayBuffer(4 + 4);
+		new DataView(frame).setUint32(0, 24_000, true);
+		socket.onmessage?.({ data: frame });
+		nodes.clock.now = 2.5;
+
+		socket.onmessage?.({ data: JSON.stringify({ type: "pause" }) });
+		expect(nodes.sources[0].stop).toHaveBeenCalled();
+		expect(nodes.played).toHaveLength(1);
+
+		nodes.clock.now = 9;
+		socket.onmessage?.({ data: JSON.stringify({ type: "resume" }) });
+
+		expect(nodes.played).toHaveLength(2);
+		expect(nodes.played[1].from).toBe(2.5);
+	});
+
+	/** A reply handed over while held waits instead of talking over the user. */
+	it("keeps a reply that arrives during a pause until the resume", async () => {
+		await connectBrowserVoice("b1", deps);
+		socket.onmessage?.({ data: JSON.stringify({ type: "pause" }) });
+		const frame = new ArrayBuffer(4 + 4);
+		new DataView(frame).setUint32(0, 24_000, true);
+		socket.onmessage?.({ data: frame });
+		expect(nodes.played).toHaveLength(0);
+
+		socket.onmessage?.({ data: JSON.stringify({ type: "resume" }) });
+
+		expect(nodes.played).toHaveLength(1);
+		expect(nodes.played[0].from).toBe(0);
 	});
 
 	/**

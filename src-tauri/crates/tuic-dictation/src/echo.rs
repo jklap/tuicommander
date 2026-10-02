@@ -99,9 +99,16 @@ pub struct FarEnd {
     /// hidden: a climbing count means playback and capture have lost step,
     /// which shows up as an echo that stops being cancelled.
     dropped: u64,
-    /// The speaker is held silent mid-reply. What is queued has not left it, so
-    /// capture is matched against silence until playback continues.
-    paused: bool,
+    /// Capture samples handed out so far, which is what the pause positions
+    /// below are measured in.
+    position: usize,
+    /// The speaker was held silent from this capture position. What is queued
+    /// has not left it, so capture is matched against silence until playback
+    /// continues. A position, not a flag: capture recorded before the pause
+    /// but not yet cleaned still heard the reply.
+    paused_from: Option<usize>,
+    /// ... and continued from this one, once it is known.
+    resumed_at: Option<usize>,
 }
 
 impl FarEnd {
@@ -147,14 +154,20 @@ impl FarEnd {
     /// what keeps the canceller converged through the gaps between replies:
     /// skipping the call instead would make it lose its place.
     pub fn take(&mut self, count: usize) -> Vec<f32> {
-        if self.paused {
-            return vec![0.0; count];
+        let mut frame = Vec::with_capacity(count);
+        for _ in 0..count {
+            if self.resumed_at.is_some_and(|at| self.position >= at) {
+                self.paused_from = None;
+                self.resumed_at = None;
+            }
+            let silent = self.paused_from.is_some_and(|from| self.position >= from);
+            self.position += 1;
+            frame.push(if silent {
+                0.0
+            } else {
+                self.samples.pop_front().unwrap_or(0.0)
+            });
         }
-        let mut frame: Vec<f32> = self
-            .samples
-            .drain(..count.min(self.samples.len()))
-            .collect();
-        frame.resize(count, 0.0);
         frame
     }
 
@@ -163,12 +176,19 @@ impl FarEnd {
     /// would subtract a sound that is not there.
     pub fn clear(&mut self) {
         self.samples.clear();
-        self.paused = false;
+        self.paused_from = None;
+        self.resumed_at = None;
     }
 
-    /// Hold the queued reply back from capture, or let it flow again.
-    pub fn set_paused(&mut self, paused: bool) {
-        self.paused = paused;
+    /// Where the next sample handed out will sit in the capture stream, plus
+    /// `recorded` samples that capture already holds but this has not seen.
+    fn position_after(&self, recorded: usize) -> usize {
+        self.position + recorded
+    }
+
+    /// Is the reply held back right now, with no continuation yet?
+    fn is_paused(&self) -> bool {
+        self.paused_from.is_some() && self.resumed_at.is_none()
     }
 
     /// Is any reply audio still waiting to be matched?
@@ -262,7 +282,7 @@ impl EchoGuard {
     pub fn note_rendered(&mut self, audio: &SpeechAudio) {
         // Not while paused: the reply starts when playback continues, and the
         // capture recorded until then is not ahead of it.
-        if self.far_end.is_empty() && !self.far_end.paused {
+        if self.far_end.is_empty() && !self.far_end.is_paused() {
             let pending = self.backlog.as_ref().map_or(0, |backlog| backlog());
             self.far_end.pad(self.remainder.len() + pending);
         }
@@ -272,12 +292,28 @@ impl EchoGuard {
     /// The speaker was paused: nothing reaches the microphone until
     /// [`note_resumed`](Self::note_resumed), and the queued reply must not be
     /// consumed meanwhile.
+    ///
+    /// Takes effect after the capture already recorded: the device went quiet
+    /// now, and everything the microphone recorded until now heard the reply.
     pub fn note_paused(&mut self) {
-        self.far_end.set_paused(true);
+        if !self.far_end.is_paused() {
+            self.far_end.paused_from = Some(self.far_end.position_after(self.recorded()));
+            self.far_end.resumed_at = None;
+        }
     }
 
+    /// The same offset on the way out: what was recorded while paused heard
+    /// silence, and the reply continues with what is recorded from now on.
     pub fn note_resumed(&mut self) {
-        self.far_end.set_paused(false);
+        if self.far_end.is_paused() {
+            self.far_end.resumed_at = Some(self.far_end.position_after(self.recorded()));
+        }
+    }
+
+    /// Capture recorded but not yet cleaned: the carried partial frame and the
+    /// endpoint's backlog.
+    fn recorded(&self) -> usize {
+        self.remainder.len() + self.backlog.as_ref().map_or(0, |backlog| backlog())
     }
 
     /// Playback was stopped. Drop the queued reply and the partial frame with
@@ -373,13 +409,24 @@ impl super::speaker::Output for FarEndTap {
         // Device first, for the same reason as `stop`: the far end is what the
         // microphone has yet to hear.
         self.inner.pause();
-        self.guard.lock().note_paused();
+        // Only if the output actually holds its audio. One that keeps playing
+        // would leave the reference silent while the microphone still hears
+        // the reply, and the far end a whole pause behind it afterwards.
+        if self.inner.can_pause() {
+            self.guard.lock().note_paused();
+        }
     }
 
     fn resume(&self) {
         // Far end first: it may run ahead of the microphone, never behind.
-        self.guard.lock().note_resumed();
+        if self.inner.can_pause() {
+            self.guard.lock().note_resumed();
+        }
         self.inner.resume();
+    }
+
+    fn can_pause(&self) -> bool {
+        self.inner.can_pause()
     }
 
     fn stop(&self) {
