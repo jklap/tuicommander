@@ -533,21 +533,6 @@ fn mcp_session_routes_to(state: &AppState, mcp_sid: &str, tuic_session: &str) ->
         .is_some_and(|bound| bound.value() == tuic_session)
 }
 
-/// A managed PTY has one mailbox even if two bridges assert different UUIDs
-/// for it (for example, a persisted tab UUID and the PTY key). Choose the
-/// first registered peer so the mailbox address stays stable on reconnect.
-/// Callers that create a binding hold PEER_IDENTITY_BIND_LOCK while using it.
-fn peer_identity_for_live_pty(state: &AppState, asserted: &str) -> Option<String> {
-    let pty = state.live_pty_for_peer(asserted)?;
-    state
-        .peer_agents
-        .iter()
-        .filter(|peer| state.live_pty_for_peer(peer.key()).as_deref() == Some(pty.as_str()))
-        .map(|peer| (peer.registered_at, peer.key().clone()))
-        .min()
-        .map(|(_, identity)| identity)
-}
-
 /// A short-lived bridge can exit without DELETE /mcp. Retire its protocol
 /// metadata and routes when another bridge for the same identity arrives,
 /// while preserving subscribed and recently active sibling bridges.
@@ -782,7 +767,7 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
         return true;
     }
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
-    let canonical = peer_identity_for_live_pty(state, asserted);
+    let canonical = state.peer_identity_for_live_pty(asserted);
     let tuic = canonical.as_deref().unwrap_or(asserted);
     retire_stale_identity_sessions_locked(state, tuic, mcp_sid);
     // Only a process that inherited this PTY's `$TUIC_SESSION` can assert the
@@ -4917,7 +4902,9 @@ fn resolve_registration_identity(
             }
         }
         return Ok((
-            peer_identity_for_live_pty(state, explicit).unwrap_or_else(|| explicit.to_string()),
+            state
+                .peer_identity_for_live_pty(explicit)
+                .unwrap_or_else(|| explicit.to_string()),
             false,
         ));
     }
@@ -5012,8 +4999,10 @@ fn handle_messaging(
                         .as_ref()
                         .is_some_and(|prior| state.orchestrator_peers.contains(prior))
             });
+            // An empty name is unset: it would otherwise be an address nothing can use.
             let name = args["name"]
                 .as_str()
+                .filter(|name| !name.is_empty())
                 .map(str::to_string)
                 .or_else(|| existing.as_ref().map(|(name, _)| name.clone()))
                 .unwrap_or_else(|| "agent".to_string());
@@ -6464,15 +6453,22 @@ fn handle_workflow_report(
                 if let Ok(Some(coordinator_session)) =
                     crate::workflows::active_coordinator_session(&receipt.snapshot)
                 {
-                    if let Ok(Some(peer)) = state.resolve_peer_ref_checked(&coordinator_session) {
-                        queue_workflow_coordinator_wake(
-                            state,
-                            &peer,
-                            &pty,
-                            &receipt.snapshot.id,
-                            &reported_story_id,
-                            receipt.sequence,
-                        );
+                    match state.resolve_peer_ref_checked(&coordinator_session) {
+                        Ok(Some(peer)) => {
+                            queue_workflow_coordinator_wake(
+                                state,
+                                &peer,
+                                &pty,
+                                &receipt.snapshot.id,
+                                &reported_story_id,
+                                receipt.sequence,
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => tracing::warn!(
+                            "workflow coordinator wake skipped for run {}: {error}",
+                            receipt.snapshot.id
+                        ),
                     }
                 }
             }
@@ -12223,6 +12219,25 @@ mod tests {
             .filter(|peer| peer["name"] == "coordinator")
             .count();
         assert_eq!(listed, 1, "one coordinator must be listed: {peers}");
+    }
+
+    /// Catches: register accepting an empty name, leaving a peer that list_peers
+    /// shows with a blank name no address can reach.
+    #[test]
+    fn register_with_an_empty_name_falls_back_to_the_default_name() {
+        let state = test_state();
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-4466554400c2",
+            "",
+            "mcp-blank",
+        );
+
+        let name = state
+            .peer_agents
+            .get("550e8400-e29b-41d4-a716-4466554400c2")
+            .map(|peer| peer.name.clone());
+        assert_eq!(name.as_deref(), Some("agent"));
     }
 
     #[cfg(unix)]
