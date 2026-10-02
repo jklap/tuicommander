@@ -231,6 +231,10 @@ fn invalidate_model_snapshot() {
 pub fn get_dictation_status(
     dictation: State<'_, DictationState>,
 ) -> Result<DictationStatus, String> {
+    Ok(dictation_status(&dictation))
+}
+
+fn dictation_status(dictation: &DictationState) -> DictationStatus {
     let snapshot = model_snapshot();
     let has_transcriber = dictation.transcriber_arc.lock().is_some();
 
@@ -254,7 +258,7 @@ pub fn get_dictation_status(
         .as_ref()
         .map(audio::AudioCapture::level);
 
-    Ok(DictationStatus {
+    DictationStatus {
         model_status: model_status.to_string(),
         model_name: snapshot.model.name().to_string(),
         model_size_mb: snapshot.size_mb,
@@ -262,7 +266,7 @@ pub fn get_dictation_status(
         processing: dictation.processing.load(Ordering::Acquire),
         audio_level: capture_level(push_to_talk_level, hands_free_level),
         owned_elsewhere: !dictation.is_owner(),
-    })
+    }
 }
 
 /// The microphone level to show: push-to-talk's capture when it is open,
@@ -3267,6 +3271,19 @@ mod tests {
             crate::dictation::ownership::OWNED_ELSEWHERE
         );
         assert!(!opened.load(Ordering::SeqCst), "the microphone was opened");
+    }
+
+    /// Bug caught: the status of a non-owner reports a plain "ready", so the UI
+    /// never says another instance owns dictation.
+    #[test]
+    fn status_reports_owned_elsewhere_for_a_non_owner() {
+        let (dir, _config) = config_of_this_test(DictationConfig::default());
+        let _held_by_the_other_instance =
+            crate::dictation::ownership::Ownership::acquire(dir.path());
+        let dictation = DictationState::new();
+        assert!(!dictation_status(&dictation).owned_elsewhere);
+        dictation.claim_ownership(dir.path());
+        assert!(dictation_status(&dictation).owned_elsewhere);
     }
 
     /// The whole feature, once, against a real session: arm binds, the status
