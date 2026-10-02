@@ -11521,6 +11521,44 @@ mod tests {
         assert_eq!(line.spans[0].text, "TUICommander v1.7.7 is connected. ");
     }
 
+    /// Screen text of a 40-column buffer that received `output`.
+    fn narrow_screen_text(output: &str) -> Vec<String> {
+        let mut buf = VtLogBuffer::new(24, 40, 1000);
+        buf.process(output.as_bytes());
+        buf.screen_log_lines().iter().map(|l| l.text()).collect()
+    }
+
+    /// Catches: the strip removing only the row that carries `suggest:` and
+    /// leaving the wrapped tail ("Federico Coletto ]") as plain text, or joining
+    /// only one continuation row. Covers a token over 2 and over 3 rows.
+    #[test]
+    fn test_screen_hides_suggest_tail_rows_at_phone_width() {
+        for token in [
+            // 2 rows at 40 cols
+            "suggest: [ Ask Federico Coletto | Draft summary | Close it ]",
+            // 3 rows at 40 cols
+            "suggest: [ Ask Federico Coletto about the cost review | Draft the summary | Close the story ]",
+        ] {
+            let text = narrow_screen_text(&format!("\u{23FA} done\r\n\u{23FA} {token}\r\n"));
+            assert_eq!(text.iter().filter(|t| !t.is_empty()).count(), 1, "{text:?}");
+            assert!(
+                !text
+                    .iter()
+                    .any(|t| t.contains(']') || t.contains("Federico")),
+                "wrapped suggest tail leaked: {text:?}"
+            );
+        }
+    }
+
+    /// Catches: a stray `suggest: [` that never closes swallowing the output
+    /// below it. The parser does not accept such a token, so nothing is hidden.
+    #[test]
+    fn test_screen_keeps_rows_after_an_unclosed_suggest() {
+        let text =
+            narrow_screen_text("suggest: [ Ask Federico Coletto | and\r\nreal prose after it\r\n");
+        assert!(text.iter().any(|t| t == "real prose after it"), "{text:?}");
+    }
+
     #[test]
     fn test_strip_structural_tokens_mid_line_not_stripped() {
         let mut line = LogLine {
