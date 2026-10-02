@@ -10,6 +10,7 @@ const files = new Map([
 	["src/hello.txt", "hello\n"],
 	["src/guide.md", "# Guide\n\n**Important** note.\n"],
 	["src/null.dat", "abc\0def"],
+	["src/abs.md", "![In](/repo-one/src/images/in.png) ![Out](/elsewhere/out.png)"],
 	[
 		"src/deep/guide.md",
 		"![Local](images/diagram.png) ![Web](https://example.com/logo.png) ![Inline](data:image/png;base64,AAAA)",
@@ -227,6 +228,23 @@ describe("FilesScreen", () => {
 		expect(local.searchParams.get("file")).toBe("src/deep/images/diagram.png");
 		expect(images[1].getAttribute("src")).toBe("https://example.com/logo.png");
 		expect(images[2].getAttribute("src")).toBe("data:image/png;base64,AAAA");
+	});
+
+	// Catches: an absolute image path being joined to the file directory ("src//repo-one/..."), a 404.
+	it("maps an absolute image inside the repository to its repo-relative path and leaves one outside alone", async () => {
+		linkedTarget.value = { absolute_path: "/repo-one/src/abs.md", is_directory: false };
+		const view = render(() => (
+			<FilesScreen
+				initialRepo={{ cwd: "/repo-one", worktreePath: "/repo-one" }}
+				initialLink={{ candidate: "src/abs.md" }}
+			/>
+		));
+		await waitFor(() => expect(view.container.querySelectorAll("#markdown-content img").length).toBe(2));
+		const [inside, outside] = view.container.querySelectorAll<HTMLImageElement>("#markdown-content img");
+		const url = new URL(inside.src);
+		expect(url.pathname).toBe("/fs/markdown-image");
+		expect(url.searchParams.get("file")).toBe("src/images/in.png");
+		expect(outside.getAttribute("src")).toBe("/elsewhere/out.png");
 	});
 
 	it("refuses large and binary files without offering an editor", async () => {
