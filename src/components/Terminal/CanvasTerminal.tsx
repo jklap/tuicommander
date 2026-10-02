@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { type Component, createEffect, createSignal, onCleanup, onMount, Show, untrack } from "solid-js";
 import { lastMenuActionTime } from "../../menuDedup";
 import { isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
@@ -17,6 +17,8 @@ import { isPerfDebug } from "../../utils/perfDebug";
 import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
+import { AnswersPanel } from "./AnswersPanel";
+import { type AnswersTurn, buildAnswersTurn, readTurnRows, turnStart } from "./answersTurn";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
 import {
 	createCanvasLinkController,
@@ -58,6 +60,7 @@ import {
 	reconcileDelay,
 	rowText,
 	rowTextLayout,
+	type StyledRange,
 	shouldFireReconcile,
 	snapLineHeight,
 	textSpanToCellRanges,
@@ -70,7 +73,13 @@ import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml } from "./scrollbarMarks";
 import { scrollbarThumb } from "./scrollbarThumb";
-import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./suggestOverlay";
+import {
+	ANSWER_MARKER_RE,
+	INTENT_HIGHLIGHT_RE,
+	paintOverlayBlocks,
+	planSuggestOverlay,
+	SUGGEST_ANCHOR_RE,
+} from "./suggestOverlay";
 import {
 	altSequenceFromCode,
 	createCompositionState,
@@ -608,6 +617,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		updateScrollbar(frame);
 		updateSuggestOverlay(frame, m, dirtyIndices);
+		if (answersView() !== null) scheduleAnswersRefresh();
 	}
 
 	function repaintOverlay(frame: DecodedFrame, m: CellMetrics) {
@@ -1027,12 +1037,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	const rowToText = rowText;
 
-	function makeOverlayDiv(top: number, height: number, background: string): HTMLDivElement {
-		const div = document.createElement("div");
-		div.style.cssText = `position:absolute;left:0;right:0;top:${top}px;height:${height}px;background:${background}`;
-		return div;
-	}
-
 	// Cached suggest/intent overlay state to avoid full DOM rebuild
 	let lastSuggestOverlayKey = "";
 
@@ -1044,7 +1048,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	) {
 		if (!overlayRef) return;
 
-		// Skip full rescan if no dirty rows touch suggest/intent patterns
+		// Skip full rescan if no dirty rows touch suggest/intent/answer patterns
 		// (skipped entirely when rendering from the cache during a scroll gesture).
 		if (!snapshotOverride && dirtyIndices && !fullRepaintNeeded) {
 			let hasSuggestContent = false;
@@ -1052,7 +1056,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const row = rowMap.get(idx);
 				if (!row) continue;
 				const text = rowToText(row);
-				if (SUGGEST_ANCHOR_RE.test(text) || INTENT_HIGHLIGHT_RE.test(text)) {
+				if (SUGGEST_ANCHOR_RE.test(text) || INTENT_HIGHLIGHT_RE.test(text) || ANSWER_MARKER_RE.test(text)) {
 					hasSuggestContent = true;
 					break;
 				}
@@ -1081,11 +1085,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (key === lastSuggestOverlayKey) return;
 		lastSuggestOverlayKey = key;
 
-		overlayRef.textContent = "";
-		for (const block of blocks) {
-			const background = block.kind === "intent" ? "rgba(181,147,90,0.12)" : bg;
-			overlayRef.appendChild(makeOverlayDiv(block.row * m.cellHeight, m.cellHeight, background));
-		}
+		paintOverlayBlocks(overlayRef, blocks, m.cellHeight, bg);
 	}
 
 	function startBlink() {
@@ -1362,6 +1362,63 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			ipcErr("terminal_styled_rows")(e);
 		}
 	}
+
+	// --- Answers-only view ---
+	// A panel above the canvas listing the user's last prompt and the 💬 answers of
+	// its turn, read from the backend grid (scrollback included) through the same
+	// `terminal_styled_rows` reader as the scroll row cache. The PTY and the grid
+	// are untouched; closing the panel returns to the live terminal as it was.
+	const [answersView, setAnswersView] = createSignal<AnswersTurn | null>(null);
+	let answersGeneration = 0;
+	let answersTimer: ReturnType<typeof setTimeout> | undefined;
+	const answersOnly = () => terminalsStore.get(props.terminalId)?.answersOnly === true;
+
+	async function fetchStyledRange(start: number, count: number): Promise<StyledRange | null> {
+		if (!invokeRef) return null;
+		try {
+			const buffer = toBinaryPayload(
+				await invokeRef("terminal_styled_rows", { sessionId: props.sessionId, start, count }),
+			);
+			return buffer ? decodeStyledRange(buffer) : null;
+		} catch (e) {
+			ipcErr("terminal_styled_rows")(e);
+			return null;
+		}
+	}
+
+	async function refreshAnswers() {
+		const frame = currentFrame;
+		if (!alive || !frame) return;
+		const generation = ++answersGeneration;
+		const endAbs = frame.historyBase + frame.historySize + frame.screenRows;
+		const { startAbs, hasPrompt } = turnStart(
+			terminalsStore.get(props.terminalId)?.userPromptLines ?? [],
+			frame.historyBase,
+			endAbs,
+		);
+		const rows = await readTurnRows(fetchStyledRange, startAbs, endAbs);
+		// A newer refresh, the toggle going off, or unmount during the await wins.
+		if (!rows || generation !== answersGeneration || !alive || !answersOnly()) return;
+		setAnswersView(buildAnswersTurn(rows, hasPrompt));
+	}
+
+	/** New output while the panel is open: re-read the turn, at most every 400 ms. */
+	function scheduleAnswersRefresh() {
+		if (answersTimer) return;
+		answersTimer = setTimeout(() => {
+			answersTimer = undefined;
+			void refreshAnswers();
+		}, 400);
+	}
+
+	createEffect(() => {
+		if (answersOnly()) {
+			untrack(() => void refreshAnswers());
+		} else {
+			answersGeneration++;
+			setAnswersView(null);
+		}
+	});
 
 	// During a gesture the cursor/selection canvas is hidden (those are anchored to
 	// the backend frame and we're not selecting while scrolling). The suggest/intent
@@ -3515,6 +3572,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	onCleanup(() => {
 		alive = false;
+		clearTimeout(answersTimer);
 		stopBlink();
 		if (rafId !== undefined) {
 			cancelAnimationFrame(rafId);
@@ -3689,6 +3747,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					/>
 				</div>
 			</div>
+			<Show when={answersView()}>
+				{(view) => (
+					<AnswersPanel
+						view={view()}
+						fontFamily={settingsStore.getFontFamily()}
+						fontSize={terminalsStore.get(props.terminalId)?.fontSize ?? settingsStore.state.defaultFontSize}
+					/>
+				)}
+			</Show>
 			{/* Scrollbar */}
 			<div
 				ref={scrollbarRef!}

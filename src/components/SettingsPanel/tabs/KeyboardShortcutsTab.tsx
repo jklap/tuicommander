@@ -129,6 +129,7 @@ export function getShortcutSections(): ShortcutSection[] {
 				{ action: "block-next", keys: keyFor("block-next"), description: "Next command block" },
 				{ action: "block-fold-toggle", keys: keyFor("block-fold-toggle"), description: "Toggle block fold" },
 				{ action: "block-search-toggle", keys: keyFor("block-search-toggle"), description: "Search in block" },
+				{ action: "answers-only", keys: keyFor("answers-only"), description: "Toggle answers-only view" },
 			],
 		},
 		{

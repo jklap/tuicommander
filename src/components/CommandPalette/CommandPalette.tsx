@@ -84,6 +84,7 @@ const BROWSER_ACTION_IDS = new Set([
 	"block-next",
 	"block-fold-toggle",
 	"block-search-toggle",
+	"answers-only",
 	"toggle-compose-panel",
 	"toggle-hands-free",
 	"progress",

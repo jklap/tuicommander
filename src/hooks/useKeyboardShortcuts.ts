@@ -345,6 +345,9 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 		case "toggle-compose-panel":
 			handlers.toggleComposePanel();
 			return true;
+		case "answers-only":
+			terminalsStore.toggleAnswersOnly();
+			return true;
 		case "toggle-hands-free":
 			void toggleHandsFreeConversation();
 			return true;
