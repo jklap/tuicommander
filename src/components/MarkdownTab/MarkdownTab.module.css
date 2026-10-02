@@ -25,20 +25,6 @@
   cursor: text;
 }
 
-/* Tweak comment highlights */
-.content :global(.tweak-highlight) {
-  background: color-mix(in srgb, var(--tweak-highlight) 25%, transparent);
-  border-bottom: 1.5px solid color-mix(in srgb, var(--tweak-highlight) 70%, transparent);
-  border-radius: 2px;
-  cursor: pointer;
-  padding: 0 1px;
-  transition: background 0.15s ease;
-}
-
-.content :global(.tweak-highlight:hover) {
-  background: color-mix(in srgb, var(--tweak-highlight) 40%, transparent);
-}
-
 /* Whole-block comment target. The inset rule sits in the gutter without moving
    the Markdown layout; the fill is intentionally quieter than a saved comment. */
 .content :global(.tweak-block-target) {
@@ -46,14 +32,7 @@
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.content :global(.tweak-block-highlight) {
-  position: relative;
-  background: color-mix(in srgb, var(--tweak-highlight) 16%, transparent);
-  cursor: pointer;
-}
-
-.content :global(.tweak-block-target)::before,
-.content :global(.tweak-block-highlight)::before {
+.content :global(.tweak-block-target)::before {
   content: "";
   position: absolute;
   top: 0;
@@ -62,10 +41,6 @@
   width: 2px;
   background: color-mix(in srgb, var(--accent) 70%, transparent);
   pointer-events: none;
-}
-
-.content :global(.tweak-block-highlight)::before {
-  background: color-mix(in srgb, var(--tweak-highlight) 75%, transparent);
 }
 
 .agentActions {
