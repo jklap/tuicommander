@@ -13,6 +13,7 @@ pub use tuic_dictation::language;
 pub use tuic_dictation::loudness;
 pub use tuic_dictation::model;
 mod model_download;
+pub mod ownership;
 pub use tuic_dictation::permission;
 pub use tuic_dictation::speaker;
 pub use tuic_dictation::speech;
@@ -138,9 +139,44 @@ pub struct DictationState {
     /// handler that registers a client, and arming, which looks one up. Empty
     /// on a desktop-only install, which is the ordinary case.
     pub browser_endpoints: Arc<browser::BrowserEndpoints>,
+    /// Whether this instance owns dictation. Unset until startup claims it, so
+    /// a test or the headless build, which never claim, behave as the owner.
+    ownership: std::sync::OnceLock<ownership::Ownership>,
 }
 
 impl DictationState {
+    /// Claim dictation for this instance's config directory, once, at startup.
+    /// Keeps the lock for the life of the state. Logs the outcome so a second
+    /// instance leaves evidence of who owned what.
+    pub fn claim_ownership(&self, config_dir: &std::path::Path) {
+        let claimed = self
+            .ownership
+            .get_or_init(|| ownership::Ownership::acquire(config_dir));
+        tracing::info!(
+            source = "dictation",
+            owner = claimed.is_owner(),
+            lock = %claimed.path().display(),
+            "Dictation ownership: {}",
+            if claimed.is_owner() { "owner" } else { "non-owner, another instance holds the lock" }
+        );
+    }
+
+    /// True unless another instance holds this config directory's dictation lock.
+    pub fn is_owner(&self) -> bool {
+        self.ownership
+            .get()
+            .is_none_or(ownership::Ownership::is_owner)
+    }
+
+    /// `Err` with the user-facing refusal when another instance owns dictation.
+    pub fn ensure_owner(&self) -> Result<(), String> {
+        if self.is_owner() {
+            Ok(())
+        } else {
+            Err(ownership::OWNED_ELSEWHERE.to_string())
+        }
+    }
+
     /// Stop microphone capture at the native event edge, before WebView delivery.
     /// The IPC stop later joins streaming and transcribes the retained audio.
     pub fn request_native_stop(&self, source: &'static str) {
@@ -198,6 +234,7 @@ impl DictationState {
             preview: Mutex::new(None),
             utterance_observer: Mutex::new(None),
             browser_endpoints: Arc::new(browser::BrowserEndpoints::default()),
+            ownership: std::sync::OnceLock::new(),
         }
     }
 

@@ -178,6 +178,15 @@ export const DictationSettings: Component = () => {
 		<div class={s.section}>
 			<h3>{t("dictation.heading.dictation", "Dictation")}</h3>
 
+			<Show when={dictationStore.state.ownedElsewhere}>
+				<p class={s.hint}>
+					{t(
+						"dictation.ownedElsewhere",
+						"Dictation is owned by another TUICommander instance on this configuration. Use it there; this instance does not register the global hotkey or open the microphone.",
+					)}
+				</p>
+			</Show>
+
 			<div class={s.group}>
 				<label>{t("dictation.enableLabel", "Enable Dictation")}</label>
 				<div class={s.toggle}>

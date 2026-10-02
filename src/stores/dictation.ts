@@ -250,6 +250,9 @@ export interface ModelInfo {
 	actual_size_mb: number;
 }
 
+/** Marker of the backend refusal when another instance owns dictation (`dictation::ownership`). */
+const OWNED_ELSEWHERE_MARKER = "owned by another TUICommander instance";
+
 /** Model status values from Rust backend */
 type ModelStatus = "not_downloaded" | "downloaded" | "ready";
 
@@ -261,6 +264,8 @@ interface DictationStatus {
 	recording: boolean;
 	processing: boolean;
 	audio_level?: number;
+	/** Another instance holds dictation for this config directory. */
+	owned_elsewhere?: boolean;
 }
 
 /** Transcription response from Rust backend */
@@ -333,6 +338,8 @@ interface DictationStoreState {
 	modelSizeMb: number;
 	recording: boolean;
 	processing: boolean;
+	/** Another TUICommander instance owns dictation; this one cannot record. */
+	ownedElsewhere: boolean;
 	loading: boolean; // Model is being loaded into memory on first use
 	downloading: boolean;
 	downloadPercent: number;
@@ -445,6 +452,7 @@ function createDictationStore() {
 		modelSizeMb: 0,
 		recording: false,
 		processing: false,
+		ownedElsewhere: false,
 		loading: false,
 		downloading: false,
 		downloadPercent: 0,
@@ -806,6 +814,7 @@ function createDictationStore() {
 					modelSizeMb: status.model_size_mb,
 					recording: status.recording,
 					processing: status.processing,
+					ownedElsewhere: status.owned_elsewhere === true,
 					audioLevel: normalizeAudioLevel(status.audio_level),
 				});
 			} catch (err) {
@@ -894,7 +903,10 @@ function createDictationStore() {
 				startAudioLevelPolling();
 			} catch (err) {
 				const errStr = String(err);
-				if (errStr.includes("microphone_denied")) {
+				if (errStr.includes(OWNED_ELSEWHERE_MARKER)) {
+					setState("ownedElsewhere", true);
+					toastsStore.add("Dictation unavailable", errStr, "warn");
+				} else if (errStr.includes("microphone_denied")) {
 					appLogger.error(
 						"dictation",
 						"Microphone access denied. Open System Settings > Privacy > Microphone to allow access.",
@@ -1126,6 +1138,7 @@ function createDictationStore() {
 				// conversation that does not exist.
 				browserVoice?.stop();
 				browserVoice = null;
+				if (String(err).includes(OWNED_ELSEWHERE_MARKER)) setState("ownedElsewhere", true);
 				setState("handsFreeError", String(err));
 				appLogger.error("dictation", "Failed to arm hands-free", err);
 				return false;
