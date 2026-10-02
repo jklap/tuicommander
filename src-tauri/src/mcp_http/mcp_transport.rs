@@ -23865,6 +23865,16 @@ mod tests {
                 .any(|pair| pair == ["-c", expected.as_str()]),
             "launch must scope trust to the new cwd: {actual}"
         );
+        // Catches: a managed Codex child blocked on the Update now / Skip prompt
+        // (1373).
+        assert!(
+            actual
+                .lines()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["-c", "check_for_update_on_startup=false"]),
+            "managed Codex child must skip the update check: {actual}"
+        );
         assert!(
             prompt.contains("say READY"),
             "spawn prompt must be submitted: prompt={prompt:?}; queued={queued}; shell={shell:?}; idle_confirmed={idle_confirmed:?}; blocked={blocked}; output={output}"
@@ -23922,16 +23932,6 @@ mod tests {
         assert!(
             !actual.contains("trust_level"),
             "opt-out must preserve Codex trust behavior: {actual}"
-        );
-        // Catches: a managed Codex child blocked on the Update now / Skip prompt
-        // (1373); the update opt-out is independent of the trust opt-out.
-        assert!(
-            actual
-                .lines()
-                .collect::<Vec<_>>()
-                .windows(2)
-                .any(|pair| pair == ["-c", "check_for_update_on_startup=false"]),
-            "managed Codex child must skip the update check: {actual}"
         );
     }
 
