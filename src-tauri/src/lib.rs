@@ -18,6 +18,8 @@ pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
 pub(crate) mod ai_agent;
 pub(crate) mod attachments;
+#[cfg(feature = "desktop")]
+pub(crate) mod audio_enumeration;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
@@ -40,8 +42,6 @@ pub(crate) mod design_mode;
 #[cfg(test)]
 #[path = "../build_sidecars.rs"]
 mod build_sidecars;
-#[cfg(feature = "desktop")]
-pub(crate) mod audio_enumeration;
 #[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod dir_watcher;
