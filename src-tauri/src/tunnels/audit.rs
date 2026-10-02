@@ -66,7 +66,7 @@ impl AuditLog {
     fn connect(db_path: &Path) -> Result<Connection> {
         let conn = Connection::open(db_path)?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS tunnel_events (
