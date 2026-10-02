@@ -2,7 +2,7 @@ use super::check::{CheckReceipt, clean_artifact, execute_pinned_check, git_outpu
 use super::model::*;
 use super::reducer::apply_event;
 use crate::stories::{NewStory, Story, StoryOrigin, StoryStatus, StoryStore};
-use crate::workflows::{CheckDefinition, NodeKind, WorkflowKind, WorkflowStore};
+use crate::workflows::{CheckDefinition, NodeKind, PublishedWorkflow, WorkflowKind, WorkflowStore};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -613,7 +613,7 @@ impl RunStore {
             return Err("canonical HEAD is not a merge of the checked story commit".into());
         }
         let base_commit = parts[1].to_owned();
-        require_nonempty_policy(&definition.required_checks)?;
+        require_nonempty_policy(&definition)?;
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
             let receipt = execute_pinned_check(check, canonical)?;
@@ -711,7 +711,7 @@ impl RunStore {
             &snapshot.story_definition_id,
             snapshot.story_definition_revision,
         )?;
-        require_nonempty_policy(&definition.required_checks)?;
+        require_nonempty_policy(&definition)?;
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
             let receipt = execute_pinned_check(check, canonical)?;

@@ -375,6 +375,34 @@ impl WorkflowStore {
         read_published(&self.connect()?, id, revision)
     }
 
+    /// Seed the pre-check-policy built-ins (story_delivery rev 1 with no checks).
+    #[cfg(test)]
+    pub(crate) fn seed_pre_policy_templates(&self, project: &str) -> Result<(), String> {
+        let conn = self.connect()?;
+        let story_id = Uuid::now_v7().to_string();
+        let plan_id = Uuid::now_v7().to_string();
+        insert_seed(
+            &conn,
+            &story_id,
+            project,
+            "Story delivery",
+            WorkflowKind::Story,
+            "story_delivery",
+            story_template_graph(),
+            &[],
+        )?;
+        insert_seed(
+            &conn,
+            &plan_id,
+            project,
+            "Resolve plan",
+            WorkflowKind::Plan,
+            "resolve_plan",
+            resolve_plan_graph(&story_id, 1),
+            &[],
+        )
+    }
+
     /// Seed the two built-in templates atomically and only once per project.
     pub fn seed_templates(&self, project: &str) -> Result<Vec<WorkflowDraft>, String> {
         validate_identity(project, "Resolve plan")?;
@@ -405,9 +433,11 @@ impl WorkflowStore {
                 "Resolve plan",
                 WorkflowKind::Plan,
                 "resolve_plan",
-                resolve_plan_graph(&story_id),
+                resolve_plan_graph(&story_id, 1),
                 &[],
             )?;
+        } else {
+            migrate_unchecked_story_seed(&tx, project)?;
         }
         let ids = {
             let mut stmt = tx.prepare("SELECT id FROM workflow_definitions WHERE project=?1 AND builtin_key IS NOT NULL ORDER BY builtin_key")
@@ -425,6 +455,69 @@ impl WorkflowStore {
             .map_err(|e| format!("commit template seed: {e}"))?;
         Ok(templates)
     }
+}
+
+/// Seeds created before the check policy shipped hold story_delivery rev 1 with
+/// no checks, which makes every integration fail. When that definition (and the
+/// resolve_plan seed pinning it) is byte-for-byte the original seed, publish
+/// revision 2 with the default policy. Anything the user edited is left alone;
+/// integration then reports the missing checks by name.
+fn migrate_unchecked_story_seed(conn: &Connection, project: &str) -> Result<(), String> {
+    let seed_id = |key: &str| -> Result<Option<String>, String> {
+        conn.query_row(
+            "SELECT id FROM workflow_definitions WHERE project=?1 AND builtin_key=?2",
+            params![project, key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| format!("find built-in workflow: {e}"))
+    };
+    let (Some(story_id), Some(plan_id)) = (seed_id("story_delivery")?, seed_id("resolve_plan")?)
+    else {
+        return Ok(());
+    };
+    let is_original = |id: &str, graph: &WorkflowGraph, checks: &[CheckDefinition]| {
+        let draft = read_draft(conn, id)?;
+        let published = read_published(conn, id, 1)?;
+        Ok::<_, String>(
+            draft.draft_revision == 1
+                && draft.latest_published_revision == 1
+                && draft.closure == WorkflowClosure::Human
+                && draft.graph == *graph
+                && draft.required_checks == checks
+                && published.graph == *graph
+                && published.closure == WorkflowClosure::Human
+                && published.required_checks == checks,
+        )
+    };
+    if !is_original(&story_id, &story_template_graph(), &[])?
+        || !is_original(&plan_id, &resolve_plan_graph(&story_id, 1), &[])?
+    {
+        return Ok(());
+    }
+    republish_seed(
+        conn,
+        &story_id,
+        &story_template_graph(),
+        &default_story_checks(),
+    )?;
+    republish_seed(conn, &plan_id, &resolve_plan_graph(&story_id, 2), &[])
+}
+
+fn republish_seed(
+    conn: &Connection,
+    id: &str,
+    graph: &WorkflowGraph,
+    checks: &[CheckDefinition],
+) -> Result<(), String> {
+    let raw = encode_graph(graph)?;
+    let checks_raw =
+        serde_json::to_string(checks).map_err(|e| format!("encode workflow checks: {e}"))?;
+    conn.execute("UPDATE workflow_definitions SET graph_json=?1,checks_json=?2,draft_revision=2,latest_published_revision=2,last_published_draft_revision=2 WHERE id=?3",
+        params![raw, checks_raw, id]).map_err(|e| format!("migrate built-in workflow: {e}"))?;
+    conn.execute("INSERT INTO workflow_published(id,revision,project,name,kind,graph_json,closure,checks_json) SELECT id,2,project,name,kind,?1,closure,?2 FROM workflow_published WHERE id=?3 AND revision=1",
+        params![raw, checks_raw, id]).map_err(|e| format!("publish migrated built-in workflow: {e}"))?;
+    Ok(())
 }
 
 fn validate_identity(project: &str, name: &str) -> Result<(), String> {
@@ -608,7 +701,7 @@ fn story_template_graph() -> WorkflowGraph {
         ],
     }
 }
-fn resolve_plan_graph(story_template_id: &str) -> WorkflowGraph {
+fn resolve_plan_graph(story_template_id: &str, story_revision: i64) -> WorkflowGraph {
     WorkflowGraph {
         nodes: vec![
             node("start", NodeKind::Start),
@@ -625,7 +718,7 @@ fn resolve_plan_graph(story_template_id: &str) -> WorkflowGraph {
                 "dispatch",
                 NodeKind::StoryDispatch {
                     story_template_id: story_template_id.into(),
-                    story_revision: 1,
+                    story_revision,
                 },
             ),
             node("judge", NodeKind::Judge),
