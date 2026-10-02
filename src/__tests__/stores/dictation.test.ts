@@ -421,6 +421,19 @@ describe("dictationStore", () => {
 				consoleSpy.mockRestore();
 			});
 		});
+
+		// Bug caught: a secondary instance's refused start looks like a broken
+		// microphone instead of "the other instance owns dictation".
+		it("flags ownedElsewhere when another instance owns dictation", async () => {
+			mockInvoke.mockRejectedValueOnce("Dictation is owned by another TUICommander instance");
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				await expect(store.startRecording()).rejects.toBeDefined();
+				expect(store.state.ownedElsewhere).toBe(true);
+				consoleSpy.mockRestore();
+			});
+		});
 	});
 
 	describe("saveConfig()", () => {
@@ -1098,6 +1111,41 @@ describe("dictationStore", () => {
 				expect(store.state.handsFree).toBeNull();
 				expect(store.state.handsFreeError).toContain("not available on this build");
 				consoleSpy.mockRestore();
+			});
+		});
+
+		// Bug caught: a refused hands-free arm on a non-owner instance is shown as
+		// a generic failure and the Settings notice never appears.
+		it("flags ownedElsewhere when hands-free is refused by a non-owner", async () => {
+			mockInvoke.mockImplementation((command: string) =>
+				command === "arm_hands_free_dictation"
+					? Promise.reject("Dictation is owned by another TUICommander instance. Restart this instance.")
+					: Promise.resolve(undefined),
+			);
+			const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			await testInScopeAsync(async () => {
+				expect(await store.armHandsFree("sess-1")).toBe(false);
+				expect(store.state.ownedElsewhere).toBe(true);
+				expect(store.state.handsFreeError).toContain("owned by another TUICommander instance");
+				consoleSpy.mockRestore();
+			});
+		});
+
+		// Bug caught: status.owned_elsewhere is never mapped, so opening Settings
+		// on a non-owner shows no notice.
+		it("maps status.owned_elsewhere into the store", async () => {
+			mockInvoke.mockResolvedValue({
+				model_status: "ready",
+				model_name: "m",
+				model_size_mb: 1,
+				recording: false,
+				processing: false,
+				owned_elsewhere: true,
+			});
+			await testInScopeAsync(async () => {
+				await store.refreshStatus();
+				expect(store.state.ownedElsewhere).toBe(true);
 			});
 		});
 
