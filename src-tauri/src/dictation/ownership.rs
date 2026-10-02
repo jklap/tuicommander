@@ -119,3 +119,78 @@ mod tests {
         assert!(first.is_owner() && second.is_owner());
     }
 }
+
+/// Adversarial cases added by the 1294-87b7 critic review.
+#[cfg(test)]
+mod critic_tests {
+    use super::*;
+    use crate::dictation::DictationState;
+
+    fn dir() -> tempfile::TempDir {
+        tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap()
+    }
+
+    #[test]
+    fn a_config_dir_that_is_a_file_leaves_the_only_instance_the_owner() {
+        // Bug caught: an unusable lock location fails closed and switches
+        // dictation off for the only running instance.
+        let dir = dir();
+        let blocker = dir.path().join("not-a-dir");
+        std::fs::write(&blocker, b"x").unwrap();
+        assert!(Ownership::acquire(&blocker).is_owner());
+    }
+
+    #[test]
+    fn a_lock_path_that_is_a_directory_leaves_the_instance_the_owner() {
+        // Bug caught: open() failing with EISDIR is read as "someone else holds it".
+        let dir = dir();
+        std::fs::create_dir(dir.path().join(LOCK_FILE)).unwrap();
+        assert!(Ownership::acquire(dir.path()).is_owner());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_lock_file_leaves_the_instance_the_owner() {
+        // Bug caught: EACCES on the lock file (left by another user) locks the
+        // only instance out of dictation.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = dir();
+        let lock = dir.path().join(LOCK_FILE);
+        std::fs::write(&lock, b"").unwrap();
+        std::fs::set_permissions(&lock, std::fs::Permissions::from_mode(0o444)).unwrap();
+        // Root bypasses file modes; then open succeeds and the test is vacuous but still true.
+        assert!(Ownership::acquire(dir.path()).is_owner());
+    }
+
+    #[test]
+    fn a_state_that_never_claimed_owns_dictation() {
+        // Bug caught: the headless build, which never claims, refuses every start.
+        let state = DictationState::new();
+        assert!(state.is_owner());
+        assert!(state.ensure_owner().is_ok());
+    }
+
+    #[test]
+    fn the_refusal_carries_the_marker_the_frontend_matches_on() {
+        // Bug caught: the refusal text is edited and the UI notice never shows.
+        let dir = dir();
+        let _other = Ownership::acquire(dir.path());
+        let state = DictationState::new();
+        state.claim_ownership(dir.path());
+        let refusal = state.ensure_owner().unwrap_err();
+        assert!(refusal.contains(OWNED_ELSEWHERE_MARKER), "{refusal}");
+    }
+
+    #[test]
+    fn the_claiming_state_keeps_the_lock_until_it_is_dropped() {
+        // Bug caught: claim_ownership drops the lock file handle, so a second
+        // instance on the same config dir also becomes the owner.
+        let dir = dir();
+        let state = DictationState::new();
+        state.claim_ownership(dir.path());
+        assert!(state.is_owner());
+        assert!(!Ownership::acquire(dir.path()).is_owner());
+        drop(state);
+        assert!(Ownership::acquire(dir.path()).is_owner());
+    }
+}
