@@ -67,7 +67,7 @@ export interface WorkspaceState {
 	isMerged: boolean; // true when branch is fully merged into the repo's main branch
 	/** Derived on refresh; never persisted as user intent or trusted for deletion. */
 	lifecycleStatus?: WorkspaceLifecycleStatus;
-	lastCommitTs: number | null; // Unix timestamp of last commit on this branch
+	lastCommitTs: number | null; // Unix milliseconds of last commit on this branch
 	runCommand?: string; // Saved run command for this workspace
 	savedTerminals?: SavedTerminal[]; // Persisted terminal metadata for session restore
 	/** CI auto-heal: when enabled, CI failures trigger automatic agent fix cycles */

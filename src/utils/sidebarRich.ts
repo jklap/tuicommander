@@ -23,7 +23,7 @@ export function compactAge(thenMs: number | null | undefined, nowMs: number): st
 }
 
 export interface BranchFactsInput {
-	/** Unix seconds, as `lastCommitTs` holds it. */
+	/** Unix milliseconds, as `lastCommitTs` holds it. */
 	lastCommitTs: number | null;
 	ahead?: number;
 	behind?: number;
@@ -48,7 +48,7 @@ export interface BranchFacts {
 }
 
 export function branchFacts(i: BranchFactsInput, nowMs: number): BranchFacts {
-	const commitMs = i.lastCommitTs ? i.lastCommitTs * 1000 : null;
+	const commitMs = i.lastCommitTs || null;
 	const merged = !i.isMain && (i.isMerged || i.commitStatus === "merged");
 	const stale = !i.isMain && !merged && commitMs !== null && nowMs - commitMs > STALE_AFTER_DAYS * 24 * 60 * MINUTE;
 	const sync = [i.ahead ? `↑${i.ahead}` : "", i.behind ? `↓${i.behind}` : ""].filter(Boolean).join(" ");

@@ -15,13 +15,13 @@ import {
 // Each case names the plausible bug it catches (#1334-b659).
 
 const NOW = 1_800_000_000_000;
-const DAY_S = 86_400;
+const DAY_MS = 86_400_000;
 const base = { additions: 0, deletions: 0, dirtyFiles: 0, isMerged: false, lastCommitTs: null };
 
 describe("branchFacts", () => {
-	// Catches: feeding the unix-seconds commit timestamp to a millisecond formatter, so every age reads "20000d".
-	it("treats lastCommitTs as seconds", () => {
-		expect(branchFacts({ ...base, lastCommitTs: NOW / 1000 - 3 * 3600 }, NOW).commitAge).toBe("3h");
+	// Catches: scaling the millisecond store value by 1000 again, so every age reads "<1m" and nothing is ever stale.
+	it("treats lastCommitTs as milliseconds", () => {
+		expect(branchFacts({ ...base, lastCommitTs: NOW - 3 * 3600_000 }, NOW).commitAge).toBe("3h");
 	});
 
 	// Catches: printing "↑0 ↓0" on every clean branch.
@@ -33,10 +33,16 @@ describe("branchFacts", () => {
 
 	// Catches: a merged branch also flagged stale, so the chip contradicts itself.
 	it("reports merged over stale and stale only past the threshold", () => {
-		const old = NOW / 1000 - (STALE_AFTER_DAYS + 1) * DAY_S;
+		const old = NOW - (STALE_AFTER_DAYS + 1) * DAY_MS;
 		expect(branchFacts({ ...base, lastCommitTs: old, isMerged: true }, NOW).state).toBe("merged");
 		expect(branchFacts({ ...base, lastCommitTs: old }, NOW).state).toBe("stale");
-		expect(branchFacts({ ...base, lastCommitTs: NOW / 1000 - (STALE_AFTER_DAYS - 1) * DAY_S }, NOW).state).toBeNull();
+		expect(branchFacts({ ...base, lastCommitTs: NOW - (STALE_AFTER_DAYS - 1) * DAY_MS }, NOW).state).toBeNull();
+	});
+
+	// Catches: a commit at or after "now" (clock skew) going negative or NaN instead of "<1m".
+	it("reads a commit now or in the future as <1m", () => {
+		expect(branchFacts({ ...base, lastCommitTs: NOW }, NOW).commitAge).toBe("<1m");
+		expect(branchFacts({ ...base, lastCommitTs: NOW + 3600_000 }, NOW).commitAge).toBe("<1m");
 	});
 
 	// Catches: an unknown commit time (null) read as the epoch, flagging every new branch stale.
@@ -142,7 +148,7 @@ describe("subagentRows", () => {
 });
 
 describe("branchFacts for a main checkout", () => {
-	const old = { ...base, lastCommitTs: NOW / 1000 - 90 * DAY_S };
+	const old = { ...base, lastCommitTs: NOW - 90 * DAY_MS };
 
 	// Catches: main/master older than 30 days shown as Stale.
 	it("is never stale", () => {
