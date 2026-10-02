@@ -228,7 +228,8 @@ export const LiveMarkdownEditor: Component<LiveMarkdownEditorProps> = (props) =>
 		if (!container) return;
 		// A re-render rebuilds the rendered DOM and drops the swapped-in editor with it.
 		const observer = new MutationObserver(() => {
-			if (active && !active.host.isConnected) {
+			// The twin is gone when a re-render rebuilt the DOM or when mermaid swapped its <pre> for the diagram.
+			if (active && (!active.host.isConnected || !active.rendered?.isConnected)) {
 				active.rendered = undefined;
 				const wait = (frames: number) => {
 					place();
