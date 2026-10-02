@@ -4561,8 +4561,11 @@ fn handle_agent_with_parent_cwd(
                 launch_args.insert(0, "-c".to_string());
                 launch_args.insert(
                     1,
+                    // Inline table, not a dotted key: Codex splits a `-c` key on every
+                    // `.`, so `projects."<cwd>".trust_level` never matches the path
+                    // (every real path holds a dot) and the trust prompt stays.
                     format!(
-                        "projects.{}.trust_level=\"trusted\"",
+                        "projects={{{}={{trust_level=\"trusted\"}}}}",
                         serde_json::to_string(&crate::fs::portable_spelling(
                             &cwd.to_string_lossy()
                         ))
@@ -23756,7 +23759,7 @@ mod tests {
         );
         assert!(!actual.is_empty(), "agent must record launch argv");
         let expected = format!(
-            "projects.{}.trust_level=\"trusted\"",
+            "projects={{{}={{trust_level=\"trusted\"}}}}",
             serde_json::to_string(&cwd.to_string_lossy()).unwrap()
         );
         assert!(
@@ -23896,7 +23899,7 @@ mod tests {
             None,
         );
         let expected = format!(
-            "projects.{}.trust_level=\"trusted\"",
+            "projects={{{}={{trust_level=\"trusted\"}}}}",
             serde_json::to_string(&cwd.to_string_lossy()).unwrap()
         );
         assert!(
