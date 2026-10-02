@@ -772,12 +772,6 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		});
 	});
 
-	/** The terminal the answers-only button acts on; none while a diff, markdown or editor tab is in front. */
-	const activeTerminalId = () => {
-		if (diffTabsStore.state.activeId || mdTabsStore.state.activeId || editorTabsStore.state.activeId) return null;
-		return terminalsStore.state.activeId;
-	};
-
 	/** Collect tab IDs and names that are clipped in the given direction */
 	const getOverflowItems = (direction: "left" | "right"): ContextMenuItem[] => {
 		const el = tabsRef;
@@ -1065,20 +1059,6 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			>
 				+
 			</button>
-
-			{/* Answers-only toggle: a plain click target (no hover or long-press), so it works on touch. */}
-			<Show when={activeTerminalId()}>
-				{(id) => (
-					<button
-						class={cx(s.answersBtn, terminalsStore.get(id())?.answersOnly && s.answersBtnOn)}
-						onClick={() => terminalsStore.toggleAnswersOnly(id())}
-						aria-pressed={terminalsStore.get(id())?.answersOnly === true}
-						title={`${t("tabBar.answersOnly", "Answers only")} (${keyFor("answers-only")})`}
-					>
-						💬
-					</button>
-				)}
-			</Show>
 
 			<ContextMenu
 				items={getTabContextMenuItems()}
