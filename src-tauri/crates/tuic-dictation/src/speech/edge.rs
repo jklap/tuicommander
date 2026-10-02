@@ -1704,8 +1704,18 @@ mod critic_round2 {
     /// (the reply heard back counts as a voice, a user over it does) when the
     /// segmenter's frame floor is `activity_rms`.
     fn echo_and_user_over_it_heard_at(activity_rms: f32) -> (bool, bool) {
+        heard_through(activity_rms, || {
+            Box::new(crate::echo::webrtc::WebRtc::new().expect("the APM starts"))
+        })
+    }
+
+    /// The same, with the canceller `canceller` builds for each run.
+    fn heard_through(
+        activity_rms: f32,
+        canceller: impl Fn() -> Box<dyn crate::echo::Canceller>,
+    ) -> (bool, bool) {
         use crate::continuous::{Segmenter, SegmenterConfig};
-        use crate::echo::{EchoGuard, SAMPLE_RATE, webrtc::WebRtc};
+        use crate::echo::{EchoGuard, SAMPLE_RATE};
 
         let reply = decode_mp3(recorded_mp3()).expect("the recorded stream decodes");
         let ratio = f64::from(SAMPLE_RATE) / f64::from(reply.sample_rate);
@@ -1725,7 +1735,7 @@ mod critic_round2 {
         }
 
         let run = |user: Option<std::ops::Range<usize>>| -> bool {
-            let mut guard = EchoGuard::new(Box::new(WebRtc::new().expect("the APM starts")));
+            let mut guard = EchoGuard::new(canceller());
             guard.note_rendered(&SpeechAudio {
                 samples: far.clone(),
                 sample_rate: SAMPLE_RATE,
@@ -1777,6 +1787,13 @@ mod critic_round2 {
             eprintln!("floor {floor}: echo counts as voice = {echo}, user over it heard = {user}");
         }
         let floor = crate::transcribe::DEFAULT_RMS_THRESHOLD;
+        // Negative control: with no cancellation the same echo must clear the
+        // gate, or the assertion below proves nothing about the fixture.
+        let (uncancelled, _) = heard_through(floor, || Box::new(crate::echo::PassThrough));
+        assert!(
+            uncancelled,
+            "without a canceller the echo did not count as a voice at {floor}: the fixture does not exercise the gate"
+        );
         let (echo, user) = echo_and_user_over_it_heard_at(floor);
         assert!(!echo, "the reply heard back counted as a voice at {floor}");
         assert!(
