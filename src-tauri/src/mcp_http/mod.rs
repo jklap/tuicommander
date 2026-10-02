@@ -6165,6 +6165,40 @@ mod tests {
         assert!(dirty.join("untracked.txt").exists());
     }
 
+    // Catches: worktree_remove defaulting `force` to true (or ignoring its absence), which
+    // would discard the uncommitted work of a branch worktree without confirmation.
+    #[tokio::test]
+    async fn test_repo_worktree_remove_without_force_refuses_a_dirty_branch_worktree() {
+        let repo = create_temp_git_repo();
+        let linked = repo.path().join("dirty-wt");
+        crate::git_cli::git_cmd(repo.path())
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "dirty-branch",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        std::fs::write(linked.join("work.txt"), "uncommitted").unwrap();
+
+        let result = call_mcp_tool(
+            &test_state(),
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": repo.path().to_str().unwrap(),
+                "branch": "dirty-branch"
+            }),
+        )
+        .await;
+
+        assert!(result["error"].is_string(), "{result}");
+        assert!(linked.join("work.txt").exists());
+    }
+
     #[tokio::test]
     async fn test_repo_worktree_remove_rejects_renamed_workspace_id() {
         let repo = create_temp_git_repo();
