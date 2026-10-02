@@ -141,6 +141,14 @@ describe("buildResumeCommand", () => {
 		expect(buildResumeCommand("amp", null)).toBe("amp threads continue");
 	});
 
+	// Catches: resume reopening a new ego session instead of the one recorded for the tab.
+	it("resumes the recorded ego session by id and falls back to the workspace's latest", () => {
+		expect(buildResumeCommand("ego", "01a02491-6a90-7ae2-9089-fd6a8532eb82")).toBe(
+			"ego resume 01a02491-6a90-7ae2-9089-fd6a8532eb82",
+		);
+		expect(buildResumeCommand("ego", null)).toBe("ego resume");
+	});
+
 	it("returns null for agents without resume support", () => {
 		expect(buildResumeCommand("droid", null)).toBeNull();
 		expect(buildResumeCommand("git", null)).toBeNull();

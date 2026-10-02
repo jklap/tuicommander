@@ -5431,6 +5431,10 @@ pub(crate) fn hook_instrumented_for(
     let Some(agent_type) = agent_type else {
         return false;
     };
+    // ego emits OSC 7770 natively: there is no hook to install or disable.
+    if agent_type == "ego" {
+        return true;
+    }
     let settings = agents.agents.get(agent_type);
     if matches!(agent_type, "claude" | "codex") {
         settings
@@ -12285,6 +12289,9 @@ fn exact_agent_name(process_name: &str) -> Option<&'static str> {
         "grok" => Some("grok"),
         "droid" => Some("droid"),
         "pi" => Some("pi"),
+        // The terminal CLI only: the AI Chat ego runs over ACP with no PTY, so no
+        // process tree of a terminal session ever reaches this name for it.
+        "ego" => Some("ego"),
         _ => None,
     }
 }

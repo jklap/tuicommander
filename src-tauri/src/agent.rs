@@ -1033,6 +1033,7 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "goose",
     "droid",
     "pi",
+    "ego",
 ];
 
 /// Detect any agent binary location
