@@ -112,8 +112,9 @@ pub struct Utterance {
     pub end: UtteranceEnd,
     /// Milliseconds of *active* audio, pre-roll and trailing silence excluded.
     pub speech_ms: u32,
-    /// The longest unbroken run of active frames. `speech_ms` adds up frames
-    /// that may be seconds apart; this is what a voice looks like.
+    /// The longest run of active frames, dips under `VOICE_GAP_MS` included.
+    /// `speech_ms` adds up frames that may be seconds apart; this is what a
+    /// voice looks like.
     pub longest_run_ms: u32,
 }
 
@@ -163,10 +164,18 @@ struct OpenUtterance {
     audio: Vec<f32>,
     speech_ms: u32,
     silence_ms: u32,
-    /// Consecutive active frames up to now, and the longest such run so far.
+    /// The current run of activity and the longest so far, in milliseconds. A
+    /// dip of up to [`VOICE_GAP_MS`] does not end a run.
     run_ms: u32,
     longest_run_ms: u32,
+    /// Quiet frames since the last active one, in milliseconds.
+    gap_ms: u32,
 }
+
+/// The longest dip inside a voice: a plosive closure is 40-100 ms of quiet in
+/// the middle of a word. Scattered residual echo, a frame in every 200 ms,
+/// stays well past it.
+const VOICE_GAP_MS: u32 = 60;
 
 impl Segmenter {
     pub fn new(config: SegmenterConfig) -> Self {
@@ -267,6 +276,7 @@ impl Segmenter {
                         silence_ms: 0,
                         run_ms: FRAME_MS,
                         longest_run_ms: FRAME_MS,
+                        gap_ms: 0,
                     });
                 } else {
                     let cap = ms_to_samples(self.config.pre_roll_ms);
@@ -282,11 +292,17 @@ impl Segmenter {
                 if active {
                     open.speech_ms += FRAME_MS;
                     open.silence_ms = 0;
-                    open.run_ms += FRAME_MS;
+                    // A short dip is part of the run, and counts as time in it.
+                    open.run_ms = if open.gap_ms <= VOICE_GAP_MS {
+                        open.run_ms + open.gap_ms + FRAME_MS
+                    } else {
+                        FRAME_MS
+                    };
+                    open.gap_ms = 0;
                     open.longest_run_ms = open.longest_run_ms.max(open.run_ms);
                 } else {
                     open.silence_ms += FRAME_MS;
-                    open.run_ms = 0;
+                    open.gap_ms += FRAME_MS;
                 }
                 let end = if open.audio.len() >= ms_to_samples(self.config.max_utterance_ms) {
                     Some(UtteranceEnd::MaxLength)
@@ -1445,6 +1461,10 @@ impl Capture {
         if self.paused_at_ms.take().is_some()
             && let Some(speaker) = self.speaker.as_ref()
         {
+            tracing::info!(
+                source = "dictation",
+                "speech: resumed, nothing addressed to us"
+            );
             speaker.resume();
         }
     }

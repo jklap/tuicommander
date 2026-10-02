@@ -59,6 +59,11 @@ pub enum Downlink {
     Speak(SpeechAudio),
     /// Stop playing and drop whatever is queued.
     Stop,
+    /// Hold what is playing where it is, and anything that arrives, until
+    /// [`Resume`](Self::Resume).
+    Pause,
+    /// Continue from where [`Pause`](Self::Pause) stopped.
+    Resume,
 }
 
 /// One connected browser client.
@@ -78,6 +83,9 @@ pub struct BrowserLink {
     /// deadline is the authority; a client that finishes early says so and
     /// moves it to now.
     speaking_until: Mutex<Option<Instant>>,
+    /// While the client is told to hold its audio: how much of it is left to
+    /// play. The deadline above is wall-clock, which a pause would run out.
+    paused_with: Mutex<Option<Duration>>,
 }
 
 impl BrowserLink {
@@ -88,6 +96,7 @@ impl BrowserLink {
             playback,
             alive: AtomicBool::new(true),
             speaking_until: Mutex::new(None),
+            paused_with: Mutex::new(None),
         }
     }
 
@@ -122,6 +131,10 @@ impl BrowserLink {
     /// The client reported that it finished playing.
     pub fn note_playback_ended(&self) {
         *self.speaking_until.lock() = None;
+        // Nothing left to hold: a reply that ended while paused cannot happen
+        // on a client that honours the pause, and one that does not has
+        // finished.
+        *self.paused_with.lock() = None;
     }
 
     /// Is the client still connected?
@@ -240,8 +253,17 @@ impl speaker::Output for BrowserOutput {
     fn play(&self, audio: &SpeechAudio) -> Result<(), String> {
         let duration = Duration::from_secs_f32(audio.duration_seconds());
         // Armed before the send, so a client that answers instantly cannot have
-        // its "I finished" overwritten by the deadline it beat.
-        *self.link.speaking_until.lock() = Some(Instant::now() + duration);
+        // its "I finished" overwritten by the deadline it beat. While paused
+        // the client holds the audio instead of playing it, so what is armed
+        // is what is left to play, not a deadline.
+        {
+            let mut paused = self.link.paused_with.lock();
+            if paused.is_some() {
+                *paused = Some(duration);
+            } else {
+                *self.link.speaking_until.lock() = Some(Instant::now() + duration);
+            }
+        }
         if self
             .link
             .playback
@@ -249,13 +271,42 @@ impl speaker::Output for BrowserOutput {
             .is_err()
         {
             *self.link.speaking_until.lock() = None;
+            *self.link.paused_with.lock() = None;
             return Err("the browser client that owns this conversation is gone".to_string());
         }
         Ok(())
     }
 
+    fn pause(&self) {
+        let mut paused = self.link.paused_with.lock();
+        if paused.is_none() {
+            let left = self
+                .link
+                .speaking_until
+                .lock()
+                .take()
+                .map_or(Duration::ZERO, |deadline| {
+                    deadline.saturating_duration_since(Instant::now())
+                });
+            *paused = Some(left);
+        }
+        let _ = self.link.playback.send(Downlink::Pause);
+    }
+
+    fn resume(&self) {
+        if let Some(left) = self.link.paused_with.lock().take() {
+            *self.link.speaking_until.lock() = (!left.is_zero()).then(|| Instant::now() + left);
+        }
+        let _ = self.link.playback.send(Downlink::Resume);
+    }
+
+    fn can_pause(&self) -> bool {
+        true
+    }
+
     fn stop(&self) {
         *self.link.speaking_until.lock() = None;
+        *self.link.paused_with.lock() = None;
         // A closed receiver means there is nobody left to stop, which is the
         // outcome asked for. `hush` runs on the capture loop and must not fail.
         let _ = self.link.playback.send(Downlink::Stop);
@@ -264,6 +315,14 @@ impl speaker::Output for BrowserOutput {
     fn is_speaking(&self) -> bool {
         if !self.link.connected() {
             return false;
+        }
+        if self
+            .link
+            .paused_with
+            .lock()
+            .is_some_and(|left| !left.is_zero())
+        {
+            return true;
         }
         self.link
             .speaking_until
@@ -484,6 +543,34 @@ mod tests {
             Downlink::Stop
         );
         assert!(!output.is_speaking(), "a stopped reply is not speaking");
+    }
+
+    /// A paused reply is still being spoken, and its time does not run out
+    /// while it is held. Catches: the wall-clock deadline expiring during a
+    /// pause, which finishes a reply the user has not heard.
+    #[test]
+    fn a_paused_reply_keeps_what_is_left_of_it_and_continues_from_there() {
+        use speaker::Output;
+
+        let link = Arc::new(BrowserLink::new());
+        let mut client = link.subscribe();
+        let output = BrowserOutput::new(link.clone());
+        output.play(&audio(30.0)).expect("sent");
+        client.try_recv().expect("the reply");
+
+        output.pause();
+        assert_eq!(client.try_recv().expect("told to hold"), Downlink::Pause);
+        *link.speaking_until.lock() = None;
+        assert!(output.is_speaking(), "a held reply is not finished");
+
+        output.resume();
+        assert_eq!(client.try_recv().expect("told to go on"), Downlink::Resume);
+        assert!(output.is_speaking(), "the rest of it is still to play");
+        assert!(output.can_pause());
+
+        output.pause();
+        output.stop();
+        assert!(!output.is_speaking(), "a stop ends a held reply too");
     }
 
     /// `Finished` is set when the device reports nothing left, so a browser
