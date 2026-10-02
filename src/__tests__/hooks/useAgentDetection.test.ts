@@ -25,6 +25,7 @@ describe("useAgentDetection", () => {
 			"git",
 			"grok",
 			"pi",
+			"ego",
 		];
 		const result: Record<string, { path: string | null; version: string | null }> = {};
 		for (const bin of allBinaries) {
@@ -59,6 +60,7 @@ describe("useAgentDetection", () => {
 				expect(map.get("codex")?.available).toBe(true);
 				expect(map.get("grok")?.available).toBe(false);
 				expect(map.get("pi")?.available).toBe(false);
+				expect(map.get("ego")?.available).toBe(false);
 			});
 		});
 

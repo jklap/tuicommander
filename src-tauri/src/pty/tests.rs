@@ -602,6 +602,52 @@ fn test_classify_agent_droid() {
     assert_eq!(classify_agent("droid"), Some("droid"));
 }
 
+/// Catches: the terminal ego tab keeping no agent_type, so submit is rejected
+/// with `not_managed_agent` and no state is shown. Also pins the neighbours that
+/// must NOT classify: a different binary sharing the prefix.
+#[test]
+fn test_classify_agent_ego() {
+    assert_eq!(classify_agent("ego"), Some("ego"));
+    assert_eq!(classify_agent("ego-0.1.0"), Some("ego"));
+    assert_eq!(classify_agent("egoist"), None);
+    assert_eq!(classify_agent("ego-acp"), None);
+}
+
+/// Catches: OSC 7770 from ego being ignored for question suppression because the
+/// user never set `hook_instrumentation` — ego has no hook to configure.
+#[test]
+fn test_ego_is_always_hook_instrumented() {
+    let agents = crate::config::AgentsConfig::default();
+    assert!(hook_instrumented_for(&agents, Some("ego")));
+}
+
+/// Catches: `not_managed_agent` for an idle terminal ego (story 1080-a62f).
+#[cfg(unix)]
+#[test]
+fn test_submit_to_idle_terminal_ego_is_accepted() {
+    let state = crate::state::tests_support::make_test_app_state();
+    insert_recording_session(&state, "ego-tab");
+    agent_session(&state, "ego-tab", SHELL_IDLE);
+    state
+        .session_maps
+        .session_states
+        .get_mut("ego-tab")
+        .unwrap()
+        .agent_type = Some("ego".into());
+    assert_eq!(agent_submission_rejection(&state, "ego-tab", false), None);
+}
+
+/// Catches: a session that is not a PTY tab (the AI Chat ego over ACP has none)
+/// matching the ego agent type through submit.
+#[test]
+fn test_submit_to_acp_hosted_ego_session_is_not_matched() {
+    let state = crate::state::tests_support::make_test_app_state();
+    assert_eq!(
+        agent_submission_rejection(&state, "acp-ego-session", false),
+        Some(("session_not_found", "unknown"))
+    );
+}
+
 #[test]
 fn test_classify_agent_unknown_returns_none() {
     assert_eq!(classify_agent("bash"), None);
