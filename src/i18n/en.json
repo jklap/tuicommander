@@ -953,7 +953,6 @@
 	"statusBar.updating": "Updating",
 	"statusBar.voiceDictation": "Voice Dictation",
 	"tabBar.alias": "Alias: {alias}",
-	"tabBar.answersOnly": "Answers only",
 	"tabBar.captureSession": "Capture Session",
 	"tabBar.close": "Close",
 	"tabBar.closeOthers": "Close Other Tabs",

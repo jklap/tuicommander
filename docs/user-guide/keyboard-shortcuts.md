@@ -307,5 +307,5 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `block-prev` | `Cmd+Shift+Up` | Previous command block |
 | `block-next` | `Cmd+Shift+Down` | Next command block |
 | `block-search-toggle` | `Cmd+Shift+B` | Search in block |
-| `answers-only` | `Cmd+Alt+R` | Show the last turn as its prompt plus the 💬 answers (whole turn, scrollback included); press again to return to the live terminal |
+| `answers-only` | `Cmd+Alt+R` | Show every prompt of the session with its 💬 answers (turns without an answer are left out); press again to return to the live terminal |
 | `toggle-hands-free` | — | Start/stop hands-free conversation with the active terminal |
