@@ -79,7 +79,7 @@ export function createMarkdownDocumentPanelAdapter(tabId: string, onSelect?: (id
 			}
 			const source = mdTabsStore.get(tabId);
 			if (source?.type !== "file") return;
-			setPendingHeading(source.fsRoot || source.repoPath, target);
+			setPendingHeading(source.fsRoot || source.repoPath, { open_path: target.open_path, anchor: target.anchor });
 			openFileAction(target.open_path, source.repoPath, source.fsRoot, target.line);
 		},
 	};
