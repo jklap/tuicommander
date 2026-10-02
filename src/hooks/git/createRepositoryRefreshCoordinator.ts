@@ -13,6 +13,8 @@ export interface OrphanAssessment {
 	path: string;
 	safe: boolean;
 	reason?: string;
+	/** The checkout's status + HEAD fingerprint; absent when it is gone or unreadable. */
+	dirty_fingerprint?: string;
 	live_sessions?: Array<{ session_id: string; name: string }>;
 }
 
@@ -573,9 +575,12 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 	/** Detect orphaned linked worktrees and act based on the orphanCleanup setting. */
 	let orphanDialogOpen = false;
-	// Orphans the user chose to "Keep" this session — don't nag about them again
-	// on every subsequent refresh/poll. Session-scoped (re-detected on next launch). (#65)
-	const keptOrphans = new Set<string>();
+	// Orphans the user chose to "Keep" this session, with the fingerprint they had:
+	// a Keep holds until the checkout changes, then the orphan is judged afresh. (#65)
+	// Session-scoped (re-detected on next launch).
+	const keptOrphans = new Map<string, string | undefined>();
+	const isKept = (entry: OrphanAssessment) =>
+		keptOrphans.has(entry.path) && keptOrphans.get(entry.path) === entry.dirty_fingerprint;
 	/** Remove one orphan, then close its terminals. Resolves with how many terminals could not be closed. The backend verdict comes first: a session
 	 *  that started after the assessment makes the backend refuse, and its terminal must survive.
 	 *  A review-confirmed entry carries the session ids the user saw; the backend refuses if
@@ -649,24 +654,23 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		}
 		if (assessments.length === 0) return;
 
-		// A checkout a session still works in is never removed unattended: it waits
-		// for the review below, in both modes.
-		let reviewable = assessments;
-		if (orphanCleanup === "on") {
-			// Auto-remove only the worktrees the backend classified as safe.
-			await removeOrphans(
-				repoPath,
-				assessments.filter((entry) => entry.safe),
-				"Failed to auto-remove orphan worktree",
-				tally,
-			);
-			reviewable = assessments.filter((entry) => (entry.live_sessions?.length ?? 0) > 0);
-		}
+		// A checkout the backend judged safe (clean, reachable from a branch, no live
+		// session) is removed without asking, in both modes: the same rule as any
+		// merged clean worktree. Whatever else is left waits for the review below;
+		// in "on" mode only a checkout a session still works in does.
+		await removeOrphans(
+			repoPath,
+			assessments.filter((entry) => entry.safe),
+			"Failed to auto-remove orphan worktree",
+			tally,
+		);
+		const unsafe = assessments.filter((entry) => !entry.safe);
+		const reviewable =
+			orphanCleanup === "on" ? unsafe.filter((entry) => (entry.live_sessions?.length ?? 0) > 0) : unsafe;
 
-		// Ask flow (orphanCleanup === "ask", or "on" with live sessions to review).
-		// Skip orphans the user already chose to keep — otherwise the dialog re-fires
-		// on every refresh until the underlying worktree state changes. (#65)
-		const pending = reviewable.filter((entry) => !keptOrphans.has(entry.path));
+		// Skip orphans the user already chose to keep until their fingerprint moves —
+		// otherwise the dialog re-fires on every refresh. (#65)
+		const pending = reviewable.filter((entry) => !isKept(entry));
 		if (pending.length === 0) return;
 
 		if (orphanDialogOpen) return; // Prevent duplicate dialogs from concurrent refreshes
@@ -718,7 +722,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		}
 		if (!confirmed) {
 			// User chose "Keep" — remember these so we don't prompt again this session.
-			for (const entry of pending) keptOrphans.add(entry.path);
+			for (const entry of pending) keptOrphans.set(entry.path, entry.dirty_fingerprint);
 			return;
 		}
 

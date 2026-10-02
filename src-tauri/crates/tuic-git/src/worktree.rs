@@ -9040,6 +9040,39 @@ branch refs/heads/feat
         assert!(path.exists());
     }
 
+    // Catches: a Keep that cannot tell "still the same edits" from "edited again
+    // or cleaned", because the assessment carries no fingerprint (orphan-dialog-repeats).
+    #[test]
+    fn orphan_assessment_fingerprint_follows_the_checkout_state() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "orphan-fingerprint");
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        let fingerprint = |repo: &Path| {
+            assess_orphan_worktrees(&repo.to_string_lossy())
+                .unwrap()
+                .into_iter()
+                .find(|entry| entry.path.ends_with("orphan-fingerprint"))
+                .expect("the orphan is listed")
+        };
+
+        let clean = fingerprint(&repo);
+        assert!(clean.safe, "{clean:?}");
+        fs::write(path.join("note.txt"), "one\n").unwrap();
+        let dirty = fingerprint(&repo);
+        assert!(!dirty.safe, "{dirty:?}");
+        assert_eq!(
+            dirty,
+            fingerprint(&repo),
+            "unchanged edits keep the fingerprint"
+        );
+        fs::write(path.join("second.txt"), "x\n").unwrap();
+        let grown = fingerprint(&repo);
+
+        assert!(clean.dirty_fingerprint.is_some());
+        assert_ne!(clean.dirty_fingerprint, dirty.dirty_fingerprint);
+        assert_ne!(dirty.dirty_fingerprint, grown.dirty_fingerprint);
+    }
+
     /// The directory was moved away but git still lists the worktree. Spawning
     /// git in the missing cwd used to surface as "Failed to spawn git".
     #[test]
@@ -9471,6 +9504,144 @@ branch refs/heads/feat
             assert_eq!(serde_json::to_value(status).expect("serialize"), expected);
         }
     }
+
+    fn orphan_entry(repo: &Path, name: &str) -> OrphanCleanupAssessment {
+        assess_orphan_worktrees(&repo.to_string_lossy())
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path.ends_with(name))
+            .unwrap_or_else(|| panic!("{name} is listed as an orphan"))
+    }
+
+    fn detached_orphan(repo: &Path, name: &str) -> PathBuf {
+        let path = add_worktree(repo, name);
+        git_cmd(&path).args(["checkout", "--detach"]).run().unwrap();
+        path
+    }
+
+    // Catches (critic-1367): any form of unsaved work that `git status` reports being
+    // missed by the safety verdict, so ask mode now removes it without a dialog.
+    #[test]
+    fn orphan_assessment_is_unsafe_for_every_kind_of_unsaved_work() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let staged = detached_orphan(&repo, "orphan-staged");
+        fs::write(staged.join("new.txt"), "x\n").unwrap();
+        git_cmd(&staged).args(["add", "new.txt"]).run().unwrap();
+        let edited = detached_orphan(&repo, "orphan-edited");
+        fs::write(edited.join("README.md"), "changed\n").unwrap();
+        let deleted = detached_orphan(&repo, "orphan-deleted");
+        fs::remove_file(deleted.join("README.md")).unwrap();
+        let untracked = detached_orphan(&repo, "orphan-untracked");
+        fs::write(untracked.join("scratch.txt"), "x\n").unwrap();
+        detached_orphan(&repo, "orphan-clean");
+
+        for name in [
+            "orphan-staged",
+            "orphan-edited",
+            "orphan-deleted",
+            "orphan-untracked",
+        ] {
+            let entry = orphan_entry(&repo, name);
+            assert!(!entry.safe, "{name} holds unsaved work: {entry:?}");
+            assert!(entry.dirty_fingerprint.is_some(), "{name}: {entry:?}");
+        }
+        assert!(orphan_entry(&repo, "orphan-clean").safe);
+    }
+
+    // Catches (critic-1367): a fingerprint built from `status` alone, so a Keep on a
+    // clean checkout survives it being moved to another commit.
+    #[test]
+    fn orphan_assessment_fingerprint_changes_when_a_clean_checkout_moves_head() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        commit_file(&repo, "second.txt", "two\n");
+        let path = detached_orphan(&repo, "orphan-moves");
+
+        let before = orphan_entry(&repo, "orphan-moves");
+        assert_eq!(
+            before.dirty_fingerprint,
+            orphan_entry(&repo, "orphan-moves").dirty_fingerprint,
+            "an untouched checkout keeps its fingerprint"
+        );
+        git_cmd(&path)
+            .args(["checkout", "--detach", "HEAD~1"])
+            .run()
+            .unwrap();
+        let after = orphan_entry(&repo, "orphan-moves");
+
+        assert!(before.safe && after.safe, "{before:?} {after:?}");
+        assert_ne!(before.dirty_fingerprint, after.dirty_fingerprint);
+    }
+
+    // Catches (critic-1367): a vanished checkout reported with a fingerprint, so a Keep
+    // would hold for a directory nobody can inspect any more.
+    #[test]
+    fn orphan_whose_directory_is_gone_has_no_fingerprint() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = detached_orphan(&repo, "orphan-vanished");
+        fs::remove_dir_all(&path).unwrap();
+
+        let entry = orphan_entry(&repo, "orphan-vanished");
+
+        assert!(entry.safe, "{entry:?}");
+        assert_eq!(entry.dirty_fingerprint, None);
+    }
+
+    // Catches (critic-1367): the fingerprint being skipped when the verdict is "unsafe"
+    // for a reason other than dirt, so such an orphan can never be remembered as kept;
+    // and a verdict that does not follow the branch that later protects its HEAD.
+    #[test]
+    fn clean_orphan_with_an_unreachable_head_is_unsafe_with_a_fingerprint_until_a_branch_holds_it()
+    {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = detached_orphan(&repo, "orphan-unreachable");
+        commit_file(&path, "only-here.txt", "x\n");
+
+        let before = orphan_entry(&repo, "orphan-unreachable");
+        assert!(!before.safe, "{before:?}");
+        assert!(
+            before
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("unreachable"),
+            "{before:?}"
+        );
+        assert!(before.dirty_fingerprint.is_some(), "{before:?}");
+
+        let head = rev_at(&path, "HEAD").unwrap();
+        git_cmd(&repo)
+            .args(["branch", "rescue", &head])
+            .run()
+            .unwrap();
+        assert!(orphan_entry(&repo, "orphan-unreachable").safe);
+    }
+
+    // Catches (critic-1367): uncommitted edits inside a submodule being invisible to the
+    // verdict and the fingerprint, so a populated submodule's work is removed unasked.
+    #[test]
+    fn orphan_assessment_sees_edits_inside_a_populated_submodule() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = detached_orphan(&repo, "orphan-module");
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let clean = orphan_entry(&repo, "orphan-module");
+        assert!(clean.safe, "{clean:?}");
+
+        fs::write(path.join("modules/local/module.txt"), "edited in module\n").unwrap();
+        let edited = orphan_entry(&repo, "orphan-module");
+
+        assert!(!edited.safe, "{edited:?}");
+        assert_ne!(clean.dirty_fingerprint, edited.dirty_fingerprint);
+    }
 }
 
 /// Blocking orphan scan; scheduling belongs to the app adapter.
@@ -9489,6 +9660,11 @@ pub struct OrphanCleanupAssessment {
     pub safe: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Same fingerprint `worktree_lifecycle` reports (status + HEAD + submodules).
+    /// A remembered Keep holds only while it is unchanged. None when the
+    /// checkout is gone or cannot be inspected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dirty_fingerprint: Option<String>,
 }
 
 /// Assess each current detached worktree. Only a clean checkout whose HEAD is
@@ -9497,17 +9673,24 @@ pub fn assess_orphan_worktrees(repo_path: &str) -> Result<Vec<OrphanCleanupAsses
     detect_orphan_worktrees_blocking(repo_path.to_string()).map(|paths| {
         paths
             .into_iter()
-            .map(|path| match orphan_cleanup_safety(repo_path, &path) {
-                Ok(()) => OrphanCleanupAssessment {
-                    reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
-                    path,
-                    safe: true,
-                },
-                Err(reason) => OrphanCleanupAssessment {
-                    path,
-                    safe: false,
-                    reason: Some(reason),
-                },
+            .map(|path| {
+                let dirty_fingerprint = dirty_fingerprint_at(Path::new(&path))
+                    .ok()
+                    .map(|(fingerprint, _)| fingerprint);
+                match orphan_cleanup_safety(repo_path, &path) {
+                    Ok(()) => OrphanCleanupAssessment {
+                        reason: (!Path::new(&path).exists()).then(|| DIRECTORY_GONE.to_string()),
+                        path,
+                        safe: true,
+                        dirty_fingerprint,
+                    },
+                    Err(reason) => OrphanCleanupAssessment {
+                        path,
+                        safe: false,
+                        reason: Some(reason),
+                        dirty_fingerprint,
+                    },
+                }
             })
             .collect()
     })
