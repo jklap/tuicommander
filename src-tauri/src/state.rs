@@ -3635,37 +3635,72 @@ impl AppState {
         &self,
         reference: &str,
     ) -> Result<Option<String>, String> {
+        if reference.is_empty() {
+            return Ok(None);
+        }
         if self.peer_agents.contains_key(reference) {
             return Ok(Some(reference.to_string()));
         }
-        // The register `name` is what list_peers prints, so it is an address too.
-        // Two peers sharing a name is ambiguous: refuse, never pick one.
-        let named: Vec<String> = self
-            .peer_agents
-            .iter()
-            .filter(|entry| entry.value().name == reference)
-            .map(|entry| entry.key().clone())
-            .collect();
-        match named.as_slice() {
-            [] => {}
-            [peer] => return Ok(Some(peer.clone())),
-            _ => {
-                return Err(format!(
-                    "Peer name '{reference}' is ambiguous; matches {}",
-                    named.join(", ")
-                ));
-            }
-        }
-        let Some(session_id) = self.resolve_session_ref_checked(reference)? else {
-            return Ok(None);
-        };
-        Ok(self
-            .peer_agents
-            .iter()
-            .find(|entry| {
+        // Terminal addresses win over the register name: a peer must not be able
+        // to capture another terminal's alias, PTY key or display name by
+        // registering it as its name.
+        if let Some(session_id) = self.resolve_session_ref_checked(reference)?
+            && let Some(peer) = self.peer_agents.iter().find(|entry| {
                 self.live_pty_for_peer(entry.key()).as_deref() == Some(session_id.as_str())
             })
-            .map(|entry| entry.key().clone()))
+        {
+            return Ok(Some(peer.key().clone()));
+        }
+        self.resolve_peer_name(reference)
+    }
+
+    /// The register `name` list_peers prints, as an address. Live peers (a live
+    /// PTY or a known MCP session) shadow dead ones, so a restart that reuses
+    /// the default name is not made ambiguous by its dead predecessor; with no
+    /// live peer the dead ones still answer. Identities of one PTY are one
+    /// owner. Two owners with one name are refused with the candidates.
+    fn resolve_peer_name(&self, name: &str) -> Result<Option<String>, String> {
+        let mut live = std::collections::BTreeSet::new();
+        let mut dead = std::collections::BTreeSet::new();
+        for entry in self.peer_agents.iter().filter(|e| e.value().name == name) {
+            let key = entry.key();
+            if self.live_pty_for_peer(key).is_some() {
+                live.extend(self.peer_identity_for_live_pty(key));
+            } else if self
+                .mcp
+                .sessions
+                .contains_key(&entry.value().mcp_session_id)
+            {
+                live.insert(key.clone());
+            } else {
+                dead.insert(key.clone());
+            }
+        }
+        let owners: Vec<String> = if live.is_empty() { dead } else { live }
+            .into_iter()
+            .collect();
+        match owners.as_slice() {
+            [] => Ok(None),
+            [owner] => Ok(Some(owner.clone())),
+            _ => Err(format!(
+                "Peer name '{name}' is ambiguous; matches {}",
+                owners.join(", ")
+            )),
+        }
+    }
+
+    /// A managed PTY has one mailbox even if two bridges assert different UUIDs
+    /// for it (for example, a persisted tab UUID and the PTY key). Choose the
+    /// first registered peer so the mailbox address stays stable on reconnect.
+    /// Callers that create a binding hold PEER_IDENTITY_BIND_LOCK while using it.
+    pub(crate) fn peer_identity_for_live_pty(&self, asserted: &str) -> Option<String> {
+        let pty = self.live_pty_for_peer(asserted)?;
+        self.peer_agents
+            .iter()
+            .filter(|peer| self.live_pty_for_peer(peer.key()).as_deref() == Some(pty.as_str()))
+            .map(|peer| (peer.registered_at, peer.key().clone()))
+            .min()
+            .map(|(_, identity)| identity)
     }
 
     /// This session's knowledge record, read off disk when it is not resident.
