@@ -95,7 +95,12 @@ export const PrStateBadge: Component<{
 	}
 
 	return (
-		<span class={cx(s.prBadge, PR_BADGE_CLASSES[badge().cls])} title={`PR #${props.prNumber}${dirtySuffix()}`}>
+		<span
+			class={cx(s.prBadge, PR_BADGE_CLASSES[badge().cls])}
+			data-tooltip={`PR #${props.prNumber}${dirtySuffix()}`}
+			data-tooltip-pos="bottom"
+			data-tooltip-align="right"
+		>
 			{badge().label}
 		</span>
 	);
