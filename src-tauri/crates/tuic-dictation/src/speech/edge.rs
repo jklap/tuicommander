@@ -1695,8 +1695,27 @@ mod critic_round2 {
     /// — and, over the same room, a user talking over it still being heard.
     #[test]
     fn recorded_speech_heard_back_is_not_a_voice_and_a_user_over_it_is() {
+        let floor = crate::continuous::SegmenterConfig::default().activity_rms;
+        let (echo, user) = echo_and_user_over_it_heard_at(floor);
+        assert!(!echo, "the reply heard back counted as a voice");
+        assert!(user, "a user talking over the reply was not heard");
+    }
+
+    /// (the reply heard back counts as a voice, a user over it does) when the
+    /// segmenter's frame floor is `activity_rms`.
+    fn echo_and_user_over_it_heard_at(activity_rms: f32) -> (bool, bool) {
+        heard_through(activity_rms, || {
+            Box::new(crate::echo::webrtc::WebRtc::new().expect("the APM starts"))
+        })
+    }
+
+    /// The same, with the canceller `canceller` builds for each run.
+    fn heard_through(
+        activity_rms: f32,
+        canceller: impl Fn() -> Box<dyn crate::echo::Canceller>,
+    ) -> (bool, bool) {
         use crate::continuous::{Segmenter, SegmenterConfig};
-        use crate::echo::{EchoGuard, SAMPLE_RATE, webrtc::WebRtc};
+        use crate::echo::{EchoGuard, SAMPLE_RATE};
 
         let reply = decode_mp3(recorded_mp3()).expect("the recorded stream decodes");
         let ratio = f64::from(SAMPLE_RATE) / f64::from(reply.sample_rate);
@@ -1716,7 +1735,7 @@ mod critic_round2 {
         }
 
         let run = |user: Option<std::ops::Range<usize>>| -> bool {
-            let mut guard = EchoGuard::new(Box::new(WebRtc::new().expect("the APM starts")));
+            let mut guard = EchoGuard::new(canceller());
             guard.note_rendered(&SpeechAudio {
                 samples: far.clone(),
                 sample_rate: SAMPLE_RATE,
@@ -1741,7 +1760,10 @@ mod critic_round2 {
                     echo + voice
                 })
                 .collect();
-            let mut segmenter = Segmenter::new(SegmenterConfig::default());
+            let mut segmenter = Segmenter::new(SegmenterConfig {
+                activity_rms,
+                ..SegmenterConfig::default()
+            });
             let mut heard = false;
             for chunk in near.chunks(SAMPLE_RATE as usize / 20) {
                 segmenter.push(&guard.clean(chunk));
@@ -1750,11 +1772,33 @@ mod critic_round2 {
             heard
         };
 
-        assert!(!run(None), "the reply heard back counted as a voice");
         let from = one.len() * 2;
+        (run(None), run(Some(from..from + SAMPLE_RATE as usize)))
+    }
+
+    /// The Settings floor (1164-ee4b) is 0.001 for hands-free, ten times the
+    /// old compiled one. Catches: residual echo clearing the 1376 voice gate
+    /// at that floor and hushing a reply the user never interrupted. Prints
+    /// the sweep so the playback-time floor can be chosen from numbers.
+    #[test]
+    fn the_settings_floor_still_keeps_a_reply_heard_back_from_being_a_voice() {
+        for floor in [0.001, 0.002, 0.005, 0.01] {
+            let (echo, user) = echo_and_user_over_it_heard_at(floor);
+            eprintln!("floor {floor}: echo counts as voice = {echo}, user over it heard = {user}");
+        }
+        let floor = crate::transcribe::DEFAULT_RMS_THRESHOLD;
+        // Negative control: with no cancellation the same echo must clear the
+        // gate, or the assertion below proves nothing about the fixture.
+        let (uncancelled, _) = heard_through(floor, || Box::new(crate::echo::PassThrough));
         assert!(
-            run(Some(from..from + SAMPLE_RATE as usize)),
-            "a user talking over the reply was not heard"
+            uncancelled,
+            "without a canceller the echo did not count as a voice at {floor}: the fixture does not exercise the gate"
+        );
+        let (echo, user) = echo_and_user_over_it_heard_at(floor);
+        assert!(!echo, "the reply heard back counted as a voice at {floor}");
+        assert!(
+            user,
+            "a user talking over the reply was not heard at {floor}"
         );
     }
 }
