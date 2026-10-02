@@ -35,6 +35,21 @@ export function createAgentLaunchMenu(getItems: () => ContextMenuItem[], options
 		pressTimer = undefined;
 	};
 
+	// A touch release is followed by emulated mouse events; the menu closes on any
+	// mousedown outside it, so the mousedown that ends the press that opened it
+	// would shut the list the instant the finger lifts. Browsers that send none
+	// (iOS Safari on a long press) leave the one-shot listener to expire.
+	const swallowReleaseMouseDown = () => {
+		const stop = (e: Event) => e.stopPropagation();
+		document.addEventListener("mousedown", stop, { capture: true, once: true });
+		setTimeout(() => document.removeEventListener("mousedown", stop, { capture: true }), 500);
+	};
+
+	const onPointerUp = (e: PointerEvent) => {
+		cancelPress();
+		if (pressFired && (e.pointerType === "touch" || e.pointerType === "pen")) swallowReleaseMouseDown();
+	};
+
 	const onPointerDown = (e: PointerEvent) => {
 		pressFired = false;
 		if (e.button !== 0) return;
@@ -98,7 +113,7 @@ export function createAgentLaunchMenu(getItems: () => ContextMenuItem[], options
 		consumeClick,
 		buttonHandlers: {
 			onPointerDown,
-			onPointerUp: cancelPress,
+			onPointerUp,
 			onPointerLeave: cancelPress,
 			onPointerCancel: cancelPress,
 			onContextMenu,
