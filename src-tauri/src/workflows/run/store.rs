@@ -613,6 +613,7 @@ impl RunStore {
             return Err("canonical HEAD is not a merge of the checked story commit".into());
         }
         let base_commit = parts[1].to_owned();
+        require_nonempty_policy(&definition.required_checks)?;
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
             let receipt = execute_pinned_check(check, canonical)?;
@@ -710,6 +711,7 @@ impl RunStore {
             &snapshot.story_definition_id,
             snapshot.story_definition_revision,
         )?;
+        require_nonempty_policy(&definition.required_checks)?;
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
             let receipt = execute_pinned_check(check, canonical)?;
@@ -1037,6 +1039,7 @@ pub(super) fn receipt_current(
             item.canonical_ref == current_ref
                 && item.merge_commit == head
                 && item.merge_tree == tree
+                && !item.post_checks.is_empty()
                 && item.post_checks.iter().all(|check| {
                     check.exit_code == 0
                         && check.ref_name == current_ref
@@ -1051,6 +1054,7 @@ pub(super) fn receipt_current(
             item.canonical_ref == current_ref
                 && item.commit == head
                 && item.tree == tree
+                && !item.post_checks.is_empty()
                 && item.post_checks.iter().all(|check| {
                     check.exit_code == 0
                         && check.ref_name == current_ref
@@ -1074,6 +1078,17 @@ fn source_is_ancestor(canonical: &Path, source: &str, head: &str) -> Result<bool
         .status()
         .map_err(|error| format!("verify integrated source ancestry: {error}"))?;
     Ok(ancestor.success())
+}
+
+/// An integration with no pinned checks would record an empty `post_checks`
+/// list and release dependents without validating anything.
+pub(super) fn require_nonempty_policy(required: &[CheckDefinition]) -> Result<(), String> {
+    if required.is_empty() {
+        return Err(
+            "story workflow pins no required checks; integration cannot be validated".into(),
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn require_current_checks(
