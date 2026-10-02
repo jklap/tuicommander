@@ -3,7 +3,7 @@ import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
-import { getRemoteBaseUrl, getRepoConnection, withRemoteToken } from "../../transportRuntime";
+import { repoImageUrl } from "../../utils/repoImageUrl";
 import styles from "./FilesScreen.module.css";
 
 interface FileEntry {
@@ -252,12 +252,7 @@ export function FilesScreen(props: FilesScreenProps) {
 		const repoPath = repo();
 		const currentFile = file();
 		if (!repoPath || !currentFile) return relativePath;
-		const connectionId = getRepoConnection(repoPath);
-		const base = connectionId ? getRemoteBaseUrl(connectionId) : undefined;
-		const url = new URL("/fs/markdown-image", base ?? window.location.origin);
-		url.searchParams.set("repoPath", repoPath);
-		url.searchParams.set("file", `${currentFile.split("/").slice(0, -1).join("/")}/${relativePath}`);
-		return withRemoteToken(url.toString(), connectionId);
+		return repoImageUrl(repoPath, `${currentFile.split("/").slice(0, -1).join("/")}/${relativePath}`);
 	}
 
 	async function save() {
