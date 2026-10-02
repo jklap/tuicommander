@@ -945,6 +945,121 @@ mod tests {
         assert_eq!(probe.far_end_seen().last().copied(), Some(1.0));
     }
 
+    /// Survivors of cargo-mutants on the pause arithmetic (1379-f455).
+    mod mutation_1379 {
+        use super::*;
+        use crate::speaker::Output;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        fn ramp(len: usize) -> SpeechAudio {
+            audio((1..=len).map(|n| n as f32).collect(), SAMPLE_RATE)
+        }
+
+        /// A pausable device that counts what it was told.
+        #[derive(Default)]
+        struct Counting {
+            pauses: AtomicUsize,
+            resumes: AtomicUsize,
+        }
+
+        impl Output for Counting {
+            fn play(&self, _audio: &SpeechAudio) -> Result<(), String> {
+                Ok(())
+            }
+            fn stop(&self) {}
+            fn is_speaking(&self) -> bool {
+                false
+            }
+            fn pause(&self) {
+                self.pauses.fetch_add(1, Ordering::Relaxed);
+            }
+            fn resume(&self) {
+                self.resumes.fetch_add(1, Ordering::Relaxed);
+            }
+            fn can_pause(&self) -> bool {
+                true
+            }
+        }
+
+        /// Catches: `position += 1` turned into `*= 1`, which freezes the
+        /// capture position at 0 so no later pause window is ever reached.
+        #[test]
+        fn take_advances_the_capture_position_across_calls() {
+            let mut far_end = FarEnd::new();
+            far_end.push(&ramp(20));
+            far_end.pauses.push_back((4, Some(7)));
+
+            let first = far_end.take(5);
+            let second = far_end.take(5);
+
+            assert_eq!(first, [1.0, 2.0, 3.0, 4.0, 0.0]);
+            assert_eq!(second, [0.0, 0.0, 5.0, 6.0, 7.0]);
+        }
+
+        /// Catches: `position + recorded` turned into `*`, and `silent_within`
+        /// returning 0 or computing its end as `position * count`.
+        #[test]
+        fn pause_positions_are_measured_from_the_capture_cursor() {
+            let mut far_end = FarEnd::new();
+            far_end.position = 10;
+            far_end.pauses.push_back((8, Some(13)));
+            far_end.pauses.push_back((14, Some(16)));
+            far_end.pauses.push_back((20, None));
+
+            assert_eq!(far_end.position_after(4), 14);
+            // Window [10, 15): three positions of the first pause, one of the
+            // second; the open pause is not counted.
+            assert_eq!(far_end.silent_within(5), 4);
+        }
+
+        /// Catches: `recorded - covered` turned into `+` in `note_rendered`,
+        /// which pads twice what a closed pause window already silences.
+        #[test]
+        fn a_closed_pause_window_is_not_padded_twice() {
+            let mut guard = EchoGuard::new(Box::new(PassThrough));
+            guard.attach_capture(Box::new(|| 10));
+            guard.far_end.pauses.push_back((2, Some(6)));
+
+            guard.note_rendered(&ramp(4));
+
+            // 10 recorded, 4 of them inside the window: pad 6, then the reply.
+            assert_eq!(guard.far_end.samples.len(), 6 + 4);
+        }
+
+        /// Catches: `FarEndTap::pause` / `resume` doing nothing, and
+        /// `can_pause` constant: the device must be told, and the reference
+        /// must go silent for a pausable output and come back on resume.
+        #[test]
+        fn the_tap_forwards_pause_and_resume_and_tracks_them_in_the_reference() {
+            let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let guard = Arc::new(parking_lot::Mutex::new(EchoGuard::new(Box::new(Tee(
+                Arc::clone(&seen),
+            )))));
+            let device = Arc::new(Counting::default());
+            let tapped = FarEndTap::new(Arc::clone(&device) as _, Arc::clone(&guard));
+            assert!(tapped.can_pause());
+            assert!(
+                !FarEndTap::new(Arc::new(PlayedOutput::default()), Arc::clone(&guard)).can_pause()
+            );
+            tapped.play(&ramp(SAMPLE_RATE as usize)).expect("played");
+
+            tapped.pause();
+            assert_eq!(device.pauses.load(Ordering::Relaxed), 1);
+            guard.lock().clean(&vec![0.0; FRAME_SAMPLES]);
+            assert!(seen.lock().iter().flatten().all(|sample| *sample == 0.0));
+
+            tapped.resume();
+            assert_eq!(device.resumes.load(Ordering::Relaxed), 1);
+            guard.lock().clean(&vec![0.0; FRAME_SAMPLES]);
+            assert_eq!(
+                seen.lock().last().and_then(|frame| frame.first()).copied(),
+                Some(1.0),
+                "the reference did not resume at the head of the reply"
+            );
+        }
+    }
+
     /// Probes by the critic of 1376-f33e.
     mod critic_1376 {
         use super::*;
