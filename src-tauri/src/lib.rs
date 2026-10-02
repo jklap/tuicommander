@@ -2502,137 +2502,6 @@ pub fn set_password_interactive() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run the headless (non-desktop) server.
-/// Called by the `tuic-remote` binary.
-#[cfg(not(feature = "desktop"))]
-pub async fn run_headless(port: u16) -> anyhow::Result<()> {
-    let log_buffer = Arc::new(parking_lot::Mutex::new(app_logger::LogRingBuffer::new(
-        app_logger::LOG_RING_CAPACITY,
-    )));
-    app_logger::init_tracing(log_buffer.clone());
-
-    let mut app_config = config::load_app_config();
-    app_config.services.server.enabled = true;
-    if app_config.services.server.port != port {
-        tracing::info!(
-            source = "remote",
-            config_port = app_config.services.server.port,
-            override_port = port,
-            "Port overridden by TUIC_PORT / CLI argument"
-        );
-        app_config.services.server.port = port;
-    }
-    if app_config.services.auth.lan_auth_bypass {
-        tracing::warn!(
-            source = "remote",
-            "lan_auth_bypass is not supported in headless mode — forcing off"
-        );
-        app_config.services.auth.lan_auth_bypass = false;
-    }
-    if app_config.services.auth.session_token.is_empty() {
-        app_config.services.auth.session_token = uuid::Uuid::new_v4().to_string();
-        app_config.services.auth.session_token_exists = true;
-    }
-
-    let data_dir = config::config_dir();
-    let worktrees_dir = data_dir.join("worktrees");
-    std::fs::create_dir_all(&worktrees_dir)?;
-
-    // Env only, for the same reason the desktop boot does it: the rest of the
-    // chain spawns `gh` or reads the credential store, and this runs before the
-    // HTTP server binds. No window here, but a wedged `gh` would still keep the
-    // server unreachable.
-    let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
-
-    agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
-
-    let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
-    *app_state.github.token.get_mut() = github_token;
-    *app_state.github.token_source.get_mut() = github_token_source;
-
-    let state = Arc::new(app_state);
-    state.wire_event_bus();
-    crate::github_auth::spawn_deferred_token_resolution(state.clone());
-
-    spawn_background_tasks(&state);
-
-    agent_mcp::ensure_mcp_configs(&app_config.disabled_mcp_agents);
-
-    let tls_config = match &app_config.services.tls {
-        config::TlsConfig::Manual {
-            cert_path,
-            key_path,
-        } => {
-            let cert_pem = std::fs::read(cert_path)
-                .map_err(|e| anyhow::anyhow!("Failed to read TLS cert at {cert_path}: {e}"))?;
-            let key_pem = std::fs::read(key_path)
-                .map_err(|e| anyhow::anyhow!("Failed to read TLS key at {key_path}: {e}"))?;
-            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
-                .await
-                .map_err(|e| anyhow::anyhow!("Invalid TLS cert/key: {e}"))?;
-            tracing::info!(
-                source = "remote",
-                cert_path,
-                key_path,
-                "TLS loaded (manual mode)"
-            );
-            Some(tls)
-        }
-        config::TlsConfig::Off => None,
-    };
-
-    tracing::info!(
-        source = "remote",
-        port,
-        tls = tls_config.is_some(),
-        "Starting tuic-remote"
-    );
-
-    // Auto-connect saved upstream MCP servers. Spawned (not awaited) for the
-    // same reason as the desktop boot path: `start_server` below parks on the
-    // shutdown signal and never returns, so any auto-connect after it would be
-    // dead code. Registration is fast (async init is spawned), so it does not
-    // delay socket binding.
-    let auto_state = state.clone();
-    let settle_guard = auto_state.clone();
-    let auto_handle = tokio::spawn(async move {
-        crate::mcp_upstream_config::auto_connect_saved_upstreams(&auto_state).await;
-    });
-    // Recover the settle latch if the auto-connect task panics (see desktop path).
-    tokio::spawn(async move {
-        if let Err(e) = auto_handle.await {
-            tracing::error!(
-                source = "mcp_upstream",
-                "auto_connect_saved_upstreams task failed: {e}"
-            );
-            settle_guard
-                .mcp
-                .upstream_registry
-                .mark_initial_connect_complete();
-        }
-    });
-
-    // Run server until SIGINT/SIGTERM, then shut down gracefully.
-    tokio::select! {
-        tcp_bound = mcp_http::start_server(state.clone(), true, true, tls_config) => {
-            if !tcp_bound {
-                anyhow::bail!("Fatal: failed to bind TCP on port {port} — cannot serve in headless mode");
-            }
-        }
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!(source = "remote", "Received shutdown signal");
-            if let Some(tx) = state.server_shutdown.lock().take() {
-                let _ = tx.send(());
-            }
-        }
-    }
-
-    // Flush the last buffered log lines to disk before the process exits
-    // (story #672-c1a3) — the lines a shutdown bug needs most.
-    app_logger::flush_logs_on_exit();
-    Ok(())
-}
-
 /// Background tasks the `tuic-remote` daemon runs.
 ///
 /// The daemon is a whole machine, not a session server: it holds the repos, the
@@ -2681,9 +2550,8 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     //   to write files no one asks it for.
 }
 
-/// Run the tuic-remote server — a slim variant of `run_headless()`.
+/// Run the tuic-remote server.
 ///
-/// Differences from `run_headless()`:
 /// - Uses `build_remote_router()` (no config, MCP, plugins, push, static files).
 /// - Spawns only the two essential background tasks: session state accumulator
 ///   and tombstone sweeper.
@@ -3601,27 +3469,26 @@ mod tests {
             "the rest of the chain must still run, or GitHub panels silently see no token"
         );
 
-        // The two headless entry points have no window, but the chain still ran
-        // before their HTTP server bound its socket — a wedged `gh` kept the
-        // server unreachable instead of the window unpainted. Same treatment.
-        for entry in ["pub async fn run_headless(", "pub async fn run_remote("] {
-            let body = source
-                .split(entry)
-                .nth(1)
-                .unwrap_or_else(|| panic!("{entry} must exist"))
-                .split("\n}\n")
-                .next()
-                .expect("entry body");
-            assert!(
-                body.contains("github_auth::resolve_token_from_env()")
-                    && body.contains("github_auth::spawn_deferred_token_resolution("),
-                "{entry} must take the env token and defer the rest, like the desktop boot"
-            );
-            assert!(
-                !body.contains("github_auth::resolve_token_without_keychain()"),
-                "{entry} must not run the `gh`-spawning chain before its server binds"
-            );
-        }
+        // The daemon has no window, but the chain still ran before its HTTP
+        // server bound its socket — a wedged `gh` kept the server unreachable
+        // instead of the window unpainted. Same treatment.
+        let entry = "pub async fn run_remote(";
+        let body = source
+            .split(entry)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{entry} must exist"))
+            .split("\n}\n")
+            .next()
+            .expect("entry body");
+        assert!(
+            body.contains("github_auth::resolve_token_from_env()")
+                && body.contains("github_auth::spawn_deferred_token_resolution("),
+            "{entry} must take the env token and defer the rest, like the desktop boot"
+        );
+        assert!(
+            !body.contains("github_auth::resolve_token_without_keychain()"),
+            "{entry} must not run the `gh`-spawning chain before its server binds"
+        );
     }
 
     /// Catches: a headless daemon that never writes `agent-hooks/claude.json`, so
@@ -3631,7 +3498,6 @@ mod tests {
         let source = include_str!("lib.rs");
         for entry in [
             "pub fn run()",
-            "pub async fn run_headless(",
             "pub async fn run_remote(",
         ] {
             let body = source

@@ -73,7 +73,7 @@ connect_upstream(config)
 
 ### Boot-Time Auto-Connect & `tools/list` Readiness
 
-On startup, `auto_connect_saved_upstreams()` (`mcp_upstream_config.rs`) registers every saved upstream. It is **spawned, not awaited**, on both boot paths (desktop `lib.rs` and headless `run_headless`): `mcp_http::start_server` parks on the shutdown signal and never returns, so any auto-connect placed *after* it would be dead code — leaving every upstream unconnected until the user touches the UI. Registration is fast (the per-upstream async `initialize` is itself spawned), so it never delays IPC socket binding.
+On startup, `auto_connect_saved_upstreams()` (`mcp_upstream_config.rs`) registers every saved upstream. It is **spawned, not awaited**, on both boot paths (desktop and `run_remote`, both in `lib.rs`): `mcp_http::start_server` parks on the shutdown signal and never returns, so any auto-connect placed *after* it would be dead code — leaving every upstream unconnected until the user touches the UI. Registration is fast (the per-upstream async `initialize` is itself spawned), so it never delays IPC socket binding.
 
 To avoid serving a stale tool list, the registry exposes a one-shot settle gate:
 
