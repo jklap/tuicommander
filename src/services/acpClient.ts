@@ -65,6 +65,8 @@ interface Live {
 
 export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 	const live = new Map<AcpConnectionId, Live>();
+	/** Sessions whose `session/load` replay has not yet ended, with the connection that carries it. */
+	const replaying = new Map<AcpSessionId, AcpConnectionId>();
 
 	async function subscribe(connectionId: AcpConnectionId, entry: Live): Promise<void> {
 		const handle = await open({
@@ -99,6 +101,16 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		entry.spent = 0;
 		acpStore.applyFrame(connectionId, frame);
 		acpTranscript.applyFrame(frame);
+		if (
+			frame.kind === "event" &&
+			frame.sessionId &&
+			replaying.get(frame.sessionId) === connectionId &&
+			frame.event.kind === "sessionUpdate" &&
+			frame.event.update.sessionUpdate === "session_info_update"
+		) {
+			replaying.delete(frame.sessionId);
+			acpTranscript.settleReplayed(frame.sessionId);
+		}
 		if (frame.kind !== "event") {
 			// `gap` and `end` are both terminal and neither is recoverable by
 			// reading again: a gap means the journal no longer holds what the
@@ -130,6 +142,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		entry.abandoned = true;
 		entry.handle?.close();
 		live.delete(connectionId);
+		for (const [sessionId, owner] of replaying) if (owner === connectionId) replaying.delete(sessionId);
 	}
 
 	/**
@@ -236,6 +249,9 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			// erased conversation under a live session reads as history that is
 			// gone rather than as a request that failed.
 			const cleared = acpTranscript.clear(sessionId);
+			// ego ends a replay with a `session_info_update` and sends it after
+			// the response, so the frame can beat this call's own return.
+			replaying.set(sessionId, connectionId);
 			try {
 				await invoke("acp_session_load", {
 					connectionId,
@@ -243,6 +259,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 					authority: { cwd, additionalDirectories: [] },
 				});
 			} catch (error) {
+				replaying.delete(sessionId);
 				acpTranscript.restore(sessionId, cleared);
 				throw error;
 			}
