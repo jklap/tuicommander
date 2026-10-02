@@ -7,11 +7,13 @@ import { appLogger } from "../../stores/appLogger";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { type HtmlPreviewTab as HtmlPreviewTabData, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { isTauri } from "../../transport";
 import { IFRAME_EXTERNAL_LINK_SCRIPT } from "../../utils/iframeExternalLinks";
 import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
 import { IFRAME_SCROLLBAR_STYLE, IFRAME_SEARCH_BRIDGE_SCRIPT } from "../../utils/iframeSearch";
 import { handleOpenUrl, openLocalPath } from "../../utils/openUrl";
 import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
+import { repoImageUrl } from "../../utils/repoImageUrl";
 import { buildSearchPattern, type SearchOptions } from "../shared/DomSearchEngine";
 import e from "../shared/editor-header.module.css";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
@@ -167,6 +169,11 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 
 	/** Asset URL for binary files (PDF, images, video, audio), cache-busted via repo revision */
 	const assetUrl = () => {
+		// Browser mode has no asset protocol: a repository image goes through the HTTP image route.
+		const { repoPath, filePath } = props.tab;
+		if (!isTauri() && kind() === "image" && repoPath && !isAbsolutePath(filePath)) {
+			return repoImageUrl(repoPath, filePath);
+		}
 		const rev = props.tab.repoPath ? repositoriesStore.getRevision(props.tab.repoPath) : 0;
 		return `${convertFileSrc(absolutePath(props.tab))}?v=${rev}`;
 	};
