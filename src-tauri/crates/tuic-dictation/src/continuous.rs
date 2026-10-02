@@ -166,13 +166,14 @@ struct OpenUtterance {
     silence_ms: u32,
     /// The current run of activity and the longest so far, in milliseconds. A
     /// dip of up to [`VOICE_GAP_MS`] does not end a run, provided the activity
-    /// after it lasts at least two frames.
+    /// after it lasts [`VOICE_CONFIRM_FRAMES`] frames.
     run_ms: u32,
     longest_run_ms: u32,
-    /// The dip and the one active frame after it, not yet part of the run: a
-    /// lone frame after a dip is as likely residual echo as speech, so it only
-    /// joins the run once a second consecutive frame confirms it.
+    /// The dip and the active frames after it, not yet part of the run: a few
+    /// frames after a dip are as likely residual echo as speech, so they only
+    /// join the run once [`VOICE_CONFIRM_FRAMES`] consecutive ones confirm it.
     bridge_ms: u32,
+    bridge_frames: u32,
     /// Quiet frames since the last active one, in milliseconds.
     gap_ms: u32,
 }
@@ -180,8 +181,13 @@ struct OpenUtterance {
 /// The longest dip inside a voice: a plosive closure is 40-100 ms of quiet in
 /// the middle of a word. Scattered residual echo, a frame in every 200 ms,
 /// stays well past it; a denser scatter (one frame in four) is closed out by
-/// the two-frame confirmation after the dip.
+/// the confirmation after the dip.
 const VOICE_GAP_MS: u32 = 60;
+
+/// Contiguous active frames needed after a dip before the run continues across
+/// it. Voiced segments of speech outlast 60 ms; residual echo comes in singles
+/// and pairs.
+const VOICE_CONFIRM_FRAMES: u32 = 3;
 
 impl Segmenter {
     pub fn new(config: SegmenterConfig) -> Self {
@@ -283,6 +289,7 @@ impl Segmenter {
                         run_ms: FRAME_MS,
                         longest_run_ms: FRAME_MS,
                         bridge_ms: 0,
+                        bridge_frames: 0,
                         gap_ms: 0,
                     });
                 } else {
@@ -300,22 +307,29 @@ impl Segmenter {
                     open.speech_ms += FRAME_MS;
                     open.silence_ms = 0;
                     // A short dip is part of the run, and counts as time in it,
-                    // once a second active frame follows it.
-                    if open.gap_ms == 0 {
-                        open.run_ms += open.bridge_ms + FRAME_MS;
-                        open.bridge_ms = 0;
+                    // once VOICE_CONFIRM_FRAMES active frames follow it.
+                    if open.gap_ms == 0 && open.bridge_frames == 0 {
+                        open.run_ms += FRAME_MS;
+                    } else if open.gap_ms == 0 {
+                        open.bridge_ms += FRAME_MS;
+                        open.bridge_frames += 1;
+                        if open.bridge_frames >= VOICE_CONFIRM_FRAMES {
+                            open.run_ms += open.bridge_ms;
+                            open.bridge_frames = 0;
+                        }
                     } else if open.gap_ms <= VOICE_GAP_MS {
                         open.bridge_ms = open.gap_ms + FRAME_MS;
+                        open.bridge_frames = 1;
                     } else {
                         open.run_ms = FRAME_MS;
-                        open.bridge_ms = 0;
+                        open.bridge_frames = 0;
                     }
                     open.gap_ms = 0;
                     open.longest_run_ms = open.longest_run_ms.max(open.run_ms);
                 } else {
                     open.silence_ms += FRAME_MS;
                     open.gap_ms += FRAME_MS;
-                    open.bridge_ms = 0;
+                    open.bridge_frames = 0;
                 }
                 let end = if open.audio.len() >= ms_to_samples(self.config.max_utterance_ms) {
                     Some(UtteranceEnd::MaxLength)

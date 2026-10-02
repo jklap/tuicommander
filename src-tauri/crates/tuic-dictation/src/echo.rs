@@ -191,6 +191,17 @@ impl FarEnd {
         self.position + recorded
     }
 
+    /// How many of the next `count` capture positions lie inside a closed
+    /// pause window.
+    fn silent_within(&self, count: usize) -> usize {
+        let (start, end) = (self.position, self.position + count);
+        self.pauses
+            .iter()
+            .filter_map(|&(from, until)| Some((from, until?)))
+            .map(|(from, until)| until.min(end).saturating_sub(from.max(start)))
+            .sum()
+    }
+
     /// Is the reply held back right now, with no continuation yet?
     fn is_paused(&self) -> bool {
         self.pauses
@@ -290,8 +301,12 @@ impl EchoGuard {
         // Not while paused: the reply starts when playback continues, and the
         // capture recorded until then is not ahead of it.
         if self.far_end.is_empty() && !self.far_end.is_paused() {
-            let pending = self.backlog.as_ref().map_or(0, |backlog| backlog());
-            self.far_end.pad(self.remainder.len() + pending);
+            // Pad up to where the reply starts, minus what a closed pause
+            // window already covers: `take` hands out silence inside a window
+            // without using the pad, so counting it twice starts the reply late.
+            let recorded = self.recorded();
+            let covered = self.far_end.silent_within(recorded);
+            self.far_end.pad(recorded - covered);
         }
         self.far_end.push(audio);
     }

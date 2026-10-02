@@ -27,7 +27,9 @@ fn guard() -> (EchoGuard, Arc<Mutex<Vec<f32>>>, Arc<AtomicUsize>) {
 
 fn reply(frames: usize) -> SpeechAudio {
     SpeechAudio {
-        samples: (0..FRAME_SAMPLES * frames).map(|n| n as f32 + 1.0).collect(),
+        samples: (0..FRAME_SAMPLES * frames)
+            .map(|n| n as f32 + 1.0)
+            .collect(),
         sample_rate: SAMPLE_RATE,
     }
 }
@@ -174,7 +176,10 @@ fn frames_of(pattern: &[bool], periods: usize) -> Vec<f32> {
 fn residual_echo_in_pairs_every_hundred_ms_is_not_a_voice() {
     let mut segmenter = Segmenter::new(SegmenterConfig::default());
     segmenter.push(&frames_of(&[true, true, false, false, false], 10));
-    assert!(!segmenter.has_voice(), "paired echo frames counted as a voice");
+    assert!(
+        !segmenter.has_voice(),
+        "paired echo frames counted as a voice"
+    );
 }
 
 /// Control: two words of 100 ms with a 60 ms plosive-length dip are one voice.
@@ -199,19 +204,31 @@ fn an_eighty_ms_dip_splits_the_run() {
     assert!(!segmenter.has_voice());
 }
 
-/// Catches: the bridge being credited at the first confirmed frame instead of
-/// the second, or lost on the confirmation frame: voice ending right after the
-/// second frame past a dip must count the dip and both frames.
+/// Catches: the bridge being credited before the confirmation frame, or lost on
+/// it: voice ending right after the third frame past a dip must count the dip
+/// and all three frames. (Round 3 raised the confirmation from two frames to
+/// three; this test was `a_dip_then_exactly_two_frames_counts_the_dip_and_both`.)
 #[test]
-fn a_dip_then_exactly_two_frames_counts_the_dip_and_both() {
+fn a_dip_then_exactly_three_frames_counts_the_dip_and_all_three() {
     let mut segmenter = Segmenter::new(SegmenterConfig::default());
-    // 9 active (180) + 3 quiet (60) + 2 active (40) = 280 >= 200, but the
+    // 9 active (180) + 3 quiet (60) + 3 active (60) = 300 >= 200, but the
     // active frames alone before the dip (180) are below the threshold.
+    let mut pattern = vec![true; 9];
+    pattern.extend([false; 3]);
+    pattern.extend([true; 3]);
+    segmenter.push(&frames_of(&pattern, 1));
+    assert!(segmenter.has_voice());
+}
+
+/// Catches: the confirmation being met by a pair of frames (residual echo).
+#[test]
+fn a_dip_then_two_frames_is_not_yet_part_of_the_run() {
+    let mut segmenter = Segmenter::new(SegmenterConfig::default());
     let mut pattern = vec![true; 9];
     pattern.extend([false; 3]);
     pattern.extend([true; 2]);
     segmenter.push(&frames_of(&pattern, 1));
-    assert!(segmenter.has_voice());
+    assert!(!segmenter.has_voice());
 }
 
 /// Catches: a lone frame after a dip being counted before it is confirmed.
