@@ -15,6 +15,7 @@ import { uiStore } from "../../stores/ui";
 import { copyPathToClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
 import { isAbsolutePath, joinPath, normalizeSep, pathDirname } from "../../utils/pathUtils";
+import { consumePendingHeading, setPendingHeading } from "../../utils/pendingHeadings";
 import {
 	insertTweakBlockComment,
 	insertTweakComment,
@@ -55,9 +56,6 @@ export interface MarkdownTabHandle {
 function isMissingFileError(msg: string): boolean {
 	return msg.includes("No such file") || msg.includes("os error 2");
 }
-
-/** Anchor requested for a Markdown tab that has not finished loading yet. */
-const pendingHeadings = new Map<string, string>();
 
 type MarkdownLinkTarget =
 	| { kind: "heading"; anchor: string }
@@ -332,9 +330,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		if (tab.type !== "file" || !body || loading() || mdTabsStore.state.activeId !== tab.id) return;
 		const root = tab.fsRoot || tab.repoPath;
 		const absolute = normalizeSep(isAbsolutePath(tab.filePath) ? tab.filePath : joinPath(root, tab.filePath));
-		const anchor = pendingHeadings.get(absolute);
+		const anchor = consumePendingHeading(absolute);
 		if (!anchor) return;
-		pendingHeadings.delete(absolute);
 		requestAnimationFrame(() => scrollToHeading(anchor));
 	});
 
@@ -375,10 +372,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 				uiStore.setFileBrowserPanelVisible(true);
 				return;
 			}
-			if (resolved.anchor && /\.mdx?$/i.test(resolved.open_path)) {
-				const tabPath = isAbsolutePath(resolved.open_path) ? resolved.open_path : joinPath(root, resolved.open_path);
-				pendingHeadings.set(normalizeSep(tabPath), resolved.anchor);
-			}
+			setPendingHeading(root, resolved);
 			openFileAction(resolved.open_path, ft.repoPath, ft.fsRoot, resolved.line);
 		} catch (err) {
 			appLogger.error("app", "Markdown link target lookup failed", { href, error: String(err) });
