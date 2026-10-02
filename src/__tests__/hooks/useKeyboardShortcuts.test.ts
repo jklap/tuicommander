@@ -294,6 +294,16 @@ describe("useKeyboardShortcuts", () => {
 			expect(handlers.toggleAiChatPanel).toHaveBeenCalled();
 		});
 
+		it("Cmd+Alt+R toggles answers-only on the active terminal (option-modified key → ®)", () => {
+			// catches: the action bound but unreachable on macOS, where Option+R yields e.key="®"
+			const id = terminalsStore.add(makeTerminal());
+			terminalsStore.setActive(id);
+			fireKeydown("®", { metaKey: true, altKey: true, code: "KeyR" });
+			expect(terminalsStore.get(id)?.answersOnly).toBe(true);
+			fireKeydown("®", { metaKey: true, altKey: true, code: "KeyR" });
+			expect(terminalsStore.get(id)?.answersOnly).toBe(false);
+		});
+
 		it("Cmd+Alt+A does nothing when AI chat is disabled", () => {
 			settingsStore.setExperimentalFeaturesEnabled(false);
 			fireKeydown("å", { metaKey: true, altKey: true, code: "KeyA" });

@@ -2,7 +2,7 @@ use super::check::{CheckReceipt, clean_artifact, execute_pinned_check, git_outpu
 use super::model::*;
 use super::reducer::apply_event;
 use crate::stories::{NewStory, Story, StoryOrigin, StoryStatus, StoryStore};
-use crate::workflows::{CheckDefinition, NodeKind, WorkflowKind, WorkflowStore};
+use crate::workflows::{CheckDefinition, NodeKind, PublishedWorkflow, WorkflowKind, WorkflowStore};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -95,6 +95,46 @@ impl RunStore {
         definition_revision: i64,
         limits: RunLimits,
     ) -> Result<RunSnapshot, String> {
+        self.start_plan_with(
+            project,
+            plan_id,
+            definition_id,
+            definition_revision,
+            limits,
+            true,
+        )
+    }
+
+    /// Starts a run the way a pre-policy build did, so tests can model an
+    /// in-flight run pinned to an unchecked story definition.
+    #[cfg(test)]
+    pub(crate) fn start_plan_pre_policy(
+        &self,
+        project: &str,
+        plan_id: &str,
+        definition_id: &str,
+        definition_revision: i64,
+        limits: RunLimits,
+    ) -> Result<RunSnapshot, String> {
+        self.start_plan_with(
+            project,
+            plan_id,
+            definition_id,
+            definition_revision,
+            limits,
+            false,
+        )
+    }
+
+    fn start_plan_with(
+        &self,
+        project: &str,
+        plan_id: &str,
+        definition_id: &str,
+        definition_revision: i64,
+        limits: RunLimits,
+        enforce_check_policy: bool,
+    ) -> Result<RunSnapshot, String> {
         limits.validate()?;
         let owner = crate::progress::resolve_owning_project(Some(project))?
             .to_string_lossy()
@@ -131,6 +171,9 @@ impl RunStore {
             .get_published(&story_definition_id, story_definition_revision)?;
         if story_definition.kind != WorkflowKind::Story || story_definition.project != owner {
             return Err("pinned story workflow does not belong to project".into());
+        }
+        if enforce_check_policy {
+            require_nonempty_policy(&story_definition)?;
         }
         let initial = RunSnapshot {
             id: Uuid::now_v7().to_string(),
@@ -594,6 +637,7 @@ impl RunStore {
             &snapshot.story_definition_id,
             snapshot.story_definition_revision,
         )?;
+        require_nonempty_policy(&definition)?;
         require_current_checks(
             &definition.required_checks,
             &execution.check_receipts,
@@ -710,6 +754,7 @@ impl RunStore {
             &snapshot.story_definition_id,
             snapshot.story_definition_revision,
         )?;
+        require_nonempty_policy(&definition)?;
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
             let receipt = execute_pinned_check(check, canonical)?;
@@ -1037,6 +1082,7 @@ pub(super) fn receipt_current(
             item.canonical_ref == current_ref
                 && item.merge_commit == head
                 && item.merge_tree == tree
+                && !item.post_checks.is_empty()
                 && item.post_checks.iter().all(|check| {
                     check.exit_code == 0
                         && check.ref_name == current_ref
@@ -1051,6 +1097,7 @@ pub(super) fn receipt_current(
             item.canonical_ref == current_ref
                 && item.commit == head
                 && item.tree == tree
+                && !item.post_checks.is_empty()
                 && item.post_checks.iter().all(|check| {
                     check.exit_code == 0
                         && check.ref_name == current_ref
@@ -1074,6 +1121,18 @@ fn source_is_ancestor(canonical: &Path, source: &str, head: &str) -> Result<bool
         .status()
         .map_err(|error| format!("verify integrated source ancestry: {error}"))?;
     Ok(ancestor.success())
+}
+
+/// An integration with no pinned checks would record an empty `post_checks`
+/// list and release dependents without validating anything.
+pub(super) fn require_nonempty_policy(definition: &PublishedWorkflow) -> Result<(), String> {
+    if definition.required_checks.is_empty() {
+        return Err(format!(
+            "story workflow {} revision {} pins no required checks; publish a revision with at least one check",
+            definition.name, definition.revision
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn require_current_checks(

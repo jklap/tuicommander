@@ -36,6 +36,33 @@ describe("terminalsStore", () => {
 		});
 	});
 
+	describe("toggleAnswersOnly()", () => {
+		it("is off for a new terminal and flips only the targeted one", () => {
+			testInScope(() => {
+				const id1 = store.add(makeTerminal({ name: "T1" }));
+				const id2 = store.add(makeTerminal({ name: "T2" }));
+				expect(store.get(id1)!.answersOnly).toBe(false);
+				store.toggleAnswersOnly(id1);
+				expect(store.get(id1)!.answersOnly).toBe(true);
+				expect(store.get(id2)!.answersOnly).toBe(false);
+				store.toggleAnswersOnly(id1);
+				expect(store.get(id1)!.answersOnly).toBe(false);
+			});
+		});
+
+		it("defaults to the active terminal and ignores a missing one", () => {
+			testInScope(() => {
+				store.toggleAnswersOnly(); // no active terminal: no-op, no throw
+				const id = store.add(makeTerminal());
+				store.setActive(id);
+				store.toggleAnswersOnly();
+				expect(store.get(id)!.answersOnly).toBe(true);
+				store.toggleAnswersOnly("term-missing");
+				expect(store.state.terminals["term-missing"]).toBeUndefined();
+			});
+		});
+	});
+
 	describe("remove()", () => {
 		it("removes a terminal", () => {
 			testInScope(() => {
