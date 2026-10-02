@@ -43,7 +43,7 @@ it("stages an uploaded file path in the PTY draft without pressing Enter", async
 
 describe("mobile slash submission", () => {
 	it.each([
-		["codex", "/status", 180],
+		["codex", "/status", 40],
 		["claude", "/help", 40],
 	])("submits a typed %s slash command after the agent input gap", async (agentType, command, minGap) => {
 		const { container } = render(() => <CommandInput sessionId="disposable" agentType={agentType} />);
@@ -56,7 +56,7 @@ describe("mobile slash submission", () => {
 	});
 
 	it.each([
-		["codex", "/status", 180],
+		["codex", "/status", 40],
 		["claude", "/help", 40],
 	])("submits a %s slash menu pick once with its selected command", async (agentType, command, minGap) => {
 		const { container } = render(() => (

@@ -10011,11 +10011,7 @@ fn a_prompt_that_lands_after_the_warning_closes_the_loop() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| flush_pending_injections_blocking(&state, child_id));
-        for expected in [
-            b"\x15".as_slice(),
-            b"\x1b[200~review the draft\x1b[201~",
-            b"\r",
-        ] {
+        for expected in [b"\x15".as_slice(), b"review the draft", b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -11390,11 +11386,7 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     tokio::task::yield_now().await;
     running.store(false, Ordering::Release);
 
-    for expected in [
-        b"\x15".as_slice(),
-        b"\x1b[200~resume queued work\x1b[201~",
-        b"\r",
-    ] {
+    for expected in [b"\x15".as_slice(), b"resume queued work", b"\r"] {
         let actual = received
             .recv_timeout(std::time::Duration::from_secs(15))
             .expect("ready confirmation must submit queued command without a new shell edge");
@@ -11770,11 +11762,7 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [
-            b"\x15".as_slice(),
-            b"\x1b[200~wake the agent\x1b[201~",
-            b"\r",
-        ] {
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -11852,11 +11840,7 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [
-            b"\x15".as_slice(),
-            b"\x1b[200~wake the agent\x1b[201~",
-            b"\r",
-        ] {
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -11934,11 +11918,7 @@ fn run_codex_queued_delivery(
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [
-            b"\x15".as_slice(),
-            b"\x1b[200~wake the agent\x1b[201~",
-            b"\r",
-        ] {
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -12014,10 +11994,10 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     // Ctrl-U, brief, first Enter, second Enter.
     assert_eq!(inputs.len(), 4);
     let brief = String::from_utf8(records[inputs[1]].data.clone()).unwrap();
-    // The capture predates the bracketed Codex payload: the brief was typed as
-    // plain characters and its Enter was swallowed. Replaying it still proves
+    // The capture predates the bracketed long-Codex payload: the brief was typed
+    // as plain characters and its Enter was swallowed. Replaying it still proves
     // the retry from the placeholder; the write is now the framed paste.
-    let framed_brief = bracketed_payload(&brief);
+    let framed_brief = format!("\x1b[200~{brief}\x1b[201~");
     let second_enter = inputs[3];
 
     let state = crate::state::tests_support::make_test_app_state();
@@ -12308,11 +12288,7 @@ fn queued_codex_accepts_ready_then_working_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
-        for expected in [
-            b"\x15".as_slice(),
-            b"\x1b[200~wake the agent\x1b[201~",
-            b"\r",
-        ] {
+        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -13744,16 +13720,22 @@ fn agent_submission_keeps_ctrl_u_gap_and_brackets_a_long_single_line_codex_wake(
         vec![b"\x15".as_slice(), framed.as_bytes(), b"\r".as_slice()]
     );
     assert!(
-        writes[1].0 - writes[0].0 >= INJECT_ENTER_GAP,
+        writes[1].0 - writes[0].0 >= std::time::Duration::from_millis(45),
         "Ctrl-U and the text must not share a read"
     );
     assert!(
-        writes[2].0 - writes[1].0 >= INJECT_ENTER_GAP,
+        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(45),
         "the CR must not share a read with the paste"
     );
 
-    assert_eq!(injection_enter_gap(Some("codex")), INJECT_ENTER_GAP);
-    assert_eq!(injection_enter_gap(Some("claude")), INJECT_ENTER_GAP);
+    assert_eq!(
+        injection_enter_gap(Some("codex")),
+        std::time::Duration::from_millis(50)
+    );
+    assert_eq!(
+        injection_enter_gap(Some("claude")),
+        std::time::Duration::from_millis(50)
+    );
 }
 
 #[cfg(unix)]
@@ -13801,20 +13783,37 @@ fn agent_submission_with_unrecognized_type_keeps_the_unverified_gap_and_plain_pa
 /// short gap. Catches: the Codex branch leaking to another agent, or an agent
 /// losing its >=50ms gap (Claude swallows a CR that shares the payload's read).
 #[test]
-fn single_line_payload_is_framed_for_codex_only_and_every_known_gap_is_at_least_50ms() {
+fn long_single_line_payload_is_framed_for_codex_only_and_every_known_gap_is_at_least_50ms() {
+    let long = "x".repeat(1000);
     for agent in [
-        "claude", "gemini", "opencode", "aider", "goose", "grok", "pi", "amp", "cursor", "droid",
+        "claude",
+        "gemini",
+        "opencode",
+        "aider",
+        "goose",
+        "grok",
+        "pi",
+        "amp",
+        "cursor",
+        "droid",
         "future-agent",
     ] {
         let profile = agent_submit_profile(Some(agent));
-        assert_eq!((profile.payload)("y"), "y", "{agent} must stay plain");
-        assert!(profile.enter_gap >= INJECT_ENTER_GAP, "{agent} gap");
+        assert_eq!((profile.payload)(&long), long, "{agent} must stay plain");
+        assert!(
+            profile.enter_gap >= std::time::Duration::from_millis(50),
+            "{agent} gap"
+        );
     }
-    assert_eq!((agent_submit_profile(None).payload)("y"), "y");
-    assert!(agent_submit_profile(None).enter_gap >= INJECT_ENTER_GAP);
+    assert_eq!((agent_submit_profile(None).payload)(&long), long);
+    assert!(agent_submit_profile(None).enter_gap >= std::time::Duration::from_millis(50));
     let codex = agent_submit_profile(Some("codex"));
-    assert_eq!((codex.payload)("y"), "\x1b[200~y\x1b[201~");
-    assert!(codex.enter_gap >= INJECT_ENTER_GAP);
+    assert_eq!((codex.payload)(&long), format!("\x1b[200~{long}\x1b[201~"));
+    // Short text, a slash command and a one-key answer stay plain keystrokes.
+    for short in ["y", "/status", &"x".repeat(500)] {
+        assert_eq!((codex.payload)(short), short);
+    }
+    assert!(codex.enter_gap >= std::time::Duration::from_millis(50));
 }
 
 /// Critic (1163): a human answer to a Codex question is a keypress, not prose.

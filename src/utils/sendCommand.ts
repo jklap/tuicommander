@@ -27,9 +27,11 @@ export const UNVERIFIED_ENTER_GAP_MS = 200;
 /** Codex ingests a long plain write as a paste burst for hundreds of
  *  milliseconds, and an Enter inside that burst is swallowed (measured live on
  *  0.159.0: 1000 chars at a 200ms gap stay in the composer). No fixed gap
- *  covers a payload whose ingestion time grows with its length, so Codex always
- *  gets a bracketed paste. Mirrors `agent_submit_profile` in `pty.rs`. */
-const ALWAYS_BRACKETED_AGENTS = new Set(["codex"]);
+ *  covers a payload whose ingestion time grows with its length, so a long
+ *  Codex payload is a bracketed paste. Shorter text stays plain keystrokes:
+ *  Codex approval and choice overlays ignore a paste event. Mirrors
+ *  `CODEX_PASTE_FRAME_MIN_CHARS` in `pty.rs`. */
+export const CODEX_PASTE_FRAME_MIN_CHARS = 500;
 
 // Keep in step with Rust's agent_submit_profile: an unrecognized type must use
 // the longer gap until its input semantics are known.
@@ -129,7 +131,7 @@ export async function sendCommand(
 	const agentInput = Boolean(agentType) || unknownForeground;
 	const skipPrefix = !agentInput && isWindowsNative(shellFamily);
 	const prefix = skipPrefix ? "" : "\x15";
-	const bracketed = text.includes("\n") || (agentType != null && ALWAYS_BRACKETED_AGENTS.has(agentType));
+	const bracketed = text.includes("\n") || (agentType === "codex" && text.length > CODEX_PASTE_FRAME_MIN_CHARS);
 	const payload = bracketed ? `\x1b[200~${text}\x1b[201~` : text;
 	if (agentInput) {
 		// Ctrl-U must reach an agent in its own read. Claude Code treats a long

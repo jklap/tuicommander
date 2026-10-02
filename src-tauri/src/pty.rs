@@ -8857,10 +8857,22 @@ fn injection_payload(text: &str) -> String {
     }
 }
 
-/// The text inside a bracketed paste whatever its shape. Codex needs this even
-/// for a single line: see `agent_submit_profile`.
 fn bracketed_payload(text: &str) -> String {
     format!("\x1b[200~{text}\x1b[201~")
+}
+
+/// Single-line length above which Codex gets a bracketed paste: see
+/// `agent_submit_profile`. Measured: 600 chars submit at a 200ms gap, 1000 do
+/// not; the margin below 600 absorbs a slower machine. Shorter text stays plain
+/// keystrokes, so slash commands and one-key answers keep working.
+const CODEX_PASTE_FRAME_MIN_CHARS: usize = 500;
+
+fn codex_payload(text: &str) -> String {
+    if text.chars().count() > CODEX_PASTE_FRAME_MIN_CHARS {
+        bracketed_payload(text)
+    } else {
+        injection_payload(text)
+    }
 }
 
 /// Paste into an agent composer without clearing or submitting existing input.
@@ -8933,8 +8945,10 @@ const DELAYED_AGENT_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
 /// `codex-0.159-long-brief-swallowed-enter.tcap`); an Enter that lands inside
 /// that burst becomes part of the paste and the text stays in the composer.
 /// A fixed gap cannot cover a payload whose ingestion time grows with its
-/// length, so Codex always receives a bracketed paste: the terminal delivers
-/// it as one paste event and the later CR is an ordinary Enter.
+/// length, so a Codex payload over `CODEX_PASTE_FRAME_MIN_CHARS` (or multiline)
+/// is a bracketed paste: Codex takes it as one paste event and the later CR is
+/// an ordinary Enter. Short text stays plain: Codex's approval and choice
+/// overlays act on key presses and ignore a paste event.
 ///
 /// The frontend's `sendCommand.ts` keeps the same table for user-originated
 /// PTY writes.
@@ -8964,7 +8978,7 @@ fn agent_submit_profile(agent_type: Option<&str>) -> AgentSubmitProfile {
     };
     AgentSubmitProfile {
         payload: if agent_type == Some("codex") {
-            bracketed_payload
+            codex_payload
         } else {
             injection_payload
         },
