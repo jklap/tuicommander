@@ -187,3 +187,34 @@
   background-color: var(--border);
   border: 0;
 }
+
+/* Tweak comments: shared by the viewer and the Live editor's rendered blocks. */
+#markdown-content .tweak-highlight {
+  background: color-mix(in srgb, var(--tweak-highlight) 25%, transparent);
+  border-bottom: 1.5px solid color-mix(in srgb, var(--tweak-highlight) 70%, transparent);
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 0 1px;
+  transition: background 0.15s ease;
+}
+
+#markdown-content .tweak-highlight:hover {
+  background: color-mix(in srgb, var(--tweak-highlight) 40%, transparent);
+}
+
+#markdown-content .tweak-block-highlight {
+  position: relative;
+  background: color-mix(in srgb, var(--tweak-highlight) 16%, transparent);
+  cursor: pointer;
+}
+
+#markdown-content .tweak-block-highlight::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -10px;
+  width: 2px;
+  background: color-mix(in srgb, var(--tweak-highlight) 75%, transparent);
+  pointer-events: none;
+}

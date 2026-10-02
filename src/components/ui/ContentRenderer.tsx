@@ -275,6 +275,11 @@ async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
 				const wrapper = document.createElement("div");
 				wrapper.className = "mermaid-diagram";
 				wrapper.innerHTML = svg;
+				// The diagram stands where the block was: it keeps the block's source range and comment metadata.
+				for (const [key, value] of Object.entries(pre.dataset)) {
+					if (key.startsWith("commentSource") || key.startsWith("tweak")) wrapper.dataset[key] = value ?? "";
+				}
+				if (pre.classList.contains("tweak-block-highlight")) wrapper.classList.add("tweak-block-highlight");
 				pre.replaceWith(wrapper);
 			} catch {
 				pre.dataset.mermaidRendered = "error";
