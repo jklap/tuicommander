@@ -13797,6 +13797,57 @@ fn agent_submission_with_unrecognized_type_keeps_the_unverified_gap_and_plain_pa
     );
 }
 
+/// Critic (1163): only Codex is framed, and only a verified agent gets the
+/// short gap. Catches: the Codex branch leaking to another agent, or an agent
+/// losing its >=50ms gap (Claude swallows a CR that shares the payload's read).
+#[test]
+fn single_line_payload_is_framed_for_codex_only_and_every_known_gap_is_at_least_50ms() {
+    for agent in [
+        "claude", "gemini", "opencode", "aider", "goose", "grok", "pi", "amp", "cursor", "droid",
+        "future-agent",
+    ] {
+        let profile = agent_submit_profile(Some(agent));
+        assert_eq!((profile.payload)("y"), "y", "{agent} must stay plain");
+        assert!(profile.enter_gap >= INJECT_ENTER_GAP, "{agent} gap");
+    }
+    assert_eq!((agent_submit_profile(None).payload)("y"), "y");
+    assert!(agent_submit_profile(None).enter_gap >= INJECT_ENTER_GAP);
+    let codex = agent_submit_profile(Some("codex"));
+    assert_eq!((codex.payload)("y"), "\x1b[200~y\x1b[201~");
+    assert!(codex.enter_gap >= INJECT_ENTER_GAP);
+}
+
+/// Critic (1163): a human answer to a Codex question is a keypress, not prose.
+/// Codex's approval/choice overlays take key events and ignore a paste event, so
+/// a bracketed `y` is dropped and the following CR selects the default option.
+/// Catches: `write_human_reply_to_pty` framing a short reply as a bracketed paste.
+#[cfg(unix)]
+#[test]
+fn a_short_human_reply_to_a_codex_question_is_typed_not_pasted() {
+    let state = crate::state::tests_support::make_test_app_state();
+    agent_session(&state, "codex-human-question", SHELL_IDLE);
+    let bytes = insert_recording_session(&state, "codex-human-question");
+    {
+        let mut session = state
+            .session_maps
+            .session_states
+            .get_mut("codex-human-question")
+            .unwrap();
+        session.agent_type = Some("codex".into());
+    }
+
+    assert!(matches!(
+        write_human_reply_to_pty(&state, "codex-human-question", "y"),
+        AgentSubmissionWrite::Complete { .. }
+    ));
+    let written = bytes.lock().unwrap();
+    assert!(
+        !written.windows(4).any(|w| w == b"\x1b[20"),
+        "a one-key answer must not be framed as a paste: {:?}",
+        String::from_utf8_lossy(&written)
+    );
+}
+
 #[test]
 fn injection_payload_multiline_bracketed_paste() {
     // Multiline MUST ride in a bracketed paste — raw newlines prefill an
