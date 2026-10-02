@@ -11,6 +11,9 @@ pub use run::*;
 pub use store::*;
 
 #[cfg(test)]
+mod critic_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
