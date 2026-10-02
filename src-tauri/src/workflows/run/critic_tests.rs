@@ -360,3 +360,116 @@ fn start_plan_rejects_a_pinned_story_definition_without_checks() {
         .unwrap_err();
     assert!(error.contains("required checks"), "{error}");
 }
+
+fn migrated_start_fixture() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    impl Drop,
+    String,
+    String,
+    String,
+) {
+    let config = tempfile::tempdir().expect("config");
+    let project = tempfile::tempdir().expect("project");
+    let guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let project_path = project
+        .path()
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    let plan = StoryStore::open()
+        .unwrap()
+        .create_plan(NewPlan {
+            project: project_path.clone(),
+            title: "Resolve".into(),
+            source: "plan.md".into(),
+        })
+        .unwrap();
+    let definitions = WorkflowStore::open().unwrap();
+    definitions
+        .seed_pre_policy_templates(&project_path)
+        .unwrap();
+    // The upgrade path: opening the project lists drafts, which seeds and migrates.
+    let plan_definition = definitions
+        .seed_templates(&project_path)
+        .unwrap()
+        .into_iter()
+        .find(|draft| draft.kind == WorkflowKind::Plan)
+        .unwrap();
+    (
+        config,
+        project,
+        guard,
+        project_path,
+        plan.id,
+        plan_definition.id,
+    )
+}
+
+#[test]
+fn start_plan_checks_the_pinned_story_revision_not_the_latest_one() {
+    let (_config, _project, _guard, project_path, plan_id, definition_id) =
+        migrated_start_fixture();
+    let store = RunStore::open().unwrap();
+    // catches: the policy being read from the latest published story revision (or the draft)
+    // instead of the revision the plan pins, so plan revision 1 (pinned to the unchecked story
+    // revision 1) starts a run that can never integrate just because story revision 2 has checks.
+    let error = store
+        .start_plan(
+            &project_path,
+            &plan_id,
+            &definition_id,
+            1,
+            RunLimits::default(),
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("Story delivery") && error.contains("revision 1"),
+        "{error}"
+    );
+    // catches: the rejection happening after the run row is written, leaving a Running run that
+    // blocks the plan and dispatches nothing.
+    assert!(
+        store
+            .list_plan_runs(&project_path, &plan_id, 10)
+            .unwrap()
+            .is_empty()
+    );
+    // control: the migrated plan revision pins the checked story revision and starts.
+    let run = store
+        .start_plan(
+            &project_path,
+            &plan_id,
+            &definition_id,
+            2,
+            RunLimits::default(),
+        )
+        .unwrap();
+    assert_eq!(run.story_definition_revision, 2);
+}
+
+#[test]
+fn run_started_before_the_upgrade_stays_pinned_to_its_unchecked_revision() {
+    let (flow, _guard) = accepted_flow(true);
+    let project = flow.repo.to_string_lossy().to_string();
+    // The user opens the project after upgrading: story revision 2 now carries the default policy.
+    let definitions = WorkflowStore::open()
+        .unwrap()
+        .seed_templates(&project)
+        .unwrap();
+    let story = definitions
+        .iter()
+        .find(|draft| draft.kind == WorkflowKind::Story)
+        .unwrap();
+    assert_eq!(story.latest_published_revision, 2);
+    git(&flow.repo, &["merge", "--no-ff", "--no-edit", "story"]);
+    // catches: integration re-reading the latest story revision, so an in-flight run silently
+    // changes policy mid-run; the run's pin (revision 1) decides, and it fails by name.
+    let error = flow
+        .store
+        .record_integrated_story(&flow.run_id, &flow.story_id, "integrate", flow.sequence)
+        .unwrap_err();
+    assert!(error.contains("revision 1"), "{error}");
+    assert!(!story_integrated_at_revision(&flow.story_id, flow.revision).unwrap());
+}
