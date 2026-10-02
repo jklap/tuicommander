@@ -316,12 +316,12 @@ the replacement lives in ego and will have a different file list.
 | Smart Prompts `api` execution mode | `llm_api.rs`, `execute_api_prompt` | **landed as 787-ee50** — see "Smart Prompts `api` mode" above. The provider registry did not come back; the mode is one unattended ego turn |
 
 ### Remote Daemon (`tuic-remote`)
-When modifying the remote daemon binary, `run_headless`, or standalone server behavior:
+When modifying the remote daemon binary or standalone server behavior:
 
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/bin/tuic_remote.rs` | Binary entry point |
-| `src-tauri/src/lib.rs` | `run_remote()` — the daemon; `run_headless()` |
+| `src-tauri/src/lib.rs` | `run_remote()` — the daemon |
 | `src-tauri/src/lib.rs` | `spawn_daemon_background_tasks()` — every task is started or refused with a reason; the guard test is `the_daemon_decides_on_every_desktop_background_task` |
 | `src-tauri/src/mcp_http/mod.rs` | `spawn_ipc_listener()` / `spawn_maintenance_sweep()` — shared by the desktop and the daemon |
 | `src-tauri/src/remote_lifetime.rs` | Optional idle lifetime driven by SSE and WebSocket client counts; `/health.survive_secs` must stay in sync |

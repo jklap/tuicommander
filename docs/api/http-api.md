@@ -1233,7 +1233,7 @@ error body — never a `200` with an empty result. `POST /repo/pr-review`,
 `POST /repo/improvement-scan` and `POST /repo/conflict-assist` also emit
 `review-progress`, `proposals-ready` and `conflict-assist-status` on `/events`
 while they run — on **every** build. The routes are mounted in `build_router`,
-which `run_headless` serves as well as the desktop app, and a browser reading
+which the desktop app serves, and a browser reading
 `/events` is the only client a non-desktop build has: the desktop window emit is
 gated on `feature = "desktop"`, the `event_bus` send never is (#808-84e1). They
 are **not** in `shared_routes`, so the `tuic-remote` daemon does not serve them
