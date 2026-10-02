@@ -792,6 +792,7 @@ const API_PREFIXES: &[&str] = &[
     "api",
     "attachments",
     "audio",
+    "auth",
     "circleci",
     "claude",
     "codex",
@@ -909,6 +910,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/api/auth/session-token",
             get(config_routes::get_session_token),
         )
+        // The mobile app's login form posts here. It is the one route a device
+        // without a session may call: `basic_auth_middleware` lets it through
+        // and the handler runs the same admission as the Basic fallback.
+        .route("/auth/login", post(auth::login_handler))
         // Agent configs. Shared: a remote repo's agents run with the remote
         // machine's `agents.json`, which the frontend reads by connection
         // (`remoteIO` in agentConfigs.ts). Only in `build_router`, the daemon
@@ -3840,6 +3845,9 @@ mod tests {
             // Auth for the session token here, so the remote router must carry
             // it. `build_router` alone is exactly the Progress mistake below.
             "/api/auth/session-token",
+            // The mobile login form's POST: the PWA of a `tuic-remote` host
+            // needs it exactly as the desktop one does.
+            "/auth/login",
             "/sessions",
             "/sessions/x/write",
             "/sessions/x/submit",

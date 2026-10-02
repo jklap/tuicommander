@@ -54,7 +54,11 @@ fn is_mobile_user_agent(headers: &HeaderMap) -> bool {
 /// Paths starting with "mobile" use mobile.html; everything else uses index.html.
 #[cfg(feature = "desktop")]
 fn spa_fallback_file(path: &str) -> &str {
-    if path == "mobile" || path.starts_with("mobile/") {
+    // The login page is a standalone file, not the SPA: it must load without
+    // the app bundle, which an unauthenticated device may not fetch.
+    if path == "mobile/login" {
+        "mobile-login.html"
+    } else if path == "mobile" || path.starts_with("mobile/") {
         "mobile.html"
     } else {
         "index.html"
@@ -121,6 +125,10 @@ pub(super) fn cache_control_for(path: &str) -> &'static str {
     }
     // PWA manifest: must pick up changes immediately
     if path == "mobile-manifest.json" {
+        return "no-cache";
+    }
+    // Login script: unhashed and security-relevant, so a fix must reach phones at once
+    if path == "mobile-login.js" {
         return "no-cache";
     }
     // Hashed assets (Vite output): immutable, cache forever
@@ -205,6 +213,7 @@ mod tests {
     fn spa_fallback_routes() {
         assert_eq!(spa_fallback_file("mobile"), "mobile.html");
         assert_eq!(spa_fallback_file("mobile/settings"), "mobile.html");
+        assert_eq!(spa_fallback_file("mobile/login"), "mobile-login.html");
         assert_eq!(spa_fallback_file("some/deep/route"), "index.html");
         assert_eq!(spa_fallback_file(""), "index.html");
     }
