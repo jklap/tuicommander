@@ -82,6 +82,57 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn timed_out_pinned_check_stops_its_descendants() {
+        use std::process::Command;
+        let repo = tempfile::tempdir().expect("repo");
+        let pid_dir = tempfile::tempdir().expect("pid dir");
+        let pid_file = pid_dir.path().join("worker.pid");
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.name", "Workflow Test"],
+            vec!["config", "user.email", "workflow@example.test"],
+            vec!["commit", "-q", "--allow-empty", "-m", "initial"],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(repo.path())
+                    .status()
+                    .expect("git setup")
+                    .success()
+            );
+        }
+        // A runner that forks a long-lived worker and waits for it, like a
+        // test runner with a child pool; killing only the shell leaves the worker.
+        let check = crate::workflows::CheckDefinition {
+            id: "pool".into(),
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                format!("sleep 60 & echo $! > {}; wait", pid_file.display()),
+            ],
+            timeout_secs: 1,
+        };
+        let receipt = execute_pinned_check(&check, repo.path()).expect("timed out receipt");
+        assert_eq!(receipt.exit_code, -1);
+        let worker: libc::pid_t = std::fs::read_to_string(&pid_file)
+            .expect("worker pid")
+            .trim()
+            .parse()
+            .expect("pid");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // SAFETY: signal 0 only probes for existence.
+        while unsafe { libc::kill(worker, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "descendant {worker} outlived the timed-out check"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
     #[test]
     fn failed_or_stale_pinned_check_cannot_authorize_integration() {
         let check = crate::workflows::CheckDefinition {
@@ -1633,6 +1684,56 @@ mod tests {
             stories.get_story(&dependent.id).unwrap().status,
             crate::stories::StoryStatus::Ready
         );
+    }
+
+    fn stored_schema_version(db: &std::path::Path) -> i64 {
+        rusqlite::Connection::open(db)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn run_store_records_its_schema_version_and_keeps_a_pre_version_store() {
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let db = config.path().join("runs-versioned.sqlite3");
+        let store = RunStore::open_at(&db).unwrap();
+        assert_eq!(stored_schema_version(&db), 1, "fresh store records version");
+        let run = store
+            .start_plan(
+                project.path().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        // A store written before the version existed reports 0 with data in it.
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .pragma_update(None, "user_version", 0)
+            .unwrap();
+        let upgraded = RunStore::open_at(&db).unwrap();
+        assert_eq!(stored_schema_version(&db), 1);
+        assert_eq!(
+            upgraded.snapshot(&run.id).unwrap().sequence,
+            run.sequence,
+            "the pre-version run survives the upgrade"
+        );
+    }
+
+    #[test]
+    fn run_store_refuses_a_newer_schema_version_without_touching_it() {
+        let config = tempfile::tempdir().unwrap();
+        let db = config.path().join("runs-future.sqlite3");
+        RunStore::open_at(&db).unwrap();
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .pragma_update(None, "user_version", 99)
+            .unwrap();
+        let err = RunStore::open_at(&db).unwrap_err();
+        assert!(err.contains("99") && err.contains("newer"), "got: {err}");
+        assert_eq!(stored_schema_version(&db), 99);
     }
 
     #[test]
