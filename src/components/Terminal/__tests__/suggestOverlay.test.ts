@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { continuationRowsAfterSuggest, isSuggestBlock, planSuggestOverlay, type RowSnapshot } from "../suggestOverlay";
+import type { DecodedRow } from "../canvasTerminalUtils";
+import { rowText } from "../canvasTerminalUtils";
+import {
+	continuationRowsAfterSuggest,
+	isSuggestBlock,
+	paintOverlayBlocks,
+	planSuggestOverlay,
+	type RowSnapshot,
+} from "../suggestOverlay";
 
 /** Build a `getRow` lookup from a compact string/bool list, with null past end. */
 function rows(snapshots: Array<[string, boolean]>): (i: number) => RowSnapshot | null {
@@ -202,5 +210,101 @@ describe("planSuggestOverlay", () => {
 			key: "",
 			blocks: [],
 		});
+	});
+});
+
+describe("planSuggestOverlay — 💬 answer marker", () => {
+	it("tints a marker line", () => {
+		const get = rows([
+			["some tool output", false],
+			["💬 The build passes.", false],
+		]);
+		expect(planSuggestOverlay(2, get).blocks).toEqual([{ row: 1, kind: "answer" }]);
+	});
+
+	it("tints every row a wrapped marker line spans", () => {
+		// catches: highlight lost on a long answer, where only the first row carries the marker
+		const get = rows([
+			["💬 A long answer that does not fit on one row and", false],
+			["wraps onto a second row and even", true],
+			["a third one.", true],
+			["next unrelated line", false],
+		]);
+		expect(planSuggestOverlay(4, get).blocks).toEqual([
+			{ row: 0, kind: "answer" },
+			{ row: 1, kind: "answer" },
+			{ row: 2, kind: "answer" },
+		]);
+	});
+
+	it("does not treat an emoji that a wrap lands on as a marker", () => {
+		// catches: a mid-sentence 💬 pushed to a row start by wrapping being highlighted as an answer
+		const get = rows([
+			["some ordinary output that fills the row up to the very", false],
+			["💬 end", true],
+		]);
+		expect(planSuggestOverlay(2, get).blocks).toEqual([]);
+	});
+
+	it("does not match a marker in the middle of a line", () => {
+		const get = rows([["see the 💬 emoji", false]]);
+		expect(planSuggestOverlay(1, get).blocks).toEqual([]);
+	});
+
+	it("matches a marker behind the agent bullet", () => {
+		const get = rows([["⏺ 💬 Done.", false]]);
+		expect(planSuggestOverlay(1, get).blocks).toEqual([{ row: 0, kind: "answer" }]);
+	});
+
+	it("detects a marker row whose cells carry bold styling and a wide-char spacer", () => {
+		// catches: styling (ANSI bold/colour) or the wire's zero spacer cell after the wide emoji hiding the marker
+		const codepoints = [..."💬 Styled answer"].map((c) => c.codePointAt(0) ?? 32);
+		codepoints.splice(1, 0, 0); // wide-char spacer cell
+		const row = {
+			index: 0,
+			count: codepoints.length,
+			wrapped: false,
+			codepoints: Uint32Array.from(codepoints),
+			fg: new Uint32Array(codepoints.length).fill(0xff0000),
+			bg: new Uint32Array(codepoints.length),
+			attrs: new Uint8Array(codepoints.length).fill(1), // bold
+		} as unknown as DecodedRow;
+		const get = (i: number): RowSnapshot | null => (i === 0 ? { text: rowText(row), isWrapped: row.wrapped } : null);
+		expect(planSuggestOverlay(1, get).blocks).toEqual([{ row: 0, kind: "answer" }]);
+	});
+
+	it("changes the key when the marker set changes", () => {
+		const without = planSuggestOverlay(1, rows([["plain", false]]));
+		const withMarker = planSuggestOverlay(1, rows([["💬 yes", false]]));
+		expect(withMarker.key).not.toBe(without.key);
+	});
+});
+
+describe("paintOverlayBlocks", () => {
+	it("masks suggest rows with the background and keeps answer rows translucent with a gutter", () => {
+		// catches: an answer row masked like a suggest row, hiding the answer text
+		const container = document.createElement("div");
+		paintOverlayBlocks(
+			container,
+			[
+				{ row: 1, kind: "suggest" },
+				{ row: 2, kind: "answer" },
+			],
+			20,
+			"rgb(10, 10, 10)",
+		);
+		const [masked, answer] = Array.from(container.children) as HTMLElement[];
+		expect(masked.style.top).toBe("20px");
+		expect(masked.style.background).toBe("rgb(10, 10, 10)");
+		expect(answer.style.top).toBe("40px");
+		expect(answer.style.background).toContain("0.14");
+		expect(answer.style.boxShadow).toContain("inset 3px");
+	});
+
+	it("replaces the previous strips instead of stacking them", () => {
+		const container = document.createElement("div");
+		paintOverlayBlocks(container, [{ row: 0, kind: "answer" }], 20, "#000");
+		paintOverlayBlocks(container, [], 20, "#000");
+		expect(container.children.length).toBe(0);
 	});
 });

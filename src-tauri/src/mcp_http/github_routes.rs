@@ -592,3 +592,89 @@ pub(super) async fn github_resolve_repos(
     ))
     .into_response()
 }
+
+/// Kills the surviving mutants of #1366-ea64: a handler that returns `Response::default()`
+/// (200, empty body) instead of the result of the GitHub call it wraps.
+#[cfg(test)]
+mod pr_action_route_tests {
+    use super::*;
+    use crate::mcp_http::types::{ApprovePrRequest, MergePrRequest, UpdatePrBranchRequest};
+    use axum::http::StatusCode;
+
+    fn state() -> Arc<AppState> {
+        Arc::new(crate::state::tests_support::make_test_app_state())
+    }
+
+    async fn error_body(response: Response) -> String {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&bytes).expect("a JSON body");
+        json["error"].as_str().expect("an error string").to_string()
+    }
+
+    /// Catches (repo_pr_review_threads -> Default): a failed lookup answering 200 with no body.
+    #[tokio::test]
+    async fn review_threads_route_returns_the_lookup_error() {
+        let response = repo_pr_review_threads(
+            State(state()),
+            Query(CiChecksQuery {
+                path: "/nonexistent".into(),
+                pr_number: 1,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error_body(response).await, "No GitHub remote");
+    }
+
+    /// Catches (repo_update_pr_branch -> Default): a refused update answering 200 with no body,
+    /// which the panel reads as "branch updated".
+    #[tokio::test]
+    async fn update_branch_route_returns_the_upstream_error() {
+        let response = repo_update_pr_branch(
+            State(state()),
+            Json(UpdatePrBranchRequest {
+                repo_path: "/nonexistent".into(),
+                pr_number: 1,
+                expected_head_sha: String::new(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(error_body(response).await.contains("head commit"));
+    }
+
+    /// Catches (repo_close_pr -> Default): a PR that could not be closed answering 200.
+    #[tokio::test]
+    async fn close_route_returns_the_upstream_error() {
+        let response = repo_close_pr(
+            State(state()),
+            Json(ApprovePrRequest {
+                repo_path: "/nonexistent".into(),
+                pr_number: 1,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(!error_body(response).await.is_empty());
+    }
+
+    /// Catches (merge_pr_via_github_http -> Default): a refused merge answering 200 with no
+    /// `sha`, which the caller reads as merged.
+    #[tokio::test]
+    async fn merge_route_returns_the_merge_error() {
+        let response = crate::mcp_http::worktree_routes::merge_pr_via_github_http(
+            State(state()),
+            Json(MergePrRequest {
+                repo_path: "/nonexistent".into(),
+                pr_number: 1,
+                merge_method: "squash".into(),
+                expected_head_sha: String::new(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(error_body(response).await.contains("head commit"));
+    }
+}
