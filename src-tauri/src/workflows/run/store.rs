@@ -18,6 +18,12 @@ pub struct RunStore {
     db_path: PathBuf,
 }
 
+/// Layout version recorded in `PRAGMA user_version`. Stores created before the
+/// version was recorded report 0 and already have the version 1 layout. A
+/// change to a persisted event or snapshot shape bumps this and adds a step to
+/// `migrate_schema`.
+const RUN_STORE_SCHEMA_VERSION: i64 = 1;
+
 static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
 static RECONCILED_RUN_STORES: LazyLock<Mutex<HashSet<PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -57,6 +63,14 @@ impl RunStore {
             .map_err(|e| format!("workflow run WAL: {e}"))?;
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(|e| format!("workflow run foreign keys: {e}"))?;
+        let stored_version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(|e| format!("read workflow run schema version: {e}"))?;
+        if stored_version > RUN_STORE_SCHEMA_VERSION {
+            return Err(format!(
+                "workflow run store schema version {stored_version} is newer than this build supports ({RUN_STORE_SCHEMA_VERSION}); update TUICommander"
+            ));
+        }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS workflow_runs (
                 id TEXT PRIMARY KEY, project TEXT NOT NULL, plan_id TEXT NOT NULL,
@@ -84,6 +98,10 @@ impl RunStore {
             );",
         )
         .map_err(|e| format!("prepare workflow run schema: {e}"))?;
+        if stored_version < RUN_STORE_SCHEMA_VERSION {
+            conn.pragma_update(None, "user_version", RUN_STORE_SCHEMA_VERSION)
+                .map_err(|e| format!("record workflow run schema version: {e}"))?;
+        }
         Ok(conn)
     }
 

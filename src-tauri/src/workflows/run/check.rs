@@ -61,12 +61,17 @@ pub fn execute_pinned_check(check: &CheckDefinition, path: &Path) -> Result<Chec
         .first()
         .ok_or("workflow check has no executable")?;
     let start = Instant::now();
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(check.argv.iter().skip(1))
         .current_dir(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    // Own process group, so a timeout can stop the runner's descendants too.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("start workflow check {}: {error}", check.id))?;
     let timeout = Duration::from_secs(u64::from(check.timeout_secs));
@@ -78,6 +83,12 @@ pub fn execute_pinned_check(check: &CheckDefinition, path: &Path) -> Result<Chec
             break status.code().unwrap_or(-1);
         }
         if start.elapsed() >= timeout {
+            #[cfg(unix)]
+            // SAFETY: killpg only signals the group led by our own child; an
+            // already empty group fails with ESRCH, which is ignored.
+            unsafe {
+                libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+            }
             child
                 .kill()
                 .map_err(|error| format!("stop timed-out workflow check: {error}"))?;

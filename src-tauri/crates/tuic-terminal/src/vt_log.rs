@@ -151,6 +151,28 @@ impl LogLine {
     }
 }
 
+/// Strip structural tokens from a run of rows, including the wrapped tail rows
+/// of a bracketed `suggest: [ … ]` that [`LogLine::strip_structural_tokens`]
+/// cannot see from one row. The tail rows are dropped; the head row is emptied
+/// as for any single-row token (#1380-05d8).
+fn strip_structural_blocks(lines: &mut Vec<LogLine>) {
+    let texts: Vec<String> = lines.iter().map(LogLine::text).collect();
+    let mut tail = vec![false; lines.len()];
+    for (i, head) in texts.iter().enumerate() {
+        if tail[i] || !head.contains("suggest:") {
+            continue;
+        }
+        let rows =
+            output_parser::suggest_tail_rows(head, texts[i + 1..].iter().map(String::as_str));
+        tail[i + 1..=i + rows].fill(true);
+    }
+    let mut is_tail = tail.into_iter();
+    lines.retain(|_| !is_tail.next().unwrap_or(false));
+    for line in lines {
+        line.strip_structural_tokens();
+    }
+}
+
 /// A screen row that changed after a `VtLogBuffer::process()` call.
 ///
 /// Consumers (output parsers) iterate these to detect status lines, intent
@@ -363,9 +385,7 @@ impl VtLogBuffer {
             .filter(|line| !line.chrome)
             .cloned()
             .collect();
-        for line in &mut slice {
-            line.strip_structural_tokens();
-        }
+        strip_structural_blocks(&mut slice);
         (slice, total)
     }
 
@@ -472,9 +492,7 @@ impl VtLogBuffer {
     /// Used by mobile/REST to render screen content with colors.
     pub fn screen_log_lines(&self) -> Vec<LogLine> {
         let mut lines = self.grid.screen_log_lines();
-        for line in &mut lines {
-            line.strip_structural_tokens();
-        }
+        strip_structural_blocks(&mut lines);
         // Trim trailing empty lines
         while let Some(last) = lines.last() {
             if last.spans.is_empty() {

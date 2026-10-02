@@ -4528,6 +4528,12 @@ fn handle_agent_with_parent_cwd(
                 .and_then(|agent_type| agents_cfg.agents.get(agent_type))
                 .and_then(|settings| settings.skip_trust_dialog)
                 .unwrap_or(true);
+            if effective_agent_type.as_deref() == Some("codex") {
+                // A pending Codex update shows an Update now / Skip prompt before
+                // the composer, and a managed child waits on it forever (1373).
+                launch_args.insert(0, "-c".to_string());
+                launch_args.insert(1, "check_for_update_on_startup=false".to_string());
+            }
             if skip_trust_dialog && effective_agent_type.as_deref() == Some("codex") {
                 let cwd = effective_cwd
                     .as_deref()
@@ -23858,6 +23864,16 @@ mod tests {
                 .windows(2)
                 .any(|pair| pair == ["-c", expected.as_str()]),
             "launch must scope trust to the new cwd: {actual}"
+        );
+        // Catches: a managed Codex child blocked on the Update now / Skip prompt
+        // (1373).
+        assert!(
+            actual
+                .lines()
+                .collect::<Vec<_>>()
+                .windows(2)
+                .any(|pair| pair == ["-c", "check_for_update_on_startup=false"]),
+            "managed Codex child must skip the update check: {actual}"
         );
         assert!(
             prompt.contains("say READY"),
