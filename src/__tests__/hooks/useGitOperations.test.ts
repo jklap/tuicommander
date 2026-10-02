@@ -15,6 +15,7 @@ import { terminalsStore } from "../../stores/terminals";
 import type { BranchPrStatus } from "../../types";
 import { openDialog as open } from "../../utils/nativeDialog";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
+import { branchFacts, STALE_AFTER_DAYS } from "../../utils/sidebarRich";
 import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -1996,6 +1997,39 @@ describe("useGitOperations", () => {
 			const repo = repositoriesStore.get("/repo");
 			expect(repo?.workspaces["main"]?.lastCommitTs).toBe(1700000001 * 1000);
 			expect(repo?.workspaces["feature-x"]?.lastCommitTs).toBe(1700000042 * 1000);
+		});
+
+		// Catches: the store (ms) and branchFacts disagreeing on the unit, so a 2 h old Rust %ct reads "<1m" and never goes stale.
+		it("renders a Rust %ct seconds value written by the refresh as its real age and stale state", async () => {
+			const nowMs = 1_800_000_000_000;
+			const secondsAgo = (s: number) => nowMs / 1000 - s;
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "recent", { worktreePath: "/repo/wt-recent" });
+			repositoriesStore.setWorkspace("/repo", "old", { worktreePath: "/repo/wt-old" });
+			mockSummary({
+				worktree_paths: wtPaths({ recent: "/repo/wt-recent", old: "/repo/wt-old" }),
+				merged_branches: [],
+				diff_stats: {
+					"/repo/wt-recent": { additions: 0, deletions: 0 },
+					"/repo/wt-old": { additions: 0, deletions: 0 },
+				},
+				last_commit_ts: {
+					recent: secondsAgo(2 * 3600),
+					old: secondsAgo((STALE_AFTER_DAYS + 1) * 86_400),
+				},
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			const facts = (name: string) => {
+				const ws = repositoriesStore.get("/repo")?.workspaces[name];
+				return branchFacts(
+					{ lastCommitTs: ws?.lastCommitTs ?? null, additions: 0, deletions: 0, dirtyFiles: 0, isMerged: false },
+					nowMs,
+				);
+			};
+			expect(facts("recent")).toMatchObject({ commitAge: "2h", state: null });
+			expect(facts("old").state).toBe("stale");
 		});
 
 		it("stores lastCommitTs as null when backend returns null", async () => {

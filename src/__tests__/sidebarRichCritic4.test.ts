@@ -16,7 +16,7 @@ describe("critic round 4: sidebarRich", () => {
 	// Catches: a long-lived main/develop branch whose last commit is 40 days old gets a "Stale" chip,
 	// which suggests it can be cleaned up; the row is the main checkout.
 	it("never calls a main branch stale", () => {
-		const input = { ...base, lastCommitTs: (NOW - 40 * DAY) / 1000, isMain: true } as BranchFactsInput;
+		const input = { ...base, lastCommitTs: NOW - 40 * DAY, isMain: true } as BranchFactsInput;
 		expect(branchFacts(input, NOW).state).toBeNull();
 	});
 
@@ -33,8 +33,7 @@ describe("critic round 4: sidebarRich", () => {
 
 	// Catches: off-by-one at the 30 day staleness edge and a merged branch also reading stale.
 	it("is stale strictly after 30 days, never when merged", () => {
-		const at = (ageMs: number, extra = {}) =>
-			branchFacts({ ...base, lastCommitTs: (NOW - ageMs) / 1000, ...extra }, NOW).state;
+		const at = (ageMs: number, extra = {}) => branchFacts({ ...base, lastCommitTs: NOW - ageMs, ...extra }, NOW).state;
 		expect(at(30 * DAY)).toBeNull();
 		expect(at(30 * DAY + 1000)).toBe("stale");
 		expect(at(90 * DAY, { isMerged: true })).toBe("merged");

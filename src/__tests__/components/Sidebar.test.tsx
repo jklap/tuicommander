@@ -393,7 +393,7 @@ describe("Sidebar", () => {
 			additions: 12,
 			deletions: 3,
 			isMerged: false,
-			lastCommitTs: Math.floor(Date.now() / 1000) - 3 * 3600,
+			lastCommitTs: Date.now() - 3 * 3600_000,
 			lifecycleStatus: { dirtyFiles: 4, commitStatus: "unmerged", removalSafety: "destructive" },
 			...over,
 		});
@@ -472,7 +472,7 @@ describe("Sidebar", () => {
 			expect(detail).toContain("Refactor the sidebar");
 		});
 
-		const OLD_TS = () => Math.floor(Date.now() / 1000) - 90 * 86_400;
+		const OLD_TS = () => Date.now() - 90 * 86_400_000;
 		const chips = (c: HTMLElement) => c.querySelector(".branchRichMeta")?.textContent ?? "";
 
 		// Catches: main flagged Stale in rich because the facts never learn it is a main checkout.
