@@ -60,6 +60,10 @@ describe("keybindingDefaults", () => {
 			}
 		});
 
+		it("binds answers-only to Cmd+Alt+R", () => {
+			expect(DEFAULT_BINDINGS["answers-only"]).toBe("Cmd+Alt+R");
+		});
+
 		it("leaves the hands-free toggle unbound: it is a Command Palette action", () => {
 			expect(DEFAULT_BINDINGS["toggle-hands-free"]).toBe("");
 		});

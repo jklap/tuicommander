@@ -76,6 +76,7 @@ export const ACTION_NAMES = [
 	"block-prev",
 	"block-next",
 	"block-search-toggle",
+	"answers-only",
 	"toggle-hands-free",
 	// Numbered tabs and branches
 	...Array.from({ length: 9 }, (_, i) => `switch-tab-${i + 1}`),
@@ -167,6 +168,7 @@ export const DEFAULT_BINDINGS: Record<ActionName, string> = {
 	"block-prev": "Cmd+Shift+ArrowUp",
 	"block-next": "Cmd+Shift+ArrowDown",
 	"block-search-toggle": "Cmd+Shift+B",
+	"answers-only": "Cmd+Alt+R",
 	"toggle-hands-free": "",
 	// Numbered tabs
 	...Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`switch-tab-${i + 1}`, `Cmd+${i + 1}`])),

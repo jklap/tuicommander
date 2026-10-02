@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { type Component, createEffect, createSignal, onCleanup, onMount, untrack } from "solid-js";
 import { lastMenuActionTime } from "../../menuDedup";
 import { isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
@@ -70,7 +70,14 @@ import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex, matchWebUrls } from "./linkProvider";
 import { buildScrollbarMarksHtml } from "./scrollbarMarks";
 import { scrollbarThumb } from "./scrollbarThumb";
-import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./suggestOverlay";
+import {
+	ANSWER_MARKER_RE,
+	INTENT_HIGHLIGHT_RE,
+	lastTurnStartRow,
+	paintOverlayBlocks,
+	planSuggestOverlay,
+	SUGGEST_ANCHOR_RE,
+} from "./suggestOverlay";
 import {
 	altSequenceFromCode,
 	createCompositionState,
@@ -1027,12 +1034,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	const rowToText = rowText;
 
-	function makeOverlayDiv(top: number, height: number, background: string): HTMLDivElement {
-		const div = document.createElement("div");
-		div.style.cssText = `position:absolute;left:0;right:0;top:${top}px;height:${height}px;background:${background}`;
-		return div;
-	}
-
 	// Cached suggest/intent overlay state to avoid full DOM rebuild
 	let lastSuggestOverlayKey = "";
 
@@ -1041,18 +1042,22 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		m: CellMetrics,
 		dirtyIndices?: Set<number>,
 		snapshotOverride?: (i: number) => { text: string; isWrapped: boolean } | null,
+		displayOffset: number = _frame.displayOffset,
 	) {
 		if (!overlayRef) return;
 
-		// Skip full rescan if no dirty rows touch suggest/intent patterns
-		// (skipped entirely when rendering from the cache during a scroll gesture).
-		if (!snapshotOverride && dirtyIndices && !fullRepaintNeeded) {
+		const answersOnly = terminalsStore.get(props.terminalId)?.answersOnly === true;
+
+		// Skip full rescan if no dirty rows touch suggest/intent/answer patterns
+		// (skipped entirely when rendering from the cache during a scroll gesture,
+		// and in the answers-only view, where any changed row can change the collapse).
+		if (!snapshotOverride && !answersOnly && dirtyIndices && !fullRepaintNeeded) {
 			let hasSuggestContent = false;
 			for (const idx of dirtyIndices) {
 				const row = rowMap.get(idx);
 				if (!row) continue;
 				const text = rowToText(row);
-				if (SUGGEST_ANCHOR_RE.test(text) || INTENT_HIGHLIGHT_RE.test(text)) {
+				if (SUGGEST_ANCHOR_RE.test(text) || INTENT_HIGHLIGHT_RE.test(text) || ANSWER_MARKER_RE.test(text)) {
 					hasSuggestContent = true;
 					break;
 				}
@@ -1077,15 +1082,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// Decide what to mask before building anything: most repaints leave the
 		// plan untouched, and the elements were being created and dropped just to
 		// discover that.
-		const { key, blocks } = planSuggestOverlay(numRows, getRowSnapshot);
+		const scope = answersOnly
+			? {
+					startRow: lastTurnStartRow(
+						terminalsStore.get(props.terminalId)?.userPromptLines ?? [],
+						_frame.historySize,
+						displayOffset,
+						numRows,
+					),
+					// At the bottom the cursor row is the live prompt: keep it and what follows.
+					endRow: displayOffset === 0 ? _frame.cursorRow : numRows,
+				}
+			: undefined;
+		const { key, blocks } = planSuggestOverlay(numRows, getRowSnapshot, scope);
 		if (key === lastSuggestOverlayKey) return;
 		lastSuggestOverlayKey = key;
 
-		overlayRef.textContent = "";
-		for (const block of blocks) {
-			const background = block.kind === "intent" ? "rgba(181,147,90,0.12)" : bg;
-			overlayRef.appendChild(makeOverlayDiv(block.row * m.cellHeight, m.cellHeight, background));
-		}
+		paintOverlayBlocks(overlayRef, blocks, m.cellHeight, bg);
 	}
 
 	function startBlink() {
@@ -1277,11 +1290,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// scrolling content instead of the lagging backend frame (no flicker, and the
 		// raw suggest line stays masked).
 		if (currentFrame) {
-			updateSuggestOverlay(currentFrame, m, undefined, (i) => {
-				const cached = cacheRow(hist - intOffset + i);
-				if (!cached) return null;
-				return { text: rowToText(cached), isWrapped: cached.wrapped };
-			});
+			updateSuggestOverlay(
+				currentFrame,
+				m,
+				undefined,
+				(i) => {
+					const cached = cacheRow(hist - intOffset + i);
+					if (!cached) return null;
+					return { text: rowToText(cached), isWrapped: cached.wrapped };
+				},
+				intOffset,
+			);
 		}
 	}
 
@@ -3443,6 +3462,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			updateKeyboardLift();
 		});
 	}
+
+	// Toggling the answers-only view repaints the mask now rather than on the next frame.
+	createEffect(() => {
+		terminalsStore.state.terminals[props.terminalId]?.answersOnly;
+		if (!alive || !currentFrame) return;
+		const m = metrics();
+		if (m) untrack(() => updateSuggestOverlay(currentFrame as DecodedFrame, m));
+	});
 
 	createEffect(() => {
 		terminalsStore.state.terminals[props.terminalId]?.fontSize;
