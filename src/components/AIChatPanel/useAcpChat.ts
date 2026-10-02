@@ -110,6 +110,7 @@ export type AcpChatClient = Pick<
 	| "pause"
 	| "resumeTurn"
 	| "compact"
+	| "forkSession"
 >;
 
 /** A refusal, as a person reads it. Rust answers with an `AcpClientError`. */
@@ -448,6 +449,18 @@ export function createAcpChat(
 			}
 			toastsStore.add("Conversation compacted", "Continuing in the compacted conversation", "info");
 			await selectSession(compacted.targetSessionId);
+		},
+
+		/** Branch this conversation at its tip into a new tab; the parent keeps its own. */
+		async fork(): Promise<void> {
+			const current = pair();
+			const target = root();
+			if (!current || !target || busy()) return;
+			const child = await guard("forking the conversation", () =>
+				client.forkSession(current.id, current.session, target),
+			);
+			if (child === null) return;
+			await selectSession(child);
 		},
 
 		async setOption(configId: string, value: AcpSessionConfigOptionValue): Promise<void> {
