@@ -3638,6 +3638,24 @@ impl AppState {
         if self.peer_agents.contains_key(reference) {
             return Ok(Some(reference.to_string()));
         }
+        // The register `name` is what list_peers prints, so it is an address too.
+        // Two peers sharing a name is ambiguous: refuse, never pick one.
+        let named: Vec<String> = self
+            .peer_agents
+            .iter()
+            .filter(|entry| entry.value().name == reference)
+            .map(|entry| entry.key().clone())
+            .collect();
+        match named.as_slice() {
+            [] => {}
+            [peer] => return Ok(Some(peer.clone())),
+            _ => {
+                return Err(format!(
+                    "Peer name '{reference}' is ambiguous; matches {}",
+                    named.join(", ")
+                ));
+            }
+        }
         let Some(session_id) = self.resolve_session_ref_checked(reference)? else {
             return Ok(None);
         };
@@ -7186,6 +7204,39 @@ mod tests {
             );
         }
         assert_eq!(state.resolve_peer_ref_checked("never-seen").unwrap(), None);
+    }
+
+    /// list_peers prints the register `name`; a name that cannot be sent to is a
+    /// trap. Catches: name resolving to nothing, or silently picking one of two
+    /// peers that share it.
+    #[test]
+    fn resolve_peer_ref_checked_accepts_the_register_name_and_refuses_duplicates() {
+        let state = tests_support::make_test_app_state();
+        for (key, name) in [("peer-a", "alpha"), ("peer-b", "twin"), ("peer-c", "twin")] {
+            state.peer_agents.insert(
+                key.to_string(),
+                PeerAgent {
+                    tuic_session: key.to_string(),
+                    mcp_session_id: format!("mcp-{key}"),
+                    name: name.to_string(),
+                    project: None,
+                    registered_at: 0,
+                },
+            );
+        }
+
+        assert_eq!(
+            state.resolve_peer_ref_checked("alpha").unwrap(),
+            Some("peer-a".to_string())
+        );
+        let error = state
+            .resolve_peer_ref_checked("twin")
+            .expect_err("a shared name must not pick a peer");
+        assert!(error.contains("ambiguous"), "{error}");
+        assert!(
+            error.contains("peer-b") && error.contains("peer-c"),
+            "{error}"
+        );
     }
 
     #[test]

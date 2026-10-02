@@ -1588,7 +1588,8 @@ bar also keeps repo-scoped tabs visible when a repository has no active workspac
    identity with a terminal is a reachable peer, and taking its inbox would strand a working agent.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by path).
 3. **Send**: `agent action=send to=<address> message="..."` buffers to the recipient's inbox.
-   `to` takes any of the three address forms — the peer's `tuic_session`, the id of the
+   `to` takes the peer's `tuic_session`, its registered `name` (as `list_peers` prints it;
+   two peers with one name are refused with the candidates), the id of the
    PTY it runs in, or that terminal's alias. `delivered` is the verdict and
    `delivery_path` is the single source of truth for the route and distinguishes SSE,
    terminal-or-queued, waiter, subscribed ACP inbox resource, generic/coalesced
