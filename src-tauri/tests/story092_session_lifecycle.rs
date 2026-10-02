@@ -24,7 +24,7 @@ use tuicommander_lib::acp::{
 
 mod acp_support;
 
-use acp_support::{Fixture, authority, text, until};
+use acp_support::{Fixture, authority, chunk, text, until};
 
 /// The session ids the scenarios answer with, spelled once.
 const FIRST: &str = "01932d5e-0000-7000-8000-0000000000aa";
@@ -310,24 +310,20 @@ async fn load_preserves_the_first_replayed_assistant_chunks() {
         .manager
         .subscribe(connection.connection_id, 0)
         .expect("journal");
-    // The scenario sends its last chunk after the load response, so the journal may
-    // place it after `Idle`. Stopping at `Idle` made this test race the host's
-    // handling of the response against the following notification (~20% of runs
-    // on the Linux box). Read until the whole replay has arrived instead.
-    let expected = "TUICommander v1.7.7 is connected.\nintent: Checking active agents (Agents)";
-    let answer = std::cell::RefCell::new(String::new());
     let events = until(&mut stream, |event| {
-        if let tuicommander_lib::acp::AcpClientEvent::SessionUpdate { update } = event
-            && let v1::SessionUpdate::AgentMessageChunk(chunk) = &**update
-            && let v1::ContentBlock::Text(text) = &chunk.content
-        {
-            answer.borrow_mut().push_str(&text.text);
-        }
-        answer.borrow().len() >= expected.len()
+        matches!(
+            event,
+            tuicommander_lib::acp::AcpClientEvent::AttachmentState {
+                state: AcpAttachmentState::Idle
+            }
+        )
     })
     .await;
-    let answer = answer.into_inner();
-    assert_eq!(answer, expected, "events: {events:?}");
+    let answer: String = events.iter().filter_map(chunk).collect();
+    assert_eq!(
+        answer,
+        "TUICommander v1.7.7 is connected.\nintent: Checking active agents (Agents)"
+    );
 
     fixture
         .manager
