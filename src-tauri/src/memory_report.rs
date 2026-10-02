@@ -219,6 +219,20 @@ fn walk_zones() -> Option<(u64, u64, std::time::Duration)> {
     }
     const MALLOC_PTR_IN_USE_RANGE_TYPE: libc::c_uint = 1;
 
+    // `memory_reader_t`: how an enumerator reads the target task. For this
+    // process the address is the memory, so the reader hands it back.
+    // 2026-10-02: Apple's zones tolerate a null reader for the own task, but
+    // CoreAudio's caulk zone calls it unconditionally and jumped to address 0.
+    unsafe extern "C" fn in_process_reader(
+        _task: u32,
+        address: usize,
+        _size: usize,
+        local: *mut *mut libc::c_void,
+    ) -> libc::c_int {
+        unsafe { *local = address as *mut libc::c_void };
+        0 // KERN_SUCCESS
+    }
+
     unsafe extern "C" fn record(
         _task: u32,
         context: *mut libc::c_void,
@@ -241,10 +255,8 @@ fn walk_zones() -> Option<(u64, u64, std::time::Duration)> {
     let task = unsafe { libc::mach_task_self() };
     let mut addresses: *mut usize = std::ptr::null_mut();
     let mut zone_count: libc::c_uint = 0;
-    // A null reader means "this process": the addresses are directly readable.
-    let rc = unsafe {
-        malloc_get_all_zones(task, std::ptr::null_mut(), &mut addresses, &mut zone_count)
-    };
+    let reader = in_process_reader as *mut libc::c_void;
+    let rc = unsafe { malloc_get_all_zones(task, reader, &mut addresses, &mut zone_count) };
     if rc != 0 || addresses.is_null() {
         return None;
     }
@@ -272,7 +284,7 @@ fn walk_zones() -> Option<(u64, u64, std::time::Duration)> {
                 std::ptr::addr_of_mut!(census).cast(),
                 MALLOC_PTR_IN_USE_RANGE_TYPE,
                 zone as usize,
-                std::ptr::null_mut(),
+                reader,
                 record,
             );
             unlock(zone);
@@ -722,5 +734,158 @@ mod census_critic_tests {
             w.join().unwrap();
         }
         allocator.join().unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod foreign_zone_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const MAGIC: u64 = 0x1371_3968_cafe_f00d;
+    static ENUMERATIONS: AtomicUsize = AtomicUsize::new(0);
+
+    type Reader = unsafe extern "C" fn(u32, usize, usize, *mut *mut libc::c_void) -> libc::c_int;
+    type Recorder =
+        unsafe extern "C" fn(u32, *mut libc::c_void, libc::c_uint, *mut [usize; 2], libc::c_uint);
+
+    // `<malloc/malloc.h>` malloc_introspection_t, spelled to its end so nothing
+    // that walks the zone list reads past the struct.
+    #[repr(C)]
+    struct Introspection {
+        enumerator: unsafe extern "C" fn(
+            u32,
+            *mut libc::c_void,
+            libc::c_uint,
+            usize,
+            Option<Reader>,
+            Recorder,
+        ) -> libc::c_int,
+        good_size: *const libc::c_void,
+        check: *const libc::c_void,
+        print: *const libc::c_void,
+        log: *const libc::c_void,
+        force_lock: unsafe extern "C" fn(*mut libc::c_void),
+        force_unlock: unsafe extern "C" fn(*mut libc::c_void),
+        rest: [*const libc::c_void; 8],
+    }
+
+    #[repr(C)]
+    struct Zone {
+        reserved1: *const libc::c_void,
+        reserved2: *const libc::c_void,
+        size: unsafe extern "C" fn(*mut libc::c_void, *const libc::c_void) -> usize,
+        malloc: *const libc::c_void,
+        calloc: *const libc::c_void,
+        valloc: *const libc::c_void,
+        free: *const libc::c_void,
+        realloc: *const libc::c_void,
+        destroy: *const libc::c_void,
+        zone_name: *const libc::c_char,
+        batch_malloc: *const libc::c_void,
+        batch_free: *const libc::c_void,
+        introspect: *const Introspection,
+        version: libc::c_uint,
+        rest: [*const libc::c_void; 4],
+        magic: u64,
+    }
+
+    unsafe extern "C" {
+        fn malloc_zone_register(zone: *mut libc::c_void);
+        fn malloc_zone_unregister(zone: *mut libc::c_void);
+    }
+
+    unsafe extern "C" fn owns_nothing(_: *mut libc::c_void, _: *const libc::c_void) -> usize {
+        0
+    }
+    unsafe extern "C" fn no_lock(_: *mut libc::c_void) {}
+
+    // Behaves as caulk does: the reader is called without a null check, and the
+    // bytes it returns are used. A null reader is a jump to address 0.
+    unsafe extern "C" fn enumerate(
+        task: u32,
+        context: *mut libc::c_void,
+        _kind: libc::c_uint,
+        zone: usize,
+        reader: Option<Reader>,
+        recorder: Recorder,
+    ) -> libc::c_int {
+        let mut local: *mut libc::c_void = std::ptr::null_mut();
+        let rc = unsafe {
+            (reader.unwrap_unchecked())(
+                task,
+                zone + std::mem::offset_of!(Zone, magic),
+                8,
+                &mut local,
+            )
+        };
+        if rc != 0 || unsafe { *local.cast::<u64>() } != MAGIC {
+            return 1;
+        }
+        ENUMERATIONS.fetch_add(1, Ordering::SeqCst);
+        let mut range = [0usize, 2 * LARGE_BLOCK_BYTES as usize];
+        unsafe { recorder(task, context, 1, &mut range, 1) };
+        0
+    }
+
+    #[test]
+    fn a_zone_whose_enumerator_calls_the_reader_unconditionally_survives_the_census() {
+        // Catches: passing a null memory_reader_t to every enumerator. CoreAudio's
+        // caulk zone calls the reader without a check, so GET /diagnostics/memory
+        // jumped to address 0 and killed the app (2026-10-02, story 1371-3968).
+        let introspect = Box::new(Introspection {
+            enumerator: enumerate,
+            good_size: std::ptr::null(),
+            check: std::ptr::null(),
+            print: std::ptr::null(),
+            log: std::ptr::null(),
+            force_lock: no_lock,
+            force_unlock: no_lock,
+            rest: [std::ptr::null(); 8],
+        });
+        let zone = Box::into_raw(Box::new(Zone {
+            reserved1: std::ptr::null(),
+            reserved2: std::ptr::null(),
+            size: owns_nothing,
+            malloc: std::ptr::null(),
+            calloc: std::ptr::null(),
+            valloc: std::ptr::null(),
+            free: std::ptr::null(),
+            realloc: std::ptr::null(),
+            destroy: std::ptr::null(),
+            zone_name: c"tuic-test-reader-zone".as_ptr(),
+            batch_malloc: std::ptr::null(),
+            batch_free: std::ptr::null(),
+            introspect: &*introspect,
+            version: 0,
+            rest: [std::ptr::null(); 4],
+            magic: MAGIC,
+        }));
+        unsafe { malloc_zone_register(zone.cast()) };
+        let before = ENUMERATIONS.load(Ordering::SeqCst);
+
+        let census = large_malloc_blocks();
+
+        unsafe { malloc_zone_unregister(zone.cast()) };
+        drop(unsafe { Box::from_raw(zone) });
+        let (count, bytes) = census.expect("the census completes with a foreign zone present");
+        assert!(
+            ENUMERATIONS.load(Ordering::SeqCst) > before,
+            "the foreign zone was enumerated"
+        );
+        assert!(
+            count >= 1 && bytes >= 2 * LARGE_BLOCK_BYTES,
+            "its block is counted: {count}, {bytes}"
+        );
+    }
+
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn the_census_survives_after_the_audio_stack_was_touched() {
+        // Catches: the same null reader against whatever zones CoreAudio registers
+        // once a device list has been read. Whether this registers the caulk zone
+        // depends on the machine; the test only asserts the walk completes.
+        let _ = crate::notification_sound::list_output_devices();
+        assert!(large_malloc_blocks().is_some());
     }
 }
