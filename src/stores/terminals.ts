@@ -106,6 +106,7 @@ export interface TerminalData {
 	lastCommandExecAt: number | null; // Timestamp of last OSC 133 "C" (real command execution); monotonic, never evicted — used to gate completion against prompt-redraw/wake false-busy
 	foldedBlocks: Set<number>; // promptLine values of folded blocks
 	userPromptLines: number[]; // Absolute lines where the user submitted a prompt (UserInput.line), for the green scrollbar marker
+	answersOnly: boolean; // Answers-only view: output of the last turn is collapsed except 💬 answer lines. Never automatic.
 	alias: string | null; // Human-friendly alias from Rust (e.g. "tc-1")
 	standby: boolean; // Session is SIGSTOP'd (auto-standby)
 	/** PTY and agent were ended on purpose (Suspend); the tab is kept and resumes like a restored one. */
@@ -152,6 +153,7 @@ type TerminalCreateData = Omit<
 	| "lastCommandExecAt"
 	| "foldedBlocks"
 	| "userPromptLines"
+	| "answersOnly"
 	| "alias"
 	| "standby"
 	| "suspended"
@@ -464,6 +466,7 @@ function createTerminalsStore() {
 				lastCommandExecAt: null,
 				foldedBlocks: new Set<number>(),
 				userPromptLines: [],
+				answersOnly: false,
 				alias: null,
 				standby: false,
 				suspended: false,
@@ -518,6 +521,7 @@ function createTerminalsStore() {
 				lastCommandExecAt: null,
 				foldedBlocks: new Set<number>(),
 				userPromptLines: [],
+				answersOnly: false,
 				alias: null,
 				standby: false,
 				suspended: false,
@@ -825,6 +829,13 @@ function createTerminalsStore() {
 				next.add(promptLine);
 			}
 			setState("terminals", id, "foldedBlocks", next);
+		},
+
+		/** Flip the answers-only view of one terminal (button / `answers-only` action). */
+		toggleAnswersOnly(id: string | null = state.activeId): void {
+			const term = id ? state.terminals[id] : undefined;
+			if (!id || !term) return;
+			setState("terminals", id, "answersOnly", !term.answersOnly);
 		},
 
 		/** Update agent-declared intent (via intent: token) */
