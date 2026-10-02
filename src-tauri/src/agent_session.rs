@@ -1154,8 +1154,11 @@ mod tests {
         fs::create_dir(&broken).unwrap();
         fs::write(broken.join("lease"), "not json").unwrap();
         fs::create_dir(dir.path().join("not-a-uuid")).unwrap();
-        fs::write(dir.path().join("not-a-uuid").join("lease"), r#"{"pid":111,"heartbeat":99}"#)
-            .unwrap();
+        fs::write(
+            dir.path().join("not-a-uuid").join("lease"),
+            r#"{"pid":111,"heartbeat":99}"#,
+        )
+        .unwrap();
         assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_B));
     }
 
@@ -1170,7 +1173,10 @@ mod tests {
         })
         .unwrap();
         let home = home.path().to_str().unwrap();
-        assert_eq!(discover_ego_session(Some(111), Some(home)).as_deref(), Some(EGO_A));
+        assert_eq!(
+            discover_ego_session(Some(111), Some(home)).as_deref(),
+            Some(EGO_A)
+        );
         assert_eq!(discover_ego_session(None, Some(home)), None);
     }
 
@@ -1194,7 +1200,11 @@ mod tests {
     /// `EGO_HOME` is looked up in `~/.ego` and never found.
     #[test]
     fn test_ego_home_is_a_session_env_var() {
-        assert!(AGENT_ENV_VARS.iter().any(|(t, vars)| *t == "ego" && vars.contains(&"EGO_HOME")));
+        assert!(
+            AGENT_ENV_VARS
+                .iter()
+                .any(|(t, vars)| *t == "ego" && vars.contains(&"EGO_HOME"))
+        );
     }
 
     #[test]
