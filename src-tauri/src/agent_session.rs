@@ -12,6 +12,7 @@
 //! | gemini | `~/.gemini/tmp/<hash>/chats/session-*.json` | JSON `sessionId` field |
 //! | codex  | `~/.codex/sessions/YYYY/MM/DD/rollout-*-<UUID>.jsonl` | UUID in filename |
 //! | goose  | SQLite `~/Library/Application Support/Block/goose/sessions/sessions.db` | name field (TUIC_SESSION) |
+//! | ego    | `$EGO_HOME/sessions/<UUID>/lease` (`{"pid","heartbeat"}`, exact pid binding), default `~/.ego/sessions` | UUID directory name |
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -94,6 +95,7 @@ fn discover_session_id(
         // Shell wrapper injects --name $TUIC_SESSION for deterministic binding.
         "goose" => None,
         "grok" => discover_grok_session(cwd, claimed_ids, agent_pid),
+        "ego" => discover_ego_session(agent_pid, env.get("EGO_HOME").map(|s| s.as_str())),
         _ => None,
     }
 }
@@ -216,6 +218,7 @@ const AGENT_ENV_VARS: &[(&str, &[&str])] = &[
     ("gemini", &["GEMINI_CLI_HOME"]),
     ("codex", &["CODEX_HOME"]),
     ("opencode", &["OPENCODE_DATA_DIR"]),
+    ("ego", &["EGO_HOME"]),
 ];
 
 /// Read session-relevant env vars from a running agent process.
@@ -684,6 +687,7 @@ pub(crate) fn verify_agent_session(
         "codex" => verify_codex_session(&session_id, env.get("CODEX_HOME").map(|s| s.as_str())),
         "goose" => verify_goose_session(),
         "grok" => verify_grok_session(&session_id, &cwd),
+        "ego" => verify_ego_session(&session_id, env.get("EGO_HOME").map(|s| s.as_str())),
         _ => false,
     }
 }
@@ -884,6 +888,58 @@ fn verify_grok_session(session_id: &str, cwd: &str) -> bool {
     dir.join(session_id).is_dir()
 }
 
+// ─── ego ──────────────────────────────────────────────────────────────────────
+
+/// ego's session store: `$EGO_HOME/sessions`, default `~/.ego/sessions`. Each
+/// session is a UUID-named directory.
+fn ego_sessions_dir(ego_home: Option<&str>) -> Option<PathBuf> {
+    match ego_home {
+        Some(home) => Some(PathBuf::from(home).join("sessions")),
+        None => dirs::home_dir().map(|h| h.join(".ego").join("sessions")),
+    }
+}
+
+/// The session whose `lease` file names `pid`.
+///
+/// ego writes `{"pid":<n>,"heartbeat":<ms>}` to `<session>/lease` while a process
+/// holds the session, which is the exact pid→session binding (no "newest file"
+/// guess). The file outlives its process, so a dead holder is rejected by the
+/// caller's pid (the live agent pid never matches it) except under pid reuse; the
+/// most recent heartbeat wins then.
+fn ego_session_for_pid(sessions_dir: &Path, pid: u32) -> Option<String> {
+    std::fs::read_dir(sessions_dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_string();
+            if !is_uuid(&name) {
+                return None;
+            }
+            let lease: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(entry.path().join("lease")).ok()?)
+                    .ok()?;
+            if lease.get("pid")?.as_u64()? != u64::from(pid) {
+                return None;
+            }
+            Some((lease.get("heartbeat")?.as_u64()?, name))
+        })
+        .max()
+        .map(|(_, name)| name)
+}
+
+/// ego has no per-cwd layout and no fallback: without a pid there is no honest
+/// binding, and `ego resume` with no id already continues the workspace's latest.
+fn discover_ego_session(agent_pid: Option<u32>, ego_home: Option<&str>) -> Option<String> {
+    ego_session_for_pid(&ego_sessions_dir(ego_home)?, agent_pid?)
+}
+
+/// Check if `<sessions>/<session_id>/manifest.json` exists.
+fn verify_ego_session(session_id: &str, ego_home: Option<&str>) -> bool {
+    is_uuid(session_id)
+        && ego_sessions_dir(ego_home)
+            .is_some_and(|dir| dir.join(session_id).join("manifest.json").is_file())
+}
+
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
 /// Return true if `s` matches the UUID format: 8-4-4-4-12 lowercase hex with dashes.
@@ -1052,6 +1108,103 @@ mod tests {
             })
             .collect();
         serde_json::Value::Array(arr).to_string()
+    }
+
+    /// Lay out an ego store the way ego writes it: `<uuid>/lease` + `manifest.json`.
+    fn ego_store(leases: &[(&str, u32, u64)]) -> TempDir {
+        let dir = TempDir::new().unwrap();
+        for (id, pid, heartbeat) in leases {
+            let session = dir.path().join(id);
+            fs::create_dir(&session).unwrap();
+            fs::write(session.join("manifest.json"), "{}").unwrap();
+            fs::write(
+                session.join("lease"),
+                format!(r#"{{"pid":{pid},"heartbeat":{heartbeat}}}"#),
+            )
+            .unwrap();
+        }
+        dir
+    }
+
+    const EGO_A: &str = "01a02491-6a90-7ae2-9089-fd6a8532eb82";
+    const EGO_B: &str = "01a02491-81eb-79e3-975e-af01974e86cb";
+
+    /// Catches: two ego tabs in one workspace both resuming the newest session
+    /// (what a "newest unclaimed" scan would do) instead of their own.
+    #[test]
+    fn test_ego_session_for_pid_picks_the_session_leased_to_that_pid() {
+        let dir = ego_store(&[(EGO_A, 111, 5), (EGO_B, 222, 9)]);
+        assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_A));
+        assert_eq!(ego_session_for_pid(dir.path(), 222).as_deref(), Some(EGO_B));
+        assert_eq!(ego_session_for_pid(dir.path(), 333), None);
+    }
+
+    /// Catches: a recycled pid binding a tab to a dead process's older session.
+    #[test]
+    fn test_ego_session_for_pid_prefers_the_latest_heartbeat() {
+        let dir = ego_store(&[(EGO_A, 111, 9), (EGO_B, 111, 5)]);
+        assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_A));
+    }
+
+    /// Catches: a corrupt lease or a stray non-session entry aborting discovery.
+    #[test]
+    fn test_ego_session_for_pid_skips_corrupt_leases_and_non_session_entries() {
+        let dir = ego_store(&[(EGO_B, 111, 5)]);
+        let broken = dir.path().join(EGO_A);
+        fs::create_dir(&broken).unwrap();
+        fs::write(broken.join("lease"), "not json").unwrap();
+        fs::create_dir(dir.path().join("not-a-uuid")).unwrap();
+        fs::write(
+            dir.path().join("not-a-uuid").join("lease"),
+            r#"{"pid":111,"heartbeat":99}"#,
+        )
+        .unwrap();
+        assert_eq!(ego_session_for_pid(dir.path(), 111).as_deref(), Some(EGO_B));
+    }
+
+    /// Catches: discovery guessing a session when the agent pid is unknown.
+    #[test]
+    fn test_discover_ego_session_resolves_under_ego_home_and_needs_a_pid() {
+        let home = TempDir::new().unwrap();
+        let sessions = ego_store(&[(EGO_A, 111, 5)]);
+        fs::rename(sessions.path().join(EGO_A), {
+            fs::create_dir(home.path().join("sessions")).unwrap();
+            home.path().join("sessions").join(EGO_A)
+        })
+        .unwrap();
+        let home = home.path().to_str().unwrap();
+        assert_eq!(
+            discover_ego_session(Some(111), Some(home)).as_deref(),
+            Some(EGO_A)
+        );
+        assert_eq!(discover_ego_session(None, Some(home)), None);
+    }
+
+    /// Catches: resume of an id whose session directory is gone, and a path
+    /// traversal through a non-UUID id.
+    #[test]
+    fn test_verify_ego_session_requires_an_existing_uuid_session() {
+        let home = TempDir::new().unwrap();
+        let sessions = home.path().join("sessions");
+        fs::create_dir(&sessions).unwrap();
+        let session = sessions.join(EGO_A);
+        fs::create_dir(&session).unwrap();
+        fs::write(session.join("manifest.json"), "{}").unwrap();
+        let home = home.path().to_str().unwrap();
+        assert!(verify_ego_session(EGO_A, Some(home)));
+        assert!(!verify_ego_session(EGO_B, Some(home)));
+        assert!(!verify_ego_session("../sessions", Some(home)));
+    }
+
+    /// Catches: ego missing from the env table, so a session under a custom
+    /// `EGO_HOME` is looked up in `~/.ego` and never found.
+    #[test]
+    fn test_ego_home_is_a_session_env_var() {
+        assert!(
+            AGENT_ENV_VARS
+                .iter()
+                .any(|(t, vars)| *t == "ego" && vars.contains(&"EGO_HOME"))
+        );
     }
 
     #[test]

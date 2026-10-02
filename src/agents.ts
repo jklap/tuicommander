@@ -11,6 +11,7 @@ export type AgentType =
 	| "grok"
 	| "droid"
 	| "pi"
+	| "ego"
 	| "git"
 	| "api";
 
@@ -27,6 +28,7 @@ export const AGENT_TYPES: readonly AgentType[] = [
 	"grok",
 	"droid",
 	"pi",
+	"ego",
 	"git",
 	"api",
 ] as const;
@@ -313,6 +315,25 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 			prompt: [/\[y\/n\]/i],
 		},
 	},
+	ego: {
+		type: "ego",
+		name: "ego",
+		binary: "ego",
+		// The terminal CLI only. The AI Chat ego runs over ACP and is not an AgentType.
+		description: "ego coding agent (terminal CLI)",
+		defaultHeadlessTemplate: 'ego run "{prompt}"',
+		// `ego resume` with no id continues the latest session of this workspace.
+		resumeCommand: "ego resume",
+		sessionDiscovery: { resumeWithId: (id) => `ego resume ${id}` },
+		spawnArgs: (prompt) => [prompt],
+		outputFormat: "text",
+		detectPatterns: {
+			rateLimit: [/rate.?limit/i, /429/, /too many requests/i],
+			completion: [],
+			error: [/error:/i, /failed:/i],
+			prompt: [],
+		},
+	},
 	git: {
 		type: "git",
 		name: "Git",
@@ -425,6 +446,8 @@ export const MCP_SUPPORT: Record<AgentType, boolean> = {
 	// auto-install waits for the adapter's ~/.pi/agent/mcp.json; Install here is
 	// explicit, so it writes the file.
 	pi: true,
+	// ego registers MCP servers with its own `ego mcp add`; TUIC writes no config for it.
+	ego: false,
 	git: false,
 	api: false,
 };
@@ -447,6 +470,8 @@ export const HOOK_SUPPORT: Record<AgentType, boolean> = {
 	// pi exposes lifecycle events to extensions, but TUIC has no managed installer for
 	// them yet — its screen adapter covers busy/idle without instrumentation.
 	pi: false,
+	// ego reports state natively over OSC 7770 — there is no hook to install.
+	ego: false,
 	git: false,
 	api: false,
 };
@@ -464,6 +489,7 @@ export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string }> =
 	grok: { icon: "G", color: "#1a1a1a" },
 	droid: { icon: "D", color: "#f97316" },
 	pi: { icon: "π", color: "#c4a7e7" },
+	ego: { icon: "ɛ", color: "#38bdf8" },
 	git: { icon: "G", color: "#f05032" },
 	api: { icon: "⚡", color: "#06b6d4" },
 };
