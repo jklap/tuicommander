@@ -135,7 +135,17 @@ export interface SpeechStatus {
 	rendering: boolean;
 	/** Audio is playing. */
 	speaking: boolean;
+	/** A reply is held mid-playback and `resume_speech` continues it; `speaking` is false meanwhile. */
+	paused: boolean;
 	lastError: string | null;
+}
+
+/** What the pill's playback controls show: pause + stop, play + stop, or nothing. */
+export type PlaybackState = "idle" | "speaking" | "paused";
+
+export function playbackState(speech: SpeechStatus | null): PlaybackState {
+	if (speech?.paused) return "paused";
+	return speech?.speaking ? "speaking" : "idle";
 }
 
 /**
@@ -527,6 +537,11 @@ function createDictationStore() {
 						...current,
 						rendering: event.payload.state === "rendering",
 						speaking: event.payload.state === "speaking",
+						// Only a reply starting or ending settles this; a push for a
+						// queued or rendering one says nothing about a held reply.
+						paused: ["speaking", "finished", "interrupted", "failed"].includes(event.payload.state)
+							? false
+							: current.paused,
 						lastError: event.payload.error ?? current.lastError,
 					}
 				: current,
@@ -572,6 +587,15 @@ function createDictationStore() {
 			}
 		}, 75);
 	};
+	const speechControl = async (command: "pause_speech" | "resume_speech" | "stop_speech"): Promise<void> => {
+		try {
+			setState("speech", await invoke<SpeechStatus>(command));
+		} catch (err) {
+			appLogger.warn("dictation", `${command} refused`, err);
+			await actions.refreshSpeechStatus();
+		}
+	};
+
 	const applyHandsFree = (status: HandsFreeStatus) => {
 		const earcon = turnEarcon(state.handsFree, status, isTauri() ? DESKTOP_AUDIO_OWNER : browserAudioOwner);
 		if (earcon && state.handsFreeEarcons) playEarcon(earcon);
@@ -1090,6 +1114,15 @@ function createDictationStore() {
 				appLogger.error("dictation", "Failed to get speech status", err);
 			}
 		},
+
+		/**
+		 * Pause, resume or stop the spoken reply. The backend answers with the
+		 * speaker's new state, which is stored as is; on a refusal the state is
+		 * re-read so the pill never keeps showing a button that no longer applies.
+		 */
+		pauseSpeech: () => speechControl("pause_speech"),
+		resumeSpeech: () => speechControl("resume_speech"),
+		stopSpeech: () => speechControl("stop_speech"),
 
 		/**
 		 * Bind hands-free to a terminal and open the microphone.

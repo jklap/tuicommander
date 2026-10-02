@@ -1126,8 +1126,9 @@ pub struct SpeechStatus {
     pub queued: usize,
     pub rendering: bool,
     pub speaking: bool,
-    /// A reply is held where it is, by the user or while the microphone hears
-    /// somebody. `speaking` is false meanwhile.
+    /// The user holds the reply where it is. `speaking` is false meanwhile.
+    /// The capture loop's own short hold for a verdict on a voice is not
+    /// reported here: the pill must keep offering Pause for it.
     pub paused: bool,
     /// The last synthesis or device failure, cleared by the next reply that
     /// works.
