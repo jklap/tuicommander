@@ -2071,15 +2071,30 @@ async fn fetch_review_thread_counts(
     repo: &str,
     pr_number: i64,
 ) -> Result<(ReviewThreadCounts, bool), String> {
-    let mut total = ReviewThreadCounts::default();
-    let mut after = serde_json::Value::Null;
-    for _ in 0..REVIEW_THREADS_MAX_PAGES {
+    walk_review_thread_pages(|after| async move {
         let variables = serde_json::json!({
             "owner": owner, "repo": repo, "number": pr_number, "after": after
         });
-        let data = graphql_with_retry(state, account, PR_REVIEW_THREADS_QUERY, variables, None)
+        graphql_with_retry(state, account, PR_REVIEW_THREADS_QUERY, variables, None)
             .await
-            .map_err(|e| format!("GraphQL review threads query failed: {e}"))?;
+            .map_err(|e| format!("GraphQL review threads query failed: {e}"))
+    })
+    .await
+}
+
+/// The page loop of [`fetch_review_thread_counts`]; `fetch_page` takes the `after` cursor and
+/// returns the GraphQL `data` of that page.
+async fn walk_review_thread_pages<F, Fut>(
+    mut fetch_page: F,
+) -> Result<(ReviewThreadCounts, bool), String>
+where
+    F: FnMut(serde_json::Value) -> Fut,
+    Fut: std::future::Future<Output = Result<serde_json::Value, String>>,
+{
+    let mut total = ReviewThreadCounts::default();
+    let mut after = serde_json::Value::Null;
+    for _ in 0..REVIEW_THREADS_MAX_PAGES {
+        let data = fetch_page(after).await?;
         let threads = &data["repository"]["pullRequest"]["reviewThreads"];
         let page = count_review_threads(&threads["nodes"]);
         total.bot += page.bot;
@@ -2100,6 +2115,11 @@ const SETTLED_THREADS_TTL: std::time::Duration = std::time::Duration::from_secs(
 /// github_poller.rs), so a rate-limited PR does not pay up to 10 failing calls every poll.
 const FAILED_WALK_RETRY: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// An entry exactly `limit` old is already stale.
+fn is_younger_than(age: std::time::Duration, limit: std::time::Duration) -> bool {
+    age < limit
+}
+
 /// The batch poll reads 50 threads per PR. For the PRs that have more, walk the remaining pages
 /// (that PR only) so the badge, the readiness verdict and the Ready notice see the real count;
 /// only a PR still truncated after the bound keeps "N+". A failed walk keeps the lower bound.
@@ -2117,7 +2137,7 @@ async fn settle_truncated_threads<W, Fut>(
     W: Fn(i64) -> Fut,
     Fut: std::future::Future<Output = Result<(ReviewThreadCounts, bool), String>>,
 {
-    cache.retain(|_, v| v.walked_at.elapsed() < SETTLED_THREADS_TTL);
+    cache.retain(|_, v| is_younger_than(v.walked_at.elapsed(), SETTLED_THREADS_TTL));
     for pr in statuses
         .iter_mut()
         .filter(|s| s.unresolved_threads_truncated)
@@ -2131,7 +2151,7 @@ async fn settle_truncated_threads<W, Fut>(
                 pr.settle_review_threads(hit.unresolved, hit.complete);
                 continue;
             }
-            if hit.walked_at.elapsed() < FAILED_WALK_RETRY {
+            if is_younger_than(hit.walked_at.elapsed(), FAILED_WALK_RETRY) {
                 continue;
             }
         }
@@ -7378,5 +7398,188 @@ mod settled_threads_critic5_tests {
         settle_truncated_threads(&cache, "h/o", "r", &mut prs, walk_ok(&walks, 3)).await;
         assert_eq!(walks.load(Ordering::SeqCst), 2);
         assert_eq!(prs[0].unresolved_threads, 3);
+    }
+}
+
+/// Kills the surviving mutants of #1366-ea64 in the review-thread walk, the stale-entry
+/// boundary and the PR action entry points.
+#[cfg(test)]
+mod pr_panel_mutant_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    fn thread(resolved: bool, author_type: &str) -> serde_json::Value {
+        serde_json::json!({
+            "isResolved": resolved,
+            "comments": {"nodes": [{"author": {"__typename": author_type, "login": "a"}}]}
+        })
+    }
+
+    fn page(nodes: Vec<serde_json::Value>, next_cursor: Option<&str>) -> serde_json::Value {
+        serde_json::json!({"repository": {"pullRequest": {"reviewThreads": {
+            "pageInfo": {"hasNextPage": next_cursor.is_some(), "endCursor": next_cursor},
+            "nodes": nodes
+        }}}})
+    }
+
+    /// Runs the page walk over canned pages (the last one repeats) and records the cursors it sent.
+    async fn walk(
+        pages: Vec<serde_json::Value>,
+    ) -> (
+        Result<(ReviewThreadCounts, bool), String>,
+        Vec<serde_json::Value>,
+    ) {
+        let cursors = Mutex::new(Vec::new());
+        let result = walk_review_thread_pages(|after| {
+            let mut sent = cursors.lock().unwrap();
+            let index = sent.len().min(pages.len() - 1);
+            sent.push(after);
+            std::future::ready(Ok(pages[index].clone()))
+        })
+        .await;
+        (result, cursors.into_inner().unwrap())
+    }
+
+    /// Catches (fetch_review_thread_counts): `+=` -> `-=`/`*=` on the bot and human totals
+    /// (2085/2086) and `!= Some(true)` -> `==` (2087): totals must add up across pages, the walk
+    /// must follow `endCursor` and stop at the page that has no next page.
+    #[tokio::test]
+    async fn review_thread_counts_sum_pages_and_flag_truncation() {
+        let (result, cursors) = walk(vec![
+            page(
+                vec![
+                    thread(false, "User"),
+                    thread(false, "User"),
+                    thread(false, "Bot"),
+                    thread(true, "User"),
+                ],
+                Some("c1"),
+            ),
+            page(
+                vec![
+                    thread(false, "User"),
+                    thread(false, "Bot"),
+                    thread(false, "Bot"),
+                ],
+                None,
+            ),
+        ])
+        .await;
+
+        let (counts, complete) = result.expect("walk");
+        assert_eq!((counts.human, counts.bot), (3, 3));
+        assert!(complete, "the last page was reached");
+        assert_eq!(cursors, vec![serde_json::Value::Null, "c1".into()]);
+    }
+
+    /// Catches (2087 `!=` -> `==`): a single page with no next page being walked again, and a
+    /// missing `hasNextPage` being read as "more pages".
+    #[tokio::test]
+    async fn a_last_page_ends_the_walk_even_without_a_has_next_page_field() {
+        let (result, cursors) = walk(vec![serde_json::json!({"repository": {"pullRequest": {
+            "reviewThreads": {"nodes": [thread(false, "User")]}
+        }}})])
+        .await;
+
+        let (counts, complete) = result.expect("walk");
+        assert_eq!((counts.human, counts.bot), (1, 0));
+        assert!(complete);
+        assert_eq!(cursors.len(), 1);
+    }
+
+    /// Catches (fetch_review_thread_counts whole-fn `Ok((Default, true))` is covered by the
+    /// breaker test below): the page bound ending the walk with `complete = false` and the counts
+    /// gathered so far, instead of looping on or reporting a complete walk.
+    #[tokio::test]
+    async fn walk_stops_at_the_page_bound_and_reports_a_lower_bound() {
+        let (result, cursors) = walk(vec![page(vec![thread(false, "User")], Some("more"))]).await;
+
+        let (counts, complete) = result.expect("walk");
+        assert_eq!(counts.human as usize, REVIEW_THREADS_MAX_PAGES);
+        assert!(!complete, "the bound ran out before the last page");
+        assert_eq!(cursors.len(), REVIEW_THREADS_MAX_PAGES);
+    }
+
+    /// Catches (fetch_review_thread_counts whole-fn `Ok((Default, true))`): the public walk
+    /// swallowing a failed GraphQL call as "no unresolved threads, complete". The open breaker
+    /// refuses the call before any request is sent.
+    #[tokio::test]
+    async fn fetch_review_thread_counts_surfaces_a_refused_graphql_call() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+        state.github.circuit_breaker.record_rate_limit(60);
+
+        let err = fetch_review_thread_counts(&state, &account, "o", "r", 1)
+            .await
+            .expect_err("an open breaker must fail the walk");
+        assert!(
+            err.starts_with("GraphQL review threads query failed:"),
+            "{err}"
+        );
+    }
+
+    /// Catches (2120 and 2134 `<` -> `<=`): an entry exactly at the TTL or the failed-retry
+    /// delay still counting as fresh, so it is trusted one more poll.
+    #[test]
+    fn an_entry_exactly_at_the_limit_is_stale() {
+        for limit in [SETTLED_THREADS_TTL, FAILED_WALK_RETRY] {
+            assert!(is_younger_than(
+                limit - std::time::Duration::from_millis(1),
+                limit
+            ));
+            assert!(!is_younger_than(limit, limit));
+            assert!(!is_younger_than(
+                limit + std::time::Duration::from_millis(1),
+                limit
+            ));
+        }
+    }
+
+    /// Catches (poll_one_account `Ok(())`): a poll whose GraphQL call was refused reporting
+    /// success, so the poller records a clean cycle and never backs off.
+    #[tokio::test]
+    async fn poll_one_account_reports_a_refused_graphql_call() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+        state.github.circuit_breaker.record_rate_limit(60);
+        let mut prs = std::collections::HashMap::new();
+        let mut issues = std::collections::HashMap::new();
+
+        let err = poll_one_account(
+            &state,
+            &account,
+            None,
+            &[("/p".into(), "o".into(), "r".into())],
+            false,
+            "disabled",
+            false,
+            &mut prs,
+            &mut issues,
+        )
+        .await
+        .expect_err("an open breaker must fail the poll");
+        assert!(err.contains("rate-limit"), "{err}");
+        assert!(prs.is_empty() && issues.is_empty());
+    }
+
+    /// Catches (get_pr_review_threads_impl whole-fn `Ok(Default)`): a path with no GitHub remote
+    /// reading as "zero unresolved threads".
+    #[tokio::test]
+    async fn review_threads_of_a_path_without_a_github_remote_is_an_error() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let err = get_pr_review_threads_impl("/nonexistent", 1, &state)
+            .await
+            .expect_err("no remote, no threads");
+        assert_eq!(err, "No GitHub remote");
+    }
+
+    /// Catches (close_pr_impl `Ok(())`): closing a PR of a repo that resolves to no GitHub
+    /// account reporting success without any request.
+    #[tokio::test]
+    async fn close_pr_of_an_unresolvable_repo_is_an_error() {
+        let state = crate::state::tests_support::make_test_app_state();
+        close_pr_impl("/nonexistent", 1, &state)
+            .await
+            .expect_err("nothing was closed, so it must not succeed");
     }
 }
