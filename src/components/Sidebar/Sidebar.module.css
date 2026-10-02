@@ -232,6 +232,7 @@
 .content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 4px 0;
 }
 
@@ -1569,10 +1570,12 @@
     height: 36px;
   }
 
-  /* The repo name has priority, like a branch name: it keeps its full width and
-     the action cluster gives way (tighter gaps, no extra margin on +). */
+  /* The repo name has priority, like a branch name: the action cluster (which
+     never shrinks) gives way with tighter gaps and no extra margin on +. The name
+     itself still shrinks (ellipsis) when it cannot fit; `1 0 auto` made it as wide
+     as its text and the whole list scrolled sideways. */
   .sidebar[data-density="rich"] .repoName {
-    flex: 1 0 auto;
+    flex: 1 1 auto;
   }
 
   .sidebar[data-density="rich"] .repoActions {
