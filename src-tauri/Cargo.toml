@@ -4,6 +4,7 @@ members = [
     "crates/tuic-terminal",
     "crates/tuic-test-support",
     "crates/tuic-core",
+    "crates/tuic-ipc",
     "crates/tuic-git",
     "crates/tuic-dictation",
     "crates/tuic-bridge",
@@ -165,6 +166,7 @@ serde_json = "1"
 [dependencies]
 tuic-terminal = { path = "crates/tuic-terminal" }
 tuic-core = { path = "crates/tuic-core" }
+tuic-ipc = { path = "crates/tuic-ipc" }
 tuic-git = { path = "crates/tuic-git" }
 tuic-dictation = { path = "crates/tuic-dictation", optional = true }
 agent-client-protocol = { version = "=2.0.0", features = [
