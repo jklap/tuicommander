@@ -1026,39 +1026,41 @@ export async function initApp(deps: AppInitDeps) {
 	// Start tracking user activity (click/keydown) for PR display timeouts
 	deps.stores.startUserActivityListening();
 
-	// Restore active repo/branch from persisted state
-	const repoPaths = repositoriesStore.getPaths();
-	if (repoPaths.length > 0) {
-		// Use persisted active repo, falling back to first
-		const persistedActive = repositoriesStore.state.activeRepoPath;
-		const firstPath = persistedActive && repoPaths.includes(persistedActive) ? persistedActive : repoPaths[0];
-		const firstRepo = repositoriesStore.get(firstPath);
-		repositoriesStore.setActive(firstPath);
-		if (firstRepo?.activeWorkspaceId) {
-			if (survivingSessions.length > 0) {
-				const branch = firstRepo.workspaces[firstRepo.activeWorkspaceId];
-				const validTerminals = branch?.terminals.filter((id) => terminalsStore.getIds().includes(id)) || [];
-				if (validTerminals.length > 0) {
-					const remembered = branch?.lastActiveTerminal;
-					const target = remembered && validTerminals.includes(remembered) ? remembered : validTerminals[0];
-					appLogger.info(
-						"terminal",
-						`initApp RESTORE activeTerminal=${target} (remembered=${remembered}, valid=${JSON.stringify(validTerminals)})`,
-					);
-					terminalsStore.setActive(target);
+	try {
+		// Restore active repo/branch from persisted state
+		const repoPaths = repositoriesStore.getPaths();
+		if (repoPaths.length > 0) {
+			// Use persisted active repo, falling back to first
+			const persistedActive = repositoriesStore.state.activeRepoPath;
+			const firstPath = persistedActive && repoPaths.includes(persistedActive) ? persistedActive : repoPaths[0];
+			const firstRepo = repositoriesStore.get(firstPath);
+			repositoriesStore.setActive(firstPath);
+			if (firstRepo?.activeWorkspaceId) {
+				if (survivingSessions.length > 0) {
+					const branch = firstRepo.workspaces[firstRepo.activeWorkspaceId];
+					const validTerminals = branch?.terminals.filter((id) => terminalsStore.getIds().includes(id)) || [];
+					if (validTerminals.length > 0) {
+						const remembered = branch?.lastActiveTerminal;
+						const target = remembered && validTerminals.includes(remembered) ? remembered : validTerminals[0];
+						appLogger.info(
+							"terminal",
+							`initApp RESTORE activeTerminal=${target} (remembered=${remembered}, valid=${JSON.stringify(validTerminals)})`,
+						);
+						terminalsStore.setActive(target);
+					} else {
+						await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
+					}
 				} else {
+					// Eagerly restore terminals when a pane layout was loaded from disk —
+					// the layout references terminal IDs that must exist for panes to render.
+					// Without this, the split layout shows empty boxes after a fresh start.
 					await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
 				}
-			} else {
-				// Eagerly restore terminals when a pane layout was loaded from disk —
-				// the layout references terminal IDs that must exist for panes to render.
-				// Without this, the split layout shows empty boxes after a fresh start.
-				await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
 			}
 		}
+	} finally {
+		mdTabsStore.restoreAfterReload();
 	}
-
-	mdTabsStore.restoreAfterReload();
 
 	// Lazy restore: don't create terminals on startup.
 	// Terminals are restored when user clicks a branch in the sidebar.
