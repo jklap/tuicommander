@@ -15,6 +15,8 @@ mod log_routes;
 pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod plugin_routes;
+mod remote_mcp_sessions;
+pub(crate) mod remote_peer;
 mod remote_session_proxy;
 mod request_boundary;
 pub(crate) mod session;
@@ -391,6 +393,7 @@ async fn post_progress_report(
 #[derive(serde::Deserialize)]
 struct SubmitAgentReplyRequest {
     input: String,
+    timeout_ms: Option<u64>,
 }
 
 /// Browser counterpart of the managed session `submit` action. Both transports
@@ -418,7 +421,7 @@ async fn submit_agent_reply(
     }
     let result = mcp_transport::handle_session_submit(
         &state,
-        &serde_json::json!({"session_id": session_id, "input": body.input}),
+        &serde_json::json!({"session_id": session_id, "input": body.input, "timeout_ms": body.timeout_ms}),
         true,
     )
     .await;
@@ -888,6 +891,7 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 /// the per-router `/fs/read-editor*` handler down-scope (SECURITY).
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/mcp/peer", get(remote_peer::endpoint))
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
         // Shared on purpose: this is how a remote client escapes the header-only
@@ -2315,7 +2319,7 @@ fn evict_peers_for_reaped_mcp_session_locked(
         .map(|entry| entry.key().clone())
         .partition(|tuic| state.peer_identity_is_reapable(tuic));
     for tuic in &removed {
-        state.peer_agents.remove(tuic);
+        crate::mcp_http::remote_peer::unregister_peer(&state, tuic);
         state.orchestrator_peers.remove(tuic);
         state.active_agent_waiters.remove(tuic);
         let _ = state

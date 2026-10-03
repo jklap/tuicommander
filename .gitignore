@@ -65,6 +65,7 @@ scripts/*
 !scripts/ts-mutants.mjs
 !scripts/with-test-tmp.sh
 !scripts/test-nextest-fixture-scope.sh
+!scripts/test-remote-mcp.py
 !scripts/install-launch-shells.sh
 !scripts/test-shell-entrypoint.sh
 !scripts/test-append-only-merge.sh

@@ -1869,6 +1869,43 @@ The mobile companion UI (`/mobile`) uses the same HTTP/WebSocket infrastructure 
 
 The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop — no mobile-specific transport code.
 
+## Configured remote MCP ownership
+
+The desktop's native MCP session list includes the Rust remote mirror. Remote rows carry
+`connection_id` and `address` (`connection_id/session_id`). Session output and submit
+resolve that owner and use its configured HTTP URL and token. Output uses the daemon's
+native MCP cursor, redaction and exited-session contract through `format=mcp` or
+`format=mcp_raw`; submit uses the authenticated semantic submit endpoint.
+
+Peer discovery includes local and connected remote registries. Use a returned peer
+`address`, or pass `connection_id` with `to`. `local/id` addresses the desktop.
+The desktop opens an authenticated `/mcp/peer` WebSocket to each configured daemon.
+This duplex mail link carries register, list_peers, send, inbox and wait only; process
+creation is excluded. A daemon sends to the desktop or another daemon through the hub.
+The authenticated link determines sender provenance. Destination delivery reuses native
+inbox and wake handling, preserving the message body in the inbox.
+
+Local mail survives hub loss. Cross-host failure names the connection; uncertain
+acknowledgements must not be retried blindly. Lifecycle mail retains its message identity
+in the bounded native outbox until acknowledged. Reconnect retries those notices without
+duplicating an already retained destination message.
+
+Peer handshakes serialize per configured connection, so a mute daemon cannot hold
+mail calls to another host behind its network deadline. Session targets reject empty
+ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
+reads: each registered recipient keeps a FIFO ring of the last 100 forwarded
+message ids and fingerprints, shared across senders, without retaining message
+bodies. A retained id with a different sender or body is rejected as an identity
+collision. Recipient unregister removes that recipient's ring; sender retirement
+does not. Beyond the last 100 ids, a retry may be delivered twice, including when
+another sender's burst pushes its id out of the ring. There are no global budgets,
+host quotas or sender eviction rules.
+
+Disconnect retires that host's existing shadows synchronously, independently
+of a pending handshake or a later reconnect generation. The registered-recipient
+check and enqueue remain atomic with recipient retirement. This is a bounded
+replay horizon, not unbounded or restart-persistent exactly-once delivery.
+
 ## Telegram adapter groundwork
 
 The offline `telegram` module holds owner/config/API and SQLite inbound boundaries (story 1438-79b4). It is not started by desktop or daemon boot and registers no MCP tool yet. `MailPort` requires idempotent stable-ID insertion and safe wake from the future native-mail integration; consumption must be committed at the inbox read boundary. These integrations await 1419/1420. See [the approved design](../design/telegram-channel.md) for the proposed tool, authorization and receipt contract.

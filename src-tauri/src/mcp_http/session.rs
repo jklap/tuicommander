@@ -479,6 +479,28 @@ pub(super) async fn get_output(
 ) -> impl IntoResponse {
     let format = query.format.as_deref().unwrap_or("raw");
 
+    // Both local MCP and the remote proxy use the same serializer, including
+    // cursor windows, secret redaction and retained output after PTY exit.
+    if matches!(format, "mcp" | "mcp_raw") {
+        let result = super::mcp_transport::session_output(
+            &state,
+            &serde_json::json!({
+                "action": "output", "session_id": session_id,
+                "format": if format == "mcp_raw" { "raw" } else { "text" },
+                "limit": query.limit, "from_line": query.from_line,
+                "since_cursor": query.since_cursor,
+            }),
+        );
+        return (
+            if result.get("error").is_some() {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::OK
+            },
+            Json(result),
+        );
+    }
+
     // format=log: return VT100-extracted clean log lines (best for mobile/REST consumers)
     if format == "log" {
         let vt_log = match state.grid.vt_log_buffers.get(&session_id) {

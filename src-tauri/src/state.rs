@@ -2198,6 +2198,8 @@ pub struct AppState {
     /// Sessions running on connected remote machines, mirrored from their own
     /// `GET /sessions` and `/events` so they raise the same badges as local ones.
     pub(crate) remote_sessions: crate::remote_mirror::RemoteSessions,
+    /// Duplex, authenticated agent mail links through this desktop hub.
+    pub(crate) remote_mail: crate::mcp_http::remote_peer::RemoteMail,
     /// Task registry for long-running MCP orchestration. Survives client
     /// reconnects, so an orchestrator is not bound by the 300s wait ceiling.
     pub(crate) tasks: Arc<crate::tasks::TaskRegistry>,
@@ -2428,7 +2430,9 @@ impl AppState {
 
     pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) -> u64 {
         self.track_blocked_hold(recipient, &msg);
-        self.store_agent_inbox(recipient, msg)
+        let timestamp = self.store_agent_inbox(recipient, msg);
+        crate::mcp_http::remote_peer::notice_stored(self, recipient);
+        timestamp
     }
 
     /// `push_agent_inbox` without touching BLOCKED holds, for replaying mail that
@@ -3415,6 +3419,7 @@ impl AppState {
             tunnel_manager,
             remote: Default::default(),
             remote_sessions: Default::default(),
+            remote_mail: Default::default(),
             tunnel_audit,
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),

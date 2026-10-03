@@ -2728,3 +2728,38 @@ The following commands are accessible only via the Tauri `invoke()` bridge in th
 | `get_agent_mcp_status` | `agent_mcp.rs` | Check MCP config status for an agent |
 | `install_agent_mcp` | `agent_mcp.rs` | Install TUICommander MCP entry in agent config |
 | `remove_agent_mcp` | `agent_mcp.rs` | Remove TUICommander MCP entry from agent config |
+
+### Remote peer mail
+
+`GET /mcp/peer?connection_id=<configured-id>&token=<daemon-token>` upgrades to
+the desktop-initiated duplex peer-mail WebSocket. A real daemon token is required even
+on loopback. One hub is admitted per daemon. JSON frames use `kind:call` with
+`id`, `sender`, `arguments` and optional `message_id`, or `kind:reply` with
+`id` and `result`. Calls allow register/list_peers/send/inbox/wait; daemon-to-hub
+calls allow send/list_peers. Sender host is bound to the authenticated connection.
+Frames and outstanding requests are bounded; heartbeat loss closes the link.
+
+`GET /sessions/{id}/output?format=mcp|mcp_raw` returns the native MCP output object,
+including `exited`, cursor and truncation fields. It accepts `limit`, `from_line`
+and `since_cursor`. `POST /sessions/{id}/submit` also accepts `timeout_ms`.
+These are the configured remote desktop MCP adapters, sharing native backend behavior.
+
+Peer handshakes serialize per configured connection, so a mute daemon cannot hold
+mail calls to another host behind its network deadline. Session targets reject empty
+ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
+reads: it retains fingerprints of the last 100 forwarded ids per sender and registered
+recipient, without retaining message bodies. The cache holds at most 65,536
+ids globally and 1,024 per remote host. A host quota rejection names the host;
+one host cannot consume every other host's replay budget. Full 100-id windows
+can still rotate in place, and retained replays still deduplicate at either cap.
+
+There is no time expiry: the sender's outbox lives until acknowledgement.
+Only under global or host quota pressure, the cache reclaims all windows of
+the least-recently-active sender with no live peer shadow (within the pressured
+host when its quota is full). Live sender windows are never reclaimed.
+Sender retirement alone preserves dedupe; recipient unregister frees only
+that recipient's records and quota. Accepted risk: a departed sender that
+reconnects after pressure evicted its history can deliver one duplicate.
+Disconnect retires that host's existing shadows synchronously, independently
+of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
+not unbounded or restart-persistent exactly-once delivery.
