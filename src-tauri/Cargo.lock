@@ -9591,6 +9591,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tuic-ipc",
  "tuic-test-support",
 ]
 
@@ -9602,6 +9603,7 @@ dependencies = [
  "dirs",
  "serde_json",
  "tempfile",
+ "tuic-ipc",
  "tuic-test-support",
 ]
 
@@ -9621,6 +9623,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+ "tuic-ipc",
  "tuic-test-support",
  "uuid",
 ]
@@ -9676,6 +9679,14 @@ dependencies = [
  "tuic-test-support",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "tuic-ipc"
+version = "1.7.7"
+dependencies = [
+ "sha2 0.11.0",
+ "tuic-test-support",
 ]
 
 [[package]]
@@ -9806,6 +9817,7 @@ dependencies = [
  "tuic-core",
  "tuic-dictation",
  "tuic-git",
+ "tuic-ipc",
  "tuic-terminal",
  "tuic-test-support",
  "ulid",

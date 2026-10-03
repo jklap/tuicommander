@@ -48,6 +48,12 @@ environment assignment still beats a target-specific `?=`, so
 `TUIC_APP_INSTANCE=<id> make dev` keeps working and `make dev` announces the
 configuration directory it starts on — no check can see a developer's shell.
 
+The `tuic` CLI and `tuic-bridge` sidecar use the same immutable instance
+selection through `tuic-ipc`. Both accept `--instance <id>`, which takes
+precedence over `TUIC_APP_INSTANCE`. The CLI's background runner inherits that
+selection, so wake markers stay in the same instance directory. On Unix,
+`TUIC_SOCKET` takes precedence over automatic endpoint resolution.
+
 The credential namespace follows the same immutable selection. The default
 vault remains keyring service `tuicommander`, user `vault`; a named instance
 uses service `tuicommander-instance-<id>`, user `vault`. Named instances never
