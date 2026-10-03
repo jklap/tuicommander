@@ -32,7 +32,7 @@ test_tmp="$(mktemp -d "$test_tmp_base/tuic-run.XXXXXX")"
 # This root is disposable; physical traversal never changes symlink targets.
 cleanup_test_tmp() {
   local command_status=$?
-  chmod -R -P u+rwX "$test_tmp"
+  chmod -R u+rwX "$test_tmp"
   rm -rf "$test_tmp"
   return "$command_status"
 }
