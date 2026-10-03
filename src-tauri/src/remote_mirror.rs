@@ -1251,7 +1251,9 @@ mod tests {
         apply_frame(
             &state,
             "a",
-            &critic_toast(r#"{"title":"t","level":"info","sound":null,"origin_session_id":"peer-x"}"#),
+            &critic_toast(
+                r#"{"title":"t","level":"info","sound":null,"origin_session_id":"peer-x"}"#,
+            ),
         );
         let AppEvent::RemoteMirrored { payload, .. } = rx.try_recv().unwrap() else {
             panic!("missing toast");
