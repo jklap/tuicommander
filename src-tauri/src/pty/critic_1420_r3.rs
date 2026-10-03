@@ -52,10 +52,7 @@ fn discovered_agent_replacing_a_preset_is_still_revocable() {
     let sid = "critic-1420r3-replace";
     let probe = ForegroundIdentityProbe::new(state.clone(), sid, "codex");
     set_identity(&state, sid, Some("claude"), true);
-    assert_eq!(
-        refresh_session_agent(&state, sid).as_deref(),
-        Some("codex")
-    );
+    assert_eq!(refresh_session_agent(&state, sid).as_deref(), Some("codex"));
     let flag = state
         .session_maps
         .session_states
