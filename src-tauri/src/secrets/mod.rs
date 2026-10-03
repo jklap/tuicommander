@@ -12,6 +12,8 @@ mod tests;
 mod tests_critic1435;
 #[cfg(test)]
 mod tests_critic1435s;
+#[cfg(test)]
+mod tests_critic1435s3;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
