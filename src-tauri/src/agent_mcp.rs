@@ -461,7 +461,7 @@ fn install_bridge_binary(source: &std::path::Path) -> Result<PathBuf, String> {
     if bytes.is_empty() {
         return Err("Bridge became empty during installation".into());
     }
-    let revision = format!("{:x}", Sha256::digest(&bytes));
+    let revision = hex::encode(Sha256::digest(&bytes));
     let dir = crate::config::config_dir()
         .join("mcp-bridge")
         .join(revision);
@@ -3052,7 +3052,7 @@ mod tests {
         let blocked = config_dir
             .path()
             .join("mcp-bridge")
-            .join(format!("{:x}", Sha256::digest(bytes)));
+            .join(hex::encode(Sha256::digest(bytes)));
         std::fs::write(blocked, b"not a directory").unwrap();
         ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
         assert_eq!(std::fs::read(&spec.config_path).unwrap(), before);
@@ -4236,5 +4236,205 @@ mod tests {
                 "{agent} is in SUPPORTED_AGENTS but has no config spec",
             );
         }
+    }
+
+    // --- critic-1415: stable bridge installation ---
+
+    fn fake_bridge(dir: &std::path::Path, bytes: &[u8]) -> PathBuf {
+        let path = bridge_path_in(dir);
+        std::fs::write(&path, bytes).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    }
+
+    /// Catches: `matches()` trusting an existing destination whose bytes differ (a torn or
+    /// corrupted earlier copy), so config keeps naming a broken executable forever.
+    #[test]
+    fn install_repairs_a_corrupted_installed_revision() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"bridge bytes");
+        let installed = install_bridge_binary(&source).unwrap();
+        std::fs::write(&installed, b"torn").unwrap();
+        assert_eq!(install_bridge_binary(&source).unwrap(), installed);
+        assert_eq!(std::fs::read(&installed).unwrap(), b"bridge bytes");
+        assert!(usable_executable(&installed));
+    }
+
+    /// Catches: reusing an identical-bytes destination that lost its executable bit.
+    #[cfg(unix)]
+    #[test]
+    fn install_repairs_an_installed_revision_without_exec_bit() {
+        use std::os::unix::fs::PermissionsExt;
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"bridge bytes");
+        let installed = install_bridge_binary(&source).unwrap();
+        std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o600)).unwrap();
+        install_bridge_binary(&source).unwrap();
+        assert!(usable_executable(&installed));
+    }
+
+    /// Catches: installing an empty or non-executable source, which would publish a
+    /// command that fails at spawn, and leaving a revision directory behind.
+    #[cfg(unix)]
+    #[test]
+    fn install_rejects_empty_and_non_executable_sources_without_side_effects() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_guard, config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let empty = fake_bridge(dir.path(), b"");
+        assert!(install_bridge_binary(&empty).is_err());
+        std::fs::write(&empty, b"bytes").unwrap();
+        std::fs::set_permissions(&empty, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(install_bridge_binary(&empty).is_err());
+        assert!(!config_dir.path().join("mcp-bridge").exists());
+    }
+
+    /// Catches: two startups publishing the same revision concurrently and one failing
+    /// (rename race) or leaving a temp file next to the executable.
+    #[test]
+    fn concurrent_installs_of_one_revision_all_succeed_and_leave_one_file() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), &vec![7u8; 256 * 1024]);
+        let results: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| install_bridge_binary(&source)))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let first = results[0].clone().unwrap();
+        for result in &results {
+            assert_eq!(result.as_ref().unwrap(), &first);
+        }
+        assert_eq!(
+            std::fs::read_dir(first.parent().unwrap()).unwrap().count(),
+            1
+        );
+        assert!(usable_executable(&first));
+    }
+
+    /// Catches: a symlinked source (mbx target view) being linked rather than copied, so the
+    /// installed command still dies with the view.
+    #[cfg(unix)]
+    #[test]
+    fn install_copies_through_a_symlinked_source() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let real = fake_bridge(dir.path(), b"real bytes");
+        let view = dir.path().join("view");
+        std::fs::create_dir(&view).unwrap();
+        let link = bridge_path_in(&view);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let installed = install_bridge_binary(&link).unwrap();
+        assert!(
+            !installed
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        std::fs::remove_file(&real).unwrap();
+        assert_eq!(std::fs::read(&installed).unwrap(), b"real bytes");
+    }
+
+    /// Catches: a config already naming an older installed revision being treated as a
+    /// kept custom command, so a rebuilt bridge never reaches the agent config.
+    #[test]
+    fn startup_moves_config_from_old_installed_revision_to_the_new_one() {
+        let (_guard, _config) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"revision one");
+        let spec = spec_at(dir.path().join("claude.json"));
+        ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
+        let old = PathBuf::from(command_at_spec(&spec));
+        fake_bridge(dir.path(), b"revision two");
+        ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
+        let new = PathBuf::from(command_at_spec(&spec));
+        assert_ne!(new, old);
+        assert_eq!(std::fs::read(&new).unwrap(), b"revision two");
+        assert_eq!(std::fs::read(&old).unwrap(), b"revision one");
+    }
+
+    /// Catches: every startup rewriting an up-to-date agent config.
+    #[test]
+    fn startup_with_unchanged_bridge_leaves_config_bytes_alone() {
+        let (_guard, _config) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"revision one");
+        let spec = spec_at(dir.path().join("claude.json"));
+        ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
+        let first = std::fs::read(&spec.config_path).unwrap();
+        let modified = spec.config_path.metadata().unwrap().modified().unwrap();
+        ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
+        assert_eq!(std::fs::read(&spec.config_path).unwrap(), first);
+        assert_eq!(
+            spec.config_path.metadata().unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    /// Catches: the build-output test matching any working command under a `target`
+    /// directory instead of only a bridge-named one, clobbering a user's own wrapper.
+    #[test]
+    fn working_wrapper_under_a_target_directory_is_kept() {
+        let (_guard, _config) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"bridge");
+        let wrapper_dir = dir.path().join("target/release");
+        std::fs::create_dir_all(&wrapper_dir).unwrap();
+        let wrapper = wrapper_dir.join("my-wrapper");
+        std::fs::write(&wrapper, b"wrapper").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let spec = spec_at(dir.path().join("claude.json"));
+        assert!(ensure_spec_entry(
+            &spec,
+            wrapper.to_str().unwrap(),
+            "claude"
+        ));
+        ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
+        assert_eq!(command_at_spec(&spec), wrapper.to_str().unwrap());
+    }
+
+    /// Catches: explicit install keeping a working legacy build-output command (the old
+    /// `command != bridge_path` rule), so Settings > Agents never migrates it.
+    #[test]
+    fn explicit_install_replaces_a_working_target_command() {
+        let (_guard, _config) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let build = dir.path().join("target/debug");
+        std::fs::create_dir_all(&build).unwrap();
+        let legacy = fake_bridge(&build, b"bridge");
+        let installed = install_bridge_binary(&legacy).unwrap();
+        let spec = spec_at(dir.path().join("claude.json"));
+        assert!(ensure_spec_entry(&spec, legacy.to_str().unwrap(), "claude"));
+        install_spec(&spec, installed.to_str().unwrap(), "claude").unwrap();
+        assert_eq!(command_at_spec(&spec), installed.to_str().unwrap());
+    }
+
+    /// Catches: a config naming an installed revision whose file was deleted being kept
+    /// as "custom", leaving the agent with ENOENT.
+    #[test]
+    fn startup_repairs_a_config_naming_a_deleted_installed_revision() {
+        let (_guard, _config) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"bridge");
+        let spec = spec_at(dir.path().join("claude.json"));
+        ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
+        let installed = PathBuf::from(command_at_spec(&spec));
+        std::fs::remove_dir_all(installed.parent().unwrap()).unwrap();
+        ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
+        assert!(usable_executable(std::path::Path::new(&command_at_spec(
+            &spec
+        ))));
     }
 }
