@@ -2107,7 +2107,10 @@ mod tests {
         assert!(output.player.is_paused(), "pause did not reach the player");
 
         output.resume();
-        assert!(!output.player.is_paused(), "resume did not reach the player");
+        assert!(
+            !output.player.is_paused(),
+            "resume did not reach the player"
+        );
     }
 
     /// Catches: `DeviceOutput::stop` doing nothing, which leaves a paused

@@ -4860,7 +4860,10 @@ mod tests {
         input.extend(silence(600));
         let closed = segmenter.push(&input);
         assert_eq!(closed.len(), 1, "the test needs one closed utterance");
-        assert!(closed[0].speech_ms >= 100, "enough summed speech to be sent");
+        assert!(
+            closed[0].speech_ms >= 100,
+            "enough summed speech to be sent"
+        );
         assert!(!segmenter.is_voice(&closed[0]));
 
         let sustained = closed_utterance(&[speech(500)]);
