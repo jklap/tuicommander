@@ -28,7 +28,15 @@ if [[ -d "$shared_socket_parent" ]]; then
     -name 's????????????????' -mtime +6 -print0)
 fi
 test_tmp="$(mktemp -d "$test_tmp_base/tuic-run.XXXXXX")"
-trap 'rm -rf "$test_tmp"' EXIT
+# Real permission tests may leave unreadable directories or read-only files.
+# This root is disposable; physical traversal never changes symlink targets.
+cleanup_test_tmp() {
+  local command_status=$?
+  chmod -R -P u+rwX "$test_tmp"
+  rm -rf "$test_tmp"
+  return "$command_status"
+}
+trap cleanup_test_tmp EXIT
 export TMPDIR="$test_tmp/"
 export TMP="$test_tmp/"
 export TEMP="$test_tmp/"
