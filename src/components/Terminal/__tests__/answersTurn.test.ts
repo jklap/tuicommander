@@ -292,7 +292,18 @@ describe("readAnswersHistory", () => {
 			"💬 Worktrees: I closed the 5 that were finished:",
 			"💬 The ones still open each have a reason:",
 		]);
-		expect(answers[0]).toMatch(/fixing it\.$/);
+		expect(answers[0]).toBe(
+			[
+				"💬 Green bar in the terminal scrollbar: green is the colour TUIC uses to mark the",
+				"line where you sent a prompt, one 2-pixel tick per prompt",
+				"(src/components/Terminal/scrollbarMarks.ts). A solid band means hundreds of those",
+				"ticks are bunched together at the bottom. Either far too many prompts get recorded",
+				"(for example Claude Code redrawing its input box), or their positions are calculated",
+				"against a different line count than the scrollbar uses. I haven't proven which.",
+				"Story 1388 is open and the tuic-1388 agent is finding the cause with evidence before",
+				"fixing it.",
+			].join("\n"),
+		);
 		expect(answers[1]).toMatch(/gate status per repo\.$/);
 		expect(answers[2]).toMatch(/so TUIC sees them as unmerged\.$/);
 	});

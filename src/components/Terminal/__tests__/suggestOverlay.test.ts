@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DecodedRow } from "../canvasTerminalUtils";
 import { rowText } from "../canvasTerminalUtils";
 import {
+	answerExtent,
 	continuationRowsAfterSuggest,
 	isSuggestBlock,
 	paintOverlayBlocks,
@@ -264,13 +265,14 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 	});
 
 	it("starts a new answer at a second marker instead of extending the first", () => {
+		// catches: the marker break deleted from answerExtent, so the first answer swallows the second
 		const get = rows([
 			["⏺ 💬 First.", false],
 			["  more first", false],
 			["⏺ 💬 Second.", false],
 		]);
-		expect(planSuggestOverlay(3, get).blocks.map((b) => b.row)).toEqual([0, 1, 2]);
-		expect(planSuggestOverlay(3, get).key).toBe("a0,a1,a2");
+		expect(answerExtent(0, 3, get)).toBe(1);
+		expect(answerExtent(2, 3, get)).toBe(2);
 	});
 
 	it("does not treat an emoji that a wrap lands on as a marker", () => {
