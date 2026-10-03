@@ -70,24 +70,7 @@ fn marker_path(caller: &str) -> Result<std::path::PathBuf, String> {
     let directory = if let Some(path) = std::env::var_os("TUIC_BG_WAKE_DIR") {
         std::path::PathBuf::from(path)
     } else {
-        let mut config = ipc::config_dir();
-        if let Ok(id) = std::env::var("TUIC_APP_INSTANCE")
-            && !id.is_empty()
-            && id != "default"
-        {
-            let bytes = id.as_bytes();
-            if id.len() > 63
-                || !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
-                || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
-                || !bytes
-                    .iter()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
-            {
-                return Err("Invalid TUIC_APP_INSTANCE for background wake marker".into());
-            }
-            config = config.join("instances").join(id);
-        }
-        config.join("bg-wakes")
+        ipc::config_dir().join("bg-wakes")
     };
     Ok(directory.join(format!("{caller}.json")))
 }
@@ -154,6 +137,9 @@ pub fn launch(log: &str, command: &[String]) -> Result<(), String> {
     )?;
 
     let mut runner = Command::new(exe);
+    if let Some(id) = tuic_ipc::app_instance::current_app_instance().named_id() {
+        runner.env(tuic_ipc::app_instance::APP_INSTANCE_ENV_VAR, id);
+    }
     runner
         .arg("__bg-runner")
         .arg(log)
