@@ -38,6 +38,7 @@ fn has_integration_receipt(flow: &Flow) -> bool {
         .any(|item| item.integration_receipt.is_some())
 }
 
+#[cfg(unix)]
 #[test]
 fn evil_merge_that_only_flips_a_file_mode_is_rejected() {
     // catches: comparing only blob content or file names, so a mode-only change in the merge commit is certified.
@@ -46,6 +47,7 @@ fn evil_merge_that_only_flips_a_file_mode_is_rejected() {
     let repo = canonical(&flow);
     git(&repo, &["merge", "--no-ff", "--no-commit", "story"]);
     {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let path = repo.join("story.txt");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
