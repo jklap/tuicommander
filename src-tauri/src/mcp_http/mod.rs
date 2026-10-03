@@ -1266,6 +1266,11 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/fs/copy-abs", post(fs_routes::copy_path_abs_http))
         .route("/fs/move-abs", post(fs_routes::move_path_abs_http))
         .route("/fs/transfer", post(fs_routes::fs_transfer_paths_http))
+        .route(
+            "/fs/transfer-remote",
+            post(fs_routes::fs_transfer_remote_paths_http),
+        )
+        .route("/fs/upload-copy", post(fs_routes::upload_copy_http))
         // Claude Usage dashboard
         .route("/claude/usage", get(claude_routes::claude_usage_api))
         .route(

@@ -1581,6 +1581,10 @@ Returns dynamic server instructions for the MCP bridge binary as `{"instructions
 
 ## Filesystem Endpoints
 
+`POST /fs/transfer-remote` takes `{ connectionId, destDir, paths, allowRecursive }` on the **sending** backend and returns `TransferResult`. It copies local sources to the connected daemon using the existing runtime endpoint/token. `needs_confirm=true` makes no remote writes. Existing names are skipped; errors identify the remote host and destination.
+
+`POST /fs/upload-copy?destDir=<absolute-directory>&name=<leaf-name>&directory=true|false` accepts a streamed, uncompressed tar body under the existing daemon authentication. All archive paths must start with `name`; only files and directories are accepted. Limits: 256 MiB of archive and extracted file data, 10,000 entries, two concurrent uploads. Destination resolution uses registered repository directory capabilities, rejects traversal and escapes through symlinks, and never follows a target symlink. Staging is removed on failure/disconnect; the completed top-level file or directory is published with a no-replace atomic rename. A concurrently created target is skipped. No new listener or credential is created.
+
 `POST /attachments/upload?kind=pty|acp&id=<session-or-connection-id>&name=<filename>`
 streams a binary request body into the target's working directory at
 `.tuic/attachments/<timestamp>-<safe-name>`. It returns `{ "path": "/absolute/path", "size": N }`.
