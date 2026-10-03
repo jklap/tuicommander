@@ -324,21 +324,6 @@ impl WorkflowStore {
         Ok(updated)
     }
 
-    /// Publish a revision that satisfies the graph execution contract.
-    /// The regular publication path remains available for legacy record-only definitions.
-    pub fn publish_executable(
-        &self,
-        id: &str,
-        expected_revision: i64,
-    ) -> Result<PublishedWorkflow, String> {
-        let draft = self.get_draft(id)?;
-        if draft.draft_revision != expected_revision {
-            return Err("workflow draft revision changed".into());
-        }
-        validate_executable_graph(&draft.graph, draft.kind, !draft.required_checks.is_empty())?;
-        self.publish(id, expected_revision)
-    }
-
     pub fn publish(
         &self,
         id: &str,

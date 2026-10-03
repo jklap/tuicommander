@@ -4479,3 +4479,5 @@ or credential is touched.
 
 
 - [ ] Workflow graph slice A (1446-ff21): after Boss rebuilds/restarts, inspect and cancel a pre-contract run; it must refuse Resume without changing its history. Graph runtime remains disabled. Targeted native store/replay tests cover the backend; the running desktop has not loaded these Rust changes.
+
+- [ ] After Boss restarts the desktop or rebuilds release: verify the native workflow graph runtime uses serial predecessor history and refuses pause resolution while effects are uncertain or input is pending (1446 slice A). Internal graph transitions remain unavailable on the public transport.

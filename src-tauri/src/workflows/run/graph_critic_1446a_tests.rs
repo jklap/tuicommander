@@ -3,8 +3,7 @@ use super::graph::*;
 use super::reducer::apply_event;
 use super::*;
 use crate::workflows::{
-    AgentRole, Edge, JoinMode, Node, NodeKind, PublishedWorkflow, WorkflowClosure, WorkflowGraph,
-    WorkflowKind, validate_executable_graph,
+    Edge, Node, NodeKind, PublishedWorkflow, WorkflowClosure, WorkflowGraph, WorkflowKind,
 };
 
 fn node(id: &str, kind: NodeKind) -> Node {
@@ -24,9 +23,7 @@ fn edge(from: &str, to: &str, outcome: Option<&str>) -> Edge {
 
 fn evidence() -> DecisionEvidence {
     DecisionEvidence {
-        actor: DecisionActor::Session {
-            session_id: "s".into(),
-        },
+        actor: "s".into(),
         reason: "r".into(),
         references: vec!["x".into()],
     }
@@ -113,7 +110,13 @@ fn resolve_pause_keeps_the_uncertain_effect_fence() {
         graph: pause_graph(),
         revision: run.definition_revision,
     };
-    let execution = GraphExecution::start("g1".into(), run.plan_id.clone(), definition).unwrap();
+    let execution = GraphExecution::start(
+        run.event_contract_version,
+        "g1".into(),
+        run.plan_id.clone(),
+        definition,
+    )
+    .unwrap();
     let mut s = step(
         run,
         RunEventKind::Graph {
@@ -191,19 +194,50 @@ fn resolve_pause_keeps_the_uncertain_effect_fence() {
             state: EffectState::Uncertain,
         },
     );
-    s = graph_step(
-        s,
-        GraphTransition::ResolvePause {
-            execution_id: e,
-            activation_id: "a2".into(),
-            resolution: PauseResolution::Retry {
-                reason: "go".into(),
+    let resolution = GraphTransition::ResolvePause {
+        execution_id: e,
+        activation_id: "a2".into(),
+        resolution: "go".into(),
+    };
+    let rejected = event(
+        &s,
+        RunEventKind::Graph {
+            event: GraphEvent::Transition {
+                transition: resolution.clone(),
             },
         },
     );
-    assert_eq!(
-        s.status,
-        RunStatus::Paused,
-        "an uncertain effect must still hold the run paused"
+    assert!(
+        apply_event(Some(s.clone()), &rejected)
+            .unwrap_err()
+            .contains("uncertain effects")
     );
+    // Answered input still cannot override an uncertain effect.
+    s.attempts.push(NodeAttempt {
+        id: "input".into(),
+        story_id: s.plan_id.clone(),
+        node_id: "judge".into(),
+        generation: 1,
+        state: AttemptState::Reported,
+        outcome: Some(AttemptOutcome::NeedsInput),
+        agent: None,
+        report: None,
+        input_answer: Some("answer".into()),
+    });
+    assert!(
+        apply_event(Some(s.clone()), &rejected)
+            .unwrap_err()
+            .contains("uncertain effects")
+    );
+    s.effects[0].state = EffectState::Succeeded;
+    s.attempts[0].input_answer = None;
+    assert!(
+        apply_event(Some(s.clone()), &rejected)
+            .unwrap_err()
+            .contains("human input")
+    );
+    s.attempts[0].input_answer = Some("answer".into());
+    let resumed = apply_event(Some(s), &rejected).unwrap();
+    assert_eq!(resumed.status, RunStatus::Running);
+    assert!(resumed.graph_executions[0].pauses[0].resolution.is_some());
 }

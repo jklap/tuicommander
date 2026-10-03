@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Workflow graph foundation** — Durable graph positions, predecessor tokens, decision provenance and repair counters now replay from pinned definitions. Executable validation requires final checks and explicit pause targets. This slice does not enable autonomous scheduling; older pre-contract runs remain inspectable and cancellable.
+- **Workflow graph foundation** — Durable serial graph positions, bounded predecessor history, decision provenance and repair counters now replay from pinned definitions. Executable validation requires final checks and explicit pause targets. This slice does not enable autonomous scheduling; older pre-contract runs remain inspectable and cancellable.
 
 - **MCP Markdown tabs** — Documents opened with `ui action=tab` survive UI reloads in the same window, including native recovery without an unload event. Reopening their stable id updates the restored tab without creating a duplicate.
 - **Remote terminal stream failures** — A stalled initial replay, unreadable frame or disconnected stream now shows a persistent error toast. Reconnect attempts remain bounded until a frame reaches the renderer.

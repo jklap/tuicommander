@@ -194,7 +194,7 @@ impl RunStore {
             require_nonempty_policy(&story_definition)?;
         }
         let initial = RunSnapshot {
-            event_contract_version: 2,
+            event_contract_version: super::graph::RUN_EVENT_CONTRACT_VERSION,
             id: Uuid::now_v7().to_string(),
             canonical_ref: git_output(Path::new(&owner), &["symbolic-ref", "HEAD"]).ok(),
             project: owner,
@@ -1421,7 +1421,7 @@ fn choose_event(
     if snapshot.event_contract_version == 0 && !matches!(command, RunCommand::Cancel) {
         return Err("legacy workflow runs support inspect and cancel only; start a new run".into());
     }
-    if snapshot.event_contract_version > 2 {
+    if snapshot.event_contract_version > super::graph::RUN_EVENT_CONTRACT_VERSION {
         return Err("unsupported workflow event contract".into());
     }
     if !snapshot.graph_executions.is_empty()
@@ -1495,6 +1495,12 @@ fn choose_event(
     }
     match command {
         RunCommand::Graph { transition } => {
+            if matches!(
+                transition,
+                super::graph::GraphTransition::ResolvePause { .. }
+            ) {
+                super::reducer::validate_resume(snapshot)?;
+            }
             let event = if let super::graph::GraphTransition::Start {
                 execution_id,
                 target_id,
@@ -1517,6 +1523,7 @@ fn choose_event(
                 }
                 super::graph::GraphEvent::Started {
                     execution: Box::new(super::graph::GraphExecution::start(
+                        snapshot.event_contract_version,
                         execution_id.clone(),
                         target_id.clone(),
                         definition,
@@ -2094,22 +2101,7 @@ fn choose_event(
         }
         RunCommand::Pause => Ok(RunEventKind::Paused),
         RunCommand::Resume => {
-            if snapshot.status != RunStatus::Paused {
-                return Err("workflow is not paused".into());
-            }
-            if snapshot
-                .effects
-                .iter()
-                .any(|effect| effect.state == EffectState::Uncertain)
-            {
-                return Err("uncertain effects need an explicit resolution".into());
-            }
-            if snapshot.attempts.iter().any(|attempt| {
-                attempt.outcome == Some(AttemptOutcome::NeedsInput)
-                    && attempt.input_answer.is_none()
-            }) {
-                return Err("human input is still pending".into());
-            }
+            super::reducer::validate_resume(snapshot)?;
             Ok(RunEventKind::Resumed)
         }
         RunCommand::Cancel => Ok(RunEventKind::Cancelled),

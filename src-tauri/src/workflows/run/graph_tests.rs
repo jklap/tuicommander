@@ -1,15 +1,13 @@
 use super::graph::*;
 use super::*;
 use crate::workflows::{
-    AgentRole, Edge, JoinMode, Node, NodeKind, WorkflowGraph, WorkflowKind, WorkflowStore,
+    AgentRole, Edge, Node, NodeKind, WorkflowGraph, WorkflowKind, WorkflowStore,
     validate_executable_graph,
 };
 
 fn evidence() -> DecisionEvidence {
     DecisionEvidence {
-        actor: DecisionActor::Session {
-            session_id: "reviewer-session".into(),
-        },
+        actor: "reviewer-session".into(),
         reason: "Recorded current review evidence".into(),
         references: vec!["review:current-artifact".into()],
     }
@@ -54,7 +52,7 @@ fn graph_fixture() -> (
         .update_draft(&story.id, story.draft_revision, story.graph)
         .unwrap();
     let published = definitions
-        .publish_executable(&story.id, story.draft_revision)
+        .publish(&story.id, story.draft_revision)
         .unwrap();
     let mut graph = plan.graph;
     for node in &mut graph.nodes {
@@ -75,9 +73,7 @@ fn graph_fixture() -> (
             published.required_checks.clone(),
         )
         .unwrap();
-    let published = definitions
-        .publish_executable(&plan.id, plan.draft_revision)
-        .unwrap();
+    let published = definitions.publish(&plan.id, plan.draft_revision).unwrap();
     let store = RunStore::open_at(&config.path().join("graph-runs.sqlite3")).unwrap();
     let run = store
         .start_plan(
@@ -260,6 +256,17 @@ fn judge_selects_one_published_edge_once() {
 #[test]
 fn pause_pins_resume_target_and_pending_request() {
     let (config, _project, store, run, story, _guard) = graph_fixture();
+    let reserved = store
+        .command(
+            &run.id,
+            "reserve-pause-effect",
+            RunCommand::ReserveEffect {
+                key: "pause-effect".into(),
+                kind: EffectKind::Notify,
+            },
+        )
+        .unwrap();
+    let effect_id = reserved.snapshot.effects[0].id.clone();
     start_graph(&store, &run.id, &story);
     reach_judge(&store, &run.id, true);
     visit(
@@ -295,7 +302,7 @@ fn pause_pins_resume_target_and_pending_request() {
         .update_draft(&draft.id, draft.draft_revision, graph)
         .unwrap();
     definitions
-        .publish_executable(&edited.id, edited.draft_revision)
+        .publish(&edited.id, edited.draft_revision)
         .unwrap();
     let reopened = RunStore::open_at(&config.path().join("graph-runs.sqlite3")).unwrap();
     assert_eq!(reopened.replay(&run.id).unwrap(), paused.snapshot);
@@ -309,9 +316,7 @@ fn pause_pins_resume_target_and_pending_request() {
         transition: GraphTransition::ResolvePause {
             execution_id: "story-execution".into(),
             activation_id: pause_id.clone(),
-            resolution: PauseResolution::Input {
-                answer: String::new(),
-            },
+            resolution: String::new(),
         },
     };
     assert!(
@@ -320,6 +325,32 @@ fn pause_pins_resume_target_and_pending_request() {
             .unwrap_err()
             .contains("empty")
     );
+    let fenced = reopened.reconcile(&run.id).unwrap();
+    assert_eq!(fenced.effects[0].state, EffectState::Uncertain);
+    let resolve = RunCommand::Graph {
+        transition: GraphTransition::ResolvePause {
+            execution_id: "story-execution".into(),
+            activation_id: pause_id.clone(),
+            resolution: "Current evidence supplied".into(),
+        },
+    };
+    assert!(
+        reopened
+            .command(&run.id, "uncertain-resume", resolve)
+            .unwrap_err()
+            .contains("uncertain effects")
+    );
+    assert_eq!(reopened.snapshot(&run.id).unwrap(), fenced);
+    reopened
+        .command(
+            &run.id,
+            "resolve-pause-effect",
+            RunCommand::ResolveUncertainEffect {
+                effect_id,
+                succeeded: true,
+            },
+        )
+        .unwrap();
     let resumed = transition(
         &reopened,
         &run.id,
@@ -327,11 +358,10 @@ fn pause_pins_resume_target_and_pending_request() {
         GraphTransition::ResolvePause {
             execution_id: "story-execution".into(),
             activation_id: pause_id,
-            resolution: PauseResolution::Input {
-                answer: "Current evidence supplied".into(),
-            },
+            resolution: "Current evidence supplied".into(),
         },
     );
+    assert_eq!(resumed.snapshot.status, RunStatus::Running);
     let graph = &resumed.snapshot.graph_executions[0];
     assert_eq!(graph.activations.last().unwrap().node_id, "implement");
     assert_eq!(graph.definition.revision, run.story_definition_revision);
@@ -429,8 +459,7 @@ fn executable_publication_rejects_invalid_graphs() {
             .update_draft(&draft.id, draft.draft_revision, graph)
             .unwrap();
         assert!(
-            definitions
-                .publish_executable(&draft.id, draft.draft_revision)
+            validate_executable_graph(&draft.graph, draft.kind, !draft.required_checks.is_empty())
                 .unwrap_err()
                 .contains(expected)
         );
@@ -472,8 +501,7 @@ fn executable_contract_requires_checks_and_explicit_pause_target() {
         .update_checks(&draft.id, draft.draft_revision, vec![])
         .unwrap();
     assert!(
-        definitions
-            .publish_executable(&draft.id, draft.draft_revision)
+        validate_executable_graph(&draft.graph, draft.kind, !draft.required_checks.is_empty())
             .unwrap_err()
             .contains("deterministic final checks")
     );
@@ -486,12 +514,26 @@ fn executable_contract_requires_checks_and_explicit_pause_target() {
             .contains("resume_to")
     );
     let join: NodeKind = serde_json::from_str(r#"{"type":"join"}"#).unwrap();
-    assert_eq!(
-        join,
-        NodeKind::Join {
-            mode: JoinMode::Merge,
-            fork_id: None
-        }
+    assert_eq!(join, NodeKind::Join);
+    for unsupported in [
+        r#"{"type":"fork","join_id":"join"}"#,
+        r#"{"type":"join","mode":"all","fork_id":"fork"}"#,
+    ] {
+        assert!(serde_json::from_str::<NodeKind>(unsupported).is_err());
+    }
+    // Publication remains legal; executable validation is enforced at graph start.
+    let published = definitions
+        .publish(&draft.id, draft.draft_revision)
+        .unwrap();
+    assert!(
+        GraphExecution::start(
+            RUN_EVENT_CONTRACT_VERSION,
+            "no-checks".into(),
+            run.plan_id.clone(),
+            published
+        )
+        .unwrap_err()
+        .contains("deterministic final checks")
     );
 }
 
@@ -583,4 +625,87 @@ fn public_run_transport_rejects_internal_graph_mutation() {
             .contains("internal backend service")
     );
     assert_eq!(store.snapshot(&run.id).unwrap(), run);
+}
+
+// Catches: graph replay under a legacy contract, forged serial predecessors, or unbounded retained activations.
+#[test]
+fn serial_replay_requires_its_contract_predecessor_and_history_bound() {
+    let (_config, _project, store, run, story, _guard) = graph_fixture();
+    start_graph(&store, &run.id, &story);
+    let snapshot = store.snapshot(&run.id).unwrap();
+    let graph = snapshot.graph_executions[0].clone();
+    for version in [0, 1, RUN_EVENT_CONTRACT_VERSION + 1] {
+        assert!(
+            GraphExecution::start(version, "g".into(), story.clone(), graph.definition.clone())
+                .unwrap_err()
+                .contains("contract")
+        );
+        let mut wrong_version = snapshot.clone();
+        wrong_version.event_contract_version = version;
+        let event = RunEvent {
+            sequence: snapshot.sequence + 1,
+            command_id: "wrong-version".into(),
+            command_hash: None,
+            at_ms: snapshot.started_ms,
+            kind: RunEventKind::Graph {
+                event: GraphEvent::Transition {
+                    transition: GraphTransition::Activate {
+                        execution_id: graph.id.clone(),
+                        activation_id: "a0".into(),
+                    },
+                },
+            },
+        };
+        assert!(
+            super::reducer::apply_event(Some(wrong_version), &event)
+                .unwrap_err()
+                .contains("contract")
+        );
+    }
+    visit(&store, &run.id, "start", None, None);
+    let graph = store.snapshot(&run.id).unwrap().graph_executions.remove(0);
+    let activate = GraphTransition::Activate {
+        execution_id: graph.id.clone(),
+        activation_id: "a1".into(),
+    };
+    let mut forged = graph.clone();
+    forged.activations[1].from_activation = Some("foreign".into());
+    assert!(
+        forged
+            .apply(RUN_EVENT_CONTRACT_VERSION, &activate, 3)
+            .unwrap_err()
+            .contains("predecessor")
+    );
+    let mut forged = graph.clone();
+    forged.activations[0].state = ActivationState::Running;
+    assert!(
+        forged
+            .apply(RUN_EVENT_CONTRACT_VERSION, &activate, 3)
+            .unwrap_err()
+            .contains("predecessor")
+    );
+    let mut valid = graph;
+    valid
+        .apply(RUN_EVENT_CONTRACT_VERSION, &activate, 3)
+        .unwrap();
+    assert!(
+        valid
+            .apply(RUN_EVENT_CONTRACT_VERSION, &activate, 3)
+            .unwrap_err()
+            .contains("not ready")
+    );
+    valid.activations.resize(4096, valid.activations[0].clone());
+    let complete = GraphTransition::Complete {
+        execution_id: valid.id.clone(),
+        activation_id: "a1".into(),
+        outcome: None,
+        evidence: None,
+    };
+    assert!(
+        valid
+            .apply(RUN_EVENT_CONTRACT_VERSION, &complete, 3)
+            .unwrap_err()
+            .contains("budget")
+    );
+    assert_eq!(valid.activations.len(), 4096);
 }

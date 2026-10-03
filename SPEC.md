@@ -739,4 +739,4 @@ For web deployment without Tauri:
 - [Tauri Documentation](https://tauri.app/v1/guides/)
 
 
-Graph runtime slice A adds a versioned activation/token/decision ledger and executable validation with pinned Pause targets and deterministic final checks. Fork/Join all schema is restricted to read-only review/validation branches; its execution is pending slice G. Pre-contract runs support inspect/cancel only. Autonomous scheduling remains disabled pending slice B and authorization story 956-9745.
+Graph runtime slice A adds version-2 serial activation/predecessor/decision history and executable start validation with pinned Pause targets and deterministic final checks. History is bounded to 4096 activations per execution. Fork/all-Join schema and execution are deferred to slice G. Pre-contract runs support inspect/cancel only. Autonomous scheduling remains disabled pending slice B and authorization story 956-9745.
