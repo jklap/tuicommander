@@ -12312,6 +12312,8 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
 
 /// Discover and record the foreground agent for desktop and headless consumers.
 /// Identity alone never confirms readiness or bypasses the composer guards.
+/// Returns the effective foreground detection, not the retained session identity:
+/// a shell foreground returns None even while a startup preset remains armed.
 pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Option<String> {
     const SHELLS: &[&str] = &[
         "zsh",
@@ -12382,6 +12384,12 @@ pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Optio
                 if entry.agent_type.as_ref() != Some(agent) {
                     entry.agent_type_from_run_config = false;
                 }
+                entry.agent_foreground_observed = true;
+            } else if !fg_is_shell && entry.agent_type_from_run_config && effective.is_some() {
+                // Custom wrappers may never classify by name. Any non-shell
+                // carrying the preset counts as observed, so shell return revokes
+                // it. A direnv/nvm startup helper may disarm it early: fail closed
+                // rather than allow unattended submit into the returned shell.
                 entry.agent_foreground_observed = true;
             }
             let next = if fg_is_shell {
