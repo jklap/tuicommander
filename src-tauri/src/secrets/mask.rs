@@ -4,6 +4,9 @@ use zeroize::Zeroizing;
 
 pub(crate) fn representations(value: &str) -> Vec<Zeroizing<String>> {
     let mut result = vec![Zeroizing::new(value.to_owned())];
+    let json =
+        Zeroizing::new(serde_json::to_string(value).expect("string serialization cannot fail"));
+    result.push(Zeroizing::new(json[1..json.len() - 1].to_owned()));
     for engine in [
         &base64::engine::general_purpose::STANDARD,
         &base64::engine::general_purpose::STANDARD_NO_PAD,
@@ -53,6 +56,7 @@ pub(crate) fn mask_bytes(bytes: &[u8], needles: &[Zeroizing<String>]) -> String 
     let mut marked = vec![false; bytes.len()];
     let (flat, starts, ends) = flatten(bytes);
     let (decoded, decoded_starts, decoded_ends) = url_decode(&flat, &starts, &ends);
+    let (base64, base64_starts, base64_ends) = base64_decode(&flat, &starts, &ends);
     for needle in needles {
         if needle.is_empty() {
             continue;
@@ -74,6 +78,7 @@ pub(crate) fn mask_bytes(bytes: &[u8], needles: &[Zeroizing<String>]) -> String 
             &clean,
             &mut marked,
         );
+        mark_matches(&base64, &base64_starts, &base64_ends, &clean, &mut marked);
     }
     let mut result = Zeroizing::new(Vec::with_capacity(bytes.len()));
     let mut redacted = false;
@@ -148,6 +153,53 @@ fn flatten(bytes: &[u8]) -> (Zeroizing<Vec<u8>>, Vec<usize>, Vec<usize>) {
         i += 1;
     }
     (flat, starts, ends)
+}
+
+/// Map decoded bytes back to whole base64 groups, even when a secret starts
+/// inside a group (for example Basic auth's username:password payload).
+fn base64_decode(
+    bytes: &[u8],
+    starts: &[usize],
+    ends: &[usize],
+) -> (Zeroizing<Vec<u8>>, Vec<usize>, Vec<usize>) {
+    let mut decoded = Zeroizing::new(Vec::new());
+    let mut ds = Vec::new();
+    let mut de = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if !(bytes[i].is_ascii_alphanumeric() || b"+/-_=".contains(&bytes[i])) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || b"+/-_=".contains(&bytes[i]))
+        {
+            i += 1;
+        }
+        let mut end = i;
+        while end > start && bytes[end - 1] == b'=' {
+            end -= 1;
+        }
+        let token = &bytes[start..end];
+        let value = base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(token)
+            .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token));
+        if let Ok(value) = value {
+            let value = Zeroizing::new(value);
+            for (j, byte) in value.iter().enumerate() {
+                let group = start + (j / 3) * 4;
+                decoded.push(*byte);
+                ds.push(starts[group]);
+                de.push(ends[(group + 4).min(end) - 1]);
+            }
+            // Valid stored values cannot contain NUL. Keep separate tokens
+            // separate so matching cannot invent a secret across two blobs.
+            decoded.push(0);
+            ds.push(starts[start]);
+            de.push(ends[i - 1]);
+        }
+    }
+    (decoded, ds, de)
 }
 
 fn url_decode(

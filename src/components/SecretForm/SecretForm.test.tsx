@@ -74,4 +74,32 @@ describe("SecretForm", () => {
 		expect(screen.getByText("https://example.invalid/login")).toBeTruthy();
 		expect(screen.queryByRole("link")).toBeNull();
 	});
+	// Catches: the form forwarding an editable/wildcard template instead of
+	// retaining only the exact argv that the human sees and approves.
+	it("remembers only the displayed exact argv", async () => {
+		const submit = vi.fn(async () => {});
+		const argv = ["/usr/bin/gh", "api", "user"];
+		render(() => (
+			<SecretForm
+				form={{
+					nonce: "test-nonce",
+					id: "test",
+					reason: "Approve",
+					fields: [{ name: "TOKEN", kind: "password" }],
+					argv,
+					cwd: "/trusted",
+				}}
+				submit={submit}
+			/>
+		));
+		expect(screen.queryByRole("textbox")).toBeNull();
+		fireEvent.click(screen.getByRole("checkbox"));
+		fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+		expect(submit).toHaveBeenCalledWith({
+			nonce: "test-nonce",
+			status: "approved",
+			values: {},
+			template: argv,
+		});
+	});
 });

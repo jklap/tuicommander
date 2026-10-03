@@ -215,12 +215,7 @@ fn secret_child_fixture() {
 
 #[tokio::test]
 async fn http_submission_rejects_guessed_and_replayed_nonce_without_echoing_values() {
-    use axum::{
-        Router,
-        body::Body,
-        http::Request,
-        routing::{get, post},
-    };
+    use axum::{body::Body, extract::ConnectInfo, http::Request};
     use tower::ServiceExt;
     let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
     let form = state
@@ -237,10 +232,9 @@ async fn http_submission_rejects_guessed_and_replayed_nonce_without_echoing_valu
             .unwrap(),
         )
         .unwrap();
-    let app = Router::new()
-        .route("/secrets/forms/{nonce}", get(form_http))
-        .route("/secrets/forms/submit", post(submit_http))
-        .with_state(state.clone());
+    let app = crate::mcp_http::build_router(state.clone(), false, true).layer(axum::Extension(
+        ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))),
+    ));
     let wrong = app
         .clone()
         .oneshot(
@@ -372,4 +366,80 @@ fn saved_template_cannot_approve_new_names_or_working_directory() {
 fn utf8_split_by_a_wrap_is_masked_before_lossy_decoding() {
     let needles = mask::representations("café");
     assert_eq!(mask::mask_bytes(b"caf\xc3\r\n\xa9", &needles), "[REDACTED]");
+}
+
+// Catches: exact argv consent accidentally authorising changed arguments or
+// interpreting a literal former placeholder as a wildcard.
+#[test]
+fn exact_template_does_not_authorise_changed_arguments() {
+    let argv = vec!["gh".into(), "api".into(), "user".into()];
+    let template = policy::Template::new(argv.clone()).unwrap();
+    assert!(template.matches(&argv));
+    for changed in [
+        vec!["gh".into(), "api".into(), "repos/org/repo".into()],
+        vec![
+            "gh".into(),
+            "api".into(),
+            "https://evil.example/collect".into(),
+        ],
+        vec!["gh".into(), "auth".into(), "user".into()],
+        vec!["gh".into(), "api".into(), "user".into(), "extra".into()],
+    ] {
+        assert!(!template.matches(&changed));
+    }
+    let literal = policy::Template::new(vec!["gh".into(), "api".into(), "{arg}".into()]).unwrap();
+    assert!(!literal.matches(&argv));
+}
+
+// Catches: remove retaining a previously stored value in the child environment.
+#[test]
+fn removed_secret_is_missing_from_the_child_environment() {
+    let store = SecretStore::default();
+    let form = store
+        .open(
+            Form::request(
+                vec![Field {
+                    name: "PASS".into(),
+                    kind: FieldKind::Password,
+                    display: None,
+                }],
+                "test".into(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    store
+        .submit(
+            &form.nonce,
+            Submission::stored(BTreeMap::from([("PASS".into(), "synthetic-entry".into())])),
+        )
+        .unwrap();
+    assert!(store.environment(&["PASS".into()]).is_ok());
+    store.remove(&["PASS".into()]);
+    assert!(store.environment(&["PASS".into()]).is_err());
+}
+
+// Catches: encoded values leaking when their enclosing payload starts at a
+// different base64 alignment, or unrelated encoded output being over-redacted.
+#[test]
+fn base64_payload_redacts_secret_at_every_alignment_without_hiding_unrelated_output() {
+    use base64::Engine;
+    let secret = "s3cr3t-Pass!w0rd";
+    let needles = mask::representations(secret);
+    for engine in [
+        &base64::engine::general_purpose::STANDARD,
+        &base64::engine::general_purpose::STANDARD_NO_PAD,
+        &base64::engine::general_purpose::URL_SAFE,
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+    ] {
+        for prefix in ["a:", "ab:", "abc:"] {
+            let encoded = engine.encode(format!("{prefix}{secret}:suffix"));
+            let wrapped = format!("Basic {}\r\n{}", &encoded[..8], &encoded[8..]);
+            let masked = mask::mask(&wrapped, &needles);
+            assert!(masked.contains("[REDACTED]"), "{wrapped}: {masked}");
+            assert!(!masked.contains(&encoded[8..]), "{wrapped}: {masked}");
+        }
+    }
+    let unrelated = "Basic dXNlcjpub3QtaXQ=";
+    assert_eq!(mask::mask(unrelated, &needles), unrelated);
 }
