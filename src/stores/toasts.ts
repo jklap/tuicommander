@@ -131,6 +131,25 @@ function mirrorToBell(toast: Toast, force = false): void {
 function createToastsStore() {
 	const [state, setState] = createStore<{ toasts: Toast[] }>({ toasts: [] });
 	const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	const durations = new Map<number, number>();
+	const queued: Toast[] = [];
+	let lastBellNotice: Toast | undefined;
+
+	function clearDismissTimer(id: number): void {
+		const timer = dismissTimers.get(id);
+		if (timer !== undefined) clearTimeout(timer);
+		dismissTimers.delete(id);
+	}
+
+	function armDismissTimer(id: number, remove: (id: number) => void): void {
+		clearDismissTimer(id);
+		const duration = durations.get(id) ?? 0;
+		if (duration > 0)
+			dismissTimers.set(
+				id,
+				setTimeout(() => remove(id), duration),
+			);
+	}
 
 	return {
 		get toasts() {
@@ -153,9 +172,20 @@ function createToastsStore() {
 			level: Toast["level"] = "info",
 			repoPath?: string,
 			action?: Toast["action"],
+			sessionId?: string,
 		) {
+			if (
+				lastBellNotice?.title === title &&
+				lastBellNotice.message === message &&
+				lastBellNotice.level === level &&
+				lastBellNotice.repoPath === repoPath &&
+				lastBellNotice.sessionId === sessionId &&
+				activityStore.getActive().some((item) => item.id === `toast-${lastBellNotice!.id}`)
+			)
+				return -1;
 			const id = nextId++;
-			mirrorToBell({ id, title, message, level, createdAt: Date.now(), repoPath, action }, true);
+			lastBellNotice = { id, title, message, level, createdAt: Date.now(), repoPath, action, sessionId };
+			mirrorToBell(lastBellNotice, true);
 			return id;
 		},
 
@@ -170,7 +200,17 @@ function createToastsStore() {
 			sessionId?: string,
 			mirrorInBell = true,
 		) {
-			if (this.hasVisible(title, message, level, repoPath)) {
+			if (
+				this.hasVisible(title, message, level, repoPath) ||
+				queued.some(
+					(item) =>
+						item.title === title &&
+						item.message === message &&
+						item.level === level &&
+						item.repoPath === repoPath &&
+						item.sessionId === sessionId,
+				)
+			) {
 				return -1;
 			}
 			const id = nextId++;
@@ -185,36 +225,47 @@ function createToastsStore() {
 			);
 			const overflow = !group && state.toasts.length >= 2;
 			if (mirrorInBell) mirrorToBell(toast, overflow);
-			if (overflow) return id;
+			if (sound) playSound(level);
+			durations.set(group?.id ?? id, durationMs ?? DEFAULT_DURATION_MS[level]);
+			if (overflow) {
+				// Errors take a slot ahead of informational cards. Domain-specific
+				// cards cannot rely on the Messages bell, so retain them visibly or queued.
+				const displaced = state.toasts.find((item) => item.level !== "error");
+				if (displaced && (level === "error" || !mirrorInBell)) {
+					clearDismissTimer(displaced.id);
+					queued.push(displaced);
+					setState("toasts", (items) => items.filter((item) => item.id !== displaced.id));
+				} else {
+					if (!mirrorInBell) queued.push(toast);
+					else durations.delete(id);
+					return id;
+				}
+			}
 			if (group) {
 				setState("toasts", (item) => item.id === group.id, {
 					message,
 					action,
 					count: (group.count ?? 1) + 1,
 				});
+				armDismissTimer(group.id, (toastId) => this.remove(toastId));
 				return group.id;
 			}
 			setState("toasts", (prev) => [...prev, toast]);
-			if (sound) playSound(level);
-			// A non-positive duration means "sticky" — no auto-dismiss timer, so the
-			// toast stays until the user clicks it away.
-			const timeout = durationMs ?? DEFAULT_DURATION_MS[level];
-			if (timeout > 0) {
-				dismissTimers.set(
-					id,
-					setTimeout(() => this.remove(id), timeout),
-				);
-			}
+			armDismissTimer(id, (toastId) => this.remove(toastId));
 			return id;
 		},
 
 		remove(id: number) {
-			const timer = dismissTimers.get(id);
-			if (timer !== undefined) {
-				clearTimeout(timer);
-				dismissTimers.delete(id);
-			}
+			clearDismissTimer(id);
+			durations.delete(id);
+			const pendingIndex = queued.findIndex((item) => item.id === id);
+			if (pendingIndex >= 0) queued.splice(pendingIndex, 1);
 			setState("toasts", (prev) => prev.filter((t) => t.id !== id));
+			if (state.toasts.length < 2 && queued.length > 0) {
+				const next = queued.shift()!;
+				setState("toasts", (prev) => [...prev, next]);
+				armDismissTimer(next.id, (toastId) => this.remove(toastId));
+			}
 		},
 	};
 }

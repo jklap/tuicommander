@@ -2504,6 +2504,29 @@ describe("initApp", () => {
 			play.mockRestore();
 		});
 
+		it("1397 duplicate backend delivery keeps one bell item and plays its requested sound once", async () => {
+			// catches: transport redelivery duplicates both the bell notice and attention sound
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const event = {
+				payload: {
+					title: "Duplicate delivery",
+					message: "same",
+					level: "warn",
+					sound: "attention",
+					origin_session_id: "caller",
+				},
+			};
+			getCallback()!(event);
+			getCallback()!(event);
+			expect(
+				activityStore.getForSection("messages").filter((item) => item.title === "Duplicate delivery"),
+			).toHaveLength(1);
+			expect(play).toHaveBeenCalledTimes(1);
+			play.mockRestore();
+		});
+
 		it("stays silent when no sound was requested or the name is unknown", async () => {
 			const { getCallback } = captureMcpToast();
 			const deps = createMockDeps();

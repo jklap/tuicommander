@@ -10,6 +10,8 @@ describe("toastsStore critic 1397", () => {
 		vi.resetModules();
 		toastsStore = (await import("../../stores/toasts")).toastsStore;
 		activityStore = (await import("../../stores/activityStore")).activityStore;
+		await activityStore.hydrate();
+		activityStore.clearAll();
 	});
 
 	afterEach(() => {
