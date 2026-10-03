@@ -36,7 +36,7 @@ impl RunStore {
             .map_err(|_| "workflow recovery lock poisoned")?;
         let store = Self::open_at(&db_path)?;
         if !reconciled.contains(&db_path) {
-            store.reconcile_active()?;
+            store.reconcile_active_after_restart()?;
             reconciled.insert(db_path);
         }
         Ok(store)
@@ -984,8 +984,15 @@ impl RunStore {
         Ok(receipt)
     }
 
-    /// Mark uncertain external effects and interrupted attempts; never replay them.
+    /// Refresh projections at runtime without treating live work as crash debris.
     pub fn reconcile(&self, run_id: &str) -> Result<RunSnapshot, String> {
+        let snapshot = self.snapshot(run_id)?;
+        StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)?;
+        self.snapshot(run_id)
+    }
+
+    /// Recovery only: old effects are uncertain and old attempts interrupted.
+    pub(super) fn reconcile_after_restart(&self, run_id: &str) -> Result<RunSnapshot, String> {
         let snapshot = self.snapshot(run_id)?;
         if matches!(snapshot.status, RunStatus::Completed | RunStatus::Cancelled) {
             return Ok(snapshot);
@@ -1027,8 +1034,8 @@ impl RunStore {
         self.snapshot(run_id)
     }
 
-    /// Called on first workflow use, before new workflow work is accepted.
-    pub fn reconcile_active(&self) -> Result<usize, String> {
+    /// Called once on the first workflow open after process restart.
+    pub(super) fn reconcile_active_after_restart(&self) -> Result<usize, String> {
         let conn = self.connect()?;
         let mut stmt = conn
             .prepare("SELECT id FROM workflow_runs WHERE status IN ('running','paused')")
@@ -1040,11 +1047,20 @@ impl RunStore {
             .collect::<Result<_, _>>()?;
         drop(stmt);
         drop(conn);
+        let mut recovered = 0;
         for run_id in &run_ids {
-            let snapshot = self.reconcile(run_id)?;
-            StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)?;
+            let result = self.reconcile_after_restart(run_id).and_then(|snapshot| {
+                StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)
+            });
+            match result {
+                Ok(()) => recovered += 1,
+                Err(error) => tracing::warn!(
+                    source = "workflows", run_id = %run_id, %error,
+                    "Workflow restart recovery failed for this run; continuing other runs"
+                ),
+            }
         }
-        Ok(run_ids.len())
+        Ok(recovered)
     }
 
     fn append_reconcile_event(
