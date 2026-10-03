@@ -4479,6 +4479,9 @@ or credential is touched.
 
 ## Private secret forms (#1435-6e1d) — Rust restart required
 
+- [ ] After restart, with a private form open, verify direct upstream MCP
+  `tools/call` rejects inspection, matching native and `call_tool` entry points.
+
 - [ ] After Boss restarts the desktop backend, request username/password/OTP
   fields with synthetic data. Verify the separate native window, exact reduced
   schema, main-window bootstrap rejection, decline, close and timeout cleanup.

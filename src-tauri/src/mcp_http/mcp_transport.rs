@@ -1979,20 +1979,35 @@ async fn handle_mcp_tool_call_with_context(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
+    guard_secret_inspection(
+        state,
+        name,
+        args,
+        dispatch_mcp_tool_call_with_context(
+            state,
+            addr,
+            name,
+            args,
+            mcp_session_id,
+            managed_parent_cwd,
+        ),
+    )
+    .await
+}
+
+/// Gate both native and direct upstream inspection, including overlapping form openings.
+async fn guard_secret_inspection(
+    state: &Arc<AppState>,
+    name: &str,
+    args: &serde_json::Value,
+    call: impl std::future::Future<Output = serde_json::Value>,
+) -> serde_json::Value {
     let inspection = secret_inspection_tool(name, args);
     let epoch = state.secrets.inspection_epoch();
     if inspection && state.secrets.tools_blocked() {
         return serde_json::json!({"error": "Agent inspection is disabled while a private secret form is open"});
     }
-    let result = dispatch_mcp_tool_call_with_context(
-        state,
-        addr,
-        name,
-        args,
-        mcp_session_id,
-        managed_parent_cwd,
-    )
-    .await;
+    let result = call.await;
     if inspection && (state.secrets.tools_blocked() || state.secrets.inspection_epoch() != epoch) {
         return serde_json::json!({"error": "Inspection result withheld because a private secret form opened during the call"});
     }
@@ -2007,9 +2022,6 @@ async fn dispatch_mcp_tool_call_with_context(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
-    if state.secrets.tools_blocked() && (matches!(name, "ui" | "debug") || name.contains("__")) {
-        return serde_json::json!({"error": "Agent inspection is disabled while a private secret form is open"});
-    }
     // Enforce disabled_native_tools on every call path (not just the call_tool meta-tool).
     // Read-guard does not span an await and is released at the end of the `if` expression.
     if state
@@ -7767,16 +7779,21 @@ pub(super) async fn mcp_post(
                 // Resolving the allowlist reads and parses repo-settings.json from
                 // disk. Only a proxied call consults it, so a native call must not
                 // pay for it.
-                let allowed = resolve_allowed_upstreams(&state, session_id_str.as_deref());
-                match state
-                    .mcp
-                    .upstream_registry
-                    .proxy_tool_call_for_repo(&tool_name, args.clone(), allowed.as_deref())
-                    .await
-                {
-                    Ok(v) => (mark_upstream_tool_result(v), false),
-                    Err(e) => (serde_json::json!({"error": e}), true),
-                }
+                let result = guard_secret_inspection(&state, &tool_name, &args, async {
+                    let allowed = resolve_allowed_upstreams(&state, session_id_str.as_deref());
+                    match state
+                        .mcp
+                        .upstream_registry
+                        .proxy_tool_call_for_repo(&tool_name, args.clone(), allowed.as_deref())
+                        .await
+                    {
+                        Ok(v) => mark_upstream_tool_result(v),
+                        Err(e) => serde_json::json!({"error": e}),
+                    }
+                })
+                .await;
+                let is_error = result.get("error").is_some();
+                (result, is_error)
             } else {
                 let result = handle_mcp_tool_call_with_context(
                     &state,
