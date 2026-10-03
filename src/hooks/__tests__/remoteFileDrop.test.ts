@@ -54,14 +54,10 @@ describe("remote OS file drop", () => {
 	});
 
 	// Catches: hiding remote failures or falling back to a local transfer.
-	it("surfaces the host and destination when the upload fails without local fallback", async () => {
-		mocks.invoke.mockRejectedValue(new Error("mint /home/stefano/repo/.: upload rejected"));
+	it("surfaces backend failures without retrying through the local transfer", async () => {
+		mocks.invoke.mockRejectedValue(new Error("upload rejected"));
 		await dispatchTauriDrop(["/Users/me/file.txt"], 1, 2);
-		expect(mocks.toast).toHaveBeenCalledWith(
-			"Transfer failed",
-			expect.stringContaining("mint /home/stefano/repo/."),
-			"error",
-		);
+		expect(mocks.toast).toHaveBeenCalledWith("Transfer failed", expect.stringContaining("upload rejected"), "error");
 		expect(mocks.invoke).toHaveBeenCalledTimes(1);
 	});
 

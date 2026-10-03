@@ -193,7 +193,7 @@ failures spend one shared budget. The service worker never caches
 
 ## Server Limits
 
-Every route on both the desktop and remote routers is subject to two bounds
+Both the desktop and remote routers apply request bounds
 (`with_server_limits` in `mcp_http/mod.rs`):
 
 - **`408 Request Timeout`** — a handler that has not produced a response within
@@ -203,6 +203,8 @@ Every route on both the desktop and remote routers is subject to two bounds
   body always wins the race instead of a bare 408 (`docs/backend/mcp-http.md` →
   "Server Limits"). SSE (`/events`) and WebSocket endpoints return their
   headers immediately and then stream for as long as they like, unaffected.
+  Streamed `/fs/upload-copy` uses a 30 s idle deadline per body chunk instead
+  of this total response deadline, so a progressing slow upload can finish.
 - **`413 Payload Too Large`** — a request body over 2 MB is refused rather than
   buffered.
 
@@ -1583,7 +1585,7 @@ Returns dynamic server instructions for the MCP bridge binary as `{"instructions
 
 `POST /fs/transfer-remote` takes `{ connectionId, destDir, paths, allowRecursive }` on the **sending** backend and returns `TransferResult`. It copies local sources to the connected daemon using the existing runtime endpoint/token. `needs_confirm=true` makes no remote writes. Existing names are skipped; errors identify the remote host and destination.
 
-`POST /fs/upload-copy?destDir=<absolute-directory>&name=<leaf-name>&directory=true|false` accepts a streamed, uncompressed tar body under the existing daemon authentication. All archive paths must start with `name`; only files and directories are accepted. Limits: 256 MiB of archive and extracted file data, 10,000 entries, two concurrent uploads. Destination resolution uses registered repository directory capabilities, rejects traversal and escapes through symlinks, and never follows a target symlink. Staging is removed on failure/disconnect; the completed top-level file or directory is published with a no-replace atomic rename. A concurrently created target is skipped. No new listener or credential is created.
+`POST /fs/upload-copy?destDir=<absolute-directory>&name=<leaf-name>&directory=true|false` accepts a streamed, uncompressed tar body under the existing daemon authentication. All archive paths must start with `name`; only files and directories are accepted. Limits: 256 MiB of archive and extracted file data, 10,000 entries, two concurrent uploads. Destination resolution uses registered repository directory capabilities, rejects traversal and escapes through symlinks, and never follows a target symlink. Staging is removed on failure/disconnect; the completed top-level file or directory is published with a no-replace atomic rename. A concurrently created target is skipped; existing targets drain the bounded body before returning `skipped`. The upload is exempt from the global response timeout and aborts after 30 s without a body chunk. The concurrency permit lasts through extraction even if the handler is cancelled. Filenames use the receiver platform rules (POSIX permits colon and backslash); Windows rejects colon and backslash. Unix tar permissions are masked to `0755` for executable files/directories and `0644` for ordinary files, with the receiving umask applied and no privilege bits. At daemon startup, leftover `.tuic-upload-*` directories are swept only under registered roots without following symlink directories. The sender uses the existing `tui-session` cookie header; tokens are absent from upload URLs and reqwest error text. No new listener or credential is created.
 
 `POST /attachments/upload?kind=pty|acp&id=<session-or-connection-id>&name=<filename>`
 streams a binary request body into the target's working directory at

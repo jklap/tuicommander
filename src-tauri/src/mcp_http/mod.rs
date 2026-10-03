@@ -1497,17 +1497,26 @@ pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
 /// exercising different code (AGENTS.md, "Which timing assertions are
 /// load-bearing").
 ///
-/// Both layers are safe over SSE and WebSocket. `tower_http`'s `ResponseFuture`
-/// races its sleep only against the future that produces the `Response`; once
+/// Both layers are safe over SSE and WebSocket. The timeout races its sleep
+/// only against the future that produces the `Response`; once
 /// headers are returned the timeout is dropped and the body streams
 /// unwatched. `Sse` and `WebSocketUpgrade` both return immediately, so neither
 /// `/events` nor a PTY socket can be cut off mid-stream.
 pub(crate) fn with_server_limits(routes: Router, timeout: std::time::Duration) -> Router {
     routes
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            timeout,
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                // Upload bodies carry their own idle/size limits. A total deadline
+                // would reject a progressing transfer on a slow authenticated link.
+                if request.uri().path() == "/fs/upload-copy" {
+                    return next.run(request).await;
+                }
+                match tokio::time::timeout(timeout, next.run(request)).await {
+                    Ok(response) => response,
+                    Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+                }
+            },
         ))
 }
 
