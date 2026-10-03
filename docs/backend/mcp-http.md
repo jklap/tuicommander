@@ -1821,3 +1821,24 @@ The mobile companion UI (`/mobile`) uses the same HTTP/WebSocket infrastructure 
 - **Activity**: `GET /config/activity` returns the persisted array; the Activity tab hydrates that array when opened.
 
 The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop — no mobile-specific transport code.
+
+## Configured remote MCP ownership
+
+The desktop's native MCP session list includes the Rust remote mirror. Remote rows carry
+`connection_id` and `address` (`connection_id/session_id`). Session output and submit
+resolve that owner and use its configured HTTP URL and token. Output uses the daemon's
+native MCP cursor, redaction and exited-session contract through `format=mcp` or
+`format=mcp_raw`; submit uses the authenticated semantic submit endpoint.
+
+Peer discovery includes local and connected remote registries. Use a returned peer
+`address`, or pass `connection_id` with `to`. `local/id` addresses the desktop.
+The desktop opens an authenticated `/mcp/peer` WebSocket to each configured daemon.
+This duplex mail link carries register, list_peers, send, inbox and wait only; process
+creation is excluded. A daemon sends to the desktop or another daemon through the hub.
+The authenticated link determines sender provenance. Destination delivery reuses native
+inbox and wake handling, preserving the message body in the inbox.
+
+Local mail survives hub loss. Cross-host failure names the connection; uncertain
+acknowledgements must not be retried blindly. Lifecycle mail retains its message identity
+in the bounded native outbox until acknowledged. Reconnect retries those notices without
+duplicating an already retained destination message.

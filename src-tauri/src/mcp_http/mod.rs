@@ -15,6 +15,8 @@ mod log_routes;
 pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod plugin_routes;
+mod remote_mcp_sessions;
+pub(crate) mod remote_peer;
 mod remote_session_proxy;
 pub(crate) mod session;
 pub(crate) mod sse_routes;
@@ -404,6 +406,7 @@ async fn post_progress_report(
 #[derive(serde::Deserialize)]
 struct SubmitAgentReplyRequest {
     input: String,
+    timeout_ms: Option<u64>,
 }
 
 /// Browser counterpart of the managed session `submit` action. Both transports
@@ -431,7 +434,7 @@ async fn submit_agent_reply(
     }
     let result = mcp_transport::handle_session_submit(
         &state,
-        &serde_json::json!({"session_id": session_id, "input": body.input}),
+        &serde_json::json!({"session_id": session_id, "input": body.input, "timeout_ms": body.timeout_ms}),
         true,
     )
     .await;
@@ -901,6 +904,7 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 /// the per-router `/fs/read-editor*` handler down-scope (SECURITY).
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/mcp/peer", get(remote_peer::endpoint))
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
         // Shared on purpose: this is how a remote client escapes the header-only

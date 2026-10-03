@@ -1521,6 +1521,7 @@ pub(crate) fn autoconnect_all(state: &Arc<AppState>) {
 /// heartbeat and the mirror is a long-lived stream, so one failing must not take
 /// the other down.
 fn spawn_mirror(state: &Arc<AppState>, id: String) {
+    crate::mcp_http::remote_peer::connect_configured(state, id.clone());
     let previous = {
         let mut entry = state.remote.entries.entry(id.clone()).or_default();
         entry.mirror.take()

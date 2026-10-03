@@ -4461,3 +4461,7 @@ or credential is touched.
 - [x] Sidebar: separate status and agents chevron hit areas, collapsed count, and Enter/Space (#1410-e201). _(verified: production components in agent-browser; expanded/collapsed screenshots, trusted keyboard input, and 13 filtered component tests)_
 
 - [x] Voice settings: accent Start, distinct Stop, and Running/Stopped indicator (#1409-4ec3). _(verified: accent colour in agent-browser screenshot; Running/Stopped component regression tests)_
+
+## Remote desktop MCP routing (1419-ab18) — coordinated Rust rollout required
+
+- [ ] After Boss schedules the desktop restart and coordinator deploys the reviewed daemon build, run `scripts/test-remote-mcp.py --connection <Mac-mint-id> --session <disposable-agent> --exercise`. Confirm remote output/submit, destination wake and reply to the Mac. Run with `--second-connection` and `--second-session` for a disposable second daemon peer. The live desktop does not load Rust changes without a restart; never restart it or a daemon holding live PTYs just to perform this check.
