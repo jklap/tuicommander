@@ -122,6 +122,9 @@ export async function readTurnRows(
 	}
 	const rows: RowSnapshot[] = [];
 	// A row's wire flag says it continues onto the NEXT row; a snapshot says it continues the previous one.
+	// DEFERRED (2026-10-04) — a buffer that starts mid-wrapped-answer (eviction cut the head off) has no
+	// row startAbs-1 to read, so its first row looks like a head and can show a ghost answer in the
+	// answers-only view. Cosmetic and rare; avoiding it needs a look-back mechanism (Boss: not worth it).
 	for (let abs = startAbs; abs < endAbs; abs++)
 		rows.push({ text: byAbs.get(abs)?.text ?? "", isWrapped: byAbs.get(abs - 1)?.wrapped ?? false });
 	return rows;

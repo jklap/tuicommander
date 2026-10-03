@@ -88,11 +88,11 @@ describe("readAnswersHistory prompt-less prefix (critic 1417)", () => {
 		expect(turns?.flatMap((t) => t.answers)).toEqual(["💬 Answer one.", "💬 Answer two."]);
 	});
 
-	it("does not treat a wrapped continuation at the very start of the prefix as an answer", async () => {
-		// catches: eviction cutting an answer mid-wrap leaving a headless continuation row that starts with the marker glyph
-		const rows = ["💬 tail of an evicted answer", "plain", "❯ q", "💬 real"];
-		const turns = await readAnswersHistory(serve(rows, 0, [], new Set([0])), [2], 0, rows.length, newTurnCache());
-		expect(turns?.[0].answers).toEqual([]);
+	it("joins a wrapped answer that begins on the very first row of the prefix", async () => {
+		// catches: reading the wire flag as "continues the previous row", which cuts an answer starting at row 0 short and drops its second row
+		const rows = ["💬 head ", "tail", "plain", "❯ q", "💬 real"];
+		const turns = await readAnswersHistory(serve(rows, 0, [], new Set([0])), [3], 0, rows.length, newTurnCache());
+		expect(turns?.[0].answers).toEqual(["💬 head tail"]);
 	});
 
 	it("a failed prefix read returns null and leaves no half-built cache entry", async () => {
