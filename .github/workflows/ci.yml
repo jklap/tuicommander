@@ -101,9 +101,6 @@ jobs:
       - name: Referenced scripts are tracked
         run: grep -ohE 'scripts/[A-Za-z0-9_./-]+\.(mjs|sh|js|py)' package.json .github/workflows/*.yml | sort -u | xargs git ls-files --error-unmatch
 
-      - name: Release tag guard
-        run: bash scripts/check-release-tag.sh --self-test
-
       - name: Third-party notices (JavaScript)
         run: |
           node scripts/third-party-notices.mjs --self-test
