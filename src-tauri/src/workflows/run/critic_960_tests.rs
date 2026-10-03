@@ -45,7 +45,13 @@ fn dependency_refresh_failure_after_interruption_does_not_requeue_recovery_of_li
         .id;
     let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
     let run = store
-        .start_plan(&project_path, &plan.id, &definition_id, 1, RunLimits::default())
+        .start_plan(
+            &project_path,
+            &plan.id,
+            &definition_id,
+            1,
+            RunLimits::default(),
+        )
         .unwrap();
     store
         .command(
@@ -69,7 +75,9 @@ fn dependency_refresh_failure_after_interruption_does_not_requeue_recovery_of_li
         first.snapshot(&run.id).unwrap().attempts[0].state,
         AttemptState::Interrupted
     );
-    first.command(&run.id, "resume", RunCommand::Resume).unwrap();
+    first
+        .command(&run.id, "resume", RunCommand::Resume)
+        .unwrap();
     first
         .command(
             &run.id,
@@ -84,7 +92,13 @@ fn dependency_refresh_failure_after_interruption_does_not_requeue_recovery_of_li
     assert_eq!(live.attempts.last().unwrap().state, AttemptState::Running);
     let second = RunStore::open().unwrap();
     assert_eq!(
-        second.snapshot(&run.id).unwrap().attempts.last().unwrap().state,
+        second
+            .snapshot(&run.id)
+            .unwrap()
+            .attempts
+            .last()
+            .unwrap()
+            .state,
         AttemptState::Running,
         "second open interrupted a live worker"
     );
