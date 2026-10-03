@@ -33,7 +33,7 @@ impl MailPort for Probe {
 }
 
 // Catches: offset advances before the real mail-port handoff, or a failed
-// second handoff loses the first message or causes an immediate network loop.
+// second handoff advances a partial batch or causes an immediate network loop.
 #[tokio::test]
 async fn capacity_at_first_or_second_handoff_preserves_cursor_and_schedules_retry() {
     for fail_id in [
@@ -65,13 +65,9 @@ async fn capacity_at_first_or_second_handoff_preserves_cursor_and_schedules_retr
                 .unwrap();
         adapter.poll().await.unwrap();
         assert_eq!(adapter.poll().await.err(), Some(Error::Capacity));
-        let expected = if fail_id.as_deref() == Some("tg:test-bot:8") {
-            8
-        } else {
-            0
-        };
-        assert_eq!(offset(&paths), expected);
-        if expected == 8 {
+        assert_eq!(offset(&paths), 0);
+        let partial = fail_id.as_deref() == Some("tg:test-bot:8");
+        if partial {
             assert_eq!(
                 *delivered.lock().unwrap(),
                 vec![(0, "tg:test-bot:7".into())]
@@ -84,12 +80,15 @@ async fn capacity_at_first_or_second_handoff_preserves_cursor_and_schedules_retr
         full.store(false, Ordering::Relaxed);
         elapse_backoff().await;
         assert!(matches!(adapter.poll().await.unwrap(), Poll::Accepted(_)));
-        assert_eq!(server.requests()[2].1["offset"], expected);
+        assert_eq!(server.requests()[2].1["offset"], 0);
         assert_eq!(offset(&paths), 9);
-        assert_eq!(
-            *delivered.lock().unwrap(),
-            vec![(0, "tg:test-bot:7".into()), (8, "tg:test-bot:8".into())]
-        );
+        let mut expected = vec![];
+        if partial {
+            // A failed batch retries already offered mail with its original ID.
+            expected.push((0, "tg:test-bot:7".into()));
+        }
+        expected.extend([(0, "tg:test-bot:7".into()), (0, "tg:test-bot:8".into())]);
+        assert_eq!(*delivered.lock().unwrap(), expected);
         assert_eq!(
             std::fs::read_to_string(paths.file("next_offset")).unwrap(),
             "9\n"
@@ -191,3 +190,32 @@ async fn first_start_network_fault_uses_backoff_and_retries_backlog_skip() {
     }
 }
 
+// Catches: the fixed request limit drifts, or ignored strangers are excluded
+// from the once-per-batch cursor and get replayed forever.
+#[tokio::test]
+async fn fixed_ten_update_batches_commit_the_tail_including_ignored_chats() {
+    for chats in [[2222222, 2222222], [1111111, 2222222], [2222222, 1111111]] {
+        let (_dir, paths) = setup();
+        let server = FakeServer::start(vec![
+            updates(vec![]),
+            updates(vec![
+                text_update(7, chats[0], "first"),
+                text_update(8, chats[1], "tail"),
+            ]),
+            updates(vec![]),
+        ])
+        .await;
+        let mut adapter = Inbound::loopback(paths.clone(), server.address).unwrap();
+        adapter.poll().await.unwrap();
+        let expected_mail = if chats == [2222222, 2222222] { 0 } else { 1 };
+        assert!(
+            matches!(adapter.poll().await.unwrap(), Poll::Accepted(count) if count == expected_mail)
+        );
+        assert_eq!(adapter.pending().unwrap().len(), expected_mail);
+        assert_eq!(offset(&paths), 9);
+        adapter.poll().await.unwrap();
+        assert_eq!(server.requests()[1].1["limit"], 10);
+        assert_eq!(server.requests()[2].1["limit"], 10);
+        assert_eq!(server.requests()[2].1["offset"], 9);
+    }
+}
