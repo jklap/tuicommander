@@ -1,5 +1,5 @@
 //! Critic tests for 957-dc59 (canonical merge tree) and 953-feed (concurrent check receipts).
-use super::critic_tests::{accepted_flow, Flow};
+use super::critic_tests::{Flow, accepted_flow};
 use std::path::PathBuf;
 
 fn git(path: &std::path::Path, args: &[&str]) {
