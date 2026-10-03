@@ -17,7 +17,7 @@ fn purged4() -> TerminalGrid {
 #[test]
 fn ed1_on_every_cursor_row_erases_everything_above_and_nothing_below() {
     for bce in ["", "\x1b[41m"] {
-        for row in 1..=4u16 {
+        for row in 1..=4usize {
             let mut g = purged4();
             let _ = g.process(format!("{bce}\x1b[{row};80H\x1b[1J\x1b[0m").as_bytes());
             for r in 0..row {
@@ -31,7 +31,7 @@ fn ed1_on_every_cursor_row_erases_everything_above_and_nothing_below() {
             for r in row..4 {
                 assert_eq!(
                     g.get_selection_text(r, 0, r, 79),
-                    below[r as usize],
+                    below[r],
                     "bce={bce:?} row={row} kept r={r}"
                 );
             }
