@@ -81,7 +81,9 @@ The publisher must obtain the decision through a deterministic receipt lookup an
 
 ## 5. Config, secrets and restart recovery
 
-Proposed `~/.config/tuic-telegram/config.json` is an opt-in daemon config with `enabled`, a non-secret stable `bot_alias`, and explicit bindings `{chat_id, target_tuic_session}`. Store chat IDs as decimal strings at the JSON/MCP boundary, validate to signed integers in Rust. Missing, empty or invalid allowlist disables receiving and sending; never learn authorization from `/start`, usernames or first contact. `/start` from an unauthorized chat is dropped. No chat ID is invented here.
+Confirmed by the coordinator via br-3: the sole allowlist source is mint `~/.config/tuic-telegram/allowed_chat_ids`, mode 0600, one decimal chat ID per line, beside `bot.token`. Boss's private chat is already authorized there. Read this file for authorization; never copy its real IDs into the repository, fixtures, tests, logs or memory. Tests use fake IDs. Missing, empty, unreadable or malformed content fails closed; refresh authorization before accepting inbound updates or sending outbound work, so removal also revokes queued sends. Never learn authorization from `/start`, usernames or first contact.
+
+Proposed `config.json` remains opt-in daemon configuration for `enabled`, a non-secret stable `bot_alias` and `target_tuic_session`; it does not duplicate the allowlist. For the initial single target, route authorized chats to that peer and use only allowlisted destinations. Multiple authorized destinations require an explicit outbound chat selector; never broadcast by accident. Represent chat IDs as decimal strings at JSON/MCP boundaries and validate them as signed integers in Rust. No live allowlist or token is read in phase 1.
 
 The existing token path is `~/.config/tuic-telegram/bot.token`. Read it for each API request, keep it only for that request's duration, then discard it. Never put it in `AppState`, config serialization, environment, memory, logs, error strings or persisted retry work. Validate a regular owner-readable file and enforce owner-only access on mint. No token reads occur in this phase. A shared lock and state directory belong to this adapter config, so isolated TUIC instances cannot become duplicate owners of the same file. Test instances explicitly redirect all three paths under the checkout temp root.
 
@@ -93,6 +95,15 @@ Bot API URLs contain the secret: disable request URL tracing and map transport e
 - 429: honor response retry delay. Malformed update/API responses never advance a cursor blindly. Log safe error categories, not response bodies or chat content.
 
 Use a small SQLite journal (the repository already uses SQLite for progress) under the adapter state directory. Transactionally insert unique `(bot_alias, update_id)` records and pending mail/Stop/callback effects, then advance `next_offset` to `update_id + 1`. Only the committed offset may be sent in the next poll; failed journal writes leave it unchanged. Store only validated allowlisted payloads; rejected/irrelevant updates advance the cursor without retaining their text. Telegram acknowledgement is defined by the next higher-offset poll, per [getUpdates](https://core.telegram.org/bots/api#getupdates).
+
+**First-start backlog policy (authorized by the coordinator):** br-3 reports two unacknowledged updates, `/start` and "Fatto". The adapter may discard the pending backlog on first initialization; this is not a restart policy and tests must not pin that count.
+
+1. Under the sole-owner lock, create and commit journal state `bootstrap_started` before the first poll. Startup with an existing `initialized` row always uses its persisted nonnegative offset; it never enters discard mode again.
+2. For the fresh initialization only, call `getUpdates(offset=-1, limit=1, timeout=0)` without a restrictive update filter. The documented negative offset reads the queue tail and forgets earlier updates. Do not dispatch or retain the returned old payload. Persist `initialized=true` and `next_offset=last_update_id+1` in one transaction; an empty successful result persists `initialized=true, next_offset=0`.
+3. The next ordinary poll uses that committed nonnegative offset, acknowledging the last discarded update. Updates arriving after the sampled tail remain eligible for normal delivery. No second negative-offset poll runs during normal operation or token rotation.
+4. If the call outcome or the subsequent local commit is uncertain, retain `bootstrap_started` and stop with a durable initialization alert. On restart, that state requires an explicit operator recovery decision; do not repeat `offset=-1` automatically, because a repeated discard could erase new phone messages. Journal corruption or disappearance after prior use also requires explicit reinitialization authorization, not an automatic "first start" reset. A fresh install is the only automatic discard path.
+
+This intentionally changes Telegram queue state only in the later authorized implementation bootstrap. No polling occurs during design. [Negative-offset semantics](https://core.telegram.org/bots/api#getupdates)
 
 **Critical gap:** the TUIC mailbox is a bounded in-memory `DashMap<VecDeque<AgentMessage>>` (`src-tauri/src/state.rs:2124`, capacity at `:1654`). Stable-ID deduplication in 1419 is also insufficient to claim disk durability. The adapter journal therefore retains channel mail until consumption, rehydrates it when the same peer re-registers after restart, and integrates stable-ID insertion plus inbox consumption receipts with the shared service. Journal mail IDs remain immutable; rehydration checks the live inbox under its identity/delivery lock. An inbox read records the durable consumed cursor before acknowledging removal. Capacity eviction must leave unconsumed channel mail pending, not delete it from the journal. Bound pending count/bytes and surface saturation; never silently evict accepted phone messages. Retention compacts only consumed/completed rows while preserving callback expiry and replay tombstones.
 
@@ -129,6 +140,8 @@ Use an in-process fake Bot API HTTP server, injected clock and fault injection a
 | `telegram_idle_mail_wakes_without_typing_payload` | Adapter bypasses native send arbitration; real inbox has JSON mail and PTY has only the generic wake. |
 | `telegram_busy_mail_waits_for_safe_idle` | Message text or Enter reaches a running tool; no write until safe idle, then one wake. Also cover partial composer and active waiter. |
 | `telegram_restart_restores_unconsumed_mail_once` | Offset persists but inbox vanishes; restart at insertion/dispatch/consumption boundaries and assert one stable mail record and no replay of consumed entries. |
+| `telegram_first_start_discards_backlog_once` | A restart repeats negative-offset polling and drops new text; fake-server cases cover nonempty/empty tails, new arrivals and persisted bootstrap uncertainty, with fake chat IDs. |
+| `telegram_allowlist_file_revokes_pending_sends` | A stale JSON allowlist or cached authorization leaks outbound messages after file removal; fake 0600 file changes revoke queued work. |
 | `telegram_disk_failure_does_not_ack_update` | Cursor advances before durable commit; next poll keeps the old offset. |
 | `telegram_401_latches_without_retrying` | Revoked credentials trigger an infinite loop; one failed request, durable alert, zero later calls. |
 | `telegram_409_never_starts_a_second_owner` | Conflict or second instance races another poller; stopped owner and no automatic takeover. |
@@ -155,11 +168,11 @@ At the end of each implementation story, run only the relevant `telegram::tests:
 4. **Stop:** draft mapping, Esc/bookkeeping integration, stale-turn rejection and durable safe audit.
 5. **Progress notices:** bound-peer blocked/done subscription, persisted progress replay cursor and language-preserving notifications.
 6. **Buttons and approvals:** opaque handles, durable decisions, callback acknowledgement/edit retry, exact-text versioning and publisher receipt contract. Publisher integration must be identified before enabling approvals.
-7. **Operator docs and coordinated live verification:** apply sync matrix MCP/remote/progress sections (`docs/sync-matrix.md:112`, `:149`, `:318`, `:409`): API/backend/user guides, FEATURES, SPEC, CHANGELOG and restart checklist as each behavior lands. Obtain chat binding, authentic sanitized fixtures and Boss readiness; coordinator schedules mint deployment while pe-3 is idle.
+7. **Operator docs and coordinated live verification:** apply sync matrix MCP/remote/progress sections (`docs/sync-matrix.md:112`, `:149`, `:318`, `:409`): API/backend/user guides, FEATURES, SPEC, CHANGELOG and restart checklist as each behavior lands. Use the confirmed allowlist file, obtain the stable peer binding, authentic sanitized fixtures and Boss readiness; coordinator schedules mint deployment while pe-3 is idle.
 
 ## Decisions needed from Boss before implementation
 
-1. Provide the allowlisted private chat ID and stable marketeer peer UUID. No discovery poller is started here.
+1. Provide the stable marketeer peer UUID. Chat authorization is already supplied by the confirmed allowed_chat_ids file; do not request or copy Boss's chat ID. No discovery poller is started here.
 2. Confirm the proposed primary stream: explicit begin/finish plus intents and safe agent-authored tool-step activity. Fully automatic tool-name streaming needs a separate captured hook/transcript contract.
 3. Confirm restart semantics: durable update/mail deduplication and explicit uncertainty for ambiguous sends, versus an additional model/application acknowledgement protocol. Exactly-once external execution is not established.
 4. Identify the deterministic marketeer publisher and approval record interface. Recommend adapter-owned immutable receipts consumed by publisher code; an LLM-only approval workflow cannot satisfy the request.
