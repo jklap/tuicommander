@@ -53,7 +53,12 @@ describe("mdTabsStore MCP reload snapshot — critic 1424", () => {
 		md.addMcpFile("a", "/r", "a.md", true, true);
 		md.addMcpFile("b", "/r", "b.md", true, true);
 		md.addMcpFile("c", "/r", "c.md", true, true);
-		md.setActive(md.getIds().map((id) => md.get(id)).find((t) => t?.mcpUiId === "b")!.id);
+		md.setActive(
+			md
+				.getIds()
+				.map((id) => md.get(id))
+				.find((t) => t?.mcpUiId === "b")!.id,
+		);
 		await reload();
 		md.restoreAfterReload();
 		expect(md.state._order.map((id) => md.get(id)?.mcpUiId)).toEqual(["a", "b", "c"]);
