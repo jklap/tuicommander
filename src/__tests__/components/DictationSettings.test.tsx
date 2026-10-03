@@ -1104,3 +1104,26 @@ describe("DictationSettings – Edge engine", () => {
 		expect(labelled(container, "Voice")).toBeUndefined();
 	});
 });
+
+describe("hands-free conversation state", () => {
+	afterEach(() => {
+		mockStore.state.handsFree = null;
+	});
+
+	it("shows Stopped before status arrives so opening settings does not imply a running microphone", () => {
+		mockStore.state.handsFree = null;
+		const view = render(() => <DictationSettings />);
+		expect(view.getByRole("status").textContent).toContain("Stopped");
+		expect(view.getByRole("button", { name: "Start conversation" })).toBeDefined();
+		expect(view.queryByRole("button", { name: "Stop conversation" })).toBeNull();
+	});
+
+	it("shows Running and Stop for an armed conversation instead of the start action", () => {
+		mockStore.state.handsFree = { armed: true, phase: "waiting" };
+		const view = render(() => <DictationSettings />);
+		expect(view.getByRole("status").textContent).toContain("Running");
+		fireEvent.click(view.getByRole("button", { name: "Stop conversation" }));
+		expect(mockStore.disarmHandsFree).toHaveBeenCalled();
+		expect(view.queryByRole("button", { name: "Start conversation" })).toBeNull();
+	});
+});
