@@ -248,3 +248,6 @@ fn private_file_validation_rejects_links_permissions_and_malformed_allowlist() {
 mod inbound;
 #[path = "journal_tests.rs"]
 mod journal;
+
+#[path = "regression_tests.rs"]
+mod regression;

@@ -101,10 +101,16 @@ The existing token path is `~/.config/tuic-telegram/bot.token`. Read it for each
 
 Bot API URLs contain the secret: disable request URL tracing and map transport errors to typed safe errors without formatting a raw reqwest error. Persist method/body and non-secret identifiers, never a constructed URL. Use production HTTPS with the fixed API host; an injected loopback base exists only in tests.
 
-- Network loss/5xx: bounded exponential backoff with jitter, 1–60 seconds; reuse the persisted cursor. Long poll for 25 seconds with a separately larger HTTP timeout. Cancellation terminates the outstanding request before another loop starts.
-- 401: latch `unauthorized`, stop polling and outbound sends, persist a TUIC-visible alert, and require an explicit restart/re-enable after token rotation. No autonomous retry loop.
+- Network loss/5xx, nonpermanent rejections, malformed responses, capacity and journal failures: one bounded exponential backoff with jitter, 1–60 seconds; reuse the persisted cursor. Long poll for 25 seconds with a separately larger HTTP timeout. Cancellation terminates the outstanding request before another loop starts.
+- 401/403/404: latch `unauthorized`, stop polling and outbound sends, persist a TUIC-visible alert, and require an explicit restart/re-enable after token rotation. No autonomous retry loop.
 - 409: latch ownership conflict, stop polling and sends, alert that another poller or webhook conflicts. Do not remove a webhook or try to steal ownership. Operator resolves it and explicitly resumes.
-- 429: honor response retry delay. Malformed update/API responses never advance a cursor blindly. Log safe error categories, not response bodies or chat content.
+- 429: honor response retry delay, clamped to 1 second–1 hour; log the safe category when the upper cap applies. Malformed update/API responses never advance a cursor blindly. Log safe error categories, not response bodies or chat content.
+
+Oversized polling responses use an adaptive request limit: start at 100, halve down to 1 after each response above the 1 MiB batch cap, through the same backoff schedule. A successfully committed batch restores the limit to 100. At limit 1, allow an 8 MiB single-update response budget. This is an explicit finite allocation policy, not a documented universal Telegram byte bound. A response beyond that budget latches `oversize_update` durably, stops all further requests and leaves the cursor unchanged; explicit operator recovery is required. Never silently acknowledge or drop an oversize update.
+
+Allowlist revalidation purges mail belonging to removed chats from the journal before another poll or offer, including already offered entries. The committed cursor stays unchanged so restoring authorization cannot resurrect purged mail. This purge covers adapter retention; a previously offered native inbox copy requires its own integration policy.
+
+The source token and formatted request string use zeroizing buffers. Copies inside reqwest's parsed `Url` are **not zeroized**; this is a remaining memory limitation. Safe errors and logging still never expose request URLs or tokens.
 
 Use a small SQLite journal (the repository already uses SQLite for progress) under the adapter state directory. Transactionally insert unique `(bot_alias, update_id)` records and pending mail/Stop/callback effects, then advance `next_offset` to `update_id + 1`. Only the committed offset may be sent in the next poll; failed journal writes leave it unchanged. Store only validated allowlisted payloads; rejected/irrelevant updates advance the cursor without retaining their text. Telegram acknowledgement is defined by the next higher-offset poll, per [getUpdates](https://core.telegram.org/bots/api#getupdates).
 

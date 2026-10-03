@@ -4478,3 +4478,6 @@ or credential is touched.
 - [ ] Remote replay rollout (#1421-733e): deploy the updated daemon before the updated client. An older daemon without the explicit empty-replay marker can trigger a false 15-second stream error on a healthy idle session whose initial grid is unavailable. Coordinate deployment after live PTYs can be safely preserved or closed; do not restart mac-mint during this incident.
 
 - [ ] Telegram offline adapter boundaries (#1438-79b4): after a future rebuild, native startup remains disabled until stable-ID mail integration lands; no Telegram polling or secret reads are wired by slices 1–2.
+
+
+- [ ] Telegram slices 1–2 polling recovery: after the next Rust rebuild and later native integration, verify visible operator recovery for 403/404/oversize-update stops, bounded retries and revoked-mail purge. Offline adapter tests cover the journal/network boundary; daemon startup and operator UI remain deferred. Rust changes require Boss's manual restart to load.

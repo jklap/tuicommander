@@ -15,6 +15,9 @@ pub(super) enum Phase {
     Ready,
     Unauthorized,
     Conflict,
+    Forbidden,
+    NotFound,
+    OversizeUpdate,
 }
 
 pub(super) struct Journal {
@@ -99,6 +102,9 @@ impl Journal {
             "ready" => Phase::Ready,
             "unauthorized" => Phase::Unauthorized,
             "conflict" => Phase::Conflict,
+            "forbidden" => Phase::Forbidden,
+            "not_found" => Phase::NotFound,
+            "oversize_update" => Phase::OversizeUpdate,
             _ => return Err(Error::State),
         };
         Ok((phase, offset))
@@ -136,6 +142,9 @@ impl Journal {
         let phase = match error {
             Error::Unauthorized => "unauthorized",
             Error::Conflict => "conflict",
+            Error::Rejected(403) => "forbidden",
+            Error::Rejected(404) => "not_found",
+            Error::OversizeUpdate => "oversize_update",
             _ => return Err(Error::State),
         };
         self.connection
@@ -200,6 +209,35 @@ impl Journal {
             .map_err(|_| Error::Store)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|_| Error::Store)
+    }
+    /// Revalidation erases revoked mail while the offset retains its tombstone.
+    pub(super) fn purge_revoked(
+        &mut self,
+        ids: &std::collections::BTreeSet<i64>,
+    ) -> Result<Vec<String>, Error> {
+        let pending = self.pending()?;
+        let mut revoked = Vec::new();
+        for mail in pending {
+            let body: serde_json::Value =
+                serde_json::from_str(&mail.content).map_err(|_| Error::Store)?;
+            let authorized = body["chat_id"]
+                .as_str()
+                .and_then(|id| id.parse::<i64>().ok())
+                .is_some_and(|id| ids.contains(&id));
+            if !authorized {
+                revoked.push(mail.id);
+            }
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| Error::Store)?;
+        for id in &revoked {
+            tx.execute("DELETE FROM updates WHERE mail_id=?1", [id])
+                .map_err(|_| Error::Store)?;
+        }
+        tx.commit().map_err(|_| Error::Store)?;
+        Ok(revoked)
     }
     /// Called by the future native inbox consumption boundary, never by offer.
     pub(super) fn consume(&mut self, id: &str, peer: &str) -> Result<(), Error> {

@@ -59,7 +59,10 @@ async fn journal_write_failure_rolls_back_mail_and_offset() {
     assert!(matches!(adapter.poll().await, Err(Error::Store)));
     assert_eq!(offset(&paths), 0);
     assert!(adapter.pending().unwrap().is_empty());
+    assert!(matches!(adapter.poll().await.unwrap(), Poll::Backoff(_)));
+    assert_eq!(server.requests().len(), 2);
     db.execute_batch("DROP TRIGGER fail_phone_insert;").unwrap();
+    super::regression::elapse_backoff().await;
     assert!(matches!(adapter.poll().await.unwrap(), Poll::Accepted(1)));
     assert_eq!(server.requests()[2].1["offset"], 0);
     assert_eq!(offset(&paths), 4);
@@ -106,6 +109,7 @@ async fn malformed_or_colliding_updates_do_not_acknowledge_the_batch() {
     assert!(matches!(adapter.poll().await, Err(Error::Protocol)));
     assert_eq!(offset(&paths), 0);
     assert!(adapter.pending().unwrap().is_empty());
+    super::regression::elapse_backoff().await;
     assert!(matches!(adapter.poll().await, Err(Error::Protocol)));
     assert_eq!(offset(&paths), 0);
 }

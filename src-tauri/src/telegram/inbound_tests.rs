@@ -190,9 +190,9 @@ async fn unconsumed_mail_rehydrates_stable_id_and_consumed_mail_does_not_replay(
     assert_eq!(adapter.deliver(&mut fresh_inbox).await.unwrap(), 0);
 }
 
-// Catches: port failure, revoked chat or disabled config erases pending mail or still delivers it.
+// Catches: port failure erases pending mail, or revoked/disabled authorization still delivers it.
 #[tokio::test]
-async fn unavailable_or_revoked_target_keeps_mail_pending_without_delivering() {
+async fn unavailable_target_retains_mail_and_revocation_purges_without_delivering() {
     let (_dir, paths) = setup();
     let server = FakeServer::start(vec![
         updates(vec![]),
@@ -214,7 +214,7 @@ async fn unavailable_or_revoked_target_keeps_mail_pending_without_delivering() {
     write_private(&paths.file("allowed_chat_ids"), "2222222\n");
     inbox.unavailable = false;
     assert_eq!(adapter.deliver(&mut inbox).await.unwrap(), 0);
-    assert_eq!(adapter.pending().unwrap().len(), 1);
+    assert!(adapter.pending().unwrap().is_empty());
     assert!(inbox.by_id.is_empty());
     write_private(
         &paths.file("config.json"),
