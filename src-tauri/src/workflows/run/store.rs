@@ -291,6 +291,7 @@ impl RunStore {
         .collect()
     }
 
+    #[cfg(test)]
     pub fn replay(&self, run_id: &str) -> Result<RunSnapshot, String> {
         let conn = self.connect()?;
         let mut stmt = conn
@@ -1008,6 +1009,7 @@ impl RunStore {
 /// One authority for dependency release, dispatch, and final verification.
 /// A prior story receipt remains usable after a later *recorded and checked*
 /// integration on the same ref; an unrecorded ref or tree movement fails closed.
+#[cfg(test)]
 pub fn story_integrated_at_revision(story_id: &str, revision: i64) -> Result<bool, String> {
     story_integrated_at_revision_in(
         &crate::config::config_dir().join("workflow_runs.sqlite3"),
@@ -1534,7 +1536,7 @@ fn choose_event(
                 .unwrap_or(0)
                 + 1;
             Ok(RunEventKind::AttemptStarted {
-                attempt: NodeAttempt {
+                attempt: Box::new(NodeAttempt {
                     id: Uuid::now_v7().to_string(),
                     story_id: snapshot.plan_id.clone(),
                     node_id,
@@ -1544,7 +1546,7 @@ fn choose_event(
                     agent: None,
                     report: None,
                     input_answer: None,
-                },
+                }),
             })
         }
         RunCommand::StartAttempt { story_id, node_id } => {
@@ -1619,7 +1621,7 @@ fn choose_event(
                 .unwrap_or(0)
                 + 1;
             Ok(RunEventKind::AttemptStarted {
-                attempt: NodeAttempt {
+                attempt: Box::new(NodeAttempt {
                     id: Uuid::now_v7().to_string(),
                     story_id,
                     node_id,
@@ -1629,7 +1631,7 @@ fn choose_event(
                     agent: None,
                     report: None,
                     input_answer: None,
-                },
+                }),
             })
         }
         RunCommand::ReportAttempt {
@@ -1806,8 +1808,8 @@ fn choose_event(
                 {
                     return Err("invalid criterion result index".into());
                 }
-                if let Some(review) = &report.review {
-                    if review.artifact_digest.len() != 64
+                if let Some(review) = &report.review
+                    && (review.artifact_digest.len() != 64
                         || !review
                             .artifact_digest
                             .bytes()
@@ -1823,10 +1825,9 @@ fn choose_event(
                                 || finding.summary.len() > 1_000
                                 || finding.evidence.trim().is_empty()
                                 || finding.evidence.len() > 2_000
-                        })
-                    {
-                        return Err("invalid review evidence".into());
-                    }
+                        }))
+                {
+                    return Err("invalid review evidence".into());
                 }
             }
             if expired

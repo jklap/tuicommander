@@ -124,7 +124,7 @@ pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
     }
     let build_keys: Vec<String> = cmd
         .iter_full_env_as_str()
-        .filter_map(|(key, _)| {
+        .filter(|&(key, _)| {
             [
                 "CARGO_PKG_",
                 "CARGO_BIN_EXE_",
@@ -135,8 +135,8 @@ pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
             ]
             .iter()
             .any(|prefix| key.starts_with(prefix))
-            .then(|| key.to_owned())
         })
+        .map(|(key, _)| key.to_owned())
         .collect();
     for key in build_keys {
         cmd.env_remove(key);
@@ -3864,6 +3864,7 @@ fn is_opencode_frame_close_row(row: &str) -> bool {
 /// present in every state: without it a frame whose status bar has not been painted yet
 /// would read Ready mid-turn — exactly the false idle that lets auto-standby SIGSTOP a live
 /// session. The interrupt hint is checked first so a working screen is never downgraded.
+#[cfg(test)]
 fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
     detect_opencode_screen_activity_at(rows, None)
 }
@@ -4061,6 +4062,7 @@ fn screen_classify_calls() -> usize {
     SCREEN_CLASSIFY_CALLS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[cfg(test)]
 fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
     detect_agent_screen_activity_at(agent_type, rows, None)
 }
@@ -4369,6 +4371,7 @@ fn transition_explicit_shell_state(
     );
 }
 
+#[cfg(test)]
 fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
     state: &crate::state::AppState,
     session_id: &str,
@@ -4683,6 +4686,11 @@ struct TimerIdleTransition {
     /// dead-code the moment the last assertion on it disappears.
     #[cfg_attr(not(test), allow(dead_code))]
     screen_confirms_idle: bool,
+    // Returned provenance is inspected by regression tests; production uses the transition result.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "test-observed transition provenance")
+    )]
     evidence: Option<Evidence>,
 }
 
@@ -5347,11 +5355,11 @@ fn emit_open_intent_if_idle(
     silence: &Arc<Mutex<SilenceState>>,
     session_id: &str,
 ) {
-    if !state
+    if state
         .session_maps
         .shell_states
         .get(session_id)
-        .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_IDLE)
+        .is_none_or(|shell| shell.load(Ordering::Acquire) != SHELL_IDLE)
     {
         return;
     }
@@ -6529,10 +6537,9 @@ impl ChunkProcessor {
             && state.managed_trust_dialogs.contains(session_id)
             && managed_claude_trust_dialog(&screen_buf)
             && state.managed_trust_dialogs.remove(session_id).is_some()
+            && let Err(error) = accept_managed_claude_trust_dialog(state, session_id)
         {
-            if let Err(error) = accept_managed_claude_trust_dialog(state, session_id) {
-                tracing::warn!(source = "terminal", session_id, %error, "Could not accept managed Claude workspace trust dialog");
-            }
+            tracing::warn!(source = "terminal", session_id, %error, "Could not accept managed Claude workspace trust dialog");
         }
 
         if startup_alt_screen {
@@ -6869,10 +6876,11 @@ impl ChunkProcessor {
                         || open.text.starts_with(&text)
                         || same_anchor_repaint
                 });
-                if sl.open_intent.is_some() && !compatible {
-                    if let Some(event) = sl.close_open_intent() {
-                        intent_events.push(event);
-                    }
+                if sl.open_intent.is_some()
+                    && !compatible
+                    && let Some(event) = sl.close_open_intent()
+                {
+                    intent_events.push(event);
                 }
                 // Ink can erase the continuation row, briefly paint the next
                 // paragraph there, then move the intact anchor up one row and

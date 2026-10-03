@@ -135,6 +135,11 @@ pub fn render_story_prompt(
 /// Wake a pinned plan agent with only its plan, current story summary and the
 /// events since its acknowledged sequence. This does not grant transition
 /// authority: proposals remain subject to the story and run services.
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "prompt boundary binds independently sourced run, plan and acknowledgement state"
+)]
 pub fn render_plan_prompt(
     run: &RunSnapshot,
     plan: &Plan,

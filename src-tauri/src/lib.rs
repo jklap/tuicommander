@@ -3,7 +3,6 @@
     not(feature = "desktop"),
     allow(dead_code, unused_imports, unused_variables)
 )]
-#![recursion_limit = "256"]
 
 pub mod acp;
 pub(crate) mod acp_commands;
@@ -37,7 +36,7 @@ pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
-// Tests of the pure sidecar predicate that build.rs also compiles; a build
+// Tests of the sidecar config override that build.rs also compiles; a build
 // script has no test harness.
 #[cfg(test)]
 #[path = "../build_sidecars.rs"]

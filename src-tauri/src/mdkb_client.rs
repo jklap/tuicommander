@@ -391,13 +391,13 @@ mod platform {
             // does not, this is not the envelope this client understands, and
             // guessing which of the two numbers to believe would put a wrong
             // count on screen. Say so instead.
-            if let Some(showing) = found.showing {
-                if showing as usize != found.symbols.len() {
-                    bail!(
-                        "mdkb: code_find reported showing={showing} but sent {} rows",
-                        found.symbols.len()
-                    );
-                }
+            if let Some(showing) = found.showing
+                && showing as usize != found.symbols.len()
+            {
+                bail!(
+                    "mdkb: code_find reported showing={showing} but sent {} rows",
+                    found.symbols.len()
+                );
             }
             Ok(MdkbFindResult {
                 symbols: found.symbols,
