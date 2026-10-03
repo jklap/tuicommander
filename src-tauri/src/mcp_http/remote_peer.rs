@@ -1128,3 +1128,7 @@ mod tests {
         assert!(missing["error"].as_str().unwrap().contains("missing"));
     }
 }
+
+#[cfg(test)]
+#[path = "remote_peer_critic1419.rs"]
+mod critic1419;
