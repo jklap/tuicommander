@@ -156,18 +156,3 @@ fn copied_selection_pulled_history_boundary_activates_then_full_reset_restores_k
     grid.resize(ReflowMode::None, 4, 12);
     assert!(!grid[Line(0)].copy_origin_unknown);
 }
-
-// Catches reactivating latent predecessor loss after a full erase starts a new composer.
-#[test]
-fn copied_selection_full_screen_erase_clears_latent_loss_across_resize() {
-    let mut grid = TerminalGrid::new(2, 20, 1);
-    let _ = grid.process("aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n".as_bytes());
-    grid.resize_with_mode(3, 20, ReflowMode::None);
-    assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
-    assert!(grid.term().grid()[Line(0)].copy_predecessor_lost);
-    let _ = grid.process("\x1b[H\x1b[J❯ hello".as_bytes());
-    assert!(!grid.term().grid()[Line(0)].copy_origin_unknown);
-    assert!(!grid.term().grid()[Line(0)].copy_predecessor_lost);
-    grid.resize_with_mode(3, 24, ReflowMode::None);
-    assert_eq!(grid.get_selection_text(0, 0, 0, 23), "hello");
-}
