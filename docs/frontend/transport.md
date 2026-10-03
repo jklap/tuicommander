@@ -6,7 +6,7 @@ Repository-owned calls resolve their machine from path arguments, including
 `project` on the Project Progress commands. The remote backend owns the
 journal; the local transport routes reads and writes to it.
 
-OS drops are a cross-machine operation: `fs_transfer_remote_paths` runs on the sending backend (`POST /fs/transfer-remote`), reads the local sources and streams bounded archives to `/fs/upload-copy` on the connection id supplied by the drop target. It uses `remote_runtime` for the live endpoint and existing token. It must not route local source paths to the receiving daemon.
+OS drops are a cross-machine operation: desktop-only `fs_transfer_remote_paths` runs through local Tauri IPC, reads Finder source paths and streams bounded archives to `/fs/upload-copy` on the connection id supplied by the drop target. It is `INTENTIONALLY_UNMAPPED`: HTTP token holders must not trigger exfiltration of sources that cannot be gated to registered roots. It uses `remote_runtime` for the live endpoint and existing token. It must not route local source paths to the receiving daemon.
 
 ## Files
 
