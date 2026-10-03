@@ -8,7 +8,7 @@ use crate::workflows::{CheckDefinition, NodeKind, PublishedWorkflow, WorkflowKin
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{LazyLock, Mutex};
@@ -27,27 +27,21 @@ pub struct RunStore {
 const RUN_STORE_SCHEMA_VERSION: i64 = 1;
 
 static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
-// Only runs captured on the first open can be restart debris. Empty sets mean
-// recovery completed; failures remain pending without capturing newly live work.
-static RESTART_RECOVERY_STORES: LazyLock<Mutex<HashMap<PathBuf, HashSet<String>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+// Restart recovery runs once per database path; later opens preserve live work.
+static RECONCILED_STORES: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 impl RunStore {
     pub fn open() -> Result<Self, String> {
         let db_path = crate::config::config_dir().join("workflow_runs.sqlite3");
-        let mut recovery = RESTART_RECOVERY_STORES
-            .lock()
-            .map_err(|_| "workflow recovery lock poisoned")?;
         let store = Self::open_at(&db_path)?;
-        let pending = match recovery.entry(db_path) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(store.active_run_ids()?.into_iter().collect())
-            }
-            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-        };
-        let run_ids: Vec<_> = pending.iter().cloned().collect();
-        let (_, failed) = store.reconcile_runs_after_restart(&run_ids);
-        *pending = failed;
+        let first_open = RECONCILED_STORES
+            .lock()
+            .map_err(|_| "workflow recovery lock poisoned")?
+            .insert(db_path);
+        if first_open {
+            store.reconcile_runs_after_restart(&store.active_run_ids()?);
+        }
         Ok(store)
     }
 
@@ -996,17 +990,6 @@ impl RunStore {
 
     /// Refresh projections at runtime without treating live work as crash debris.
     pub fn reconcile(&self, run_id: &str) -> Result<RunSnapshot, String> {
-        let mut recovery = RESTART_RECOVERY_STORES
-            .lock()
-            .map_err(|_| "workflow recovery lock poisoned")?;
-        if let Some(pending) = recovery.get_mut(&self.db_path) {
-            if pending.contains(run_id) {
-                self.reconcile_run_after_restart(run_id)?;
-                pending.remove(run_id);
-                return self.snapshot(run_id);
-            }
-        }
-        drop(recovery);
         let snapshot = self.snapshot(run_id)?;
         StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)?;
         self.snapshot(run_id)
@@ -1072,7 +1055,7 @@ impl RunStore {
 
     #[cfg(test)]
     pub(super) fn reconcile_active_after_restart(&self) -> Result<usize, String> {
-        Ok(self.reconcile_runs_after_restart(&self.active_run_ids()?).0)
+        Ok(self.reconcile_runs_after_restart(&self.active_run_ids()?))
     }
 
     fn reconcile_run_after_restart(&self, run_id: &str) -> Result<(), String> {
@@ -1080,14 +1063,12 @@ impl RunStore {
         StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)
     }
 
-    fn reconcile_runs_after_restart(&self, run_ids: &[String]) -> (usize, HashSet<String>) {
+    fn reconcile_runs_after_restart(&self, run_ids: &[String]) -> usize {
         let mut recovered = 0;
-        let mut failed = HashSet::new();
         for run_id in run_ids {
             match self.reconcile_run_after_restart(run_id) {
                 Ok(()) => recovered += 1,
                 Err(error) => {
-                    failed.insert(run_id.clone());
                     tracing::warn!(
                         source = "workflows", run_id = %run_id, %error,
                         "Workflow restart recovery failed for this run; continuing other runs"
@@ -1095,7 +1076,7 @@ impl RunStore {
                 }
             }
         }
-        (recovered, failed)
+        recovered
     }
 
     fn append_reconcile_event(
