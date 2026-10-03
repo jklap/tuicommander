@@ -180,11 +180,7 @@ fn recover<const BACKWARD: bool>(gain: &mut [f32], rate: f32) {
         // a release tail, which rises toward the peak faster than it decays.
         let mut before = [carried; LANES];
         before[1..].copy_from_slice(&need[..LANES - 1]);
-        if need
-            .iter()
-            .zip(&before)
-            .fold(true, |held, (&d, &b)| held & (d >= b * keep))
-        {
+        if need.iter().zip(&before).all(|(&d, &b)| d >= b * keep) {
             carried = need[LANES - 1];
             return;
         }
@@ -193,7 +189,7 @@ fn recover<const BACKWARD: bool>(gain: &mut [f32], rate: f32) {
             *r = carried * decay[j + 1];
         }
         // Inside a release tail no sample needs anything: only the carry moves.
-        if need.iter().fold(false, |any, &d| any | (d > 0.0)) {
+        if need.iter().any(|&d| d > 0.0) {
             for (&d, row) in need.iter().zip(&spread) {
                 for (r, &s) in risen.iter_mut().zip(row) {
                     *r = r.max(d * s);
@@ -218,9 +214,8 @@ fn recover<const BACKWARD: bool>(gain: &mut [f32], rate: f32) {
         block(&mut padded);
         rest.copy_from_slice(&padded[LANES - len..]);
     } else {
-        let mut blocks = gain.chunks_exact_mut(LANES);
-        blocks.by_ref().for_each(|b| block(b.try_into().unwrap()));
-        let rest = blocks.into_remainder();
+        let (blocks, rest) = gain.as_chunks_mut::<LANES>();
+        blocks.iter_mut().for_each(&mut block);
         let len = rest.len();
         padded[..len].copy_from_slice(rest);
         block(&mut padded);
@@ -279,7 +274,7 @@ fn for_each_window_sum(samples: &[f32], width: usize, mut each: impl FnMut(usize
             // square, and what it adds it takes back when it leaves.
             *d = d.wrapping_sub(fixed_square(x));
         }
-        for group in diff.chunks_exact_mut(GROUP) {
+        for group in diff.as_chunks_mut::<GROUP>().0 {
             let mut step = 1;
             while step < GROUP {
                 for j in (step..GROUP).rev() {

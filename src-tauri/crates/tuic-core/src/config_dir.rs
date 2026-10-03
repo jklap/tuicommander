@@ -107,6 +107,6 @@ pub fn config_dir() -> PathBuf {
         let platform_dir = dirs::config_dir();
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let instance = crate::app_instance::current_app_instance();
-        production_path(platform_dir.as_deref(), &home, &instance)
+        production_path(platform_dir.as_deref(), &home, instance)
     }
 }

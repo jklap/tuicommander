@@ -31,6 +31,7 @@
 //! The service is unofficial and can change. A change shows up as a typed
 //! [`SpeechError::Failed`] naming what the service did, never as silence.
 
+use std::fmt::Write;
 use std::io::Cursor;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, mpsc};
@@ -99,6 +100,7 @@ trait Socket: Send {
     fn recv(&mut self) -> Result<Frame>;
 }
 
+#[cfg(test)]
 type Dial = Box<dyn Fn() -> Result<Box<dyn Socket>> + Send + Sync>;
 
 /// What bounds one synthesis, shared by every request it makes.
@@ -442,10 +444,12 @@ fn sec_ms_gec(now: SystemTime) -> String {
     let since_unix = now.duration_since(UNIX_EPOCH).unwrap_or_default();
     let ticks = (since_unix + Duration::from_secs(WINDOWS_EPOCH_OFFSET_SECONDS)).as_nanos() / 100;
     let ticks = ticks - ticks % FIVE_MINUTES_IN_TICKS;
-    Sha256::digest(format!("{ticks}{CLIENT_TOKEN}"))
-        .iter()
-        .map(|byte| format!("{byte:02X}"))
-        .collect()
+    let digest = Sha256::digest(format!("{ticks}{CLIENT_TOKEN}"));
+    let mut token = String::with_capacity(64);
+    for byte in digest {
+        write!(token, "{byte:02X}").expect("writing to a String cannot fail");
+    }
+    token
 }
 
 // ---------------------------------------------------------------------------
