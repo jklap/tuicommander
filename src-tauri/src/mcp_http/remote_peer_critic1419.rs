@@ -185,7 +185,10 @@ async fn replayed_message_id_is_not_redelivered_after_the_recipient_read_it() {
     )
     .await;
     assert!(
-        state.agent_inbox.get("b").is_none_or(|inbox| inbox.is_empty()),
+        state
+            .agent_inbox
+            .get("b")
+            .is_none_or(|inbox| inbox.is_empty()),
         "same forwarded message id was delivered twice"
     );
 }
