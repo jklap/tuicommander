@@ -32,7 +32,7 @@ fn live_sender(state: &AppState, sender: &str) {
 fn fill(state: &AppState, tag: &str, recipients: usize, per: usize, sender: &str) {
     for r in 0..recipients {
         // Independent live hosts exercise global accounting, not one host quota.
-        let sender = format!("{tag}-host-{r}/{sender}");
+        let sender = format!("{tag}-host-{r}/{}", sender.rsplit('/').next().unwrap());
         live_sender(state, &sender);
         for i in 0..per {
             let id = format!("{tag}-{r}-{i}");
@@ -136,7 +136,7 @@ fn budget_is_exact_after_window_eviction_and_full_budget_still_dedupes() {
         "65537th id must be rejected"
     );
     assert_eq!(
-        record_forwarded(&state, "a-0", &message("a-0-0", "a-host-0/mint/other")),
+        record_forwarded(&state, "a-0", &message("a-0-0", "a-host-0/other")),
         Ok(false),
         "a replay is still recognised when the budget is full"
     );
