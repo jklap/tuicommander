@@ -646,7 +646,7 @@ fn retire_repaired_phantom_identity(
         // Drop the addressable identity before draining: a send blocked on the
         // guard then finds no recipient instead of refilling the inbox we just
         // emptied.
-        state.peer_agents.remove(phantom);
+        crate::mcp_http::remote_peer::unregister_peer(&state, phantom);
         let carried = match state.agent_inbox.remove(phantom) {
             Some((_, pending)) => pending
                 .into_iter()
@@ -5453,15 +5453,16 @@ fn handle_messaging_with_message_id(
                     )});
                 }
                 if let Some(id) = forwarded_message_id {
-                    match super::remote_peer::record_forwarded(state, to, &msg) {
-                        Ok(true) => {}
-                        Ok(false) => {
+                    match super::remote_peer::enqueue_forwarded(state, to, msg) {
+                        Ok(Some(timestamp)) => timestamp,
+                        Ok(None) => {
                             return serde_json::json!({"message_id":id,"delivered":false,"delivery_path":"inbox_duplicate"});
                         }
                         Err(detail) => return serde_json::json!({"error":detail}),
                     }
+                } else {
+                    state.push_agent_inbox(to, msg)
                 }
-                state.push_agent_inbox(to, msg)
             };
             if let Some(enabled) = keep_open {
                 if enabled {
@@ -8172,7 +8173,7 @@ pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
         .filter(|tuic| state.peer_identity_is_reapable(tuic))
         .collect();
     for tuic in &removed_tuic {
-        state.peer_agents.remove(tuic);
+        crate::mcp_http::remote_peer::unregister_peer(&state, tuic);
         state.orchestrator_peers.remove(tuic);
         state.agent_inbox.remove(tuic);
         drop_identity_buffers(state, tuic);

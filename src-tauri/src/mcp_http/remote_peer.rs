@@ -3,7 +3,7 @@
 //! actions cross this protocol.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -36,7 +36,7 @@ pub(crate) struct RemoteMail {
     hub: Mutex<Option<(String, Arc<Link>)>>,
     // Role transitions are short; network handshakes serialize only per host.
     role_lock: Mutex<()>,
-    connect_locks: Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
+    connect_locks: Mutex<HashMap<String, Weak<HostLock>>>,
     forwarded_history: Mutex<ForwardedHistory>,
     own_host: Mutex<Option<String>>,
     notice_notify: Arc<tokio::sync::Notify>,
@@ -44,18 +44,62 @@ pub(crate) struct RemoteMail {
     supervisors: DashMap<String, tokio::task::AbortHandle>,
 }
 
-/// Keep deduplication independent of inbox reads. History matches the bounded
-/// 100-message outbox horizon and caps recipient count as well as per-peer entries.
+const MAX_FORWARDED_RECORDS: usize = 65_536;
+
 #[derive(Default)]
-struct ForwardedHistory {
-    recipients: HashMap<String, VecDeque<(String, [u8; 32])>>,
-    order: VecDeque<String>,
+struct RecipientHistory {
+    ids: HashMap<String, (String, [u8; 32])>,
+    senders: HashMap<String, VecDeque<String>>,
 }
 
-/// Called under the native identity/enqueue lock. Only fingerprints are retained,
-/// never 64-KiB message bodies (at most 1024 * 100 compact records).
+/// Native send checks registration under its identity lock before recording.
+/// Recipients disappear only when their peer unregisters, never through LRU.
+#[derive(Default)]
+struct ForwardedHistory {
+    recipients: HashMap<String, RecipientHistory>,
+    records: usize,
+}
+
+struct HostLock {
+    mutex: tokio::sync::Mutex<()>,
+    runtime: tokio::runtime::Handle,
+    generation: AtomicU64,
+}
+
+/// Pure replay bookkeeping is also exercised directly by the critic tests.
+#[cfg(test)]
 pub(super) fn record_forwarded(
     state: &AppState,
+    recipient: &str,
+    message: &crate::state::AgentMessage,
+) -> Result<bool, &'static str> {
+    remember_forwarded(
+        &mut state.remote_mail.forwarded_history.lock(),
+        recipient,
+        message,
+    )
+}
+
+/// Registration, replay recording and enqueue share the retirement lock. A
+/// concurrent unregister cannot leave replay state for an unregistered peer.
+pub(super) fn enqueue_forwarded(
+    state: &AppState,
+    recipient: &str,
+    message: crate::state::AgentMessage,
+) -> Result<Option<u64>, &'static str> {
+    let mut history = state.remote_mail.forwarded_history.lock();
+    if !state.peer_agents.contains_key(recipient) {
+        return Err("Forwarded recipient is no longer registered");
+    }
+    if !remember_forwarded(&mut history, recipient, &message)? {
+        return Ok(None);
+    }
+    Ok(Some(state.push_agent_inbox(recipient, message)))
+}
+
+/// A full global budget rejects new ids visibly, preserving every other window.
+fn remember_forwarded(
+    history: &mut ForwardedHistory,
     recipient: &str,
     message: &crate::state::AgentMessage,
 ) -> Result<bool, &'static str> {
@@ -65,30 +109,67 @@ pub(super) fn record_forwarded(
     hasher.update(message.from_tuic_session.as_bytes());
     hasher.update(message.content.as_bytes());
     let fingerprint: [u8; 32] = hasher.finalize().into();
-    let mut history = state.remote_mail.forwarded_history.lock();
     if let Some(records) = history.recipients.get(recipient)
-        && let Some((_, previous)) = records.iter().find(|(id, _)| id == &message.id)
+        && let Some((sender, previous)) = records.ids.get(&message.id)
     {
-        return if *previous == fingerprint {
+        return if sender == &message.from_tuic_session && *previous == fingerprint {
             Ok(false)
         } else {
             Err("Forwarded message identity collision")
         };
     }
-    history.order.retain(|id| id != recipient);
-    if !history.recipients.contains_key(recipient)
-        && history.recipients.len() >= 1024
-        && let Some(oldest) = history.order.pop_front()
-    {
-        history.recipients.remove(&oldest);
+    let window_full = history
+        .recipients
+        .get(recipient)
+        .and_then(|records| records.senders.get(&message.from_tuic_session))
+        .is_some_and(|window| window.len() >= 100);
+    if !window_full && history.records >= MAX_FORWARDED_RECORDS {
+        return Err("Forwarded replay history is full; new message was not queued");
     }
-    history.order.push_back(recipient.to_string());
+    if !window_full {
+        history.records += 1;
+    }
     let records = history.recipients.entry(recipient.to_string()).or_default();
-    if records.len() >= 100 {
-        records.pop_front();
+    let window = records
+        .senders
+        .entry(message.from_tuic_session.clone())
+        .or_default();
+    if window_full && let Some(oldest) = window.pop_front() {
+        records.ids.remove(&oldest);
     }
-    records.push_back((message.id.clone(), fingerprint));
+    window.push_back(message.id.clone());
+    records.ids.insert(
+        message.id.clone(),
+        (message.from_tuic_session.clone(), fingerprint),
+    );
     Ok(true)
+}
+
+/// Every peer retirement uses this path so replay history cannot outlive the
+/// registered recipient. The history lock serializes removal with recording.
+pub(crate) fn unregister_peer(state: &AppState, recipient: &str) {
+    let mut history = state.remote_mail.forwarded_history.lock();
+    state.peer_agents.remove(recipient);
+    if let Some(records) = history.recipients.remove(recipient) {
+        history.records -= records.ids.len();
+    }
+}
+
+fn host_lock(state: &AppState, id: &str) -> Arc<HostLock> {
+    let mut locks = state.remote_mail.connect_locks.lock();
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    let slot = locks.entry(id.to_string()).or_default();
+    if let Some(lock) = slot.upgrade() {
+        lock
+    } else {
+        let lock = Arc::new(HostLock {
+            mutex: tokio::sync::Mutex::new(()),
+            runtime: tokio::runtime::Handle::current(),
+            generation: AtomicU64::new(0),
+        });
+        *slot = Arc::downgrade(&lock);
+        lock
+    }
 }
 
 struct Link {
@@ -464,20 +545,9 @@ fn process(
 async fn connection(state: &Arc<AppState>, id: &str) -> Result<Arc<Link>, Value> {
     // Weak locks disappear after the handshake callers finish, so unknown
     // host probes cannot accumulate permanent lock entries.
-    let host_lock = {
-        let mut locks = state.remote_mail.connect_locks.lock();
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        let slot = locks.entry(id.to_string()).or_default();
-        if let Some(lock) = slot.upgrade() {
-            lock
-        } else {
-            let lock = Arc::new(tokio::sync::Mutex::new(()));
-            *slot = Arc::downgrade(&lock);
-            lock
-        }
-    };
-    let _guard = host_lock.lock().await;
-    {
+    let host_lock = host_lock(state, id);
+    let _guard = host_lock.mutex.lock().await;
+    let generation = {
         let _role_guard = state.remote_mail.role_lock.lock();
         if state.remote_mail.own_host.lock().is_some() {
             return Err(error(
@@ -485,7 +555,8 @@ async fn connection(state: &Arc<AppState>, id: &str) -> Result<Arc<Link>, Value>
                 "a daemon spoke routes remote mail through its desktop hub",
             ));
         }
-    }
+        host_lock.generation.load(Ordering::Acquire)
+    };
     if let Some(link) = state.remote_mail.connections.get(id)
         && !link.outbound.is_closed()
     {
@@ -535,7 +606,8 @@ async fn connection(state: &Arc<AppState>, id: &str) -> Result<Arc<Link>, Value>
     });
     {
         let _role_guard = state.remote_mail.role_lock.lock();
-        if state.remote_mail.own_host.lock().is_some()
+        if host_lock.generation.load(Ordering::Acquire) != generation
+            || state.remote_mail.own_host.lock().is_some()
             || state.remote.base_url(id).as_deref() != Some(base.as_str())
             || state.remote.token(id).as_deref() != Some(token.as_str())
         {
@@ -561,13 +633,13 @@ async fn connection(state: &Arc<AppState>, id: &str) -> Result<Arc<Link>, Value>
             Role::Hub(id.clone()),
         )
         .await;
-        let _guard = task_host_lock.lock().await;
-        if task_state
+        let _guard = task_host_lock.mutex.lock().await;
+        let removed = task_state
             .remote_mail
             .connections
             .remove_if(&id, |_, current| Arc::ptr_eq(current, &task_link))
-            .is_some()
-        {
+            .is_some();
+        if removed || !task_state.remote_mail.connections.contains_key(&id) {
             cleanup_shadows(&task_state, Some(&id));
         }
     });
@@ -834,25 +906,70 @@ fn cleanup_shadows(state: &AppState, host: Option<&str>) {
         .map(|peer| peer.key().clone())
         .collect();
     for identity in identities {
-        state.peer_agents.remove(&identity);
+        unregister_peer(state, &identity);
         // Do not drop retained cross-host lifecycle mail: it is the outbox
         // until the owning machine acknowledges its durable inbox copy.
     }
 }
 
 /// Retire the mail link when its configured connection is disconnected.
-pub(crate) fn disconnect(state: &AppState, host: &str) {
-    if let Some((_, supervisor)) = state.remote_mail.supervisors.remove(host) {
-        supervisor.abort();
-    }
-    if let Some((_, link)) = state.remote_mail.connections.remove(host) {
-        link.shutdown.notify_one();
+pub(crate) fn disconnect(state: &Arc<AppState>, host: &str) {
+    let gate = state
+        .remote_mail
+        .connect_locks
+        .lock()
+        .get(host)
+        .and_then(Weak::upgrade);
+    let generation = {
+        let _role_guard = state.remote_mail.role_lock.lock();
+        let generation = gate
+            .as_ref()
+            .map(|gate| gate.generation.fetch_add(1, Ordering::AcqRel) + 1);
+        if let Some((_, supervisor)) = state.remote_mail.supervisors.remove(host) {
+            supervisor.abort();
+        }
+        if let Some((_, link)) = state.remote_mail.connections.remove(host) {
+            link.shutdown.notify_one();
+        }
+        generation
+    };
+    let Some(gate) = gate else {
+        cleanup_shadows(state, Some(host));
+        return;
+    };
+    if let Ok(_guard) = gate.mutex.try_lock() {
+        cleanup_shadows(state, Some(host));
+    } else {
+        // Sync runtime/mirror callbacks cannot await a pending handshake.
+        // Invalidation above is atomic with publication; final retirement takes
+        // that same host lock on its original runtime, even from a plain thread.
+        let state = state.clone();
+        let host = host.to_string();
+        let task_gate = gate.clone();
+        gate.runtime.spawn(async move {
+            let _guard = task_gate.mutex.lock().await;
+            if Some(task_gate.generation.load(Ordering::Acquire)) == generation {
+                cleanup_shadows(&state, Some(&host));
+            }
+        });
     }
 }
 
 /// Open the reverse path when the configured connection becomes ready, so a
 /// daemon can mail the hub before the desktop makes its first mail call.
 pub(crate) fn connect_configured(state: &Arc<AppState>, host: String) {
+    {
+        let _role_guard = state.remote_mail.role_lock.lock();
+        if let Some(gate) = state
+            .remote_mail
+            .connect_locks
+            .lock()
+            .get(&host)
+            .and_then(Weak::upgrade)
+        {
+            gate.generation.fetch_add(1, Ordering::AcqRel);
+        }
+    }
     if let Some((_, previous)) = state.remote_mail.supervisors.remove(&host) {
         previous.abort();
     }
@@ -1163,6 +1280,196 @@ mod tests {
                 .iter()
                 .any(|entry| entry.key().starts_with("remote-mail:"))
         );
+    }
+
+    fn forwarded(id: &str, from: &str) -> crate::state::AgentMessage {
+        crate::state::AgentMessage {
+            id: id.into(),
+            from_tuic_session: from.into(),
+            from_name: from.into(),
+            content: "one lifecycle notice".into(),
+            timestamp: 0,
+            delivered_via_channel: false,
+        }
+    }
+
+    // Catches: cache pressure silently evicts live replay protection to admit mail.
+    #[tokio::test]
+    async fn forwarded_cache_pressure_rejects_new_ids_without_forgetting_replays() {
+        let state = test_state();
+        let (_, sender) = peer(&state, "sender").await;
+        let (_, first) = peer(&state, "first").await;
+        let original = forwarded("original", &sender);
+        assert_eq!(record_forwarded(&state, &first, &original), Ok(true));
+        let mut recipient = first.clone();
+        for n in 1..MAX_FORWARDED_RECORDS {
+            if n % 100 == 0 {
+                recipient = peer(&state, "recipient").await.1;
+            }
+            assert_eq!(
+                record_forwarded(&state, &recipient, &forwarded(&format!("id-{n}"), &sender)),
+                Ok(true)
+            );
+        }
+        assert!(record_forwarded(&state, &recipient, &forwarded("overflow", &sender)).is_err());
+        assert_eq!(record_forwarded(&state, &first, &original), Ok(false));
+    }
+
+    // Catches: peer retirement leaks its replay budget or erases another peer's ids.
+    #[tokio::test]
+    async fn recipient_unregister_releases_only_its_own_forwarded_history() {
+        let state = test_state();
+        let (sid, first) = peer(&state, "first").await;
+        let (_, second) = peer(&state, "second").await;
+        let original = forwarded("notice", "sender");
+        assert_eq!(record_forwarded(&state, &first, &original), Ok(true));
+        assert_eq!(record_forwarded(&state, &second, &original), Ok(true));
+        unregister_peer(&state, &first);
+        let restored = super::super::mcp_transport::local_peer_call(
+            &state,
+            &json!({"action":"register","tuic_session":first,"name":"restored"}),
+            Some(&sid),
+        )
+        .await;
+        assert_eq!(restored["tuic_session"], first, "{restored}");
+        assert_eq!(record_forwarded(&state, &first, &original), Ok(true));
+        assert_eq!(record_forwarded(&state, &second, &original), Ok(false));
+    }
+
+    // Catches: a retired recipient acquires replay state or an orphan inbox.
+    #[tokio::test]
+    async fn forwarded_enqueue_after_unregister_never_leaves_orphan_state() {
+        let state = test_state();
+        let (_, recipient) = peer(&state, "recipient").await;
+        unregister_peer(&state, &recipient);
+        assert_eq!(
+            enqueue_forwarded(&state, &recipient, forwarded("notice", "sender")),
+            Err("Forwarded recipient is no longer registered")
+        );
+        assert!(
+            !state
+                .remote_mail
+                .forwarded_history
+                .lock()
+                .recipients
+                .contains_key(&recipient)
+        );
+        assert!(!state.agent_inbox.contains_key(&recipient));
+    }
+
+    // The native router performs the real authenticated WebSocket handshake.
+    // Middleware holds only response setup; no external protocol is fabricated.
+    async fn held_daemon(
+        hub: &Arc<AppState>,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        tokio::sync::oneshot::Receiver<()>,
+        Arc<tokio::sync::Notify>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let remote = test_state();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        hub.remote.force_connected_for_test(
+            "mint",
+            &url,
+            Some(&remote.session_token.read().clone()),
+        );
+        let (tx, entered) = tokio::sync::oneshot::channel();
+        let signal = Arc::new(Mutex::new(Some(tx)));
+        let release = Arc::new(tokio::sync::Notify::new());
+        let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let router = super::super::build_remote_router(remote).layer(axum::middleware::from_fn({
+            let release = release.clone();
+            let requests = requests.clone();
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let release = release.clone();
+                let signal = signal.clone();
+                let requests = requests.clone();
+                async move {
+                    if request.uri().path() == "/mcp/peer" {
+                        requests.fetch_add(1, Ordering::AcqRel);
+                        if let Some(tx) = signal.lock().take() {
+                            let _ = tx.send(());
+                        }
+                        release.notified().await;
+                    }
+                    next.run(request).await
+                }
+            }
+        }));
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        (server, entered, release, requests)
+    }
+
+    // Catches: concurrent callers for one host race into two authenticated hubs.
+    #[tokio::test]
+    async fn same_host_parallel_calls_open_only_one_authenticated_connection() {
+        let hub = test_state();
+        let (server, entered, release, requests) = held_daemon(&hub).await;
+        let first_hub = hub.clone();
+        let first = tokio::spawn(async move { connection(&first_hub, "mint").await });
+        entered.await.unwrap();
+        let mut second = Box::pin(connection(&hub, "mint"));
+        assert!(matches!(
+            futures_util::poll!(&mut second),
+            std::task::Poll::Pending
+        ));
+        release.notify_one();
+        assert!(first.await.unwrap().is_ok());
+        assert!(second.await.is_ok());
+        assert_eq!(
+            requests.load(Ordering::Acquire),
+            1,
+            "one host must share one handshake"
+        );
+        disconnect(&hub, "mint");
+        server.abort();
+    }
+
+    // Catches: disconnect during handshake publishes a link after retirement.
+    #[tokio::test]
+    async fn disconnect_during_a_handshake_never_publishes_a_stranded_link() {
+        let hub = test_state();
+        let (server, entered, release, _) = held_daemon(&hub).await;
+        let first_hub = hub.clone();
+        let opening = tokio::spawn(async move { connection(&first_hub, "mint").await });
+        entered.await.unwrap();
+        disconnect(&hub, "mint");
+        release.notify_one();
+        let result = opening.await.unwrap();
+        assert!(
+            matches!(result, Err(ref detail) if detail["error"].as_str().unwrap().contains("changed during"))
+        );
+        assert!(!hub.remote_mail.connections.contains_key("mint"));
+        server.abort();
+    }
+
+    // Catches: a credential change publishes a socket authenticated with the old token.
+    #[tokio::test]
+    async fn configured_token_rotation_during_handshake_rejects_the_old_generation() {
+        let hub = test_state();
+        let (server, entered, release, _) = held_daemon(&hub).await;
+        let first_hub = hub.clone();
+        let opening = tokio::spawn(async move { connection(&first_hub, "mint").await });
+        entered.await.unwrap();
+        let url = hub.remote.base_url("mint").unwrap();
+        hub.remote
+            .force_connected_for_test("mint", &url, Some("rotated-token"));
+        release.notify_one();
+        let result = opening.await.unwrap();
+        assert!(
+            matches!(result, Err(ref detail) if detail["error"].as_str().unwrap().contains("changed during"))
+        );
+        assert!(!hub.remote_mail.connections.contains_key("mint"));
+        server.abort();
     }
 
     // Catches: star routing disables local delivery when the hub is down, or a
