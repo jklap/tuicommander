@@ -2,6 +2,8 @@
 
 ## File Browser Panel
 
+Drop files from Finder onto a folder or empty panel space to transfer them into that directory. A remote repository always receives a copy over its connected daemon; your Mac originals stay in place. Confirm directory recursion before copying folders. Existing destination names are skipped, as with local drops. Uploads are limited to 256 MiB (including archive overhead) and 10,000 entries per top-level source; symlinks and special files are not uploaded. The remote destination must be inside a registered repository.
+
 Toggle with `Cmd+E` or the folder icon in the status bar. The file browser shows the directory tree of the active repository (or linked worktree when on a worktree branch).
 
 The file browser, Markdown viewer, and Diff panels are mutually exclusive — opening one closes any other that is open.

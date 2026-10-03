@@ -1,5 +1,9 @@
 # MCP & HTTP Server
 
+## Remote file copies
+
+The shared filesystem router exposes `/fs/transfer-remote` for sender-side copy coordination and streamed `/fs/upload-copy` on the daemon. Both use the existing authentication middleware. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
+
 ## CI logs
 
 The MCP `repo` tool's `ci_logs` action accepts `path` and `branch` and fetches

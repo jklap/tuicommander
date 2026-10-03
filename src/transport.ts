@@ -1981,6 +1981,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			},
 		}),
 	},
+	fs_transfer_remote_paths: {
+		map: (args) => ({ method: "POST", path: "/fs/transfer-remote", body: args }),
+	},
 	search_content: {
 		map: (args, p) => {
 			let path = `/fs/search-content?repoPath=${p("repoPath")}&query=${p("query")}&caseSensitive=${p("caseSensitive")}&useRegex=${p("useRegex")}&wholeWord=${p("wholeWord")}`;

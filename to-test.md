@@ -60,6 +60,10 @@
 
 # To Test
 
+## Remote file drops (1434-1719) — Rust restart required
+
+- [ ] After Boss restarts the desktop and updates the remote daemon, drop a Mac file and a folder onto a registered remote repository in tree and flat views. Verify remote bytes, unchanged local sources, directory confirmation and conflict skipping. This native Finder-to-Tauri interaction requires the desktop rebuild; no second desktop instance was launched.
+
 ## Safe orphan cleanup countdown (story 1257-a30b) — Rust restart required
 
 - [ ] In an isolated `TUIC_APP_INSTANCE=<id>` after `make dev` restart, create a disposable detached linked worktree whose HEAD is on a branch and has no tracked or untracked changes. In Ask mode verify the dialog counts down from the configured number and removes it; repeat with Keep and Escape and verify it remains. Add an untracked file and verify the dialog names the reason and never counts down. While a clean dialog is open, answer `repo action=orphan_cleanup_answer path=<repo> decision=keep` through MCP and verify it closes without removal. _(NOT VERIFIED 2026-09-30: needs the desktop frontend; deferred until after Boss restart. Backend: No pending orphan cleanup exists headless; orphan_cleanup_answer exists but dialog and countdown are UI.)_

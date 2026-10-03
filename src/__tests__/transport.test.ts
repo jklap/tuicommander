@@ -1157,6 +1157,16 @@ describe("transport", () => {
 			});
 		});
 
+		// Catches: the desktop upload coordinator losing its HTTP equivalent.
+		it("maps remote copy coordination to the sending backend with its owner intact", () => {
+			const args = { connectionId: "mint", destDir: "/repo/dst", paths: ["/Mac/file"], allowRecursive: false };
+			expect(mapCommandToHttp("fs_transfer_remote_paths", args)).toEqual({
+				method: "POST",
+				path: "/fs/transfer-remote",
+				body: args,
+			});
+		});
+
 		// --- PTY/terminal read commands (story 062) ---
 		it("maps get_shell_state to GET with {state} unwrap transform", () => {
 			const result = mapCommandToHttp("get_shell_state", { sessionId: "s1" });
