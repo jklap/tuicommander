@@ -68,6 +68,16 @@ jobs:
       - name: Scan cargo fetch through Socket Firewall
         run: cd src-tauri && sfw cargo fetch
 
+  gitlink:
+    timeout-minutes: 5
+    name: Plugins pin is pushed
+    runs-on: ubuntu-22.04
+    steps:
+      # No submodule checkout: an unpushed pin would fail that step before this check ran.
+      - uses: actions/checkout@v6
+      - run: scripts/check-gitlink-reachable.sh
+      - run: TMPDIR="$RUNNER_TEMP" scripts/test-check-gitlink-reachable.sh
+
   frontend:
     timeout-minutes: 20
     name: Frontend (typecheck + tests)
@@ -96,6 +106,10 @@ jobs:
 
       - name: Typecheck
         run: pnpm exec tsc --noEmit
+
+      # A `scripts/*` gitignore rule once hid a script that CI and package.json call.
+      - name: Referenced scripts are tracked
+        run: grep -ohE 'scripts/[A-Za-z0-9_./-]+\.(mjs|sh|js|py)' package.json .github/workflows/*.yml | sort -u | xargs git ls-files --error-unmatch
 
       - name: Third-party notices (JavaScript)
         run: |

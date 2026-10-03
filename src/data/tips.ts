@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Private Secret Forms",
+		description:
+			"Ask an agent to request named credentials in a private form. Review the exact command before allowing it to use them.",
+		shortcut: null,
+	},
+	{
 		feature: "AI Chat Prompt Parking",
 		description:
 			"Park a half-written AI Chat prompt to ask something else; it returns after your next Send. On phones, tap Park.",

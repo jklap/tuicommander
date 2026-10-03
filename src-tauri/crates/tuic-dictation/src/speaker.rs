@@ -763,6 +763,9 @@ fn next_reply(shared: &Shared, output: &dyn Output) -> Option<(Reply, SpeechCanc
         if !state.changes.is_empty() {
             let changes = std::mem::take(&mut state.changes);
             parking_lot::MutexGuard::unlocked(&mut state, || shared.dispatch(changes));
+            // Shutdown or a new reply may have arrived while dispatch released
+            // the lock. Its wake has already fired: recheck before sleeping.
+            continue;
         }
         match state.queue.pop_front() {
             Some(reply) if reply.generation == state.generation => {
@@ -797,8 +800,9 @@ fn next_reply(shared: &Shared, output: &dyn Output) -> Option<(Reply, SpeechCanc
 
 /// Playback through the system's audio output.
 pub struct DeviceOutput {
-    /// Held for as long as the player: dropping the stream silences it.
-    _stream: rodio::MixerDeviceSink,
+    /// Held for as long as the player: dropping the stream silences it. `None`
+    /// only in tests, which drive the player without a sound device.
+    _stream: Option<rodio::MixerDeviceSink>,
     player: rodio::Player,
 }
 
@@ -815,7 +819,7 @@ impl DeviceOutput {
             .ok_or_else(|| "no audio output device could be opened".to_string())?;
         let player = rodio::Player::connect_new(stream.mixer());
         Ok(Self {
-            _stream: stream,
+            _stream: Some(stream),
             player,
         })
     }
@@ -1831,6 +1835,62 @@ mod tests {
         }
     }
 
+    // Catches: a shutdown wake lost while Finished dispatch releases the lock,
+    // leaving the render worker asleep forever after its last reply.
+    #[test]
+    fn shutdown_during_finished_dispatch_does_not_need_another_wake() {
+        struct HoldFinished {
+            entered: std::sync::mpsc::Sender<()>,
+            release: Mutex<std::sync::mpsc::Receiver<()>>,
+        }
+
+        impl UtteranceObserver for HoldFinished {
+            fn changed(&self, _id: UtteranceId, state: &Utterance, _generation: u64) {
+                if *state == Utterance::Finished {
+                    self.entered.send(()).expect("test waits for Finished");
+                    self.release.lock().recv().expect("test releases dispatch");
+                }
+            }
+        }
+
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let output = Arc::new(FakeOutput::default());
+        let mut speaker =
+            Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 0);
+        speaker.observe(Arc::new(HoldFinished {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        }));
+        let id = speaker.say(0, "ciao", "alba").expect("queued");
+        eventually("the reply to reach the device", || {
+            speaker.utterance(id) == Some(Utterance::Speaking)
+        });
+        output.finish_playing();
+        entered_rx.recv().expect("Finished dispatch started");
+
+        // Run the real shutdown before dispatch can reacquire the lock. Join
+        // separately so a regression can fail and wake the worker for cleanup.
+        let worker = speaker.worker.take().expect("render worker");
+        let shared = Arc::clone(&speaker.shared);
+        drop(speaker);
+        release_tx.send(()).expect("release Finished dispatch");
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let joiner = std::thread::spawn(move || {
+            let result = worker.join();
+            done_tx.send(result).expect("test waits for worker exit");
+        });
+        let stopped = done_rx.recv_timeout(PATIENCE);
+        if stopped.is_err() {
+            // The old worker is asleep after consuming the shutdown wake.
+            shared.wake.notify_all();
+        }
+        joiner.join().expect("worker joiner");
+        stopped
+            .expect("shutdown needed another wake after Finished dispatch")
+            .expect("render worker panicked");
+    }
+
     /// A reply's whole life is pushed, not polled for.
     ///
     /// `Finished` is the one that matters and the one a caller cannot be told:
@@ -2081,5 +2141,47 @@ mod tests {
             !speaker.status().paused,
             "an output that cannot hold reported held"
         );
+    }
+
+    /// A `DeviceOutput` over a player nothing drains, so `Output` calls can be
+    /// observed on the player without a sound device.
+    fn deviceless_output() -> DeviceOutput {
+        let (player, _queue) = rodio::Player::new();
+        DeviceOutput {
+            _stream: None,
+            player,
+        }
+    }
+
+    /// Catches: `DeviceOutput::pause`/`resume` being no-ops, and `can_pause`
+    /// reporting false, which would make the speaker fall back to dropping the
+    /// reply instead of holding it.
+    #[test]
+    fn device_output_pause_and_resume_drive_the_player() {
+        let output = deviceless_output();
+        assert!(output.can_pause());
+        assert!(!output.player.is_paused());
+
+        output.pause();
+        assert!(output.player.is_paused(), "pause did not reach the player");
+
+        output.resume();
+        assert!(
+            !output.player.is_paused(),
+            "resume did not reach the player"
+        );
+    }
+
+    /// Catches: `DeviceOutput::stop` doing nothing, which leaves a paused
+    /// player paused, so the next reply is appended into silence.
+    #[test]
+    fn device_output_stop_leaves_a_paused_player_playing() {
+        let output = deviceless_output();
+        output.pause();
+        assert!(output.player.is_paused());
+
+        output.stop();
+
+        assert!(!output.player.is_paused(), "stop left the player paused");
     }
 }

@@ -204,6 +204,11 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     )
 }
 
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) fn remove_worktree_with_presence_confirmation(
     repo_path: &str,
     workspace_id: &str,
@@ -385,6 +390,11 @@ pub(crate) fn get_worktrees_dir(
 /// `delete_branch` defaults to `false` with force and `true` otherwise.
 #[cfg(feature = "desktop")]
 #[tauri::command]
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) async fn remove_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
@@ -931,6 +941,11 @@ pub(crate) fn merge_and_archive_worktree_impl(
     )
 }
 
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
     state: &Arc<AppState>,
     repo_path: String,
@@ -1074,6 +1089,11 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
 /// commits while its worktree is dirty. The frontend sets it after the user confirms.
 #[cfg(feature = "desktop")]
 #[tauri::command]
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) fn merge_and_archive_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,

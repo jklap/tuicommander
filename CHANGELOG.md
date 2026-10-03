@@ -6,7 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Private secret forms** — Agents request only named sensitive fields and run user-approved argv commands with values in the child environment. Values remain in memory, output is masked, and a one-time capability supports browser or phone entry on the existing server. TUIC inspection tools are suspended while entry is open.
+- **Remote peer mail** — A flooding host has its own replay quota. Budget pressure reclaims only departed senders, and disconnect retires old shadow peers even during a reconnect handshake. A departed sender may replay once after pressure evicted its history.
+
+### Fixed
+
+- Desktop MCP now discovers and addresses configured remote terminals and peers, preserving native output and semantic submit behavior. Authenticated peer mail supports remote replies and remote-to-remote delivery through the desktop hub.
 - **Remote file drops** — Dropping Mac files onto a connected remote repository copies them through the authenticated daemon connection. Directory drops keep the recursion confirmation; existing names are skipped. Uploads have a 17-minute total receive deadline, and read-only directories publish correctly. Abrupt daemon termination can leave a staging directory for manual removal.
+- **HTTP API security** — Reject foreign browser origins and DNS-rebinding Host names before handlers run. Protected HTTP requests now require credentials even from loopback/LAN; local CLI/MCP IPC retains its existing access.
+
 - **Remote agent notices** — MCP toasts from connected daemons reach the desktop notification bell with the host name, original level and requested sound. Open terminal selects the originating remote tab; unknown sessions leave focus unchanged. Disconnected notices are not queued for replay. Malformed remote notice text is discarded, and identically named connections retain separate notices.
 - **Telegram adapter groundwork** — Add offline owner, file authorization, safe Bot API and minimal inbound boundaries. Persist only the atomic polling cursor; unread inbox mail may be lost on restart. Harden offline polling with fixed ten-update batches under a 1 MiB response cap, one cursor write after each successful batch, shared retry scheduling and in-memory rejection stops. Daemon polling and native mail delivery remain disabled pending integration; no live Telegram channel is available yet.
 
@@ -14,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Remote terminal stream failures** — A stalled initial replay, unreadable frame or disconnected stream now shows a persistent error toast. Reconnect attempts remain bounded until a frame reaches the renderer.
 - **Answers-only view** — Keep marked answers that precede the first tracked prompt. Show a short notice when no marked answers remain in the retained history.
 - **Stable MCP bridge** — Agent configs use an atomically installed bridge outside Cargo targets. Rebuilds and target cleanup no longer remove the executable needed by new MCP connections; previous bridge revisions remain available through updates.
+- **Remote agent detection** — Agents started by hand in a headless terminal gain backend agent state, safe submit and mail wake. HTTP and desktop foreground detection now share the state update. Rejected submissions and unavailable mail wakes explain the cause and the next action.
+- Revoke agent identity when the foreground returns to a shell after the agent was observed, retaining startup presets and transient helpers; recognise native versioned and updater-replaced Claude executables on Linux.
 
 - **Hands-free controls** — Start conversation uses the accent action style. A coloured Running/Stopped indicator keeps the current state visible.
 

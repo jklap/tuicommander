@@ -48,6 +48,10 @@ jobs:
           # cannot compile at all.
           submodules: recursive
 
+      - name: Check tag matches version
+        if: github.ref_type == 'tag'
+        run: bash scripts/check-release-tag.sh "$GITHUB_REF_NAME"
+
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -241,6 +245,10 @@ jobs:
           # cannot compile at all.
           submodules: recursive
 
+      - name: Check tag matches version
+        if: github.ref_type == 'tag'
+        run: bash scripts/check-release-tag.sh "$GITHUB_REF_NAME"
+
       - name: Install Linux dependencies
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
@@ -420,6 +428,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
+
+      - name: Check tag matches version
+        if: github.ref_type == 'tag'
+        run: bash scripts/check-release-tag.sh "$GITHUB_REF_NAME"
 
       - name: Build release notes
         env:

@@ -496,7 +496,7 @@ mod tests {
             3,
             "all same-event sources must remain loaded"
         );
-        assert!(commands[2].contains("7770;state=busy"));
+        assert!(commands[2].contains("7770;state=prompt"));
 
         for command in commands {
             let status = std::process::Command::new("/bin/sh")

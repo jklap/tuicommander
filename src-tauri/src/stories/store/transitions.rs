@@ -150,6 +150,7 @@ impl StoryStore {
         Ok(story)
     }
 
+    #[cfg(test)]
     pub fn transition(
         &self,
         story_id: &str,
