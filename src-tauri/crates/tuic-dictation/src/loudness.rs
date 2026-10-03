@@ -151,6 +151,12 @@ fn limit(samples: &mut [f32], gain: &mut [f32], rate: NonZero<u32>, ceiling: f32
 /// computes that maximum from its own needs and the deficit carried in, so the
 /// only dependency from one block to the next is one multiply: a sample-serial
 /// chain would cost its latency per sample.
+// Both reductions evaluate every lane so the fixed-size block remains branch-free
+// and can be vectorized; short-circuiting changes the audio processing budget.
+#[expect(
+    clippy::needless_bitwise_bool,
+    reason = "branch-free SIMD lane reductions"
+)]
 fn recover<const BACKWARD: bool>(gain: &mut [f32], rate: f32) {
     const LANES: usize = 8;
     let keep = 1.0 - rate;
@@ -180,7 +186,11 @@ fn recover<const BACKWARD: bool>(gain: &mut [f32], rate: f32) {
         // a release tail, which rises toward the peak faster than it decays.
         let mut before = [carried; LANES];
         before[1..].copy_from_slice(&need[..LANES - 1]);
-        if need.iter().zip(&before).all(|(&d, &b)| d >= b * keep) {
+        if need
+            .iter()
+            .zip(&before)
+            .fold(true, |held, (&d, &b)| held & (d >= b * keep))
+        {
             carried = need[LANES - 1];
             return;
         }
@@ -189,7 +199,7 @@ fn recover<const BACKWARD: bool>(gain: &mut [f32], rate: f32) {
             *r = carried * decay[j + 1];
         }
         // Inside a release tail no sample needs anything: only the carry moves.
-        if need.iter().any(|&d| d > 0.0) {
+        if need.iter().fold(false, |any, &d| any | (d > 0.0)) {
             for (&d, row) in need.iter().zip(&spread) {
                 for (r, &s) in risen.iter_mut().zip(row) {
                     *r = r.max(d * s);
