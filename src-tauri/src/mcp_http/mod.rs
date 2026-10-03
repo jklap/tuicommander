@@ -16,6 +16,8 @@ pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod plugin_routes;
 mod remote_session_proxy;
+#[cfg(test)]
+mod secret_critic1435_tests;
 pub(crate) mod session;
 pub(crate) mod sse_routes;
 pub(crate) mod static_files;
