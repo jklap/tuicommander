@@ -10,6 +10,7 @@ const { subscribe, unsubscribe, eventHandlers } = vi.hoisted(() => ({
 vi.mock("../../components/Terminal/canvasTerminalTransport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../components/Terminal/canvasTerminalTransport")>()),
 	createTransport: () => ({
+		onStreamError: (handler: (error: unknown) => void) => eventHandlers.set("stream-error", handler),
 		onEvent: vi.fn(async (type: string, handler: (error: unknown) => void) => {
 			eventHandlers.set(type, handler);
 		}),

@@ -1781,9 +1781,13 @@ async fn handle_ws_grid_session(
     // scopes the MutexGuard (dropped before the .await) and gives the damage back
     // so this connect does not cost the desktop channel its next frame.
     let initial_frame = full_frame_for_single_client(&state, &session_id);
-    if let Some(frame) = initial_frame
-        && ws_sender.binary(frame).await.is_err()
-    {
+    let sent = match initial_frame {
+        Some(frame) => ws_sender.binary(frame).await,
+        // A live watch channel can precede its grid buffer. Silence would look
+        // like a lost replay to the client, even for a healthy idle PTY.
+        None => ws_sender.text(r#"{"type":"grid-replay-empty"}"#).await,
+    };
+    if sent.is_err() {
         return;
     }
 
@@ -2440,6 +2444,52 @@ mod tests {
                 .is_some_and(|message| message.contains("not a directory"))
         );
         assert!(state.session_maps.sessions.is_empty());
+        server.abort();
+    }
+
+    /// Catches: a live but empty grid stream sends nothing on attach, causing
+    /// the client replay watchdog to report a false failure on an idle PTY.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn grid_ws_empty_replay_does_not_leave_healthy_idle_session_silent() {
+        let state = super::super::tests::test_state();
+        let sid = "empty-grid-replay";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        state
+            .grid
+            .watch
+            .insert(sid.into(), crate::grid_watch::new_grid_watch());
+        assert!(!state.grid.vt_log_buffers.contains_key(sid));
+
+        let app = super::super::build_router(state, false, true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind isolated test server");
+        let addr = listener.local_addr().expect("bound address");
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!(
+            "ws://{addr}/sessions/{sid}/stream?format=grid"
+        ))
+        .await
+        .expect("complete WS setup before replay deadline");
+        // This bound measures replay delivery, not setup reaching the server.
+        let replay = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
+            .await
+            .expect("an idle session must explicitly finish its empty replay")
+            .expect("stream must stay open")
+            .expect("receive replay marker");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(replay.to_text().expect("text marker"))
+                .expect("valid replay JSON"),
+            serde_json::json!({"type": "grid-replay-empty"})
+        );
+        socket.close(None).await.expect("close disposable client");
         server.abort();
     }
 

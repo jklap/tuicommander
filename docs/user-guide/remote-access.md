@@ -416,7 +416,7 @@ dialog update without moving the journal to the local machine.
 Once a remote connection is configured:
 
 - **Add remote repo** — Select a connection and browse from that machine's home directory. If a directory cannot be read, the picker explains the error and still allows entering a path or moving to its parent. The repo appears in the sidebar with a remote badge
-- **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. A failed launch displays its error in the terminal pane; a failed stream connection, a missing initial frame after 15 seconds, or an unreadable compressed frame shows a persistent error toast. The client retries the stream and replays the current viewport on reconnect; the toast remains until dismissed. An idle terminal that has received its first frame is not treated as stalled
+- **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. A failed launch displays its error in the terminal pane; a failed stream connection, a missing initial frame after 15 seconds, or an unreadable compressed frame shows a persistent error toast. The client retries the stream and replays the current viewport on reconnect; the toast remains until dismissed. An idle terminal whose viewport or explicit empty replay has arrived is not treated as stalled
 - **Health monitoring** — Connection health is polled periodically. Disconnected connections show a warning badge in the sidebar
 
 Connections are stored in `<config_dir>/connections.json` with SSH and Direct transport types.
