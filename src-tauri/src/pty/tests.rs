@@ -680,6 +680,17 @@ fn test_classify_agent_version_strip_does_not_overreach() {
     assert_eq!(classify_agent("grok-wrapper"), None);
     assert_eq!(classify_agent("not-grok"), None);
     assert_eq!(classify_agent("postgres-16"), None);
+    // Catches: installer support misidentifies any agent-named ancestor.
+    assert_eq!(classify_agent_name_or_path("/opt/pi/tool"), None);
+    assert_eq!(classify_agent_name_or_path("/opt/claude/bin/tool"), None);
+    assert_eq!(
+        classify_agent_name_or_path("/opt/claude/versions/tool"),
+        None
+    );
+    assert_eq!(
+        classify_agent_name_or_path("/opt/claude/versions/2.1.87"),
+        Some("claude")
+    );
 }
 
 /// The ready-screen adapter is the whole point of detecting the agent: grok
@@ -4131,6 +4142,7 @@ fn sanitized_background_command_keeps_agent_working_across_adapters() {
         state.session_maps.session_states.insert(
             sid.clone(),
             crate::state::SessionState {
+                spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
                 agent_type: Some(agent.to_string()),
                 background_work: true,
                 ..Default::default()
@@ -11227,6 +11239,7 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     state.session_maps.session_states.insert(
         "q".to_string(),
         crate::state::SessionState {
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             agent_type: Some("claude".to_string()),
             awaiting_input: true,
             question_confident: true,
@@ -11254,6 +11267,7 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     state.session_maps.session_states.insert(
         "ready".to_string(),
         crate::state::SessionState {
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             agent_type: Some("codex".to_string()),
             awaiting_input: true,
             question_confident: false,
@@ -11342,12 +11356,13 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "codex-ready-after-idle";
     agent_session(&state, sid, SHELL_BUSY);
-    state
-        .session_maps
-        .session_states
-        .get_mut(sid)
-        .unwrap()
-        .agent_type = Some("codex".into());
+    {
+        // The recording writer uses a shell child, not the captured agent.
+        // The explicitly seeded identity models a configured launch preset.
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("codex".into());
+        session.agent_type_from_run_config = true;
+    }
     let (writes, received) = std::sync::mpsc::channel();
     insert_session_with_writer(&state, sid, Box::new(WriteChannel(writes)), TtyMode::Raw);
 
@@ -13596,6 +13611,7 @@ fn flush_keeps_pending_while_question_confident() {
     state.session_maps.session_states.insert(
         "sess".to_string(),
         crate::state::SessionState {
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             agent_type: Some("claude".to_string()),
             awaiting_input: true,
             question_confident: true,
@@ -16216,16 +16232,25 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
     let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
     let sid = "opencode-mini-queue";
     let (state, silence) = chunk_trace_state(sid);
+    {
+        // The recording writer uses a shell child, not the captured agent.
+        // The explicitly seeded identity models a configured launch preset.
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("opencode".into());
+        session.agent_type_from_run_config = true;
+    }
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    // Captured agent output owns this recording composer; the shell
+    // child is only its PTY holder, not a foreground-detection scenario.
     state
         .session_maps
         .session_states
         .get_mut(sid)
         .unwrap()
-        .agent_type = Some("opencode".into());
-    state
-        .grid
-        .vt_log_buffers
-        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+        .spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
     let bytes = insert_recording_session(&state, sid);
     // The turn is running when the user queues: the Enter of its own prompt
     // left the shell busy, as observed live (`shell-state` stayed `busy`).
@@ -17541,6 +17566,14 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
     #[cfg(unix)]
     {
         silence.lock().confirm_idle();
+        // Captured agent output owns this recording composer; the shell
+        // child is only its PTY holder, not a foreground-detection scenario.
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
         let bytes = insert_recording_session(&state, sid);
         assert!(matches!(
             write_agent_submission_to_pty(&state, sid, "echo ready"),
@@ -20280,6 +20313,14 @@ async fn critic_1302_queued_injection_flushes_after_a_dismissed_question() {
     use std::collections::VecDeque;
     let sid = "critic-1302-queue";
     let (state, _silence, _processor) = replay_claude_askuser_esc(sid).await;
+    // Captured agent output owns this recording composer; the shell
+    // child is only its PTY holder, not a foreground-detection scenario.
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
     let bytes = insert_recording_session(&state, sid);
     let mut queue = VecDeque::new();
     queue.push_back(crate::state::PendingInjection::notice("after esc"));
@@ -21051,4 +21092,475 @@ fn retry_enter_only_when_composer_retained_and_clause_two() {
         !retry("retry-flush-fails", RetryWriterFault::Flush),
         "a failed flush is not a confirmed submission"
     );
+}
+
+/// Catches: a headless terminal needs UI polling to discover an agent, or retains
+/// a shell-era screen cache after the foreground identity becomes known.
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_foreground_timer_discovers_claude_and_reclassifies_quiet_screen() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "headless-foreground-discovery";
+    let _probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-askuser-esc-20260929.tcap",
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(4096)));
+    // Recorded ready composer after Esc, before record 195 paints the next draft.
+    for record in capture.records.into_iter().take(195) {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            vt.process(&record.data);
+            state
+                .session_maps
+                .output_buffers
+                .get(sid)
+                .unwrap()
+                .lock()
+                .write(&record.data);
+        }
+    }
+    let output_offset = state
+        .session_maps
+        .output_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .total_written;
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let running = Arc::new(AtomicBool::new(true));
+    // Paused Tokio time advances the timer without asserting startup latency.
+    tokio::time::pause();
+    spawn_silence_timer(silence.clone(), running.clone(), sid.into(), state.clone());
+    // Sleeping past the first scheduled tick lets Tokio dispatch its sleeper;
+    // advance(interval) followed by yield can inspect before that dispatch.
+    tokio::time::sleep(SILENCE_CHECK_INTERVAL * 2).await;
+    running.store(false, Ordering::Release);
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("idle")
+    );
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready
+    );
+    assert_eq!(silence.lock().last_ready_screen_offset, output_offset);
+}
+
+/// Catches: clearing an armed run-config identity during shell startup blocks
+/// the configured agent before it has ever reached the foreground.
+#[cfg(unix)]
+#[test]
+fn configured_agent_is_submittable_during_shell_startup_before_first_observation() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "preset-shell-startup";
+    let probe =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "start task"),
+        AgentSubmissionWrite::Complete { .. }
+    ));
+    assert_eq!(*probe.bytes.lock().unwrap(), b"\x15start task\r");
+}
+
+/// Catches: a configured preset stays permanently armed after its agent was
+/// observed, letting unattended submit/mail type into the shell after exit.
+#[cfg(unix)]
+#[test]
+fn configured_agent_seen_then_exited_to_shell_is_not_submittable_or_wakeable() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "preset-agent-exit";
+    let agent =
+        crate::test_support::ForegroundIdentityProbe::shell_parent(state.clone(), sid, "claude");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    let seen = state.session_maps.session_states.get(sid).unwrap().clone();
+    assert!(seen.agent_foreground_observed);
+    drop(agent);
+    let shell =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
+    // Replace only the test PTY child; carry the same production identity state.
+    state.session_maps.session_states.insert(sid.into(), seen);
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type,
+        None
+    );
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe shell command"),
+        AgentSubmissionWrite::Rejected {
+            reason: "not_managed_agent",
+            ..
+        }
+    ));
+    assert!(!should_inject_now(&state, sid));
+    assert!(shell.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: treating an unclassified startup helper as unseen leaves the preset
+/// armed forever, allowing unattended submission into its returned shell.
+/// Early disarming is the intentional safe trade-off for direnv/nvm hooks.
+#[cfg(unix)]
+#[test]
+fn non_shell_startup_helper_disarms_preset_and_refuses_submit_after_shell_return() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "preset-startup-helper";
+    let helper =
+        crate::test_support::ForegroundIdentityProbe::shell_parent(state.clone(), sid, "direnv");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    let seen = state.session_maps.session_states.get(sid).unwrap().clone();
+    assert!(seen.agent_foreground_observed);
+    drop(helper);
+    let shell =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
+    state.session_maps.session_states.insert(sid.into(), seen);
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe shell command"),
+        AgentSubmissionWrite::Rejected {
+            reason: "not_managed_agent",
+            ..
+        }
+    ));
+    assert!(!should_inject_now(&state, sid));
+    assert!(shell.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: a slow shell snapshot sampled before a newer agent snapshot revokes
+/// the live agent, or a late agent snapshot re-arms a newer returned shell.
+#[test]
+fn stale_foreground_snapshot_cannot_revoke_newer_agent_or_rearm_returned_shell() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "foreground-snapshot-order";
+    agent_session(&state, sid, SHELL_IDLE);
+    assert_eq!(
+        apply_foreground_agent_observation(
+            &state,
+            sid,
+            2,
+            Some("claude".into()),
+            false,
+            false,
+            "claude".into()
+        )
+        .as_deref(),
+        Some("claude")
+    );
+    // The older sample completes after generation 2 committed.
+    assert_eq!(
+        apply_foreground_agent_observation(&state, sid, 1, None, true, false, "bash".into())
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        apply_foreground_agent_observation(&state, sid, 3, None, true, false, "bash".into()),
+        None
+    );
+    assert_eq!(
+        apply_foreground_agent_observation(
+            &state,
+            sid,
+            2,
+            Some("claude".into()),
+            false,
+            false,
+            "claude".into()
+        ),
+        None
+    );
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert_eq!(session.agent_type, None);
+    assert_eq!(session.foreground_probe_generation, 3);
+}
+
+/// Catches: a shell absent from a basename allowlist retains a discovered agent
+/// forever. The root process identity must revoke for every shell spelling.
+#[cfg(unix)]
+#[test]
+fn shell_root_identity_revokes_agent_for_ash_and_renamed_shell() {
+    // Linux /proc/comm exposes at most 15 bytes. Keep the real executable's
+    // arbitrary name within that limit so setup waits for an observable name.
+    for name in ["ash", "renamed-shell"] {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "unlisted-root-shell";
+        let probe =
+            crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, name);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("claude".into());
+        assert_eq!(refresh_session_agent(&state, sid), None);
+        assert!(!should_inject_now(&state, sid));
+        assert!(matches!(
+            write_agent_submission_to_pty(&state, sid, "unsafe"),
+            AgentSubmissionWrite::Rejected {
+                reason: "not_managed_agent",
+                ..
+            }
+        ));
+        assert!(probe.bytes.lock().unwrap().is_empty());
+    }
+}
+
+/// Catches: a bash-script wrapper is mistaken for the owning shell on macOS,
+/// never observed, and leaves its preset armed after returning to the real root.
+#[cfg(unix)]
+#[test]
+fn bash_script_wrapper_is_observed_and_revoked_only_when_its_shell_root_returns() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "bash-script-wrapper-root";
+    let mut probe = crate::test_support::ForegroundIdentityProbe::bash_wrapper(
+        state.clone(),
+        sid,
+        crate::state::SpawnRootRole::Shell,
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_foreground_observed
+    );
+    probe.return_to_root();
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(!should_inject_now(&state, sid));
+    assert!(probe.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: a nested shell opened by a direct agent revokes its identity, or
+/// receives an unattended task/mail wake intended for the parent agent.
+#[cfg(unix)]
+#[test]
+fn direct_agent_nested_subshell_holds_input_without_revoking_identity() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "direct-agent-nested-shell";
+    let mut probe = crate::test_support::ForegroundIdentityProbe::bash_wrapper(
+        state.clone(),
+        sid,
+        crate::state::SpawnRootRole::DirectProgram,
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+    assert!(!should_inject_now(&state, sid));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe child input"),
+        AgentSubmissionWrite::Rejected {
+            reason: "agent_not_ready",
+            ..
+        }
+    ));
+    assert!(probe.bytes.lock().unwrap().is_empty());
+    probe.return_to_root();
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert!(should_inject_now(&state, sid));
+}
+
+/// Catches: a mirrored/legacy session with no authoritative spawn role permits
+/// unattended input using a configured agent identity alone.
+#[cfg(unix)]
+#[test]
+fn unknown_spawn_root_role_refuses_submit_and_mail_wake() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "missing-root-role";
+    let _probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .spawn_root_role = crate::state::SpawnRootRole::Unknown;
+    assert!(!should_inject_now(&state, sid));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe"),
+        AgentSubmissionWrite::Rejected {
+            reason: "agent_not_ready",
+            ..
+        }
+    ));
+}
+
+/// Catches: exec into a different shell image at the same root PID is promoted
+/// to an agent or retains an old discovered agent's identity.
+#[cfg(unix)]
+#[test]
+fn shell_root_exec_into_another_shell_still_revokes_agent_identity() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "exec-root-shell";
+    let probe =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type,
+        None
+    );
+    assert!(!should_inject_now(&state, sid));
+    assert!(probe.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: an agent exec'd into the shell root leaves live agent identity and
+/// a mail/submit target behind after its process exits instead of a shell return.
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_root_agent_exit_clears_identity_and_refuses_submit_and_mail() {
+    use std::io::Write;
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "exec-root-agent-exit";
+    let _probe =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "claude");
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
+        Some("claude")
+    );
+    assert!(
+        should_inject_now(&state, sid),
+        "the live exec'd agent must receive input"
+    );
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    _probe.start_reader();
+    // The probe's actual cat image exits normally on terminal EOF. The recorded
+    // writer remains untouched; use its native master solely to end our process.
+    {
+        let entry = state.session_maps.sessions.get(sid).unwrap();
+        let mut session = entry.lock();
+        session
+            .master
+            .take_writer()
+            .unwrap()
+            .write_all(b"\x04")
+            .unwrap();
+        assert!(session._child.wait().unwrap().success());
+    }
+    // Native reader EOF now owns lifecycle publication and process cleanup.
+    while state.session_maps.session_states.contains_key(sid)
+        || state.session_maps.sessions.contains_key(sid)
+    {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(!should_inject_now(&state, sid));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe"),
+        AgentSubmissionWrite::Rejected {
+            reason: "session_not_found",
+            ..
+        }
+    ));
 }

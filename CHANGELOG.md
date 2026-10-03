@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Remote terminal stream failures** — A stalled initial replay, unreadable frame or disconnected stream now shows a persistent error toast. Reconnect attempts remain bounded until a frame reaches the renderer.
 - **Answers-only view** — Keep marked answers that precede the first tracked prompt. Show a short notice when no marked answers remain in the retained history.
 - **Stable MCP bridge** — Agent configs use an atomically installed bridge outside Cargo targets. Rebuilds and target cleanup no longer remove the executable needed by new MCP connections; previous bridge revisions remain available through updates.
+- **Remote agent detection** — Agents started by hand in a headless terminal gain backend agent state, safe submit and mail wake. HTTP and desktop foreground detection now share the state update. Rejected submissions and unavailable mail wakes explain the cause and the next action.
+- Revoke agent identity when the foreground returns to a shell after the agent was observed, retaining startup presets and transient helpers; recognise native versioned and updater-replaced Claude executables on Linux.
 
 - **Hands-free controls** — Start conversation uses the accent action style. A coloured Running/Stopped indicator keeps the current state visible.
 
