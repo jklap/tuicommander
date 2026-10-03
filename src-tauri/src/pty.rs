@@ -7904,7 +7904,7 @@ fn flush_eof(
 /// [`remove_live_session_state`] enforces for per-session state: a new
 /// peer-keyed map belongs in this function and nowhere else.
 fn retire_peer_identity(state: &AppState, tuic_session: &str) {
-    state.peer_agents.remove(tuic_session);
+    crate::mcp_http::remote_peer::unregister_peer(&state, tuic_session);
     state.orchestrator_peers.remove(tuic_session);
     state.agent_inbox.remove(tuic_session);
     state.agent_inbox_evictions.remove(tuic_session);
@@ -7985,7 +7985,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
     state.pending_initial_prompts.remove(session_id);
     state.managed_trust_dialogs.remove(session_id);
     state.active_agent_waiters.remove(session_id);
-    state.peer_agents.remove(session_id);
+    crate::mcp_http::remote_peer::unregister_peer(&state, session_id);
     state.orchestrator_peers.remove(session_id);
     state.agent_inbox.remove(session_id);
     state.agent_inbox_evictions.remove(session_id);

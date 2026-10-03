@@ -2549,6 +2549,12 @@ profile rules or allow/deny policy in `session/new`.
 - The notification bell always offers Terminal Progress, including with zero unread updates; `Cmd/Ctrl+Shift+P` and the command palette open the same dialog
 - `progress_tracking` gate: a global setting ANDed with a per-agent override. Global off removes the tool from every agent's tool list
 
+### Remote MCP session ownership and peer mail
+
+Desktop MCP discovers configured remote PTYs and peers, routes output and semantic
+submit to the owning daemon, and delivers connection-qualified peer mail through an
+authenticated desktop hub. Local mail remains independent of the hub.
+
 ### Answers-only View
 
 Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marked answers and their tracked prompts. Turns without marked answers are omitted. Output before the first tracked prompt remains available as a prompt-less turn, from the retained history base. If no answers qualify, the view shows a one-line notice. Toggle the view again to return to the terminal.

@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Remote peer mail** — A flooding host has its own replay quota. Budget pressure reclaims only departed senders, and disconnect retires old shadow peers even during a reconnect handshake. A departed sender may replay once after pressure evicted its history.
+
+### Fixed
+
+- Desktop MCP now discovers and addresses configured remote terminals and peers, preserving native output and semantic submit behavior. Authenticated peer mail supports remote replies and remote-to-remote delivery through the desktop hub.
 - **Remote file drops** — Dropping Mac files onto a connected remote repository copies them through the authenticated daemon connection. Directory drops keep the recursion confirmation; existing names are skipped. Uploads have a 17-minute total receive deadline, and read-only directories publish correctly. Abrupt daemon termination can leave a staging directory for manual removal.
 - **HTTP API security** — Reject foreign browser origins and DNS-rebinding Host names before handlers run. Protected HTTP requests now require credentials even from loopback/LAN; local CLI/MCP IPC retains its existing access.
 
