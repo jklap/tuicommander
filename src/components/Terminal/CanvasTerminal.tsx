@@ -1075,7 +1075,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			((i: number) => {
 				const row = rowMap.get(i);
 				if (!row) return null;
-				return { text: rowToText(row), isWrapped: row.wrapped };
+				// `row.wrapped` says the row continues onto the NEXT one; the overlay
+				// wants "this row continues the previous one".
+				return { text: rowToText(row), isWrapped: rowMap.get(i - 1)?.wrapped ?? false };
 			});
 
 		// Decide what to mask before building anything: most repaints leave the
@@ -1280,7 +1282,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			updateSuggestOverlay(currentFrame, m, undefined, (i) => {
 				const cached = cacheRow(hist - intOffset + i);
 				if (!cached) return null;
-				return { text: rowToText(cached), isWrapped: cached.wrapped };
+				return { text: rowToText(cached), isWrapped: cacheRow(hist - intOffset + i - 1)?.wrapped ?? false };
 			});
 		}
 	}

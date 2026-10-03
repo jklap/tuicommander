@@ -114,14 +114,16 @@ export async function readTurnRows(
 	startAbs: number,
 	endAbs: number,
 ): Promise<RowSnapshot[] | null> {
-	const byAbs = new Map<number, RowSnapshot>();
+	const byAbs = new Map<number, { text: string; wrapped: boolean }>();
 	for (let start = startAbs; start < endAbs; start += TURN_FETCH_CHUNK) {
 		const range = await fetchRange(start, Math.min(TURN_FETCH_CHUNK, endAbs - start));
 		if (!range) return null;
-		for (const { abs, row } of range.rows) byAbs.set(abs, { text: rowCopyText(row), isWrapped: row.wrapped });
+		for (const { abs, row } of range.rows) byAbs.set(abs, { text: rowCopyText(row), wrapped: row.wrapped });
 	}
 	const rows: RowSnapshot[] = [];
-	for (let abs = startAbs; abs < endAbs; abs++) rows.push(byAbs.get(abs) ?? { text: "", isWrapped: false });
+	// A row's wire flag says it continues onto the NEXT row; a snapshot says it continues the previous one.
+	for (let abs = startAbs; abs < endAbs; abs++)
+		rows.push({ text: byAbs.get(abs)?.text ?? "", isWrapped: byAbs.get(abs - 1)?.wrapped ?? false });
 	return rows;
 }
 
