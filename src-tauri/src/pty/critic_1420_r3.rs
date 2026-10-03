@@ -31,7 +31,7 @@ fn identity(state: &AppState, sid: &str) -> Option<String> {
 fn discovered_agent_survives_a_transient_unrecognised_non_shell_foreground() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "critic-1420r3-transient";
-    let _probe = ForegroundIdentityProbe::new(state.clone(), sid, "git");
+    let _probe = ForegroundIdentityProbe::shell_parent(state.clone(), sid, "git");
     set_identity(&state, sid, Some("claude"), false);
     refresh_session_agent(&state, sid);
     assert_eq!(
@@ -60,7 +60,7 @@ fn discovered_agent_replacing_a_preset_is_still_revocable() {
         .unwrap()
         .agent_type_from_run_config;
     drop(probe);
-    let _shell = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let _shell = ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     set_identity(&state, sid, Some("codex"), flag);
     refresh_session_agent(&state, sid);
     assert_eq!(

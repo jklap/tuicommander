@@ -240,6 +240,7 @@ pub(crate) fn agent_session(state: &crate::state::AppState, sid: &str, shell: u8
         sid.to_string(),
         crate::state::SessionState {
             agent_type: Some("claude".to_string()),
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             ..Default::default()
         },
     );
@@ -370,6 +371,7 @@ pub(crate) struct ForegroundIdentityProbe {
     state: std::sync::Arc<crate::state::AppState>,
     session_id: String,
     _scratch: tempfile::TempDir,
+    foreground_child: Option<u32>,
 }
 
 #[cfg(unix)]
@@ -378,6 +380,87 @@ impl ForegroundIdentityProbe {
         state: std::sync::Arc<crate::state::AppState>,
         sid: &str,
         name: &str,
+    ) -> Self {
+        Self::spawn(
+            state,
+            sid,
+            name,
+            crate::state::SpawnRootRole::DirectProgram,
+            false,
+            false,
+        )
+    }
+
+    pub(crate) fn shell_root(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        name: &str,
+    ) -> Self {
+        Self::spawn(
+            state,
+            sid,
+            name,
+            crate::state::SpawnRootRole::Shell,
+            false,
+            false,
+        )
+    }
+
+    pub(crate) fn shell_parent(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        name: &str,
+    ) -> Self {
+        Self::spawn(
+            state,
+            sid,
+            name,
+            crate::state::SpawnRootRole::Shell,
+            true,
+            false,
+        )
+    }
+
+    pub(crate) fn bash_wrapper(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        role: crate::state::SpawnRootRole,
+    ) -> Self {
+        Self::spawn(state, sid, "bash", role, true, true)
+    }
+
+    pub(crate) fn return_to_root(&mut self) {
+        let pid = self
+            .foreground_child
+            .take()
+            .expect("probe owns a foreground child");
+        // SAFETY: this PID belongs to the child started by this probe.
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+        loop {
+            let session = self
+                .state
+                .session_maps
+                .sessions
+                .get(&self.session_id)
+                .unwrap();
+            let session = session.lock();
+            if session.master.process_group_leader()
+                == session._child.process_id().map(|pid| pid as i32)
+            {
+                break;
+            }
+            drop(session);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn spawn(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        name: &str,
+        role: crate::state::SpawnRootRole,
+        shell_parent: bool,
+        bash_script: bool,
     ) -> Self {
         use parking_lot::Mutex;
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
@@ -409,21 +492,43 @@ impl ForegroundIdentityProbe {
                 pixel_height: 0,
             })
             .unwrap();
-        let mut child = pair
-            .slave
-            .spawn_command(CommandBuilder::new(&executable))
-            .unwrap();
+        let command = if shell_parent {
+            let mut command = CommandBuilder::new("/bin/bash");
+            // Real job control puts the launched child in its own foreground group.
+            // Keep another builtin after it so bash cannot exec away the shell root.
+            command.args(["-c", "set -m; \"$@\"; read -r completion", "probe-root"]);
+            if bash_script {
+                let script = scratch.path().join("wrapper.sh");
+                std::fs::write(&script, "read -r input\n").unwrap();
+                command.arg("/bin/bash");
+                command.arg(script);
+            } else {
+                command.arg(&executable);
+            }
+            command
+        } else {
+            CommandBuilder::new(&executable)
+        };
+        let mut child = pair.slave.spawn_command(command).unwrap();
         let child_pid = child.process_id().unwrap();
         // fork precedes setsid/exec. This is setup, not a latency assertion;
         // nextest bounds a genuine hang without charging startup to behavior.
-        while crate::pty::process_name_from_pid(child_pid).as_deref() != Some(name)
-            || pair.master.process_group_leader() != Some(child_pid as i32)
-        {
+        let foreground_pid = loop {
+            if let Some(fg) = pair.master.process_group_leader().map(|pid| pid as u32) {
+                let group_ready = if shell_parent {
+                    fg != child_pid
+                } else {
+                    fg == child_pid
+                };
+                if group_ready && crate::pty::process_name_from_pid(fg).as_deref() == Some(name) {
+                    break fg;
+                }
+            }
             if let Some(status) = child.try_wait().unwrap() {
                 panic!("identity probe exited before setup: {status:?}");
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        };
         let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
         state.session_maps.sessions.insert(
             sid.into(),
@@ -444,17 +549,17 @@ impl ForegroundIdentityProbe {
             }),
         );
         agent_session(&state, sid, crate::pty::SHELL_IDLE);
-        state
-            .session_maps
-            .session_states
-            .get_mut(sid)
-            .unwrap()
-            .agent_type = None;
+        {
+            let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+            session.agent_type = None;
+            session.spawn_root_role = role;
+        }
         Self {
             bytes,
             state,
             session_id: sid.into(),
             _scratch: scratch,
+            foreground_child: (foreground_pid != child_pid).then_some(foreground_pid),
         }
     }
 }
@@ -464,6 +569,13 @@ impl Drop for ForegroundIdentityProbe {
     fn drop(&mut self) {
         if let Some((_, session)) = self.state.session_maps.sessions.remove(&self.session_id) {
             let mut session = session.into_inner();
+            if let Some(pid) = self.foreground_child {
+                // This is the child created by our probe, never an ancestor.
+                // SAFETY: kill takes a numeric PID and a valid signal.
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+            }
             session._child.kill().expect("kill our identity probe");
             session._child.wait().expect("reap our identity probe");
         }
