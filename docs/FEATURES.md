@@ -2461,6 +2461,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Status polling runs against `/api/version`, not `/health`: only a route behind the auth middleware can tell a working connection from a rejected one
 
 ### 24.6 Event Mirror
+- Remote MCP toasts are retained once in the desktop Messages bell with `[connection name]` before the title. Their level and requested notification sound are preserved; Open terminal resolves the peer to its live remote PTY and never selects a local tab. Unknown or closed sessions leave focus unchanged. Toasts arriving after disconnect are dropped, with no replay queue.
 - `remote_mirror.rs` runs one task per connected connection: it reads the daemon's `GET /sessions` and then its `/events` stream, in Rust
 - The stream carries **no** `types=` filter, and every frame is repeated on the local bus under the daemon's own event name — a client cannot tell a mirrored event from a local one, so the existing handlers raise the same badge, the same notification and the same queue gate, and a new event type crosses for free
 - Mirrored sessions appear in `list_active_sessions` and `GET /sessions` beside local ones, each carrying `connection_id` — the only field that says which machine runs it
