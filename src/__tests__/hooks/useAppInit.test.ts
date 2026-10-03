@@ -11,6 +11,7 @@ vi.mock("../../transport", async (importOriginal) => ({
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
+import { activityStore } from "../../stores/activityStore";
 import { appLogger } from "../../stores/appLogger";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
@@ -25,6 +26,7 @@ import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
 function resetStores() {
+	activityStore.clearAll();
 	for (const id of terminalsStore.getIds()) {
 		terminalsStore.remove(id);
 	}
@@ -89,6 +91,7 @@ describe("initApp", () => {
 		vi.useFakeTimers();
 		vi.mocked(listen).mockReset().mockResolvedValue(vi.fn());
 		resetStores();
+		sessionStorage.clear();
 	});
 
 	afterEach(() => {
@@ -105,6 +108,77 @@ describe("initApp", () => {
 		await initApp(createMockDeps());
 		expect(log).toHaveBeenCalledWith("app", expect.stringContaining("navigation=reload"));
 		expect(log).toHaveBeenCalledWith("app", expect.stringContaining(`documentStart=${performance.timeOrigin}`));
+	});
+
+	// Catches: ui-tab documents are saved but initApp returns after restoring a branch without restoring them.
+	it("restores an MCP Markdown document after unload and repository startup without duplicating its identity", async () => {
+		vi.resetModules();
+		const { initApp } = await import("../../hooks/useAppInit");
+		const { mdTabsStore } = await import("../../stores/mdTabs");
+		const { repositoriesStore } = await import("../../stores/repositories");
+		let send: ((event: { payload: unknown }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") send = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		const events = vi.spyOn(window, "addEventListener");
+		repositoriesStore.add({ path: "/repo", displayName: "repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { branchName: "main", worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+		await initApp(createMockDeps());
+		const payload = {
+			id: "boss-digest",
+			title: "Digest",
+			html: "",
+			pinned: false,
+			url: "tuic://open//Users/boss/Gits/digest.md",
+		};
+		send!({ payload });
+		expect(mdTabsStore.getActive()).toMatchObject({ mcpUiId: "boss-digest" });
+		const unload = events.mock.calls.find(([name]) => name === "beforeunload")?.[1];
+		expect(unload).toBeTypeOf("function");
+		(unload as EventListener)(new Event("beforeunload"));
+		// A reload discards the old module graph; a repeated init in one graph is idempotent.
+		vi.resetModules();
+		const { initApp: reloadApp } = await import("../../hooks/useAppInit");
+		const { mdTabsStore: restored } = await import("../../stores/mdTabs");
+		const { repositoriesStore: restoredRepos } = await import("../../stores/repositories");
+		restoredRepos.add({ path: "/repo", displayName: "repo" });
+		restoredRepos.setWorkspace("/repo", "main", { branchName: "main", worktreePath: "/repo" });
+		restoredRepos.setActiveWorkspace("/repo", "main");
+		restoredRepos.setActive("/repo");
+		await reloadApp(createMockDeps());
+		expect(restored.getActive()).toMatchObject({
+			mcpUiId: "boss-digest",
+			filePath: "/Users/boss/Gits/digest.md",
+		});
+		send!({ payload });
+		expect(restored.getCount()).toBe(1);
+	});
+
+	// Catches: a rejected branch restore skips Markdown restore and leaves later MCP tabs unsaved.
+	it("arms MCP Markdown snapshots even when branch restoration rejects", async () => {
+		vi.resetModules();
+		const { initApp } = await import("../../hooks/useAppInit");
+		const { mdTabsStore } = await import("../../stores/mdTabs");
+		const { repositoriesStore } = await import("../../stores/repositories");
+		repositoriesStore.add({ path: "/repo", displayName: "repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { branchName: "main", worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+		const failure = new Error("branch restore failed");
+		await expect(initApp(createMockDeps({ handleBranchSelect: vi.fn().mockRejectedValue(failure) }))).rejects.toBe(
+			failure,
+		);
+		mdTabsStore.addMcpFile("boss-digest", "", "/Users/boss/Gits/digest.md", false, false);
+		vi.resetModules();
+		const { mdTabsStore: reloaded } = await import("../../stores/mdTabs");
+		reloaded.restoreAfterReload();
+		expect(reloaded.getActive()).toMatchObject({
+			mcpUiId: "boss-digest",
+			filePath: "/Users/boss/Gits/digest.md",
+		});
 	});
 
 	it("hydrates stores and detects platform", async () => {
@@ -2468,6 +2542,7 @@ describe("initApp", () => {
 			sound: string | null;
 			origin_repo_path?: string;
 			origin_session_id?: string;
+			__tuic_origin?: { connection: string; name?: string };
 		};
 
 		function captureMcpToast() {
@@ -2482,32 +2557,200 @@ describe("initApp", () => {
 			return { getCallback: () => callback };
 		}
 
+		// Catches: malformed remote fields create a bell item/sound or leak their content into logs.
+		it.each([
+			{ title: null },
+			{ title: 42 },
+			{ message: 42 },
+			{ message: { secret: "do-not-log" } },
+			{ message: undefined },
+		])("1439 discards malformed remote text fields with a content-free debug log: %j", async (malformed) => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const payload = Object.assign(
+				{
+					title: "Private title",
+					message: "Private message",
+					level: "warn",
+					sound: "attention",
+					__tuic_origin: { connection: "mint", name: "mac-mint" },
+				},
+				malformed,
+			);
+			getCallback()!({ payload });
+			expect(activityStore.getForSection("messages")).toHaveLength(0);
+			expect(play).not.toHaveBeenCalled();
+			expect(debug).toHaveBeenCalledExactlyOnceWith("app", "Discarding malformed mirrored MCP toast");
+			debug.mockRestore();
+			play.mockRestore();
+		});
+
+		// Catches: remote toast has no host label, loses severity/sound, or clicks the wrong tab.
+		it("1439 labels a remote notice once and clicks its originating terminal", async () => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			repositoriesStore.add({ path: "/remote/repo", displayName: "Remote", connectionId: "mint" });
+			repositoriesStore.setWorkspace("/remote/repo", "main", { worktreePath: "/remote/repo" });
+			const remote = terminalsStore.add(makeTerminal({ sessionId: "remote-pty", cwd: "/remote/repo" }));
+			repositoriesStore.addTerminalToWorkspace("/remote/repo", "main", remote);
+			const local = terminalsStore.add(makeTerminal({ sessionId: "local-pty" }));
+			terminalsStore.setActive(local);
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const payload: ToastPayload = {
+				title: "Need input",
+				message: "Which branch?",
+				level: "warn",
+				sound: "attention",
+				origin_session_id: "remote-pty",
+				__tuic_origin: { connection: "mint", name: "mac-mint" },
+			};
+			getCallback()!({ payload });
+			getCallback()!({ payload });
+			const notices = activityStore.getForSection("messages");
+			expect(notices).toHaveLength(1);
+			expect(notices[0]).toMatchObject({
+				title: "[mac-mint] Need input",
+				subtitle: "Which branch?",
+				severity: "warn",
+				repoPath: "/remote/repo",
+			});
+			expect(play).toHaveBeenCalledOnce();
+			expect(play).toHaveBeenCalledWith("attention");
+			expect(terminalsStore.state.activeId).toBe(local);
+			notices[0].onClick!();
+			expect(terminalsStore.state.activeId).toBe(remote);
+			expect(repositoriesStore.state.activeRepoPath).toBe("/remote/repo");
+			play.mockRestore();
+		});
+
+		// Catches: an unknown, closed, or local session in a remote notice steals focus.
+		it("1439 remote notices cannot navigate to unknown or locally owned sessions", async () => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			repositoriesStore.add({ path: "/same/path", displayName: "Local" });
+			const local = terminalsStore.add(makeTerminal({ sessionId: "local-pty", cwd: "/same/path" }));
+			terminalsStore.setActive(local);
+			const setActive = vi.spyOn(terminalsStore, "setActive");
+			for (const session of ["unknown", "local-pty"]) {
+				getCallback()!({
+					payload: {
+						title: session,
+						message: null,
+						level: "error",
+						sound: null,
+						origin_repo_path: "/same/path",
+						origin_session_id: session,
+						__tuic_origin: { connection: "mint" },
+					},
+				});
+				const notice = activityStore.getForSection("messages").find((item) => item.title === `[mint] ${session}`)!;
+				expect(notice.repoPath).toBeUndefined();
+				expect(notice.severity).toBe("error");
+				notice.onClick!();
+			}
+			expect(setActive).not.toHaveBeenCalled();
+			expect(terminalsStore.state.activeId).toBe(local);
+			setActive.mockRestore();
+		});
+
+		// Catches: a retained remote notice uses a stale tab after it closes or changes owner.
+		it("1439 rechecks remote terminal ownership when a retained notice is clicked", async () => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			repositoriesStore.add({ path: "/remote/repo", displayName: "Remote", connectionId: "mint" });
+			const remote = terminalsStore.add(makeTerminal({ sessionId: "remote-pty", cwd: "/remote/repo" }));
+			const local = terminalsStore.add(makeTerminal({ sessionId: "local-pty" }));
+			terminalsStore.setActive(local);
+			getCallback()!({
+				payload: {
+					title: "Retained",
+					message: null,
+					level: "info",
+					sound: null,
+					origin_session_id: "remote-pty",
+					__tuic_origin: { connection: "mint", name: "mac-mint" },
+				},
+			});
+			const notice = activityStore.getForSection("messages")[0];
+			terminalsStore.remove(remote);
+			const replacement = terminalsStore.add(makeTerminal({ sessionId: "remote-pty", cwd: "/remote/repo" }));
+			repositoriesStore.add({ path: "/remote/repo", displayName: "Other", connectionId: "other-host" });
+			const setActive = vi.spyOn(terminalsStore, "setActive");
+			notice.onClick!();
+			terminalsStore.remove(replacement);
+			notice.onClick!();
+			expect(setActive).not.toHaveBeenCalled();
+			expect(terminalsStore.state.activeId).toBe(local);
+			setActive.mockRestore();
+		});
+
 		it("plays the named sound through the notification scheme, not the toast's own tone", async () => {
 			const { getCallback } = captureMcpToast();
 			const deps = createMockDeps();
 			await initApp(deps);
 			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
-			const addToast = vi.spyOn(toastsStore, "add");
 
 			getCallback()!({
 				payload: { title: "need you", message: "which branch?", level: "warn", sound: "attention" },
 			});
 
 			expect(play).toHaveBeenCalledWith("attention");
-			// The toast store's own level-keyed tone would play a second, different
-			// sound over the buzzer and would ignore the user's volume/device/mutes.
-			expect(addToast).toHaveBeenCalledWith(
-				"need you",
-				"which branch?",
-				"warn",
-				false,
-				undefined,
-				undefined,
-				undefined,
-				undefined,
-			);
+			expect(toastsStore.toasts).toHaveLength(0);
+			expect(activityStore.getForSection("messages")[0]).toMatchObject({
+				title: "need you",
+				subtitle: "which branch?",
+				severity: "warn",
+			});
 			play.mockRestore();
-			addToast.mockRestore();
+		});
+
+		it("1397 duplicate backend delivery keeps one bell item and plays its requested sound once", async () => {
+			// catches: transport redelivery duplicates both the bell notice and attention sound
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const event = {
+				payload: {
+					title: "Duplicate delivery",
+					message: "same",
+					level: "warn",
+					sound: "attention",
+					origin_session_id: "caller",
+				},
+			};
+			getCallback()!(event);
+			getCallback()!(event);
+			expect(
+				activityStore.getForSection("messages").filter((item) => item.title === "Duplicate delivery"),
+			).toHaveLength(1);
+			expect(play).toHaveBeenCalledTimes(1);
+			play.mockRestore();
+		});
+
+		it("1397 a repeated backend failure ten minutes later creates a fresh item and sound", async () => {
+			// catches: dedup lasts as long as the old bell item, silencing a new failure
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const event = {
+				payload: {
+					title: "Repeated failure",
+					message: "same",
+					level: "error",
+					sound: "error",
+					origin_session_id: "caller",
+				},
+			};
+			getCallback()!(event);
+			vi.setSystemTime(Date.now() + 10 * 60_000);
+			getCallback()!(event);
+			expect(activityStore.getForSection("messages").filter((item) => item.title === "Repeated failure")).toHaveLength(
+				2,
+			);
+			expect(play).toHaveBeenCalledTimes(2);
+			play.mockRestore();
 		});
 
 		it("stays silent when no sound was requested or the name is unknown", async () => {
@@ -2523,12 +2766,11 @@ describe("initApp", () => {
 			play.mockRestore();
 		});
 
-		it("scopes the toast to the repository resolved from the caller cwd", async () => {
+		it("1397 scopes the bell-only notification to the repository resolved from the caller cwd", async () => {
 			repositoriesStore.add({ path: "/Gits/personal/tuicommander", displayName: "TUICommander" });
 			const { getCallback } = captureMcpToast();
 			const deps = createMockDeps();
 			await initApp(deps);
-			const addToast = vi.spyOn(toastsStore, "add");
 
 			getCallback()!({
 				payload: {
@@ -2541,21 +2783,14 @@ describe("initApp", () => {
 				},
 			});
 
-			// The session id rides along with the repo path: the repo scopes the
-			// toast, the session is what a click on it navigates to. The repo name
-			// is NOT glued onto the message — ToastContainer renders it as its own
-			// badge, so prefixing here would print it twice.
-			expect(addToast).toHaveBeenCalledWith(
-				"Release published",
-				"v1.7.4",
-				"info",
-				false,
-				undefined,
-				undefined,
-				"/Gits/personal/tuicommander",
-				"sess-abc",
-			);
-			addToast.mockRestore();
+			expect(toastsStore.toasts).toHaveLength(0);
+			expect(activityStore.getForSection("messages")[0]).toMatchObject({
+				title: "Release published",
+				subtitle: "v1.7.4",
+				repoPath: "/Gits/personal/tuicommander",
+				severity: "info",
+			});
+			expect(activityStore.getForSection("messages")[0].onClick).toBeTypeOf("function");
 		});
 	});
 
@@ -2582,6 +2817,17 @@ describe("initApp", () => {
 		beforeEach(() => {
 			paneLayoutStore.reset();
 			resetGroupCounter();
+		});
+
+		// Catches: a managed spawn interrupting input or leaving no retained notice.
+		it("1397 retains agent spawns in the bell without a toast", async () => {
+			const { getCallback } = captureSessionCreated();
+			await initApp(createMockDeps());
+			getCallback()!({
+				payload: { session_id: "1397-agent", cwd: null, agent_type: "claude", display_name: "Worker" },
+			});
+			expect(toastsStore.toasts).toHaveLength(0);
+			expect(activityStore.getForSection("messages")[0]).toMatchObject({ title: "Agent started", subtitle: "Worker" });
 		});
 
 		it("setActive not called when active terminal already exists", async () => {

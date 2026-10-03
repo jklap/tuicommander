@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 /// Cookie name used to persist the session after successful Basic Auth.
 /// The browser sends cookies automatically in fetch() calls (unlike stored Basic Auth),
 /// which is why we need this: JS API calls would otherwise fail with 401 every time.
-const SESSION_COOKIE: &str = "tui-session";
+pub(crate) const SESSION_COOKIE: &str = "tui-session";
 
 /// Failed header digests retained for one IP and one rate-limit window.
 const MAX_CACHED_FAILURES_PER_IP: usize = 64;

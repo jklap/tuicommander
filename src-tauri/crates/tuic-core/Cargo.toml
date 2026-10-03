@@ -8,6 +8,7 @@ default = []
 test-support = ["dep:tempfile", "dep:tuic-test-support"]
 
 [dependencies]
+tuic-ipc = { path = "../tuic-ipc" }
 bm25 = { path = "../../patches/bm25" }
 dirs = "6"
 jsonc-parser = { version = "0.33", features = ["cst", "serde", "serde_json"] }
