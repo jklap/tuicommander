@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **MCP Markdown tabs** — Documents opened with `ui action=tab` survive UI reloads in the same window. Reopening their stable id updates the restored tab without creating a duplicate.
+- **MCP Markdown tabs** — Documents opened with `ui action=tab` survive UI reloads in the same window, including native recovery without an unload event. Reopening their stable id updates the restored tab without creating a duplicate.
 
 - **Hands-free controls** — Start conversation uses the accent action style. A coloured Running/Stopped indicator keeps the current state visible.
 

@@ -135,7 +135,11 @@ describe("initApp", () => {
 		const unload = events.mock.calls.find(([name]) => name === "beforeunload")?.[1];
 		expect(unload).toBeTypeOf("function");
 		(unload as EventListener)(new Event("beforeunload"));
+		const snapshot = sessionStorage.getItem("tui-commander-mcp-markdown-reload");
+		// Model discarding the old graph, rather than a user closing all tabs:
+		// clearAll now correctly updates storage, so retain the recorded unload snapshot.
 		mdTabsStore.clearAll();
+		sessionStorage.setItem("tui-commander-mcp-markdown-reload", snapshot!);
 		await initApp(createMockDeps());
 		expect(mdTabsStore.getActive()).toMatchObject({
 			mcpUiId: "boss-digest",
