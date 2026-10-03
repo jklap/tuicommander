@@ -599,7 +599,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Font selection setting
 - [x] Tab bar with keyboard navigation
 - [x] Density modes for readability
-- [x] Terminal selection copy unwraps soft-wrapped rows and removes coherent Claude visual gutters without altering literal block characters
+- [x] Terminal selection copy unwraps soft-wrapped rows, removes coherent Claude visual gutters and composer margins, and preserves literal block characters, pasted prompt glyphs, and short typed line breaks
 - [x] Status bar with branch and PR info
 - [x] Rate limit detection
 - [x] JSONL output parsing
