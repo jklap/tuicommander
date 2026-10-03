@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::time::Duration;
 use zeroize::Zeroizing;
 
-/// Bound response allocation; no arbitrary API payload reaches the journal.
+/// Bound response allocation before any update reaches the mail port.
 pub(super) const RESPONSE_LIMIT: usize = 1024 * 1024;
 
 /// One update has no documented byte bound. This finite recovery budget allows

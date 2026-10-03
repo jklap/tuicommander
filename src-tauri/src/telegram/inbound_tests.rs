@@ -55,9 +55,9 @@ async fn empty_bootstrap_persists_zero_without_reentering_discard_mode() {
     assert_eq!(adapter.pending().unwrap().len(), 1);
 }
 
-// Catches: 401/409 retry forever or reset their stopped state when the daemon restarts.
+// Catches: 401/409 cause immediate retry loops instead of stopping the current owner.
 #[tokio::test]
-async fn unauthorized_and_conflict_latch_across_restart_without_more_polls() {
+async fn unauthorized_and_conflict_stop_the_owner_until_restart() {
     for (status, expected) in [
         (StatusCode::UNAUTHORIZED, Error::Unauthorized),
         (StatusCode::CONFLICT, Error::Conflict),
@@ -74,8 +74,8 @@ async fn unauthorized_and_conflict_latch_across_restart_without_more_polls() {
         assert!(matches!(adapter.poll().await,Err(e) if e==expected));
         drop(adapter);
         let mut adapter = Inbound::loopback(paths, server.address).unwrap();
-        assert!(matches!(adapter.poll().await,Err(e) if e==expected));
-        assert_eq!(server.requests().len(), 2);
+        assert!(matches!(adapter.poll().await.unwrap(), Poll::Accepted(0)));
+        assert_eq!(server.requests().len(), 3);
     }
 }
 

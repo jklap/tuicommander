@@ -249,3 +249,6 @@ mod inbound;
 
 #[path = "regression_tests.rs"]
 mod regression;
+
+#[path = "offset_tests.rs"]
+mod offset;
