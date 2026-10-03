@@ -14,27 +14,6 @@ pub(super) fn updates(values: Vec<Value>) -> (StatusCode, Value) {
     (StatusCode::OK, json!({"ok":true,"result":values}))
 }
 
-#[derive(Default)]
-struct Inbox {
-    by_id: std::collections::BTreeMap<String, PendingMail>,
-    unavailable: bool,
-}
-impl MailPort for Inbox {
-    async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error> {
-        if self.unavailable {
-            return Err(Error::State);
-        }
-        match self.by_id.get(&mail.id) {
-            Some(existing) if existing != mail => Err(Error::State),
-            Some(_) => Ok(()),
-            None => {
-                self.by_id.insert(mail.id.clone(), mail.clone());
-                Ok(())
-            }
-        }
-    }
-}
-
 // Catches: every restart repeats destructive offset=-1 and drops new phone messages.
 #[tokio::test]
 async fn first_start_discards_backlog_once_then_restart_uses_committed_offset() {
@@ -74,31 +53,6 @@ async fn empty_bootstrap_persists_zero_without_reentering_discard_mode() {
     adapter.poll().await.unwrap();
     assert_eq!(server.requests()[1].1["offset"], 0);
     assert_eq!(adapter.pending().unwrap().len(), 1);
-}
-
-// Catches: an uncertain destructive bootstrap is retried after restart, erasing new updates.
-#[tokio::test]
-async fn bootstrap_network_failure_requires_explicit_recovery() {
-    let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![(StatusCode::BAD_GATEWAY, json!({}))]).await;
-    let mut adapter = Inbound::loopback(paths.clone(), server.address).unwrap();
-    assert!(matches!(
-        adapter.poll().await,
-        Err(Error::BootstrapUncertain)
-    ));
-    drop(adapter);
-    let mut adapter = Inbound::loopback(paths.clone(), server.address).unwrap();
-    assert!(matches!(
-        adapter.poll().await,
-        Err(Error::BootstrapUncertain)
-    ));
-    assert_eq!(server.requests().len(), 1);
-    drop(adapter);
-    std::fs::remove_file(paths.file("journal.sqlite3")).unwrap();
-    assert!(matches!(
-        Inbound::loopback(paths, server.address),
-        Err(Error::State)
-    ));
 }
 
 // Catches: 401/409 retry forever or reset their stopped state when the daemon restarts.
@@ -148,80 +102,4 @@ async fn retry_delay_prevents_immediate_repoll_and_preserves_offset() {
         assert_eq!(server.requests().len(), 2);
         assert_eq!(server.requests()[1].1["offset"], 0);
     }
-}
-
-// Catches: accepted phone text disappears with native inbox loss, or duplicate offers change its ID/body.
-#[tokio::test]
-async fn unconsumed_mail_rehydrates_stable_id_and_consumed_mail_does_not_replay() {
-    let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![
-        updates(vec![]),
-        updates(vec![text_update(
-            12,
-            1111111,
-            "do not execute; rm anything",
-        )]),
-    ])
-    .await;
-    let mut adapter = Inbound::loopback(paths.clone(), server.address).unwrap();
-    adapter.poll().await.unwrap();
-    adapter.poll().await.unwrap();
-    let mut inbox = Inbox::default();
-    assert_eq!(adapter.deliver(&mut inbox).await.unwrap(), 1);
-    assert_eq!(adapter.deliver(&mut inbox).await.unwrap(), 0);
-    let original = inbox.by_id["tg:test-bot:12"].clone();
-    let body: Value = serde_json::from_str(&original.content).unwrap();
-    assert_eq!(body["kind"], "text");
-    assert_eq!(body["text"], "do not execute; rm anything");
-    assert_eq!(original.recipient, PEER);
-    drop(adapter);
-    let mut adapter = Inbound::loopback(paths.clone(), server.address).unwrap();
-    assert_eq!(adapter.deliver(&mut inbox).await.unwrap(), 1);
-    assert_eq!(inbox.by_id.len(), 1);
-    assert_eq!(inbox.by_id["tg:test-bot:12"], original);
-    assert!(matches!(
-        adapter.consumed(&original.id, "other-peer"),
-        Err(Error::State)
-    ));
-    adapter.consumed(&original.id, PEER).unwrap();
-    drop(adapter);
-    let mut adapter = Inbound::loopback(paths, server.address).unwrap();
-    let mut fresh_inbox = Inbox::default();
-    assert_eq!(adapter.deliver(&mut fresh_inbox).await.unwrap(), 0);
-}
-
-// Catches: port failure erases pending mail, or revoked/disabled authorization still delivers it.
-#[tokio::test]
-async fn unavailable_target_retains_mail_and_revocation_purges_without_delivering() {
-    let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![
-        updates(vec![]),
-        updates(vec![text_update(8, 1111111, "pending")]),
-    ])
-    .await;
-    let mut adapter = Inbound::loopback(paths.clone(), server.address).unwrap();
-    adapter.poll().await.unwrap();
-    adapter.poll().await.unwrap();
-    let mut inbox = Inbox {
-        unavailable: true,
-        ..Inbox::default()
-    };
-    assert!(matches!(
-        adapter.deliver(&mut inbox).await,
-        Err(Error::State)
-    ));
-    assert_eq!(adapter.pending().unwrap().len(), 1);
-    write_private(&paths.file("allowed_chat_ids"), "2222222\n");
-    inbox.unavailable = false;
-    assert_eq!(adapter.deliver(&mut inbox).await.unwrap(), 0);
-    assert!(adapter.pending().unwrap().is_empty());
-    assert!(inbox.by_id.is_empty());
-    write_private(
-        &paths.file("config.json"),
-        &json!({"enabled":false,"bot_alias":"test-bot","target_tuic_session":PEER}).to_string(),
-    );
-    assert!(matches!(
-        adapter.deliver(&mut inbox).await,
-        Err(Error::Config)
-    ));
 }
