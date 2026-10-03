@@ -5,6 +5,9 @@
 ## Shared IPC instance routing (1390-cd42) — Rust rebuild required
 
 - [ ] After Boss restarts the rebuilt backend and replaces the bridge/CLI binaries, use a disposable named headless instance. Run `tuic --instance <id> ls --json` and `TUIC_APP_INSTANCE=<id> tuic-bridge`: both must reach that instance. An explicit `TUIC_SOCKET` must still win. Do not launch a second desktop instance. The existing live Rust process does not hot-reload these changes.
+## Stable MCP bridge (1415-ef32) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, confirm the primary instance migrates Claude and private Claude MCP commands to `mcp-bridge/<sha256>/tuic-bridge` under its config directory. Start a disposable Claude session and confirm MCP initialize succeeds. Existing desktop Rust code does not hot-reload. Target cleanup and executable lifetime are covered by the targeted regression tests; real Claude startup after the desktop restart remains to check.
 
 ## Suspend Tab (1358-d008) — desktop menu
 

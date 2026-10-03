@@ -57,6 +57,26 @@ and HTTP `POST /progress/list?path=…` use the same input and response.
 
 Optional HTTP/WebSocket server that exposes all Tauri commands as REST endpoints. Enables browser-mode operation and MCP (Model Context Protocol) integration for external AI tools.
 
+## Installed bridge lifetime
+
+The primary instance installs the adjacent `tuic-bridge` into
+`<config_dir>/mcp-bridge/<sha256>/tuic-bridge` (`.exe` on Windows) before updating
+agent MCP configs, only when an eligible integration needs repair. Publication
+uses a temporary file in the destination directory and atomic rename, with
+executable permissions set before publication. The source is hashed before copying;
+both the copy and a second source read must match before publication. Identical
+bytes reuse the existing file. Different builds get separate revision directories;
+old revisions remain available to running agents and saved config commands.
+Cargo target cleanup, mbx view refreshes and app upgrades therefore cannot remove
+the configured executable. Failed installation leaves agent configs unchanged.
+Startup migrates TUIC bridge commands from cargo/mbx targets and its installed
+revision directory, while preserving custom working commands and transports.
+Secondary-instance ownership rules still apply. An explicit Settings > Agents
+Install can install under user authority. Manual setup snippets only inspect
+installed copies and never create them; without a copy they report the bare
+`tuic-bridge` command. Revision cleanup is deferred until every agent config root,
+including private Claude and `CLAUDE_CONFIG_DIR` roots, can be discovered.
+
 ## Activation
 
 The server has two independent listeners:
