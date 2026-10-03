@@ -9,6 +9,17 @@ fn scratch() -> tempfile::TempDir {
 /// One raw tar member. The `tar` builder refuses `..`/absolute names, so the
 /// header bytes are written by hand, exactly as a hostile client would.
 fn raw_member(name: &[u8], kind: u8, link: &[u8], declared_size: u64, body: &[u8]) -> Vec<u8> {
+    raw_member_mode(name, kind, link, declared_size, body, 0o644)
+}
+
+fn raw_member_mode(
+    name: &[u8],
+    kind: u8,
+    link: &[u8],
+    declared_size: u64,
+    body: &[u8],
+    mode: u32,
+) -> Vec<u8> {
     let mut header = tar::Header::new_gnu();
     {
         let old = header.as_old_mut();
@@ -17,7 +28,7 @@ fn raw_member(name: &[u8], kind: u8, link: &[u8], declared_size: u64, body: &[u8
     }
     header.set_entry_type(tar::EntryType::new(kind));
     header.set_size(declared_size);
-    header.set_mode(0o644);
+    header.set_mode(mode);
     header.set_cksum();
     let mut out = header.as_bytes().to_vec();
     out.extend_from_slice(body);
@@ -530,4 +541,93 @@ async fn transfer_remote_route_requires_the_session_token() {
             res.status()
         );
     }
+}
+
+fn running_as_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+// Catches (round 2): the mode masks making a legitimate read-only directory
+// (0o555, e.g. a vendored cache) unpublishable — rename(2) of a directory into a
+// different parent needs write permission on the moved directory, so restoring
+// the archive's r-x mode before publish fails the whole upload with EACCES.
+#[cfg(unix)]
+#[tokio::test]
+async fn read_only_top_level_directory_is_published() {
+    if running_as_root() {
+        return;
+    }
+    let tmp = scratch();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    let members = [
+        raw_member_mode(b"x", b'5', b"", 0, b"", 0o555),
+        raw_member_mode(b"x/f", b'0', b"", 1, b"a", 0o444),
+    ]
+    .concat();
+    let out = upload(&root, &root, "x", true, finish(members)).await;
+    assert_eq!(out.map(|r| r.moved), Ok(1));
+    assert_eq!(std::fs::read(root.join("x/f")).unwrap(), b"a");
+    assert_eq!(names(&root), vec!["x"], "no staging residue");
+    // The test's own cleanup needs the owner write bit back.
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(root.join("x"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+// Catches (round 2): the startup sweep deleting a user's own directory because it
+// merely starts with `.tuic-upload-` (data loss), or following a symlink out of a
+// registered root to delete staging-looking directories elsewhere.
+#[cfg(unix)]
+#[test]
+fn sweep_deletes_only_real_staging_and_never_follows_links() {
+    let tmp = scratch();
+    let root = tmp.path().join("repo");
+    let outside = tmp.path().join("outside");
+    let uuid = uuid::Uuid::new_v4();
+    let staging = format!(".tuic-upload-{uuid}");
+    std::fs::create_dir_all(root.join("a/b").join(&staging).join("data")).unwrap();
+    std::fs::write(root.join("a/b").join(&staging).join("archive"), b"x").unwrap();
+    std::fs::create_dir_all(root.join(".tuic-upload-notes")).unwrap();
+    std::fs::write(root.join(".tuic-upload-notes/keep.txt"), b"mine").unwrap();
+    std::fs::create_dir_all(outside.join(&staging)).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+
+    sweep_staging(&[root.to_str().unwrap().to_owned()]);
+
+    assert!(
+        !root.join("a/b").join(&staging).exists(),
+        "real staging must go"
+    );
+    assert!(
+        root.join(".tuic-upload-notes/keep.txt").exists(),
+        "a user directory sharing the prefix was deleted"
+    );
+    assert!(outside.join(&staging).exists(), "sweep followed a symlink");
+}
+
+// Catches (round 2): removing the global timeout for /fs/upload-copy while the only
+// remaining bound is a per-chunk idle limit — a client trickling one byte every
+// 29 s never idles out and pins an upload slot (2 in total) for hours.
+#[tokio::test(start_paused = true)]
+async fn trickling_upload_cannot_pin_a_slot_indefinitely() {
+    let tmp = scratch();
+    let root = tmp.path().join("repo");
+    std::fs::create_dir(&root).unwrap();
+    let stream = futures_util::stream::unfold(0u32, |n| async move {
+        if n >= 400 {
+            return None;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(29)).await;
+        Some((Ok::<_, io::Error>(vec![0u8]), n + 1))
+    });
+    let started = tokio::time::Instant::now();
+    let roots = [root.to_str().unwrap().to_owned()];
+    let out = receive_copy(query(&root, "f", false), &roots, Body::from_stream(stream)).await;
+    assert!(out.is_err());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3600),
+        "slot held for {:?} by a 1 B / 29 s trickle",
+        started.elapsed()
+    );
+    assert_eq!(names(&root), Vec::<String>::new());
 }
