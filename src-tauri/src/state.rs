@@ -613,6 +613,10 @@ pub(crate) struct SessionState {
     /// Detected agent type, if known
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// Run-config identity survives shell startup; discovered identity does not
+    /// survive a foreground program that is no longer an agent.
+    #[serde(skip)]
+    pub(crate) agent_type_from_run_config: bool,
     /// Keep the foreground detection warning to one record per session.
     #[serde(skip)]
     pub(crate) unknown_foreground_warned: bool,
@@ -4523,10 +4527,12 @@ impl AppState {
                     .and_modify(|session| {
                         session.last_activity_ms = now_ms;
                         session.agent_type = agent_type.clone();
+                        session.agent_type_from_run_config = agent_type.is_some();
                     })
                     .or_insert_with(|| SessionState {
                         last_activity_ms: now_ms,
                         agent_type: agent_type.clone(),
+                        agent_type_from_run_config: agent_type.is_some(),
                         ..Default::default()
                     });
             }

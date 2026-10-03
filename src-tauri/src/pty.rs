@@ -12200,7 +12200,7 @@ fn is_script_interpreter(name: &str) -> bool {
 }
 
 /// Look up the process name for a given PID using OS-native syscalls.
-/// On macOS uses `proc_pidpath`, on Linux reads `/proc/{pid}/comm`.
+/// On macOS uses `proc_pidpath`, on Linux resolves `/proc/{pid}/exe` with a comm fallback.
 /// Returns None if the lookup fails.
 #[cfg(target_os = "macos")]
 pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
@@ -12233,6 +12233,14 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
+    // Native Claude installs a numeric executable; comm alone cannot name it.
+    // Keep comm/process-title discovery when readlink is denied or the path
+    // describes an interpreter instead of the agent it is hosting.
+    if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/exe"))
+        && let Some(agent) = classify_agent_name_or_path(&path.to_string_lossy())
+    {
+        return Some(agent.to_string());
+    }
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
         .ok()
         .map(|s| s.trim().to_string())
@@ -12347,6 +12355,7 @@ pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Optio
             .session_maps
             .session_states
             .get(session_id)
+            .filter(|s| s.agent_type_from_run_config)
             .and_then(|s| s.agent_type.clone())
     });
 
@@ -12360,37 +12369,29 @@ pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Optio
         tracing::warn!(session_id, foreground_process = %fg_name, "Unrecognized non-shell foreground process; if this is an agent, Enter uses the safe gap");
     }
 
-    // Mirror the detected agent type into session_states so the PTY reader's
-    // `agent_active_for_parse` check flips on and plain-prefix structured
-    // tokens (`intent:`, `action:`, `suggest:`) start being parsed. Without
-    // this sync, sessions started by running `claude` inside a plain shell
-    // (as opposed to via the /agent spawn route) never enable plain-prefix
-    // parsing, so intents never rename the tab.
-    //
-    // Sticky: only set on Some, never clear on None. Foreground-pgid sampling
-    // is inherently flaky during subprocess transitions — when claude spawns a
-    // short-lived grandchild (git, sed, rg) the pgid leader briefly points to
-    // that unrecognized binary and classify_agent returns None. Writing that
-    // None back would flip agent_active off and drop the very next
-    // `suggest:`/`intent:` token even though claude is still the live agent.
-    // Frontend useAgentPolling.ts applies the same stickiness (streak +
-    // source=idle) on its store mirror; backend must match or the parser
-    // gates off while the UI still shows the agent active. Session teardown
-    // clears session_states entirely, so no explicit reset is needed here.
-    let identity_changed = if let Some(mut entry) =
-        state.session_maps.session_states.get_mut(session_id)
-        && effective.is_some()
-        && entry.agent_type != effective
-    {
-        entry.agent_type = effective.clone();
-        entry.hook_instrumented = hook_instrumented_for(
-            &crate::config::load_agents_config(),
-            entry.agent_type.as_deref(),
-        );
-        true
-    } else {
-        false
-    };
+    // A preset survives shell startup. A discovered identity is revocable:
+    // after the agent exits, unattended submit/mail must not target its shell.
+    // Failed OS observation returned above and is not evidence of an exit.
+    let identity_changed =
+        if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id) {
+            let next = if effective.is_some() || !entry.agent_type_from_run_config {
+                effective.clone()
+            } else {
+                entry.agent_type.clone()
+            };
+            if entry.agent_type != next {
+                entry.agent_type = next;
+                entry.hook_instrumented = hook_instrumented_for(
+                    &crate::config::load_agents_config(),
+                    entry.agent_type.as_deref(),
+                );
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
     // The screen may already be quiet when the process is discovered. Its
     // cached shell-era verdict is not evidence about the newly known agent.
