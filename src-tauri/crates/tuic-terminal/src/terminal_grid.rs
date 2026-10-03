@@ -1997,7 +1997,7 @@ impl TerminalGrid {
             && grid[first_line][Column(0)].c == '❯'
             && grid[first_line][Column(1)].c == ' '
             && (first_line == grid.topmost_line()
-                || !grid[first_line - 1][Column(num_cols - 1)]
+                || !grid[Line(first_line.0 - 1)][Column(num_cols - 1)]
                     .flags
                     .contains(Flags::WRAPLINE));
 
