@@ -1,6 +1,6 @@
 # Telegram channel for TUICommander
 
-**Story:** 1438-79b4. **Date:** 2026-10-03. **Phase:** design for approval; no implementation or deployment.
+**Story:** 1438-79b4. **Date:** 2026-10-03. **Phase:** approved design; implementation authorized for offline slices 1–2 only, no deployment.
 **Branch:** feat/1438-telegram-adapter. **Source baseline:** 140e8950deae7e4bb7a2f4498c7a23c95eacca21.
 
 ## Consumer contract
@@ -31,7 +31,7 @@ Dependency evidence is from these branch snapshots, not landed behavior:
 
 Before those branches land: Bot API client, journal, scheduler, schema, splitting and fake-server tests can be built against narrow ports. Their final native-mail integration must use 1419's stable-ID seam, and the hand-launched marketeer PTY wake test depends on 1420. Do not cherry-pick unfinished branch code. Re-read both final landed diffs before integration. Cross-host send by a desktop agent through the Telegram tool is outside this first slice; agents on mint use its local MCP bridge.
 
-Binding config stores the stable target `tuic_session`, with `pe-3` used only to resolve and display the initial target. An ambiguous alias or missing peer retains pending mail and reports unavailability; it never selects a different agent. Rebinding requires an explicit config change. Boss must provide the actual UUID.
+Binding config stores the stable target `tuic_session`, for a NEW managed Claude marketeer agent in `~/Gits/personal/marketeer` on mint. The coordinator spawns it with a stable UUID at deployment; it is not pe-3. The new agent reads marketeer/AGENTS.md, x/AGENTS.md and HANDOFF.md after pe-3 hands over. An ambiguous alias or missing peer retains pending mail and reports unavailability; it never selects a different agent. Rebinding requires an explicit config change. The coordinator supplies the new peer UUID at deployment.
 
 ## 2. Streaming source and correlation
 
@@ -77,7 +77,7 @@ Text mail uses the same envelope with `kind:"text"`, `text`, originating `messag
 
 For publish approvals, add an explicit approval input `{artifact_id, exact_text}` to send. TUIC computes SHA-256 over the exact UTF-8 bytes before chunking, escaping or display annotation; no trimming, newline conversion or Unicode normalization. Require approval exact_text to equal the submitted message text byte for byte; reject a different preview. Store an immutable version `(artifact_id, digest, exact_text, issuer, chat, expiry)`. Buttons reference that version; edited text creates a new version and invalidates old handles. On click, Rust writes a decision row with that immutable digest before sending mail. Generic opaque `approve:*` strings alone do not confer publish authority.
 
-The publisher must obtain the decision through a deterministic receipt lookup and recompute the digest of the bytes it will publish. The LLM cannot mint, alter or reinterpret a decision, and free-text "yes" never creates an approval. Proposed `telegram decision` returns the stored receipt to the issuing peer; the marketeer's publishing code must check it, not trust an agent's paraphrase. TUIC cannot prove an external publisher consumes this record: the location/API of marketeer's approval store is an open integration question for Boss. This is application publish consent, separate from Claude MCP permission relay discussed in `ideas/mcp-channels.md:64`.
+The publisher must obtain the decision through a deterministic receipt lookup and recompute the digest of the bytes it will publish. The LLM cannot mint, alter or reinterpret a decision, and free-text "yes" never creates an approval. Proposed `telegram decision` returns the stored receipt to the issuing peer; the marketeer's publishing code must check it, not trust an agent's paraphrase. TUIC cannot prove an external publisher consumes this record: Boss selected the xkit publish path: TUIC owns the receipts, and xkit checks them before every publication, with no local approve path. This is application publish consent, separate from Claude MCP permission relay discussed in `ideas/mcp-channels.md:64`.
 
 ### Publish previews cannot carry approval
 
@@ -119,7 +119,7 @@ This intentionally changes Telegram queue state only in the later authorized imp
 
 **Critical gap:** the TUIC mailbox is a bounded in-memory `DashMap<VecDeque<AgentMessage>>` (`src-tauri/src/state.rs:2124`, capacity at `:1654`). Stable-ID deduplication in 1419 is also insufficient to claim disk durability. The adapter journal therefore retains channel mail until consumption, rehydrates it when the same peer re-registers after restart, and integrates stable-ID insertion plus inbox consumption receipts with the shared service. Journal mail IDs remain immutable; rehydration checks the live inbox under its identity/delivery lock. An inbox read records the durable consumed cursor before acknowledging removal. Capacity eviction must leave unconsumed channel mail pending, not delete it from the journal. Bound pending count/bytes and surface saturation; never silently evict accepted phone messages. Retention compacts only consumed/completed rows while preserving callback expiry and replay tombstones.
 
-Do not equate this with exactly-once model execution. A crash after a read response is sent but before the model acts cannot be resolved by an offset. Likewise `sendMessage` has no idempotency field in this design: an accepted POST followed by a lost response is uncertain. Persist `delivery_uncertain`, do not blindly resend successful-looking final replies or approval posts, and surface recovery to TUIC. Confirm with Boss whether the requirement means no duplicated durable updates/mail or demands an additional application-level acknowledgement. Do not promise lossless, duplicate-free semantic effects across that boundary.
+Do not equate this with exactly-once model execution. A crash after a read response is sent but before the model acts cannot be resolved by an offset. Likewise `sendMessage` has no idempotency field in this design: an accepted POST followed by a lost response is uncertain. Persist `delivery_uncertain`, do not blindly resend successful-looking final replies or approval posts, and surface recovery to TUIC. Boss accepted durable deduplication and explicit delivery uncertainty without blind resend; no stronger model acknowledgement is required in this scope. Do not promise lossless, duplicate-free semantic effects across that boundary.
 
 ## 6. Agent MCP surface
 
@@ -183,10 +183,24 @@ At the end of each implementation story, run only the relevant `telegram::tests:
 6. **Buttons and approvals:** opaque handles, durable decisions, callback acknowledgement/edit retry, exact-text versioning and publisher receipt contract. Publisher integration must be identified before enabling approvals.
 7. **Operator docs and coordinated live verification:** apply sync matrix MCP/remote/progress sections (`docs/sync-matrix.md:112`, `:149`, `:318`, `:409`): API/backend/user guides, FEATURES, SPEC, CHANGELOG and restart checklist as each behavior lands. Use the confirmed allowlist file, obtain the stable peer binding, authentic sanitized fixtures and Boss readiness; coordinator schedules mint deployment while pe-3 is idle.
 
-## Open design questions for Boss via br-3
+## Approved decisions (Boss via br-3, 2026-10-03)
 
-1. Provide the stable marketeer peer UUID. Chat authorization is already supplied by the confirmed allowed_chat_ids file; do not request or copy Boss's chat ID. No discovery poller is started here.
-2. Confirm the proposed primary stream: explicit begin/finish plus intents and safe agent-authored tool-step activity. Fully automatic tool-name streaming needs a separate captured hook/transcript contract.
-3. Confirm restart semantics: durable update/mail deduplication and explicit uncertainty for ambiguous sends, versus an additional model/application acknowledgement protocol. Exactly-once external execution is not established.
-4. Identify the deterministic marketeer publisher and approval record interface. Recommend adapter-owned immutable receipts consumed by publisher code; an LLM-only approval workflow cannot satisfy the request.
-5. Supply or authorize later acquisition of sanitized Bot API draft, Stop, callback and error fixtures, then give phase-2 go. Live mint use additionally requires Boss readiness; this document grants no deployment authority.
+- Recipient: new coordinator-spawned managed Claude marketeer on mint with a stable UUID; never pe-3. Allowlist stays in allowed_chat_ids.
+- Streaming: explicit begin/finish plus intents and authored safe activity accepted.
+- Recovery: durable deduplication and delivery_uncertain without blind resend accepted.
+- Consent: TUIC owns immutable callback-created SHA-256 receipts. The xkit publish path checks them before every publish; no local approval path.
+- Phase 2: slices 1–2 offline only. 1419/1420 are not landed: implement narrow ports and leave native stable-ID mail integration explicitly deferred, with no cherry-picks. No Bot API, mint, token or SSH access. Live captures and deployment occur later with Boss present.
+
+### Receipt lookup contract for xkit through tuic-bridge
+
+The existing native `telegram` tool gains `action:"receipt_lookup"`. Input is `{receipt_id, subject:{kind:"item", artifact_id, sha256}}` or `{receipt_id, subject:{kind:"queue", queue_id, item_sha256s:[...]}}`. Unknown fields, noncanonical 64-lowercase-hex digests, empty queues and invalid IDs fail validation. No caller-supplied peer identity is accepted. The MCP connection bound by tuic-bridge to the managed marketeer TUIC_SESSION is the issuing peer; headerless/unregistered calls fail authentication. The same identity must have issued the proposal that owns the receipt. Cross-peer lookups fail authorization. Peer identity is authorization, not permission to manufacture a receipt.
+
+Success is `{valid:true, receipt:{receipt_id, issuing_peer, chat_id, callback_id, approved_at_ms, subject, binding_sha256}}`. Only an existing callback-created positive record returns success, and subject/digest must match exactly. Return safe typed errors `unauthenticated`, `forbidden`, `invalid_input`, `receipt_not_found`, `not_approved`, `subject_mismatch`, `superseded`, `expired`, or `store_unavailable`; no error is an approval. Do not return proposal text or token. xkit invokes this through the local mint bridge for every publish, recomputing the exact item bytes first. It fails closed on any error, timeout, digest mismatch or uncertain result; there is no `./x approve` fallback. Lookup does not consume the immutable receipt. Revocation/supersession status is checked on every lookup.
+
+For Mac Keyboard, Boss approves the queue once as a process. Store a queue proposal with its exact ordered item-digest list. Compute `binding_sha256 = SHA256(b"tuic-telegram-queue-v1\0" || count_u64_be || digest_1_raw_32_bytes || ... || digest_N_raw_32_bytes)`. Count and binary fixed-length encoding prevent concatenation ambiguity; order and duplicates are significant. The validated button callback creates that queue receipt. Adding, removing, changing or reordering an item changes the binding and requires a new proposal and button press. The publisher supplies the whole original ordered digest list for lookup and verifies the current item's exact bytes and queue position against it before each publish; remaining items are not represented as a shortened queue. A completed item cannot authorize newly appended work. Persist execution progress separately from approval. Receipt lookup uses the original issuing marketeer peer via its bridge; a Mac Keyboard runner must use that authorized publisher path, never impersonate or assert an issuing peer in tool arguments. Dedicated runner identity/delegation would need separate approval and is outside slices 1–2.
+
+### Open operational inputs (not unresolved architecture)
+
+- Coordinator supplies the new managed peer UUID at deployment.
+- Authentic sanitized Bot API captures are acquired later on mint with Boss present. No live capture is required or claimed by offline slices 1–2.
+- Live end-to-end and pe-3 handover remain coordinator-owned and require Boss readiness. Approval/publisher tooling is a later slice, not implemented by the current offline ports.
