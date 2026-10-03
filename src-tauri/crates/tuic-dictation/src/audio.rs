@@ -488,6 +488,26 @@ mod tests {
         );
     }
 
+    /// 44.1 kHz is the other common device rate and its ratio is not an exact
+    /// fraction. Catches `output_len` rounding up (the audio grows by a sample
+    /// per callback, so dictation drifts against real time) and a source index
+    /// that overruns or reorders the chunk. 442 ramp samples -> 160 outputs;
+    /// out[i] is input sample floor(i * 2.75625), checked away from exact
+    /// integer products where f64 rounding may legitimately pick either side.
+    #[test]
+    fn process_audio_chunk_resamples_44_1khz_keeping_length_and_order() {
+        let ramp: Vec<f32> = (0..442).map(|i| i as f32).collect();
+        let mut fx = ChunkFixture::new();
+        fx.process(&ramp, 44_100, 1);
+        let out = fx.captured();
+        assert_eq!(out.len(), 160, "442 * 16000 / 44100 = 160.36, floored");
+        assert!(out.windows(2).all(|w| w[0] <= w[1]), "order lost: {out:?}");
+        assert_eq!(out[0], 0.0);
+        assert_eq!(out[1], 2.0);
+        assert_eq!(out[100], 275.0);
+        assert_eq!(out[159], 438.0);
+    }
+
     /// A device reporting 0 Hz makes `ratio` infinite, and
     /// `(len as f64 * f64::INFINITY) as usize` saturates to `usize::MAX` — so
     /// `reserve` aborts on capacity overflow, on the real-time audio thread.
