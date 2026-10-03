@@ -83,10 +83,25 @@ impl Update {
     }
 }
 
-/// Native integration must insert idempotently under the identity lock, then
-/// arbitrate safe wake using the current inbox service. Queued is not consumed.
+/// Native integration offers to the in-memory inbox under the identity lock,
+/// then arbitrates safe wake. No adapter persistence or consumption receipts.
 /// DEFERRED (2026-10-03): implement against landed 1419 stable-ID send and 1420
 /// readiness; no alternative PTY injection or cherry-picked implementation.
 pub(crate) trait MailPort {
     async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error>;
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct TestInbox {
+    pub(super) by_id: std::collections::BTreeMap<String, PendingMail>,
+}
+#[cfg(test)]
+impl MailPort for TestInbox {
+    async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error> {
+        self.by_id
+            .entry(mail.id.clone())
+            .or_insert_with(|| mail.clone());
+        Ok(())
+    }
 }

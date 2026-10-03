@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Telegram adapter groundwork** — Add offline owner, file authorization, safe Bot API and durable inbound boundaries. Harden offline polling with adaptive response limits, shared retry scheduling, durable rejection/oversize stops and revoked-mail purge. Daemon polling and native mail delivery remain disabled pending integration; no live Telegram channel is available yet.
+- **Telegram adapter groundwork** — Add offline owner, file authorization, safe Bot API and minimal inbound boundaries. Persist only the atomic polling cursor; unread inbox mail may be lost on restart. Harden offline polling with adaptive response limits, shared retry scheduling and in-memory rejection/oversize stops. Daemon polling and native mail delivery remain disabled pending integration; no live Telegram channel is available yet.
 
 - **MCP Markdown tabs** — Documents opened with `ui action=tab` survive UI reloads in the same window, including native recovery without an unload event. Reopening their stable id updates the restored tab without creating a duplicate.
 - **Remote terminal stream failures** — A stalled initial replay, unreadable frame or disconnected stream now shows a persistent error toast. Reconnect attempts remain bounded until a frame reaches the renderer.

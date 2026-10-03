@@ -8,9 +8,10 @@ pub(super) async fn elapse_backoff() {
 }
 
 fn offset(paths: &Paths) -> i64 {
-    rusqlite::Connection::open(paths.file("journal.sqlite3"))
+    std::fs::read_to_string(paths.file("next_offset"))
         .unwrap()
-        .query_row("SELECT offset FROM state", [], |r| r.get(0))
+        .trim()
+        .parse()
         .unwrap()
 }
 
@@ -53,9 +54,9 @@ async fn oversized_batches_shrink_without_acknowledging_and_restore_after_succes
 }
 
 // Catches: one large update either wedges forever at the batch cap,
-// is silently skipped, or an oversize stop is forgotten on restart.
+// is silently skipped, or an oversize response loops within one owner lifetime.
 #[tokio::test]
-async fn single_update_budget_recovers_or_durably_stops_without_skipping() {
+async fn single_update_budget_recovers_or_stops_without_skipping() {
     for (bytes, stops) in [
         (1024 * 1024, false),
         (8 * 1024 * 1024 - 100, false),
@@ -81,8 +82,8 @@ async fn single_update_budget_recovers_or_durably_stops_without_skipping() {
             assert!(matches!(adapter.poll().await, Err(Error::OversizeUpdate)));
             drop(adapter);
             let mut adapter = Inbound::loopback(paths, server.address).unwrap();
-            assert!(matches!(adapter.poll().await, Err(Error::OversizeUpdate)));
-            assert_eq!(server.requests().len(), count);
+            assert!(matches!(adapter.poll().await.unwrap(), Poll::Accepted(0)));
+            assert_eq!(server.requests().len(), count + 1);
         } else {
             assert!(matches!(adapter.poll().await.unwrap(), Poll::Accepted(0)));
             assert_eq!(offset(&paths), 8);
@@ -92,10 +93,10 @@ async fn single_update_budget_recovers_or_durably_stops_without_skipping() {
     }
 }
 
-// Catches: 403/404 stops live only in RAM, or successful-HTTP error
-// envelopes bypass the same durable stop as HTTP status errors.
+// Catches: successful-HTTP 403/404 envelopes bypass the same in-memory stop
+// as HTTP status errors, or repeated polls ignore the stopped state.
 #[tokio::test]
-async fn forbidden_and_missing_bot_latch_from_status_or_envelope_across_restart() {
+async fn forbidden_and_missing_bot_latch_from_status_or_envelope_until_restart() {
     for (status, code) in [
         (StatusCode::FORBIDDEN, 403),
         (StatusCode::NOT_FOUND, 404),
@@ -112,10 +113,12 @@ async fn forbidden_and_missing_bot_latch_from_status_or_envelope_across_restart(
         adapter.poll().await.unwrap();
         assert_eq!(adapter.poll().await.err(), Some(Error::Rejected(code)));
         assert_eq!(offset(&paths), 0);
-        drop(adapter);
-        let mut adapter = Inbound::loopback(paths, server.address).unwrap();
         assert_eq!(adapter.poll().await.err(), Some(Error::Rejected(code)));
         assert_eq!(server.requests().len(), 2);
+        drop(adapter);
+        let mut adapter = Inbound::loopback(paths, server.address).unwrap();
+        assert!(matches!(adapter.poll().await.unwrap(), Poll::Accepted(0)));
+        assert_eq!(server.requests().len(), 3);
     }
 }
 
