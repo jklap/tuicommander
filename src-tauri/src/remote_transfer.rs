@@ -533,3 +533,7 @@ fn publish(source: &Dir, dest: &Dir, name: &str) -> io::Result<()> {
 #[cfg(test)]
 #[path = "remote_transfer_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "remote_transfer_critic_tests.rs"]
+mod critic_tests;
