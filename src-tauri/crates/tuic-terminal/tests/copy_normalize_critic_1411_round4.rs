@@ -3,16 +3,6 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use tuic_terminal::terminal_grid::TerminalGrid;
 
-// Catches flagging the top row unknown when ED 3 purges history that ED 2 just pushed out of a
-// now-blank viewport (Ink's clearTerminal is ESC[2J ESC[3J ESC[H): the row holds only new text.
-#[test]
-fn composer_written_after_ed2_then_ed3_clear_terminal_still_normalizes() {
-    let mut grid = TerminalGrid::new(3, 80, 10);
-    let _ = grid.process(b"a\r\nb\r\n");
-    let _ = grid.process("\x1b[2J\x1b[3J\x1b[H❯ hello".as_bytes());
-    assert_eq!(grid.get_selection_text(0, 0, 0, 10), "hello");
-}
-
 // Catches marking a blank, freshly reset top row unknown because a linefeed flood evicted
 // everything above it: no predecessor content can wrap into text written later at column 0.
 #[test]

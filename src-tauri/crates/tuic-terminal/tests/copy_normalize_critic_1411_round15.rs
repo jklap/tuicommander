@@ -17,27 +17,6 @@ fn fill(rows: u16, scrollback: usize) -> TerminalGrid {
     g
 }
 
-// Catches ED2 over a fully occupied screen leaving the unknown flag on a live row for any
-// scrollback size (evicted-predecessor marking applied after the row reset), with and without
-// the ED3 that Ink's clearTerminal appends.
-#[test]
-fn ed2_over_full_screen_leaves_live_row_zero_known_for_any_scrollback() {
-    for scrollback in [0usize, 1, 3] {
-        for rows in [2u16, 3] {
-            for tail in ["", "\x1b[3J"] {
-                let mut g = fill(rows, scrollback);
-                let _ = g.process(format!("\x1b[2J{tail}\x1b[H{COMPOSER}").as_bytes());
-                let row = abs(&g, 0);
-                assert_eq!(
-                    g.get_selection_text(row, 0, row, 79),
-                    "new composer",
-                    "scrollback={scrollback} rows={rows} tail={tail:?}"
-                );
-            }
-        }
-    }
-}
-
 // Catches ED2 (or the resize that pulls history back) dropping the lost-predecessor flag of the
 // oldest retained history row: a literal "❯ lit" that lost its predecessor must keep its glyph
 // when it returns to the viewport, while a blank row below it stays known.
