@@ -4437,4 +4437,67 @@ mod tests {
             &spec
         ))));
     }
+
+    // --- critic-1415r2: installed-bridge lifecycle ---
+
+    /// Catches: a config dir with spaces and quotes (macOS `Application Support` is the
+    /// benign case) being mangled by one format's escaping, so that format names a
+    /// command that does not exist while JSON keeps working.
+    #[cfg(unix)]
+    #[test]
+    fn installed_command_round_trips_through_every_format_for_an_awkward_config_dir() {
+        let root = TempDir::new().unwrap();
+        let odd = root.path().join("App Support 'q' \"d\" \\b");
+        std::fs::create_dir_all(&odd).unwrap();
+        let _guard = crate::config::set_config_dir_override(odd);
+        let source = fake_bridge(root.path(), b"bridge");
+        let specs = [
+            (McpFormat::Json, "mcpServers", "a.json"),
+            (McpFormat::OpenCode, "mcp", "b.json"),
+            (
+                McpFormat::Toml {
+                    forward_session: true,
+                },
+                "mcp_servers",
+                "c.toml",
+            ),
+            (McpFormat::Yaml, "extensions", "d.yaml"),
+        ];
+        for (format, key, file) in specs {
+            let spec = McpConfigSpec {
+                format,
+                key_path: vec![key],
+                ..spec_at(root.path().join(file))
+            };
+            ensure_mcp_configs_for(&[], Some(&source), [("agent", spec_at_format(&spec))]);
+            let command = command_at_spec(&spec);
+            assert!(
+                usable_executable(std::path::Path::new(&command)),
+                "{file} names {command:?}"
+            );
+        }
+    }
+
+    /// Catches: a failed publish (destination occupied by a non-empty directory) leaving
+    /// the temp copy of the bridge behind, one full binary per failed startup.
+    #[test]
+    fn failed_publish_leaves_no_temp_copy_behind() {
+        use sha2::{Digest, Sha256};
+        let (_guard, config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let bytes = b"bridge bytes";
+        let source = fake_bridge(dir.path(), bytes);
+        let revision = config_dir
+            .path()
+            .join("mcp-bridge")
+            .join(hex::encode(Sha256::digest(bytes)));
+        let occupied = bridge_path_in(&revision);
+        std::fs::create_dir_all(occupied.join("child")).unwrap();
+        assert!(install_bridge_binary(&source).is_err());
+        let names: Vec<_> = std::fs::read_dir(&revision)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![occupied.file_name().unwrap().to_owned()]);
+    }
 }
