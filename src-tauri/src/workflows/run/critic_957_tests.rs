@@ -1,6 +1,5 @@
 //! Critic tests for 957-dc59 (canonical merge tree) and 953-feed (concurrent check receipts).
 use super::critic_tests::{accepted_flow, Flow};
-use super::*;
 use std::path::PathBuf;
 
 fn git(path: &std::path::Path, args: &[&str]) {
@@ -46,7 +45,12 @@ fn evil_merge_that_only_flips_a_file_mode_is_rejected() {
     let sequence = checked(&flow);
     let repo = canonical(&flow);
     git(&repo, &["merge", "--no-ff", "--no-commit", "story"]);
-    git(&repo, &["update-index", "--chmod=+x", "story.txt"]);
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = repo.join("story.txt");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    git(&repo, &["add", "story.txt"]);
     git(&repo, &["commit", "-qm", "merge story"]);
     let error = integration_error(&flow, sequence);
     assert!(
