@@ -39,18 +39,33 @@ fn latent_flag_follows_its_physical_row_across_two_grow_steps() {
     scroll(&mut grid);
     scroll(&mut grid);
     assert_eq!(grid.history_size(), 2);
-    assert!(grid[Line(-2)].copy_predecessor_lost, "boundary row is the oldest blank row");
+    assert!(
+        grid[Line(-2)].copy_predecessor_lost,
+        "boundary row is the oldest blank row"
+    );
 
     grid.resize(ReflowMode::None, 4, 10);
     assert_eq!(grid.history_size(), 1);
-    assert!(grid[Line(-1)].copy_predecessor_lost, "flag stays on the boundary row");
-    assert!(!grid[Line(0)].copy_origin_unknown, "newer blank row is a fresh origin");
+    assert!(
+        grid[Line(-1)].copy_predecessor_lost,
+        "flag stays on the boundary row"
+    );
+    assert!(
+        !grid[Line(0)].copy_origin_unknown,
+        "newer blank row is a fresh origin"
+    );
     assert!(!grid[Line(0)].copy_predecessor_lost);
 
     grid.resize(ReflowMode::None, 5, 10);
     assert_eq!(grid.history_size(), 0);
-    assert!(grid[Line(0)].copy_origin_unknown, "boundary row came back live");
-    assert!(!grid[Line(1)].copy_origin_unknown, "the newer blank row stays known");
+    assert!(
+        grid[Line(0)].copy_origin_unknown,
+        "boundary row came back live"
+    );
+    assert!(
+        !grid[Line(1)].copy_origin_unknown,
+        "the newer blank row stays known"
+    );
     assert!(!grid[Line(1)].copy_predecessor_lost);
 }
 
@@ -67,7 +82,10 @@ fn blank_boundary_survives_repeated_combined_resize_cycles() {
         for cycle in 0..3 {
             grid.resize(mode, 4, 7);
             assert_eq!(grid.history_size(), 0, "{mode:?} cycle {cycle} grow");
-            assert!(grid[Line(0)].copy_origin_unknown, "{mode:?} cycle {cycle} grow");
+            assert!(
+                grid[Line(0)].copy_origin_unknown,
+                "{mode:?} cycle {cycle} grow"
+            );
             grid.resize(mode, 3, 10);
             assert_eq!(grid.history_size(), 1, "{mode:?} cycle {cycle} shrink");
             assert!(
@@ -101,7 +119,11 @@ fn flags_stay_on_oldest_piece_when_flagged_row_is_split_and_merged() {
 
     grid.resize(ReflowMode::HistoryOnly, 3, 20);
     let oldest = grid.topmost_line();
-    assert_eq!(grid[oldest][Column(10)].c, 'c', "continuation merged into the oldest row");
+    assert_eq!(
+        grid[oldest][Column(10)].c,
+        'c',
+        "continuation merged into the oldest row"
+    );
     assert!(grid[oldest].copy_origin_unknown && grid[oldest].copy_predecessor_lost);
 
     grid.resize(ReflowMode::HistoryOnly, 3, 10);
@@ -110,7 +132,10 @@ fn flags_stay_on_oldest_piece_when_flagged_row_is_split_and_merged() {
     assert!(grid[oldest].copy_origin_unknown && grid[oldest].copy_predecessor_lost);
     let second = Line(oldest.0 + 1);
     assert_eq!(grid[second][Column(0)].c, 'c');
-    assert!(!grid[second].copy_origin_unknown, "split-off tail is not the boundary");
+    assert!(
+        !grid[second].copy_origin_unknown,
+        "split-off tail is not the boundary"
+    );
     assert!(!grid[second].copy_predecessor_lost);
 }
 
@@ -193,7 +218,11 @@ fn reflow_truncation_of_blank_only_rows_keeps_survivor_known() {
     assert_eq!(grid.history_size(), 1);
     grid.resize(ReflowMode::All, 2, 5);
     let oldest = grid.topmost_line();
-    assert_eq!(grid[oldest][Column(0)].c, '❯', "blank row was the one truncated");
+    assert_eq!(
+        grid[oldest][Column(0)].c,
+        '❯',
+        "blank row was the one truncated"
+    );
     assert!(
         !grid[oldest].copy_origin_unknown,
         "only a blank row was discarded; the composer row is a fresh origin"
@@ -249,8 +278,17 @@ fn reactivated_blank_boundary_row_keeps_marker_literal() {
 // Catches a partial erase (not covering the whole row) being treated as a fresh row origin.
 #[test]
 fn partial_erases_do_not_clear_the_reactivated_flag() {
-    for erase in ["\x1b[1;6H\x1b[1K", "\x1b[1;6H\x1b[J", "\x1b[1;6H\x1b[1J", "\x1b[1;6H\x1b[K"] {
-        assert_eq!(composer_after(erase, true), "❯ new composer", "erase {erase:?}");
+    for erase in [
+        "\x1b[1;6H\x1b[1K",
+        "\x1b[1;6H\x1b[J",
+        "\x1b[1;6H\x1b[1J",
+        "\x1b[1;6H\x1b[K",
+    ] {
+        assert_eq!(
+            composer_after(erase, true),
+            "❯ new composer",
+            "erase {erase:?}"
+        );
     }
 }
 
@@ -265,7 +303,11 @@ fn full_erases_clear_both_flags_and_resize_does_not_resurrect_them() {
         "\x1b[1;20H\x1b[1J",
         "\x1b[1;20H\x1b[1K",
     ] {
-        assert_eq!(composer_after(erase, true), "new composer", "erase {erase:?}");
+        assert_eq!(
+            composer_after(erase, true),
+            "new composer",
+            "erase {erase:?}"
+        );
     }
 }
 
