@@ -196,7 +196,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         if current_history_size > history_size {
             self.raw.shrink_lines(current_history_size - history_size);
             let oldest = self.topmost_line();
-            if !self.raw[oldest].is_clear() {
+            // A blank history row is immutable. A blank live screen row can
+            // still receive the continuation of the lost predecessor.
+            if self.history_size() == 0 || !self.raw[oldest].is_clear() {
                 self.raw[oldest].copy_origin_unknown = true;
             }
         }
@@ -435,7 +437,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         }
         if evicts_predecessor {
             let oldest = self.topmost_line();
-            if !self.raw[oldest].is_clear() {
+            // A blank history row is immutable. A blank live screen row can
+            // still receive the continuation of the lost predecessor.
+            if self.history_size() == 0 || !self.raw[oldest].is_clear() {
                 self.raw[oldest].copy_origin_unknown = true;
             }
         }
