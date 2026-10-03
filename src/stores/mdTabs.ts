@@ -238,6 +238,7 @@ function createMdTabsStore() {
 
 		/** Called after repository and terminal restoration so selected documents win. */
 		restoreAfterReload(): void {
+			if (untrack(reloadReady)) return;
 			try {
 				const raw = sessionStorage.getItem(MCP_RELOAD_KEY);
 				// Consume even corrupt JSON; another init must not replay a broken snapshot.

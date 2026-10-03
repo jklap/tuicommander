@@ -13,11 +13,11 @@ describe("mdTabsStore MCP reload snapshot — critic 1424", () => {
 		vi.resetModules();
 		md = (await import("../../stores/mdTabs")).mdTabsStore;
 		editor = (await import("../../stores/editorTabs")).editorTabsStore;
-		md.restoreAfterReload(); // Normal startup arms explicit saves and mutation snapshots.
 	});
 
 	/** Simulate unload → fresh module graph → init. Returns the fresh store. */
 	async function reload() {
+		md.restoreAfterReload(); // Finish startup before simulating unload.
 		md.saveForReload();
 		vi.resetModules();
 		md = (await import("../../stores/mdTabs")).mdTabsStore;
@@ -31,6 +31,7 @@ describe("mdTabsStore MCP reload snapshot — critic 1424", () => {
 			.filter(Boolean);
 
 	it("a tab closed before the next unload is not resurrected — catches: snapshot taken once and never refreshed", async () => {
+		md.restoreAfterReload();
 		md.addMcpFile("a", "/r", "a.md", true, true);
 		md.addMcpFile("b", "/r", "b.md", true, true);
 		md.saveForReload();
@@ -198,6 +199,7 @@ describe("mdTabsStore MCP reload snapshot — critic 1424", () => {
 	});
 
 	it("saveForReload swallows a quota error — catches: throw in beforeunload skipping terminal snapshot", () => {
+		md.restoreAfterReload();
 		md.addMcpFile("a", "/r", "a.md", true, true);
 		const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
 			throw new DOMException("quota", "QuotaExceededError");
@@ -210,6 +212,7 @@ describe("mdTabsStore MCP reload snapshot — critic 1424", () => {
 	});
 
 	it("saving with no MCP tabs overwrites a stale snapshot — catches: early return leaves old tabs to resurrect", () => {
+		md.restoreAfterReload();
 		md.addMcpFile("a", "/r", "a.md", true, true);
 		md.saveForReload();
 		md.closeMcpFile("a");

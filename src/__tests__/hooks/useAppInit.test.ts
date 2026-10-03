@@ -112,6 +112,10 @@ describe("initApp", () => {
 
 	// Catches: ui-tab documents are saved but initApp returns after restoring a branch without restoring them.
 	it("restores an MCP Markdown document after unload and repository startup without duplicating its identity", async () => {
+		vi.resetModules();
+		const { initApp } = await import("../../hooks/useAppInit");
+		const { mdTabsStore } = await import("../../stores/mdTabs");
+		const { repositoriesStore } = await import("../../stores/repositories");
 		let send: ((event: { payload: unknown }) => void) | undefined;
 		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
 			if (event === "ui-tab") send = handler;
@@ -135,18 +139,46 @@ describe("initApp", () => {
 		const unload = events.mock.calls.find(([name]) => name === "beforeunload")?.[1];
 		expect(unload).toBeTypeOf("function");
 		(unload as EventListener)(new Event("beforeunload"));
-		const snapshot = sessionStorage.getItem("tui-commander-mcp-markdown-reload");
-		// Model discarding the old graph, rather than a user closing all tabs:
-		// clearAll now correctly updates storage, so retain the recorded unload snapshot.
-		mdTabsStore.clearAll();
-		sessionStorage.setItem("tui-commander-mcp-markdown-reload", snapshot!);
-		await initApp(createMockDeps());
-		expect(mdTabsStore.getActive()).toMatchObject({
+		// A reload discards the old module graph; a repeated init in one graph is idempotent.
+		vi.resetModules();
+		const { initApp: reloadApp } = await import("../../hooks/useAppInit");
+		const { mdTabsStore: restored } = await import("../../stores/mdTabs");
+		const { repositoriesStore: restoredRepos } = await import("../../stores/repositories");
+		restoredRepos.add({ path: "/repo", displayName: "repo" });
+		restoredRepos.setWorkspace("/repo", "main", { branchName: "main", worktreePath: "/repo" });
+		restoredRepos.setActiveWorkspace("/repo", "main");
+		restoredRepos.setActive("/repo");
+		await reloadApp(createMockDeps());
+		expect(restored.getActive()).toMatchObject({
 			mcpUiId: "boss-digest",
 			filePath: "/Users/boss/Gits/digest.md",
 		});
 		send!({ payload });
-		expect(mdTabsStore.getCount()).toBe(1);
+		expect(restored.getCount()).toBe(1);
+	});
+
+	// Catches: a rejected branch restore skips Markdown restore and leaves later MCP tabs unsaved.
+	it("arms MCP Markdown snapshots even when branch restoration rejects", async () => {
+		vi.resetModules();
+		const { initApp } = await import("../../hooks/useAppInit");
+		const { mdTabsStore } = await import("../../stores/mdTabs");
+		const { repositoriesStore } = await import("../../stores/repositories");
+		repositoriesStore.add({ path: "/repo", displayName: "repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { branchName: "main", worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+		const failure = new Error("branch restore failed");
+		await expect(initApp(createMockDeps({ handleBranchSelect: vi.fn().mockRejectedValue(failure) }))).rejects.toBe(
+			failure,
+		);
+		mdTabsStore.addMcpFile("boss-digest", "", "/Users/boss/Gits/digest.md", false, false);
+		vi.resetModules();
+		const { mdTabsStore: reloaded } = await import("../../stores/mdTabs");
+		reloaded.restoreAfterReload();
+		expect(reloaded.getActive()).toMatchObject({
+			mcpUiId: "boss-digest",
+			filePath: "/Users/boss/Gits/digest.md",
+		});
 	});
 
 	it("hydrates stores and detects platform", async () => {
