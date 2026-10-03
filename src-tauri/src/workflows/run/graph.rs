@@ -2,8 +2,8 @@
 use crate::workflows::{NodeKind, PublishedWorkflow, validate_executable_graph};
 use serde::{Deserialize, Serialize};
 
-/// First graph contract; absent graph executions identify legacy record-only runs.
-pub const GRAPH_CONTRACT_VERSION: u16 = 1;
+/// Run event contract that owns serial graph validation and replay semantics.
+pub const RUN_EVENT_CONTRACT_VERSION: u16 = 2;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -19,19 +19,9 @@ pub enum ActivationState {
 pub struct Activation {
     pub id: String,
     pub node_id: String,
-    pub generation: u64,
     pub state: ActivationState,
-    pub input_token: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EdgeToken {
-    pub id: String,
-    pub from_activation: String,
+    pub from_activation: Option<String>,
     pub edge_index: Option<usize>,
-    pub target: String,
-    pub consumed_by: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -60,28 +50,17 @@ impl EdgeOutcome {
     }
 }
 
-/// This records provenance; it does not authorize story approval (slice D).
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum DecisionActor {
-    Session { session_id: String },
-    Operator { authorization_id: String },
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DecisionEvidence {
-    pub actor: DecisionActor,
+    pub actor: String,
     pub reason: String,
     pub references: Vec<String>,
 }
 
 impl DecisionEvidence {
     fn validate(&self) -> Result<(), String> {
-        let actor = match &self.actor {
-            DecisionActor::Session { session_id } => session_id,
-            DecisionActor::Operator { authorization_id } => authorization_id,
-        };
+        let actor = &self.actor;
         if actor.trim().is_empty()
             || actor.len() > 256
             || self.reason.trim().is_empty()
@@ -116,52 +95,22 @@ pub struct LoopCounter {
     pub repeats: u16,
 }
 
-/// A typed resolution does not implicitly authorize a check, approval or merge.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum PauseResolution {
-    Input { answer: String },
-    Evidence { references: Vec<String> },
-    Retry { reason: String },
-}
-
-impl PauseResolution {
-    fn validate(&self) -> Result<(), String> {
-        let values = match self {
-            Self::Input { answer } => std::slice::from_ref(answer),
-            Self::Retry { reason } => std::slice::from_ref(reason),
-            Self::Evidence { references } => references.as_slice(),
-        };
-        if values.is_empty()
-            || values.len() > 32
-            || values
-                .iter()
-                .any(|value| value.trim().is_empty() || value.len() > 4096)
-        {
-            return Err("pause resolution is empty or too large".into());
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GraphPause {
     pub activation_id: String,
     pub resume_to: String,
     pub evidence: DecisionEvidence,
-    pub resolution: Option<PauseResolution>,
+    pub resolution: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GraphExecution {
-    pub contract_version: u16,
     pub id: String,
     pub target_id: String,
     pub definition: PublishedWorkflow,
     pub activations: Vec<Activation>,
-    pub tokens: Vec<EdgeToken>,
     pub decisions: Vec<GraphDecision>,
     pub loops: Vec<LoopCounter>,
     pub pauses: Vec<GraphPause>,
@@ -170,10 +119,12 @@ pub struct GraphExecution {
 
 impl GraphExecution {
     pub(super) fn start(
+        event_contract_version: u16,
         id: String,
         target_id: String,
         definition: PublishedWorkflow,
     ) -> Result<Self, String> {
+        require_graph_contract(event_contract_version)?;
         if id.trim().is_empty()
             || id.len() > 80
             || target_id.trim().is_empty()
@@ -195,17 +146,15 @@ impl GraphExecution {
         let root = Activation {
             id: "a0".into(),
             node_id: start.id.clone(),
-            generation: 1,
             state: ActivationState::Ready,
-            input_token: None,
+            from_activation: None,
+            edge_index: None,
         };
         Ok(Self {
-            contract_version: GRAPH_CONTRACT_VERSION,
             id,
             target_id,
             definition,
             activations: vec![root],
-            tokens: vec![],
             decisions: vec![],
             loops: vec![],
             pauses: vec![],
@@ -223,29 +172,12 @@ impl GraphExecution {
             return Err("graph activation budget exhausted".into());
         }
         let id = format!("a{}", self.activations.len());
-        let token_id = format!("t{}", self.tokens.len());
-        let generation = u64::try_from(
-            self.activations
-                .iter()
-                .filter(|a| a.node_id == target)
-                .count(),
-        )
-        .map_err(|_| "graph generation overflow")?
-        .checked_add(1)
-        .ok_or("graph generation overflow")?;
-        self.tokens.push(EdgeToken {
-            id: token_id.clone(),
-            from_activation: from.into(),
-            edge_index,
-            target: target.clone(),
-            consumed_by: None,
-        });
         self.activations.push(Activation {
             id,
             node_id: target,
-            generation,
             state: ActivationState::Ready,
-            input_token: Some(token_id),
+            from_activation: Some(from.into()),
+            edge_index,
         });
         Ok(())
     }
@@ -253,12 +185,11 @@ impl GraphExecution {
     /// Validate and project a committed transition without performing effects.
     pub(super) fn apply(
         &mut self,
+        event_contract_version: u16,
         transition: &GraphTransition,
         remaining_loops: u16,
     ) -> Result<u16, String> {
-        if self.contract_version != GRAPH_CONTRACT_VERSION {
-            return Err("unsupported graph contract version".into());
-        }
+        require_graph_contract(event_contract_version)?;
         if self.completed {
             return Err("completed graph cannot advance".into());
         }
@@ -289,29 +220,33 @@ impl GraphExecution {
                 if paused || activation.state != ActivationState::Ready {
                     return Err("graph activation is not ready".into());
                 }
-                // Fork/Join all execution is deliberately unavailable until slice G.
-                if matches!(
-                    kind,
-                    NodeKind::Fork { .. }
-                        | NodeKind::Join {
-                            mode: crate::workflows::JoinMode::All,
-                            ..
+                if let Some(from) = &activation.from_activation {
+                    let predecessor = index
+                        .checked_sub(1)
+                        .and_then(|previous| self.activations.get(previous))
+                        .filter(|previous| {
+                            previous.id == *from && previous.state == ActivationState::Completed
+                        })
+                        .ok_or("activation predecessor is not completed")?;
+                    if let Some(edge_index) = activation.edge_index {
+                        let edge = self
+                            .definition
+                            .graph
+                            .edges
+                            .get(edge_index)
+                            .ok_or("activation predecessor edge is missing")?;
+                        if edge.from != predecessor.node_id || edge.to != activation.node_id {
+                            return Err("activation predecessor edge does not match".into());
                         }
-                ) {
-                    return Err("parallel graph execution requires slice G".into());
-                }
-                if let Some(token_id) = &activation.input_token {
-                    let token = self
-                        .tokens
-                        .iter_mut()
-                        .find(|token| token.id == *token_id)
-                        .ok_or("activation predecessor token is missing")?;
-                    if token.target != activation.node_id || token.consumed_by.is_some() {
-                        return Err("activation predecessor token is not available".into());
+                    } else if !self.pauses.iter().any(|pause| {
+                        pause.activation_id == *from
+                            && pause.resume_to == activation.node_id
+                            && pause.resolution.is_some()
+                    }) {
+                        return Err("activation predecessor pause is unresolved".into());
                     }
-                    token.consumed_by = Some(activation.id.clone());
                 } else if !matches!(kind, NodeKind::Start) || index != 0 {
-                    return Err("non-root activation needs a predecessor token".into());
+                    return Err("non-root activation needs a predecessor".into());
                 }
                 self.activations[index].state = ActivationState::Running;
             }
@@ -414,7 +349,9 @@ impl GraphExecution {
                 return Ok(repeats);
             }
             GraphTransition::ResolvePause { resolution, .. } => {
-                resolution.validate()?;
+                if resolution.trim().is_empty() || resolution.len() > 4096 {
+                    return Err("pause resolution is empty or too large".into());
+                }
                 if activation.state != ActivationState::Paused {
                     return Err("activation has no pending pause".into());
                 }
@@ -456,7 +393,7 @@ pub enum GraphTransition {
     ResolvePause {
         execution_id: String,
         activation_id: String,
-        resolution: PauseResolution,
+        resolution: String,
     },
 }
 
@@ -476,4 +413,12 @@ impl GraphTransition {
 pub enum GraphEvent {
     Started { execution: Box<GraphExecution> },
     Transition { transition: GraphTransition },
+}
+
+/// Version 2 owns both executable validation and serial replay semantics.
+fn require_graph_contract(version: u16) -> Result<(), String> {
+    match version {
+        RUN_EVENT_CONTRACT_VERSION => Ok(()),
+        _ => Err("unsupported workflow graph event contract".into()),
+    }
 }

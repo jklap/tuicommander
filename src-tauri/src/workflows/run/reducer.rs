@@ -7,7 +7,7 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
         if previous.is_some()
             || event.sequence != 1
             || initial.sequence != 0
-            || initial.event_contract_version > 2
+            || initial.event_contract_version > super::graph::RUN_EVENT_CONTRACT_VERSION
             || !initial.graph_executions.is_empty()
         {
             return Err("invalid workflow start event".into());
@@ -49,6 +49,7 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                     return Err("graph execution has a foreign definition".into());
                 }
                 let initial = super::graph::GraphExecution::start(
+                    snapshot.event_contract_version,
                     execution.id.clone(),
                     execution.target_id.clone(),
                     execution.definition.clone(),
@@ -59,6 +60,12 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                 snapshot.graph_executions.push(initial);
             }
             super::graph::GraphEvent::Transition { transition } => {
+                if matches!(
+                    transition,
+                    super::graph::GraphTransition::ResolvePause { .. }
+                ) {
+                    validate_resume(&snapshot)?;
+                }
                 let execution = snapshot
                     .graph_executions
                     .iter_mut()
@@ -71,7 +78,11 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                     .ok_or("workflow loop budget exhausted")?;
                 snapshot.loops = snapshot
                     .loops
-                    .checked_add(execution.apply(transition, remaining)?)
+                    .checked_add(execution.apply(
+                        snapshot.event_contract_version,
+                        transition,
+                        remaining,
+                    )?)
                     .ok_or("loop counter overflow")?;
                 if snapshot
                     .graph_executions
@@ -323,7 +334,10 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
             snapshot.verification_fingerprint = Some(fingerprint.clone())
         }
         RunEventKind::Paused => snapshot.status = RunStatus::Paused,
-        RunEventKind::Resumed => snapshot.status = RunStatus::Running,
+        RunEventKind::Resumed => {
+            validate_resume(&snapshot)?;
+            snapshot.status = RunStatus::Running;
+        }
         RunEventKind::Cancelled => {
             // A spawn may already be in flight outside this transaction. Keep
             // its outcome explicit even though terminal runs cannot accept a
@@ -345,4 +359,24 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
     }
     snapshot.sequence = event.sequence;
     Ok(snapshot)
+}
+
+/// Shared resume fence for commands and graph event replay.
+pub(super) fn validate_resume(snapshot: &RunSnapshot) -> Result<(), String> {
+    if snapshot.status != RunStatus::Paused {
+        return Err("workflow is not paused".into());
+    }
+    if snapshot
+        .effects
+        .iter()
+        .any(|effect| effect.state == EffectState::Uncertain)
+    {
+        return Err("uncertain effects need an explicit resolution".into());
+    }
+    if snapshot.attempts.iter().any(|attempt| {
+        attempt.outcome == Some(AttemptOutcome::NeedsInput) && attempt.input_answer.is_none()
+    }) {
+        return Err("human input is still pending".into());
+    }
+    Ok(())
 }

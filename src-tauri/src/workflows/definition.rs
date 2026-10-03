@@ -18,14 +18,6 @@ pub enum AgentRole {
     Validator,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum JoinMode {
-    #[default]
-    Merge,
-    All,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NodeKind {
@@ -49,15 +41,7 @@ pub enum NodeKind {
     Loop {
         max_iterations: u16,
     },
-    Fork {
-        join_id: String,
-    },
-    Join {
-        #[serde(default)]
-        mode: JoinMode,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        fork_id: Option<String>,
-    },
+    Join,
     Notify,
     End,
 }
@@ -134,9 +118,7 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
                     );
                 }
             }
-            NodeKind::Join { .. } | NodeKind::Fork { .. }
-                if workflow_kind != WorkflowKind::Story =>
-            {
+            NodeKind::Join if workflow_kind != WorkflowKind::Story => {
                 return Err("Join may combine only branches of one story attempt".into());
             }
             NodeKind::Loop { max_iterations } if !(1..=100).contains(max_iterations) => {
@@ -220,17 +202,13 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
                     node.id
                 ));
             }
-        } else if matches!(node.kind, NodeKind::Fork { .. }) {
-            if edges.len() < 2 || edges.iter().any(|edge| edge.outcome.is_some()) {
-                return Err("Fork needs at least two unlabeled outgoing branches".into());
-            }
         } else if edges.len() != 1 || edges[0].outcome.is_some() {
             return Err(format!(
                 "node {} needs one unlabeled outgoing edge",
                 node.id
             ));
         }
-        if matches!(node.kind, NodeKind::Join { .. })
+        if matches!(node.kind, NodeKind::Join)
             && incoming.get(node.id.as_str()).copied().unwrap_or(0) < 2
         {
             return Err(format!(
@@ -305,7 +283,6 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
             return Err("Loop repeat edge must return through its Loop node".into());
         }
     }
-    validate_parallel_scopes(graph)?;
     Ok(())
 }
 
@@ -331,89 +308,6 @@ pub fn validate_executable_graph(
             }) {
                 return Err("Pause resume_to must name an executable non-Start target".into());
             }
-        }
-    }
-    Ok(())
-}
-
-fn validate_parallel_scopes(graph: &WorkflowGraph) -> Result<(), String> {
-    let nodes: HashMap<&str, &NodeKind> = graph
-        .nodes
-        .iter()
-        .map(|node| (node.id.as_str(), &node.kind))
-        .collect();
-    for node in &graph.nodes {
-        match &node.kind {
-            NodeKind::Join {
-                mode: JoinMode::Merge,
-                fork_id: Some(_),
-            } => {
-                return Err("merge Join cannot name a Fork".into());
-            }
-            NodeKind::Join {
-                mode: JoinMode::All,
-                fork_id,
-            } => {
-                let fork = fork_id.as_deref().ok_or("all Join needs fork_id")?;
-                if !matches!(nodes.get(fork), Some(NodeKind::Fork { join_id }) if *join_id == node.id)
-                {
-                    return Err("all Join must be paired with its Fork".into());
-                }
-            }
-            NodeKind::Fork { join_id } => {
-                if !matches!(nodes.get(join_id.as_str()),
-                    Some(NodeKind::Join { mode: JoinMode::All, fork_id: Some(fork) }) if *fork == node.id)
-                {
-                    return Err("Fork must name its paired all Join".into());
-                }
-                let mut scoped = HashSet::new();
-                for entry in graph.edges.iter().filter(|edge| edge.from == node.id) {
-                    let mut branch = HashSet::new();
-                    let mut queue = VecDeque::from([entry.to.as_str()]);
-                    while let Some(id) = queue.pop_front() {
-                        if id == join_id {
-                            continue;
-                        }
-                        if !branch.insert(id) {
-                            continue;
-                        }
-                        if !scoped.insert(id) {
-                            return Err("Fork branches may converge only at their all Join".into());
-                        }
-                        match nodes.get(id) {
-                            Some(NodeKind::Agent {
-                                role: AgentRole::Reviewer | AgentRole::Validator,
-                                capabilities,
-                                ..
-                            }) if capabilities.iter().all(|cap| {
-                                matches!(cap.as_str(), "story_read" | "story_report")
-                            }) => {}
-                            _ => {
-                                return Err(
-                                    "Fork branches support only read-only Reviewer/Validator nodes"
-                                        .into(),
-                                );
-                            }
-                        }
-                        for edge in graph.edges.iter().filter(|edge| edge.from == id) {
-                            queue.push_back(edge.to.as_str());
-                        }
-                    }
-                    if branch.is_empty() {
-                        return Err("Fork branch must contain a read-only agent".into());
-                    }
-                }
-                for edge in &graph.edges {
-                    if (scoped.contains(edge.to.as_str())
-                        && !scoped.contains(edge.from.as_str())
-                        && edge.from != node.id)
-                        || (edge.to == *join_id && !scoped.contains(edge.from.as_str()))
-                    {
-                        return Err("all Join scope has an outside arrival".into());
-                    }
-                }
-            }
-            _ => {}
         }
     }
     Ok(())
