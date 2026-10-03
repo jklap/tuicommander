@@ -145,24 +145,29 @@ fn queued_claude_turn_whose_hook_busy_already_ended_is_confirmed() {
     assert!(!silence.lock().injection_delivery_uncertain);
 }
 
-/// Catches: the idle-claim fast path (lifecycle wake, mail wake, urgent notice,
-/// voice) reporting Submitted the moment Enter is flushed. A Codex whose Enter
-/// was swallowed (child silent, text still in the composer) is then treated as
-/// delivered: the claim is committed as a submitted turn and the orchestrator's
-/// wake cursor advances, with nothing left to surface the lost notice.
+/// Boss decision A (2026-10-04): lifecycle notices, mail wakes and voice are
+/// write-only; the inbox copy covers a lost Enter. Replaces the round-1 critic
+/// test `notice_to_idle_codex_that_never_reacts_is_uncertain`.
+///
+/// Catches: a notice to a silent agent holding the shared injection worker for
+/// the confirmation wait, then flagging Uncertain and raising the false
+/// "Agent input was not confirmed" toast.
 #[cfg(unix)]
 #[test]
-fn notice_to_idle_codex_that_never_reacts_is_uncertain() {
+fn notice_to_silent_agent_is_written_once_without_waiting_for_confirmation() {
     let sid = "critic-notice-silent-codex";
-    let (state, _bytes) = idle_agent("codex", sid, CODEX_READY);
+    let (state, bytes) = idle_agent("codex", sid, CODEX_READY);
     let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut alerts = state.event_bus.subscribe();
 
     deliver_notice_to_managed_pty(&state, sid, "[TUIC] child agent 5d0dbc39 is now idle");
 
+    assert_eq!(enters(&bytes), 1, "written once, no retry Enter");
     assert!(
-        silence.lock().injection_delivery_uncertain,
-        "a silent child cannot have confirmed a notice written on the idle fast path"
+        !silence.lock().injection_delivery_uncertain,
+        "a notice is write-only: silence is not an uncertain delivery"
     );
+    assert_eq!(confirmation_toasts(&mut alerts), 0, "no toast for a notice");
 }
 
 /// Catches: `composer_retains_text` matching the submitted text anywhere on the

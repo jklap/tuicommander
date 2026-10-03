@@ -39,7 +39,10 @@ fn silent_agent_notice_does_not_hold_the_shared_injection_worker() {
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while bytes.lock().unwrap().last() != Some(&b'\r') {
-        assert!(std::time::Instant::now() < deadline, "notice never wrote Enter");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "notice never wrote Enter"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 

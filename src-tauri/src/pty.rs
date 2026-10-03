@@ -9201,10 +9201,11 @@ fn write_agent_command_with_boundary(
     (InjectionOutcome::Submitted, acknowledgement_offset)
 }
 
-/// The one submit rule for every claimed injection (queued input, brief, wake,
-/// mail notice): write, wait for the child to confirm the turn started, and send
-/// at most one more Enter when the composer still holds the text. Returns the
-/// outcome and how the retry went (`none`, `confirmed`, `unconfirmed`).
+/// The submit rule for flush and MCP submit (queued input, brief): write, wait
+/// for the child to confirm the turn started, and send at most one more Enter
+/// when the composer still holds the text. Lifecycle notices and voice are
+/// write-only and never reach this function. Returns the outcome and how the
+/// retry went (`none`, `confirmed`, `unconfirmed`).
 fn submit_and_confirm(
     state: &AppState,
     session_id: &str,
