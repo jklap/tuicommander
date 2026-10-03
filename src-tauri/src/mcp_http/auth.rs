@@ -276,7 +276,7 @@ pub(crate) fn is_tailscale_ip(ip_str: &str) -> bool {
 /// Basic Auth middleware that validates credentials against config.
 ///
 /// Flow:
-/// 1. Localhost connections bypass auth (local Tauri app).
+/// 1. Only login assets and CORS preflight bypass credential checks.
 /// 2. Requests with a valid session cookie pass through (fast path — no bcrypt).
 /// 3. Requests with a valid `Authorization: Basic` header pass through AND get
 ///    a session cookie set so subsequent JS fetch() calls are authenticated.
@@ -291,34 +291,27 @@ pub async fn basic_auth_middleware(
     mut req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    // The login page, its script and the login POST are the only routes an
-    // unauthenticated device may reach: without them the form could not load.
-    // They never get the `Authenticated` marker below.
-    if is_public_login_route(req.method(), req.uri().path()) {
+    // Login assets and preflight must load without credentials. The outer
+    // request boundary still validates their Host and Origin; the CORS layer
+    // handles OPTIONS without running a protected handler. Neither public path
+    // gets the `Authenticated` marker below.
+    if is_public_login_route(req.method(), req.uri().path())
+        || (req.method() == Method::OPTIONS
+            && req
+                .headers()
+                .contains_key(header::ACCESS_CONTROL_REQUEST_METHOD))
+    {
         return next.run(req).await;
     }
 
     // Mark the request as authenticated for downstream route guards
     // (require_local_or_auth). Reaching a handler implies the request passed
-    // one of the auth gates below (loopback/LAN bypass, session cookie, URL
+    // one of the auth gates below (session cookie, URL
     // token, or Basic Auth); every failed path short-circuits with 401/429
     // here and never runs the handler, so the marker only ever propagates to
     // authenticated handler invocations. (Boss 2026-06-27: token-auth = full
     // trust across config + agent-spawn + prompt routes.)
     req.extensions_mut().insert(super::guards::Authenticated);
-
-    // Localhost bypass: only in desktop mode where the Tauri webview connects
-    // locally. Headless mode binds 0.0.0.0 so loopback must be authenticated
-    // like any other address — otherwise any local process gets full access.
-    #[cfg(feature = "desktop")]
-    if addr.ip().is_loopback() {
-        return next.run(req).await;
-    }
-
-    // LAN bypass: skip auth for private/RFC1918 addresses when configured
-    if state.config.read().services.auth.lan_auth_bypass && is_private_ip(&addr.ip()) {
-        return next.run(req).await;
-    }
 
     let session_token = state.session_token.read().clone();
     let token_duration_secs = state
