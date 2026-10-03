@@ -422,8 +422,8 @@ pub(crate) fn bridge_search_paths() -> Vec<PathBuf> {
 
 /// The bridge binary, only when we can point at a file that exists.
 ///
-/// Separate from [`detect_bridge_binary`], which turns a miss into the bare
-/// name: a config file written for an agent may name `tuic-bridge` and still
+/// Separate from [`get_mcp_bridge_info`], which reports installed copies:
+/// a config file written for an agent may name `tuic-bridge` and still
 /// work, since the agent resolves it against its own `PATH` at launch. ego is
 /// not such an agent any more — it reaches `tuicommander` over ACP.
 pub(crate) fn locate_bridge_binary() -> Option<PathBuf> {
@@ -439,20 +439,69 @@ pub(crate) fn locate_bridge_binary() -> Option<PathBuf> {
     (resolved.is_absolute() && usable_executable(&resolved)).then_some(resolved)
 }
 
-fn detect_bridge_binary() -> String {
-    let installed = locate_bridge_binary().and_then(|source| {
-        install_bridge_binary(&source)
-            .inspect_err(|error| tracing::warn!(source = "mcp", "{error}"))
-            .ok()
-    });
-    bridge_command_from_location(installed)
+/// Inspect installed copies without creating files, including when a target
+/// cleanup has removed the adjacent source. Settings reads must stay read-only.
+fn locate_installed_bridge(source: Option<&std::path::Path>) -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+    if let Some(bytes) = source.and_then(|path| std::fs::read(path).ok()) {
+        let target = bridge_install_path(&Sha256::digest(&bytes));
+        if usable_executable(&target) {
+            return Some(target);
+        }
+    }
+    std::fs::read_dir(crate::config::config_dir().join("mcp-bridge"))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            if name.len() != 64 || !name.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
+            let path = bridge_path_in(&entry.path());
+            if !usable_executable(&path) {
+                return None;
+            }
+            Some((path.metadata().ok()?.modified().ok()?, path))
+        })
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+fn bridge_install_path(digest: &[u8]) -> PathBuf {
+    bridge_path_in(
+        &crate::config::config_dir()
+            .join("mcp-bridge")
+            .join(hex::encode(digest)),
+    )
+}
+
+/// The copy must independently match the initial digest: copying the already
+/// hashed buffer would miss a source changed by a linker between the two reads.
+fn copy_verified_bridge(
+    source: &std::path::Path,
+    temp: &mut tempfile::NamedTempFile,
+    expected: &[u8],
+) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    std::fs::copy(source, temp.path()).map_err(|e| format!("Failed to copy bridge: {e}"))?;
+    let copied =
+        std::fs::read(temp.path()).map_err(|e| format!("Failed to verify bridge copy: {e}"))?;
+    let current =
+        std::fs::read(source).map_err(|e| format!("Failed to verify bridge source: {e}"))?;
+    if &Sha256::digest(&copied)[..] != expected || &Sha256::digest(&current)[..] != expected {
+        return Err("Bridge source changed during installation; leaving configs unchanged".into());
+    }
+    Ok(())
 }
 
 /// Content-addressed copies outlive target cleanup and app upgrades. Never rewrite
 /// an identical executable: Windows may have it open in an existing MCP session.
 fn install_bridge_binary(source: &std::path::Path) -> Result<PathBuf, String> {
     use sha2::{Digest, Sha256};
-    use std::io::Write;
+    // DEFERRED (2026-10-03): retain revisions until every agent config root
+    // (including private/CLAUDE_CONFIG_DIR roots) can be discovered. Pruning an
+    // unknown root's referenced revision would recreate the original ENOENT.
 
     if !usable_executable(source) {
         return Err(format!("Bridge is not executable: {}", source.display()));
@@ -461,11 +510,11 @@ fn install_bridge_binary(source: &std::path::Path) -> Result<PathBuf, String> {
     if bytes.is_empty() {
         return Err("Bridge became empty during installation".into());
     }
-    let revision = hex::encode(Sha256::digest(&bytes));
-    let dir = crate::config::config_dir()
-        .join("mcp-bridge")
-        .join(revision);
-    let target = bridge_path_in(&dir);
+    let digest = Sha256::digest(&bytes);
+    let target = bridge_install_path(&digest);
+    let dir = target
+        .parent()
+        .ok_or_else(|| "Bridge installation directory unavailable".to_string())?;
     let matches = || usable_executable(&target) && std::fs::read(&target).is_ok_and(|b| b == bytes);
     if matches() {
         return Ok(target);
@@ -473,8 +522,7 @@ fn install_bridge_binary(source: &std::path::Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create bridge directory: {e}"))?;
     let mut temp = tempfile::NamedTempFile::new_in(&dir)
         .map_err(|e| format!("Failed to create bridge temp file: {e}"))?;
-    temp.write_all(&bytes)
-        .map_err(|e| format!("Failed to copy bridge: {e}"))?;
+    copy_verified_bridge(source, &mut temp, &digest)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1618,6 +1666,33 @@ fn ensure_mcp_configs_for<'a>(
             "Skipping agent MCP config updates: no bridge beside this executable");
         return;
     };
+    let source_command = bridge.to_string_lossy();
+    let pending: Vec<_> = agents
+        .into_iter()
+        .filter(|(agent, spec)| {
+            if disabled.iter().any(|d| d == *agent) {
+                tracing::debug!(source = "mcp", agent, "Skipping (disabled by user)");
+                return false;
+            }
+            if !auto_install_allowed(spec, agent) || entry_has_custom_transport(spec) {
+                return false;
+            }
+            if let Some(command) = configured_bridge_command(spec)
+                && custom_command_should_be_kept(&command, &source_command)
+            {
+                return false;
+            }
+            // A parse/read failure cannot result in a config write.
+            match spec.format {
+                McpFormat::Toml { .. } => read_toml_file(&spec.config_path).is_some(),
+                McpFormat::Yaml => read_yaml_file(&spec.config_path).is_some(),
+                _ => read_json_file(&spec.config_path).is_some(),
+            }
+        })
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
     let bridge = match install_bridge_binary(bridge) {
         Ok(installed) => installed,
         Err(error) => {
@@ -1627,26 +1702,7 @@ fn ensure_mcp_configs_for<'a>(
     };
     let bridge_path = bridge.to_string_lossy();
     tracing::info!(source = "mcp", bridge = %bridge_path, "Ensuring bridge configs");
-
-    for (agent, spec) in agents {
-        if disabled.iter().any(|d| d == agent) {
-            tracing::debug!(source = "mcp", agent, "Skipping (disabled by user)");
-            continue;
-        }
-        if !auto_install_allowed(&spec, agent) {
-            continue;
-        }
-        if entry_has_custom_transport(&spec) {
-            tracing::info!(source = "mcp", agent, "Keeping custom MCP transport");
-            continue;
-        }
-        if let Some(command) = configured_bridge_command(&spec)
-            && custom_command_should_be_kept(&command, &bridge_path)
-        {
-            tracing::info!(source = "mcp", agent, command, bridge = %bridge_path,
-                "Keeping custom or working bridge command");
-            continue;
-        }
+    for (agent, spec) in pending {
         ensure_spec_entry(&spec, &bridge_path, agent);
     }
 }
@@ -1892,7 +1948,11 @@ pub(crate) struct McpBridgeInfo {
 /// Return bridge path + ready-to-paste JSON snippet for manual MCP setup
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn get_mcp_bridge_info() -> McpBridgeInfo {
-    let bridge_path = detect_bridge_binary();
+    bridge_info_from_location(locate_bridge_binary().as_deref())
+}
+
+fn bridge_info_from_location(source: Option<&std::path::Path>) -> McpBridgeInfo {
+    let bridge_path = bridge_command_from_location(locate_installed_bridge(source));
     let entry = TuicMcpEntry {
         transport_type: "stdio".to_string(),
         command: bridge_path.clone(),
@@ -4499,5 +4559,78 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names, vec![occupied.file_name().unwrap().to_owned()]);
+    }
+    /// Catches: reading a setup snippet implicitly installing a bridge from a
+    /// secondary instance or worktree, despite that instance not owning configs.
+    #[test]
+    fn bridge_info_reads_do_not_install_or_rewrite_bridge_copies() {
+        let (_guard, config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"read-only getter fixture");
+        let info = bridge_info_from_location(Some(&source));
+        assert_eq!(info.bridge_path, BRIDGE_NAME);
+        assert!(!config_dir.path().join("mcp-bridge").exists());
+        let installed = install_bridge_binary(&source).unwrap();
+        let modified = installed.metadata().unwrap().modified().unwrap();
+        let info = bridge_info_from_location(Some(&source));
+        assert_eq!(info.bridge_path, installed.to_str().unwrap());
+        assert_eq!(installed.metadata().unwrap().modified().unwrap(), modified);
+        std::fs::remove_file(source).unwrap();
+        let info = bridge_info_from_location(None);
+        assert_eq!(info.bridge_path, installed.to_str().unwrap());
+        let snippet: serde_json::Value = serde_json::from_str(&info.config_snippet).unwrap();
+        assert_eq!(
+            snippet["tuicommander"]["command"],
+            installed.to_str().unwrap()
+        );
+    }
+
+    /// Catches: installing a full executable when every agent is disabled,
+    /// absent, unreadable, or has a custom integration that cannot be rewritten.
+    #[test]
+    fn startup_without_any_config_to_update_does_not_install_a_bridge() {
+        let (_guard, config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"bridge bytes");
+        for case in ["disabled", "absent", "http", "wrapper", "malformed"] {
+            let path = dir.path().join(format!("{case}.json"));
+            let mut spec = spec_at(path.clone());
+            let disabled = if case == "disabled" {
+                vec!["claude".to_string()]
+            } else {
+                vec![]
+            };
+            match case {
+                "absent" => spec.presence_dir = Some(dir.path().join("absent-agent")),
+                "http" => std::fs::write(&path, r#"{"mcpServers":{"tuicommander":{"type":"http","url":"http://localhost:9876/mcp"}}}"#).unwrap(),
+                "wrapper" => std::fs::write(&path, r#"{"mcpServers":{"tuicommander":{"command":"bash","args":["-lc","tuic-bridge"],"env":{}}}}"#).unwrap(),
+                "malformed" => std::fs::write(&path, b"{malformed").unwrap(),
+                _ => { assert!(ensure_spec_entry(&spec, BRIDGE_NAME, "claude")); }
+            }
+            let before = std::fs::read(&path).ok();
+            ensure_mcp_configs_for(&disabled, Some(&source), [("claude", spec)]);
+            assert!(!config_dir.path().join("mcp-bridge").exists(), "{case}");
+            assert_eq!(std::fs::read(&path).ok(), before, "{case}");
+        }
+    }
+
+    /// Catches: copying a source that changed after hashing and publishing it
+    /// under the old digest, instead of rejecting the mismatched executable.
+    #[test]
+    fn bridge_copy_rejects_a_source_changed_after_the_initial_hash() {
+        use sha2::{Digest, Sha256};
+        let (_guard, config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let original = b"original executable bytes";
+        let source = fake_bridge(dir.path(), original);
+        let digest = Sha256::digest(original);
+        std::fs::write(&source, b"source replaced while linking").unwrap();
+        let mut temp = tempfile::NamedTempFile::new_in(config_dir.path()).unwrap();
+        let temp_path = temp.path().to_path_buf();
+        let error = copy_verified_bridge(&source, &mut temp, &digest).unwrap_err();
+        assert!(error.contains("changed during installation"));
+        drop(temp);
+        assert!(!temp_path.exists());
+        assert!(!config_dir.path().join("mcp-bridge").exists());
     }
 }
