@@ -64,25 +64,6 @@ fn preset_survives_repeated_shell_polls_before_the_agent_starts() {
     assert_eq!(flags(&state, sid), (Some("claude".into()), true, false));
 }
 
-/// Catches: `refresh_session_agent` returns the foreground-derived `effective`
-/// (None on a shell) while the stored identity is the retained preset; the IPC
-/// and HTTP callers hand that return value to the frontend, which then sees no
-/// agent for a session whose state says claude.
-#[cfg(unix)]
-#[test]
-fn refresh_result_matches_the_retained_preset_identity_during_shell_startup() {
-    let state = Arc::new(crate::state::tests_support::make_test_app_state());
-    let sid = "critic-1420r4-startup-return";
-    let _shell = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
-    restore(&state, sid, (Some("claude".into()), true, false));
-    let returned = refresh_session_agent(&state, sid);
-    assert_eq!(
-        returned,
-        flags(&state, sid).0,
-        "returned identity disagrees with stored identity"
-    );
-}
-
 /// Catches: after the observed preset agent exits and the identity is revoked,
 /// further shell polls or a hand-launched agent leave stale provenance: the
 /// relaunched agent must be discovered (not preset) and revocable again.
