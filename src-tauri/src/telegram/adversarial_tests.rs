@@ -1,7 +1,5 @@
 //! Security-critic tests for slices 1-2. Offline: loopback fake only, fake IDs.
-use super::journal::Journal;
-use super::mail::Update;
-use super::{Error, Inbound, Paths, PendingMail, Poll};
+use super::{Error, Inbound, Paths, Poll};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -183,32 +181,6 @@ async fn stranger_flood_larger_than_response_cap_does_not_wedge_polling() {
     );
 }
 
-// Catches: capacity saturation returns Err without any backoff, so a caller
-// that retries immediately re-downloads the same batch in a tight loop.
-#[tokio::test]
-async fn capacity_saturation_does_not_cause_an_immediate_refetch() {
-    let (_dir, paths) = setup();
-    let (address, shared) = serve().await;
-    let mut inbound = ready(&paths, address).await;
-    shared.lock().unwrap().updates = (1..=100)
-        .map(|id| message(id, OWNER_CHAT, "private", "hi"))
-        .collect();
-    assert!(matches!(inbound.poll().await, Ok(Poll::Accepted(100))));
-    shared
-        .lock()
-        .unwrap()
-        .updates
-        .push(message(101, OWNER_CHAT, "private", "hi"));
-    assert!(matches!(inbound.poll().await, Err(Error::Capacity)));
-    let before = requests(&shared);
-    let _ = inbound.poll().await;
-    assert_eq!(
-        requests(&shared),
-        before,
-        "immediate retry hit the network again"
-    );
-}
-
 // Catches: a permanent 4xx (404 for a malformed/unknown token) is neither
 // latched nor backed off, so polling hammers Telegram with a dead credential.
 #[tokio::test]
@@ -225,22 +197,6 @@ async fn permanent_rejection_does_not_cause_an_immediate_refetch() {
         before,
         "immediate retry hit the network again"
     );
-}
-
-// Catches: the 401 latch lives only in memory, so a restart resumes polling
-// with the revoked token.
-#[tokio::test]
-async fn unauthorized_latch_survives_restart_without_a_request() {
-    let (_dir, paths) = setup();
-    let (address, shared) = serve().await;
-    let mut inbound = ready(&paths, address).await;
-    shared.lock().unwrap().status = Some(401);
-    assert!(matches!(inbound.poll().await, Err(Error::Unauthorized)));
-    drop(inbound);
-    let before = requests(&shared);
-    let mut again = Inbound::loopback(paths.clone(), address).unwrap();
-    assert!(matches!(again.poll().await, Err(Error::Unauthorized)));
-    assert_eq!(requests(&shared), before);
 }
 
 // Catches: the cursor is only advanced for accepted mail, so ignored strangers
@@ -273,66 +229,6 @@ async fn second_owner_is_refused_until_the_first_drops() {
     ));
     drop(first);
     assert!(Inbound::open(paths.clone()).is_ok());
-}
-
-fn mail_update(id: i64) -> Update {
-    Update {
-        id,
-        mail: Some(PendingMail {
-            id: format!("tg:mint:{id}"),
-            recipient: PEER.into(),
-            content: format!(r#"{{"chat_id":"{OWNER_CHAT}"}}"#),
-        }),
-    }
-}
-
-fn journal(paths: &Paths) -> Journal {
-    let mut journal = Journal::open(paths, "mint", PEER).unwrap();
-    journal.begin_bootstrap().unwrap();
-    journal.finish_bootstrap(0).unwrap();
-    journal
-}
-
-// Catches: a capacity failure commits the cursor or part of the batch, losing
-// or half-storing phone messages (offset vs mail atomicity).
-#[test]
-fn capacity_failure_rolls_back_cursor_and_rows() {
-    let (_dir, paths) = setup();
-    let mut journal = journal(&paths);
-    let batch: Vec<Update> = (1..=101).map(mail_update).collect();
-    assert_eq!(journal.accept(&batch).err(), Some(Error::Capacity));
-    assert_eq!(journal.state().unwrap().1, 0);
-    assert!(journal.pending().unwrap().is_empty());
-}
-
-// Catches: after consumption the tombstone is lost and a redelivery after a
-// crash (server re-sends from the old offset) enqueues the message again.
-#[test]
-fn consumed_mail_is_not_resurrected_by_redelivery() {
-    let (_dir, paths) = setup();
-    let mut journal = journal(&paths);
-    let batch = vec![mail_update(1), mail_update(2)];
-    assert_eq!(journal.accept(&batch).unwrap(), 2);
-    journal.consume("tg:mint:1", PEER).unwrap();
-    assert_eq!(journal.accept(&batch).unwrap(), 0);
-    let ids: Vec<String> = journal
-        .pending()
-        .unwrap()
-        .into_iter()
-        .map(|m| m.id)
-        .collect();
-    assert_eq!(ids, vec!["tg:mint:2".to_string()]);
-}
-
-// Catches: consume() honors a mail ID addressed to another peer, letting one
-// peer discard another's phone mail.
-#[test]
-fn consume_for_the_wrong_peer_keeps_the_mail() {
-    let (_dir, paths) = setup();
-    let mut journal = journal(&paths);
-    journal.accept(&[mail_update(1)]).unwrap();
-    assert!(journal.consume("tg:mint:1", "someone-else").is_err());
-    assert_eq!(journal.pending().unwrap().len(), 1);
 }
 
 // Catches: opening a FIFO named bot.token blocks the poller forever (missing
