@@ -166,7 +166,7 @@ describe("readTurnRows", () => {
 		})),
 	});
 
-	it("reads the whole turn across chunk boundaries in order, keeping wrap flags", async () => {
+	it("reads the whole turn across chunk boundaries in order, turning wire wrap flags into continuation flags", async () => {
 		const calls: Array<[number, number]> = [];
 		const end = 10 + TURN_FETCH_CHUNK + 5;
 		const rows = await readTurnRows(
@@ -183,7 +183,10 @@ describe("readTurnRows", () => {
 		]);
 		expect(rows?.length).toBe(TURN_FETCH_CHUNK + 5);
 		expect(rows?.[0]).toEqual({ text: "r10", isWrapped: false });
-		expect(rows?.[1]).toEqual({ text: "r11", isWrapped: true });
+		// catches: the wire flag (this row continues onto the NEXT) used as "this row continues the
+		// previous one", which left a long wrapped answer's marker row unrecognised.
+		expect(rows?.[1]).toEqual({ text: "r11", isWrapped: false });
+		expect(rows?.[2]).toEqual({ text: "r12", isWrapped: true });
 		expect(rows?.[TURN_FETCH_CHUNK + 4].text).toBe(`r${end - 1}`);
 	});
 
