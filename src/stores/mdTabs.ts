@@ -1,6 +1,7 @@
 import { batch } from "solid-js";
 import { pathBasename } from "../utils/pathUtils";
 import { appLogger } from "./appLogger";
+import { editorTabsStore } from "./editorTabs";
 import { branchKeyFor, repositoriesStore, resolveRepoPathFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
 
@@ -231,9 +232,10 @@ function createMdTabsStore() {
 		/** Called after repository and terminal restoration so selected documents win. */
 		restoreAfterReload(): void {
 			try {
-				const saved: unknown = JSON.parse(sessionStorage.getItem(MCP_RELOAD_KEY) ?? "null");
-				// Consume the snapshot; another init must not resurrect closed tabs.
+				const raw = sessionStorage.getItem(MCP_RELOAD_KEY);
+				// Consume even corrupt JSON; another init must not replay a broken snapshot.
 				sessionStorage.removeItem(MCP_RELOAD_KEY);
+				const saved: unknown = JSON.parse(raw ?? "null");
 				if (!saved || typeof saved !== "object") return;
 				const snapshot = saved as Record<string, unknown>;
 				if (!Array.isArray(snapshot.tabs)) return;
@@ -254,7 +256,8 @@ function createMdTabsStore() {
 					if (
 						Object.values(base.state.tabs).some(
 							(open) => open.mcpUiId === tab.mcpUiId || (open.type === "plugin-panel" && open.pluginId === tab.mcpUiId),
-						)
+						) ||
+						Object.values(editorTabsStore.state.tabs).some((open) => open.mcpUiId === tab.mcpUiId)
 					)
 						continue;
 					const id = this.addMcpFile(tab.mcpUiId, tab.repoPath, tab.filePath, tab.pinned, true);
