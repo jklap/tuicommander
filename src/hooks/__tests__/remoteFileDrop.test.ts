@@ -4,6 +4,9 @@ const mocks = vi.hoisted(() => ({ invoke: vi.fn(), toast: vi.fn(), confirm: vi.f
 vi.mock("../../invoke", () => ({ invoke: mocks.invoke }));
 vi.mock("../../transport", () => ({ isTauri: () => false, rpc: vi.fn() }));
 vi.mock("../../stores/toasts", () => ({ toastsStore: { add: mocks.toast } }));
+vi.mock("../../stores/appLogger", () => ({
+	appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+}));
 vi.mock("../../stores/repositories", () => ({ repositoriesStore: { state: { activeRepoPath: "/local" } } }));
 
 import { confirmFolderDrop, dispatchTauriDrop, setFolderDropConfirmHandler } from "../useFileDrop";
