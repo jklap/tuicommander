@@ -138,7 +138,7 @@ Recommended design:
 - Publication requires structured forks with a common matching Join, no branch escape before joining and no loop crossing a fork boundary. Agent nodes retain one successor; adding a second connection must not secretly become a fork. Conditions may branch inside a fork, but each selected path reaches the matching Join.
 - On branch failure, pause the scope, preserve completed arrivals and fence the failed activation. Explicit retry replaces only that generation. Cancel invalidates every outstanding branch. Do not treat a cancelled branch as successful arrival.
 
-Fork is a proposed schema/designer addition requiring Boss's decision. It is not present in the baseline palette. If Boss declines it, ship exclusive Join plus parallel story dispatch, and visibly refuse `Join.mode=all`/parallel intra-story graphs. Do not claim parallel branch E2E passed in that reduced scope.
+Boss approved Fork plus paired all-Join for enforced read-only review/validation branches. It is not present in the baseline palette. Slice A adds its schema/validator; G adds execution and client editing. Do not claim its runtime verified before G and H.
 
 ## Worktrees, concurrency and dependencies
 
@@ -250,21 +250,25 @@ Each slice has a truthful capability boundary. A graph may be saved as draft whi
 | D. Story policy | Pre-approval checks, independent approval receipt, Judge/Gate/Loop/Pause/Notify/exclusive Join; typed resolution | Cases 02-05, 12-17, 33. Policy matrix, receipt and cross-store crash tests |
 | E. Plan dispatch | Story child executions, proposal effect reuse, wave/dependency eligibility, operator integration wait and final-plan gate | Cases 29-31, 34, 37. Existing Git receipt tests plus plan fixed-point scenarios |
 | F. Start and history parity | Story/plan start controls, generated MCP run schema, IPC/HTTP mapping, controls and full history inspector | Cases 01, 06-07, 18-22, 35-36. Changed Vitest files, route mapping/probe, scoped MCP tests |
-| G. Structured parallel graph branches, if approved | Explicit Fork, paired all-Join, enforced read-only branches, scopes/generations and failure handling | Cases 17, 23, 25, 27 with branch variants. Token/concurrency tests; otherwise capability visibly unavailable |
+| G. Structured parallel graph branches | Explicit Fork, paired all-Join, enforced read-only branches, scopes/generations and failure handling | Cases 17, 23, 25, 27 with branch variants. Token/concurrency tests; otherwise capability visibly unavailable |
 | H. Isolated end-to-end verification | Build delivered headless binary; actual cheap agents and browser UI; execute and record all 37 cases | Functional matrix plus runtime crash/restart/approval evidence. No unsupported case counted passed |
 
-Ordering: A -> B -> C -> D -> E -> F -> H. G depends on A-D and lands before H if parallel intra-story branches are accepted. A-F may land incrementally with executable publication/start disabled until the seed contracts are supported. Update existing native-workflow plan through its management command after decisions; do not change its status by editing front matter.
+Ordering: A -> B -> C -> D -> E -> F -> H. G is in scope, depends on A-D and lands before H. Story 956-9745 must land before B enables autonomous scheduling; decision 1 must be resolved before D. A-F may land incrementally with executable publication/start disabled until the seed contracts are supported. Update existing native-workflow plan through its management command after decisions; do not change its status by editing front matter.
 
 The coordinator owns broad integration validation after implementation: one final remote run through `build-slot.sh --remote` with the TUIC library scope it authorized, touched Vitest files and `cargo build --bin tuic-remote --no-default-features`. Per-slice checks remain targeted and serialized; do not use that broad gate after every edit. Apply repository temp wrappers, mbx and BUILD_FREEZE policy to any eventual Cargo run. This design commit requires Markdown/link/diff checks only, no application suite.
 
-## Questions for Boss before implementation
+## Decided (Boss, 2026-10-03)
 
-1. **Approval and integration authority.** Accept independent reviewer approval under the existing human policy and keep merge explicit in the first runtime? Recommended yes. Automatic merges are a separate later decision. An included WontFix needs explicit plan disposition and never releases dependents.
-2. **Parallel graph branches.** Approve explicit Fork + paired all-Join, or limit the initial runtime to exclusive Join and parallel stories? Recommended explicit Fork for read-only review/validation branches first; writable branch composition needs a separate approved design. Otherwise visibly narrow that capability. Silent Agent fan-out is rejected as ambiguous.
-3. **Pause and retry.** Accept pinned `resume_to` and typed resolution, with three repeat traversals meaning initial implementation plus three repair attempts? Recommended yes. Budget extension requires explicit operator permission; resume cannot reset it.
-4. **Final plan verification.** Require pinned deterministic final checks before executable Resolve plan publication, alongside the current fingerprint/approval/integration gates? Recommended yes. A caller boolean is not verification. Projects must configure relevant checks; Git connectivity alone proves no feature criterion.
-5. **Legacy runs.** Preserve inspection/cancel/receipt operations but require a new graph run rather than infer/resume legacy command-driven positions? Recommended yes; obtain permission before removing or replacing old mutation behavior.
-6. **Operator authorization.** Resolve pending story 956-9745 with explicit operator capabilities for definition/check-policy edits, decisions and recovery before autonomous graph scheduling? Recommended yes. Record local_api provenance honestly; loopback/authentication alone does not prove a human actor.
-7. **Initial resource/profile defaults.** Keep two parallel stories per run, add a bounded per-project/daemon spawn limit, and require explicit sonnet/sol role profiles for verification? Recommended yes; fail visibly if unavailable rather than substitute a more expensive model.
+- **0 — Delivery:** GO for the native runtime, slice by slice A -> F, then H. Slice G is included after A-D and before H.
+- **2 — Parallel branches:** Explicit Fork with paired Join `all`, restricted to enforced read-only review/validation branches. Writable intra-story composition is outside this scope.
+- **3 — Pause and repairs:** Pin `resume_to` and require typed resolution. `max_iterations=3` permits the initial implementation plus three repairs. Resume never resets counters.
+- **4 — Plan verification:** Executable Resolve plan publication requires deterministic final checks. A caller-supplied boolean cannot certify completion.
+- **5 — Legacy runs:** Inspect and cancel only; no resume and no guessed graph positions. New execution requires a new graph run.
+- **6 — Authorization prerequisite:** Close and land story 956-9745 before enabling autonomous scheduling. It is a prerequisite of slice B. Slice A does not enable an executor.
+- **7 — Resource/profile defaults:** Two parallel stories by default, a per-project spawn limit, explicit sonnet/sol profiles, and visible errors when a required profile is missing.
 
-The named Mac instance path `~/Library/Application Support/com.tuic.commander/instances/wf-verify` is already authorized solely for later E2E and cleanup. It is not used by this design phase.
+## Open decision for Boss
+
+**1 — Approval and integration authority:** independent reviewer approval under the existing human policy and explicit merge in the first runtime remain proposed, not approved. The coordinator will ask Boss before slice D. This question does not block A-C; no approval/merge policy is enabled in those slices. An included WontFix never releases dependents.
+
+The named Mac instance path `~/Library/Application Support/com.tuic.commander/instances/wf-verify` is authorized solely for later E2E and cleanup. It is not used in slice A.
