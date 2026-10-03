@@ -1927,7 +1927,12 @@ impl<T: EventListener> Handler for Term<T> {
         let bg = self.grid.cursor.template.bg;
         let line = cursor.point.line;
         self.damage.damage_line(line.0 as usize, start.0, end.0);
+        let columns = self.columns();
         let row = &mut self.grid[line];
+        if start == Column(0) && end == Column(columns) {
+            row.copy_origin_unknown = false;
+            row.copy_predecessor_lost = false;
+        }
         for cell in &mut row[start..end] {
             *cell = bg.into();
         }
