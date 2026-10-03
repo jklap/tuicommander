@@ -284,12 +284,17 @@ describe("readAnswersHistory", () => {
 			newTurnCache(),
 		);
 		expect(turns?.[0].prompt).toBeNull();
-		expect(turns?.[0].answers).toEqual([
+		// catches: the answers-only view keeping only the 💬 row, or running an answer past its end into the next one
+		const answers = turns?.[0].answers ?? [];
+		expect(answers.map((a) => a.split("\n")[0])).toEqual([
 			"💬 Green bar in the terminal scrollbar: green is the colour TUIC uses to mark the",
 			'💬 Project by project: the full status is in the tab "Stato progetti 03/10"',
 			"💬 Worktrees: I closed the 5 that were finished:",
 			"💬 The ones still open each have a reason:",
 		]);
+		expect(answers[0]).toMatch(/fixing it\.$/);
+		expect(answers[1]).toMatch(/gate status per repo\.$/);
+		expect(answers[2]).toMatch(/so TUIC sees them as unmerged\.$/);
 	});
 
 	it("reads only retained prefix rows and caches them while the tracked turn grows", async () => {

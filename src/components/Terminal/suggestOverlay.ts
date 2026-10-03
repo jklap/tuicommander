@@ -28,6 +28,10 @@ export const ANSWER_MARKER_RE = /^[\s●⏺]*💬/;
 const OUTPUT_ROW_RE = /^\s*[●⏺]/;
 /** A continuation row of an answer: indented under the agent's bullet. */
 const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
+/** A user prompt row; an indented one still ends the answer. */
+const PROMPT_ROW_RE = /^\s*❯/;
+/** A fenced code block delimiter. Inside a fence a bullet, marker or prompt glyph is content. */
+const FENCE_RE = /^\s*```/;
 
 /**
  * Last row of the answer that starts at `start` (a row matching
@@ -35,9 +39,11 @@ const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
  * the indented rows that follow, blank paragraph gaps included. It ends before the
  * next bullet (a tool call or another answer), before a row that starts at column
  * 0 (user prompt, separator, status line) and before the trailing blank rows.
+ * Rows inside a fenced code block belong to the answer whatever glyph they start with.
  */
 export function answerExtent(start: number, totalRows: number, getRow: (i: number) => RowSnapshot | null): number {
 	let last = start;
+	let inFence = false;
 	for (let i = start + 1; i < totalRows; i++) {
 		const row = getRow(i);
 		if (!row) break;
@@ -46,8 +52,13 @@ export function answerExtent(start: number, totalRows: number, getRow: (i: numbe
 			continue;
 		}
 		if (row.text.trim() === "") continue;
-		if (!ANSWER_CONTINUATION_RE.test(row.text) || OUTPUT_ROW_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text))
-			break;
+		if (!ANSWER_CONTINUATION_RE.test(row.text)) break;
+		if (inFence) {
+			inFence = !FENCE_RE.test(row.text);
+		} else {
+			if (OUTPUT_ROW_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text) || PROMPT_ROW_RE.test(row.text)) break;
+			inFence = FENCE_RE.test(row.text);
+		}
 		last = i;
 	}
 	return last;
