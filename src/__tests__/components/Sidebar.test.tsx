@@ -576,6 +576,20 @@ describe("Sidebar", () => {
 			expect(container.querySelector(".branchItem [title]")).toBeNull();
 		});
 
+		// Catches: ellipsis making the current branch unreadable in the repo metadata chip.
+		it.each(["main", "salvage/" + "long-branch-name-".repeat(10)])(
+			"keeps the full current branch %s in the rich repo chip tooltip",
+			(branchName) => {
+				setRepos({
+					"/repo1": makeRepo({ workspaces: { main: richBranch({ branchName }) } }),
+				});
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				const chip = container.querySelector("[data-testid='repo-rich-meta'] .richChip");
+				expect(chip?.textContent).toBe(`⎇ ${branchName}`);
+				expect(chip?.getAttribute("data-tooltip")).toBe(branchName);
+			},
+		);
+
 		// Catches: "1 open PRs" and "1 worktrees".
 		it("uses the singular for one worktree and one open PR", () => {
 			vi.spyOn(githubStore, "getAllOpenPrs").mockReturnValue([{ number: 1 }] as never);
