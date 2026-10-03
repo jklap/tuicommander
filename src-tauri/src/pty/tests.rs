@@ -21299,7 +21299,9 @@ fn stale_foreground_snapshot_cannot_revoke_newer_agent_or_rearm_returned_shell()
 #[cfg(unix)]
 #[test]
 fn shell_root_identity_revokes_agent_for_ash_and_renamed_shell() {
-    for name in ["ash", "renamed-login-shell"] {
+    // Linux /proc/comm exposes at most 15 bytes. Keep the real executable's
+    // arbitrary name within that limit so setup waits for an observable name.
+    for name in ["ash", "renamed-shell"] {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let sid = "unlisted-root-shell";
         let probe =
