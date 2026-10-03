@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Write;
 use std::os::unix::net::UnixListener;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -33,29 +33,13 @@ fn bg_command(log: &std::path::Path) -> Command {
 }
 
 fn read_request(stream: &mut std::os::unix::net::UnixStream) -> (String, serde_json::Value) {
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    let request_line = line.trim_end().to_string();
-    let mut length = 0;
-    loop {
-        line.clear();
-        reader.read_line(&mut line).unwrap();
-        if line == "\r\n" {
-            break;
-        }
-        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-            length = value.trim().parse().unwrap();
-        }
-    }
-    let mut body = vec![0; length];
-    reader.read_exact(&mut body).unwrap();
+    let request = tuic_test_support::read_http_request(stream).unwrap();
     (
-        request_line,
-        if body.is_empty() {
+        request.request_line,
+        if request.body.is_empty() {
             serde_json::Value::Null
         } else {
-            serde_json::from_slice(&body).unwrap()
+            serde_json::from_slice(&request.body).unwrap()
         },
     )
 }

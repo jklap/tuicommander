@@ -324,9 +324,19 @@ tuic alias --remove
 ## IPC Architecture
 
 The CLI communicates with TUICommander via IPC:
-- **macOS/Linux:** Unix domain socket at `~/.config/com.tuic.commander/mcp.sock`
+- **macOS/Linux:** Unix domain socket at `<platform config dir>/com.tuic.commander/mcp.sock` for the default instance.
 - **Windows:** Named pipe at `\\.\pipe\tuicommander-mcp`
 
-Override with `$TUIC_SOCKET` environment variable.
+Use `tuic --instance <id> <command>` or `TUIC_APP_INSTANCE=<id> tuic <command>`
+to select the same namespace as `tuic-remote --instance <id>`. An explicit
+`--instance` takes precedence over the environment. Invalid ids fail before any
+connection. Named Unix sockets use the server's short SHA-256-based name in the OS
+temp directory. The bridge accepts `tuic-bridge --instance <id>` and the same
+environment variable; it searches only that instance's alternative sockets.
+
+On Unix, `TUIC_SOCKET` overrides the selected socket path. Windows retains the
+existing named-pipe endpoint. The clients and server share instance validation,
+config paths and IPC names through `tuic-ipc`; CLI and bridge also share HTTP
+request and response framing.
 
 If TUICommander is not running, `tuic open` and `tuic new` will launch it automatically.

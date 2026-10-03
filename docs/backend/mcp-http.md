@@ -64,6 +64,22 @@ The server has two independent listeners:
 - **IPC listener** (always started): On macOS/Linux, listens at `<config_dir>/mcp.sock` for the default instance. Named instances use a deterministic short socket name in the OS temp directory because macOS limits Unix socket paths to 104 bytes. On Windows, listens on `\\.\pipe\tuicommander-mcp` (named pipe). No authentication — used by the local `tuic-bridge` sidecar.
 - **TCP listener** (opt-in): Only starts when remote access is enabled. Binds to `0.0.0.0:<port>` (port from `services.server`) with Basic Auth.
 
+The shared `tuic-ipc` crate owns `AppInstance`, endpoint naming and HTTP
+framing. Informational responses (1xx except 101) are skipped until the final
+response arrives. More than 32 interim replies per response, or a status/header
+section above 64 KiB including its terminator, returns an invalid-data error.
+These limits persist across reads; response bodies are not subject to the header
+limit. Status 101, 204 and 304 responses finish at the header
+terminator regardless of Content-Length or Transfer-Encoding (RFC 9112 §6.3).
+The clients do not issue HEAD requests.
+The server reuses its short named socket path; CLI and bridge select it
+with `--instance <id>` or `TUIC_APP_INSTANCE`. An explicit Unix `TUIC_SOCKET`
+wins. Bridge fallback discovery stays within the selected instance's socket
+prefix, so an unavailable named instance cannot fall through to the default
+instance. Sync CLI and async bridge adapters retain their separate I/O and timeout
+policies. Both finish length-delimited responses without waiting for EOF and
+decode chunked bodies before converting UTF-8.
+
 The `mcp_server_enabled` config flag controls whether the `/mcp` protocol route is active (MCP tool discovery and invocation), not whether the server itself starts. The HTTP API endpoints (sessions, git, config, etc.) are always available on the IPC listener.
 
 The local IPC listener is independent from the **Remote Access** TCP toggle. Turning remote access on or off only starts or stops the authenticated TCP listener; it does not disable the MCP socket or the local MCP route. Lifecycle logs state whether a transition affects TCP or the always-on IPC listener.
