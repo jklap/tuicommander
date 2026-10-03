@@ -31,6 +31,72 @@ fn dedupe_survives_the_senders_own_retirement() {
     );
 }
 
+// Catches: checking registration before the history lock lets retirement finish
+// before an already-admitted enqueue recreates an unregistered recipient's ring.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_enqueue_and_retirement_keep_history_consistent() {
+    let state = test_state();
+    let (registered, registrations) = std::sync::mpsc::channel();
+    let (retired, retirements) = std::sync::mpsc::channel();
+    let producer = {
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            for i in 0..3000 {
+                state.peer_agents.insert(
+                    "R".into(),
+                    crate::state::PeerAgent {
+                        tuic_session: "R".into(),
+                        mcp_session_id: "sid-R".into(),
+                        name: "R".into(),
+                        project: None,
+                        registered_at: 0,
+                    },
+                );
+                registered.send(()).unwrap();
+                let _ = enqueue_forwarded(&state, "R", message(&format!("id-{i}"), "mint/s"));
+                retirements.recv().unwrap();
+                // Both operations finished; check before another registration can
+                // hide an orphan behind a live peer or another retirement clears it.
+                assert!(
+                    !state
+                        .remote_mail
+                        .forwarded_history
+                        .lock()
+                        .recipients
+                        .contains_key("R"),
+                    "orphan replay state for an unregistered peer at interleaving {i}"
+                );
+            }
+        })
+    };
+    let retirer = {
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            while registrations.recv().is_ok() {
+                unregister_peer(&state, "R");
+                state.agent_inbox.remove("R");
+                if retired.send(()).is_err() {
+                    break;
+                }
+            }
+        })
+    };
+    let produced = producer.await;
+    retirer.await.unwrap();
+    produced.unwrap();
+    if !state.peer_agents.contains_key("R") {
+        assert!(
+            !state
+                .remote_mail
+                .forwarded_history
+                .lock()
+                .recipients
+                .contains_key("R"),
+            "orphan replay state for an unregistered peer"
+        );
+    }
+}
+
 async fn held_daemon(
     hub: &Arc<AppState>,
 ) -> (
