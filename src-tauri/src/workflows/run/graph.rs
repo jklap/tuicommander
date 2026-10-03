@@ -2,8 +2,11 @@
 use crate::workflows::{NodeKind, PublishedWorkflow, validate_executable_graph};
 use serde::{Deserialize, Serialize};
 
-/// Run event contract that owns serial graph validation and replay semantics.
+/// Run event contract that owns serial graph transition and replay semantics.
 pub const RUN_EVENT_CONTRACT_VERSION: u16 = 2;
+
+/// Every event snapshots all activations, so the bound caps per-run storage.
+pub(super) const MAX_ACTIVATIONS: usize = 512;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -20,7 +23,6 @@ pub struct Activation {
     pub id: String,
     pub node_id: String,
     pub state: ActivationState,
-    pub from_activation: Option<String>,
     pub edge_index: Option<usize>,
 }
 
@@ -118,13 +120,27 @@ pub struct GraphExecution {
 }
 
 impl GraphExecution {
+    /// Command-time start: the definition must pass executable validation.
     pub(super) fn start(
-        event_contract_version: u16,
         id: String,
         target_id: String,
         definition: PublishedWorkflow,
     ) -> Result<Self, String> {
-        require_graph_contract(event_contract_version)?;
+        validate_executable_graph(
+            &definition.graph,
+            definition.kind,
+            !definition.required_checks.is_empty(),
+        )?;
+        Self::pristine(id, target_id, definition)
+    }
+
+    /// Initial state of a pinned definition. Replay uses this alone, so a later
+    /// validator change cannot make a persisted run unreplayable.
+    pub(super) fn pristine(
+        id: String,
+        target_id: String,
+        definition: PublishedWorkflow,
+    ) -> Result<Self, String> {
         if id.trim().is_empty()
             || id.len() > 80
             || target_id.trim().is_empty()
@@ -132,11 +148,6 @@ impl GraphExecution {
         {
             return Err("invalid graph execution identity or revision".into());
         }
-        validate_executable_graph(
-            &definition.graph,
-            definition.kind,
-            !definition.required_checks.is_empty(),
-        )?;
         let start = definition
             .graph
             .nodes
@@ -147,7 +158,6 @@ impl GraphExecution {
             id: "a0".into(),
             node_id: start.id.clone(),
             state: ActivationState::Ready,
-            from_activation: None,
             edge_index: None,
         };
         Ok(Self {
@@ -162,13 +172,8 @@ impl GraphExecution {
         })
     }
 
-    fn enqueue(
-        &mut self,
-        from: &str,
-        edge_index: Option<usize>,
-        target: String,
-    ) -> Result<(), String> {
-        if self.activations.len() >= 4096 {
+    fn enqueue(&mut self, edge_index: Option<usize>, target: String) -> Result<(), String> {
+        if self.activations.len() >= MAX_ACTIVATIONS {
             return Err("graph activation budget exhausted".into());
         }
         let id = format!("a{}", self.activations.len());
@@ -176,7 +181,6 @@ impl GraphExecution {
             id,
             node_id: target,
             state: ActivationState::Ready,
-            from_activation: Some(from.into()),
             edge_index,
         });
         Ok(())
@@ -185,11 +189,9 @@ impl GraphExecution {
     /// Validate and project a committed transition without performing effects.
     pub(super) fn apply(
         &mut self,
-        event_contract_version: u16,
         transition: &GraphTransition,
         remaining_loops: u16,
     ) -> Result<u16, String> {
-        require_graph_contract(event_contract_version)?;
         if self.completed {
             return Err("completed graph cannot advance".into());
         }
@@ -220,13 +222,11 @@ impl GraphExecution {
                 if paused || activation.state != ActivationState::Ready {
                     return Err("graph activation is not ready".into());
                 }
-                if let Some(from) = &activation.from_activation {
-                    let predecessor = index
-                        .checked_sub(1)
-                        .and_then(|previous| self.activations.get(previous))
-                        .filter(|previous| {
-                            previous.id == *from && previous.state == ActivationState::Completed
-                        })
+                if let Some(previous) = index.checked_sub(1) {
+                    let predecessor = self
+                        .activations
+                        .get(previous)
+                        .filter(|previous| previous.state == ActivationState::Completed)
                         .ok_or("activation predecessor is not completed")?;
                     if let Some(edge_index) = activation.edge_index {
                         let edge = self
@@ -239,14 +239,14 @@ impl GraphExecution {
                             return Err("activation predecessor edge does not match".into());
                         }
                     } else if !self.pauses.iter().any(|pause| {
-                        pause.activation_id == *from
+                        pause.activation_id == predecessor.id
                             && pause.resume_to == activation.node_id
                             && pause.resolution.is_some()
                     }) {
                         return Err("activation predecessor pause is unresolved".into());
                     }
-                } else if !matches!(kind, NodeKind::Start) || index != 0 {
-                    return Err("non-root activation needs a predecessor".into());
+                } else if !matches!(kind, NodeKind::Start) || activation.edge_index.is_some() {
+                    return Err("root activation must be an unlinked Start".into());
                 }
                 self.activations[index].state = ActivationState::Running;
             }
@@ -344,7 +344,7 @@ impl GraphExecution {
                         });
                     }
                 }
-                self.enqueue(&activation.id, Some(edge_index), target)?;
+                self.enqueue(Some(edge_index), target)?;
                 self.activations[index].state = ActivationState::Completed;
                 return Ok(repeats);
             }
@@ -363,7 +363,7 @@ impl GraphExecution {
                     })
                     .ok_or("activation has no pending pause")?;
                 let target = self.pauses[pause_index].resume_to.clone();
-                self.enqueue(&activation.id, None, target)?;
+                self.enqueue(None, target)?;
                 self.pauses[pause_index].resolution = Some(resolution.clone());
                 self.activations[index].state = ActivationState::Completed;
             }
@@ -413,12 +413,4 @@ impl GraphTransition {
 pub enum GraphEvent {
     Started { execution: Box<GraphExecution> },
     Transition { transition: GraphTransition },
-}
-
-/// Version 2 owns both executable validation and serial replay semantics.
-fn require_graph_contract(version: u16) -> Result<(), String> {
-    match version {
-        RUN_EVENT_CONTRACT_VERSION => Ok(()),
-        _ => Err("unsupported workflow graph event contract".into()),
-    }
 }

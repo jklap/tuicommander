@@ -25,6 +25,11 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
     {
         return Err("terminal workflow cannot advance".into());
     }
+    if matches!(event.kind, RunEventKind::Graph { .. })
+        && snapshot.event_contract_version != super::graph::RUN_EVENT_CONTRACT_VERSION
+    {
+        return Err("unsupported workflow graph event contract".into());
+    }
     match &event.kind {
         RunEventKind::Started { .. } => unreachable!(),
         RunEventKind::Graph { event } => match event {
@@ -48,8 +53,7 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                 {
                     return Err("graph execution has a foreign definition".into());
                 }
-                let initial = super::graph::GraphExecution::start(
-                    snapshot.event_contract_version,
+                let initial = super::graph::GraphExecution::pristine(
                     execution.id.clone(),
                     execution.target_id.clone(),
                     execution.definition.clone(),
@@ -78,11 +82,7 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                     .ok_or("workflow loop budget exhausted")?;
                 snapshot.loops = snapshot
                     .loops
-                    .checked_add(execution.apply(
-                        snapshot.event_contract_version,
-                        transition,
-                        remaining,
-                    )?)
+                    .checked_add(execution.apply(transition, remaining)?)
                     .ok_or("loop counter overflow")?;
                 if snapshot
                     .graph_executions
