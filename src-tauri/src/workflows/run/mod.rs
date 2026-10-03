@@ -14,6 +14,8 @@ pub use store::*;
 #[cfg(test)]
 mod critic_tests;
 #[cfg(test)]
+mod graph_critic_1446a_tests;
+#[cfg(test)]
 mod graph_tests;
 
 #[cfg(test)]
