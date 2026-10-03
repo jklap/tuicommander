@@ -43,7 +43,7 @@ fn recipient_cap_eviction_does_not_reopen_replay_for_an_old_recipient() {
     let first = message("m1", "mint/a", "once");
     assert_eq!(record_forwarded(&state, "r0", &first), Ok(true));
     for n in 1..=1024 {
-        let other = message(&format!("o-{n}"), "mint/a", "x");
+        let other = message(&format!("o-{n}"), &format!("other-{n}/a"), "x");
         assert_eq!(record_forwarded(&state, &format!("r{n}"), &other), Ok(true));
     }
     assert_eq!(
@@ -65,7 +65,7 @@ fn same_id_with_shifted_sender_content_boundary_is_a_collision() {
     );
     assert_eq!(
         record_forwarded(&state, "r", &message("m", "a", "bc")),
-        Err("Forwarded message identity collision")
+        Err("Forwarded message identity collision".into())
     );
 }
 
