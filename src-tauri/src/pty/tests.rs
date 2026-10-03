@@ -21078,6 +21078,10 @@ async fn headless_foreground_timer_discovers_claude_and_reclassifies_quiet_scree
     .unwrap();
     let (rows, cols) = capture.geometry.unwrap();
     let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(4096)));
     // Recorded ready composer after Esc, before record 195 paints the next draft.
     for record in capture.records.into_iter().take(195) {
         if record.direction == crate::pty_capture::CaptureDirection::Output {
