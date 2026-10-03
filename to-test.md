@@ -1,3 +1,7 @@
+## Bodyless IPC replies (1416-8ad4) — rebuilt clients required
+
+- [ ] Rebuild/reinstall the CLI and bridge before using this decoder fix. The running clients do not hot-reload Rust changes. Automated shared-decoder regression covers 204/304, HEAD and informational response boundaries; no desktop restart was performed by this lane.
+
 ## Shared IPC instance routing (1390-cd42) — Rust rebuild required
 
 - [ ] After Boss restarts the rebuilt backend and replaces the bridge/CLI binaries, use a disposable named headless instance. Run `tuic --instance <id> ls --json` and `TUIC_APP_INSTANCE=<id> tuic-bridge`: both must reach that instance. An explicit `TUIC_SOCKET` must still win. Do not launch a second desktop instance. The existing live Rust process does not hot-reload these changes.
