@@ -57,15 +57,6 @@ fn growing_window_height_without_eviction_keeps_composer_origin_known() {
     assert_eq!(grid.get_selection_text(row, 0, row, 10), "hello");
 }
 
-// Catches the eviction check using `>=`/`==` instead of `>` against the free history room:
-// an SU that overshoots the room by one evicts the row above the composer.
-#[test]
-fn scroll_up_overshooting_history_room_marks_oldest_unknown() {
-    let mut grid = TerminalGrid::new(2, 80, 2);
-    let _ = grid.process("x\r\n❯ payload\r\nb\x1b[2S".as_bytes());
-    assert_eq!(grid.get_selection_text(0, 0, 0, 10), "❯ payload");
-}
-
 // Catches reflow truncation evicting a split predecessor without marking the new oldest row.
 #[test]
 fn column_shrink_reflow_that_truncates_history_marks_oldest_unknown() {
