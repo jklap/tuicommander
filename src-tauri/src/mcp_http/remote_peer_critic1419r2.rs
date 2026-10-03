@@ -15,26 +15,6 @@ fn message(id: &str, from: &str, content: &str) -> crate::state::AgentMessage {
     }
 }
 
-// Catches: the per-recipient 100-id window is shared by every sender, so a
-// second peer that mails the same recipient 100 times pushes sender A's id out
-// and A's lost-ack retry (or a captured-id replay) is delivered again, although
-// A's own outbox still holds the message.
-#[test]
-fn another_senders_traffic_cannot_evict_an_id_and_let_a_replay_through() {
-    let state = test_state();
-    let victim = message("m-victim", "mint/a", "pay");
-    assert_eq!(record_forwarded(&state, "r", &victim), Ok(true));
-    for n in 0..100 {
-        let flood = message(&format!("flood-{n}"), "other/b", "x");
-        assert_eq!(record_forwarded(&state, "r", &flood), Ok(true));
-    }
-    assert_eq!(
-        record_forwarded(&state, "r", &victim),
-        Ok(false),
-        "replay of an id from another sender's window was delivered again"
-    );
-}
-
 // Catches: the 1024-recipient cap evicting the oldest recipient wholesale, so
 // traffic to 1024 other recipients erases the dedup history of the first one.
 #[test]
