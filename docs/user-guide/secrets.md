@@ -24,16 +24,13 @@ path, home, locale and temporary-directory variables. It has no terminal input,
 and stdout/stderr are captured in pipes rather than a PTY or a tcap stream.
 
 Commands outside the in-memory allowlist show the exact resolved argv, directory
-and secret names for consent. You can retain a template until exit. Templates
-fix the executable and first subcommand. A whole `{arg}` placeholder accepts
-one non-option argument containing ASCII letters, digits or `_./:@+=,-`; it
-cannot inject spaces, shell operators, another subcommand or another argument.
-In this slice, placeholders are supported only after `gh api`, whose command
-prefix is known. Other programs use exact argv templates.
-Consent also binds the names and canonical working directory.
+and secret names for consent. You can retain that exact argv until exit.
+Consent also binds the names and canonical working directory. Changing any
+argument, name or directory requires fresh consent; placeholders are not used.
 
 Shell/interpreter evaluation (`-c`, `-e` and equivalents), `env` and `printenv`
-are denied even with approval. Evaluation-like options are rejected regardless
+are denied when they are the executable, even with approval. Wrappers such as
+`nohup env` are an accepted limitation; approve only trusted executables. Evaluation-like options are rejected regardless
 of the executable name, so renaming an interpreter does not bypass the policy. Captured output masks exact values, standard and
 URL-safe base64, lower/upper hex and URL/form encodings, including line breaks
 inside an echo. Output over 1 MiB per stream or a 120-second timeout is withheld.
@@ -41,22 +38,22 @@ No raw output is logged, journalled, or added to a terminal ring.
 
 ## HTTP and phone entry
 
-The private window shows a capability link for a dedicated, temporary web
-origin. The link carries a one-time nonce in its fragment; the form removes it
-from history immediately. A nonce is bound to one open form and is consumed
-only by a valid submit. Replay and guessed nonces are rejected. Responses are
-not cached or frameable. The private origin does not serve a service worker.
+The private window shows a one-time entry path. Open it on your trusted
+TUICommander server address. The path carries a nonce in its fragment; the form
+removes it from history immediately. A nonce is bound to one open form and is
+consumed only by a valid submit. Replay and guessed nonces are rejected.
+Responses are not cached or frameable.
 
-Phone entry requires the host's existing Tailscale HTTPS configuration. Without
-that configuration, the private listener binds loopback and the link works only
-in a local browser. Plaintext LAN password submission is not enabled. A desktop
-host must open the request; headless daemons cannot initiate this form yet.
+Browser and phone entry use the existing application router, authentication and
+transport. Use HTTPS to protect values in transit. This feature does not enforce
+TLS or loopback-only HTTP, and does not isolate entry from application-origin
+service workers. A desktop host must open the request; headless daemons cannot
+initiate this form yet.
 
-While the private native window is open, TUIC blocks `ui`, `debug`, and upstream
-MCP calls, including proxied screenshots. In-flight inspection results are
-withheld if a form opened during the call. The separate form has no App stores,
-debug globals, logging handlers, plugin bridge or terminal. Bootstrap checks the
-native window identity; the main WebView cannot acquire its nonce. Inputs are
-cleared and unmounted before submit begins, and the native window is destroyed
-after successful entry. OS-level screen capture outside TUIC is not controlled
-by this mechanism.
+While the private native window is open, TUIC blocks new `ui`, `debug`, and
+upstream MCP inspection calls, including proxied screenshots. Already-running
+inspection calls are not cancelled and their results are not withheld.
+Bootstrap checks the native window identity; the main WebView cannot acquire
+its nonce. Inputs are cleared and unmounted before submit begins, and the native
+window is destroyed after successful entry. OS-level screen capture outside
+TUIC is not controlled by this mechanism.

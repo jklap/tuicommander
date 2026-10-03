@@ -4485,8 +4485,8 @@ or credential is touched.
 - [ ] After Boss restarts the desktop backend, request username/password/OTP
   fields with synthetic data. Verify the separate native window, exact reduced
   schema, main-window bootstrap rejection, decline, close and timeout cleanup.
-- [ ] With existing Tailscale HTTPS, submit a desktop-opened request from the
-  dedicated phone link; verify one-time consumption and cleared input UI.
+- [ ] On a trusted existing HTTPS server address, submit a desktop-opened request
+  from the one-time entry path; verify one-time consumption and cleared input UI.
 - [ ] Verify exact argv/name/directory approval and template consent. Run a
   trusted test executable that prints synthetic encoded/wrapped values; confirm
   masked output and no terminal/tcap entries.

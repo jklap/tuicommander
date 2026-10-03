@@ -1869,14 +1869,17 @@ The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop â€
 
 `secret` supports `request`, `run` and `remove`; no action reads values. The
 backend owns the zeroizing store and process spawn. Native-window bootstrap
-privately distributes a per-form capability. A temporary separate HTTP origin
-serves only the form/assets and capability-gated endpoints, using existing TLS
-for phone entry or loopback HTTP. An application-origin service worker therefore
-cannot intercept entry. Requests require a desktop host.
+privately distributes a per-form capability. Browser entry uses
+`/index.html#/secret-form?nonce=<capability>` on the existing application router,
+with the same authentication and transport policy. Requests require a desktop
+host. There is no separate server, TLS detection or origin isolation: an
+application-origin service worker can observe entry, and HTTP is not restricted
+to loopback by this feature. Boss accepted these limits on 2026-10-03.
 
-One shared dispatch gate blocks native `ui`/`debug`, direct upstream
-`tools/call`, and `call_tool`-wrapped inspection while a form is open. An epoch
-invalidates inspection results whose calls overlapped any form opening.
-The HTTP debug-JS handler also checks the form gate. The form entry bundle omits
-App/debug/logging/terminal initialization. Run captures pipes, caps output and
-masks before serialization; it never writes raw output to logging or PTY paths.
+One shared pre-call gate blocks native `ui`/`debug`, direct upstream
+`tools/call`, and `call_tool`-wrapped inspection while a form is open. Results
+of already-running inspection calls are not withheld. The HTTP debug-JS handler
+also checks the form gate. The form mounts through the common frontend entry
+without starting App/debug/logging/terminal initialization. Run captures pipes,
+caps output and masks before serialization; it never writes raw output to
+logging or PTY paths. Consent templates match exact argv, names and directory.

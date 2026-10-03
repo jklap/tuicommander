@@ -695,8 +695,8 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 
 ## Private secret entry on a phone
 
-A desktop secret request shows a dedicated one-time capability link in its
-private window. With Tailscale HTTPS configured, open that HTTPS link on your
-trusted phone and enter only the requested fields. Without TLS the link is
-loopback-only. The headless daemon cannot originate requests in this slice.
+A desktop secret request shows a one-time entry path in its private window.
+Open that path on your trusted TUICommander server address and enter only the
+requested fields. Entry uses the existing server authentication and transport;
+use HTTPS to protect values in transit. No separate private listener is created. The headless daemon cannot originate requests in this slice.
 See [Private secret forms](secrets.md).

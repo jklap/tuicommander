@@ -2551,11 +2551,11 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 
 ## Private secret forms
 
-The `secret` MCP tool opens an isolated native form for requested sensitive
+The `secret` MCP tool opens a separate native form for requested sensitive
 fields and returns names/status only. Approved argv commands receive values in
 the child environment; pipe output is masked for exact and common encoded
-values, including wraps. User-created templates bind program, subcommand, names
+values, including wraps. User consent binds exact argv, names
 and directory. Values and templates live only until exit. One-time nonce links
-support browser entry on a separate origin; phones require existing Tailscale
-HTTPS. TUIC inspection tools are gated while a form is open. See
+support browser entry on the existing application origin and transport. Use
+HTTPS for phone entry. TUIC inspection tools are gated while a form is open. See
 [Private secret forms](user-guide/secrets.md) for limits and consent.

@@ -121,22 +121,11 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
             .clone()
             .ok_or("Secret entry requires a desktop host")?;
         let form = state.secrets.open(form)?;
-        let (mobile_url, mobile_task) = match super::mobile::start(state, &form.nonce).await {
-            Ok(server) => server,
-            Err(error) => {
-                cancel(state, &form.id);
-                return Err(error);
-            }
-        };
-        struct MobileLifetime(tokio::task::JoinHandle<()>);
-        impl Drop for MobileLifetime {
-            fn drop(&mut self) {
-                self.0.abort();
-            }
-        }
-        let _mobile = MobileLifetime(mobile_task);
+        // Browser entry uses the existing server origin and its auth/TLS policy.
+        // Boss accepts app-origin service-worker exposure and plaintext access.
         if let Some(pending) = state.secrets.inner.lock().pending.as_mut() {
-            pending.form.mobile_url = Some(mobile_url);
+            pending.form.mobile_url =
+                Some(format!("/index.html#/secret-form?nonce={}", form.nonce));
         }
         let (tx, rx) = tokio::sync::oneshot::channel();
         if let Some(pending) = state.secrets.inner.lock().pending.as_mut() {
@@ -147,14 +136,15 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
         let built = tauri::WebviewWindowBuilder::new(
             &handle,
             &label,
-            tauri::WebviewUrl::App("secret-form.html".into()),
+            tauri::WebviewUrl::App("index.html#/secret-form".into()),
         )
         .title("TUICommander — Private secret form")
         .inner_size(540.0, 620.0)
         .resizable(true)
         .devtools(false)
         .on_navigation(|url| {
-            url.path() == "/secret-form.html"
+            url.path() == "/index.html"
+                && url.fragment() == Some("/secret-form")
                 && ((url.scheme() == "tauri" && url.host_str() == Some("localhost"))
                     || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))
                     || (cfg!(debug_assertions)

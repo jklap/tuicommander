@@ -1,7 +1,6 @@
 //! In-memory secrets. No raw-value getter, serialization, logging or persistence.
 pub(crate) mod forms;
 mod mask;
-mod mobile;
 pub(crate) mod policy;
 mod run;
 mod schema;
@@ -87,15 +86,10 @@ pub(crate) struct SecretStore {
     inner: parking_lot::Mutex<Inner>,
     // Window lifetime outlives the pending reply. Inspection stays blocked until
     // native destruction, including a submit/close race and failed destruction.
-    pub(crate) tls: parking_lot::RwLock<Option<axum_server::tls_rustls::RustlsConfig>>,
-    epoch: std::sync::atomic::AtomicU64,
     windows: parking_lot::Mutex<std::collections::BTreeSet<String>>,
 }
 
 impl SecretStore {
-    pub(crate) fn inspection_epoch(&self) -> u64 {
-        self.epoch.load(std::sync::atomic::Ordering::Acquire)
-    }
     pub(crate) fn tools_blocked(&self) -> bool {
         self.inner.lock().pending.is_some() || !self.windows.lock().is_empty()
     }
@@ -104,7 +98,6 @@ impl SecretStore {
         if inner.pending.is_some() || !self.windows.lock().is_empty() {
             return Err("A secret form is already open".into());
         }
-        self.epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         inner.pending = Some(Pending {
             form: form.clone(),
             response: None,
@@ -116,7 +109,7 @@ impl SecretStore {
         inner
             .pending
             .as_ref()
-            .filter(|p| nonce_equal(&p.form.nonce, nonce))
+            .filter(|p| p.form.nonce == nonce)
             .map(|p| p.form.clone())
             .ok_or_else(|| "Unknown or expired secret form".into())
     }
@@ -125,7 +118,7 @@ impl SecretStore {
         let form = &inner
             .pending
             .as_ref()
-            .filter(|p| nonce_equal(&p.form.nonce, nonce))
+            .filter(|p| p.form.nonce == nonce)
             .ok_or("Unknown or expired secret form")?
             .form;
         let names: Vec<String> = form.fields.iter().map(|f| f.name.clone()).collect();
@@ -238,22 +231,13 @@ impl SecretStore {
     }
 }
 
-fn nonce_equal(expected: &str, actual: &str) -> bool {
-    expected.len() == actual.len()
-        && expected
-            .bytes()
-            .zip(actual.bytes())
-            .fold(0u8, |diff, (a, b)| diff | (a ^ b))
-            == 0
-}
-
 pub(crate) use forms::{form_http, submit_http};
 pub(crate) use run::handle_secret;
 
 pub(crate) fn tool_definition() -> serde_json::Value {
     serde_json::json!({
         "name": "secret",
-        "description": "Request a private sensitive-field form, then run a user-approved argv with named values in the child environment only. Values are never returned. An approved command can exfiltrate. request opens a separate native form; HTTP/mobile entry uses its private one-time capability link. run uses user-approved command templates or asks for exact argv consent; shell/interpreter evaluation and environment dumpers are forbidden. Templates fix program/subcommands (gh api supports placeholders; other programs use exact argv); a whole {arg} placeholder accepts one safe non-option argument. Output masks exact values and base64, hex and URL encodings, including line wraps. remove zeroizes stored values. Requests require a desktop host; the phone can submit the desktop-opened form.",
+        "description": "Request a private sensitive-field form, then run a user-approved argv with named values in the child environment only. Values are never returned. An approved command can exfiltrate. request opens a separate native form; HTTP/mobile entry uses its private one-time capability link. run uses user-approved command templates or asks for exact argv consent; shell/interpreter evaluation and environment dumpers are forbidden. Templates match exact argv, names and directory. Output masks exact values and base64, hex and URL encodings, including line wraps. remove zeroizes stored values. Requests require a desktop host; the phone can submit the desktop-opened form.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["request", "run", "remove"]},
             "fields": {"type": "array", "items": {"type": "object", "properties": {

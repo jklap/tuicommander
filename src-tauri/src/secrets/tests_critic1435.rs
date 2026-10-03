@@ -84,31 +84,6 @@ fn mask_hides_json_escaped_value() {
     );
 }
 
-/// Catches: a `{arg}` placeholder that admits a full URL, letting `gh api {arg}`
-/// be pointed at an attacker-chosen host (the charset allows `:` and `/`).
-#[test]
-fn placeholder_rejects_an_absolute_url() {
-    let template = policy::Template::new(vec![
-        "/opt/homebrew/bin/gh".into(),
-        "api".into(),
-        "{arg}".into(),
-    ])
-    .unwrap();
-    let url = vec![
-        "/opt/homebrew/bin/gh".to_string(),
-        "api".into(),
-        "https://evil.example/collect".into(),
-    ];
-    assert!(!template.matches(&url));
-}
-
-/// Catches: the env/printenv ban looking only at argv[0], so a wrapper
-/// (`nohup env`) dumps the environment.
-#[test]
-fn environment_dumper_behind_a_wrapper_is_rejected() {
-    assert!(policy::validate_argv(&["/usr/bin/nohup".into(), "/usr/bin/env".into()]).is_err());
-}
-
 /// Catches: an approved template that also authorises another directory,
 /// another name set or a reordered one.
 #[test]

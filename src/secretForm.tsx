@@ -1,4 +1,4 @@
-/* This entry deliberately does not import App, debugGlobals, appLogger, stores,
+/* This form module deliberately does not import App, debugGlobals, appLogger, stores,
  * heartbeat, crash handlers, plugins or the terminal. It has no opener bridge. */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -6,22 +6,24 @@ import { render } from "solid-js/web";
 import { type PrivateForm, SecretForm, type SecretSubmission } from "./components/SecretForm/SecretForm";
 import "./global.css";
 
-const root = document.getElementById("secret-form-root");
-if (!root) throw new Error("Private form root is unavailable");
-const native = "__TAURI_INTERNALS__" in window;
-let nonce = new URLSearchParams(window.location.hash.slice(1)).get("nonce");
+const native = "__TAURI_INTERNALS__" in window && !(window as unknown as Record<string, unknown>).__TAURI_SHIM__;
+let nonce = new URLSearchParams(window.location.hash.split("?")[1]).get("nonce");
 // Remove the capability from address/history before sending any request.
-if (!native) history.replaceState(null, "", window.location.pathname);
+if (!native) history.replaceState(null, "", `${window.location.pathname}#/secret-form`);
 
-async function start() {
-	const form: PrivateForm = native ? await invoke<PrivateForm>("secret_form_bootstrap") : await readForm();
-	if (root) render(() => <SecretForm form={form} submit={submit} />, root);
+export async function startSecretForm(root: HTMLElement): Promise<void> {
+	try {
+		const form: PrivateForm = native ? await invoke<PrivateForm>("secret_form_bootstrap") : await readForm();
+		render(() => <SecretForm form={form} submit={submit} />, root);
+	} catch {
+		root.textContent = "Private form unavailable or expired. Ask for a new request.";
+	}
 }
 async function readForm(): Promise<PrivateForm> {
 	if (nonce?.length !== 64) throw new Error("Unknown form");
 	const response = await fetch(`/secrets/forms/${encodeURIComponent(nonce)}`, {
 		cache: "no-store",
-		credentials: "omit",
+		credentials: "same-origin",
 		referrerPolicy: "no-referrer",
 	});
 	if (!response.ok) throw new Error("Expired form");
@@ -37,16 +39,13 @@ async function submit(submission: SecretSubmission): Promise<void> {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(submission),
 			cache: "no-store",
-			credentials: "omit",
+			credentials: "same-origin",
 			referrerPolicy: "no-referrer",
 		});
 		if (!response.ok) throw new Error("Submission rejected");
 	}
 	nonce = null;
 }
-void start().catch(() => {
-	if (root) root.textContent = "Private form unavailable or expired. Ask for a new request.";
-});
 
 function isPrivateForm(value: unknown): value is PrivateForm {
 	if (

@@ -2583,7 +2583,6 @@ pub async fn start_server(
     remote_enabled: bool,
     tls_config: Option<axum_server::tls_rustls::RustlsConfig>,
 ) -> bool {
-    *state.secrets.tls.write() = tls_config.clone();
     let config = state.config.read().clone();
 
     // Register shutdown channel so save_config can restart server. Only the
