@@ -55,7 +55,11 @@ describe("mdTabs reload readiness gate — critic 1424 round 3", () => {
 		const md = await fresh();
 		md.addMcpFile("new", "/r", "new.md", false, true);
 		md.restoreAfterReload();
-		expect(stored()?.tabs.map((t) => t.mcpUiId).sort()).toEqual(["new", "old"]);
+		expect(
+			stored()
+				?.tabs.map((t) => t.mcpUiId)
+				.sort(),
+		).toEqual(["new", "old"]);
 	});
 
 	it("user tab opened before restore never enters the snapshot after a reload — catches: file tab without mcpUiId persisted", async () => {
