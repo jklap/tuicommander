@@ -1,6 +1,6 @@
 import type { DecodedRow, StyledRange } from "./canvasTerminalUtils";
 import { cellText } from "./canvasTerminalUtils";
-import { ANSWER_MARKER_RE, type RowSnapshot } from "./suggestOverlay";
+import { ANSWER_MARKER_RE, answerExtent, type RowSnapshot } from "./suggestOverlay";
 
 /** One turn of the answers-only view: what the user asked, then only the 💬 answers. */
 export interface AnswersTurn {
@@ -38,6 +38,15 @@ const OUTPUT_START_RE = /^\s*[●⏺]/;
 /** Rows a prompt may span, so a turn whose output never starts with a bullet is not swallowed whole. */
 export const PROMPT_MAX_ROWS = 50;
 
+/** Text of rows `[from, to]`: soft-wrapped rows concatenated, hard lines joined with a newline, indent under the bullet removed. */
+function joinAnswerRows(rows: readonly RowSnapshot[], from: number, to: number): string {
+	let text = rows[from].text.trimStart().replace(/^[●⏺]\s*/, "");
+	for (let i = from + 1; i <= to; i++) {
+		text += rows[i].isWrapped ? rows[i].text : `\n${rows[i].text.replace(/^ {1,2}/, "").trimEnd()}`;
+	}
+	return text.replace(/[ \t]+$/gm, "").trimEnd();
+}
+
 /** Join the soft-wrapped rows starting at `from` into one logical line; returns it and the next row. */
 function joinLogicalLine(rows: readonly RowSnapshot[], from: number): { text: string; next: number } {
 	let text = rows[from].text;
@@ -70,7 +79,8 @@ function readPrompt(rows: readonly RowSnapshot[]): { text: string; next: number 
 /**
  * Build one turn of the answers-only view from its rows. With `hasPrompt` the
  * first row starts the user's prompt (see `readPrompt`); every logical line after
- * it that starts with the 💬 marker is an answer, in order, wrapped rows joined.
+ * it that starts with the 💬 marker begins an answer, in order, spanning the same rows the
+ * terminal highlights (`answerExtent`).
  */
 export function buildAnswersTurn(rows: readonly RowSnapshot[], hasPrompt: boolean): AnswersTurn {
 	let i = 0;
@@ -82,10 +92,13 @@ export function buildAnswersTurn(rows: readonly RowSnapshot[], hasPrompt: boolea
 	}
 	const answers: string[] = [];
 	while (i < rows.length) {
-		const line = joinLogicalLine(rows, i);
-		if (!rows[i].isWrapped && ANSWER_MARKER_RE.test(line.text))
-			answers.push(line.text.trimStart().replace(/^[●⏺]\s*/, ""));
-		i = line.next;
+		if (!rows[i].isWrapped && ANSWER_MARKER_RE.test(rows[i].text)) {
+			const last = answerExtent(i, rows.length, (r) => rows[r] ?? null);
+			answers.push(joinAnswerRows(rows, i, last));
+			i = last + 1;
+		} else {
+			i = joinLogicalLine(rows, i).next;
+		}
 	}
 	return { prompt, answers };
 }

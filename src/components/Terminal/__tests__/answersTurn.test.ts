@@ -114,6 +114,22 @@ describe("buildAnswersTurn", () => {
 		expect(buildAnswersTurn([row("💬 a")], false)).toEqual({ prompt: null, answers: ["💬 a"] });
 	});
 
+	it("returns the whole multi-line answer up to the next tool call", () => {
+		// catches: the answers-only view keeping only the 💬 line while the terminal highlights the whole answer
+		const rows = [
+			row("❯ q"),
+			row("⏺ 💬 First line that wraps onto"),
+			{ text: " the next row.", isWrapped: true },
+			row(""),
+			row("  Second paragraph."),
+			row("⏺ Bash(make test)"),
+			row("  ⎿  ok"),
+		];
+		expect(buildAnswersTurn(rows, true).answers).toEqual([
+			"💬 First line that wraps onto the next row.\n\nSecond paragraph.",
+		]);
+	});
+
 	it("returns no answers for a turn without markers", () => {
 		expect(buildAnswersTurn([row("❯ q"), row("plain output")], true).answers).toEqual([]);
 	});
