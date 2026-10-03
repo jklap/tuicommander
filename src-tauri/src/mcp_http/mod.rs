@@ -7465,12 +7465,12 @@ mod tests {
 
     /// Catches: a device route answering 200 with an error body (a plain `Json(..)`
     /// instead of `json_result`) when the enumeration fails, which the client
-    /// would parse as a device list. A zero bound makes the real enumeration
-    /// time out; no mock layer.
+    /// would parse as a device list. The injected failure panics inside the real
+    /// blocking task, independent of enumeration speed; no mock layer.
     #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn the_device_routes_answer_500_when_the_enumeration_fails() {
-        crate::audio_enumeration::override_timeout_for_test(std::time::Duration::ZERO);
+        let _failure = crate::audio_enumeration::fail_enumeration_for_test();
         let app = build_router(test_state(), false, true);
         for path in ["/dictation/devices", "/audio/output-devices"] {
             let response = app
@@ -7488,9 +7488,7 @@ mod tests {
                 .unwrap();
             let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert!(
-                json["error"]
-                    .as_str()
-                    .is_some_and(|e| e.contains("timed out")),
+                json["error"].as_str().is_some_and(|e| e.contains("failed")),
                 "GET {path}: {json}"
             );
         }
