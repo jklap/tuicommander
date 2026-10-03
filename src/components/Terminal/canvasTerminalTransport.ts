@@ -159,6 +159,7 @@ export class TauriTransport implements TerminalTransport {
 
 const MAX_RECONNECT_ATTEMPTS = 10;
 const INITIAL_RECONNECT_MS = 1000;
+const INITIAL_FRAME_TIMEOUT_MS = 15_000;
 
 export class WsTransport implements TerminalTransport {
 	private sessionId: string;
@@ -169,6 +170,8 @@ export class WsTransport implements TerminalTransport {
 	private closed = false;
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private reconnectAttempts = 0;
+	private initialFrameTimer: ReturnType<typeof setTimeout> | null = null;
+	private failureReported = false;
 
 	constructor(sessionId: string, connectionId?: string) {
 		this.sessionId = sessionId;
@@ -185,9 +188,37 @@ export class WsTransport implements TerminalTransport {
 	async resubscribe(): Promise<void> {
 		this.closed = false;
 		this.reconnectAttempts = 0;
-		this.ws?.close();
+		this.clearTimers();
+		const previous = this.ws;
 		this.ws = null;
+		previous?.close();
 		await this.connect();
+	}
+
+	private clearInitialFrameTimer(): void {
+		if (this.initialFrameTimer !== null) clearTimeout(this.initialFrameTimer);
+		this.initialFrameTimer = null;
+	}
+
+	private clearTimers(): void {
+		this.clearInitialFrameTimer();
+		if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+		this.reconnectTimer = null;
+	}
+
+	private reportStreamError(error: unknown): void {
+		if (this.closed || this.failureReported) return;
+		this.failureReported = true;
+		this.eventHandlers.get("stream-error")?.(error);
+	}
+
+	private deliveredFrame(data: ArrayBuffer): void {
+		this.onFrameHandler?.(data);
+		// Opening a socket is not replay. Only a frame accepted by the renderer
+		// proves the stream recovered; a healthy idle PTY owes no more output.
+		this.clearInitialFrameTimer();
+		this.reconnectAttempts = 0;
+		this.failureReported = false;
 	}
 
 	/**
@@ -261,13 +292,26 @@ export class WsTransport implements TerminalTransport {
 		// Set in onopen, which the WebSocket spec fires before any message event
 		// on the same socket — so no frame is ever read against the wrong framing.
 		let compressed = false;
+		let rejectConnect: (error: Error) => void = () => {};
+		this.initialFrameTimer = setTimeout(() => {
+			if (this.closed || this.ws !== ws) return;
+			const error = new Error("Timed out waiting for the initial terminal frame");
+			this.reportStreamError(error);
+			rejectConnect(error);
+			ws.close();
+		}, INITIAL_FRAME_TIMEOUT_MS);
 		ws.onmessage = (e) => {
 			if (this.ws !== ws) return;
 			if (!compressed) {
 				// A socket that did not ask gets the original framing, handled
 				// synchronously exactly as before.
-				if (e.data instanceof ArrayBuffer) this.onFrameHandler?.(e.data);
-				else this.handleTextFrame(e.data as string);
+				try {
+					if (e.data instanceof ArrayBuffer) this.deliveredFrame(e.data);
+					else this.handleTextFrame(e.data as string);
+				} catch (error) {
+					this.reportStreamError(error);
+					ws.close();
+				}
 				return;
 			}
 			pending = pending
@@ -277,10 +321,13 @@ export class WsTransport implements TerminalTransport {
 					// Re-checked after the await: the socket can be replaced while a
 					// frame is inflating, and this one belongs to the old stream.
 					if (this.ws !== ws) return;
-					if (frame.kind === "binary") this.onFrameHandler?.(frame.data);
+					if (frame.kind === "binary") this.deliveredFrame(frame.data);
 					else this.handleTextFrame(frame.data);
 				})
 				.catch((err) => {
+					if (this.closed || this.ws !== ws) return;
+					this.reportStreamError(err);
+					ws.close();
 					// An undecodable frame is a protocol disagreement, not a slow
 					// link, and it will repeat. Say so once per frame at warn level
 					// rather than hiding it behind the perf-debug gate.
@@ -292,6 +339,11 @@ export class WsTransport implements TerminalTransport {
 		};
 		ws.onclose = () => {
 			if (this.closed || this.ws !== ws) return;
+			this.ws = null;
+			this.clearInitialFrameTimer();
+			const error = new Error("Terminal stream disconnected");
+			rejectConnect(error);
+			this.reportStreamError(error);
 			if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
 				appLogger.warn("terminal", `Terminal stream disconnected after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`, {
 					sessionId: this.sessionId,
@@ -301,18 +353,17 @@ export class WsTransport implements TerminalTransport {
 			const delay = INITIAL_RECONNECT_MS * 2 ** Math.min(this.reconnectAttempts, 5);
 			this.reconnectAttempts++;
 			this.reconnectTimer = setTimeout(() => {
-				this.connect()
-					.then(() => {
-						this.reconnectAttempts = 0;
-					})
-					.catch((err) => {
-						if (isPerfDebug()) {
-							appLogger.debug("terminal", "WsTransport reconnect failed", { sessionId: this.sessionId, error: err });
-						}
-					});
+				this.reconnectTimer = null;
+				this.connect().catch((err) => {
+					this.reportStreamError(err);
+					if (isPerfDebug()) {
+						appLogger.debug("terminal", "WsTransport reconnect failed", { sessionId: this.sessionId, error: err });
+					}
+				});
 			}, delay);
 		};
 		await new Promise<void>((resolve, reject) => {
+			rejectConnect = reject;
 			ws.onopen = () => {
 				compressed = ws.protocol === DEFLATE_SUBPROTOCOL;
 				if (asksForCompression && !compressed) {
@@ -322,16 +373,18 @@ export class WsTransport implements TerminalTransport {
 				}
 				resolve();
 			};
-			ws.onerror = () => reject(new Error("WebSocket connection failed"));
+			ws.onerror = () => {
+				if (this.closed || this.ws !== ws) return;
+				const error = new Error("WebSocket connection failed");
+				this.reportStreamError(error);
+				reject(error);
+			};
 		});
 	}
 
 	unsubscribe(): void {
 		this.closed = true;
-		if (this.reconnectTimer) {
-			clearTimeout(this.reconnectTimer);
-			this.reconnectTimer = null;
-		}
+		this.clearTimers();
 		this.ws?.close();
 		this.ws = null;
 		this.eventHandlers.clear();

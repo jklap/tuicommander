@@ -2342,6 +2342,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	let scrollGestureEndTimer: ReturnType<typeof setTimeout> | undefined;
 
+	function showStreamError(error: unknown): void {
+		toastsStore.add(
+			"Terminal stream failed",
+			error instanceof Error ? error.message : String(error),
+			"error",
+			false,
+			undefined,
+			0,
+			undefined,
+			props.sessionId,
+		);
+	}
+
 	onMount(async () => {
 		const overlayCtx = overlayCanvasRef.getContext("2d");
 		if (!overlayCtx) {
@@ -2380,6 +2393,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		try {
 			// One shape on both transports: the Tauri event and the WS frame both
 			// carry `{ cwd }`, so there is nothing to normalise here.
+			await transport.onEvent("stream-error", showStreamError);
 			await transport.onEvent("cwd", (payload) => {
 				const { cwd } = payload as { cwd: string };
 				terminalsStore.update(props.terminalId, { cwd });
@@ -3384,16 +3398,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				sessionId: props.sessionId,
 				error: e,
 			});
-			toastsStore.add(
-				"Terminal stream failed",
-				e instanceof Error ? e.message : String(e),
-				"error",
-				false,
-				undefined,
-				0,
-				undefined,
-				props.sessionId,
-			);
+			showStreamError(e);
 			// `unsubscribe` already covers this on unmount; drop the session-event
 			// listeners now rather than keeping them alive on a terminal that will
 			// never paint.
