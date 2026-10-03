@@ -3,7 +3,6 @@
     not(feature = "desktop"),
     allow(dead_code, unused_imports, unused_variables)
 )]
-#![recursion_limit = "256"]
 
 pub mod acp;
 pub(crate) mod acp_commands;
