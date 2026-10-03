@@ -445,10 +445,24 @@ fn remove_staging(parent: &Dir, name: &std::ffi::OsStr) -> io::Result<()> {
             if !meta.is_dir() {
                 return Ok(());
             }
-            parent.set_symlink_permissions(
-                name,
-                cap_std::fs::Permissions::from_mode(meta.permissions().mode() | 0o700),
-            )?;
+            use std::os::fd::AsRawFd;
+            use std::os::unix::ffi::OsStrExt;
+            let leaf = std::ffi::CString::new(name.as_bytes())?;
+            // cap-fs-ext 3 uses a rustix chmodat implementation that rejects
+            // NOFOLLOW on Linux. The native libc wrapper supports it.
+            // SAFETY: a held directory fd and one NUL-terminated leaf name;
+            // NOFOLLOW forbids changing a raced symlink's target.
+            let changed = unsafe {
+                libc::fchmodat(
+                    parent.as_raw_fd(),
+                    leaf.as_ptr(),
+                    ((meta.permissions().mode() & 0o777) | 0o700) as libc::mode_t,
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if changed != 0 {
+                return Err(io::Error::last_os_error());
+            }
             let dir = parent.open_dir_nofollow(name)?;
             for entry in dir.entries()? {
                 let entry = entry?;
