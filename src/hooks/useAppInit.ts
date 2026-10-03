@@ -25,6 +25,7 @@ import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, rpc, subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { classifyFile, isImageFile } from "../utils/filePreview";
+import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
@@ -559,19 +560,21 @@ export async function initApp(deps: AppInitDeps) {
 	replaceMcpToastListener((event) => {
 		const { title, message, level, sound, origin_repo_path, origin_session_id } = event.payload;
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
-		// The repo is not glued into the message any more — the toast renders it as
-		// its own badge, so an unregistered origin still names its repo and a
-		// registered one does not say it twice.
-		// Still only a REGISTERED repo: this field scopes the toast (and the bell
-		// item mirrored from it), so an unregistered cwd must not become a repo key.
+		// Backend notifications stay in the bell; they never cover the active input.
+		// Only a registered repo may scope a bell item.
 		const repoPath = resolveRepoForCwd(origin_repo_path) ?? undefined;
 		const visibleMessage = message ?? "";
-		const duplicate = toastsStore.hasVisible(title, visibleMessage, safeLevel, repoPath);
-		// repoPath is already undefined without an origin, and the session id is
-		// independent of it — an agent can be bound to a PTY whose cwd resolves to
-		// no registered repo — so both ride along on one call.
-		toastsStore.add(title, visibleMessage, safeLevel, false, undefined, undefined, repoPath, origin_session_id);
-		if (!duplicate && isNotificationSound(sound)) void notificationsStore.play(sound);
+		const action = origin_session_id
+			? {
+					label: "Open terminal",
+					onClick: () => {
+						const id = terminalsStore.findBySessionId(origin_session_id);
+						if (id) navigateToTerminal(id);
+					},
+				}
+			: undefined;
+		const noticeId = toastsStore.addToBell(title, visibleMessage, safeLevel, repoPath, action, origin_session_id);
+		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
@@ -625,6 +628,17 @@ export async function initApp(deps: AppInitDeps) {
 		// sessions. The tab is docked but never selected: an MCP spawn must
 		// not take over the pane the user is working in.
 		if (agent_type) {
+			toastsStore.addToBell(
+				"Agent started",
+				display_name || agent_type,
+				"info",
+				resolveRepoForCwd(cwd ?? "") ?? undefined,
+				{
+					label: "Open terminal",
+					onClick: () => navigateToTerminal(id),
+				},
+				session_id,
+			);
 			// In split mode, ensure there is an active group so assignTabToActiveGroup
 			// doesn't silently no-op and leave the tab invisible.
 			if (paneLayoutStore.isSplit() && !paneLayoutStore.state.activeGroupId) {

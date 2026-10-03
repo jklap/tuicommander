@@ -17,7 +17,7 @@ tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
-strip-ansi-escapes = "0.2"
+tuic-ansi = { path = "../tuic-ansi" }
 tuic-test-support = { path = "../tuic-test-support" }
 
 [lints]

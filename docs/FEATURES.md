@@ -630,7 +630,8 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **PR Updates section** — types: Merged, Closed, Conflicts, CI Failed, CI Passed, Changes Requested, Ready
 - **Git section** — background git operation results (push, pull, fetch) with success/failure status
 - **Worktrees section** — worktree creation events (from MCP/agent)
-- **Messages section** — every toast, mirrored as it is raised, so a message that faded while the user looked elsewhere stays readable. Level and action carry over. Agent-raised MCP toasts derive their repository from the caller's session/cwd, display its name, and retain repository scope in the bell. Clicking a toast body dismisses it without navigation; **Go to repo** navigates explicitly. Controlled by "Keep toasts in the bell" (Settings > Notifications), on by default
+- **Messages section** — agent/MCP notices and agent spawns go directly to the bell, with repository scope and an explicit **Open terminal** action when a session is known. Consecutive identical notices from the same origin within five seconds produce one item and one requested sound. User-action toasts are also retained when **Keep toasts in the bell** is enabled. Overflow from the two-card limit is retained even with that setting off; dedicated-domain toasts that explicitly opt out of Messages stay visible or queued.
+- **Transient toast placement** — top-right of the terminal area, offset left of a docked panel, with at most two visible cards. Same-kind notices in the same repository/session within five seconds show a ×N summary; every new member restarts its dismissal timer. Errors take a visible slot ahead of informational cards. Tall cards scroll within the upper region so their action buttons remain reachable without covering the bottom input. Clicking a card dismisses it; navigation uses its explicit action.
 - **Plugin activity sections** — registered by plugins via activityStore
 - Click PR notification: opens full PR detail popover for that branch
 - Individual dismiss (×) per notification, section "Dismiss All", auto-dismiss after 5min focused time
@@ -2055,7 +2056,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - In the desktop app, an unfocused agent question also sends a native OS notification naming its terminal. The Tauri notification plugin handles desktop delivery; macOS retains the native response handle through a desktop command so a click returns to the terminal. Permission is checked once, and focused windows and repeated notices within five seconds are suppressed
 - **Sounds:** `question` (C5→E5 chime), `completion` (C5→E5→G5 arpeggio), `error` (E4→C4), `warning` (A4 double-tap), `info` (single G5 pluck), and `attention` — a triangular G4→G4→E5 callback with two short knocks and a longer rise. Native and browser/PWA playback share the motif and 0.8 gain; each engine applies its own envelope. The repeated opening is immediately recognizable while the softer timbre avoids the old square buzzer's harshness. Meant for an agent that is working unattended and is blocked on the user
 - Each sound has its own on/off toggle and Test button in Settings > Notifications, and all of them honour the global volume and chosen output device
-- **Agents can raise them over MCP**: `ui action=toast sound="attention"` (see 19.x `ui` tool). `sound: true` still means "the tone matching `level`"; a name overrides it. The sound plays through this scheme, so a muted sound stays muted no matter who asked for it
+- **Agents can raise them over MCP**: `ui action=toast sound="attention"` (see 19.x `ui` tool). `sound: true` still means "the tone matching `level`"; a name overrides it. These agent notices appear in the bell rather than as transient toasts; consecutive identical notices within five seconds play once. The sound plays through this scheme, so a muted sound stays muted no matter who asked for it
 
 ### 18.10 Visual Polish
 - Frosted glass bottom tabs: `backdrop-filter: blur(20px) saturate(1.8)` with semi-transparent background
@@ -2543,3 +2544,7 @@ profile rules or allow/deny policy in `session/new`.
 - On desktop, `done` and `blocked` entries also send a native OS notification with the project and entry text while TUICommander is unfocused. A macOS click opens Progress at that project and terminal. `intent`, hand-off, and message entries remain silent; identical notices within five seconds are coalesced
 - The notification bell always offers Terminal Progress, including with zero unread updates; `Cmd/Ctrl+Shift+P` and the command palette open the same dialog
 - `progress_tracking` gate: a global setting ANDed with a per-agent override. Global off removes the tool from every agent's tool list
+
+### Answers-only View
+
+Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marked answers and their tracked prompts. Turns without marked answers are omitted. Output before the first tracked prompt remains available as a prompt-less turn, from the retained history base. If no answers qualify, the view shows a one-line notice. Toggle the view again to return to the terminal.
