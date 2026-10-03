@@ -1114,3 +1114,7 @@ Plan runs, their sequenced event history, idempotent command receipts, node atte
 | `get_claude_session_stats(scope)` | `claude_usage.rs` | Scan JSONL transcripts for aggregated token/session stats |
 | `get_claude_project_list()` | `claude_usage.rs` | List Claude project slugs with session counts |
 | `fetch_plugin_registry()` | `registry.rs` | Fetch remote plugin registry index |
+
+### Workflow recovery boundaries
+
+Runtime reconciliation refreshes integrated dependency projections without interrupting live attempts or marking their in-flight effects uncertain. The first workflow store open after a process restart uses a separate recovery path that interrupts old attempts and marks intended effects uncertain. A failed run is logged and skipped so other runs can recover. Startup dependency refresh still invokes Git; moving those probes outside write transactions requires the freshness contract tracked in story 959-c69c.

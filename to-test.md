@@ -4511,3 +4511,7 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 ## Workflow merge-tree verification (story 957-dc59) — Rust restart required
 
 - [ ] After Boss restarts the backend, use disposable repositories to verify a clean checked merge receives a receipt, an extra integration-time file does not, and a manually resolved conflict requests separate review. The running Rust backend cannot load the change without a manual restart.
+
+## Workflow recovery boundaries (story 960-8670) — Rust restart required
+
+- [ ] After Boss restarts the backend, verify restart recovery marks old attempts interrupted. On disposable active runs, a runtime reconciliation must preserve healthy attempts and intended effects; one corrupt run must not prevent a healthy run from recovering. Startup Git-probe latency remains pending story 959-c69c.
