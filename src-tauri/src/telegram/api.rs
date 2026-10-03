@@ -7,12 +7,8 @@ use zeroize::Zeroizing;
 /// Bound response allocation before any update reaches the mail port.
 pub(super) const RESPONSE_LIMIT: usize = 1024 * 1024;
 
-/// One update has no documented byte bound. This finite recovery budget allows
-/// unusually large updates without turning batch recovery into unbounded allocation;
-/// an update above 8 MiB requires explicit operator recovery, never a silent skip.
-pub(super) const SINGLE_UPDATE_LIMIT: usize = 8 * 1024 * 1024;
-/// Telegram permits at most 100 updates per request.
-pub(super) const BATCH_LIMIT: u8 = 100;
+/// Ten updates bound ordinary escaped text batches below the 1 MiB cap.
+const BATCH_LIMIT: u8 = 10;
 
 /// Shared production configuration seam; tests seed a proxy before applying it.
 pub(super) fn secure_client_builder(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
@@ -76,23 +72,10 @@ impl BotApi {
     }
 
     pub(crate) async fn get_updates(&self, offset: i64, timeout: u8) -> Result<Vec<Value>, Error> {
-        self.get_updates_with_limit(offset, timeout, if offset == -1 { 1 } else { BATCH_LIMIT })
-            .await
-    }
-
-    pub(super) async fn get_updates_with_limit(
-        &self,
-        offset: i64,
-        timeout: u8,
-        limit: u8,
-    ) -> Result<Vec<Value>, Error> {
-        if timeout > 25
-            || offset < -1
-            || !(1..=BATCH_LIMIT).contains(&limit)
-            || (offset == -1 && limit != 1)
-        {
+        if timeout > 25 || offset < -1 {
             return Err(Error::Config);
         }
+        let limit = if offset == -1 { 1 } else { BATCH_LIMIT };
         // Reading the allowlist here also revokes pending network work when its
         // source is missing/invalid. The caller checks each incoming chat again.
         self.paths.allowlist()?;
@@ -119,15 +102,10 @@ impl BotApi {
         if status != 200 && status != 429 {
             return Err(Error::Rejected(status));
         }
-        let response_limit = if limit == 1 {
-            SINGLE_UPDATE_LIMIT
-        } else {
-            RESPONSE_LIMIT
-        };
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
-            if body.len().saturating_add(chunk.len()) > response_limit {
-                return Err(Error::ResponseTooLarge);
+            if body.len().saturating_add(chunk.len()) > RESPONSE_LIMIT {
+                return Err(Error::Protocol);
             }
             body.extend_from_slice(&chunk);
         }

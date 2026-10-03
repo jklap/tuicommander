@@ -4480,4 +4480,4 @@ or credential is touched.
 - [ ] Telegram offline adapter boundaries (#1438-79b4): after a future rebuild, native startup remains disabled until stable-ID mail integration lands; no Telegram polling or secret reads are wired by slices 1–2.
 
 
-- [ ] Telegram slices 1–2 polling recovery: after the next Rust rebuild and later native integration, verify visible in-memory 403/404/oversize-update stops, bounded retries and alert-driven cursor reset. Offline adapter tests cover the cursor/network/mail-port boundary; daemon startup and operator UI remain deferred. Rust changes require Boss's manual restart to load.
+- [ ] Telegram slices 1–2 polling recovery: after the next Rust rebuild and later native integration, verify visible in-memory 403/404 stops, fixed ten-update batches, bounded retries and alert-driven cursor reset. Offline adapter tests cover the cursor/network/mail-port boundary; daemon startup and operator UI remain deferred. Rust changes require Boss's manual restart to load.

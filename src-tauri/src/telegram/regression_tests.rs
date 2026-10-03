@@ -56,6 +56,18 @@ async fn rejection_and_protocol_failures_back_off_exponentially_then_reset_on_co
             Error::Rejected(422),
         ),
         (StatusCode::OK, json!({"ok":true}), Error::Protocol),
+        // Synthetic adversarial payload: exceeding the retained 1 MiB cap is
+        // an ordinary protocol error, with no alternate allocation budget.
+        (
+            StatusCode::OK,
+            json!({"ok":true,"result":[{"update_id":7,"padding":"x".repeat(1024*1024)}]}),
+            Error::Protocol,
+        ),
+        (
+            StatusCode::OK,
+            json!({"ok":true,"result":(0..11).map(|id| json!({"update_id":id})).collect::<Vec<_>>()}),
+            Error::Protocol,
+        ),
         (
             StatusCode::OK,
             json!({"ok":true,"result":[{"update_id":-1}]}),

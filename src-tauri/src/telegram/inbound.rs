@@ -1,4 +1,3 @@
-use super::api::BATCH_LIMIT;
 use super::backoff::Backoff;
 use super::mail::{MailPort, Update};
 use super::{BotApi, Config, Error, Owner, Paths, offset};
@@ -18,7 +17,6 @@ pub(crate) struct Inbound<P: MailPort> {
     port: P,
     backoff: Backoff,
     stopped: Option<Error>,
-    batch_limit: u8,
 }
 impl<P: MailPort> Inbound<P> {
     pub(crate) fn with_port(paths: Paths, port: P) -> Result<Option<Self>, Error> {
@@ -35,7 +33,6 @@ impl<P: MailPort> Inbound<P> {
             port,
             backoff: Backoff::default(),
             stopped: None,
-            batch_limit: BATCH_LIMIT,
         }))
     }
     #[cfg(test)]
@@ -60,23 +57,12 @@ impl<P: MailPort> Inbound<P> {
         match self.poll_once().await {
             Ok(poll) => {
                 self.backoff.reset();
-                self.batch_limit = BATCH_LIMIT;
                 Ok(poll)
             }
-            Err(mut error) => {
-                if error == Error::ResponseTooLarge {
-                    if self.batch_limit == 1 {
-                        error = Error::OversizeUpdate;
-                    } else {
-                        self.batch_limit = (self.batch_limit / 2).max(1);
-                    }
-                }
+            Err(error) => {
                 if matches!(
                     error,
-                    Error::Unauthorized
-                        | Error::Conflict
-                        | Error::Rejected(403 | 404)
-                        | Error::OversizeUpdate
+                    Error::Unauthorized | Error::Conflict | Error::Rejected(403 | 404)
                 ) {
                     self.stopped = Some(error);
                     tracing::error!(source="telegram",error=%error,
@@ -85,9 +71,7 @@ impl<P: MailPort> Inbound<P> {
                 }
                 let delay = self.backoff.failed(error);
                 match error {
-                    Error::RateLimited(_) | Error::Transport | Error::ResponseTooLarge => {
-                        Ok(Poll::Backoff(delay))
-                    }
+                    Error::RateLimited(_) | Error::Transport => Ok(Poll::Backoff(delay)),
                     _ => Err(error),
                 }
             }
@@ -102,16 +86,9 @@ impl<P: MailPort> Inbound<P> {
             return Err(Error::State);
         }
         let saved = offset::read(&self.paths);
-        if saved.is_none() {
-            self.batch_limit = 1;
-        }
         let values = self
             .api
-            .get_updates_with_limit(
-                saved.unwrap_or(-1),
-                if saved.is_none() { 0 } else { 25 },
-                if saved.is_none() { 1 } else { self.batch_limit },
-            )
+            .get_updates(saved.unwrap_or(-1), if saved.is_none() { 0 } else { 25 })
             .await?;
         if saved.is_none() {
             let next = match values.last() {
@@ -157,8 +134,10 @@ impl<P: MailPort> Inbound<P> {
                 self.port.offer(&mail).await?;
                 accepted += 1;
             }
-            offset::write(&self.paths, candidate)?;
             next = candidate;
+        }
+        if Some(next) != saved {
+            offset::write(&self.paths, next)?;
         }
         Ok(Poll::Accepted(accepted))
     }
