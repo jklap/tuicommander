@@ -1,6 +1,6 @@
 use alacritty_terminal::grid::{Dimensions, Grid, ReflowMode};
-use alacritty_terminal::index::Line;
-use alacritty_terminal::term::cell::Cell;
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::cell::{Cell, Flags};
 use tuic_terminal::terminal_grid::TerminalGrid;
 
 // Catches flagging the top row unknown when ED 3 purges history that ED 2 just pushed out of a
@@ -91,9 +91,31 @@ fn alternate_screen_reentry_starts_with_known_origin() {
 fn dropping_all_history_keeps_evicted_predecessor_unknown() {
     let mut grid: Grid<Cell> = Grid::new(3, 10, 2);
     for _ in 0..5 {
+        grid[Line(0)][Column(0)].c = 'x';
         grid.scroll_up(&(Line(0)..Line(3)), 1);
     }
     assert_eq!(grid.history_size(), 2);
+    // The row that becomes the oldest after the drop carries content, so it keeps its flag.
+    grid[Line(0)][Column(0)].c = 'y';
+    assert_eq!(grid.drop_newest_history(2), 2);
+    assert_eq!(grid.history_size(), 0);
+    assert!(
+        grid[grid.topmost_line()].copy_origin_unknown,
+        "evicted predecessor must stay unknown after the history is dropped"
+    );
+}
+
+// Same, with blank rows that only carry WRAPLINE: they are still continuation provenance.
+#[test]
+fn dropping_all_history_keeps_evicted_wrapped_predecessor_unknown() {
+    let mut grid: Grid<Cell> = Grid::new(3, 10, 2);
+    for _ in 0..5 {
+        grid[Line(0)][Column(9)].flags.insert(Flags::WRAPLINE);
+        grid.scroll_up(&(Line(0)..Line(3)), 1);
+    }
+    assert_eq!(grid.history_size(), 2);
+    // The row that becomes the oldest after the drop carries content, so it keeps its flag.
+    grid[Line(0)][Column(0)].c = 'y';
     assert_eq!(grid.drop_newest_history(2), 2);
     assert_eq!(grid.history_size(), 0);
     assert!(
