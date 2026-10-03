@@ -342,3 +342,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "request_boundary_critic_tests.rs"]
+mod critic_tests;
