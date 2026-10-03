@@ -9277,15 +9277,12 @@ fn run_claimed_injection(
     claim: InjectionClaim,
     kind: ClaimedInjectionKind,
 ) -> InjectionOutcome {
-    // Confirmation needs the child's screen and output; a session without them
-    // keeps the write-only outcome.
-    let observable = state.grid.vt_log_buffers.contains_key(session_id)
-        && state.session_maps.output_buffers.contains_key(session_id);
-    let outcome = if observable {
-        submit_and_confirm(state, session_id, text).0
-    } else {
-        write_agent_command_with_boundary(state, session_id, text).0
-    };
+    // Write-only on purpose: notices (lifecycle, wake, mail, urgent) and voice
+    // turns run on the single FIFO `tuic-injection` worker or a caller that must
+    // not stall, and a silent agent would hold it for the whole confirmation
+    // window. Confirmation belongs to `flush_pending_injections_blocking` and
+    // MCP submit.
+    let outcome = write_agent_command_with_boundary(state, session_id, text).0;
     apply_claimed_injection_outcome(state, session_id, text, claim, outcome, kind)
 }
 
