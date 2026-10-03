@@ -1601,6 +1601,11 @@ pub(crate) struct SilenceState {
     /// reader paints Ready and Working before the confirmation worker wakes.
     last_ready_screen_offset: u64,
     last_working_screen_offset: u64,
+    /// Ring offset when the latest hook `state=busy` was handled, kept after a
+    /// Stop hook clears the busy evidence so a confirmation worker still sees
+    /// the turn. Hooks run before the reader writes their own chunk to the ring,
+    /// so a busy carried by the chunk after Enter is stamped AT the Enter offset.
+    last_hook_busy_offset: Option<u64>,
     /// Recent user request to interrupt (Ctrl-C or bare Escape). This never
     /// changes shell state by itself; it only strengthens a matching interrupted
     /// screen emitted by the agent.
@@ -1696,6 +1701,7 @@ impl SilenceState {
             cached_screen_activity: AgentScreenActivity::Unknown,
             last_ready_screen_offset: 0,
             last_working_screen_offset: 0,
+            last_hook_busy_offset: None,
             interrupt_requested_at: None,
             screen_ready_pending_since: None,
             active_injection_claim: None,
@@ -4480,6 +4486,13 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
         }
         if let Some(silence) = silence_guard.as_mut() {
             silence.note_explicit_state(target, hook_state);
+            if hook_state && target == SHELL_BUSY {
+                silence.last_hook_busy_offset = state
+                    .session_maps
+                    .output_buffers
+                    .get(session_id)
+                    .map(|ring| ring.lock().total_written);
+            }
             if target == SHELL_BUSY {
                 invalidate_background_probe_boundary_locked(state, session_id);
             }
@@ -9307,8 +9320,49 @@ fn write_agent_command_with_boundary(
     (InjectionOutcome::Submitted, acknowledgement_offset)
 }
 
-fn write_claimed_agent_command(state: &AppState, session_id: &str, text: &str) -> InjectionOutcome {
-    write_agent_command_with_boundary(state, session_id, text).0
+/// The submit rule for flush and MCP submit (queued input, brief): write, wait
+/// for the child to confirm the turn started, and send at most one more Enter
+/// when the composer still holds the text. Lifecycle notices and voice are
+/// write-only and never reach this function. Returns the outcome and how the
+/// retry went (`none`, `confirmed`, `unconfirmed`).
+fn submit_and_confirm(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+) -> (InjectionOutcome, &'static str) {
+    let initial_screen = agent_submission_ack_kind(state, session_id);
+    let legacy_write = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| {
+            matches!(
+                agent_submit_profile(session.agent_type.as_deref()).confirmation,
+                SubmitConfirmation::LegacyWrite
+            )
+        });
+    let (write_outcome, acknowledgement_offset) =
+        write_agent_command_with_boundary(state, session_id, text);
+    let mut enter_retry = "none";
+    let outcome = if write_outcome == InjectionOutcome::Submitted
+        && !legacy_write
+        && !wait_for_queued_submission(state, session_id, acknowledgement_offset, initial_screen)
+    {
+        if retry_enter_for_retained_composer(state, session_id, text, initial_screen) {
+            enter_retry = "confirmed";
+            InjectionOutcome::Submitted
+        } else {
+            if composer_retains_text(state, session_id, text) {
+                enter_retry = "unconfirmed";
+            }
+            InjectionOutcome::Uncertain(
+                "Enter was written, but agent submission was not confirmed".into(),
+            )
+        }
+    } else {
+        write_outcome
+    };
+    (outcome, enter_retry)
 }
 
 fn commit_injection_claim(state: &AppState, session_id: &str, claim: InjectionClaim) {
@@ -9343,7 +9397,12 @@ fn run_claimed_injection(
     claim: InjectionClaim,
     kind: ClaimedInjectionKind,
 ) -> InjectionOutcome {
-    let outcome = write_claimed_agent_command(state, session_id, text);
+    // Write-only on purpose: notices (lifecycle, wake, mail, urgent) and voice
+    // turns run on the single FIFO `tuic-injection` worker or a caller that must
+    // not stall, and a silent agent would hold it for the whole confirmation
+    // window. Confirmation belongs to `flush_pending_injections_blocking` and
+    // MCP submit.
+    let outcome = write_agent_command_with_boundary(state, session_id, text).0;
     apply_claimed_injection_outcome(state, session_id, text, claim, outcome, kind)
 }
 
@@ -9888,7 +9947,7 @@ pub(crate) fn flush_pending_injections(
 /// and keep the text in its composer. True when the tail of `text` is still on
 /// the tracked screen, or a paste placeholder holds the composer. Only Codex is probed:
 /// an Enter on its empty composer is a no-op, so a stale echo of already-submitted text costs nothing.
-fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool {
+pub(crate) fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool {
     let is_codex = state
         .session_maps
         .session_states
@@ -9913,7 +9972,8 @@ fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool
     }
     state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
         let rows = vt.lock().screen_rows();
-        squash(&rows.join("\n")).contains(&tail) || composer_holds_paste_placeholder(&rows)
+        squash(&composer_rows(&rows).join("\n")).contains(&tail)
+            || composer_holds_paste_placeholder(&rows)
     })
 }
 
@@ -9923,18 +9983,33 @@ fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool
 /// must not draw a second Enter). A composer wrapped past the prompt window has no
 /// findable `›` row, so the bottom rows are searched instead.
 fn composer_holds_paste_placeholder(rows: &[String]) -> bool {
+    composer_rows(rows)
+        .iter()
+        .any(|row| row.contains(CODEX_PASTE_PLACEHOLDER))
+}
+
+/// The rows that can hold the composer text. With a live `›` row found, only its
+/// block counts: Codex echoes accepted text as `› <text>` in the transcript above
+/// an empty composer, and that echo is not retained text. A composer wrapped past
+/// the prompt window has no findable `›` row, so the bottom rows are used instead.
+fn composer_rows(rows: &[String]) -> Vec<&str> {
     if let Some(prompt) = find_codex_prompt_row(rows) {
         return rows[prompt..]
             .iter()
             .enumerate()
             .take_while(|(offset, row)| *offset == 0 || !row.trim().is_empty())
-            .any(|(_, row)| row.contains(CODEX_PASTE_PLACEHOLDER));
+            .map(|(_, row)| row.as_str())
+            .collect();
     }
-    rows.iter()
+    let mut bottom: Vec<&str> = rows
+        .iter()
         .rev()
         .filter(|row| !row.trim().is_empty())
         .take(COMPOSER_BOTTOM_ROWS)
-        .any(|row| row.contains(CODEX_PASTE_PLACEHOLDER))
+        .map(String::as_str)
+        .collect();
+    bottom.reverse();
+    bottom
 }
 
 /// What Codex shows in its composer in place of a long pasted text.
@@ -10014,7 +10089,11 @@ fn wait_for_queued_submission(
                 .session_maps
                 .silence_states
                 .get(session_id)
-                .is_some_and(|silence| silence.lock().busy_source_is("hook-busy"));
+                .is_some_and(|silence| {
+                    let silence = silence.lock();
+                    silence.busy_source_is("hook-busy")
+                        || silence.last_hook_busy_offset.is_some_and(|at| at >= offset)
+                });
             let screen_state = agent_submission_ack_kind(state, session_id);
             let fresh_working_transition = state
                 .session_maps
@@ -10025,10 +10104,20 @@ fn wait_for_queued_submission(
                     silence.last_ready_screen_offset > offset
                         && silence.last_working_screen_offset > silence.last_ready_screen_offset
                 });
+            // A Working screen recorded after the Enter boundary proves the turn
+            // started even when a later screen (question overlay, ready) already
+            // replaced it before this observer ran.
+            let working_since_enter = state
+                .session_maps
+                .silence_states
+                .get(session_id)
+                .is_some_and(|silence| silence.lock().last_working_screen_offset > offset);
             let screen_confirms = match profile.confirmation {
+                SubmitConfirmation::WorkingScreen if initial_screen != "working_screen" => {
+                    screen_state == "working_screen" || working_since_enter
+                }
                 SubmitConfirmation::WorkingScreen => {
-                    screen_state == "working_screen"
-                        && (initial_screen != "working_screen" || fresh_working_transition)
+                    screen_state == "working_screen" && fresh_working_transition
                 }
                 SubmitConfirmation::PromptGone => {
                     initial_screen == "ready_screen" && screen_state == "terminal_output"
@@ -10123,38 +10212,7 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         );
         return;
     };
-    let initial_screen = agent_submission_ack_kind(state, session_id);
-    let legacy_write = state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .is_some_and(|session| {
-            matches!(
-                agent_submit_profile(session.agent_type.as_deref()).confirmation,
-                SubmitConfirmation::LegacyWrite
-            )
-        });
-    let (write_outcome, acknowledgement_offset) =
-        write_agent_command_with_boundary(state, session_id, injection.text());
-    let mut enter_retry = "none";
-    let outcome = if write_outcome == InjectionOutcome::Submitted
-        && !legacy_write
-        && !wait_for_queued_submission(state, session_id, acknowledgement_offset, initial_screen)
-    {
-        if retry_enter_for_retained_composer(state, session_id, injection.text(), initial_screen) {
-            enter_retry = "confirmed";
-            InjectionOutcome::Submitted
-        } else {
-            if composer_retains_text(state, session_id, injection.text()) {
-                enter_retry = "unconfirmed";
-            }
-            InjectionOutcome::Uncertain(
-                "Enter was written, but agent submission was not confirmed".into(),
-            )
-        }
-    } else {
-        write_outcome
-    };
+    let (outcome, enter_retry) = submit_and_confirm(state, session_id, injection.text());
     let outcome = apply_claimed_injection_outcome(
         state,
         session_id,
@@ -13163,3 +13221,9 @@ where
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod submit_confirmation_critic_tests;
+
+#[cfg(test)]
+mod submit_confirmation_critic2_tests;
