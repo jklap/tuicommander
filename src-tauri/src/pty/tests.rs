@@ -11353,12 +11353,13 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "codex-ready-after-idle";
     agent_session(&state, sid, SHELL_BUSY);
-    state
-        .session_maps
-        .session_states
-        .get_mut(sid)
-        .unwrap()
-        .agent_type = Some("codex".into());
+    {
+        // The recording writer uses a shell child, not the captured agent.
+        // The explicitly seeded identity models a configured launch preset.
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("codex".into());
+        session.agent_type_from_run_config = true;
+    }
     let (writes, received) = std::sync::mpsc::channel();
     insert_session_with_writer(&state, sid, Box::new(WriteChannel(writes)), TtyMode::Raw);
 
@@ -16227,12 +16228,13 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
     let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
     let sid = "opencode-mini-queue";
     let (state, silence) = chunk_trace_state(sid);
-    state
-        .session_maps
-        .session_states
-        .get_mut(sid)
-        .unwrap()
-        .agent_type = Some("opencode".into());
+    {
+        // The recording writer uses a shell child, not the captured agent.
+        // The explicitly seeded identity models a configured launch preset.
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("opencode".into());
+        session.agent_type_from_run_config = true;
+    }
     state
         .grid
         .vt_log_buffers
