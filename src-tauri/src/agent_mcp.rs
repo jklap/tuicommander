@@ -4883,4 +4883,19 @@ mod tests {
             reader.join().unwrap();
         });
     }
+
+    /// Catches: `copy_verified_bridge` wiring the three digests wrongly (e.g. comparing the
+    /// expected digest with itself), which the pure `verified_revision` table cannot see.
+    #[test]
+    fn copy_verified_bridge_rejects_a_source_changed_after_the_initial_hash() {
+        use sha2::{Digest, Sha256};
+        let (_guard, config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"original executable bytes");
+        let digest = Sha256::digest(b"original executable bytes");
+        std::fs::write(&source, b"source replaced while linking").unwrap();
+        let mut temp = tempfile::NamedTempFile::new_in(config_dir.path()).unwrap();
+        let error = copy_verified_bridge(&source, &mut temp, &digest).unwrap_err();
+        assert!(error.contains("changed during installation"), "{error}");
+    }
 }
