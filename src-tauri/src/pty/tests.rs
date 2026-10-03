@@ -21195,3 +21195,39 @@ fn configured_agent_seen_then_exited_to_shell_is_not_submittable_or_wakeable() {
     assert!(!should_inject_now(&state, sid));
     assert!(shell.bytes.lock().unwrap().is_empty());
 }
+
+/// Catches: treating an unclassified startup helper as unseen leaves the preset
+/// armed forever, allowing unattended submission into its returned shell.
+/// Early disarming is the intentional safe trade-off for direnv/nvm hooks.
+#[cfg(unix)]
+#[test]
+fn non_shell_startup_helper_disarms_preset_and_refuses_submit_after_shell_return() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "preset-startup-helper";
+    let helper = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "direnv");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    let seen = state.session_maps.session_states.get(sid).unwrap().clone();
+    assert!(seen.agent_foreground_observed);
+    drop(helper);
+    let shell = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    state.session_maps.session_states.insert(sid.into(), seen);
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe shell command"),
+        AgentSubmissionWrite::Rejected {
+            reason: "not_managed_agent",
+            ..
+        }
+    ));
+    assert!(!should_inject_now(&state, sid));
+    assert!(shell.bytes.lock().unwrap().is_empty());
+}
