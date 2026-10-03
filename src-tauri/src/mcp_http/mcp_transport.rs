@@ -10853,6 +10853,9 @@ mod tests {
         state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState {
+                // This composer shim represents a known direct agent root;
+                // foreground discovery is not part of the delivery fixture.
+                spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
                 agent_type: Some("codex".to_string()),
                 ..Default::default()
             },
@@ -15560,6 +15563,9 @@ mod tests {
         state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState {
+                // This composer shim represents a known direct agent root;
+                // foreground discovery is not part of the delivery fixture.
+                spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
                 agent_type: Some(agent_type.to_string()),
                 suggested_actions: Some(vec!["old completion".to_string()]),
                 ..Default::default()
