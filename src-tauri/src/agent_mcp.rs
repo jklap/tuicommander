@@ -4774,7 +4774,12 @@ mod tests {
             seed_command(&config, wrapper.to_str().unwrap());
             let before = std::fs::read(&config).unwrap();
             ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at(config.clone()))]);
-            assert_eq!(std::fs::read(&config).unwrap(), before, "{}", wrapper.display());
+            assert_eq!(
+                std::fs::read(&config).unwrap(),
+                before,
+                "{}",
+                wrapper.display()
+            );
         }
         assert!(!config_dir.path().join("mcp-bridge").exists());
     }
@@ -4790,15 +4795,24 @@ mod tests {
         seed_command(&config, source.to_str().unwrap());
         ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at(config.clone()))]);
         let installed = command_at_spec(&spec_at(config.clone()));
-        assert!(installed.starts_with(config_dir.path().to_str().unwrap()), "{installed}");
+        assert!(
+            installed.starts_with(config_dir.path().to_str().unwrap()),
+            "{installed}"
+        );
         let text = std::fs::read(&config).unwrap();
         let config_mtime = std::fs::metadata(&config).unwrap().modified().unwrap();
         let bridge_mtime = std::fs::metadata(&installed).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(30));
         ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at(config.clone()))]);
         assert_eq!(std::fs::read(&config).unwrap(), text);
-        assert_eq!(std::fs::metadata(&config).unwrap().modified().unwrap(), config_mtime);
-        assert_eq!(std::fs::metadata(&installed).unwrap().modified().unwrap(), bridge_mtime);
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().modified().unwrap(),
+            config_mtime
+        );
+        assert_eq!(
+            std::fs::metadata(&installed).unwrap().modified().unwrap(),
+            bridge_mtime
+        );
     }
 
     /// Catches: validity checked by size/exec bit instead of content — a same-length
@@ -4842,9 +4856,18 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let _config = with_temp_config_dir();
         let dir = TempDir::new().unwrap();
-        let installed = install_bridge_binary(&fake_bridge(dir.path(), b"bridge revision")).unwrap();
-        assert_eq!(std::fs::metadata(&installed).unwrap().permissions().mode() & 0o777, 0o700);
-        assert!(!std::fs::symlink_metadata(&installed).unwrap().file_type().is_symlink());
+        let installed =
+            install_bridge_binary(&fake_bridge(dir.path(), b"bridge revision")).unwrap();
+        assert_eq!(
+            std::fs::metadata(&installed).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert!(
+            !std::fs::symlink_metadata(&installed)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         let names: Vec<_> = std::fs::read_dir(installed.parent().unwrap())
             .unwrap()
             .map(|e| e.unwrap().file_name())
