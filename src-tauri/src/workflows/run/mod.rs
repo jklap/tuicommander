@@ -13,6 +13,9 @@ pub use store::*;
 mod critic_tests;
 
 #[cfg(test)]
+mod critic_957_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::stories::{NewPlan, NewStory, StoryCommand, StoryOrigin, StoryStore};
