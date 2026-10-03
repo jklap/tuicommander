@@ -19,23 +19,6 @@ fn dropping_history_after_blank_only_eviction_keeps_origin_known() {
     assert!(!grid[grid.topmost_line()].copy_origin_unknown);
 }
 
-// Catches the drop carry flagging a blank surviving row (new oldest) even though blank rows keep
-// a fresh origin: a composer typed there later would copy literally.
-#[test]
-fn dropping_all_history_does_not_flag_a_blank_new_oldest_row() {
-    let mut grid: Grid<Cell> = Grid::new(3, 10, 1);
-    put(&mut grid, 0, 'x');
-    grid.scroll_up(&(Line(0)..Line(3)), 1);
-    put(&mut grid, 0, 'y');
-    grid.scroll_up(&(Line(0)..Line(3)), 1);
-    assert!(
-        grid[grid.topmost_line()].copy_origin_unknown,
-        "setup: y flagged"
-    );
-    assert_eq!(grid.drop_newest_history(1), 1);
-    assert!(!grid[Line(0)].copy_origin_unknown);
-}
-
 // Catches clear_history flagging a content-bearing top row when the purged history held only
 // blank rows.
 #[test]

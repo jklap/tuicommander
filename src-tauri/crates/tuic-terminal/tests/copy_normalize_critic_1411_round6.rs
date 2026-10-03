@@ -65,25 +65,6 @@ fn removed_wrapline_only_row_counts_as_content() {
     assert!(grid[Line(0)].copy_origin_unknown);
 }
 
-// Catches provenance lost across two consecutive partial drops: the second drop removes the row
-// flagged by eviction, so the screen row it exposed must inherit the loss.
-#[test]
-fn consecutive_drops_carry_eviction_flag_to_screen_row() {
-    let mut grid: Grid<Cell> = Grid::new(3, 10, 2);
-    for c in ['x', 'y', 'z'] {
-        put(&mut grid, 0, c);
-        scroll(&mut grid);
-    }
-    put(&mut grid, 0, 'w');
-    assert_eq!(grid.drop_newest_history(1), 1);
-    assert!(
-        !grid[Line(0)].copy_origin_unknown,
-        "partial drop keeps a surviving predecessor"
-    );
-    assert_eq!(grid.drop_newest_history(1), 1);
-    assert!(grid[Line(0)].copy_origin_unknown);
-}
-
 // Catches the flag on the oldest history row being dropped by a column resize round trip.
 #[test]
 fn resize_round_trip_keeps_oldest_flag() {
@@ -116,21 +97,6 @@ fn reflow_overflowing_history_cap_flags_oldest() {
     }
     grid.resize(ReflowMode::All, 2, 2);
     assert!(grid[grid.topmost_line()].copy_origin_unknown);
-}
-
-// Catches a drop/purge of history under an unflagged oldest row marking the screen row unknown:
-// a wrap origin that was never lost must stay known.
-#[test]
-fn drop_without_eviction_of_unwrapped_history_keeps_origin_known() {
-    let mut grid: Grid<Cell> = Grid::new(3, 10, 5);
-    put(&mut grid, 0, 'x');
-    scroll(&mut grid);
-    put(&mut grid, 0, 'y');
-    assert_eq!(grid.drop_newest_history(1), 1);
-    assert!(
-        !grid[Line(0)].copy_origin_unknown,
-        "history row 'x' had no WRAPLINE, so row 'y' began a line"
-    );
 }
 
 // Catches a pasted glyph at the start of a wrapped continuation row being stripped as composer

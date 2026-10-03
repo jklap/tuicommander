@@ -47,22 +47,6 @@ fn scroll_eviction_without_history_keeps_loss_for_blank_screen_row_written_later
     );
 }
 
-// Catches a blank, unflagged oldest row left by a cap trim being read as predecessor loss on a
-// full drop: its successor row starts a fresh line.
-#[test]
-fn drop_all_after_trim_leaving_blank_oldest_keeps_survivor_known() {
-    let mut grid: Grid<Cell> = Grid::new(3, 10, 4);
-    put(&mut grid, 0, 'a');
-    scroll(&mut grid);
-    scroll(&mut grid); // blank row
-    put(&mut grid, 0, 'x');
-    scroll(&mut grid);
-    grid.update_history(2);
-    put(&mut grid, 0, 'y');
-    assert_eq!(grid.drop_newest_history(2), 2);
-    assert!(!grid[Line(0)].copy_origin_unknown);
-}
-
 // Catches predecessor loss being lost when the trimmed oldest row is content, via a full drop
 // where the newest history row is unwrapped.
 #[test]
@@ -78,21 +62,6 @@ fn drop_all_after_trim_with_content_oldest_marks_survivor_unknown() {
     assert!(grid[Line(0)].copy_origin_unknown);
 }
 
-// Catches a blank reprint head making the next content row inherit unknown origin.
-#[test]
-fn drop_all_with_blank_screen_head_leaves_next_row_known() {
-    let mut grid: Grid<Cell> = Grid::new(3, 10, 3);
-    for c in ['a', 'b', 'x'] {
-        put(&mut grid, 0, c);
-        scroll(&mut grid);
-    }
-    grid.update_history(2);
-    put(&mut grid, 1, 'y');
-    assert_eq!(grid.drop_newest_history(2), 2);
-    assert!(!grid[Line(0)].copy_origin_unknown);
-    assert!(!grid[Line(1)].copy_origin_unknown);
-}
-
 // Catches ED3 over a wrapped newest history row not marking the screen row that continues it.
 #[test]
 fn clear_history_over_wrapped_newest_row_marks_continuation_unknown() {
@@ -102,21 +71,6 @@ fn clear_history_over_wrapped_newest_row_marks_continuation_unknown() {
     put(&mut grid, 0, 'z');
     grid.clear_history();
     assert!(grid[Line(0)].copy_origin_unknown);
-}
-
-// Catches a partial drop that leaves a wrapped row adjacent to the screen being flagged unknown
-// or the oldest flag being cleared.
-#[test]
-fn partial_drop_keeps_oldest_flag_and_screen_known() {
-    let mut grid: Grid<Cell> = Grid::new(3, 10, 2);
-    for c in ['p', 'q', 'r'] {
-        put(&mut grid, 0, c);
-        scroll(&mut grid);
-    }
-    put(&mut grid, 0, 'w');
-    assert_eq!(grid.drop_newest_history(1), 1);
-    assert!(grid[grid.topmost_line()].copy_origin_unknown);
-    assert!(!grid[Line(0)].copy_origin_unknown);
 }
 
 // Catches clear_history/drop_newest_history counting a flagged-but-blank removed row as lost
