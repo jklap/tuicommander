@@ -781,6 +781,12 @@ pub(super) fn spawn_pty_session(
         )
     })?;
 
+    state
+        .session_maps
+        .session_states
+        .entry(session_id.clone())
+        .or_default()
+        .spawn_root_role = crate::state::SpawnRootRole::Shell;
     let paused = Arc::new(AtomicBool::new(false));
     register_pty_session(
         &state,
@@ -2395,7 +2401,11 @@ mod tests {
         ] {
             let state = super::super::tests::test_state();
             let sid = "http-foreground-neighbour";
-            let probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, name);
+            let probe = if name == "bash" {
+                crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, name)
+            } else {
+                crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, name)
+            };
             {
                 let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
                 session.agent_type = preset.map(str::to_string);
@@ -3714,6 +3724,29 @@ mod tests {
             Ok(id) => id,
             Err(_) => return, // PTY unavailable in CI — skip gracefully
         };
+
+        // Catches: HTTP shell creation leaves the role unknown or labels its
+        // root as a direct agent, preventing shell-return revocation.
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get(&session_id)
+                .unwrap()
+                .spawn_root_role,
+            crate::state::SpawnRootRole::Shell
+        );
+        assert!(
+            state
+                .session_maps
+                .sessions
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                ._child
+                .process_id()
+                .is_some()
+        );
 
         assert!(
             state.grid.watch.contains_key(&session_id),

@@ -1455,6 +1455,20 @@ pub(crate) async fn spawn_agent(
         .try_clone_reader()
         .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
 
+    let mut session_state = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
+        ..Default::default()
+    };
+    session_state.seed_configured_agent(agent_config.agent_type.clone());
+    session_state.hook_instrumented = crate::pty::hook_instrumented_for(
+        &crate::config::load_agents_config(),
+        agent_config.agent_type.as_deref(),
+    );
+    state
+        .session_maps
+        .session_states
+        .insert(session_id.clone(), session_state);
+
     // Store session (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
     state.session_maps.sessions.insert(

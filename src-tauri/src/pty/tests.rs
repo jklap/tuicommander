@@ -21136,7 +21136,8 @@ async fn headless_foreground_timer_discovers_claude_and_reclassifies_quiet_scree
 fn configured_agent_is_submittable_during_shell_startup_before_first_observation() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "preset-shell-startup";
-    let probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let probe =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     state
         .session_maps
         .session_states
@@ -21158,7 +21159,8 @@ fn configured_agent_is_submittable_during_shell_startup_before_first_observation
 fn configured_agent_seen_then_exited_to_shell_is_not_submittable_or_wakeable() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "preset-agent-exit";
-    let agent = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+    let agent =
+        crate::test_support::ForegroundIdentityProbe::shell_parent(state.clone(), sid, "claude");
     state
         .session_maps
         .session_states
@@ -21172,7 +21174,8 @@ fn configured_agent_seen_then_exited_to_shell_is_not_submittable_or_wakeable() {
     let seen = state.session_maps.session_states.get(sid).unwrap().clone();
     assert!(seen.agent_foreground_observed);
     drop(agent);
-    let shell = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let shell =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     // Replace only the test PTY child; carry the same production identity state.
     state.session_maps.session_states.insert(sid.into(), seen);
     assert_eq!(refresh_session_agent(&state, sid), None);
@@ -21204,7 +21207,8 @@ fn configured_agent_seen_then_exited_to_shell_is_not_submittable_or_wakeable() {
 fn non_shell_startup_helper_disarms_preset_and_refuses_submit_after_shell_return() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "preset-startup-helper";
-    let helper = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "direnv");
+    let helper =
+        crate::test_support::ForegroundIdentityProbe::shell_parent(state.clone(), sid, "direnv");
     state
         .session_maps
         .session_states
@@ -21218,7 +21222,8 @@ fn non_shell_startup_helper_disarms_preset_and_refuses_submit_after_shell_return
     let seen = state.session_maps.session_states.get(sid).unwrap().clone();
     assert!(seen.agent_foreground_observed);
     drop(helper);
-    let shell = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let shell =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     state.session_maps.session_states.insert(sid.into(), seen);
     assert_eq!(refresh_session_agent(&state, sid), None);
     assert!(matches!(
@@ -21230,4 +21235,213 @@ fn non_shell_startup_helper_disarms_preset_and_refuses_submit_after_shell_return
     ));
     assert!(!should_inject_now(&state, sid));
     assert!(shell.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: a slow shell snapshot sampled before a newer agent snapshot revokes
+/// the live agent, or a late agent snapshot re-arms a newer returned shell.
+#[test]
+fn stale_foreground_snapshot_cannot_revoke_newer_agent_or_rearm_returned_shell() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "foreground-snapshot-order";
+    agent_session(&state, sid, SHELL_IDLE);
+    assert_eq!(
+        apply_foreground_agent_observation(
+            &state,
+            sid,
+            2,
+            Some("claude".into()),
+            false,
+            false,
+            "claude".into()
+        )
+        .as_deref(),
+        Some("claude")
+    );
+    // The older sample completes after generation 2 committed.
+    assert_eq!(
+        apply_foreground_agent_observation(&state, sid, 1, None, true, false, "bash".into())
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        apply_foreground_agent_observation(&state, sid, 3, None, true, false, "bash".into()),
+        None
+    );
+    assert_eq!(
+        apply_foreground_agent_observation(
+            &state,
+            sid,
+            2,
+            Some("claude".into()),
+            false,
+            false,
+            "claude".into()
+        ),
+        None
+    );
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert_eq!(session.agent_type, None);
+    assert_eq!(session.foreground_probe_generation, 3);
+}
+
+/// Catches: a shell absent from a basename allowlist retains a discovered agent
+/// forever. The root process identity must revoke for every shell spelling.
+#[cfg(unix)]
+#[test]
+fn shell_root_identity_revokes_agent_for_ash_and_renamed_shell() {
+    for name in ["ash", "renamed-login-shell"] {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "unlisted-root-shell";
+        let probe =
+            crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, name);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("claude".into());
+        assert_eq!(refresh_session_agent(&state, sid), None);
+        assert!(!should_inject_now(&state, sid));
+        assert!(matches!(
+            write_agent_submission_to_pty(&state, sid, "unsafe"),
+            AgentSubmissionWrite::Rejected {
+                reason: "not_managed_agent",
+                ..
+            }
+        ));
+        assert!(probe.bytes.lock().unwrap().is_empty());
+    }
+}
+
+/// Catches: a bash-script wrapper is mistaken for the owning shell on macOS,
+/// never observed, and leaves its preset armed after returning to the real root.
+#[cfg(unix)]
+#[test]
+fn bash_script_wrapper_is_observed_and_revoked_only_when_its_shell_root_returns() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "bash-script-wrapper-root";
+    let mut probe = crate::test_support::ForegroundIdentityProbe::bash_wrapper(
+        state.clone(),
+        sid,
+        crate::state::SpawnRootRole::Shell,
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_foreground_observed
+    );
+    probe.return_to_root();
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(!should_inject_now(&state, sid));
+    assert!(probe.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: a nested shell opened by a direct agent revokes its identity, or
+/// receives an unattended task/mail wake intended for the parent agent.
+#[cfg(unix)]
+#[test]
+fn direct_agent_nested_subshell_holds_input_without_revoking_identity() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "direct-agent-nested-shell";
+    let mut probe = crate::test_support::ForegroundIdentityProbe::bash_wrapper(
+        state.clone(),
+        sid,
+        crate::state::SpawnRootRole::DirectProgram,
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+    assert!(!should_inject_now(&state, sid));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe child input"),
+        AgentSubmissionWrite::Rejected {
+            reason: "agent_not_ready",
+            ..
+        }
+    ));
+    assert!(probe.bytes.lock().unwrap().is_empty());
+    probe.return_to_root();
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert!(should_inject_now(&state, sid));
+}
+
+/// Catches: a mirrored/legacy session with no authoritative spawn role permits
+/// unattended input using a configured agent identity alone.
+#[cfg(unix)]
+#[test]
+fn unknown_spawn_root_role_refuses_submit_and_mail_wake() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "missing-root-role";
+    let _probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .spawn_root_role = crate::state::SpawnRootRole::Unknown;
+    assert!(!should_inject_now(&state, sid));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe"),
+        AgentSubmissionWrite::Rejected {
+            reason: "agent_not_ready",
+            ..
+        }
+    ));
 }

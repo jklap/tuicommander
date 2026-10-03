@@ -4612,7 +4612,10 @@ fn handle_agent_with_parent_cwd(
             // from the first output chunk and intent/suggest tokens are parsed
             // without waiting on foreground polling. Seeded before registration
             // because that is what publishes `session-created`.
-            let mut session_state = crate::state::SessionState::default();
+            let mut session_state = crate::state::SessionState {
+                spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
+                ..Default::default()
+            };
             if effective_agent_type.is_some() {
                 session_state.hook_instrumented =
                     crate::pty::hook_instrumented_for(&agents_cfg, effective_agent_type.as_deref());
@@ -22702,6 +22705,28 @@ mod tests {
         assert!(result.get("error").is_none(), "spawn failed: {result}");
         assert_eq!(result["name"], "linux-primary");
         let session_id = result["session_id"].as_str().unwrap();
+        // Catches: MCP direct spawn loses its root role, allowing shell-return
+        // revocation to misclassify the agent's own root process.
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .spawn_root_role,
+            crate::state::SpawnRootRole::DirectProgram
+        );
+        assert!(
+            state
+                .session_maps
+                .sessions
+                .get(session_id)
+                .unwrap()
+                .lock()
+                ._child
+                .process_id()
+                .is_some()
+        );
         let created = events
             .try_recv()
             .expect("named spawn must emit session-created");

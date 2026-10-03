@@ -484,7 +484,7 @@ Returns the current Kitty keyboard protocol flags (integer) for a session.
 GET /sessions/:id/foreground
 ```
 
-Returns the foreground process info for a session.
+Returns the foreground process info for a session. Detection uses the spawn-recorded root role and foreground process group. Returning to a shell root revokes an observed agent; a child of a direct agent holds unattended input without revoking its identity. Unknown root ownership refuses unattended input. Concurrent observations apply in generation order.
 
 ### PTY / Terminal Read State
 

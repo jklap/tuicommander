@@ -8482,6 +8482,17 @@ fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bo
     if !session_is_agent(state, session_id) {
         return false;
     }
+    if state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_none_or(|session| {
+            session.spawn_root_role == crate::state::SpawnRootRole::Unknown
+                || session.foreground_input_blocked
+        })
+    {
+        return false;
+    }
     let idle = state
         .session_maps
         .shell_states
@@ -8774,6 +8785,12 @@ pub(crate) fn agent_submission_rejection_detail(
         "partial_composer" => "The composer contains unfinished user input. Submit or clear that input before sending another command.".into(),
         "awaiting_input" => "An approval or question owns the composer. Have the user answer it, or use an explicit human reply; automated submit must wait.".into(),
         "agent_not_ready" => {
+            if state.session_maps.session_states.get(session_id).is_some_and(|session| {
+                session.spawn_root_role == crate::state::SpawnRootRole::Unknown || session.foreground_input_blocked
+            }) {
+                return "The owning process cannot accept unattended input: its root role or foreground is unavailable, or a direct agent child owns the terminal. Wait for the agent to regain foreground or use its authoritative daemon connection.".into();
+            }
+
             if state.session_maps.silence_states.get(session_id)
                 .is_some_and(|silence| silence.lock().injection_delivery_uncertain)
             {
@@ -12312,117 +12329,163 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
     }
 }
 
+static FOREGROUND_PROBE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
 /// Discover and record the foreground agent for desktop and headless consumers.
 /// Identity alone never confirms readiness or bypasses the composer guards.
 /// Returns the effective foreground detection, not the retained session identity:
 /// a shell foreground returns None even while a startup preset remains armed.
 pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Option<String> {
-    const SHELLS: &[&str] = &[
-        "zsh",
-        "bash",
-        "fish",
-        "sh",
-        "dash",
-        "ksh",
-        "csh",
-        "tcsh",
-        "nushell",
-        "nu",
-        "powershell",
-        "pwsh",
-        "cmd",
-    ];
-
-    let (detected, fg_is_shell, fg_name) = {
+    let (generation, detected, fg_is_shell, input_blocked, fg_name) = {
         let entry = state.session_maps.sessions.get(session_id)?;
         let session = entry.value().lock();
-        #[cfg(not(windows))]
-        {
-            let pgid = session.master.process_group_leader()?;
-            let name = process_name_from_pid(pgid as u32)?;
-            let is_shell = SHELLS.contains(&name.as_str());
-            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
-        }
-        #[cfg(windows)]
-        {
-            let child_pid = session._child.process_id()?;
-            let leaf = deepest_descendant_pid(child_pid)?;
-            let name = process_name_from_pid(leaf)?;
-            let is_shell = SHELLS.contains(&name.as_str());
-            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
-        }
-    };
-
-    // A non-shell helper is not evidence that the agent exited. Retain identity
-    // through transient git/rg children and configured custom wrappers.
-    let effective = detected.clone().or_else(|| {
-        if fg_is_shell {
-            return None;
-        }
-        state
+        let generation = FOREGROUND_PROBE_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let role = state
             .session_maps
             .session_states
             .get(session_id)
-            .and_then(|s| s.agent_type.clone())
-    });
-
-    if detected.is_none()
-        && !fg_is_shell
-        && effective.is_none()
-        && let Some(mut entry) = state.session_maps.session_states.get_mut(session_id)
-        && !entry.unknown_foreground_warned
-    {
-        entry.unknown_foreground_warned = true;
-        tracing::warn!(session_id, foreground_process = %fg_name, "Unrecognized non-shell foreground process; if this is an agent, Enter uses the safe gap");
-    }
-
-    // A preset survives shell startup until the agent is first observed. Shell
-    // foreground after that revokes it; unattended submit/mail cannot target
-    // the returned shell. A different observed agent drops preset provenance.
-    // Failed OS observation returned above and is not evidence of an exit.
-    let identity_changed =
-        if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id) {
-            if let Some(agent) = detected.as_ref() {
-                if entry.agent_type.as_ref() != Some(agent) {
-                    entry.agent_type_from_run_config = false;
-                }
-                entry.agent_foreground_observed = true;
-            } else if !fg_is_shell && entry.agent_type_from_run_config && effective.is_some() {
-                // Custom wrappers may never classify by name. Any non-shell
-                // carrying the preset counts as observed, so shell return revokes
-                // it. A direnv/nvm startup helper may disarm it early: fail closed
-                // rather than allow unattended submit into the returned shell.
-                entry.agent_foreground_observed = true;
-            }
-            let next = if fg_is_shell {
-                if entry.agent_type_from_run_config && !entry.agent_foreground_observed {
-                    entry.agent_type.clone()
-                } else {
-                    entry.agent_type_from_run_config = false;
+            .map(|s| s.spawn_root_role)
+            .unwrap_or_default();
+        let root = session._child.process_id();
+        #[cfg(not(windows))]
+        let foreground = session.master.process_group_leader().map(|pid| pid as u32);
+        #[cfg(windows)]
+        let foreground = root.and_then(deepest_descendant_pid);
+        match (role, root, foreground) {
+            (crate::state::SpawnRootRole::Shell, Some(root), Some(fg)) => {
+                let at_root = fg == root;
+                let name = process_name_from_pid(fg);
+                let detected = if at_root {
                     None
-                }
-            } else {
-                effective.clone()
-            };
-            if entry.agent_type != next {
-                entry.agent_type = next;
-                entry.hook_instrumented = hook_instrumented_for(
-                    &crate::config::load_agents_config(),
-                    entry.agent_type.as_deref(),
+                } else {
+                    name.as_deref().and_then(classify_agent).map(str::to_string)
+                };
+                (
+                    generation,
+                    detected,
+                    at_root,
+                    name.is_none(),
+                    name.unwrap_or_else(|| "unavailable".into()),
+                )
+            }
+            (crate::state::SpawnRootRole::DirectProgram, Some(root), Some(fg)) => {
+                let name = process_name_from_pid(root);
+                let detected = name.as_deref().and_then(classify_agent).map(str::to_string);
+                (
+                    generation,
+                    detected,
+                    false,
+                    fg != root || name.is_none(),
+                    name.unwrap_or_else(|| "unavailable".into()),
+                )
+            }
+            _ => {
+                tracing::warn!(
+                    session_id,
+                    "Foreground root role or PID unavailable; unattended agent input is held"
                 );
-                true
+                (generation, None, false, true, "unavailable".into())
+            }
+        }
+    };
+
+    apply_foreground_agent_observation(
+        state,
+        session_id,
+        generation,
+        detected,
+        fg_is_shell,
+        input_blocked,
+        fg_name,
+    )
+}
+
+/// Apply only observations newer than the last committed OS snapshot. Keeping
+/// sampling and application separate makes the cross-caller ordering explicit.
+fn apply_foreground_agent_observation(
+    state: &AppState,
+    session_id: &str,
+    generation: u64,
+    detected: Option<String>,
+    fg_is_shell: bool,
+    input_blocked: bool,
+    fg_name: String,
+) -> Option<String> {
+    let (effective, identity_changed) = {
+        let mut entry = state.session_maps.session_states.get_mut(session_id)?;
+        if generation <= entry.foreground_probe_generation {
+            return entry.foreground_probe_result.clone();
+        }
+        entry.foreground_probe_generation = generation;
+        entry.foreground_input_blocked = input_blocked;
+        // Non-shell helpers do not prove that the agent exited.
+        let effective = detected.clone().or_else(|| {
+            if fg_is_shell {
+                None
             } else {
-                false
+                entry.agent_type.clone()
+            }
+        });
+        entry.foreground_probe_result = effective.clone();
+        if detected.is_none()
+            && !fg_is_shell
+            && effective.is_none()
+            && !entry.unknown_foreground_warned
+        {
+            entry.unknown_foreground_warned = true;
+            tracing::warn!(session_id, foreground_process = %fg_name, "Unrecognized non-shell foreground process; if this is an agent, Enter uses the safe gap");
+        }
+        if let Some(agent) = detected.as_ref() {
+            if entry.agent_type.as_ref() != Some(agent) {
+                entry.agent_type_from_run_config = false;
+            }
+            entry.agent_foreground_observed = true;
+        } else if !fg_is_shell && entry.agent_type_from_run_config && effective.is_some() {
+            // Any non-shell carrying a preset counts, including unknown wrappers.
+            // direnv/nvm startup helpers may disarm early: fail closed rather than
+            // allow unattended submit into the returned shell.
+            entry.agent_foreground_observed = true;
+        }
+        let next = if fg_is_shell {
+            if entry.agent_type_from_run_config && !entry.agent_foreground_observed {
+                entry.agent_type.clone()
+            } else {
+                entry.agent_type_from_run_config = false;
+                None
             }
         } else {
-            false
+            effective.clone()
         };
+        let changed = entry.agent_type != next;
+        if changed {
+            entry.agent_type = next;
+            entry.hook_instrumented = hook_instrumented_for(
+                &crate::config::load_agents_config(),
+                entry.agent_type.as_deref(),
+            );
+        }
+        (effective, changed)
+    };
 
     // The screen may already be quiet when the process is discovered. Its
     // cached shell-era verdict is not evidence about the newly known agent.
     // Use the reader's grid -> silence lock order; future chunks share the cache.
     if identity_changed && let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
         let vt = vt.lock();
+        // A newer accepted snapshot owns the cache too. The grid lock orders
+        // reclassification; do not publish an older identity after its successor.
+        if state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_none_or(|entry| entry.foreground_probe_generation != generation)
+        {
+            return state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .and_then(|entry| entry.foreground_probe_result.clone());
+        }
         let activity = detect_agent_screen_activity_at(
             effective.as_deref(),
             &vt.screen_rows(),

@@ -126,7 +126,10 @@ pub(crate) async fn create_pty(
         .session_maps
         .terminal_rows
         .insert(session_id.clone(), std::sync::atomic::AtomicU16::new(rows));
-    let mut ss = crate::state::SessionState::default();
+    let mut ss = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::Shell,
+        ..Default::default()
+    };
     if config.agent_type.is_some() {
         ss.seed_configured_agent(config.agent_type);
         ss.hook_instrumented = hook_instrumented_for(
@@ -292,7 +295,10 @@ pub(crate) async fn create_pty_with_worktree(
         session_id.clone(),
         std::sync::atomic::AtomicU16::new(pty_rows),
     );
-    let mut ss = crate::state::SessionState::default();
+    let mut ss = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::Shell,
+        ..Default::default()
+    };
     if pty_config.agent_type.is_some() {
         ss.seed_configured_agent(pty_config.agent_type);
         ss.hook_instrumented = hook_instrumented_for(
