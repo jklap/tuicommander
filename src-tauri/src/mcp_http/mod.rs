@@ -1266,6 +1266,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/fs/copy-abs", post(fs_routes::copy_path_abs_http))
         .route("/fs/move-abs", post(fs_routes::move_path_abs_http))
         .route("/fs/transfer", post(fs_routes::fs_transfer_paths_http))
+        .route("/fs/upload-copy", post(fs_routes::upload_copy_http))
         // Claude Usage dashboard
         .route("/claude/usage", get(claude_routes::claude_usage_api))
         .route(
@@ -1492,17 +1493,26 @@ pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
 /// exercising different code (AGENTS.md, "Which timing assertions are
 /// load-bearing").
 ///
-/// Both layers are safe over SSE and WebSocket. `tower_http`'s `ResponseFuture`
-/// races its sleep only against the future that produces the `Response`; once
+/// Both layers are safe over SSE and WebSocket. The timeout races its sleep
+/// only against the future that produces the `Response`; once
 /// headers are returned the timeout is dropped and the body streams
 /// unwatched. `Sse` and `WebSocketUpgrade` both return immediately, so neither
 /// `/events` nor a PTY socket can be cut off mid-stream.
 pub(crate) fn with_server_limits(routes: Router, timeout: std::time::Duration) -> Router {
     routes
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            timeout,
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                // Upload bodies carry their own idle, size and total receive budgets.
+                // The ordinary response deadline is too short for large transfers.
+                if request.uri().path() == "/fs/upload-copy" {
+                    return next.run(request).await;
+                }
+                match tokio::time::timeout(timeout, next.run(request)).await {
+                    Ok(response) => response,
+                    Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+                }
+            },
         ))
 }
 
