@@ -349,7 +349,7 @@ struct Staging {
 }
 impl Drop for Staging {
     fn drop(&mut self) {
-        if let Err(e) = self.parent.remove_dir_all(&self.name) {
+        if let Err(e) = remove_staging(&self.parent, std::ffi::OsStr::new(&self.name)) {
             tracing::warn!(source = "remote-transfer", error = %e, "Remote upload staging cleanup failed");
         }
     }
@@ -433,6 +433,36 @@ async fn receive_body(body: Body, mut archive: Option<&mut tokio::fs::File>) -> 
     Ok(())
 }
 
+/// Archive directory modes may deliberately omit owner access. Restore it only
+/// in disposable staging, using no-follow operations on held capabilities.
+fn remove_staging(parent: &Dir, name: &std::ffi::OsStr) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use cap_fs_ext::DirExt;
+        use cap_std::fs::PermissionsExt;
+        fn restore_access(parent: &Dir, name: &std::ffi::OsStr) -> io::Result<()> {
+            let meta = parent.symlink_metadata(name)?;
+            if !meta.is_dir() {
+                return Ok(());
+            }
+            parent.set_symlink_permissions(
+                name,
+                cap_std::fs::Permissions::from_mode(meta.permissions().mode() | 0o700),
+            )?;
+            let dir = parent.open_dir_nofollow(name)?;
+            for entry in dir.entries()? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() {
+                    restore_access(&dir, &entry.file_name())?;
+                }
+            }
+            Ok(())
+        }
+        restore_access(parent, name)?;
+    }
+    parent.remove_dir_all(name)
+}
+
 /// Called before the daemon starts accepting uploads. Directory capabilities
 /// and no-follow traversal keep cleanup inside registered roots.
 pub(crate) fn sweep_staging(roots: &[String]) {
@@ -445,7 +475,7 @@ pub(crate) fn sweep_staging(roots: &[String]) {
             }
             let name = entry.file_name();
             if name.to_string_lossy().starts_with(".tuic-upload-") {
-                dir.remove_dir_all(&name)?;
+                remove_staging(dir, &name)?;
             } else {
                 // A directory replaced by a symlink during scanning is never followed.
                 let child = match dir.open_dir_nofollow(&name) {

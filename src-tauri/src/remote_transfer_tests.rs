@@ -408,7 +408,8 @@ async fn tar_permissions_preserve_exec_but_strip_privileged_and_write_bits() {
     }
 }
 
-// Catches: process termination leaving upload staging forever, or cleanup traversing an escaped link.
+// Catches: process termination leaving upload staging forever, restrictive modes blocking cleanup,
+// or cleanup following an escaped link and changing its target permissions.
 #[test]
 fn startup_sweep_removes_only_upload_directories_under_registered_roots() {
     let repo = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
@@ -424,6 +425,50 @@ fn startup_sweep_removes_only_upload_directories_under_registered_roots() {
     std::fs::create_dir(outside.path().join(".tuic-upload-outside")).unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(outside.path(), repo.path().join("escape")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(
+            repo.path()
+                .join("nested/.tuic-upload-restricted/data/locked"),
+        )
+        .unwrap();
+        std::fs::write(
+            repo.path()
+                .join("nested/.tuic-upload-restricted/data/locked/file"),
+            b"partial",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            outside.path(),
+            repo.path().join("nested/.tuic-upload-restricted/escape"),
+        )
+        .unwrap();
+        for relative in [
+            "nested/.tuic-upload-restricted/data/locked",
+            "nested/.tuic-upload-restricted/data",
+        ] {
+            std::fs::set_permissions(
+                repo.path().join(relative),
+                std::fs::Permissions::from_mode(0o000),
+            )
+            .unwrap();
+        }
+        let before = std::fs::metadata(outside.path())
+            .unwrap()
+            .permissions()
+            .mode();
+        sweep_staging(&[repo.path().to_str().unwrap().into()]);
+        assert!(!repo.path().join("nested/.tuic-upload-restricted").exists());
+        assert_eq!(
+            std::fs::metadata(outside.path())
+                .unwrap()
+                .permissions()
+                .mode(),
+            before
+        );
+    }
+    #[cfg(not(unix))]
     sweep_staging(&[repo.path().to_str().unwrap().into()]);
     assert!(!repo.path().join("nested/.tuic-upload-abandoned").exists());
     assert!(repo.path().join(".other-stage").exists());
