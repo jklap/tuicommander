@@ -437,6 +437,57 @@ mod tests {
         assert_samples(&fx.captured(), &[0.5, 0.2]);
     }
 
+    /// Catches the meter arithmetic in `process_audio_chunk` (square, mean,
+    /// `* 20.0`, `sqrt`, `clamp`) flipping: a constant 0.0125 has RMS 0.0125,
+    /// so the meter reads sqrt(0.25) = 0.5; full scale saturates at 1.0.
+    #[test]
+    fn process_audio_chunk_meter_follows_the_square_root_rms_curve() {
+        let meter = |data: &[f32]| {
+            let mut fx = ChunkFixture::new();
+            fx.process(data, 16_000, 1);
+            f32::from_bits(fx.level.load(Ordering::Relaxed))
+        };
+        assert!((meter(&[0.0125; 4]) - 0.5).abs() < 1e-3);
+        assert_eq!(meter(&[1.0; 4]), 1.0);
+        assert_eq!(meter(&[0.0; 4]), 0.0);
+    }
+
+    /// Catches the resample index arithmetic flipping (`i / ratio`): 48 kHz
+    /// keeps every third sample, 8 kHz repeats each sample twice.
+    #[test]
+    fn process_audio_chunk_resamples_to_16khz_nearest_neighbour() {
+        let mut down = ChunkFixture::new();
+        down.process(&[0.0, 0.1, 0.2, 0.3, 0.4, 0.5], 48_000, 1);
+        assert_samples(&down.captured(), &[0.0, 0.3]);
+
+        let mut up = ChunkFixture::new();
+        up.process(&[0.1, 0.2, 0.3], 8_000, 1);
+        assert_samples(&up.captured(), &[0.1, 0.1, 0.2, 0.2, 0.3, 0.3]);
+    }
+
+    /// Catches the cap comparison (`len > max_samples` becoming `>=` or `==`)
+    /// and the drop count (`len - max_samples` becoming `+` or `/`): exactly
+    /// the cap keeps everything, a few samples over drops the oldest ones.
+    #[test]
+    fn process_audio_chunk_caps_the_buffer_at_the_recording_horizon() {
+        let max = (16_000.0 * crate::streaming::MAX_RECORDING_S) as usize;
+
+        let mut at_cap = ChunkFixture::new();
+        at_cap.process(&vec![0.25; max], 16_000, 1);
+        assert_eq!(at_cap.buffer.lock().len(), max);
+        assert_eq!(at_cap.dropped_samples.load(Ordering::Relaxed), 0);
+
+        let mut over = ChunkFixture::new();
+        over.process(&[0.125, 0.125, 0.125], 16_000, 1);
+        over.process(&vec![0.25; max], 16_000, 1);
+        assert_eq!(over.buffer.lock().len(), max);
+        assert_eq!(over.dropped_samples.load(Ordering::Relaxed), 3);
+        assert!(
+            over.buffer.lock().iter().all(|&s| s == 0.25),
+            "the oldest samples must be the ones dropped"
+        );
+    }
+
     /// A device reporting 0 Hz makes `ratio` infinite, and
     /// `(len as f64 * f64::INFINITY) as usize` saturates to `usize::MAX` — so
     /// `reserve` aborts on capacity overflow, on the real-time audio thread.
