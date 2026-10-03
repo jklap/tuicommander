@@ -117,8 +117,9 @@ coherent multi-line Claude space/NBSP `▎` visual gutters. Claude composer
 selections remove one leading `❯ ` and two continuation-margin columns only
 when the ordered selection starts at grid column zero with the marker in the
 first two cells and the preceding row has no `WRAPLINE`. Partial body selections
-and VT soft-wrap continuation origins remain literal. At the oldest retained
-row, cleanup requires known row provenance. Loss of content-bearing predecessors marks
+and VT soft-wrap continuation origins remain literal. At every retained
+row, cleanup requires known row provenance; both unknown-origin and latent-loss
+flags prevent cleanup even when RI/IL moves the physical row. Loss of content-bearing predecessors marks
 retained content unknown; blank history rows keep latent predecessor-loss evidence on their physical row.
 They do not taint successors on purge/drop, but resize can pull that boundary
 back live and reactivate unknown copy origin. With zero retained history, a
@@ -129,12 +130,12 @@ unknown-origin flags; it never derives provenance from scroll counts. Removing
 the entire reprinted history tail carries prior oldest-row loss or the last
 removed WRAPLINE/wide-spacer boundary into surviving content. Without those
 signals, an unwrapped predecessor preserves a known line origin on drop.
-Full row reset or erase (including ECH covering every column from column zero)
-restores known origin without resetting absolute row counters. Partial ECH keeps
-both provenance flags. Reflow truncation inspects discarded content just like
+Full row replacements (ECH, DCH, ICH, EL or ED covering every column from
+column zero) share the row-reset path and restore known origin without resetting
+absolute row counters. Partial edits preserve both provenance flags. Reflow truncation inspects discarded content just like
 history-cap trimming; dropping only blank rows preserves known origin.
-Known conservative behavior: RI/IL can move a flagged physical row away from
-the oldest position while retaining its flags. Clearing or dropping history
+RI/IL retains the moved row's flags and literal copy behavior at its new position.
+Known conservative behavior: clearing or dropping history
 does not flag a blank live row zero; unlike scroll/resize, it does not carry
 that ambiguous blank boundary into later writes. Unknown content stays literal; the
 same width-evidence rule rejoins wraps while preserving short typed lines

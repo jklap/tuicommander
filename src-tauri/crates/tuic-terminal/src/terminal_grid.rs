@@ -1996,15 +1996,13 @@ impl TerminalGrid {
             && first_line <= grid.bottommost_line()
             && grid[first_line][Column(0)].c == '❯'
             && grid[first_line][Column(1)].c == ' '
-            && if first_line == grid.topmost_line() {
-                // Row provenance survives scrollback loss, but full erasure restores
-                // a known origin without resetting monotonic absolute row ids.
-                !grid[first_line].copy_origin_unknown
-            } else {
-                !grid[Line(first_line.0 - 1)][Column(num_cols - 1)]
+            // Lost provenance follows the physical row even when RI/IL moves it.
+            && !grid[first_line].copy_origin_unknown
+            && !grid[first_line].copy_predecessor_lost
+            && (first_line == grid.topmost_line()
+                || !grid[Line(first_line.0 - 1)][Column(num_cols - 1)]
                     .flags
-                    .contains(Flags::WRAPLINE)
-            };
+                    .contains(Flags::WRAPLINE));
 
         let mut result = String::new();
 
@@ -2655,6 +2653,38 @@ pub struct DamageGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches whole-row ECH leaving latent loss behind, or partial ECH inventing a fresh origin.
+    #[test]
+    fn copied_selection_ech_full_row_clears_loss_but_partial_keeps_literal() {
+        for count in [19, 20, 999] {
+            let mut grid = TerminalGrid::new(2, 20, 1);
+            grid.process(b"aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n");
+            grid.resize_with_mode(3, 20, ReflowMode::None);
+            assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
+            assert!(grid.term().grid()[Line(0)].copy_predecessor_lost);
+            grid.process(format!("\x1b[H\x1b[{count}X").as_bytes());
+            let remains_unknown = count < 20;
+            assert_eq!(
+                grid.term().grid()[Line(0)].copy_origin_unknown,
+                remains_unknown
+            );
+            assert_eq!(
+                grid.term().grid()[Line(0)].copy_predecessor_lost,
+                remains_unknown
+            );
+            grid.resize_with_mode(3, 24, ReflowMode::None);
+            grid.process("❯ hello".as_bytes());
+            assert_eq!(
+                grid.get_selection_text(0, 0, 0, 23),
+                if remains_unknown {
+                    "❯ hello"
+                } else {
+                    "hello"
+                }
+            );
+        }
+    }
 
     // Catches reactivating latent predecessor loss after a full erase starts a new composer.
     #[test]

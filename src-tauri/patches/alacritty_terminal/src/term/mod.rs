@@ -471,6 +471,20 @@ pub enum Osc52 {
 }
 
 impl<T> Term<T> {
+    /// Erase a cell range, resetting row provenance only for a complete replacement.
+    fn erase_row_cells(&mut self, line: Line, start: Column, end: Column) {
+        let columns = self.columns();
+        let template: Cell = self.grid.cursor.template.bg.into();
+        let row = &mut self.grid[line];
+        if start == Column(0) && end == Column(columns) {
+            row.reset(&template);
+        } else {
+            for cell in &mut row[start..end] {
+                *cell = template.clone();
+            }
+        }
+    }
+
     #[inline]
     pub fn scroll_display(&mut self, scroll: Scroll)
     where
@@ -1527,6 +1541,10 @@ impl<T: EventListener> Handler for Term<T> {
         self.damage
             .damage_line(line.0 as usize, 0, self.columns() - 1);
 
+        if source == Column(0) && count == self.columns() {
+            self.erase_row_cells(line, Column(0), Column(self.columns()));
+            return;
+        }
         let row = &mut self.grid[line][..];
 
         for offset in (0..num_cells).rev() {
@@ -1923,19 +1941,9 @@ impl<T: EventListener> Handler for Term<T> {
         let start = cursor.point.column;
         let end = cmp::min(start + count, Column(self.columns()));
 
-        // Cleared cells have current background color set.
-        let bg = self.grid.cursor.template.bg;
         let line = cursor.point.line;
         self.damage.damage_line(line.0 as usize, start.0, end.0);
-        let columns = self.columns();
-        let row = &mut self.grid[line];
-        if start == Column(0) && end == Column(columns) {
-            row.copy_origin_unknown = false;
-            row.copy_predecessor_lost = false;
-        }
-        for cell in &mut row[start..end] {
-            *cell = bg.into();
-        }
+        self.erase_row_cells(line, start, end);
     }
 
     #[inline]
@@ -1959,6 +1967,10 @@ impl<T: EventListener> Handler for Term<T> {
         let line = cursor.point.line;
         self.damage
             .damage_line(line.0 as usize, 0, self.columns() - 1);
+        if start == 0 && removed == columns {
+            self.erase_row_cells(line, Column(0), Column(columns));
+            return;
+        }
         let row = &mut self.grid[line][..];
 
         for offset in 0..shifted {
@@ -2046,7 +2058,6 @@ impl<T: EventListener> Handler for Term<T> {
         trace!("Clearing line: {mode:?}");
 
         let cursor = &self.grid.cursor;
-        let bg = cursor.template.bg;
         let point = cursor.point;
 
         let (left, right) = match mode {
@@ -2059,15 +2070,7 @@ impl<T: EventListener> Handler for Term<T> {
         self.damage
             .damage_line(point.line.0 as usize, left.0, right.0 - 1);
 
-        let columns = self.columns();
-        let row = &mut self.grid[point.line];
-        if left == Column(0) && right == Column(columns) {
-            row.copy_origin_unknown = false;
-            row.copy_predecessor_lost = false;
-        }
-        for cell in &mut row[left..right] {
-            *cell = bg.into();
-        }
+        self.erase_row_cells(point.line, left, right);
 
         let range = self.grid.cursor.point.line..=self.grid.cursor.point.line;
         self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
@@ -2166,8 +2169,6 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn clear_screen(&mut self, mode: ansi::ClearMode) {
         trace!("Clearing screen: {mode:?}");
-        let bg = self.grid.cursor.template.bg;
-
         let screen_lines = self.screen_lines();
 
         match mode {
@@ -2182,13 +2183,7 @@ impl<T: EventListener> Handler for Term<T> {
 
                 // Clear up to the current column in the current line.
                 let end = cmp::min(cursor.column + 1, Column(self.columns()));
-                if end == Column(self.columns()) {
-                    self.grid[cursor.line].copy_origin_unknown = false;
-                    self.grid[cursor.line].copy_predecessor_lost = false;
-                }
-                for cell in &mut self.grid[cursor.line][..end] {
-                    *cell = bg.into();
-                }
+                self.erase_row_cells(cursor.line, Column(0), end);
 
                 let range = Line(0)..=cursor.line;
                 self.selection = self.selection.take().filter(|s| !s.intersects_range(range));
@@ -2199,13 +2194,7 @@ impl<T: EventListener> Handler for Term<T> {
                 // so the last cell of the current line is not in range. Same
                 // reasoning as the `LineClearMode::Right` guard in `clear_line`.
                 if !self.grid.cursor.input_needs_wrap {
-                    if cursor.column == Column(0) {
-                        self.grid[cursor.line].copy_origin_unknown = false;
-                        self.grid[cursor.line].copy_predecessor_lost = false;
-                    }
-                    for cell in &mut self.grid[cursor.line][cursor.column..] {
-                        *cell = bg.into();
-                    }
+                    self.erase_row_cells(cursor.line, cursor.column, Column(self.columns()));
                 }
 
                 if (cursor.line.0 as usize) < screen_lines - 1 {
