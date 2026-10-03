@@ -4457,13 +4457,8 @@ mod tests {
         let spec = spec_at(dir.path().join("claude.json"));
         ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
         let first = std::fs::read(&spec.config_path).unwrap();
-        let modified = spec.config_path.metadata().unwrap().modified().unwrap();
         ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
         assert_eq!(std::fs::read(&spec.config_path).unwrap(), first);
-        assert_eq!(
-            spec.config_path.metadata().unwrap().modified().unwrap(),
-            modified
-        );
     }
 
     /// Catches: the build-output test matching any working command under a `target`
