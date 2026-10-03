@@ -186,3 +186,47 @@ fn copied_selection_ed1_on_last_row_resets_preceding_rows_and_keeps_cursor_suffi
     assert_eq!(grid.get_selection_text(1, 0, 1, 79), "second composer");
     assert_eq!(grid.get_selection_text(2, 0, 2, 79), " ast");
 }
+
+// Catches clear_viewport retaining overflow loss on a newly blank zero-history row.
+#[test]
+fn copied_selection_full_viewport_reset_clears_both_flags_on_every_live_row() {
+    for rows in [2, 3] {
+        let mut grid: Grid<Cell> = Grid::new(rows, 10, 0);
+        for row in 0..rows {
+            grid[Line(row as i32)][Column(0)].c = 'x';
+        }
+        grid.clear_viewport();
+        for row in 0..rows {
+            let row = &grid[Line(row as i32)];
+            assert!(row.is_clear());
+            assert!(!row.copy_origin_unknown);
+            assert!(!row.copy_predecessor_lost);
+        }
+    }
+}
+
+// Catches an ED2 provenance reset reaching retained history and stripping literal content later.
+#[test]
+fn copied_selection_full_viewport_reset_keeps_retained_history_loss_flags() {
+    let mut grid: Grid<Cell> = Grid::new(3, 10, 1);
+    for row in 0..3 {
+        grid[Line(row)][Column(0)].c = 'x';
+    }
+    grid.scroll_up(&(Line(0)..Line(3)), 2);
+    assert!(grid[Line(-1)].copy_origin_unknown);
+    assert!(grid[Line(-1)].copy_predecessor_lost);
+    grid.update_history(8);
+    for row in 0..3 {
+        grid[Line(row)][Column(0)].c = 'y';
+    }
+    grid.clear_viewport();
+    assert_eq!(grid.history_size(), 4);
+    assert_eq!(grid[Line(-4)][Column(0)].c, 'x');
+    assert!(grid[Line(-4)].copy_origin_unknown);
+    assert!(grid[Line(-4)].copy_predecessor_lost);
+    for row in 0..3 {
+        assert!(grid[Line(row)].is_clear());
+        assert!(!grid[Line(row)].copy_origin_unknown);
+        assert!(!grid[Line(row)].copy_predecessor_lost);
+    }
+}

@@ -137,6 +137,9 @@ history-cap trimming; dropping only blank rows preserves known origin.
 ED1 resets every row above the cursor, including row zero when the cursor is on
 row one; upstream skips that row with its `cursor.line > 1` guard. The cursor row
 is erased only through its current column, and rows below remain unchanged.
+ED2 resets all visible rows after scrolling occupied content into history. This
+clears loss flags that overflow can attach to a fresh blank row with zero scrollback,
+while retained history keeps its provenance. ED3 does not erase live content.
 DECALN fills live rows with default-background E cells after resetting provenance;
 it does not inherit the active erase background. Ordinary printing, including
 insert-mode shifts and a sequence that overwrites every cell, preserves unknown
