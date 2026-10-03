@@ -4762,6 +4762,32 @@ mod tests {
         assert_eq!(speaker.resumes(), 1, "the loop ended with the reply paused");
     }
 
+    /// The pause limit is exclusive: a reply paused at 100 ms is still held at
+    /// exactly `100 + PAUSE_LIMIT_MS` and released one millisecond later.
+    /// Catches: `>` relaxed to `>=` in the limit check.
+    #[test]
+    fn a_pause_is_held_up_to_and_including_the_pause_limit() {
+        let (mut capture, speaker, mode) = capture_with_a_voice_and_a_phrase();
+        let mut endpoint = FakeEndpoint::new("noise");
+        let target = FakeTarget(std::cell::Cell::new(true));
+        let queue = FakeSink::default();
+
+        endpoint.feed(speech(300));
+        tick(&mut capture, &mode, &mut endpoint, &target, &queue, 100);
+        assert_eq!(speaker.pauses(), 1);
+
+        endpoint.feed(speech(300));
+        tick(
+            &mut capture,
+            &mode,
+            &mut endpoint,
+            &target,
+            &queue,
+            100 + PAUSE_LIMIT_MS,
+        );
+        assert_eq!(speaker.resumes(), 0, "released at the limit, not past it");
+    }
+
     /// Residual echo from a reply that is still playing: a 20 ms frame over
     /// the floor every 200 ms. It keeps one utterance open and its frames add
     /// up to `min_speech_ms` inside a second, which stopped every reply 600-900
@@ -4785,6 +4811,60 @@ mod tests {
 
         segmenter.push(&speech(120));
         assert!(segmenter.has_voice(), "an unbroken run is a voice");
+    }
+
+    /// Push `chunks` (one list per call) and close the utterance with a long
+    /// silence; returns the single closed utterance.
+    fn closed_utterance(chunks: &[Vec<f32>]) -> Utterance {
+        let mut segmenter = Segmenter::new(test_config());
+        let mut closed = Vec::new();
+        for chunk in chunks {
+            closed.extend(segmenter.push(chunk));
+        }
+        closed.extend(segmenter.push(&silence(600)));
+        assert_eq!(closed.len(), 1, "the test needs exactly one utterance");
+        closed.remove(0)
+    }
+
+    /// A dip of 40 ms followed by 60 ms of activity joins the run: the dip and
+    /// the three confirming frames all count as time in the run (100 + 40 + 60).
+    /// Catches: the bridge counters at the dip, `bridge_ms` arithmetic
+    /// (`+=` flipped), `bridge_frames` counting (`+=` flipped) and the
+    /// `bridge_ms = gap + frame` seed, each of which changes the exact length.
+    #[test]
+    fn a_confirmed_dip_adds_the_dip_and_the_confirming_frames_to_the_run() {
+        let utterance = closed_utterance(&[speech(100), silence(40), speech(60)]);
+        assert_eq!(utterance.longest_run_ms, 200);
+    }
+
+    /// Two active frames after a dip do not confirm it: the run is still the
+    /// 100 ms before the dip. Catches: the confirm comparison flipped, which
+    /// would credit the unconfirmed bridge.
+    #[test]
+    fn a_dip_followed_by_too_few_frames_is_not_added_to_the_run() {
+        let utterance = closed_utterance(&[speech(100), silence(40), speech(40)]);
+        assert_eq!(utterance.longest_run_ms, 100);
+    }
+
+    /// `is_voice` judges the run, not the summed speech. Five frames 100 ms
+    /// apart add up to `min_speech_ms` and close an utterance, but no run
+    /// reaches it. Catches: `is_voice` returning true unconditionally.
+    #[test]
+    fn a_closed_utterance_of_scattered_frames_is_not_a_voice() {
+        let mut segmenter = Segmenter::new(test_config());
+        let mut input = Vec::new();
+        for _ in 0..5 {
+            input.extend(speech(20));
+            input.extend(silence(80));
+        }
+        input.extend(silence(600));
+        let closed = segmenter.push(&input);
+        assert_eq!(closed.len(), 1, "the test needs one closed utterance");
+        assert!(closed[0].speech_ms >= 100, "enough summed speech to be sent");
+        assert!(!segmenter.is_voice(&closed[0]));
+
+        let sustained = closed_utterance(&[speech(500)]);
+        assert!(segmenter.is_voice(&sustained));
     }
 
     /// The pill stuck on "capturing" (or showing the last state) after an
