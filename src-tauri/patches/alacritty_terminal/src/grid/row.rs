@@ -33,6 +33,11 @@ pub struct Row<T> {
     /// starts new content and restores a known origin.
     #[cfg_attr(feature = "serde", serde(default))]
     pub copy_origin_unknown: bool,
+
+    /// Latent boundary loss on a blank history row which can return to the live
+    /// screen during resize. It does not taint successors when this row is removed.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub copy_predecessor_lost: bool,
 }
 
 impl<T: PartialEq> PartialEq for Row<T> {
@@ -68,6 +73,7 @@ impl<T: Default> Row<T> {
             occ: 0,
             reflow_wrap: false,
             copy_origin_unknown: false,
+            copy_predecessor_lost: false,
         }
     }
 
@@ -132,6 +138,7 @@ impl<T: Default> Row<T> {
         self.occ = 0;
         self.reflow_wrap = false;
         self.copy_origin_unknown = false;
+        self.copy_predecessor_lost = false;
     }
 }
 
@@ -144,6 +151,7 @@ impl<T> Row<T> {
             occ,
             reflow_wrap: false,
             copy_origin_unknown: false,
+            copy_predecessor_lost: false,
         }
     }
 

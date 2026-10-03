@@ -1,4 +1,4 @@
-use alacritty_terminal::grid::{Dimensions, Grid};
+use alacritty_terminal::grid::{Dimensions, Grid, ReflowMode};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use tuic_terminal::terminal_grid::TerminalGrid;
@@ -138,4 +138,32 @@ fn copied_selection_eviction_keeps_live_blank_origin_unknown_but_blank_history_k
         grid[Line(0)][Column(1)].c = 's';
         assert_eq!(grid[oldest].copy_origin_unknown, expected_unknown);
     }
+}
+
+// Catches resize losing a latent boundary, or a full row reset failing to clear it.
+#[test]
+fn copied_selection_pulled_history_boundary_activates_then_full_reset_restores_known_origin() {
+    let mut grid: Grid<Cell> = Grid::new(3, 10, 1);
+    grid[Line(0)][Column(0)].c = 'x';
+    grid[Line(0)][Column(9)].flags.insert(Flags::WRAPLINE);
+    grid.scroll_up(&(Line(0)..Line(3)), 1);
+    grid.scroll_up(&(Line(0)..Line(3)), 1);
+    assert!(!grid[grid.topmost_line()].copy_origin_unknown);
+    grid.resize(ReflowMode::None, 4, 10);
+    assert!(grid[Line(0)].copy_origin_unknown);
+    grid.reset_region(Line(0)..Line(1));
+    grid[Line(0)][Column(0)].c = 's';
+    grid.resize(ReflowMode::None, 4, 12);
+    assert!(!grid[Line(0)].copy_origin_unknown);
+}
+
+// Catches reactivating latent predecessor loss after a full erase starts a new composer.
+#[test]
+fn copied_selection_full_screen_erase_clears_latent_loss_across_resize() {
+    let mut grid = TerminalGrid::new(3, 10, 1);
+    let _ = grid.process("0123456789\r\n\r\n\r\n".as_bytes());
+    grid.resize_with_mode(4, 10, ReflowMode::None);
+    let _ = grid.process("\x1b[H\x1b[J❯ hello".as_bytes());
+    grid.resize_with_mode(4, 12, ReflowMode::None);
+    assert_eq!(grid.get_selection_text(0, 0, 0, 11), "hello");
 }

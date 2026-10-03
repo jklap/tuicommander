@@ -194,11 +194,19 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
     pub fn update_history(&mut self, history_size: usize) {
         let current_history_size = self.history_size();
         if current_history_size > history_size {
-            self.raw.shrink_lines(current_history_size - history_size);
+            let removed = current_history_size - history_size;
+            let lost_content = (0..removed)
+                .any(|offset| !self.raw[Line(self.topmost_line().0 + offset as i32)].is_clear());
+            self.raw.shrink_lines(removed);
             let oldest = self.topmost_line();
-            // A blank history row is immutable. A blank live screen row can
-            // still receive the continuation of the lost predecessor.
-            if self.history_size() == 0 || !self.raw[oldest].is_clear() {
+            if lost_content {
+                self.raw[oldest].copy_predecessor_lost = true;
+            }
+            // Blank history is ineligible for cleanup, but its latent boundary
+            // loss becomes relevant again if that physical row returns live.
+            if (lost_content || self.raw[oldest].copy_predecessor_lost)
+                && (self.history_size() == 0 || !self.raw[oldest].is_clear())
+            {
                 self.raw[oldest].copy_origin_unknown = true;
             }
         }
@@ -243,6 +251,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             if count == old_history_size && unknown_predecessor && !self.raw[Line(0)].is_clear() {
                 // Reprint-tail removal must not discard predecessor-loss provenance.
                 self.raw[Line(0)].copy_origin_unknown = true;
+                self.raw[Line(0)].copy_predecessor_lost = true;
             }
             self.lines_scrolled = self.lines_scrolled.saturating_sub(count);
             // The oldest rows keep their place, so a viewport scrolled up keeps
@@ -437,8 +446,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         }
         if evicts_predecessor {
             let oldest = self.topmost_line();
-            // A blank history row is immutable. A blank live screen row can
-            // still receive the continuation of the lost predecessor.
+            self.raw[oldest].copy_predecessor_lost = true;
+            // The row can return live during resize; preserve loss even while
+            // blank retained history remains exempt from copy eligibility.
             if self.history_size() == 0 || !self.raw[oldest].is_clear() {
                 self.raw[oldest].copy_origin_unknown = true;
             }
@@ -530,6 +540,7 @@ impl<T> Grid<T> {
         self.raw.shrink_lines(removed);
         if unknown_predecessor && !self.raw[Line(0)].is_clear() {
             self.raw[Line(0)].copy_origin_unknown = true;
+            self.raw[Line(0)].copy_predecessor_lost = true;
         }
 
         // Reset display offset.

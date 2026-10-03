@@ -2058,6 +2058,7 @@ impl<T: EventListener> Handler for Term<T> {
         let row = &mut self.grid[point.line];
         if left == Column(0) && right == Column(columns) {
             row.copy_origin_unknown = false;
+            row.copy_predecessor_lost = false;
         }
         for cell in &mut row[left..right] {
             *cell = bg.into();
@@ -2178,6 +2179,7 @@ impl<T: EventListener> Handler for Term<T> {
                 let end = cmp::min(cursor.column + 1, Column(self.columns()));
                 if end == Column(self.columns()) {
                     self.grid[cursor.line].copy_origin_unknown = false;
+                    self.grid[cursor.line].copy_predecessor_lost = false;
                 }
                 for cell in &mut self.grid[cursor.line][..end] {
                     *cell = bg.into();
@@ -2194,6 +2196,7 @@ impl<T: EventListener> Handler for Term<T> {
                 if !self.grid.cursor.input_needs_wrap {
                     if cursor.column == Column(0) {
                         self.grid[cursor.line].copy_origin_unknown = false;
+                        self.grid[cursor.line].copy_predecessor_lost = false;
                     }
                     for cell in &mut self.grid[cursor.line][cursor.column..] {
                         *cell = bg.into();

@@ -27,7 +27,7 @@ review semantic changes separately from that reflow.
 | `src/event.rs` | `Event::Osc133 { command, params, line }`, `Event::Osc7(String)`, `Event::Tuic { verb, payload, line }` variants | Carry parsed OSC 133 / OSC 7 / OSC 7770 events from VTE to the application layer. All three carry the grid `line` where the marker landed. |
 | `src/term/mod.rs` | `Config.alt_scrolling_history` + alt-grid history in `Term::new`/`set_options`, era reset in `swap_alt` | User-visible parity with iTerm2's optional alternate-screen scrollback, implemented with Alacritty's separate grids rather than iTerm2's shared persistent line buffer. Upstream gives the alternate grid capacity 0 (XTerm semantics), so an app printing more than a screenful (`gh run watch`, `less`, `man`) loses whatever scrolls off. The field defaults to `0`, preserving upstream behavior for consumers that do not opt in; TUICommander uses the primary cap. Each enter/exit starts a fresh alternate era, so sessions never inherit one another and no alternate lines remain logically retained after exit. Oversized repeated redraws remain repeated because the emulator is byte-faithful, not a semantic snapshot deduplicator. |
 | `src/term/mod.rs` | `pub fn primary_history_size()` | Returns primary-grid history even while the alternate grid is active. Durable-log resize synchronization must stay in this coordinate space; using active alternate history can suppress the first normal-shell lines after exit. |
-| `src/grid/row.rs`, `src/grid/mod.rs`, `src/grid/resize.rs`, `src/term/mod.rs` | `Row::copy_origin_unknown` | Per-row copy provenance: predecessor eviction/purge makes the oldest retained origin unknown; full row reset/erase restores it. Selection cleanup consults this flag without changing absolute row counters. |
+| `src/grid/row.rs`, `src/grid/mod.rs`, `src/grid/resize.rs`, `src/term/mod.rs` | `Row::copy_origin_unknown` / `copy_predecessor_lost` | Per-row copy provenance: predecessor eviction/purge makes the oldest retained origin unknown; full row reset/erase restores it. Selection cleanup consults this flag without changing absolute row counters. |
 | `src/grid/mod.rs` | `pub fn reset_history_era()` | `clear_history()` keeps `lines_scrolled` monotonic because absolute row ids must be stable for the life of a physical line. The alternate screen is a separate content universe wiped on every enter/exit, so it gets a fresh era instead: history *and* counter reset. Frame-protocol `keyboard_flags` bit 5 marks the transition; the frontend then atomically invalidates row, scroll, selection, search, and link state. |
 | `src/grid/mod.rs` | `lines_scrolled` field + `pub fn total_scrolled()` | Monotonic count of lines ever scrolled into history (incremented in `scroll_up`). `total_scrolled() - history_size()` gives lines evicted from the top, the base for an eviction-stable absolute row coordinate. Excluded from `PartialEq`; `serde(default)` so old ref fixtures still load. |
 | `src/grid/mod.rs` | `pub enum ScrollSource` + `pub fn scroll_up_with(region, positions, source)` | Says *why* lines move up, because the region cannot: a linefeed past the bottom margin and a DL at the top row both present a region that starts at line 0. `Overflow` feeds history, advances `lines_scrolled` and shifts a scrolled-back viewport; `Control` swaps within the region and moves no counter. `scroll_up` still delegates as `Overflow`, so `resize.rs` and `clear_viewport` are untouched (#834-1878). |
@@ -119,9 +119,12 @@ when the ordered selection starts at grid column zero with the marker in the
 first two cells and the preceding row has no `WRAPLINE`. Partial body selections
 and VT soft-wrap continuation origins remain literal. At the oldest retained
 row, cleanup requires known row provenance. Loss of content-bearing predecessors marks
-retained content unknown; immutable blank history rows retain a fresh origin.
-With zero retained history, a blank oldest row is live and preserves predecessor
-loss for later writes until a full erase or reset. History removal inspects discarded content and WRAPLINE, including existing
+retained content unknown; blank history rows keep latent predecessor-loss evidence on their physical row.
+They do not taint successors on purge/drop, but resize can pull that boundary
+back live and reactivate unknown copy origin. With zero retained history, a
+blank oldest row preserves loss for later writes until full erase or reset.
+History-cap trimming inspects discarded content, so blank-only removal does
+not create a loss boundary. History removal inspects discarded content and WRAPLINE, including existing
 unknown-origin flags; it never derives provenance from scroll counts. Removing
 the entire reprinted history tail carries prior oldest-row loss or the last
 removed WRAPLINE/wide-spacer boundary into surviving content. Without those
