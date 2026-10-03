@@ -37,7 +37,7 @@ const FENCE_RE = /^\s*```/;
  * Last row of the answer that starts at `start` (a row matching
  * [`ANSWER_MARKER_RE`]). An answer is the marker row, every row it wraps onto and
  * the indented rows that follow, blank paragraph gaps included. It ends before the
- * next bullet (a tool call or another answer), before a row that starts at column
+ * next bullet (a tool call or another answer), before a `suggest:`/`intent:` row, before a row that starts at column
  * 0 (user prompt, separator, status line) and before the trailing blank rows.
  * Rows inside a fenced code block belong to the answer whatever glyph they start with.
  */
@@ -57,6 +57,7 @@ export function answerExtent(start: number, totalRows: number, getRow: (i: numbe
 			inFence = !FENCE_RE.test(row.text);
 		} else {
 			if (OUTPUT_ROW_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text) || PROMPT_ROW_RE.test(row.text)) break;
+				if (SUGGEST_ANCHOR_RE.test(row.text) || INTENT_HIGHLIGHT_RE.test(row.text)) break;
 			inFence = FENCE_RE.test(row.text);
 		}
 		last = i;
