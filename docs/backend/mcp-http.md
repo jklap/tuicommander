@@ -1846,6 +1846,7 @@ duplicating an already retained destination message.
 Peer handshakes serialize per configured connection, so a mute daemon cannot hold
 mail calls to another host behind its network deadline. Session targets reject empty
 ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
-reads: it retains fingerprints of the last 100 forwarded ids for up to 1024 recently
-active recipients, without retaining message bodies. This is a bounded replay horizon,
+reads: it retains fingerprints of the last 100 forwarded ids per sender and registered
+recipient. Recipient history is removed only on unregister; at 65,536 total ids,
+new ids that would grow the cache reject visibly without evicting another window, without retaining message bodies. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.

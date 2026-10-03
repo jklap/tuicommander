@@ -2338,7 +2338,7 @@ fn evict_peers_for_reaped_mcp_session_locked(
         .map(|entry| entry.key().clone())
         .partition(|tuic| state.peer_identity_is_reapable(tuic));
     for tuic in &removed {
-        state.peer_agents.remove(tuic);
+        crate::mcp_http::remote_peer::unregister_peer(&state, tuic);
         state.orchestrator_peers.remove(tuic);
         state.active_agent_waiters.remove(tuic);
         let _ = state

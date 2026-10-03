@@ -48,13 +48,10 @@ pub(super) fn resolve(state: &AppState, args: &Value) -> Option<Result<(String, 
     if let Some(host) = args["connection_id"].as_str() {
         return (host != "local").then(|| Ok((host.to_string(), address.to_string())));
     }
-    if state
-        .resolve_session_ref_checked(address)
-        .ok()
-        .flatten()
-        .is_some()
-    {
-        return None;
+    match state.resolve_session_ref_checked(address) {
+        Ok(Some(_)) => return None,
+        Err(detail) => return Some(Err(json!({"error":detail}))),
+        Ok(None) => {}
     }
     let rows: Vec<_> = crate::remote_mirror::mirrored_rows(state)
         .into_iter()
