@@ -14,7 +14,7 @@ pub(crate) use config::{Config, Owner, Paths};
 pub(crate) use inbound::Inbound;
 pub(crate) use inbound::Poll;
 #[cfg(test)]
-pub(crate) type Inbound = inbound::Inbound<mail::TestInbox>;
+type Inbound = inbound::Inbound<mail::TestInbox>;
 pub(crate) use mail::{MailPort, PendingMail};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
