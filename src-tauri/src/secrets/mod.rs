@@ -10,6 +10,8 @@ pub(crate) use schema::{Field, FieldKind, Form};
 mod tests;
 #[cfg(test)]
 mod tests_critic1435;
+#[cfg(test)]
+mod tests_critic1435s;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
