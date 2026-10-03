@@ -28,6 +28,11 @@ pub struct Row<T> {
     /// stale WRAPLINE from natural terminal wrapping from causing incorrect merges.
     #[cfg_attr(feature = "serde", serde(default))]
     pub reflow_wrap: bool,
+
+    /// The predecessor of this retained row was discarded. Full erasure/reset
+    /// starts new content and restores a known origin.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub copy_origin_unknown: bool,
 }
 
 impl<T: PartialEq> PartialEq for Row<T> {
@@ -62,6 +67,7 @@ impl<T: Default> Row<T> {
             inner,
             occ: 0,
             reflow_wrap: false,
+            copy_origin_unknown: false,
         }
     }
 
@@ -125,6 +131,7 @@ impl<T: Default> Row<T> {
 
         self.occ = 0;
         self.reflow_wrap = false;
+        self.copy_origin_unknown = false;
     }
 }
 
@@ -136,6 +143,7 @@ impl<T> Row<T> {
             inner: vec,
             occ,
             reflow_wrap: false,
+            copy_origin_unknown: false,
         }
     }
 
