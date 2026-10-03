@@ -3516,10 +3516,15 @@ mod tests {
                 before,
                 "{label} was not repaired"
             );
-            assert_eq!(
-                command_at_spec(&spec),
-                real_bridge.to_str().unwrap(),
+            let command = PathBuf::from(command_at_spec(&spec));
+            assert!(
+                command.starts_with(crate::config::config_dir().join("mcp-bridge")),
                 "{label}"
+            );
+            assert_ne!(command, real_bridge, "{label} still names source");
+            assert_eq!(
+                std::fs::read(command).unwrap(),
+                std::fs::read(&real_bridge).unwrap()
             );
         }
     }
@@ -3723,9 +3728,18 @@ mod tests {
             let after = std::fs::read_to_string(&config).unwrap();
             if should_write {
                 let parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+                let command = PathBuf::from(
+                    parsed["mcpServers"]["tuicommander"]["command"]
+                        .as_str()
+                        .unwrap(),
+                );
+                assert!(
+                    command.starts_with(home.join("tuic-config/mcp-bridge")),
+                    "{name}"
+                );
                 assert_eq!(
-                    parsed["mcpServers"]["tuicommander"]["command"],
-                    sandbox.path().join(bridge_name).to_str().unwrap(),
+                    std::fs::read(command).unwrap(),
+                    std::fs::read(sandbox.path().join(bridge_name)).unwrap(),
                     "{name}"
                 );
             } else {
@@ -3777,7 +3791,9 @@ mod tests {
             );
         }
         crate::app_instance::select_app_instance_from_env().unwrap();
-        let _config = with_temp_config_dir();
+        // Keep the installed copy in the parent-owned sandbox so it remains
+        // observable after the child exits, just as a production config does.
+        let _config = crate::config::set_config_dir_override(home().join("tuic-config"));
         let disabled = std::env::var("TUIC_MCP_TEST_DISABLED")
             .ok()
             .into_iter()
