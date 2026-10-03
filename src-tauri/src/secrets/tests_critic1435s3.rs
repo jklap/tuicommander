@@ -64,7 +64,10 @@ fn stale_window_release_cannot_clear_the_live_window() {
         "t".into(),
     )
     .unwrap();
-    assert!(store.open(form).is_err(), "open() allowed with a live window");
+    assert!(
+        store.open(form).is_err(),
+        "open() allowed with a live window"
+    );
     store.release_window("secret-live");
     assert!(!store.tools_blocked());
 }
