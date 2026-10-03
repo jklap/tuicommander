@@ -408,7 +408,10 @@ pub(super) async fn spawn_agent_session(
     // on immediately and intent/suggest protocol tokens are parsed from the first
     // line of output. Seeded before registration because that is what publishes
     // `session-created`.
-    let mut session_state = crate::state::SessionState::default();
+    let mut session_state = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
+        ..Default::default()
+    };
     if let Some(ref agent_type) = body.agent_type {
         session_state.hook_instrumented = crate::pty::hook_instrumented_for(
             &crate::config::load_agents_config(),
@@ -591,6 +594,28 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
+        // Catches: HTTP agent creation labels a direct program as a shell,
+        // so its own foreground root would revoke the configured identity.
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get(&session_id)
+                .unwrap()
+                .spawn_root_role,
+            crate::state::SpawnRootRole::DirectProgram
+        );
+        assert!(
+            state
+                .session_maps
+                .sessions
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                ._child
+                .process_id()
+                .is_some()
+        );
         let output = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 if let Some(buffer) = state.grid.vt_log_buffers.get(&session_id) {

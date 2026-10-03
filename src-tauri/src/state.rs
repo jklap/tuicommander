@@ -621,6 +621,17 @@ pub(crate) struct SessionState {
     /// observed, shell foreground means it has exited and cannot receive input.
     #[serde(skip)]
     pub(crate) agent_foreground_observed: bool,
+    /// Accepted OS foreground snapshot order; late completion cannot overwrite
+    /// a newer observation from another timer/IPC/HTTP caller.
+    #[serde(skip)]
+    pub(crate) foreground_probe_generation: u64,
+    #[serde(skip)]
+    pub(crate) spawn_root_role: SpawnRootRole,
+    /// A direct agent child owns foreground, or root observation is unavailable.
+    #[serde(skip)]
+    pub(crate) foreground_input_blocked: bool,
+    #[serde(skip)]
+    pub(crate) foreground_probe_result: Option<String>,
     /// Keep the foreground detection warning to one record per session.
     #[serde(skip)]
     pub(crate) unknown_foreground_warned: bool,
@@ -672,6 +683,15 @@ pub(crate) struct SessionState {
     /// Epoch ms of last push notification sent for this session (rate limiting)
     #[serde(skip)]
     pub last_push_ms: Option<u64>,
+}
+
+/// Immutable spawn metadata; unknown mirrors cannot authorize local injection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SpawnRootRole {
+    #[default]
+    Unknown,
+    Shell,
+    DirectProgram,
 }
 
 impl SessionState {
@@ -4253,6 +4273,10 @@ impl AppState {
         }
         state.agent_state = if state.agent_type.is_none() {
             None
+        } else if state.foreground_input_blocked {
+            // A direct program's child owns the terminal even if the retained
+            // ready screen or completion marker still describes the parent.
+            Some("working".to_string())
         } else if state.awaiting_input || state.choice_prompt.is_some() {
             Some("awaiting_input".to_string())
         } else if background_work {
