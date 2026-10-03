@@ -2727,6 +2727,8 @@ The following commands are accessible only via the Tauri `invoke()` bridge in th
   Invalid or replayed submissions return 400 without echoing values.
 
 The native private-window identity is the only bootstrap authority. There is no
-public endpoint listing forms or issuing their nonces. Use the dedicated-origin
-link shown in that window, not the normal application origin. Responses carry
+public endpoint listing forms or issuing their nonces. Open the entry path
+shown in that window on your trusted server address; it uses the existing
+application origin, authentication and transport. This feature does not enforce
+TLS or origin isolation. Responses carry
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and frame denial.

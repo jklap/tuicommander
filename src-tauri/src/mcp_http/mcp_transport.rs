@@ -1995,7 +1995,7 @@ async fn handle_mcp_tool_call_with_context(
     .await
 }
 
-/// Gate both native and direct upstream inspection, including overlapping form openings.
+/// Gate native and direct upstream inspection while a private form is open.
 async fn guard_secret_inspection(
     state: &Arc<AppState>,
     name: &str,
@@ -2003,15 +2003,10 @@ async fn guard_secret_inspection(
     call: impl std::future::Future<Output = serde_json::Value>,
 ) -> serde_json::Value {
     let inspection = secret_inspection_tool(name, args);
-    let epoch = state.secrets.inspection_epoch();
     if inspection && state.secrets.tools_blocked() {
         return serde_json::json!({"error": "Agent inspection is disabled while a private secret form is open"});
     }
-    let result = call.await;
-    if inspection && (state.secrets.tools_blocked() || state.secrets.inspection_epoch() != epoch) {
-        return serde_json::json!({"error": "Inspection result withheld because a private secret form opened during the call"});
-    }
-    result
+    call.await
 }
 
 async fn dispatch_mcp_tool_call_with_context(

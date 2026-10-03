@@ -146,7 +146,6 @@ export default defineConfig(async ({ command }) => ({
       input: {
         main: "index.html",
         mobile: "mobile.html",
-        secretForm: "secret-form.html",
       },
     },
   },

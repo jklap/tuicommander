@@ -27,7 +27,6 @@ export function SecretForm(props: { form: PrivateForm; submit: (submission: Secr
 	const [message, setMessage] = createSignal("");
 	const inputs = new Map<string, HTMLInputElement>();
 	let remember: HTMLInputElement | undefined;
-	let templateInput: HTMLTextAreaElement | undefined;
 	const finish = async (declined: boolean) => {
 		const values: Record<string, string> = {};
 		let template: string[] | null = null;
@@ -40,21 +39,11 @@ export function SecretForm(props: { form: PrivateForm; submit: (submission: Secr
 				values[name] = input.value;
 			}
 		}
-		if (!declined && props.form.argv && remember?.checked) {
-			try {
-				const parsed: unknown = JSON.parse(templateInput?.value ?? "null");
-				if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) throw new Error("invalid");
-				template = parsed;
-			} catch {
-				setMessage("The template must be a JSON array of arguments.");
-				return;
-			}
-		}
+		if (!declined && props.form.argv && remember?.checked) template = props.form.argv;
 		// Clear native/browser input properties and unmount BEFORE the IPC/fetch.
 		// No reactive store, localStorage, log, event or terminal receives a value.
 		for (const input of inputs.values()) input.value = "";
 		inputs.clear();
-		if (templateInput) templateInput.value = "";
 		setClosed(true);
 		const submission: SecretSubmission = {
 			nonce: props.form.nonce,
@@ -86,11 +75,7 @@ export function SecretForm(props: { form: PrivateForm; submit: (submission: Secr
 					</p>
 					<p>Secret names: {props.form.fields.map((field) => field.name).join(", ")}</p>
 					<label class="secret-remember">
-						<input type="checkbox" ref={remember} /> Allow this template for these names and directory until exit
-					</label>
-					<label>
-						Argv template (whole <code>{"{arg}"}</code> placeholders for gh api only; other commands use exact argv)
-						<textarea ref={templateInput} spellcheck={false} value={JSON.stringify(props.form.argv)} />
+						<input type="checkbox" ref={remember} /> Allow this exact argv for these names and directory until exit
 					</label>
 				</Show>
 				<Show when={!props.form.argv}>
@@ -125,7 +110,7 @@ export function SecretForm(props: { form: PrivateForm; submit: (submission: Secr
 				<Show when={props.form.mobile_url}>
 					<details>
 						<summary>Open on a trusted browser or phone</summary>
-						<p>Phone entry requires the HTTPS link. A loopback HTTP link works on this computer only.</p>
+						<p>Open this path on your trusted TUICommander server address. Use HTTPS to protect entry in transit.</p>
 						<pre>{props.form.mobile_url}</pre>
 					</details>
 				</Show>

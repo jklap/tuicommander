@@ -118,32 +118,6 @@ fn encoded_and_line_wrapped_secret_cannot_escape_output_masking() {
 }
 
 #[test]
-fn template_placeholder_cannot_change_program_subcommand_or_inject_options() {
-    let template = policy::Template::new(vec!["gh".into(), "api".into(), "{arg}".into()]).unwrap();
-    for argv in [
-        vec!["gh", "api", "user"],
-        vec!["gh", "api", "repos/org/repo"],
-    ] {
-        assert!(template.matches(&argv.into_iter().map(String::from).collect::<Vec<_>>()));
-    }
-    for argv in [
-        vec!["sh", "api", "user"],
-        vec!["gh", "auth", "user"],
-        vec!["gh", "api", "--hostname=evil"],
-        vec!["gh", "api", "x y"],
-        vec!["gh", "api", "x;y"],
-        vec!["gh", "api", "$(x)"],
-        vec!["gh", "api", "x", "y"],
-    ] {
-        assert!(!template.matches(&argv.into_iter().map(String::from).collect::<Vec<_>>()));
-    }
-    assert!(policy::Template::new(vec!["{arg}".into(), "api".into()]).is_err());
-    assert!(policy::Template::new(vec!["gh".into(), "{arg}".into()]).is_err());
-    assert!(policy::Template::new(vec!["gh".into(), "auth".into(), "{arg}".into()]).is_err());
-    assert!(policy::Template::new(vec!["git".into(), "remote".into(), "{arg}".into()]).is_err());
-}
-
-#[test]
 fn approval_cannot_override_shell_or_environment_dumper_rejection() {
     for argv in [
         vec!["sh", "-c", "true"],
@@ -386,42 +360,12 @@ fn saved_template_cannot_approve_new_names_or_working_directory() {
     let approval = store.open(approval).unwrap();
     let mut submission = Submission::declined();
     submission.status = "approved".into();
-    submission.template = Some(vec!["/usr/bin/gh".into(), "api".into(), "{arg}".into()]);
+    submission.template = approval.argv.clone();
     store.submit(&approval.nonce, submission).unwrap();
     let argv = vec!["/usr/bin/gh".into(), "api".into(), "user".into()];
     assert!(store.allowed(&argv, &["PASS".into()], "/trusted"));
     assert!(!store.allowed(&argv, &["OTHER".into()], "/trusted"));
     assert!(!store.allowed(&argv, &["PASS".into()], "/attacker"));
-}
-
-#[test]
-fn removed_value_is_missing_and_epoch_survives_close_to_catch_pending_inspection() {
-    let store = SecretStore::default();
-    let initial = store.inspection_epoch();
-    let opened = store
-        .open(
-            Form::request(
-                vec![Field {
-                    name: "PASS".into(),
-                    kind: FieldKind::Password,
-                    display: None,
-                }],
-                "test".into(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-    assert!(store.tools_blocked());
-    store
-        .submit(
-            &opened.nonce,
-            Submission::stored(BTreeMap::from([("PASS".into(), "synthetic-entry".into())])),
-        )
-        .unwrap();
-    assert!(!store.tools_blocked());
-    assert_ne!(initial, store.inspection_epoch());
-    store.remove(&["PASS".into()]);
-    assert!(store.environment(&["PASS".into()]).is_err());
 }
 
 #[test]
