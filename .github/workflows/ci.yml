@@ -97,6 +97,10 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
+      # A `scripts/*` gitignore rule once hid a script that CI and package.json call.
+      - name: Referenced scripts are tracked
+        run: grep -ohE 'scripts/[A-Za-z0-9_./-]+\.(mjs|sh|js|py)' package.json .github/workflows/*.yml | sort -u | xargs git ls-files --error-unmatch
+
       - name: Third-party notices (JavaScript)
         run: |
           node scripts/third-party-notices.mjs --self-test

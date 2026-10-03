@@ -55,6 +55,8 @@ scripts/*
 !scripts/dev-server.mjs
 !scripts/run-remote-fixture.sh
 !scripts/generate-release-notes.sh
+!scripts/third-party-notices.mjs
+!scripts/check-release-tag.sh
 !scripts/report-frontend-bundles.mjs
 !scripts/check-frontend-cycles.mjs
 !scripts/check-make-instance-scope.sh
@@ -63,6 +65,7 @@ scripts/*
 !scripts/ts-mutants.mjs
 !scripts/with-test-tmp.sh
 !scripts/test-nextest-fixture-scope.sh
+!scripts/test-remote-mcp.py
 !scripts/install-launch-shells.sh
 !scripts/test-shell-entrypoint.sh
 !scripts/test-append-only-merge.sh

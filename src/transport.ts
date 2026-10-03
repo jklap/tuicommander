@@ -129,6 +129,7 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	secret_form_submit: { map: (args) => ({ method: "POST", path: "/secrets/forms/submit", body: args.submission }) },
 	// --- Dictation ---
 	get_dictation_status: { map: () => ({ method: "GET", path: "/dictation/status" }) },
 	get_model_info: { map: () => ({ method: "GET", path: "/dictation/models" }) },
@@ -2273,6 +2274,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
  * This is NOT a feature gap — these commands have no meaning off the host machine.
  */
 export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
+	// A native window identity grants nonce bootstrap. HTTP clients use the
+	// capability link shown only in that window, never a discoverable bootstrap.
+	"secret_form_bootstrap",
 	// Data leaves the machine; source paths come from Finder and cannot be gated
 	// to registered roots. HTTP token holders must not trigger exfiltration.
 	"fs_transfer_remote_paths",

@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 
 /// Refusal text; the frontend matches on `OWNED_ELSEWHERE_MARKER`.
 pub const OWNED_ELSEWHERE: &str = "Dictation is owned by another TUICommander instance. Restart this instance after the other one quits to take dictation over.";
+#[cfg(test)]
 pub const OWNED_ELSEWHERE_MARKER: &str = "owned by another TUICommander instance";
 
 const LOCK_FILE: &str = "dictation.lock";

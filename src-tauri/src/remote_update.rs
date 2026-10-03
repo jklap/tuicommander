@@ -204,19 +204,14 @@ pub(crate) async fn perform_update_and_restart(
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
-        if let Ok(health) = crate::remote_runtime::read_health(&client, &base_url).await {
-            if health
+        if let Ok(health) = crate::remote_runtime::read_health(&client, &base_url).await
+            && health
                 .build
                 .as_ref()
                 .is_some_and(|build| build.sha256 == preview.desktop_build.sha256)
-            {
-                crate::remote_runtime::record_updated_build(
-                    state,
-                    id,
-                    preview.desktop_build.clone(),
-                );
-                return Ok(preview);
-            }
+        {
+            crate::remote_runtime::record_updated_build(state, id, preview.desktop_build.clone());
+            return Ok(preview);
         }
         if std::time::Instant::now() >= deadline {
             return Err(format!(
@@ -414,11 +409,11 @@ async fn upload_inner(
             )
         })?;
         drop(file);
-        let actual: String = hasher
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        use std::fmt::Write as _;
+        let mut actual = String::with_capacity(64);
+        for byte in hasher.finalize() {
+            write!(actual, "{byte:02x}").expect("writing to a String cannot fail");
+        }
         if !actual.eq_ignore_ascii_case(digest) {
             return Err(error(
                 StatusCode::BAD_REQUEST,

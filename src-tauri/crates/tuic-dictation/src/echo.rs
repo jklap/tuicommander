@@ -361,7 +361,7 @@ impl EchoGuard {
         }
 
         let mut cleaned: Vec<f32> = self.remainder.drain(..frames * FRAME_SAMPLES).collect();
-        for frame in cleaned.chunks_exact_mut(FRAME_SAMPLES) {
+        for frame in cleaned.as_chunks_mut::<FRAME_SAMPLES>().0 {
             let far_end = self.far_end.take(FRAME_SAMPLES);
             self.canceller.cancel(&far_end, frame);
         }
