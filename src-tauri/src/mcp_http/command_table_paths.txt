@@ -151,6 +151,7 @@
 /fs/search-content-all
 /fs/stat
 /fs/transfer
+/fs/transfer-remote
 /fs/warm-index
 /fs/write
 /fs/write-external
