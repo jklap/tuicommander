@@ -75,7 +75,9 @@ async fn serve() -> (SocketAddr, Shared) {
     let state = shared.clone();
     tokio::spawn(async move {
         loop {
-            let Ok((mut socket, _)) = listener.accept().await else { return };
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
             let mut raw = Vec::new();
             let mut buf = [0u8; 4096];
             let (head, mut body) = loop {
@@ -113,7 +115,11 @@ async fn serve() -> (SocketAddr, Shared) {
                     Some(code) => (code, format!(r#"{{"ok":false,"error_code":{code}}}"#)),
                     None => {
                         let mut pick: Vec<&str> = if offset == -1 {
-                            fake.updates.last().map(|u| u.1.as_str()).into_iter().collect()
+                            fake.updates
+                                .last()
+                                .map(|u| u.1.as_str())
+                                .into_iter()
+                                .collect()
                         } else {
                             fake.updates
                                 .iter()
@@ -123,7 +129,10 @@ async fn serve() -> (SocketAddr, Shared) {
                                 .collect()
                         };
                         pick.truncate(limit);
-                        (200, format!(r#"{{"ok":true,"result":[{}]}}"#, pick.join(",")))
+                        (
+                            200,
+                            format!(r#"{{"ok":true,"result":[{}]}}"#, pick.join(",")),
+                        )
                     }
                 }
             };
@@ -158,8 +167,9 @@ async fn stranger_flood_larger_than_response_cap_does_not_wedge_polling() {
     let (address, shared) = serve().await;
     let mut inbound = ready(&paths, address).await;
     let flood = "😀".repeat(4096);
-    shared.lock().unwrap().updates =
-        (20001..20031).map(|id| message(id, 999, "private", &flood)).collect();
+    shared.lock().unwrap().updates = (20001..20031)
+        .map(|id| message(id, 999, "private", &flood))
+        .collect();
     let mut progressed = false;
     for _ in 0..12 {
         if inbound.poll().await.is_ok() {
@@ -167,7 +177,10 @@ async fn stranger_flood_larger_than_response_cap_does_not_wedge_polling() {
             break;
         }
     }
-    assert!(progressed, "polling never recovered from an oversized stranger batch");
+    assert!(
+        progressed,
+        "polling never recovered from an oversized stranger batch"
+    );
 }
 
 // Catches: capacity saturation returns Err without any backoff, so a caller
@@ -177,14 +190,23 @@ async fn capacity_saturation_does_not_cause_an_immediate_refetch() {
     let (_dir, paths) = setup();
     let (address, shared) = serve().await;
     let mut inbound = ready(&paths, address).await;
-    shared.lock().unwrap().updates =
-        (1..=100).map(|id| message(id, OWNER_CHAT, "private", "hi")).collect();
+    shared.lock().unwrap().updates = (1..=100)
+        .map(|id| message(id, OWNER_CHAT, "private", "hi"))
+        .collect();
     assert!(matches!(inbound.poll().await, Ok(Poll::Accepted(100))));
-    shared.lock().unwrap().updates.push(message(101, OWNER_CHAT, "private", "hi"));
+    shared
+        .lock()
+        .unwrap()
+        .updates
+        .push(message(101, OWNER_CHAT, "private", "hi"));
     assert!(matches!(inbound.poll().await, Err(Error::Capacity)));
     let before = requests(&shared);
     let _ = inbound.poll().await;
-    assert_eq!(requests(&shared), before, "immediate retry hit the network again");
+    assert_eq!(
+        requests(&shared),
+        before,
+        "immediate retry hit the network again"
+    );
 }
 
 // Catches: a permanent 4xx (404 for a malformed/unknown token) is neither
@@ -198,7 +220,11 @@ async fn permanent_rejection_does_not_cause_an_immediate_refetch() {
     assert!(matches!(inbound.poll().await, Err(Error::Rejected(404))));
     let before = requests(&shared);
     let _ = inbound.poll().await;
-    assert_eq!(requests(&shared), before, "immediate retry hit the network again");
+    assert_eq!(
+        requests(&shared),
+        before,
+        "immediate retry hit the network again"
+    );
 }
 
 // Catches: the 401 latch lives only in memory, so a restart resumes polling
@@ -241,7 +267,10 @@ async fn second_owner_is_refused_until_the_first_drops() {
     let (_dir, paths) = setup();
     let (address, _shared) = serve().await;
     let first = Inbound::loopback(paths.clone(), address).unwrap();
-    assert!(matches!(Inbound::open(paths.clone()), Err(Error::AlreadyOwned)));
+    assert!(matches!(
+        Inbound::open(paths.clone()),
+        Err(Error::AlreadyOwned)
+    ));
     drop(first);
     assert!(Inbound::open(paths.clone()).is_ok());
 }
@@ -286,7 +315,12 @@ fn consumed_mail_is_not_resurrected_by_redelivery() {
     assert_eq!(journal.accept(&batch).unwrap(), 2);
     journal.consume("tg:mint:1", PEER).unwrap();
     assert_eq!(journal.accept(&batch).unwrap(), 0);
-    let ids: Vec<String> = journal.pending().unwrap().into_iter().map(|m| m.id).collect();
+    let ids: Vec<String> = journal
+        .pending()
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
     assert_eq!(ids, vec!["tg:mint:2".to_string()]);
 }
 
@@ -315,7 +349,9 @@ fn fifo_token_is_refused_without_blocking() {
     let (tx, rx) = std::sync::mpsc::channel();
     let p = paths.clone();
     std::thread::spawn(move || tx.send(p.token().err()).ok());
-    let got = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("token() blocked on FIFO");
+    let got = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("token() blocked on FIFO");
     assert_eq!(got, Some(Error::PrivateFile));
 }
 
@@ -339,7 +375,11 @@ fn token_with_url_metacharacters_is_refused() {
     for bad in ["1:a/b", "1:a?b=c", "1:a#b", "1:a b", "1:\u{e9}"] {
         let (_dir, paths) = setup();
         private(&paths.file("bot.token"), bad);
-        assert_eq!(paths.token().err(), Some(Error::PrivateFile), "accepted {bad:?}");
+        assert_eq!(
+            paths.token().err(),
+            Some(Error::PrivateFile),
+            "accepted {bad:?}"
+        );
     }
 }
 
@@ -348,8 +388,11 @@ fn token_with_url_metacharacters_is_refused() {
 fn group_readable_token_is_refused() {
     use std::os::unix::fs::PermissionsExt;
     let (_dir, paths) = setup();
-    std::fs::set_permissions(paths.file("bot.token"), std::fs::Permissions::from_mode(0o640))
-        .unwrap();
+    std::fs::set_permissions(
+        paths.file("bot.token"),
+        std::fs::Permissions::from_mode(0o640),
+    )
+    .unwrap();
     assert_eq!(paths.token().err(), Some(Error::PrivateFile));
 }
 
@@ -357,9 +400,24 @@ fn group_readable_token_is_refused() {
 // lines, widening authorization.
 #[test]
 fn allowlist_rejects_non_private_or_non_decimal_lines() {
-    for bad in ["0", "-100123", "+5", "0x10", "5 # me", "abc", "99999999999999999999"] {
+    for bad in [
+        "0",
+        "-100123",
+        "+5",
+        "0x10",
+        "5 # me",
+        "abc",
+        "99999999999999999999",
+    ] {
         let (_dir, paths) = setup();
-        private(&paths.file("allowed_chat_ids"), &format!("{OWNER_CHAT}\n{bad}\n"));
-        assert_eq!(paths.allowlist().err(), Some(Error::Config), "accepted {bad:?}");
+        private(
+            &paths.file("allowed_chat_ids"),
+            &format!("{OWNER_CHAT}\n{bad}\n"),
+        );
+        assert_eq!(
+            paths.allowlist().err(),
+            Some(Error::Config),
+            "accepted {bad:?}"
+        );
     }
 }
