@@ -793,7 +793,7 @@ function createTerminalsStore() {
 		},
 
 		/** Record an absolute line where the user submitted a prompt (UserInput.line
-		 *  from the OSC 7770 state=busy transition). Drives the green scrollbar marker.
+		 *  from the OSC 7770 state=prompt hook). Drives the green scrollbar marker.
 		 *  Ignores negative lines (keystroke-reconstructed UserInput has no grid row)
 		 *  and dedups consecutive repeats (a prompt redraw can re-fire busy on the same
 		 *  row). Capped at MAX_BLOCKS, mirroring commandBlocks eviction. */
