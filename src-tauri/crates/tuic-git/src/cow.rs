@@ -1217,4 +1217,49 @@ mod tests {
         assert_eq!(report.warmed, 0);
         assert!(report.warnings.is_empty());
     }
+
+    /// Story 1398-42b4 criterion 2: a child created from a linked-worktree
+    /// source receives the source's ignored build inputs, not only a passing
+    /// probe. Catches a fix that unblocks the probe while candidate discovery
+    /// still reads the source through `.git/` as a directory.
+    #[test]
+    fn a_linked_worktree_source_warms_a_sibling_worktree() {
+        let (temp, _repo, worktree) = warming_fixture();
+        std::fs::create_dir_all(worktree.join("build/cache")).unwrap();
+        std::fs::write(worktree.join("build/cache/data"), "from-worktree").unwrap();
+        let child = temp.path().join("child");
+        git_cmd(&worktree)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "grandchild",
+                child.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+
+        let report = warm_worktree_with(&worktree, &child, plain_copy);
+
+        assert_eq!(report.warmed, 1, "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(child.join("build/cache/data")).unwrap(),
+            "from-worktree"
+        );
+    }
+
+    /// A relative `gitdir:` pointer (git `worktree.useRelativePaths`, and
+    /// submodules) resolves against the source directory. Catches resolving it
+    /// against the process working directory.
+    #[test]
+    fn head_file_resolves_a_relative_gitdir_pointer() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        std::fs::create_dir_all(temp.path().join("store/wt")).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(temp.path().join("store/wt/HEAD"), "ref: refs/heads/x\n").unwrap();
+        std::fs::write(src.join(".git"), "gitdir: ../store/wt\n").unwrap();
+
+        assert!(head_file(&src).is_file(), "{:?}", head_file(&src));
+    }
 }
