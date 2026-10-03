@@ -2,8 +2,10 @@
 members = [
     ".",
     "crates/tuic-terminal",
+    "crates/tuic-ansi",
     "crates/tuic-test-support",
     "crates/tuic-core",
+    "crates/tuic-ipc",
     "crates/tuic-git",
     "crates/tuic-dictation",
     "crates/tuic-bridge",
@@ -165,6 +167,7 @@ serde_json = "1"
 [dependencies]
 tuic-terminal = { path = "crates/tuic-terminal" }
 tuic-core = { path = "crates/tuic-core" }
+tuic-ipc = { path = "crates/tuic-ipc" }
 tuic-git = { path = "crates/tuic-git" }
 tuic-dictation = { path = "crates/tuic-dictation", optional = true }
 agent-client-protocol = { version = "=2.0.0", features = [
@@ -208,7 +211,6 @@ gix = { version = "0.85", default-features = false, features = [
 parking_lot = "0.12"
 regex = "1"
 # github.rs sanitize_ci_logs strips terminal escapes from CI logs in production.
-strip-ansi-escapes = "0.2"
 lazy_static = "1"
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 # Not test-only: `progress::export::atomic_replace` needs a uniquely named
@@ -270,6 +272,8 @@ zip = "8"
 # speech downloader takes one shared library out of it (`dictation::speech::
 # assets`). Already in the tree transitively; named here because we read it.
 tar = "0.4"
+cap-std = "3.4.6"
+cap-fs-ext = "3.4.6"
 glob = "0.3"
 ignore = "0.4"
 grep-searcher = "0.1"
@@ -348,7 +352,7 @@ block2 = { version = "0.6", optional = true }
 # CPU-only on Windows: the Vulkan backend (vulkan-shaders-gen) fails to build on
 # the CI runner. Dictation runs on CPU; re-enable "vulkan" only once the
 # whisper.cpp Windows shader build is stabilized.
-windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Foundation", "Win32_System_ProcessStatus", "Wdk_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp", "Win32_System_Diagnostics_Debug", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_Security", "Win32_Foundation", "Win32_System_ProcessStatus", "Wdk_System_Threading", "Wdk_Storage_FileSystem", "Win32_System_IO", "Win32_Storage_FileSystem"] }
 
 [patch.crates-io]
 alacritty_terminal = { path = "patches/alacritty_terminal" }

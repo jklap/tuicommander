@@ -10,6 +10,7 @@ name = "tuic"
 path = "src/main.rs"
 
 [dependencies]
+tuic-ipc = { path = "../tuic-ipc" }
 clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 dirs = "6"

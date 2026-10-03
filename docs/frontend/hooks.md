@@ -316,6 +316,8 @@ Handles external file drag & drop using Tauri's native `onDragDropEvent` API (no
 
 ### Behaviour
 
+A folder target takes precedence. The File Browser panel supplies its connection id to descendant folder rows. Local drops call `fs_transfer_paths`; remote drops call the local Rust `fs_transfer_remote_paths` coordinator with that id, and always use copy semantics. Recursive-directory confirmation retains the connection id when retrying.
+
 1. **Active PTY session** — dropped file paths are written to the terminal as space-separated quoted strings (enables Claude Code image drops)
 2. **No active PTY** — `.md`/`.mdx` files open in the Markdown viewer; all other files open in the Code Editor
 

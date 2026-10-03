@@ -70,6 +70,8 @@ per cell and the configured history limit still apply.
 - PTY environment: `TERM=xterm-256color`, `COLORTERM=truecolor`, `LANG=en_US.UTF-8`. A parent `NO_COLOR` is stripped (`sanitize_pty_parent_env`) so a TUICommander launched from Codex does not leak that opt-out into independent sessions; per-command flags and per-agent environment can still request monochrome deliberately
 - Pause/resume PTY output (`pause_pty` / `resume_pty` Tauri commands) — suspends reader thread without killing the session
 
+- **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
+
 ### 1.2 Tab Bar
 - Create: `Cmd+T`, `+` button (click = new tab, right-click or long press = agent list)
 - Close: `Cmd+W`, middle-click, context menu
@@ -117,6 +119,7 @@ per cell and the configured history limit still apply.
 - Paste to terminal: `Cmd+V`
 - **Trailing whitespace trimmed** — All copy paths (Cmd+C, Ctrl+C, copy-on-select) strip trailing spaces from terminal rows
 - **Claude gutter normalization** — Multi-line terminal selections remove Claude's repeated non-breaking-space plus `▎` visual margin while preserving isolated block characters and the content's indentation
+- **Claude prompt copy** — Selections remove the composer prompt marker and continuation margin, rejoin width-supported wraps, and preserve typed breaks and pasted glyphs. Composer cleanup requires a column-zero origin outside VT soft-wrap continuations; partial body selections remain literal.
 - **Copy on Select** — When enabled (Settings > Terminal > Copy on select), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar.
 - **Copy feedback (Cmd+C)** — Copying via Cmd+C shows "Copied to clipboard" in the status bar, consistent with copy-on-select and Ctrl+C paths.
 - **OSC 52 clipboard writes** — Terminal programs (tmux, vim, ssh yank) can set the system clipboard via the OSC 52 escape sequence. Because any displayed file/log can also emit it, each write surfaces a non-blocking "Clipboard updated by &lt;session&gt;" notice, and the behavior can be disabled entirely via Settings > Terminal > "Allow OSC 52 clipboard writes". Suggestion chips (OSC 7770 `suggest=`) carrying shell metacharacters are inserted without auto-Enter so a click cannot silently execute a spoofed command.
@@ -382,6 +385,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Implemented in `ContentRenderer`, whose consumers are the Markdown panel and the AI Chat transcript
 
 ### 3.4 File Browser Panel (`Cmd+E`)
+- **Remote file drops**: native OS files dropped onto a connected remote repository are copied through its authenticated daemon connection; sources remain on the Mac. Directory copies require confirmation and existing names are skipped. Each top-level upload is limited to 256 MiB (including archive overhead) and 10,000 entries; symlinks and special files are rejected. Native destination filenames and safe executable permissions are preserved; uploads abort after 30 seconds without data.
 - Directory tree of active repository
 - **Auto-refresh**: directory watcher detects external file changes (create/delete/rename) and refreshes automatically within ~1s, preserving selection
 - Navigation: `↑/↓` (navigate), `Enter` (open/enter dir), `Backspace` (parent dir)
@@ -628,7 +632,8 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **PR Updates section** — types: Merged, Closed, Conflicts, CI Failed, CI Passed, Changes Requested, Ready
 - **Git section** — background git operation results (push, pull, fetch) with success/failure status
 - **Worktrees section** — worktree creation events (from MCP/agent)
-- **Messages section** — every toast, mirrored as it is raised, so a message that faded while the user looked elsewhere stays readable. Level and action carry over. Agent-raised MCP toasts derive their repository from the caller's session/cwd, display its name, and retain repository scope in the bell. Clicking a toast body dismisses it without navigation; **Go to repo** navigates explicitly. Controlled by "Keep toasts in the bell" (Settings > Notifications), on by default
+- **Messages section** — agent/MCP notices and agent spawns go directly to the bell, with repository scope and an explicit **Open terminal** action when a session is known. Consecutive identical notices from the same origin within five seconds produce one item and one requested sound. User-action toasts are also retained when **Keep toasts in the bell** is enabled. Overflow from the two-card limit is retained even with that setting off; dedicated-domain toasts that explicitly opt out of Messages stay visible or queued.
+- **Transient toast placement** — top-right of the terminal area, offset left of a docked panel, with at most two visible cards. Same-kind notices in the same repository/session within five seconds show a ×N summary; every new member restarts its dismissal timer. Errors take a visible slot ahead of informational cards. Tall cards scroll within the upper region so their action buttons remain reachable without covering the bottom input. Clicking a card dismisses it; navigation uses its explicit action.
 - **Plugin activity sections** — registered by plugins via activityStore
 - Click PR notification: opens full PR detail popover for that branch
 - Individual dismiss (×) per notification, section "Dismiss All", auto-dismiss after 5min focused time
@@ -2053,7 +2058,7 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - In the desktop app, an unfocused agent question also sends a native OS notification naming its terminal. The Tauri notification plugin handles desktop delivery; macOS retains the native response handle through a desktop command so a click returns to the terminal. Permission is checked once, and focused windows and repeated notices within five seconds are suppressed
 - **Sounds:** `question` (C5→E5 chime), `completion` (C5→E5→G5 arpeggio), `error` (E4→C4), `warning` (A4 double-tap), `info` (single G5 pluck), and `attention` — a triangular G4→G4→E5 callback with two short knocks and a longer rise. Native and browser/PWA playback share the motif and 0.8 gain; each engine applies its own envelope. The repeated opening is immediately recognizable while the softer timbre avoids the old square buzzer's harshness. Meant for an agent that is working unattended and is blocked on the user
 - Each sound has its own on/off toggle and Test button in Settings > Notifications, and all of them honour the global volume and chosen output device
-- **Agents can raise them over MCP**: `ui action=toast sound="attention"` (see 19.x `ui` tool). `sound: true` still means "the tone matching `level`"; a name overrides it. The sound plays through this scheme, so a muted sound stays muted no matter who asked for it
+- **Agents can raise them over MCP**: `ui action=toast sound="attention"` (see 19.x `ui` tool). `sound: true` still means "the tone matching `level`"; a name overrides it. These agent notices appear in the bell rather than as transient toasts; consecutive identical notices within five seconds play once. The sound plays through this scheme, so a muted sound stays muted no matter who asked for it
 
 ### 18.10 Visual Polish
 - Frosted glass bottom tabs: `backdrop-filter: blur(20px) saturate(1.8)` with semi-transparent background
@@ -2458,6 +2463,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Status polling runs against `/api/version`, not `/health`: only a route behind the auth middleware can tell a working connection from a rejected one
 
 ### 24.6 Event Mirror
+- Remote MCP toasts are retained once in the desktop Messages bell with `[connection name]` before the title. Their level and requested notification sound are preserved; Open terminal resolves the peer to its live remote PTY and never selects a local tab. Unknown or closed sessions leave focus unchanged. Toasts arriving after disconnect are dropped, with no replay queue. Malformed remote titles/messages are discarded without logging their content. Deduplication includes the connection id, so identically named hosts retain separate notices.
 - `remote_mirror.rs` runs one task per connected connection: it reads the daemon's `GET /sessions` and then its `/events` stream, in Rust
 - The stream carries **no** `types=` filter, and every frame is repeated on the local bus under the daemon's own event name — a client cannot tell a mirrored event from a local one, so the existing handlers raise the same badge, the same notification and the same queue gate, and a new event type crosses for free
 - Mirrored sessions appear in `list_active_sessions` and `GET /sessions` beside local ones, each carrying `connection_id` — the only field that says which machine runs it
@@ -2547,3 +2553,7 @@ profile rules or allow/deny policy in `session/new`.
 Desktop MCP discovers configured remote PTYs and peers, routes output and semantic
 submit to the owning daemon, and delivers connection-qualified peer mail through an
 authenticated desktop hub. Local mail remains independent of the hub.
+
+### Answers-only View
+
+Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marked answers and their tracked prompts. Turns without marked answers are omitted. Output before the first tracked prompt remains available as a prompt-less turn, from the retained history base. If no answers qualify, the view shows a one-line notice. Toggle the view again to return to the terminal.

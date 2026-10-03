@@ -234,3 +234,48 @@ pub fn dir_outside_home() -> std::path::PathBuf {
         std::path::PathBuf::from("/tmp")
     }
 }
+
+/// HTTP request bytes captured by an IPC test server.
+pub struct HttpRequest {
+    pub request_line: String,
+    /// Header lines retain their trailing CRLF for existing wire assertions.
+    pub headers: Vec<String>,
+    pub body: Vec<u8>,
+}
+
+/// Read one length-delimited request from a test connection.
+pub fn read_http_request(reader: &mut impl std::io::Read) -> std::io::Result<HttpRequest> {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(reader);
+    let mut line = String::new();
+    if reader.read_line(&mut line)? == 0 {
+        return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+    }
+    let request_line = line.trim_end().to_string();
+    let mut headers = Vec::new();
+    let mut length = 0;
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
+        if line == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid Content-Length")
+            })?;
+        }
+        headers.push(line.clone());
+    }
+    let mut body = vec![0; length];
+    std::io::Read::read_exact(&mut reader, &mut body)?;
+    Ok(HttpRequest {
+        request_line,
+        headers,
+        body,
+    })
+}

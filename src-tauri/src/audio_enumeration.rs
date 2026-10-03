@@ -11,31 +11,30 @@ use std::time::Duration;
 /// How long a device query may take before the caller gets an error. The first
 /// query on macOS can sit on the microphone permission prompt until the user
 /// answers it, so the bound has to outlast a human.
-const ENUMERATION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const ENUMERATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(test)]
-static TIMEOUT_OVERRIDE_MS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(u64::MAX);
+static FAIL_ENUMERATION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Test seam: a route test makes the real enumeration time out by shrinking the
-/// bound, instead of mocking the enumeration.
+/// Resets the failure injection when dropped, so a test cannot leak it into
+/// another test sharing the process.
 #[cfg(test)]
-pub(crate) fn override_timeout_for_test(timeout: Duration) {
-    TIMEOUT_OVERRIDE_MS.store(
-        timeout.as_millis() as u64,
-        std::sync::atomic::Ordering::SeqCst,
-    );
+pub(crate) struct EnumerationFailure;
+
+#[cfg(test)]
+impl Drop for EnumerationFailure {
+    fn drop(&mut self) {
+        FAIL_ENUMERATION.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
-pub(crate) fn enumeration_timeout() -> Duration {
-    #[cfg(test)]
-    {
-        let ms = TIMEOUT_OVERRIDE_MS.load(std::sync::atomic::Ordering::SeqCst);
-        if ms != u64::MAX {
-            return Duration::from_millis(ms);
-        }
-    }
-    ENUMERATION_TIMEOUT
+/// Test seam: every enumeration run through [`run_bounded`] fails while the
+/// returned guard lives. The failure is a panic inside the real blocking task,
+/// not a shrunk timeout, so it does not depend on how fast the host enumerates.
+#[cfg(test)]
+pub(crate) fn fail_enumeration_for_test() -> EnumerationFailure {
+    FAIL_ENUMERATION.store(true, std::sync::atomic::Ordering::SeqCst);
+    EnumerationFailure
 }
 
 /// Runs `f` on the blocking pool and gives up after `timeout`. A stalled `f`
@@ -46,6 +45,13 @@ pub(crate) async fn run_bounded<T: Send + 'static>(
     timeout: Duration,
     f: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, String> {
+    #[cfg(test)]
+    let f = move || {
+        if FAIL_ENUMERATION.load(std::sync::atomic::Ordering::SeqCst) {
+            panic!("injected enumeration failure");
+        }
+        f()
+    };
     match tokio::time::timeout(timeout, tokio::task::spawn_blocking(f)).await {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(format!("{what} failed: {error}")),
@@ -91,7 +97,21 @@ mod tests {
 
     #[tokio::test]
     async fn a_fast_enumeration_returns_its_value() {
-        let result = run_bounded("fast", enumeration_timeout(), || vec![1, 2]).await;
+        let result = run_bounded("fast", ENUMERATION_TIMEOUT, || vec![1, 2]).await;
         assert_eq!(result.unwrap(), vec![1, 2]);
+    }
+
+    /// Catches: failure injection that races a shrunk timeout against the
+    /// enumeration, so an instant enumeration (Linux, no audio devices) wins and
+    /// the "failure" never happens.
+    #[tokio::test]
+    async fn an_injected_failure_fails_even_an_instant_enumeration() {
+        let _failure = fail_enumeration_for_test();
+        let result = run_bounded("instant", ENUMERATION_TIMEOUT, || 1).await;
+        assert!(
+            result
+                .expect_err("injected failure must surface")
+                .contains("instant failed")
+        );
     }
 }

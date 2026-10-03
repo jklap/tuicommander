@@ -128,23 +128,28 @@ fn response_timeout(body: &str) -> std::time::Duration {
 
 #[cfg(unix)]
 fn config_dir() -> std::path::PathBuf {
-    dirs::config_dir()
-        .map(|d| d.join("com.tuic.commander"))
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join(".tuicommander")
-        })
+    tuic_ipc::app_instance::current_app_instance().config_dir_from(
+        dirs::config_dir().as_deref(),
+        &dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")),
+    )
 }
 
 #[cfg(unix)]
 fn ipc_endpoint() -> String {
-    config_dir().join("mcp.sock").to_string_lossy().to_string()
+    std::env::var("TUIC_SOCKET").unwrap_or_else(|_| {
+        tuic_ipc::socket_path(
+            tuic_ipc::app_instance::current_app_instance(),
+            &config_dir(),
+            &std::env::temp_dir(),
+        )
+        .to_string_lossy()
+        .into_owned()
+    })
 }
 
 #[cfg(windows)]
 fn ipc_endpoint() -> String {
-    r"\\.\pipe\tuicommander-mcp".to_string()
+    tuic_ipc::PIPE_NAME.to_string()
 }
 
 /// Wrapper that provides a unified IPC stream type across platforms.
@@ -234,7 +239,11 @@ async fn connect_ipc() -> Result<IpcStream, String> {
         }
 
         let dir = config_dir();
-        let primary = dir.join("mcp.sock");
+        let primary = tuic_ipc::socket_path(
+            tuic_ipc::app_instance::current_app_instance(),
+            &dir,
+            &std::env::temp_dir(),
+        );
 
         // Try primary socket first (with timeout to avoid hanging on stale sockets)
         if let Ok(Ok(stream)) = tokio::time::timeout(
@@ -247,13 +256,18 @@ async fn connect_ipc() -> Result<IpcStream, String> {
         }
 
         // Fall back to mcp-*.sock alternatives
-        if let Ok(entries) = std::fs::read_dir(&dir) {
+        let search_dir = primary.parent().unwrap_or(&dir);
+        let prefix = format!(
+            "{}-",
+            primary.file_stem().unwrap_or_default().to_string_lossy()
+        );
+        if let Ok(entries) = std::fs::read_dir(search_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
                 let Some(name_str) = name.to_str() else {
                     continue;
                 };
-                if name_str.starts_with("mcp-")
+                if name_str.starts_with(&prefix)
                     && name_str.ends_with(".sock")
                     && let Ok(Ok(stream)) = tokio::time::timeout(
                         std::time::Duration::from_secs(3),
@@ -273,7 +287,7 @@ async fn connect_ipc() -> Result<IpcStream, String> {
     }
     #[cfg(windows)]
     {
-        const PIPE_NAME: &str = r"\\.\pipe\tuicommander-mcp";
+        const PIPE_NAME: &str = tuic_ipc::PIPE_NAME;
         let client = tokio::net::windows::named_pipe::ClientOptions::new()
             .open(PIPE_NAME)
             .map_err(|e| format!("connect {PIPE_NAME}: {e}"))?;
@@ -370,28 +384,27 @@ async fn post_mcp(
 ) -> Result<(String, Option<String>), String> {
     let mut stream = connect_ipc().await?;
 
-    let mut headers = format!(
-        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nMCP-Protocol-Version: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
-        request_protocol_version(body),
-        body.len()
-    );
+    let protocol_version = request_protocol_version(body);
+    let session_header = tuic_session_header_line(TUIC_SESSION_ENV.as_deref());
+    let client_header = client_pid_header_line(std::process::id());
+    let mut headers = vec![("MCP-Protocol-Version", protocol_version.as_str())];
     if let Some(sid) = session_id {
-        headers.push_str(&format!("mcp-session-id: {sid}\r\n"));
+        headers.push(("mcp-session-id", sid));
     }
-    // Assert our PTY identity so the server auto-binds swarm identity without an
-    // explicit `agent register` round-trip. Read once, cached at startup.
-    headers.push_str(&tuic_session_header_line(TUIC_SESSION_ENV.as_deref()));
-    headers.push_str(&client_pid_header_line(std::process::id()));
-    headers.push_str("\r\n");
-
+    for line in [session_header.trim(), client_header.trim()] {
+        if let Some((key, value)) = line.split_once(':') {
+            headers.push((key, value.trim()));
+        }
+    }
     stream
-        .write_all(headers.as_bytes())
+        .write_all(&tuic_ipc::http::request(
+            "POST",
+            "/mcp",
+            Some(body),
+            &headers,
+        ))
         .await
-        .map_err(|e| format!("write headers: {e}"))?;
-    stream
-        .write_all(body.as_bytes())
-        .await
-        .map_err(|e| format!("write body: {e}"))?;
+        .map_err(|e| format!("write: {e}"))?;
 
     // Do not wait for EOF: hyper may keep an accepted IPC connection alive even
     // when the request says `Connection: close`. Read exactly Content-Length and
@@ -420,38 +433,20 @@ async fn read_http_response<R>(reader: &mut R) -> Result<(String, String), Strin
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    let mut buf = Vec::with_capacity(4096);
-    let mut chunk = [0u8; 4096];
+    let mut decoder = tuic_ipc::http::ResponseDecoder::default();
+    let mut bytes = [0; 4096];
     loop {
-        let n = reader
-            .read(&mut chunk)
+        let count = reader
+            .read(&mut bytes)
             .await
             .map_err(|e| format!("read: {e}"))?;
-        if n == 0 {
-            return Err("read: response ended before the declared body length".to_string());
+        decoder.push(&bytes[..count]);
+        if let Some(response) = decoder
+            .response(count == 0)
+            .map_err(|e| format!("read: {e}"))?
+        {
+            return Ok((response.raw_headers, response.body));
         }
-        buf.extend_from_slice(&chunk[..n]);
-
-        let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
-            continue;
-        };
-        let body_start = header_end + 4;
-        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
-        let content_length = headers.lines().find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().ok())
-                .flatten()
-        });
-        let Some(content_length) = content_length else {
-            return Err("read: HTTP response missing Content-Length".to_string());
-        };
-        if buf.len() < body_start + content_length {
-            continue;
-        }
-        let body =
-            String::from_utf8_lossy(&buf[body_start..body_start + content_length]).to_string();
-        return Ok((headers, body));
     }
 }
 
@@ -884,6 +879,20 @@ async fn dispatch_loop(
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
+    let mut args = std::env::args().skip(1);
+    let selected = match args.next().as_deref() {
+        None => tuic_ipc::app_instance::select_app_instance_from_env(),
+        Some("--instance") => match (args.next(), args.next()) {
+            (Some(id), None) => tuic_ipc::app_instance::select_app_instance(Some(&id)),
+            _ => Err("Usage: tuic-bridge [--instance <id>]".to_string()),
+        },
+        Some(_) => Err("Usage: tuic-bridge [--instance <id>]".to_string()),
+    };
+    if let Err(error) = selected {
+        eprintln!("tuic-bridge: {error}");
+        std::process::exit(1);
+    }
+
     eprintln!(
         "tuic-bridge v{} starting ({})",
         env!("CARGO_PKG_VERSION"),

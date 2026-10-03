@@ -527,6 +527,8 @@ Active prompt overlay state and agent stats buffer.
 ### diffTabsStore (`diffTabs.ts`) / mdTabsStore (`mdTabs.ts`)
 Open diff and markdown tab management (identical API patterns).
 
+MCP native Markdown file tabs survive document reloads through a per-window `sessionStorage` snapshot. `initApp` restores their MCP identity, file target, repository/branch scope and pin state after terminal adoption. The store then saves relevant changes synchronously, including closes, pinning and selection, so native recovery does not depend on `beforeunload`. The unload handler also saves a final snapshot. Both automatic and explicit saves wait until initial restoration finishes, preserving the unread snapshot if another reload interrupts startup. Restoration consumes the prior snapshot only once per document and still runs if restoring the active repository branch fails. The selected document is selected again; background tabs remain inactive. A new MCP event received during startup takes precedence over the snapshot, including one that moves the identity to an editor tab. Snapshots are consumed before parsing so corrupt JSON is not replayed on the next initialization. User-opened files and generated or iframe panels are not included. This is reload recovery, not backend persistence across app restarts.
+
 `mdTabsStore.openUiTab` treats URL and HTML content as alternatives. Updating an existing URL tab with HTML clears its URL; updating an HTML tab with a URL clears its HTML. Visibility is decided by the tab renderers, which unload hidden plugin and URL iframes.
 
 ### updaterStore (`updater.ts`)

@@ -37,15 +37,13 @@ use axum::{
     Json, Router,
     extract::{ConnectInfo, Extension, Path as AxumPath, Query, State},
 };
-// Only `named_socket_path` hashes, and Unix domain sockets are the only reason
-// it exists — so on Windows this import is dead and `-D warnings` rejects it.
-#[cfg(unix)]
-use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
 use tower_http::cors::CorsLayer;
+#[cfg(unix)]
+use tuic_ipc::named_socket_path;
 
 /// Maximum terminal dimension (rows or cols). Prevents resource abuse from
 /// absurdly large allocations while still allowing generous sizes.
@@ -134,23 +132,11 @@ pub(crate) fn upstream_json_result<T: serde::Serialize>(result: Result<T, String
 /// Default IPC endpoint path for local MCP bridge connections (Unix domain socket).
 #[cfg(unix)]
 pub(crate) fn socket_path() -> std::path::PathBuf {
-    let instance = crate::app_instance::current_app_instance();
-    let Some(id) = instance.named_id() else {
-        return crate::config::config_dir().join("mcp.sock");
-    };
-
-    named_socket_path(id, &std::env::temp_dir())
-}
-
-#[cfg(unix)]
-fn named_socket_path(id: &str, temp_dir: &std::path::Path) -> std::path::PathBuf {
-    // macOS limits Unix-domain socket paths to 104 bytes. The platform config
-    // directory plus `instances/<id>/mcp.sock` exceeds that limit for ordinary
-    // named ids, so keep named-instance sockets in the OS temp directory while
-    // retaining a deterministic, collision-resistant name for the bridge.
-    let digest = Sha256::digest(id.as_bytes());
-    let short_id = hex::encode(&digest[..8]);
-    temp_dir.join(format!("tuic-mcp-{short_id}.sock"))
+    tuic_ipc::socket_path(
+        crate::app_instance::current_app_instance(),
+        &crate::config::config_dir(),
+        &std::env::temp_dir(),
+    )
 }
 
 /// Resolve which socket path this instance should bind to.
@@ -220,7 +206,7 @@ fn cleanup_stale_sockets() {
 
 /// Named pipe name for Windows IPC (without the \\.\pipe\ prefix for display).
 #[cfg(windows)]
-const PIPE_NAME: &str = r"\\.\pipe\tuicommander-mcp";
+const PIPE_NAME: &str = tuic_ipc::PIPE_NAME;
 
 /// axum::serve::Listener implementation for Windows named pipes.
 /// Uses the tokio reconnect pattern: pre-creates the next pipe instance before
@@ -1284,6 +1270,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/fs/copy-abs", post(fs_routes::copy_path_abs_http))
         .route("/fs/move-abs", post(fs_routes::move_path_abs_http))
         .route("/fs/transfer", post(fs_routes::fs_transfer_paths_http))
+        .route("/fs/upload-copy", post(fs_routes::upload_copy_http))
         // Claude Usage dashboard
         .route("/claude/usage", get(claude_routes::claude_usage_api))
         .route(
@@ -1510,17 +1497,26 @@ pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
 /// exercising different code (AGENTS.md, "Which timing assertions are
 /// load-bearing").
 ///
-/// Both layers are safe over SSE and WebSocket. `tower_http`'s `ResponseFuture`
-/// races its sleep only against the future that produces the `Response`; once
+/// Both layers are safe over SSE and WebSocket. The timeout races its sleep
+/// only against the future that produces the `Response`; once
 /// headers are returned the timeout is dropped and the body streams
 /// unwatched. `Sse` and `WebSocketUpgrade` both return immediately, so neither
 /// `/events` nor a PTY socket can be cut off mid-stream.
 pub(crate) fn with_server_limits(routes: Router, timeout: std::time::Duration) -> Router {
     routes
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            timeout,
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                // Upload bodies carry their own idle, size and total receive budgets.
+                // The ordinary response deadline is too short for large transfers.
+                if request.uri().path() == "/fs/upload-copy" {
+                    return next.run(request).await;
+                }
+                match tokio::time::timeout(timeout, next.run(request)).await {
+                    Ok(response) => response,
+                    Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+                }
+            },
         ))
 }
 
@@ -7483,12 +7479,12 @@ mod tests {
 
     /// Catches: a device route answering 200 with an error body (a plain `Json(..)`
     /// instead of `json_result`) when the enumeration fails, which the client
-    /// would parse as a device list. A zero bound makes the real enumeration
-    /// time out; no mock layer.
+    /// would parse as a device list. The injected failure panics inside the real
+    /// blocking task, independent of enumeration speed; no mock layer.
     #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn the_device_routes_answer_500_when_the_enumeration_fails() {
-        crate::audio_enumeration::override_timeout_for_test(std::time::Duration::ZERO);
+        let _failure = crate::audio_enumeration::fail_enumeration_for_test();
         let app = build_router(test_state(), false, true);
         for path in ["/dictation/devices", "/audio/output-devices"] {
             let response = app
@@ -7506,9 +7502,7 @@ mod tests {
                 .unwrap();
             let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert!(
-                json["error"]
-                    .as_str()
-                    .is_some_and(|e| e.contains("timed out")),
+                json["error"].as_str().is_some_and(|e| e.contains("failed")),
                 "GET {path}: {json}"
             );
         }

@@ -1,7 +1,11 @@
-import { batch } from "solid-js";
+import { batch, createComputed, createRoot, createSignal, untrack } from "solid-js";
 import { pathBasename } from "../utils/pathUtils";
+import { appLogger } from "./appLogger";
+import { editorTabsStore } from "./editorTabs";
 import { branchKeyFor, repositoriesStore, resolveRepoPathFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
+
+const MCP_RELOAD_KEY = "tui-commander-mcp-markdown-reload";
 
 // Zoom bounds mirror the terminal zoom (useTerminalLifecycle) for consistency.
 const MD_MIN_FONT_SIZE = 8;
@@ -190,6 +194,7 @@ const pluginPanelClosedListeners = new Set<(tabId: string) => void>();
 
 function createMdTabsStore() {
 	const base = createTabManager<MdTabData>("markdown");
+	const [reloadReady, setReloadReady] = createSignal(false);
 
 	/** Announce a plugin-panel closure to every subscriber. */
 	function announceIfPluginPanel(tabId: string): void {
@@ -197,8 +202,82 @@ function createMdTabsStore() {
 		for (const listener of pluginPanelClosedListeners) listener(tabId);
 	}
 
-	return {
+	const store = {
 		state: base.state,
+
+		/** Keep MCP documents in this window across WebView/HMR reloads only. */
+		saveForReload(): void {
+			// An unload during boot must preserve the unread snapshot of the old document.
+			if (!untrack(reloadReady)) return;
+			const tabs = base.state._order
+				.map((id) => base.get(id))
+				.filter((tab): tab is FileTab => tab?.type === "file" && !!tab.mcpUiId)
+				.map((tab) => ({
+					mcpUiId: tab.mcpUiId,
+					repoPath: tab.repoPath,
+					filePath: tab.filePath,
+					branchKey: tab.branchKey,
+					pinned: tab.pinned === true,
+				}));
+			try {
+				if (tabs.length === 0) {
+					sessionStorage.removeItem(MCP_RELOAD_KEY);
+					return;
+				}
+				sessionStorage.setItem(
+					MCP_RELOAD_KEY,
+					JSON.stringify({
+						tabs,
+						activeMcpUiId: base.getActive()?.type === "file" ? base.getActive()?.mcpUiId : undefined,
+					}),
+				);
+			} catch (err) {
+				untrack(() => appLogger.warn("store", "Could not save MCP Markdown tabs for reload", err));
+			}
+		},
+
+		/** Called after repository and terminal restoration so selected documents win. */
+		restoreAfterReload(): void {
+			if (untrack(reloadReady)) return;
+			try {
+				const raw = sessionStorage.getItem(MCP_RELOAD_KEY);
+				// Consume even corrupt JSON; another init must not replay a broken snapshot.
+				sessionStorage.removeItem(MCP_RELOAD_KEY);
+				const saved: unknown = JSON.parse(raw ?? "null");
+				if (!saved || typeof saved !== "object") return;
+				const snapshot = saved as Record<string, unknown>;
+				if (!Array.isArray(snapshot.tabs)) return;
+				for (const value of snapshot.tabs) {
+					if (!value || typeof value !== "object") continue;
+					const tab = value as Record<string, unknown>;
+					if (
+						typeof tab.mcpUiId !== "string" ||
+						!tab.mcpUiId ||
+						typeof tab.repoPath !== "string" ||
+						typeof tab.filePath !== "string" ||
+						!tab.filePath ||
+						typeof tab.pinned !== "boolean" ||
+						(tab.branchKey !== undefined && typeof tab.branchKey !== "string")
+					)
+						continue;
+					// A fresh MCP event received during boot takes precedence over disk.
+					if (
+						Object.values(base.state.tabs).some(
+							(open) => open.mcpUiId === tab.mcpUiId || (open.type === "plugin-panel" && open.pluginId === tab.mcpUiId),
+						) ||
+						Object.values(editorTabsStore.state.tabs).some((open) => open.mcpUiId === tab.mcpUiId)
+					)
+						continue;
+					const id = this.addMcpFile(tab.mcpUiId, tab.repoPath, tab.filePath, tab.pinned, true);
+					base._setState("tabs", id, "branchKey", tab.branchKey as string | undefined);
+					if (tab.mcpUiId === snapshot.activeMcpUiId) base.setActive(id);
+				}
+			} catch (err) {
+				appLogger.warn("store", "Could not restore MCP Markdown tabs after reload", err);
+			} finally {
+				setReloadReady(true);
+			}
+		},
 
 		/** Remove a tab. Plugin panels announce their own death on the way out. */
 		remove(id: string): void {
@@ -723,6 +802,16 @@ function createMdTabsStore() {
 			);
 		},
 	};
+
+	// The store lives for the document lifetime. Save synchronously on changes,
+	// including close/pin/selection, so recovery needs no surviving unload handler.
+	// Wait until restore consumes the old snapshot before observing the empty store.
+	createRoot(() => {
+		createComputed(() => {
+			if (reloadReady()) store.saveForReload();
+		});
+	});
+	return store;
 }
 
 export const mdTabsStore = createMdTabsStore();

@@ -22,6 +22,10 @@ use std::path::{Path, PathBuf};
     about = "TUICommander CLI — editor, multiplexer, orchestrator"
 )]
 struct Cli {
+    /// Select an isolated application instance (overrides TUIC_APP_INSTANCE)
+    #[arg(long, global = true)]
+    instance: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 
@@ -358,10 +362,12 @@ fn main() {
         .unwrap_or_default();
 
     if argv0 == "tmux" {
+        select_instance(None);
         return tmux_compat();
     }
 
     let cli = Cli::parse();
+    select_instance(cli.instance.as_deref());
 
     let result = match cli.command {
         Some(cmd) => dispatch(cmd),
@@ -382,6 +388,17 @@ fn main() {
 
     if let Err(e) = result {
         eprintln!("tuic: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn select_instance(instance: Option<&str>) {
+    let result = match instance {
+        Some(id) => tuic_ipc::app_instance::select_app_instance(Some(id)),
+        None => tuic_ipc::app_instance::select_app_instance_from_env(),
+    };
+    if let Err(error) = result {
+        eprintln!("tuic: {error}");
         std::process::exit(1);
     }
 }

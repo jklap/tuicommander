@@ -1,5 +1,7 @@
 # Terminal Features
 
+Remote terminals replay their current viewport when attached or reconnected. A stream failure or stalled initial replay shows a persistent error toast; the client retries without requiring new terminal output. See [Remote Access](remote-access.md).
+
 ## Terminal Sessions
 
 Each terminal tab runs an independent PTY (pseudo-terminal) session with your shell. Up to 50 concurrent sessions.
@@ -237,6 +239,7 @@ Also accessible via the "Search Terminals" command in the palette.
 ## Copy & Paste
 
 - **Copy:** Select text in the terminal, then `Cmd+C`. A "Copied to clipboard" confirmation appears in the status bar. Multi-line Claude messages paste as clean text: the repeated `▎` visual gutter is removed while bullets, numbering, and indentation are preserved. Inside such a quote, rows that Claude broke only to fit the terminal width are joined back into one paragraph, so pasting into Slack or an email keeps whole sentences. Blank rows, list items and deeper indents keep their own line, and a quote that never reaches the terminal edge is copied exactly as shown.
+  Claude prompt selections also remove the first `❯ ` marker and the two-column continuation margin. Width-supported wraps join, while short typed lines and additional content indentation remain. A glyph pasted inside the prompt remains part of the text. Composer cleanup applies only when the selection starts at column zero of the first composer row. Selecting body text or a VT soft-wrap continuation preserves literal markers and indentation.
 - **Paste:** `Cmd+V` writes clipboard content to the active terminal
 
 ### Copy on Select
@@ -340,3 +343,7 @@ On restart, only terminals that had an active agent session are restored — pla
 ### OSC 8 Hyperlinks
 
 Terminal output that uses the OSC 8 standard for hyperlinks (e.g., URLs emitted by `ls --hyperlink`) is supported. Clicking an OSC 8 hyperlink opens the URL in your system browser.
+
+### Answers-only View
+
+Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marked answers and their tracked prompts. Turns without marked answers are omitted. Output before the first tracked prompt remains available as a prompt-less turn, from the retained history base. If no answers qualify, the view shows a one-line notice. Toggle the view again to return to the terminal.
