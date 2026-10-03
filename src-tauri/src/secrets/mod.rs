@@ -9,6 +9,8 @@ use schema::valid_name;
 pub(crate) use schema::{Field, FieldKind, Form};
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_critic1435;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
