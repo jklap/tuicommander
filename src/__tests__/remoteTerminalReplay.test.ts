@@ -17,7 +17,7 @@ class Socket {
 	onopen: (() => void) | null = null;
 	onclose: (() => void) | null = null;
 	onerror: (() => void) | null = null;
-	onmessage: ((event: { data: ArrayBuffer }) => void) | null = null;
+	onmessage: ((event: { data: ArrayBuffer | string }) => void) | null = null;
 	constructor(_url: string) {
 		Socket.instances.push(this);
 	}
@@ -42,6 +42,28 @@ describe("remote terminal replay health", () => {
 		setRemoteTokenLookup(() => undefined);
 		vi.unstubAllGlobals();
 		vi.useRealTimers();
+	});
+
+	// Catches: the explicit empty replay is mistaken for a stalled healthy idle terminal.
+	it.each([false, true])("accepts an empty replay without false failure (negotiated=%s)", async (negotiated) => {
+		const errors: unknown[] = [];
+		const painted = vi.fn();
+		transport.onStreamError((error) => errors.push(error));
+		const subscribed = transport.subscribe(painted);
+		const socket = Socket.instances[0];
+		socket.protocol = negotiated ? DEFLATE_SUBPROTOCOL : "";
+		socket.onopen?.();
+		await subscribed;
+		const text = JSON.stringify({ type: "grid-replay-empty" });
+		const data = negotiated ? new Uint8Array([2, ...new TextEncoder().encode(text)]).buffer : text;
+		socket.onmessage?.({ data });
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(errors).toEqual([]);
+		expect(painted).not.toHaveBeenCalled();
+		expect(Socket.instances).toHaveLength(1);
+		socket.onmessage?.({ data: negotiated ? new Uint8Array([0, ...new Uint8Array(replay)]).buffer : replay });
+		await vi.advanceTimersByTimeAsync(0);
+		expect(painted).toHaveBeenCalledTimes(1);
 	});
 
 	// Catches: opening a WS is treated as healthy even when initial replay never arrives, leaving a blank pane forever.
