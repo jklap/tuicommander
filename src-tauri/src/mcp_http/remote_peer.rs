@@ -160,11 +160,14 @@ fn remember_forwarded(
             // sender. Retirement itself never purges dedupe. Accepted risk: a
             // departed sender reconnecting after pressure eviction can deliver
             // one duplicate. Live shadow windows are never eviction candidates.
+            // Disconnect can retire the admitting shadow between native_call
+            // registration and enqueue_forwarded; keep its windows regardless.
             let oldest = history
                 .senders
                 .iter()
                 .filter(|(sender, _)| {
-                    !state.peer_agents.contains_key(sender.as_str())
+                    sender.as_str() != message.from_tuic_session
+                        && !state.peer_agents.contains_key(sender.as_str())
                         && (!host_full || sender_host(sender) == host)
                 })
                 .min_by_key(|(_, records)| records.last_active)
@@ -739,6 +742,9 @@ async fn connection(state: &Arc<AppState>, id: &str) -> Result<Arc<Link>, Value>
             .connections
             .remove_if(&id, |_, current| Arc::ptr_eq(current, &task_link))
             .is_some();
+        // DEFERRED (2026-10-03): a late old-link frame can recreate a shadow
+        // after disconnect; a replacement link skips this cleanup. No
+        // deterministic reproduction yet; keep link-generation behavior unchanged.
         if removed || !task_state.remote_mail.connections.contains_key(&id) {
             cleanup_shadows(&task_state, Some(&id));
         }
@@ -1476,6 +1482,69 @@ mod tests {
                 Ok(true)
             );
         }
+    }
+
+    // Catches: the only departed candidate evicts its own retained replay IDs.
+    #[test]
+    fn remote_peer_only_admitting_sender_rejects_pressure_without_losing_dedupe() {
+        let state = test_state();
+        seed_records(&state, "mint/s", MAX_HOST_RECORDS);
+        shadow(&state, "recipient");
+        let reason =
+            enqueue_forwarded(&state, "recipient", forwarded("new", "mint/s")).unwrap_err();
+        assert!(reason.contains("'mint'"), "{reason}");
+        assert!(!state.agent_inbox.contains_key("recipient"));
+        assert_eq!(
+            record_forwarded(&state, "mint/s-r0", &forwarded("mint/s-0", "mint/s")),
+            Ok(false)
+        );
+        assert_eq!(
+            state.remote_mail.forwarded_history.lock().records,
+            MAX_HOST_RECORDS
+        );
+    }
+
+    // Catches: protecting the admitting sender rejects instead of reclaiming another departure.
+    #[test]
+    fn remote_peer_admitting_sender_evicts_another_departed_sender() {
+        let state = test_state();
+        seed_records(&state, "mint/s", MAX_HOST_RECORDS - 1);
+        seed_records(&state, "mint/other", 1);
+        shadow(&state, "recipient");
+        assert!(
+            enqueue_forwarded(&state, "recipient", forwarded("new", "mint/s"))
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(state.agent_inbox.get("recipient").unwrap().len(), 1);
+        assert_eq!(
+            record_forwarded(&state, "mint/s-r0", &forwarded("mint/s-0", "mint/s")),
+            Ok(false)
+        );
+        let history = state.remote_mail.forwarded_history.lock();
+        assert!(!history.senders.contains_key("mint/other"));
+        assert_eq!(history.senders["mint/s"].records, MAX_HOST_RECORDS);
+    }
+
+    // Catches: a sender that becomes live again remains an eviction candidate under pressure.
+    #[test]
+    fn remote_peer_sender_live_again_keeps_replay_windows_under_pressure() {
+        let state = test_state();
+        shadow(&state, "mint/s");
+        seed_records(&state, "mint/s", MAX_HOST_RECORDS);
+        unregister_peer(&state, "mint/s");
+        shadow(&state, "mint/s");
+        shadow(&state, "recipient");
+        for sender in ["mint/other", "mint/s"] {
+            let reason =
+                enqueue_forwarded(&state, "recipient", forwarded("new", sender)).unwrap_err();
+            assert!(reason.contains("'mint'"), "{reason}");
+        }
+        assert!(!state.agent_inbox.contains_key("recipient"));
+        assert_eq!(
+            record_forwarded(&state, "mint/s-r0", &forwarded("mint/s-0", "mint/s")),
+            Ok(false)
+        );
     }
 
     // Catches: multiple shadows of one remote host bypass the flooding quota.
