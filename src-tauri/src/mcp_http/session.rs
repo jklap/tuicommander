@@ -2571,10 +2571,9 @@ mod tests {
             )
             .await;
         });
-        let mut request =
-            format!("ws://{addr}/sessions/{sid}/stream?format=grid&compress=deflate")
-                .into_client_request()
-                .expect("client request");
+        let mut request = format!("ws://{addr}/sessions/{sid}/stream?format=grid&compress=deflate")
+            .into_client_request()
+            .expect("client request");
         request.headers_mut().insert(
             "Sec-WebSocket-Protocol",
             super::super::ws_compression::DEFLATE_SUBPROTOCOL
