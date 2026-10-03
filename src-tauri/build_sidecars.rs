@@ -1,125 +1,56 @@
-//! Placeholder detection for the `externalBin` sidecars, shared by `build.rs`
-//! and (under `cfg(test)`) the lib so `cargo nextest` can run its tests: build
-//! scripts have no test harness of their own.
+//! Disable tauri-build's reverse sidecar copy without changing the CLI's
+//! packaging configuration. This module is also compiled by the lib tests.
 
-use std::collections::HashMap;
+use serde_json::{Map, Value};
 
-/// Size and executable bit of a file in `binaries/`.
-#[derive(Clone, Copy)]
-pub struct FileState {
-    pub len: u64,
-    pub executable: bool,
-}
-
-/// The `externalBin` entries (e.g. `binaries/tuic`) whose source file
-/// `<entry>-<triple><ext>` is a placeholder: empty or not executable. Files in
-/// `binaries/` that are not an `externalBin` entry never matter, and a missing
-/// source is left for tauri-build to report.
-pub fn placeholder_entries<'a>(
-    external_bin: &'a [String],
-    triple: &str,
-    ext: &str,
-    files: &HashMap<String, FileState>,
-) -> Vec<&'a str> {
-    external_bin
-        .iter()
-        .filter(|entry| {
-            let name = entry.rsplit('/').next().unwrap_or(entry);
-            files
-                .get(&format!("{name}-{triple}{ext}"))
-                .is_some_and(|file| file.len == 0 || !file.executable)
-        })
-        .map(String::as_str)
-        .collect()
+/// Keep CLI overrides, but never copy staged sidecars into Cargo's target.
+/// The process-local override does not change tauri.conf.json or the CLI env.
+pub fn without_sidecar_copy(config: Option<&str>) -> Result<String, serde_json::Error> {
+    let mut patch: Map<String, Value> = serde_json::from_str(config.unwrap_or("{}"))?;
+    let mut bundle: Map<String, Value> = serde_json::from_value(
+        patch
+            .remove("bundle")
+            .unwrap_or_else(|| serde_json::json!({})),
+    )?;
+    bundle.insert("externalBin".into(), serde_json::json!([]));
+    patch.insert("bundle".into(), Value::Object(bundle));
+    serde_json::to_string(&patch)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const TRIPLE: &str = "aarch64-apple-darwin";
-
-    fn entries() -> Vec<String> {
-        vec!["binaries/tuic-bridge".into(), "binaries/tuic".into()]
+    // Catches: default Cargo builds copying real or placeholder sidecars back
+    // over the freshly linked workspace executable.
+    #[test]
+    fn standalone_builds_never_copy_staged_sidecars_into_target() {
+        let patch: Value = serde_json::from_str(&without_sidecar_copy(None).unwrap()).unwrap();
+        assert_eq!(patch, serde_json::json!({"bundle": {"externalBin": []}}));
     }
 
-    fn files(list: &[(&str, u64, bool)]) -> HashMap<String, FileState> {
-        list.iter()
-            .map(|(name, len, executable)| {
-                (
-                    name.to_string(),
-                    FileState {
-                        len: *len,
-                        executable: *executable,
-                    },
-                )
+    // Catches: an explicit Tauri CLI override bypassing the one-way policy,
+    // or its unrelated bundle and application settings being discarded.
+    #[test]
+    fn cli_overrides_keep_packaging_settings_without_reverse_copy() {
+        let config = r#"{"bundle":{"externalBin":["binaries/tuic-bridge"],"targets":["app"],"resources":["icons/32x32.png"]},"build":{"devUrl":"http://localhost:1420"},"identifier":"com.tuic.commander"}"#;
+        let patch: Value =
+            serde_json::from_str(&without_sidecar_copy(Some(config)).unwrap()).unwrap();
+        assert_eq!(
+            patch,
+            serde_json::json!({
+                "bundle": {"externalBin": [], "targets": ["app"], "resources": ["icons/32x32.png"]},
+                "build": {"devUrl": "http://localhost:1420"},
+                "identifier": "com.tuic.commander"
             })
-            .collect()
-    }
-
-    #[test]
-    fn real_executable_sidecars_are_not_placeholders() {
-        let files = files(&[
-            ("tuic-aarch64-apple-darwin", 10, true),
-            ("tuic-bridge-aarch64-apple-darwin", 10, true),
-        ]);
-        assert!(placeholder_entries(&entries(), TRIPLE, "", &files).is_empty());
-    }
-
-    #[test]
-    fn an_empty_stub_is_a_placeholder() {
-        let files = files(&[
-            ("tuic-aarch64-apple-darwin", 0, true),
-            ("tuic-bridge-aarch64-apple-darwin", 10, true),
-        ]);
-        assert_eq!(
-            placeholder_entries(&entries(), TRIPLE, "", &files),
-            ["binaries/tuic"]
         );
     }
 
+    // Catches: malformed CLI configuration silently replaced by defaults.
     #[test]
-    fn a_non_executable_blob_is_a_placeholder() {
-        let files = files(&[
-            ("tuic-aarch64-apple-darwin", 1275296, false),
-            ("tuic-bridge-aarch64-apple-darwin", 10, true),
-        ]);
-        assert_eq!(
-            placeholder_entries(&entries(), TRIPLE, "", &files),
-            ["binaries/tuic"]
-        );
-    }
-
-    /// Catches the first version of the fix: it scanned every file ending in
-    /// `-<triple>`, so a stray empty `tuic-remote-<triple>` dropped the real
-    /// `tuic` and `tuic-bridge` from `externalBin` as well.
-    #[test]
-    fn a_stray_file_outside_external_bin_is_ignored() {
-        let files = files(&[
-            ("tuic-aarch64-apple-darwin", 10, true),
-            ("tuic-bridge-aarch64-apple-darwin", 10, true),
-            ("tuic-remote-aarch64-apple-darwin", 0, false),
-        ]);
-        assert!(placeholder_entries(&entries(), TRIPLE, "", &files).is_empty());
-    }
-
-    #[test]
-    fn a_missing_source_is_left_to_tauri_build() {
-        let files = files(&[("tuic-bridge-aarch64-apple-darwin", 10, true)]);
-        assert!(placeholder_entries(&entries(), TRIPLE, "", &files).is_empty());
-    }
-
-    #[test]
-    fn windows_sources_carry_the_exe_suffix() {
-        let triple = "x86_64-pc-windows-msvc";
-        let files = files(&[
-            ("tuic-x86_64-pc-windows-msvc.exe", 0, true),
-            ("tuic-bridge-x86_64-pc-windows-msvc.exe", 10, true),
-            ("tuic-x86_64-pc-windows-msvc", 10, true),
-        ]);
-        assert_eq!(
-            placeholder_entries(&entries(), triple, ".exe", &files),
-            ["binaries/tuic"]
-        );
+    fn malformed_cli_overrides_fail_instead_of_being_discarded() {
+        for config in ["{", "[]", r#"{"bundle":"invalid"}"#] {
+            assert!(without_sidecar_copy(Some(config)).is_err(), "{config}");
+        }
     }
 }

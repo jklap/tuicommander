@@ -88,7 +88,6 @@ authors and communities behind each project.
 | sourcemap | 9.3.2 | BSD-3-Clause |
 | ssh2-config | 0.7.2 | MIT |
 | stop-words | 0.9.0 | MIT OR Apache-2.0 |
-| strip-ansi-escapes | 0.2.1 | Apache-2.0 OR MIT |
 | tar | 0.4.46 | MIT OR Apache-2.0 |
 | tauri | 2.11.5 | Apache-2.0 OR MIT |
 | tauri-build | 2.6.3 | Apache-2.0 OR MIT |

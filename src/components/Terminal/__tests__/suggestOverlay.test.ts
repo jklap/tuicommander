@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DecodedRow } from "../canvasTerminalUtils";
 import { rowText } from "../canvasTerminalUtils";
 import {
+	answerExtent,
 	continuationRowsAfterSuggest,
 	isSuggestBlock,
 	paintOverlayBlocks,
@@ -235,6 +236,43 @@ describe("planSuggestOverlay — 💬 answer marker", () => {
 			{ row: 1, kind: "answer" },
 			{ row: 2, kind: "answer" },
 		]);
+	});
+
+	it("tints a multi-line answer to its last row and stops before the next tool call", () => {
+		// catches: only the marker row highlighted, or the tint bleeding into the next bullet
+		const get = rows([
+			["⏺ 💬 The build passes because the cache was warm and", false],
+			["  the lockfile did not change.", true],
+			["", false],
+			["  Second paragraph of the same answer.", false],
+			["  - a bullet item inside the answer", false],
+			["⏺ Bash(make test)", false],
+			["  ⎿  ok", false],
+		]);
+		expect(planSuggestOverlay(7, get).blocks.map((b) => b.row)).toEqual([0, 1, 2, 3, 4]);
+	});
+
+	it("ends an answer at a column-0 row and does not tint trailing blank rows", () => {
+		// catches: the highlight swallowing the next user prompt or status line
+		const get = rows([
+			["⏺ 💬 Done.", false],
+			["  One more line.", false],
+			["", false],
+			["✻ Cooked for 5s", false],
+			["❯ next question", false],
+		]);
+		expect(planSuggestOverlay(5, get).blocks.map((b) => b.row)).toEqual([0, 1]);
+	});
+
+	it("starts a new answer at a second marker instead of extending the first", () => {
+		// catches: the marker break deleted from answerExtent, so the first answer swallows the second
+		const get = rows([
+			["⏺ 💬 First.", false],
+			["  more first", false],
+			["⏺ 💬 Second.", false],
+		]);
+		expect(answerExtent(0, 3, get)).toBe(1);
+		expect(answerExtent(2, 3, get)).toBe(2);
 	});
 
 	it("does not treat an emoji that a wrap lands on as a marker", () => {

@@ -114,6 +114,22 @@ describe("buildAnswersTurn", () => {
 		expect(buildAnswersTurn([row("💬 a")], false)).toEqual({ prompt: null, answers: ["💬 a"] });
 	});
 
+	it("returns the whole multi-line answer up to the next tool call", () => {
+		// catches: the answers-only view keeping only the 💬 line while the terminal highlights the whole answer
+		const rows = [
+			row("❯ q"),
+			row("⏺ 💬 First line that wraps onto"),
+			{ text: " the next row.", isWrapped: true },
+			row(""),
+			row("  Second paragraph."),
+			row("⏺ Bash(make test)"),
+			row("  ⎿  ok"),
+		];
+		expect(buildAnswersTurn(rows, true).answers).toEqual([
+			"💬 First line that wraps onto the next row.\n\nSecond paragraph.",
+		]);
+	});
+
 	it("returns no answers for a turn without markers", () => {
 		expect(buildAnswersTurn([row("❯ q"), row("plain output")], true).answers).toEqual([]);
 	});
@@ -150,7 +166,7 @@ describe("readTurnRows", () => {
 		})),
 	});
 
-	it("reads the whole turn across chunk boundaries in order, keeping wrap flags", async () => {
+	it("reads the whole turn across chunk boundaries in order, turning wire wrap flags into continuation flags", async () => {
 		const calls: Array<[number, number]> = [];
 		const end = 10 + TURN_FETCH_CHUNK + 5;
 		const rows = await readTurnRows(
@@ -167,7 +183,10 @@ describe("readTurnRows", () => {
 		]);
 		expect(rows?.length).toBe(TURN_FETCH_CHUNK + 5);
 		expect(rows?.[0]).toEqual({ text: "r10", isWrapped: false });
-		expect(rows?.[1]).toEqual({ text: "r11", isWrapped: true });
+		// catches: the wire flag (this row continues onto the NEXT) used as "this row continues the
+		// previous one", which left a long wrapped answer's marker row unrecognised.
+		expect(rows?.[1]).toEqual({ text: "r11", isWrapped: false });
+		expect(rows?.[2]).toEqual({ text: "r12", isWrapped: true });
 		expect(rows?.[TURN_FETCH_CHUNK + 4].text).toBe(`r${end - 1}`);
 	});
 
@@ -265,12 +284,28 @@ describe("readAnswersHistory", () => {
 			newTurnCache(),
 		);
 		expect(turns?.[0].prompt).toBeNull();
-		expect(turns?.[0].answers).toEqual([
+		// catches: the answers-only view keeping only the 💬 row, or running an answer past its end into the next one
+		const answers = turns?.[0].answers ?? [];
+		expect(answers.map((a) => a.split("\n")[0])).toEqual([
 			"💬 Green bar in the terminal scrollbar: green is the colour TUIC uses to mark the",
 			'💬 Project by project: the full status is in the tab "Stato progetti 03/10"',
 			"💬 Worktrees: I closed the 5 that were finished:",
 			"💬 The ones still open each have a reason:",
 		]);
+		expect(answers[0]).toBe(
+			[
+				"💬 Green bar in the terminal scrollbar: green is the colour TUIC uses to mark the",
+				"line where you sent a prompt, one 2-pixel tick per prompt",
+				"(src/components/Terminal/scrollbarMarks.ts). A solid band means hundreds of those",
+				"ticks are bunched together at the bottom. Either far too many prompts get recorded",
+				"(for example Claude Code redrawing its input box), or their positions are calculated",
+				"against a different line count than the scrollbar uses. I haven't proven which.",
+				"Story 1388 is open and the tuic-1388 agent is finding the cause with evidence before",
+				"fixing it.",
+			].join("\n"),
+		);
+		expect(answers[1]).toMatch(/gate status per repo\.$/);
+		expect(answers[2]).toMatch(/so TUIC sees them as unmerged\.$/);
 	});
 
 	it("reads only retained prefix rows and caches them while the tracked turn grows", async () => {
