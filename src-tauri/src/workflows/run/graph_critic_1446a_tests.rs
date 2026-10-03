@@ -110,13 +110,7 @@ fn resolve_pause_keeps_the_uncertain_effect_fence() {
         graph: pause_graph(),
         revision: run.definition_revision,
     };
-    let execution = GraphExecution::start(
-        run.event_contract_version,
-        "g1".into(),
-        run.plan_id.clone(),
-        definition,
-    )
-    .unwrap();
+    let execution = GraphExecution::start("g1".into(), run.plan_id.clone(), definition).unwrap();
     let mut s = step(
         run,
         RunEventKind::Graph {

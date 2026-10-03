@@ -1430,7 +1430,6 @@ fn choose_event(
             RunCommand::StartAttempt { .. }
                 | RunCommand::StartPlanAgent { .. }
                 | RunCommand::AdvanceLoop
-                | RunCommand::Resume
                 | RunCommand::Complete
         )
     {
@@ -1523,7 +1522,6 @@ fn choose_event(
                 }
                 super::graph::GraphEvent::Started {
                     execution: Box::new(super::graph::GraphExecution::start(
-                        snapshot.event_contract_version,
                         execution_id.clone(),
                         target_id.clone(),
                         definition,
@@ -2101,6 +2099,13 @@ fn choose_event(
         }
         RunCommand::Pause => Ok(RunEventKind::Paused),
         RunCommand::Resume => {
+            if snapshot
+                .graph_executions
+                .iter()
+                .any(|graph| graph.pauses.iter().any(|pause| pause.resolution.is_none()))
+            {
+                return Err("graph pause needs ResolvePause".into());
+            }
             super::reducer::validate_resume(snapshot)?;
             Ok(RunEventKind::Resumed)
         }

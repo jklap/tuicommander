@@ -420,7 +420,7 @@ fn advance_loop_rejects_unreached_node_and_uses_pinned_cap() {
 
 // Catches: orphan, unbounded cycle, missing End or duplicate links entering a published execution (cases 18-21).
 #[test]
-fn executable_publication_rejects_invalid_graphs() {
+fn executable_graph_validation_rejects_invalid_graphs() {
     let (_config, _project, _store, run, _story, _guard) = graph_fixture();
     let definitions = WorkflowStore::open().unwrap();
     let original = definitions.get_draft(&run.story_definition_id).unwrap();
@@ -523,14 +523,9 @@ fn executable_contract_requires_checks_and_explicit_pause_target() {
         .publish(&draft.id, draft.draft_revision)
         .unwrap();
     assert!(
-        GraphExecution::start(
-            RUN_EVENT_CONTRACT_VERSION,
-            "no-checks".into(),
-            run.plan_id.clone(),
-            published
-        )
-        .unwrap_err()
-        .contains("deterministic final checks")
+        GraphExecution::start("no-checks".into(), run.plan_id.clone(), published)
+            .unwrap_err()
+            .contains("deterministic final checks")
     );
 }
 
@@ -632,11 +627,6 @@ fn serial_replay_requires_its_contract_predecessor_and_history_bound() {
     let snapshot = store.snapshot(&run.id).unwrap();
     let graph = snapshot.graph_executions[0].clone();
     for version in [0, 1, RUN_EVENT_CONTRACT_VERSION + 1] {
-        assert!(
-            GraphExecution::start(version, "g".into(), story.clone(), graph.definition.clone())
-                .unwrap_err()
-                .contains("contract")
-        );
         let mut wrong_version = snapshot.clone();
         wrong_version.event_contract_version = version;
         let event = RunEvent {
@@ -666,10 +656,10 @@ fn serial_replay_requires_its_contract_predecessor_and_history_bound() {
         activation_id: "a1".into(),
     };
     let mut forged = graph.clone();
-    forged.activations[1].from_activation = Some("foreign".into());
+    forged.activations[1].edge_index = Some(graph.definition.graph.edges.len() - 1);
     assert!(
         forged
-            .apply(RUN_EVENT_CONTRACT_VERSION, &activate, 3)
+            .apply(&activate, 3)
             .unwrap_err()
             .contains("predecessor")
     );
@@ -677,32 +667,22 @@ fn serial_replay_requires_its_contract_predecessor_and_history_bound() {
     forged.activations[0].state = ActivationState::Running;
     assert!(
         forged
-            .apply(RUN_EVENT_CONTRACT_VERSION, &activate, 3)
+            .apply(&activate, 3)
             .unwrap_err()
             .contains("predecessor")
     );
     let mut valid = graph;
+    valid.apply(&activate, 3).unwrap();
+    assert!(valid.apply(&activate, 3).unwrap_err().contains("not ready"));
     valid
-        .apply(RUN_EVENT_CONTRACT_VERSION, &activate, 3)
-        .unwrap();
-    assert!(
-        valid
-            .apply(RUN_EVENT_CONTRACT_VERSION, &activate, 3)
-            .unwrap_err()
-            .contains("not ready")
-    );
-    valid.activations.resize(4096, valid.activations[0].clone());
+        .activations
+        .resize(MAX_ACTIVATIONS, valid.activations[0].clone());
     let complete = GraphTransition::Complete {
         execution_id: valid.id.clone(),
         activation_id: "a1".into(),
         outcome: None,
         evidence: None,
     };
-    assert!(
-        valid
-            .apply(RUN_EVENT_CONTRACT_VERSION, &complete, 3)
-            .unwrap_err()
-            .contains("budget")
-    );
-    assert_eq!(valid.activations.len(), 4096);
+    assert!(valid.apply(&complete, 3).unwrap_err().contains("budget"));
+    assert_eq!(valid.activations.len(), MAX_ACTIVATIONS);
 }
