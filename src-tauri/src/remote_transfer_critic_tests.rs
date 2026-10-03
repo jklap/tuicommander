@@ -574,37 +574,6 @@ async fn read_only_top_level_directory_is_published() {
     std::fs::set_permissions(root.join("x"), std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-// Catches (round 2): the startup sweep deleting a user's own directory because it
-// merely starts with `.tuic-upload-` (data loss), or following a symlink out of a
-// registered root to delete staging-looking directories elsewhere.
-#[cfg(unix)]
-#[test]
-fn sweep_deletes_only_real_staging_and_never_follows_links() {
-    let tmp = scratch();
-    let root = tmp.path().join("repo");
-    let outside = tmp.path().join("outside");
-    let uuid = uuid::Uuid::new_v4();
-    let staging = format!(".tuic-upload-{uuid}");
-    std::fs::create_dir_all(root.join("a/b").join(&staging).join("data")).unwrap();
-    std::fs::write(root.join("a/b").join(&staging).join("archive"), b"x").unwrap();
-    std::fs::create_dir_all(root.join(".tuic-upload-notes")).unwrap();
-    std::fs::write(root.join(".tuic-upload-notes/keep.txt"), b"mine").unwrap();
-    std::fs::create_dir_all(outside.join(&staging)).unwrap();
-    std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
-
-    sweep_staging(&[root.to_str().unwrap().to_owned()]);
-
-    assert!(
-        !root.join("a/b").join(&staging).exists(),
-        "real staging must go"
-    );
-    assert!(
-        root.join(".tuic-upload-notes/keep.txt").exists(),
-        "a user directory sharing the prefix was deleted"
-    );
-    assert!(outside.join(&staging).exists(), "sweep followed a symlink");
-}
-
 // Catches (round 2): removing the global timeout for /fs/upload-copy while the only
 // remaining bound is a per-chunk idle limit — a client trickling one byte every
 // 29 s never idles out and pins an upload slot (2 in total) for hours.

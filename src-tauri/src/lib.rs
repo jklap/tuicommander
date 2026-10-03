@@ -2721,10 +2721,6 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     let worktrees_dir = data_dir.join("worktrees");
     std::fs::create_dir_all(&worktrees_dir)?;
     let _pid_file = RemotePidFile::create(&data_dir)?;
-    tokio::task::spawn_blocking(
-        || remote_transfer::sweep_staging(&config::registered_repo_paths()),
-    )
-    .await?;
 
     // Env only, for the same reason the desktop boot does it: the rest of the
     // chain spawns `gh` or reads the credential store, and this runs before the

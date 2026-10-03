@@ -17,10 +17,9 @@ use crate::state::AppState;
 const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
 const UPLOAD_SIZE_ERROR: &str = "upload exceeds 256 MiB including archive headers";
 const UPLOAD_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-// Allow small uploads a minute; larger ones must average at least 256 KiB/s.
-// Even an undeclared/chunked body is bounded to 17 minutes at the archive cap.
-const UPLOAD_MIN_BYTES_PER_SECOND: u64 = 256 * 1024;
-const UPLOAD_TOTAL_TIMEOUT_FLOOR: std::time::Duration = std::time::Duration::from_secs(60);
+// Bound progressing chunked senders without a throughput meter. At the 256 MiB
+// cap, a link below roughly 2 Mbit/s cannot complete within this receive budget.
+const UPLOAD_TOTAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(17 * 60);
 const MAX_ENTRIES: usize = 10_000;
 const CHUNK_BYTES: usize = 64 * 1024;
 // At most two staged copies (including archive + extracted tree) at once.
@@ -353,7 +352,7 @@ struct Staging {
 }
 impl Drop for Staging {
     fn drop(&mut self) {
-        if let Err(e) = remove_staging(&self.parent, std::ffi::OsStr::new(&self.name)) {
+        if let Err(e) = self.parent.remove_dir_all(&self.name) {
             tracing::warn!(source = "remote-transfer", error = %e, "Remote upload staging cleanup failed");
         }
     }
@@ -364,24 +363,6 @@ pub(crate) async fn receive_copy(
     roots: &[String],
     body: Body,
 ) -> Result<TransferResult, String> {
-    use axum::body::HttpBody;
-    let declared_size = body.size_hint().upper().unwrap_or(MAX_UPLOAD_BYTES);
-    receive_copy_sized(query, roots, body, declared_size).await
-}
-
-pub(crate) async fn receive_copy_sized(
-    query: UploadQuery,
-    roots: &[String],
-    body: Body,
-    declared_size: u64,
-) -> Result<TransferResult, String> {
-    if declared_size > MAX_UPLOAD_BYTES {
-        return Err(UPLOAD_SIZE_ERROR.into());
-    }
-    let total_budget = UPLOAD_TOTAL_TIMEOUT_FLOOR.max(std::time::Duration::from_secs(
-        declared_size.div_ceil(UPLOAD_MIN_BYTES_PER_SECOND),
-    ));
-    let deadline = tokio::time::Instant::now() + total_budget;
     // Refuse excess concurrency rather than buffering bodies in a queue.
     let _slot = UPLOAD_SLOTS
         .try_acquire()
@@ -392,7 +373,7 @@ pub(crate) async fn receive_copy_sized(
         Ok(_) => {
             // Consume the bounded request before returning headers: otherwise a
             // streaming sender can see a reset instead of this skipped result.
-            tokio::time::timeout_at(deadline, receive_body(body, None))
+            tokio::time::timeout(UPLOAD_TOTAL_TIMEOUT, receive_body(body, None))
                 .await
                 .map_err(|_| "remote upload total timeout".to_string())??;
             let mut answer = result();
@@ -422,7 +403,7 @@ pub(crate) async fn receive_copy_sized(
         .open_with("archive", OpenOptions::new().write(true).create_new(true))
         .map_err(|e| e.to_string())?;
     let mut archive = tokio::fs::File::from_std(archive.into_std());
-    tokio::time::timeout_at(deadline, receive_body(body, Some(&mut archive)))
+    tokio::time::timeout(UPLOAD_TOTAL_TIMEOUT, receive_body(body, Some(&mut archive)))
         .await
         .map_err(|_| "remote upload total timeout".to_string())??;
     archive.sync_all().await.map_err(|e| e.to_string())?;
@@ -457,91 +438,6 @@ async fn receive_body(body: Body, mut archive: Option<&mut tokio::fs::File>) -> 
         }
     }
     Ok(())
-}
-
-/// Archive directory modes may deliberately omit owner access. Restore it only
-/// in disposable staging, using no-follow operations on held capabilities.
-fn remove_staging(parent: &Dir, name: &std::ffi::OsStr) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use cap_fs_ext::DirExt;
-        use cap_std::fs::PermissionsExt;
-        fn restore_access(parent: &Dir, name: &std::ffi::OsStr) -> io::Result<()> {
-            let meta = parent.symlink_metadata(name)?;
-            if !meta.is_dir() {
-                return Ok(());
-            }
-            use std::os::fd::AsRawFd;
-            use std::os::unix::ffi::OsStrExt;
-            let leaf = std::ffi::CString::new(name.as_bytes())?;
-            // cap-fs-ext 3 uses a rustix chmodat implementation that rejects
-            // NOFOLLOW on Linux. The native libc wrapper supports it.
-            // SAFETY: a held directory fd and one NUL-terminated leaf name;
-            // NOFOLLOW forbids changing a raced symlink's target.
-            let changed = unsafe {
-                libc::fchmodat(
-                    parent.as_raw_fd(),
-                    leaf.as_ptr(),
-                    ((meta.permissions().mode() & 0o777) | 0o700) as libc::mode_t,
-                    libc::AT_SYMLINK_NOFOLLOW,
-                )
-            };
-            if changed != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let dir = parent.open_dir_nofollow(name)?;
-            for entry in dir.entries()? {
-                let entry = entry?;
-                if entry.file_type()?.is_dir() {
-                    restore_access(&dir, &entry.file_name())?;
-                }
-            }
-            Ok(())
-        }
-        restore_access(parent, name)?;
-    }
-    parent.remove_dir_all(name)
-}
-
-/// Called before the daemon starts accepting uploads. Directory capabilities
-/// and no-follow traversal keep cleanup inside registered roots.
-pub(crate) fn sweep_staging(roots: &[String]) {
-    use cap_fs_ext::DirExt;
-    fn sweep(dir: &Dir) -> io::Result<()> {
-        for entry in dir.entries()? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            let name = entry.file_name();
-            let staging = name
-                .to_str()
-                .and_then(|name| name.strip_prefix(".tuic-upload-"))
-                .and_then(|suffix| uuid::Uuid::parse_str(suffix).ok().map(|id| (suffix, id)))
-                .is_some_and(|(suffix, id)| suffix == id.hyphenated().to_string());
-            if staging {
-                if let Err(e) = remove_staging(dir, &name) {
-                    tracing::warn!(source = "remote-transfer", name = ?name, error = %e,
-                        "Remote upload startup entry cleanup failed");
-                }
-            } else {
-                // A directory replaced by a symlink during scanning is never followed.
-                let child = match dir.open_dir_nofollow(&name) {
-                    Ok(child) => child,
-                    Err(_) => continue,
-                };
-                sweep(&child)?;
-            }
-        }
-        Ok(())
-    }
-    for root in roots {
-        let cleaned =
-            Dir::open_ambient_dir(root, cap_std::ambient_authority()).and_then(|dir| sweep(&dir));
-        if let Err(e) = cleaned {
-            tracing::warn!(source = "remote-transfer", root, error = %e, "Remote upload startup cleanup failed");
-        }
-    }
 }
 
 fn create_upload_dirs(data: &Dir, path: &Path) -> io::Result<()> {
@@ -644,7 +540,13 @@ fn extract_and_publish(stage: Staging, query: UploadQuery) -> io::Result<Transfe
                         } else {
                             relative
                         };
-                        dir.set_permissions(relative, cap_std::fs::Permissions::from_mode(mode))?;
+                        if let Err(e) =
+                            dir.set_permissions(relative, cap_std::fs::Permissions::from_mode(mode))
+                        {
+                            // Publication already succeeded; a retry would only skip this copy.
+                            tracing::warn!(source = "remote-transfer", path = ?path, error = %e,
+                                "Published remote copy directory permissions could not be applied");
+                        }
                     }
                 }
             }
