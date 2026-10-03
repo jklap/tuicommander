@@ -341,6 +341,7 @@ export async function initApp(deps: AppInitDeps) {
 		activityStore.flushSave();
 		uiStore.flushSave();
 		paneLayoutStore.flushSave();
+		mdTabsStore.saveForReload();
 
 		// 1. Snapshot terminal metadata per repo/branch before closing
 		const snapshots = collectTerminalSnapshots();
@@ -1054,9 +1055,10 @@ export async function initApp(deps: AppInitDeps) {
 				// Without this, the split layout shows empty boxes after a fresh start.
 				await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
 			}
-			return;
 		}
 	}
+
+	mdTabsStore.restoreAfterReload();
 
 	// Lazy restore: don't create terminals on startup.
 	// Terminals are restored when user clicks a branch in the sidebar.

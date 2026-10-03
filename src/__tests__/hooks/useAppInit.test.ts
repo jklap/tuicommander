@@ -91,6 +91,7 @@ describe("initApp", () => {
 		vi.useFakeTimers();
 		vi.mocked(listen).mockReset().mockResolvedValue(vi.fn());
 		resetStores();
+		sessionStorage.clear();
 	});
 
 	afterEach(() => {
@@ -107,6 +108,41 @@ describe("initApp", () => {
 		await initApp(createMockDeps());
 		expect(log).toHaveBeenCalledWith("app", expect.stringContaining("navigation=reload"));
 		expect(log).toHaveBeenCalledWith("app", expect.stringContaining(`documentStart=${performance.timeOrigin}`));
+	});
+
+	// Catches: ui-tab documents are saved but initApp returns after restoring a branch without restoring them.
+	it("restores an MCP Markdown document after unload and repository startup without duplicating its identity", async () => {
+		let send: ((event: { payload: unknown }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") send = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		const events = vi.spyOn(window, "addEventListener");
+		repositoriesStore.add({ path: "/repo", displayName: "repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { branchName: "main", worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+		await initApp(createMockDeps());
+		const payload = {
+			id: "boss-digest",
+			title: "Digest",
+			html: "",
+			pinned: false,
+			url: "tuic://open//Users/boss/Gits/digest.md",
+		};
+		send!({ payload });
+		expect(mdTabsStore.getActive()).toMatchObject({ mcpUiId: "boss-digest" });
+		const unload = events.mock.calls.find(([name]) => name === "beforeunload")?.[1];
+		expect(unload).toBeTypeOf("function");
+		(unload as EventListener)(new Event("beforeunload"));
+		mdTabsStore.clearAll();
+		await initApp(createMockDeps());
+		expect(mdTabsStore.getActive()).toMatchObject({
+			mcpUiId: "boss-digest",
+			filePath: "/Users/boss/Gits/digest.md",
+		});
+		send!({ payload });
+		expect(mdTabsStore.getCount()).toBe(1);
 	});
 
 	it("hydrates stores and detects platform", async () => {
