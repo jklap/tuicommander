@@ -573,8 +573,8 @@ export async function initApp(deps: AppInitDeps) {
 					},
 				}
 			: undefined;
-		toastsStore.addToBell(title, visibleMessage, safeLevel, repoPath, action);
-		if (isNotificationSound(sound)) void notificationsStore.play(sound);
+		const noticeId = toastsStore.addToBell(title, visibleMessage, safeLevel, repoPath, action, origin_session_id);
+		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
@@ -637,6 +637,7 @@ export async function initApp(deps: AppInitDeps) {
 					label: "Open terminal",
 					onClick: () => navigateToTerminal(id),
 				},
+				session_id,
 			);
 			// In split mode, ensure there is an active group so assignTabToActiveGroup
 			// doesn't silently no-op and leave the tab invisible.
