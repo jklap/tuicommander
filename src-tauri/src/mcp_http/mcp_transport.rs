@@ -1208,6 +1208,7 @@ async fn handle_remote_update(
 /// tool metadata for gated tools.
 fn native_tool_definitions() -> serde_json::Value {
     let defs = serde_json::json!([
+        crate::secrets::tool_definition(),
         {
             "name": "session",
             "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
@@ -1963,6 +1964,13 @@ fn agent_action_requires_blocking_pool(action: &str) -> bool {
     matches!(action, "spawn" | "send")
 }
 
+fn secret_inspection_tool(name: &str, args: &serde_json::Value) -> bool {
+    matches!(name, "ui" | "debug")
+        || name.contains("__")
+        || (name == "call_tool"
+            && secret_inspection_tool(args["tool_name"].as_str().unwrap_or(""), &args["arguments"]))
+}
+
 async fn handle_mcp_tool_call_with_context(
     state: &Arc<AppState>,
     addr: SocketAddr,
@@ -1971,6 +1979,37 @@ async fn handle_mcp_tool_call_with_context(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
+    let inspection = secret_inspection_tool(name, args);
+    let epoch = state.secrets.inspection_epoch();
+    if inspection && state.secrets.tools_blocked() {
+        return serde_json::json!({"error": "Agent inspection is disabled while a private secret form is open"});
+    }
+    let result = dispatch_mcp_tool_call_with_context(
+        state,
+        addr,
+        name,
+        args,
+        mcp_session_id,
+        managed_parent_cwd,
+    )
+    .await;
+    if inspection && (state.secrets.tools_blocked() || state.secrets.inspection_epoch() != epoch) {
+        return serde_json::json!({"error": "Inspection result withheld because a private secret form opened during the call"});
+    }
+    result
+}
+
+async fn dispatch_mcp_tool_call_with_context(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    name: &str,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    managed_parent_cwd: Option<&str>,
+) -> serde_json::Value {
+    if state.secrets.tools_blocked() && (matches!(name, "ui" | "debug") || name.contains("__")) {
+        return serde_json::json!({"error": "Agent inspection is disabled while a private secret form is open"});
+    }
     // Enforce disabled_native_tools on every call path (not just the call_tool meta-tool).
     // Read-guard does not span an await and is released at the end of the `if` expression.
     if state
@@ -2004,6 +2043,7 @@ async fn handle_mcp_tool_call_with_context(
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
+        "secret" => crate::secrets::handle_secret(state, args).await,
         "session" => {
             // Executing / destructive session actions carry the same loopback
             // restriction as `agent spawn`: `submit` executes a managed-agent
@@ -2922,7 +2962,9 @@ fn redact_raw_output(
     if let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
         known.extend(terminal_secrets(&mut vt.lock()));
     }
-    crate::redaction::redact_secrets(&crate::redaction::scrub_fragments(window, &known))
+    state.secrets.mask(&crate::redaction::redact_secrets(
+        &crate::redaction::scrub_fragments(window, &known),
+    ))
 }
 
 fn handle_session(
@@ -17890,6 +17932,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "secret",
                 "session",
                 "agent",
                 "task",

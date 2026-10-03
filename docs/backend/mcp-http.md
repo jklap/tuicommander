@@ -1864,3 +1864,18 @@ The mobile companion UI (`/mobile`) uses the same HTTP/WebSocket infrastructure 
 - **Activity**: `GET /config/activity` returns the persisted array; the Activity tab hydrates that array when opened.
 
 The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop — no mobile-specific transport code.
+
+## Secret form security boundary
+
+`secret` supports `request`, `run` and `remove`; no action reads values. The
+backend owns the zeroizing store and process spawn. Native-window bootstrap
+privately distributes a per-form capability. A temporary separate HTTP origin
+serves only the form/assets and capability-gated endpoints, using existing TLS
+for phone entry or loopback HTTP. An application-origin service worker therefore
+cannot intercept entry. Requests require a desktop host.
+
+Dispatch blocks native `ui`/`debug` and upstream calls while a form is open. An
+epoch invalidates inspection results whose calls overlapped any form opening.
+The HTTP debug-JS handler also checks the form gate. The form entry bundle omits
+App/debug/logging/terminal initialization. Run captures pipes, caps output and
+masks before serialization; it never writes raw output to logging or PTY paths.

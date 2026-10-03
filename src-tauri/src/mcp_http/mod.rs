@@ -18,7 +18,7 @@ mod plugin_routes;
 mod remote_session_proxy;
 pub(crate) mod session;
 pub(crate) mod sse_routes;
-mod static_files;
+pub(crate) mod static_files;
 #[cfg(feature = "desktop")]
 mod system_routes;
 pub(crate) mod types;
@@ -1827,6 +1827,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))
+        .route("/secrets/forms/{nonce}", get(crate::secrets::form_http))
+        .route("/secrets/forms/submit", post(crate::secrets::submit_http))
         // Debug: reload the main WebView natively (loopback-only, enforced in
         // handler). Local router only — the remote client reloads its own tab.
         .route(
@@ -2578,6 +2580,7 @@ pub async fn start_server(
     remote_enabled: bool,
     tls_config: Option<axum_server::tls_rustls::RustlsConfig>,
 ) -> bool {
+    *state.secrets.tls.write() = tls_config.clone();
     let config = state.config.read().clone();
 
     // Register shutdown channel so save_config can restart server. Only the

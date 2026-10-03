@@ -278,6 +278,7 @@
 /repo/update-pr-branch
 /repo/working-tree-status
 /repo/worktree-dirty
+/secrets/forms/submit
 /sessions
 /sessions/agent
 /sessions/worktree

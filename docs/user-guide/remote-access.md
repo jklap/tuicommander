@@ -692,3 +692,11 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 | Connection refused | Verify the port isn't blocked by a firewall. The settings panel includes a reachability check. |
 | Authentication fails | Re-enter the password in settings — the stored bcrypt hash may be from a different password. |
 | Terminals not responding | WebSocket connection may have dropped. Refresh the browser page. |
+
+## Private secret entry on a phone
+
+A desktop secret request shows a dedicated one-time capability link in its
+private window. With Tailscale HTTPS configured, open that HTTPS link on your
+trusted phone and enter only the requested fields. Without TLS the link is
+loopback-only. The headless daemon cannot originate requests in this slice.
+See [Private secret forms](secrets.md).

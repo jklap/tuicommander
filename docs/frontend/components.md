@@ -610,3 +610,12 @@ remain in effect. `SubAgentIcon` supplies the shared 11px robot marker
 for both the dashboard and sidebar; only its tooltip/accessible name contains
 the parent name. The session list supplies each parent's live `tuic_session`
 when its PTY ID differs from that identity.
+
+## Private secret form
+
+`SecretForm` is a standalone entry (`secret-form.html`, `src/secretForm.tsx`),
+mounted in a separate backend-created WebView or a capability-gated browser.
+It imports no App stores, debug globals or logging handlers. Sensitive input
+values stay in input elements until submit, then are cleared and unmounted
+before IPC/HTTP entry. Only requested fields render; approval instead shows
+exact argv/names/directory and optional template consent.

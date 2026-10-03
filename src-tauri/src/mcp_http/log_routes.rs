@@ -219,6 +219,9 @@ pub(crate) async fn invoke_js_http(
 /// Shared by the MCP `debug` tool and the HTTP `/debug/invoke_js` route.
 #[cfg(feature = "desktop")]
 pub(crate) fn eval_debug_script(state: &Arc<AppState>, script: &str) -> serde_json::Value {
+    if state.secrets.tools_blocked() {
+        return serde_json::json!({"error": "Agent inspection is disabled while a private secret form is open"});
+    }
     use tauri::Manager;
     let app_handle = state.app_handle.read().clone();
     let Some(handle) = app_handle else {

@@ -129,6 +129,7 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	secret_form_submit: { map: (args) => ({ method: "POST", path: "/secrets/forms/submit", body: args.submission }) },
 	// --- Dictation ---
 	get_dictation_status: { map: () => ({ method: "GET", path: "/dictation/status" }) },
 	get_model_info: { map: () => ({ method: "GET", path: "/dictation/models" }) },
@@ -2273,6 +2274,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
  * This is NOT a feature gap — these commands have no meaning off the host machine.
  */
 export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
+	// A native window identity grants nonce bootstrap. HTTP clients use the
+	// capability link shown only in that window, never a discoverable bootstrap.
+	"secret_form_bootstrap",
 	// Binary IPC uses byte arrays; browser uploads use a streaming fetch body to
 	// the equivalent /attachments/upload route instead of JSON rpc mapping.
 	"upload_attachment",

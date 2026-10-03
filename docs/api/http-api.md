@@ -2715,3 +2715,18 @@ The following commands are accessible only via the Tauri `invoke()` bridge in th
 | `get_agent_mcp_status` | `agent_mcp.rs` | Check MCP config status for an agent |
 | `install_agent_mcp` | `agent_mcp.rs` | Install TUICommander MCP entry in agent config |
 | `remove_agent_mcp` | `agent_mcp.rs` | Remove TUICommander MCP entry from agent config |
+
+## Private secret entry
+
+- `GET /secrets/forms/{nonce}` returns only the pending schema, argv and entry
+  capability; no stored values. A guessed or expired nonce returns 404.
+- `POST /secrets/forms/submit` accepts `{nonce,status,values,template}`. Status
+  is `stored`, `approved` or `declined`; values must exactly match requested
+  non-SSO fields. Approval accepts no values; decline accepts neither values
+  nor a template. A valid submit consumes the nonce and returns names/status.
+  Invalid or replayed submissions return 400 without echoing values.
+
+The native private-window identity is the only bootstrap authority. There is no
+public endpoint listing forms or issuing their nonces. Use the dedicated-origin
+link shown in that window, not the normal application origin. Responses carry
+`Cache-Control: no-store`, `Referrer-Policy: no-referrer` and frame denial.
