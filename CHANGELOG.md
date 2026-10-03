@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Remote peer mail** — A flooding host has its own replay quota. Budget pressure reclaims only departed senders, and disconnect retires old shadow peers even during a reconnect handshake. A departed sender may replay once after pressure evicted its history.
+
 ### Fixed
 
 - Desktop MCP now discovers and addresses configured remote terminals and peers, preserving native output and semantic submit behavior. Authenticated peer mail supports remote replies and remote-to-remote delivery through the desktop hub.
