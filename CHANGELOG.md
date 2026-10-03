@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Remote agent notices** — MCP toasts from connected daemons reach the desktop notification bell with the host name, original level and requested sound. Open terminal selects the originating remote tab; unknown sessions leave focus unchanged. Disconnected notices are not queued for replay.
+- **Remote agent notices** — MCP toasts from connected daemons reach the desktop notification bell with the host name, original level and requested sound. Open terminal selects the originating remote tab; unknown sessions leave focus unchanged. Disconnected notices are not queued for replay. Malformed remote notice text is discarded, and identically named connections retain separate notices.
 
 - **MCP Markdown tabs** — Documents opened with `ui action=tab` survive UI reloads in the same window, including native recovery without an unload event. Reopening their stable id updates the restored tab without creating a duplicate.
 - **Remote terminal stream failures** — A stalled initial replay, unreadable frame or disconnected stream now shows a persistent error toast. Reconnect attempts remain bounded until a frame reaches the renderer.
