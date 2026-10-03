@@ -48,9 +48,18 @@ pub fn request(method: &str, path: &str, body: Option<&str>, headers: &[(&str, &
 #[derive(Default)]
 pub struct ResponseDecoder {
     bytes: Vec<u8>,
+    head_request: bool,
 }
 
 impl ResponseDecoder {
+    /// Use the originating method: HEAD responses never carry a message body.
+    pub fn for_request(method: &str) -> Self {
+        Self {
+            head_request: method == "HEAD",
+            ..Self::default()
+        }
+    }
+
     /// Add bytes received by either transport adapter.
     pub fn push(&mut self, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
@@ -81,7 +90,13 @@ impl ResponseDecoder {
                     .split(',')
                     .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
         });
-        let body = if chunked {
+        // RFC 9112 section 6.3: these boundaries precede all framing headers.
+        let body = if self.head_request
+            || (100..200).contains(&status)
+            || matches!(status, 204 | 304)
+        {
+            Vec::new()
+        } else if chunked {
             match chunked_body(body_bytes)? {
                 Some(body) => body,
                 None if eof => return Err(incomplete()),
