@@ -421,6 +421,16 @@ Once a remote connection is configured:
 
 Connections are stored in `<config_dir>/connections.json` with SSH and Direct transport types.
 
+#### Remote agent notices
+
+An agent's MCP toast on a connected machine appears in the desktop notification
+bell under **Messages**, with `[connection name]` before its title. It keeps the
+requested level and sound. **Open terminal** switches to the originating remote
+tab when it is still open; an unknown or closed session leaves focus unchanged.
+Notices from a disconnected machine are not queued or replayed on reconnect.
+Connections with the same display name retain separate notices. Malformed remote
+notice text is discarded.
+
 #### What runs on which machine
 
 A call is routed by its own arguments, not by which panel made it. TUICommander asks
