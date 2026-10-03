@@ -177,17 +177,14 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 		return handleBranchSelect;
 	}
 
-	it("offers the switch as a toast, not as a blocking dialog", async () => {
+	// Catches: an MCP/HTTP worktree event covering the input with an unsolicited toast.
+	it("1397 keeps backend-created worktrees in the bell without a toast", async () => {
 		await testInScopeAsync(async () => {
 			const handleBranchSelect = await emitCreated();
-
-			const toast = toastsStore.toasts.find((t) => t.title === `Worktree "${BRANCH}" created`);
-			expect(toast).toBeDefined();
-			expect(toast!.message).toBe("repo__wt/feature");
-			expect(toast!.repoPath).toBe(REPO);
-			expect(toast!.action?.label).toBe("Switch");
-			// Nothing has moved yet — the offer is waiting on the user, and the user
-			// is free to ignore it forever.
+			expect(toastsStore.toasts).toHaveLength(0);
+			const item = activityStore.getForSection("worktrees").find((i) => i.title === `Worktree: ${BRANCH}`);
+			expect(item?.subtitle).toBe("repo__wt/feature");
+			expect(item?.onClick).toBeTypeOf("function");
 			expect(handleBranchSelect).not.toHaveBeenCalled();
 		});
 	});
@@ -211,12 +208,12 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 		});
 	});
 
-	it("switches only once the toast action is clicked", async () => {
+	it("switches only once the bell offer is clicked", async () => {
 		await testInScopeAsync(async () => {
 			const handleBranchSelect = await emitCreated();
 
-			const toast = toastsStore.toasts.find((t) => t.title === `Worktree "${BRANCH}" created`);
-			toast!.action!.onClick();
+			const item = activityStore.getForSection("worktrees").find((i) => i.title === `Worktree: ${BRANCH}`);
+			item!.onClick!();
 			await Promise.resolve();
 
 			expect(handleBranchSelect).toHaveBeenCalledWith(REPO, BRANCH);
@@ -235,11 +232,11 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 			expect(workspaces["feature~a1b2c3d4"]?.worktreePath).toBe(WORKTREE);
 			expect(workspaces["feature~a1b2c3d4"]?.branchName).toBe("feature/x");
 			expect(workspaces["feature/x"]).toBeUndefined();
-			expect(toastsStore.toasts.some((t) => t.title === 'Worktree "feature/x" created')).toBe(true);
+			expect(activityStore.getForSection("worktrees").some((i) => i.title === "Worktree: feature/x")).toBe(true);
 		});
 	});
 
-	it("keeps the offer reachable from the bell after the toast is gone", async () => {
+	it("keeps the offer reachable from the bell during unattended creation", async () => {
 		await testInScopeAsync(async () => {
 			const handleBranchSelect = await emitCreated();
 

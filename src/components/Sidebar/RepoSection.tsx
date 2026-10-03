@@ -1468,7 +1468,13 @@ export const RepoSection: Component<{
 
 			<Show when={density() === "rich" && props.repo.isGitRepo !== false && !props.repo.collapsed}>
 				<div class={s.repoRichMeta} data-testid="repo-rich-meta">
-					<Show when={richRepoFacts().currentBranch}>{(name) => <span class={s.richChip}>⎇ {name()}</span>}</Show>
+					<Show when={richRepoFacts().currentBranch}>
+						{(name) => (
+							<span class={s.richChip} data-tooltip={name()}>
+								⎇ {name()}
+							</span>
+						)}
+					</Show>
 					<span class={s.richChip}>
 						{richRepoFacts().openPrs}{" "}
 						{richRepoFacts().openPrs === 1 ? t("sidebar.openPrOne", "open PR") : t("sidebar.openPrs", "open PRs")}
