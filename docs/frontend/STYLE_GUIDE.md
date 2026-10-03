@@ -238,7 +238,7 @@ Always use `ease` timing. Respect `prefers-reduced-motion`. Never `transition: a
 - Flex row, `gap: 6px`, `padding: 6px 12px 3px`
 - Repo initials: 28×28px circle, `--accent` bg, `--text-on-accent` text, `--font-xs`, semibold
 - Repo name: `--font-sm`, semibold, uppercase, `--fg-secondary`, truncated with ellipsis
-- Chevron: the shared `ChevronIcon` (`src/components/ui/ChevronIcon.tsx`, 12px SVG), `--fg-secondary`, rotates 0→90° on expand (150ms ease). Group headers, repo headers and GitHub panel sections use the same component and the same CSS block, so every disclosure arrow in the sidebar has one shape and one size. Branch rows carry no chevron column: the branch icon is the agents toggle and swaps to the chevron on hover or focus inside its own 14px box, so the row gives up no width and every badge keeps one right edge. The row click only opens the branch.
+- Chevron: the shared `ChevronIcon` (`src/components/ui/ChevronIcon.tsx`, 12px SVG), `--fg-secondary`, rotates 0→90° on expand (150ms ease). Branch rows use a separate, always-visible disclosure button beside the status icon. The collapsed count stays beside the chevron; the status icon and row only select the branch.
 - Actions (⋯, +): hidden by default (`opacity: 0`), shown on repo-header hover
 
 **Branch item** (the most complex sidebar element):

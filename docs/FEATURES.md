@@ -306,9 +306,9 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Agent rows show the agent icon, terminal name, current intent/task (falling back to the last substantial prompt), compact age since the backend's last semantic session activity, and the same busy/idle signal used by the terminal tab and branch icon. Terminal redraws do not reset this age. Plain shells remain visible as terminal rows.
 - A sub-agent row shows a muted robot tag with its parent agent in the tooltip; the repo GitHub badge retains the accent color to distinguish its action from session metadata.
 - Clicking a row switches to that session.
-- Every branch shows its list by default (`tabsCollapsed` absent); collapsing is remembered per workspace. The branch icon toggles the list: it swaps to a chevron on hover or keyboard focus (Enter/Space), inside the icon's own box, so branch rows have no chevron column and badges keep one right edge. Clicking the row only opens the branch — it never expands or collapses the list.
+- Every branch shows its agents by default; collapsing is remembered per workspace. A separate, always-visible chevron toggles the list by click or Enter/Space. The status icon and row select the branch without changing agent visibility.
 - Single-session branches can expand too.
-- A collapsed list shows its session count on the branch icon; an expanded list hides it, because the rows already show every session.
+- A collapsed list shows its session count beside the chevron; an expanded list hides the count.
 
 ### 2.4 Git Quick Actions
 - Bottom of sidebar when a repo is active
@@ -1272,6 +1272,7 @@ The `tuic-dictation` Rust crate implements audio, transcription and speech; the 
 ### 9.11 Driving it from Settings > Voice
 - **One titled section per job, speech-to-text and text-to-speech kept apart:** Dictation (enable, hotkey, auto-send), Speech recognition (input device, Whisper model, language, voice tuning), Auto-Corrections, Hands-free conversation, Spoken replies. Each section holds its own advanced settings; there is no shared "Advanced" section.
 - **Spoken replies** lists the speech languages and the ONNX runtime with their state, size and Download / Repair / Cancel / delete, plus the voice to speak with. There is **no** speech-language control — the language is the Whisper one, and a second control would be a second source that disagrees with it.
+- **Conversation controls** — Start conversation is an accent action, Stop is distinct, and a coloured Running/Stopped indicator accompanies the backend phase.
 - **Hands-free conversation** picks the terminal to talk to, starts and stops the mode, and shows the live phase (waiting, capturing, transcribing, holding back, delivered), the turn being held back, what is being spoken and any error. It also holds the activation phrase and the hold-back delay.
 - **Breath and continuation:** 1.5 s of quiet closes an utterance. With an activation phrase, a turn waits at least 5 s for speech that continues without repeating the phrase; the displayed pending text grows before it reaches the agent as one message.
 - **Earcons** — an 80 ms blip when a spoken turn reaches the agent, and a softer, lower one when the activation phrase drops a turn, so the user knows without looking. Web Audio on the desktop and in a browser alike, played only by the client whose microphone holds the conversation. Too short for the capture VAD to take as speech (`min_speech_ms` is 200 ms). On by default; the `hands_free_earcons` dictation setting turns them off.
