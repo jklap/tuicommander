@@ -115,7 +115,6 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
     }
     #[cfg(feature = "desktop")]
     {
-        use tauri::Manager;
         let handle = state
             .app_handle
             .read()
