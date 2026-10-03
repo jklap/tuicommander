@@ -2870,7 +2870,7 @@ fn normalized_process_name(value: &str) -> &str {
 /// Claude's installer notably uses a version number as the executable basename,
 /// so the containing `claude/versions/` path is authoritative.
 fn classify_agent_name_or_path(value: &str) -> Option<&'static str> {
-    let normalized = value.to_ascii_lowercase();
+    let normalized = value.trim_end_matches(" (deleted)").to_ascii_lowercase();
     let basename = normalized_process_name(&normalized);
     classify_agent(basename).or_else(|| {
         // Claude installs version-number executables under this exact layout.
@@ -12347,8 +12347,8 @@ pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Optio
         }
     };
 
-    // Fallback: unrecognised non-shell foreground + pre-set agent type → use preset.
-    // Covers custom commands (aliases, symlinks, wrappers) from run configs.
+    // A non-shell helper is not evidence that the agent exited. Retain identity
+    // through transient git/rg children and configured custom wrappers.
     let effective = detected.clone().or_else(|| {
         if fg_is_shell {
             return None;
@@ -12357,7 +12357,6 @@ pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Optio
             .session_maps
             .session_states
             .get(session_id)
-            .filter(|s| s.agent_type_from_run_config)
             .and_then(|s| s.agent_type.clone())
     });
 
@@ -12371,15 +12370,27 @@ pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Optio
         tracing::warn!(session_id, foreground_process = %fg_name, "Unrecognized non-shell foreground process; if this is an agent, Enter uses the safe gap");
     }
 
-    // A preset survives shell startup. A discovered identity is revocable:
-    // after the agent exits, unattended submit/mail must not target its shell.
+    // A preset survives shell startup until the agent is first observed. Shell
+    // foreground after that revokes it; unattended submit/mail cannot target
+    // the returned shell. A different observed agent drops preset provenance.
     // Failed OS observation returned above and is not evidence of an exit.
     let identity_changed =
         if let Some(mut entry) = state.session_maps.session_states.get_mut(session_id) {
-            let next = if effective.is_some() || !entry.agent_type_from_run_config {
-                effective.clone()
+            if let Some(agent) = detected.as_ref() {
+                if entry.agent_type.as_ref() != Some(agent) {
+                    entry.agent_type_from_run_config = false;
+                }
+                entry.agent_foreground_observed = true;
+            }
+            let next = if fg_is_shell {
+                if entry.agent_type_from_run_config && !entry.agent_foreground_observed {
+                    entry.agent_type.clone()
+                } else {
+                    entry.agent_type_from_run_config = false;
+                    None
+                }
             } else {
-                entry.agent_type.clone()
+                effective.clone()
             };
             if entry.agent_type != next {
                 entry.agent_type = next;

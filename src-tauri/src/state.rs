@@ -613,10 +613,14 @@ pub(crate) struct SessionState {
     /// Detected agent type, if known
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
-    /// Run-config identity survives shell startup; discovered identity does not
-    /// survive a foreground program that is no longer an agent.
+    /// Run-config identity is armed before first observation; discovered identity
+    /// is revoked when a shell returns to the foreground.
     #[serde(skip)]
     pub(crate) agent_type_from_run_config: bool,
+    /// A preset is armed during shell startup only. Once its agent has been
+    /// observed, shell foreground means it has exited and cannot receive input.
+    #[serde(skip)]
+    pub(crate) agent_foreground_observed: bool,
     /// Keep the foreground detection warning to one record per session.
     #[serde(skip)]
     pub(crate) unknown_foreground_warned: bool,
@@ -782,6 +786,15 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
 }
 
 /// PartialEq excludes last_activity_ms (telemetry, not logical state).
+impl SessionState {
+    /// Seed configured identity synchronously, before readers/events can use it.
+    pub(crate) fn seed_configured_agent(&mut self, agent_type: Option<String>) {
+        self.agent_type_from_run_config = agent_type.is_some();
+        self.agent_foreground_observed = false;
+        self.agent_type = agent_type;
+    }
+}
+
 /// Used by WS dedup to avoid sending identical state frames.
 impl PartialEq for SessionState {
     fn eq(&self, other: &Self) -> bool {
@@ -4526,14 +4539,16 @@ impl AppState {
                     .entry(session_id.clone())
                     .and_modify(|session| {
                         session.last_activity_ms = now_ms;
-                        session.agent_type = agent_type.clone();
-                        session.agent_type_from_run_config = agent_type.is_some();
+                        // Creation may be applied after foreground discovery.
+                        // Never re-arm a preset whose agent was already seen.
+                        if session.agent_type.is_none() && !session.agent_foreground_observed {
+                            session.seed_configured_agent(agent_type.clone());
+                        }
                     })
-                    .or_insert_with(|| SessionState {
-                        last_activity_ms: now_ms,
-                        agent_type: agent_type.clone(),
-                        agent_type_from_run_config: agent_type.is_some(),
-                        ..Default::default()
+                    .or_insert_with(|| {
+                        let mut session = SessionState { last_activity_ms: now_ms, ..Default::default() };
+                        session.seed_configured_agent(agent_type.clone());
+                        session
                     });
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
@@ -8331,6 +8346,31 @@ mod tests {
             display_name: None,
             parent_session: None,
         }
+    }
+
+    /// Catches: a delayed creation event re-arms a preset after the agent was
+    /// observed and exited, reopening unattended input into the returned shell.
+    #[test]
+    fn delayed_session_created_cannot_rearm_an_observed_agent_after_exit() {
+        let state = Arc::new(make_test_app_state());
+        let mut session = SessionState::default();
+        session.seed_configured_agent(Some("claude".into()));
+        session.agent_foreground_observed = true;
+        session.agent_type = None;
+        session.agent_type_from_run_config = false;
+        state
+            .session_maps
+            .session_states
+            .insert("late-created".into(), session);
+        AppState::apply_event_to_session_state(&state, &session_created("late-created", "claude"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("late-created")
+            .unwrap();
+        assert_eq!(row.agent_type, None);
+        assert!(!row.agent_type_from_run_config);
+        assert!(row.agent_foreground_observed);
     }
 
     /// Catches: SessionCreated building the row without `last_activity_ms` or

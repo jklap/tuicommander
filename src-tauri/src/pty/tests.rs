@@ -21128,3 +21128,70 @@ async fn headless_foreground_timer_discovers_claude_and_reclassifies_quiet_scree
     );
     assert_eq!(silence.lock().last_ready_screen_offset, output_offset);
 }
+
+/// Catches: clearing an armed run-config identity during shell startup blocks
+/// the configured agent before it has ever reached the foreground.
+#[cfg(unix)]
+#[test]
+fn configured_agent_is_submittable_during_shell_startup_before_first_observation() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "preset-shell-startup";
+    let probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "start task"),
+        AgentSubmissionWrite::Complete { .. }
+    ));
+    assert_eq!(*probe.bytes.lock().unwrap(), b"\x15start task\r");
+}
+
+/// Catches: a configured preset stays permanently armed after its agent was
+/// observed, letting unattended submit/mail type into the shell after exit.
+#[cfg(unix)]
+#[test]
+fn configured_agent_seen_then_exited_to_shell_is_not_submittable_or_wakeable() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "preset-agent-exit";
+    let agent = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    let seen = state.session_maps.session_states.get(sid).unwrap().clone();
+    assert!(seen.agent_foreground_observed);
+    drop(agent);
+    let shell = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    // Replace only the test PTY child; carry the same production identity state.
+    state.session_maps.session_states.insert(sid.into(), seen);
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type,
+        None
+    );
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe shell command"),
+        AgentSubmissionWrite::Rejected {
+            reason: "not_managed_agent",
+            ..
+        }
+    ));
+    assert!(!should_inject_now(&state, sid));
+    assert!(shell.bytes.lock().unwrap().is_empty());
+}
