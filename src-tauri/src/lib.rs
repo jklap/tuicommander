@@ -136,6 +136,11 @@ pub(crate) mod stories;
 pub(crate) mod subagent_map;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
+#[expect(
+    dead_code,
+    reason = "Telegram offline ports await native integration after 1419/1420"
+)]
+pub(crate) mod telegram;
 pub(crate) use tuic_terminal::terminal_grid;
 #[cfg(feature = "desktop")]
 pub(crate) mod terminal_grid_commands;
