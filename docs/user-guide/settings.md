@@ -305,6 +305,7 @@ empty answer.
 ### Voice
 
 Dictation, speech recognition, spoken replies, and hands-free conversation.
+Hands-free conversation uses an accent **Start conversation** action and a distinct **Stop conversation** action. The state row shows a coloured indicator with **Running** or **Stopped**, alongside the backend phase when available.
 The global dictation hotkey and this machine's input devices are desktop-only;
 a browser client shows the rest of the page. See [Voice Dictation](dictation.md)
 for full details.

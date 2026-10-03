@@ -389,7 +389,7 @@ The two voice sections:
   voice row is **Active** when it is the selected voice; only a language row is
   active for the language.
 - **Hands-free conversation** (`HandsFreeControls`) — a terminal picker, Start /
-  Stop, the polled phase, the activation phrase, the hold-back slider, the
+  Stop (accent Start, distinct Stop), a coloured Running/Stopped indicator, the polled phase, the activation phrase, the hold-back slider, the
   earcons toggle, the "notify model" toggle and, while that is on, the start
   notice textarea. Its placeholder is `getDefaultHandsFreeStartNotice()` — Rust
   owns the built-in text, the frontend keeps no copy. The slider edits the

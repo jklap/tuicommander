@@ -116,6 +116,8 @@
 	"dictation.handsFreeSpeaker": "Speaker",
 	"dictation.handsFreeStart": "Start conversation",
 	"dictation.handsFreeState": "State",
+	"dictation.handsFreeRunning": "Running",
+	"dictation.handsFreeStopped": "Stopped",
 	"dictation.handsFreeStop": "Stop conversation",
 	"dictation.handsFreeTarget": "Bound terminal",
 	"dictation.heading.corrections": "Auto-Corrections",

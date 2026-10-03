@@ -479,3 +479,33 @@
   letter-spacing: 0.05em;
   color: var(--fg-muted);
 }
+
+button.startConversation {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border-color: var(--accent);
+}
+
+button.startConversation:hover:not(:disabled) {
+  background: var(--accent-hover);
+  color: var(--text-on-accent);
+}
+
+button.stopConversation {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.conversationState .phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stateIndicator {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex-shrink: 0;
+}

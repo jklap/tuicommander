@@ -4459,3 +4459,5 @@ or credential is touched.
 - [ ] After the next desktop rebuild, with network and a fresh config: Settings > Voice > Spoken replies shows Edge voices for the dictation language; Listen speaks the preview; the choice survives a restart. Run `cargo nextest run -p tuic-dictation --run-ignored only -E 'test(live_edge_service)'` once to confirm the live handshake (Sec-MS-GEC, Origin) still works. Start hands-free and get a reply spoken; say "hush" mid-reply and it stops. Turn the network off: the Voice section shows the "needs an internet connection" error and replies do not hang. Expert > Speech engine: Pocket and External still work; an install that had Pocket keeps Pocket.
 
 - [ ] Sidebar: verify separate status and agents chevron hit areas, collapsed count, and Enter/Space (#1410-e201).
+
+- [ ] Voice settings: verify accent Start, distinct Stop, and Running/Stopped indicator (#1409-4ec3).

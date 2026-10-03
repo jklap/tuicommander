@@ -1068,33 +1068,32 @@ const HandsFreeControls: Component = () => {
 									<option value="">{t("dictation.handsFreeNoTarget", "Choose a terminal…")}</option>
 									<For each={targets()}>{(term) => <option value={term.sessionId ?? ""}>{term.name}</option>}</For>
 								</select>
-								<button class={s.testBtn} onClick={start} disabled={!target()}>
+								<button class={cx(s.testBtn, d.startConversation)} onClick={start} disabled={!target()}>
 									{t("dictation.handsFreeStart", "Start conversation")}
 								</button>
 							</>
 						}
 					>
-						<button class={s.testBtn} onClick={() => dictationStore.disarmHandsFree()}>
+						<button class={cx(s.testBtn, d.stopConversation)} onClick={() => dictationStore.disarmHandsFree()}>
 							{t("dictation.handsFreeStop", "Stop conversation")}
 						</button>
 					</Show>
 				</div>
 
+				<div class={cx(d.conversation, d.conversationState)} role="status">
+					<div class={d.conversationRow}>
+						<span>{t("dictation.handsFreeState", "State")}</span>
+						<span class={cx(d.phase, armed() && d.live, status()?.phase === "error" && d.failed)}>
+							<span class={d.stateIndicator} aria-hidden="true" />
+							{armed() ? t("dictation.handsFreeRunning", "Running") : t("dictation.handsFreeStopped", "Stopped")}
+							<Show when={status()}> · {phaseLabel()}</Show>
+						</span>
+					</div>
+				</div>
+
 				<Show when={status()}>
 					{(current) => (
 						<div class={d.conversation}>
-							<div class={d.conversationRow}>
-								<span>{t("dictation.handsFreeState", "State")}</span>
-								<span
-									class={cx(
-										d.phase,
-										current().phase === "error" && d.failed,
-										current().armed && current().phase !== "error" && d.live,
-									)}
-								>
-									{phaseLabel()}
-								</span>
-							</div>
 							<Show when={current().sessionId}>
 								<div class={d.conversationRow}>
 									<span>{t("dictation.handsFreeTarget", "Bound terminal")}</span>
