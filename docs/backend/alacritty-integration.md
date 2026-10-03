@@ -55,8 +55,8 @@ answers three of them differently from DEC and from xterm:
 | ICH (`CSI Ps @`), DCH (`CSI Ps P`), ECH (`CSI Ps X`) | edit the cell under the cursor, therefore resolve the pending wrap | carried the wrap past the edit, so the next character jumped to the following row |
 | ED0 (`CSI 0 J`) | the erase origin is past the right margin, so the current line keeps its last cell; lines below still clear | erased that cell, dropping a character the user had already seen |
 
-ED1, EL0, EL1 and EL2 already agreed with the reference and are deliberately
-unchanged — `clear_line` has carried the `LineClearMode::Right` guard all along.
+ED1 pending-wrap behavior, EL0, EL1 and EL2 already agreed with the reference
+and are deliberately unchanged — `clear_line` has carried the `LineClearMode::Right` guard all along.
 Do not "fix" them alongside the three rows above; `term::tests` pins their
 current behaviour for exactly that reason.
 
@@ -134,6 +134,9 @@ Full row replacements (ECH, DCH, ICH, EL or ED covering every column from
 column zero, and DECALN alignment-screen replacement) share the row-reset path and restore known origin without resetting
 absolute row counters. Partial edits preserve both provenance flags. Reflow truncation inspects discarded content just like
 history-cap trimming; dropping only blank rows preserves known origin.
+ED1 resets every row above the cursor, including row zero when the cursor is on
+row one; upstream skips that row with its `cursor.line > 1` guard. The cursor row
+is erased only through its current column, and rows below remain unchanged.
 DECALN fills live rows with default-background E cells after resetting provenance;
 it does not inherit the active erase background. Ordinary printing, including
 insert-mode shifts and a sequence that overwrites every cell, preserves unknown
