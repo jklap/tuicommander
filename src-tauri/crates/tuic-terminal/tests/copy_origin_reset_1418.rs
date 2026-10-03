@@ -85,7 +85,7 @@ fn copied_selection_ed1_on_last_row_resets_preceding_rows_and_keeps_cursor_suffi
 
 // Catches clear_viewport retaining overflow loss on a newly blank zero-history row.
 #[test]
-fn copied_selection_full_viewport_reset_clears_both_flags_on_every_live_row() {
+fn copied_selection_full_viewport_reset_clears_origin_on_every_live_row() {
     for rows in [2, 3] {
         let mut grid: Grid<Cell> = Grid::new(rows, 10, 0);
         for row in 0..rows {
@@ -96,7 +96,6 @@ fn copied_selection_full_viewport_reset_clears_both_flags_on_every_live_row() {
             let row = &grid[Line(row as i32)];
             assert!(row.is_clear());
             assert!(!row.copy_origin_unknown);
-            assert!(!row.copy_predecessor_lost);
         }
     }
 }
@@ -110,7 +109,6 @@ fn copied_selection_full_viewport_reset_keeps_retained_history_loss_flags() {
     }
     grid.scroll_up(&(Line(0)..Line(3)), 2);
     assert!(grid[Line(-1)].copy_origin_unknown);
-    assert!(grid[Line(-1)].copy_predecessor_lost);
     grid.update_history(8);
     for row in 0..3 {
         grid[Line(row)][Column(0)].c = 'y';
@@ -119,10 +117,21 @@ fn copied_selection_full_viewport_reset_keeps_retained_history_loss_flags() {
     assert_eq!(grid.history_size(), 4);
     assert_eq!(grid[Line(-4)][Column(0)].c, 'x');
     assert!(grid[Line(-4)].copy_origin_unknown);
-    assert!(grid[Line(-4)].copy_predecessor_lost);
     for row in 0..3 {
         assert!(grid[Line(row)].is_clear());
         assert!(!grid[Line(row)].copy_origin_unknown);
-        assert!(!grid[Line(row)].copy_predecessor_lost);
+    }
+}
+
+// Catches reintroducing the blank-row exemption and guessing a fresh composer origin after loss.
+#[test]
+fn copied_selection_blank_loss_boundary_stays_literal_until_fully_erased() {
+    for history in [0, 2] {
+        let mut grid = TerminalGrid::new(3, 80, history);
+        let _ = grid.process(b"old\r\n\r\n\r\n\x1b[3J\x1b[H");
+        let _ = grid.process("❯ ambiguous".as_bytes());
+        assert_eq!(grid.get_selection_text(0, 0, 0, 79), "❯ ambiguous");
+        let _ = grid.process("\x1b[H\x1b[2K❯ composer".as_bytes());
+        assert_eq!(grid.get_selection_text(0, 0, 0, 79), "composer");
     }
 }

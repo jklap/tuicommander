@@ -29,7 +29,7 @@ fn decaln_replacing_every_row_restores_known_origin() {
 }
 
 // Catches a whole-row clear path (ECH/DCH/ICH/EL/ED, left/right/all, with and without a
-// background-colour template) that bypasses Row::reset and leaves the latent origin flag behind.
+// background-colour template) that bypasses Row::reset and leaves the origin flag behind.
 #[test]
 fn every_whole_row_clear_restores_known_origin_with_and_without_bce() {
     let ops = [

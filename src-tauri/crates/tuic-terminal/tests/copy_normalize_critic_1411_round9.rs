@@ -23,7 +23,7 @@ fn flagged_lines(grid: &Grid<Cell>) -> Vec<i32> {
     (grid.topmost_line().0..=grid.bottommost_line().0)
         .filter(|l| {
             let row = &grid[Line(*l)];
-            row.copy_origin_unknown || row.copy_predecessor_lost
+            row.copy_origin_unknown
         })
         .collect()
 }
@@ -46,7 +46,7 @@ fn flags_stay_on_oldest_piece_when_flagged_row_is_split_and_merged() {
     assert_eq!(grid.history_size(), 4);
     let oldest = grid.topmost_line();
     assert_eq!(grid[oldest][Column(0)].c, 'b');
-    assert!(grid[oldest].copy_origin_unknown && grid[oldest].copy_predecessor_lost);
+    assert!(grid[oldest].copy_origin_unknown);
     grid[oldest].reflow_wrap = true;
 
     grid.resize(ReflowMode::HistoryOnly, 3, 20);
@@ -56,19 +56,18 @@ fn flags_stay_on_oldest_piece_when_flagged_row_is_split_and_merged() {
         'c',
         "continuation merged into the oldest row"
     );
-    assert!(grid[oldest].copy_origin_unknown && grid[oldest].copy_predecessor_lost);
+    assert!(grid[oldest].copy_origin_unknown);
 
     grid.resize(ReflowMode::HistoryOnly, 3, 10);
     let oldest = grid.topmost_line();
     assert_eq!(grid[oldest][Column(0)].c, 'b');
-    assert!(grid[oldest].copy_origin_unknown && grid[oldest].copy_predecessor_lost);
+    assert!(grid[oldest].copy_origin_unknown);
     let second = Line(oldest.0 + 1);
     assert_eq!(grid[second][Column(0)].c, 'c');
     assert!(
         !grid[second].copy_origin_unknown,
         "split-off tail is not the boundary"
     );
-    assert!(!grid[second].copy_predecessor_lost);
 }
 
 // Catches a rotated or reused ring row keeping a stale flag after overflow scrolls of 1 and 2
@@ -99,7 +98,7 @@ fn only_the_oldest_row_ever_carries_loss_flags_after_scrolls() {
     put(&mut grid, 0, 'x');
     scroll(&mut grid);
     put(&mut grid, 0, 'y');
-    assert!(grid[Line(0)].copy_origin_unknown && grid[Line(0)].copy_predecessor_lost);
+    assert!(grid[Line(0)].copy_origin_unknown);
     grid.scroll_up_with(&(Line(0)..Line(3)), 1, ScrollSource::Control);
     assert!(
         flagged_lines(&grid).is_empty(),
@@ -109,7 +108,7 @@ fn only_the_oldest_row_ever_carries_loss_flags_after_scrolls() {
 }
 
 // Catches cached storage rows (kept past `len` after a history purge) coming back as live rows
-// with stale content or stale loss flags when the screen grows.
+// with stale content when the screen grows.
 #[test]
 fn purged_history_rows_do_not_resurface_when_screen_grows() {
     let mut grid: Grid<Cell> = Grid::new(2, 10, 3);
@@ -128,10 +127,6 @@ fn purged_history_rows_do_not_resurface_when_screen_grows() {
     for l in grid.topmost_line().0..=grid.bottommost_line().0 {
         let row = &grid[Line(l)];
         assert!(row.is_clear(), "line {l} holds stale content");
-        assert!(
-            !row.copy_origin_unknown && !row.copy_predecessor_lost,
-            "line {l} holds a stale flag"
-        );
     }
 }
 
@@ -176,13 +171,13 @@ fn reflow_truncation_of_content_rows_flags_survivor() {
     grid.resize(ReflowMode::All, 2, 5);
     let oldest = grid.topmost_line();
     assert_eq!(grid[oldest][Column(0)].c, '❯');
-    assert!(grid[oldest].copy_origin_unknown && grid[oldest].copy_predecessor_lost);
+    assert!(grid[oldest].copy_origin_unknown);
 }
 
 const WIDTH: &str = "aaaaaaaaaaaaaaaaaaaab";
 
 // Two rows, 20 columns, history 1: a wrapped head is evicted and the retained history row is
-// blank; growing by one row pulls that blank boundary row back live.
+// blank and conservatively unknown; growing by one row pulls it back live.
 fn reactivated_grid() -> TerminalGrid {
     let mut g = TerminalGrid::new(2, 20, 1);
     let _ = g.process(format!("{WIDTH}\r\n\r\n\r\n").as_bytes());
@@ -224,10 +219,10 @@ fn partial_erases_do_not_clear_the_reactivated_flag() {
     }
 }
 
-// Catches a full-row erase clearing copy_origin_unknown but not the latent flag, so a LATER resize
-// resurrects the loss on a row that was erased and rewritten.
+// Catches a full-row erase failing to clear unknown origin, so a later resize
+// keeps a freshly redrawn composer literal.
 #[test]
-fn full_erases_clear_both_flags_and_resize_does_not_resurrect_them() {
+fn full_erases_clear_origin_and_resize_does_not_resurrect_it() {
     for erase in [
         "\x1b[1;1H\x1b[2K",
         "\x1b[1;1H\x1b[K",
@@ -249,7 +244,7 @@ fn ech_over_the_whole_row_restores_known_origin() {
     assert_eq!(composer_after("\x1b[1;1H\x1b[20X", true), "new composer");
 }
 
-// Catches ED 3 over blank-only latent history poisoning the live row it leaves behind, directly
+// Catches ED 3 over blank-only history poisoning the live row it leaves behind, directly
 // or through the stale cached copy of the purged boundary row on a later grow.
 #[test]
 fn ed3_over_blank_boundary_history_leaves_known_origin_even_after_grow() {

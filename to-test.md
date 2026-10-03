@@ -4462,10 +4462,12 @@ or credential is touched.
 
 - [ ] #1418-48c7: After Boss restarts the backend, copy a literal prompt-shaped VT continuation whose predecessor was evicted from scrollback; the glyph must remain. Targeted grid regression verifies the extraction path; desktop clipboard check awaits restart.
 
-- [ ] #1418-48c7: After the backend restart, clear history and redraw a real composer on the top row, including with zero scrollback. Copy must remove the composer marker; purging history without erasing literal prompt-shaped content must preserve it. Automated regression coverage exercises full and partial line erasure.
+- [ ] #1418-48c7: After the backend restart, clear history, fully erase the top row and redraw a real composer there, including with zero scrollback. Copy must remove the composer marker; purging history without erasing literal prompt-shaped content must preserve it. Automated regression coverage exercises full and partial line erasure.
 
 - [ ] #1418-48c7: After Boss restarts the backend, move a literal prompt-shaped row with RI/IL and copy it at its new position: keep the glyph. Replace the entire row with ECH/DCH/ICH, redraw a fresh composer, and copy: remove only composer chrome. Partial edits must keep unknown-origin content literal. Automated grid and selection regressions cover these paths; desktop clipboard awaits restart.
 
 - [ ] #1418-48c7: After Boss restarts the backend, issue ED1 (`CSI 1 J`) with the cursor on the second row: the first row must be blank. Redraw a fresh composer there and copy it: remove only composer chrome. First-row and last-row erase boundaries and the cursor-row suffix have automated grid regression coverage; desktop verification awaits restart.
 
-- [ ] #1418-48c7: After Boss restarts the backend, fill every row with scrollback set to zero, clear the screen with ED2 (`CSI 2 J`), then redraw and copy a fresh composer on row zero: remove only composer chrome. Automated regressions cover two/three-row screens, both provenance flags, and retained history with nonzero scrollback. ED3 must still preserve literal live content.
+- [ ] #1418-48c7: After Boss restarts the backend, fill every row with scrollback set to zero, clear the screen with ED2 (`CSI 2 J`), then redraw and copy a fresh composer on row zero: remove only composer chrome. Automated regressions cover two/three-row screens, the origin flag, and retained history with nonzero scrollback. ED3 must still preserve literal live content.
+
+- [ ] #1418-48c7: After the backend restart, a composer on a blank row whose nonblank predecessor was evicted or purged may retain its `❯ ` when copied until a full row erase. This conservative limitation is accepted by Boss (2026-10-03, option a); the implementation uses one origin flag and no resize promotion.
