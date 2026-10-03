@@ -181,4 +181,32 @@ describe("remote mcp-toast (critic 1439-d84f)", () => {
 		expect(item?.title).toBe("[<i>h</i>] <img src=x onerror=alert(1)>");
 		expect(item?.subtitle).toBe("<b>m</b>");
 	});
+
+	// Catches: a malformed mirrored frame still plays its sound, logs the daemon's
+	// payload, or is discarded for a legitimate null message.
+	it("a malformed remote frame makes no sound, no bell item and no payload log; null message is accepted", async () => {
+		const { appLogger } = await import("../../stores/appLogger");
+		const debug = vi.spyOn(appLogger, "debug");
+		const fire = await bootToastListener();
+		fire({ title: 7, message: "SECRET-BODY", level: "info", sound: "attention", __tuic_origin: remote("vps") });
+		fire({ title: "t", message: 5, level: "info", sound: "attention", __tuic_origin: remote("vps") });
+		expect(activityStore.getForSection("messages")).toHaveLength(0);
+		expect(notificationsStore.play).not.toHaveBeenCalled();
+		expect(JSON.stringify(debug.mock.calls)).not.toContain("SECRET-BODY");
+		fire({ title: "ok", message: null, level: "info", sound: "attention", __tuic_origin: remote("vps") });
+		expect(activityStore.getForSection("messages")).toHaveLength(1);
+	});
+
+	// Catches: the connection id in the dedup key breaks local dedup (no id) or
+	// stops the same connection's repeat from collapsing.
+	it("local notices still dedup, a same-connection repeat dedups, a local/remote twin does not", async () => {
+		const fire = await bootToastListener();
+		const base = { title: "same", message: "m", level: "info", sound: null };
+		fire(base);
+		fire(base);
+		expect(activityStore.getForSection("messages")).toHaveLength(1);
+		fire({ ...base, __tuic_origin: remote("c1", "prod") });
+		fire({ ...base, __tuic_origin: remote("c1", "prod") });
+		expect(activityStore.getForSection("messages")).toHaveLength(2);
+	});
 });
