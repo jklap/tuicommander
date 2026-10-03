@@ -4461,3 +4461,5 @@ or credential is touched.
 - [ ] #1411-097c: After a backend restart, copy a wrapped Claude prompt. Confirm only the outer `❯ ` and two-column margin disappear, width wraps join, and typed newlines remain. Select the pasted second glyph from column 2, content after an ASCII/wide prefix, and a VT continuation starting with `❯ `: literal glyphs and indentation must remain (#1414-4366). Rust changes require Boss to restart `make dev` or rebuild the release.
 
 - [ ] #1418-48c7: After Boss restarts the backend, copy a literal prompt-shaped VT continuation whose predecessor was evicted from scrollback; the glyph must remain. Targeted grid regression verifies the extraction path; desktop clipboard check awaits restart.
+
+- [ ] #1418-48c7: After the backend restart, clear history and redraw a real composer on the top row, including with zero scrollback. Copy must remove the composer marker; purging history without erasing literal prompt-shaped content must preserve it. Automated regression coverage exercises full and partial line erasure.

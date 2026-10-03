@@ -195,6 +195,8 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         let current_history_size = self.history_size();
         if current_history_size > history_size {
             self.raw.shrink_lines(current_history_size - history_size);
+            let oldest = self.topmost_line();
+            self.raw[oldest].copy_origin_unknown = true;
         }
         self.display_offset = min(self.display_offset, history_size);
         self.max_scroll_limit = history_size;
@@ -363,6 +365,10 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             self.display_offset = min(self.display_offset + positions, self.max_scroll_limit);
         }
 
+        let evicts_predecessor = region.start == 0
+            && source == ScrollSource::Overflow
+            && positions > self.max_scroll_limit - self.history_size();
+
         // Only rotate the entire history if the active region starts at the top
         // *and* the lines are leaving the screen rather than being removed. A
         // control scroll takes the branch below, which rotates within the
@@ -407,6 +413,10 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         // Ensure all new lines are fully cleared.
         for i in (region.end.0 - positions as i32..region.end.0).map(Line::from) {
             self.raw[i].reset(&self.cursor.template);
+        }
+        if evicts_predecessor {
+            let oldest = self.topmost_line();
+            self.raw[oldest].copy_origin_unknown = true;
         }
     }
 
@@ -485,8 +495,12 @@ impl<T> Grid<T> {
 
     #[inline]
     pub fn clear_history(&mut self) {
-        // Explicitly purge all lines from history.
-        self.raw.shrink_lines(self.history_size());
+        // Explicitly purge all lines from history without changing absolute row ids.
+        let removed = self.history_size();
+        self.raw.shrink_lines(removed);
+        if removed != 0 {
+            self.raw[Line(0)].copy_origin_unknown = true;
+        }
 
         // Reset display offset.
         self.display_offset = 0;

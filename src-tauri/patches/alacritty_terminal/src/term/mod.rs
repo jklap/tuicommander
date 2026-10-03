@@ -2054,7 +2054,11 @@ impl<T: EventListener> Handler for Term<T> {
         self.damage
             .damage_line(point.line.0 as usize, left.0, right.0 - 1);
 
+        let columns = self.columns();
         let row = &mut self.grid[point.line];
+        if left == Column(0) && right == Column(columns) {
+            row.copy_origin_unknown = false;
+        }
         for cell in &mut row[left..right] {
             *cell = bg.into();
         }
@@ -2172,6 +2176,9 @@ impl<T: EventListener> Handler for Term<T> {
 
                 // Clear up to the current column in the current line.
                 let end = cmp::min(cursor.column + 1, Column(self.columns()));
+                if end == Column(self.columns()) {
+                    self.grid[cursor.line].copy_origin_unknown = false;
+                }
                 for cell in &mut self.grid[cursor.line][..end] {
                     *cell = bg.into();
                 }
@@ -2185,6 +2192,9 @@ impl<T: EventListener> Handler for Term<T> {
                 // so the last cell of the current line is not in range. Same
                 // reasoning as the `LineClearMode::Right` guard in `clear_line`.
                 if !self.grid.cursor.input_needs_wrap {
+                    if cursor.column == Column(0) {
+                        self.grid[cursor.line].copy_origin_unknown = false;
+                    }
                     for cell in &mut self.grid[cursor.line][cursor.column..] {
                         *cell = bg.into();
                     }

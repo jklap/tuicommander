@@ -1997,9 +1997,9 @@ impl TerminalGrid {
             && grid[first_line][Column(0)].c == '❯'
             && grid[first_line][Column(1)].c == ' '
             && if first_line == grid.topmost_line() {
-                // An evicted predecessor may have wrapped into this row. Unknown
-                // origin is literal content, not evidence of composer chrome.
-                grid.total_scrolled() == history_size
+                // Row provenance survives scrollback loss, but full erasure restores
+                // a known origin without resetting monotonic absolute row ids.
+                !grid[first_line].copy_origin_unknown
             } else {
                 !grid[Line(first_line.0 - 1)][Column(num_cols - 1)]
                     .flags
