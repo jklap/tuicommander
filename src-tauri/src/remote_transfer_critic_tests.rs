@@ -80,18 +80,30 @@ async fn hostile_archives_publish_nothing_and_leave_no_staging() {
         ("dotdot_in_dir", file("x/../../escape", b"p"), true),
         ("absolute", file("/tmp/tuic-critic-absolute", b"p"), false),
         ("symlink", raw_member(b"x", b'2', b"/etc", 0, b""), false),
-        ("hardlink", raw_member(b"x", b'1', b"/etc/hostname", 0, b""), false),
+        (
+            "hardlink",
+            raw_member(b"x", b'1', b"/etc/hostname", 0, b""),
+            false,
+        ),
         ("chardev", raw_member(b"x", b'3', b"", 0, b""), false),
         ("fifo", raw_member(b"x", b'6', b"", 0, b""), false),
         ("sparse", raw_member(b"x", b'S', b"", 0, b""), false),
         ("pax_global", raw_member(b"x", b'g', b"", 0, b""), false),
-        ("sibling", [file("x", b"a"), file("y", b"b")].concat(), false),
+        (
+            "sibling",
+            [file("x", b"a"), file("y", b"b")].concat(),
+            false,
+        ),
         (
             "prefix_sibling",
             [dir("x"), file("xy/f", b"b")].concat(),
             true,
         ),
-        ("dup_entry", [file("x", b"a"), file("x", b"b")].concat(), false),
+        (
+            "dup_entry",
+            [file("x", b"a"), file("x", b"b")].concat(),
+            false,
+        ),
         ("backslash", file("x\\..\\y", b"a"), false),
         ("file_for_dir", file("x", b"a"), true),
         ("dir_for_file", dir("x"), false),
@@ -119,9 +131,17 @@ async fn hostile_archives_publish_nothing_and_leave_no_staging() {
             "{label}: hostile archive must be rejected, got {:?}",
             outcome.map(|r| (r.moved, r.skipped))
         );
-        assert_eq!(names(&root), Vec::<String>::new(), "{label}: residue in dest");
+        assert_eq!(
+            names(&root),
+            Vec::<String>::new(),
+            "{label}: residue in dest"
+        );
         assert_eq!(names(&outside), Vec::<String>::new(), "{label}: escaped");
-        assert_eq!(names(tmp.path()), vec!["outside", "repo"], "{label}: escaped");
+        assert_eq!(
+            names(tmp.path()),
+            vec!["outside", "repo"],
+            "{label}: escaped"
+        );
         assert!(!Path::new("/tmp/tuic-critic-absolute").exists(), "{label}");
     }
 }
@@ -143,15 +163,36 @@ async fn symlinked_destination_and_target_do_not_escape_the_root() {
     for via in ["escape", "rel_escape"] {
         let out = upload(&root, &root.join(via), "f", false, finish(file("f", b"p"))).await;
         assert!(out.is_err(), "{via} must not be followed");
-        assert_eq!(names(&outside), Vec::<String>::new(), "{via} leaked a write");
+        assert_eq!(
+            names(&outside),
+            Vec::<String>::new(),
+            "{via} leaked a write"
+        );
     }
-    let out = upload(&root, &root, "dangling", false, finish(file("dangling", b"p"))).await;
-    assert!(out.is_err(), "symlink target must be refused, not written through");
+    let out = upload(
+        &root,
+        &root,
+        "dangling",
+        false,
+        finish(file("dangling", b"p")),
+    )
+    .await;
+    assert!(
+        out.is_err(),
+        "symlink target must be refused, not written through"
+    );
     assert!(!outside.join("fresh").exists());
     // A symlink pointing inside the root is legitimate and stays usable.
     std::fs::create_dir(root.join("real")).unwrap();
     std::os::unix::fs::symlink("real", root.join("alias")).unwrap();
-    let out = upload(&root, &root.join("alias"), "f", false, finish(file("f", b"p"))).await;
+    let out = upload(
+        &root,
+        &root.join("alias"),
+        "f",
+        false,
+        finish(file("f", b"p")),
+    )
+    .await;
     assert_eq!(out.unwrap().moved, 1);
     assert!(root.join("real/f").exists());
 }
@@ -182,7 +223,11 @@ async fn invalid_destinations_and_names_are_rejected() {
         (r.clone(), "C:evil"),
     ] {
         let out = receive_copy(
-            UploadQuery { dest_dir: dest.clone(), name: name.into(), directory: false },
+            UploadQuery {
+                dest_dir: dest.clone(),
+                name: name.into(),
+                directory: false,
+            },
             &[r.clone()],
             Body::from(finish(file("f", b"p"))),
         )
@@ -201,7 +246,9 @@ async fn existing_name_is_skipped_and_publish_never_replaces() {
     let root = tmp.path().join("repo");
     std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("f"), b"original").unwrap();
-    let out = upload(&root, &root, "f", false, finish(file("f", b"new"))).await.unwrap();
+    let out = upload(&root, &root, "f", false, finish(file("f", b"new")))
+        .await
+        .unwrap();
     assert_eq!((out.moved, out.skipped), (0, 1));
     assert_eq!(std::fs::read(root.join("f")).unwrap(), b"original");
     assert_eq!(names(&root), vec!["f"]);
@@ -216,7 +263,10 @@ async fn existing_name_is_skipped_and_publish_never_replaces() {
     let err = publish(&a, &b, "d").unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
     assert!(from.join("d/new").exists(), "source must stay in staging");
-    assert!(names(&root.join("d")).is_empty(), "empty dir must not be replaced");
+    assert!(
+        names(&root.join("d")).is_empty(),
+        "empty dir must not be replaced"
+    );
 }
 
 // Catches: a dropped connection (handler future cancelled mid-body) leaking the
@@ -230,9 +280,11 @@ async fn cancelled_upload_removes_its_staging_directory() {
         .chain(futures_util::stream::pending());
     let roots = [root.to_str().unwrap().to_owned()];
     let fut = receive_copy(query(&root, "f", false), &roots, Body::from_stream(stream));
-    assert!(tokio::time::timeout(std::time::Duration::from_millis(300), fut)
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(300), fut)
+            .await
+            .is_err()
+    );
     assert_eq!(names(&root), Vec::<String>::new());
 
     // A transport error mid-body takes the same cleanup path.
@@ -258,7 +310,8 @@ async fn oversized_body_is_cut_off_and_cleaned() {
     let root = tmp.path().join("repo");
     std::fs::create_dir(&root).unwrap();
     let chunk = vec![0u8; 1024 * 1024];
-    let stream = futures_util::stream::iter((0..257).map(move |_| Ok::<_, io::Error>(chunk.clone())));
+    let stream =
+        futures_util::stream::iter((0..257).map(move |_| Ok::<_, io::Error>(chunk.clone())));
     let out = receive_copy(
         query(&root, "f", false),
         &[root.to_str().unwrap().to_owned()],
@@ -280,7 +333,11 @@ async fn declared_size_and_entry_count_limits_hold() {
     let out = upload(&root, &root, "x", false, huge).await;
     assert!(out.is_err());
     let lie = raw_member(b"x", b'0', b"", u64::MAX / 2, b"");
-    assert!(upload(&root, &root, "x", false, [lie.clone(), lie].concat()).await.is_err());
+    assert!(
+        upload(&root, &root, "x", false, [lie.clone(), lie].concat())
+            .await
+            .is_err()
+    );
     assert_eq!(names(&root), Vec::<String>::new());
 
     let build = |n: usize| {
@@ -293,7 +350,9 @@ async fn declared_size_and_entry_count_limits_hold() {
     let out = upload(&root, &root, "x", true, build(10_001)).await;
     assert!(out.is_err(), "10001 entries must be refused");
     assert_eq!(names(&root), Vec::<String>::new());
-    let out = upload(&root, &root, "x", true, build(10_000)).await.unwrap();
+    let out = upload(&root, &root, "x", true, build(10_000))
+        .await
+        .unwrap();
     assert_eq!(out.moved, 1, "exactly 10000 entries is within the cap");
 }
 
@@ -309,10 +368,14 @@ async fn overlong_member_path_is_rejected_without_leaking_host_paths() {
     h.set_size(1);
     h.set_mode(0o644);
     h.set_cksum();
-    b.append_data(&mut h, format!("x/{}", "a".repeat(5000)), &b"p"[..]).unwrap();
+    b.append_data(&mut h, format!("x/{}", "a".repeat(5000)), &b"p"[..])
+        .unwrap();
     let out = upload(&root, &root, "x", true, b.into_inner().unwrap()).await;
     let err = out.unwrap_err();
-    assert!(!err.contains(root.to_str().unwrap()), "leaked host path: {err}");
+    assert!(
+        !err.contains(root.to_str().unwrap()),
+        "leaked host path: {err}"
+    );
     assert_eq!(names(&root), Vec::<String>::new());
 }
 
@@ -331,7 +394,10 @@ async fn third_concurrent_upload_is_refused_without_side_effects() {
     assert_eq!(names(&root), Vec::<String>::new());
     drop((a, b));
     assert_eq!(
-        upload(&root, &root, "f", false, finish(file("f", b"p"))).await.unwrap().moved,
+        upload(&root, &root, "f", false, finish(file("f", b"p")))
+            .await
+            .unwrap()
+            .moved,
         1
     );
 }
@@ -385,14 +451,25 @@ async fn symlink_and_fifo_sources_are_refused_before_any_request() {
     let paths = [&link, &tree, &fifo].map(|p| p.to_str().unwrap().to_owned());
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        send_copies(reqwest::Client::new(), &endpoint, None, "/dest", paths.to_vec(), true),
+        send_copies(
+            reqwest::Client::new(),
+            &endpoint,
+            None,
+            "/dest",
+            paths.to_vec(),
+            true,
+        ),
     )
     .await
     .expect("a FIFO source must not hang the sender")
     .unwrap();
     server.abort();
     assert_eq!((out.moved, out.errors.len()), (0, 3), "{:?}", out.errors);
-    assert_eq!(hits.load(Ordering::SeqCst), 0, "hostile source reached the wire");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "hostile source reached the wire"
+    );
 }
 
 // Catches: the session token (sent as `?token=`) echoed in the error text when the
