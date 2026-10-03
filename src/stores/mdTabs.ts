@@ -1,7 +1,10 @@
 import { batch } from "solid-js";
 import { pathBasename } from "../utils/pathUtils";
+import { appLogger } from "./appLogger";
 import { branchKeyFor, repositoriesStore, resolveRepoPathFor } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
+
+const MCP_RELOAD_KEY = "tui-commander-mcp-markdown-reload";
 
 // Zoom bounds mirror the terminal zoom (useTerminalLifecycle) for consistency.
 const MD_MIN_FONT_SIZE = 8;
@@ -199,6 +202,69 @@ function createMdTabsStore() {
 
 	return {
 		state: base.state,
+
+		/** Keep MCP documents in this window across WebView/HMR reloads only. */
+		saveForReload(): void {
+			const tabs = base.state._order
+				.map((id) => base.get(id))
+				.filter((tab): tab is FileTab => tab?.type === "file" && !!tab.mcpUiId)
+				.map((tab) => ({
+					mcpUiId: tab.mcpUiId,
+					repoPath: tab.repoPath,
+					filePath: tab.filePath,
+					branchKey: tab.branchKey,
+					pinned: tab.pinned === true,
+				}));
+			try {
+				sessionStorage.setItem(
+					MCP_RELOAD_KEY,
+					JSON.stringify({
+						tabs,
+						activeMcpUiId: base.getActive()?.type === "file" ? base.getActive()?.mcpUiId : undefined,
+					}),
+				);
+			} catch (err) {
+				appLogger.warn("store", "Could not save MCP Markdown tabs for reload", err);
+			}
+		},
+
+		/** Called after repository and terminal restoration so selected documents win. */
+		restoreAfterReload(): void {
+			try {
+				const saved: unknown = JSON.parse(sessionStorage.getItem(MCP_RELOAD_KEY) ?? "null");
+				// Consume the snapshot; another init must not resurrect closed tabs.
+				sessionStorage.removeItem(MCP_RELOAD_KEY);
+				if (!saved || typeof saved !== "object") return;
+				const snapshot = saved as Record<string, unknown>;
+				if (!Array.isArray(snapshot.tabs)) return;
+				for (const value of snapshot.tabs) {
+					if (!value || typeof value !== "object") continue;
+					const tab = value as Record<string, unknown>;
+					if (
+						typeof tab.mcpUiId !== "string" ||
+						!tab.mcpUiId ||
+						typeof tab.repoPath !== "string" ||
+						typeof tab.filePath !== "string" ||
+						!tab.filePath ||
+						typeof tab.pinned !== "boolean" ||
+						(tab.branchKey !== undefined && typeof tab.branchKey !== "string")
+					)
+						continue;
+					// A fresh MCP event received during boot takes precedence over disk.
+					if (
+						Object.values(base.state.tabs).some(
+							(open) => open.mcpUiId === tab.mcpUiId || (open.type === "plugin-panel" && open.pluginId === tab.mcpUiId),
+						)
+					)
+						continue;
+					const id = this.addMcpFile(tab.mcpUiId, tab.repoPath, tab.filePath, tab.pinned, true);
+					base._setState("tabs", id, "branchKey", tab.branchKey as string | undefined);
+					if (tab.mcpUiId === snapshot.activeMcpUiId) base.setActive(id);
+				}
+			} catch (err) {
+				appLogger.warn("store", "Could not restore MCP Markdown tabs after reload", err);
+			}
+		},
 
 		/** Remove a tab. Plugin panels announce their own death on the way out. */
 		remove(id: string): void {
