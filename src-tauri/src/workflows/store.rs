@@ -621,6 +621,11 @@ fn default_story_checks() -> Vec<CheckDefinition> {
     }]
 }
 
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "seed insertion mirrors the persisted workflow fields"
+)]
 fn insert_seed(
     conn: &Connection,
     id: &str,

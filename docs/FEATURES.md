@@ -725,6 +725,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Custom scripts**: `$TUIC_SESSION` is available as a stable key for any tab-specific state
 
 ### 6.2 Agent Detection
+- Hand-launched agents are classified and recorded by the backend on desktop and headless hosts; HTTP foreground queries share the desktop detection logic. Plain shells remain ineligible for agent submit and mail wake.
 - Protocol completion survives terminal redraws and decorative idle animation; new input and recognized semantic working signals can reopen activity.
 - Auto-detection from terminal output patterns
 - Multi-agent status line detection via regex patterns anchored to line start: Claude Code (`*`/`✢`/`·` + task text + `...`/`…`), `[Running] Task` format, Aider (Knight Rider scanner `░█` + token reports), Codex CLI (`•`/`◦` bullet spinner with time suffix), Goose (`<message>... (Ctrl+C to interrupt)`), Copilot CLI (`∴`/`●`/`○` indicators), Gemini CLI (braille dots `⠋⠙⠹...`)
@@ -736,7 +737,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Brand SVG logos for each agent (fallback to capital letter)
 - Agent badge in status bar showing active agent
 - Binary detection: Rust probes well-known directories via `resolve_cli()` for reliable PATH resolution in desktop-launched apps
-- Foreground process detection: `tcgetpgrp()` on the PTY master fd, then `proc_pidpath()` to get the binary name. Handles versioned binary paths (e.g. Claude Code installs as `~/.local/share/claude/versions/2.1.87`) by scanning parent directory names when the basename is not a known agent; Droid is classified explicitly so it receives the agent idle threshold.
+- Foreground process detection: `tcgetpgrp()` on the PTY master fd, then macOS `proc_pidpath()` or Linux `/proc/<pid>/exe` with a `/proc/<pid>/comm` fallback to get the binary name. Identities are revoked when a shell returns to the foreground after agent observation; run-config presets remain armed during startup, and transient non-shell helpers preserve identity. Linux updater-replaced executables retain classification after removing the proc ` (deleted)` suffix. Handles versioned binary paths (e.g. Claude Code installs as `~/.local/share/claude/versions/2.1.87`) by recognising the exact `claude/versions/<numeric-version>` layout when the basename is not a known agent; arbitrary agent-named ancestor directories do not classify an executable; Droid is classified explicitly so it receives the agent idle threshold.
 
 ### 6.3 Rate Limit Detection
 - Provider-specific regex patterns detect rate limit messages
@@ -2430,6 +2431,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
   desktop restart so Connect can rejoin the same daemon
 
 ### 24.3 Authentication
+- Both desktop and `tuic-remote` require credentials on protected TCP requests, including loopback and LAN. Origin/Host checks reject foreign websites and DNS rebinding before any handler. Local IPC retains its existing trust.
 - `tuic-remote` authenticates every TCP request: the headless build has no loopback bypass and `run_remote` forces `lan_auth_bypass` off, so an SSH tunnel does not make it local. `GET /health` is the only unauthenticated route
 - On connect, the backend trades the vault password for the daemon's session token (`GET /api/auth/session-token`, Basic Auth) — in Rust, so the password never reaches the WebView
 - The token is appended as `?token=` to HTTP, the terminal WebSocket and the `/events` SSE stream by the single helper `withRemoteToken` (`transportRuntime.ts`). A WS upgrade cannot set a header and `Access-Control-Allow-Origin: *` rules out credentialed cookies, so the query string is the only credential all three share
@@ -2548,6 +2550,23 @@ profile rules or allow/deny policy in `session/new`.
 - The notification bell always offers Terminal Progress, including with zero unread updates; `Cmd/Ctrl+Shift+P` and the command palette open the same dialog
 - `progress_tracking` gate: a global setting ANDed with a per-agent override. Global off removes the tool from every agent's tool list
 
+### Remote MCP session ownership and peer mail
+
+Desktop MCP discovers configured remote PTYs and peers, routes output and semantic
+submit to the owning daemon, and delivers connection-qualified peer mail through an
+authenticated desktop hub. Local mail remains independent of the hub.
+
 ### Answers-only View
 
 Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marked answers and their tracked prompts. Turns without marked answers are omitted. Output before the first tracked prompt remains available as a prompt-less turn, from the retained history base. If no answers qualify, the view shows a one-line notice. Toggle the view again to return to the terminal.
+
+## Private secret forms
+
+The `secret` MCP tool opens a separate native form for requested sensitive
+fields and returns names/status only. Approved argv commands receive values in
+the child environment; pipe output is masked for exact and common encoded
+values, including wraps. User consent binds exact argv, names
+and directory. Values and templates live only until exit. One-time nonce links
+support browser entry on the existing application origin and transport. Use
+HTTPS for phone entry. TUIC inspection tools are gated while a form is open. See
+[Private secret forms](user-guide/secrets.md) for limits and consent.

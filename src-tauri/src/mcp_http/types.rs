@@ -118,6 +118,9 @@ pub(super) struct ResizeRequest {
 #[derive(Deserialize)]
 pub(super) struct OutputQuery {
     pub limit: Option<usize>,
+    /// Native MCP output windows, used only by format=mcp/mcp_raw.
+    pub from_line: Option<usize>,
+    pub since_cursor: Option<usize>,
     /// When set to "text", ANSI escape sequences are stripped from the output.
     pub format: Option<String>,
     /// Starting offset for log-mode WebSocket catch-up (skip lines already fetched via HTTP).

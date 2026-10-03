@@ -1521,6 +1521,7 @@ pub(crate) fn autoconnect_all(state: &Arc<AppState>) {
 /// heartbeat and the mirror is a long-lived stream, so one failing must not take
 /// the other down.
 fn spawn_mirror(state: &Arc<AppState>, id: String) {
+    crate::mcp_http::remote_peer::connect_configured(state, id.clone());
     let previous = {
         let mut entry = state.remote.entries.entry(id.clone()).or_default();
         entry.mirror.take()
@@ -1566,26 +1567,24 @@ async fn poll_once(state: &Arc<AppState>, id: &str) {
             let refresh = state.remote.entries.get(id).is_some_and(|entry| {
                 entry.status == Some(RemoteStatus::Connected) && entry.out_of_date == Some(true)
             });
-            if refresh {
-                if let Ok(health) = read_health(&state.remote.http_client(), &base_url).await {
-                    let sessions = health.session_count;
-                    let retry = state.remote.entries.get(id).is_some_and(|entry| {
-                        entry.status == Some(RemoteStatus::Connected)
-                            && entry.update_in_progress.is_none()
-                            && sessions == Some(0)
-                            && (entry.live_sessions != Some(0)
-                                || entry.update_notice.as_deref().is_some_and(|notice| {
-                                    notice.starts_with(
-                                        "Remote update failed: Live session count changed",
-                                    )
-                                }))
-                    });
-                    update_connected(state, id, |entry| entry.live_sessions = sessions);
-                    if retry
-                        && load_connection(state, id).is_ok_and(|connection| connection.auto_update)
-                    {
-                        spawn_build_comparison(state, id);
-                    }
+            if refresh && let Ok(health) = read_health(&state.remote.http_client(), &base_url).await
+            {
+                let sessions = health.session_count;
+                let retry = state.remote.entries.get(id).is_some_and(|entry| {
+                    entry.status == Some(RemoteStatus::Connected)
+                        && entry.update_in_progress.is_none()
+                        && sessions == Some(0)
+                        && (entry.live_sessions != Some(0)
+                            || entry.update_notice.as_deref().is_some_and(|notice| {
+                                notice
+                                    .starts_with("Remote update failed: Live session count changed")
+                            }))
+                });
+                update_connected(state, id, |entry| entry.live_sessions = sessions);
+                if retry
+                    && load_connection(state, id).is_ok_and(|connection| connection.auto_update)
+                {
+                    spawn_build_comparison(state, id);
                 }
             }
         }

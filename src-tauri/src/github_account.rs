@@ -37,6 +37,7 @@ impl GitHubAccountRegistry {
 
     /// Apply account-id changes to the latest locked registry. The on-disk
     /// representation is an array, but independent account additions compose.
+    #[cfg(test)]
     pub(crate) fn save(&self, base: &Self) -> Result<(), String> {
         let changed: Vec<_> = self
             .accounts

@@ -3766,3 +3766,18 @@ describe("owningConnectionFor", () => {
 		expect(warn.mock.calls[0][2]).toMatchObject({ command: "start_native_drag", connectionId: TYCHO });
 	});
 });
+
+// A private native bootstrap must not become a public nonce-issuing endpoint.
+describe("private secret transport boundary", () => {
+	it("keeps native nonce bootstrap unmapped and submits the same envelope over HTTP", () => {
+		expect(INTENTIONALLY_UNMAPPED.has("secret_form_bootstrap")).toBe(true);
+		const request = mapCommandToHttp("secret_form_submit", {
+			submission: { nonce: "one-time", status: "declined", values: {}, template: null },
+		});
+		expect(request).toEqual({
+			method: "POST",
+			path: "/secrets/forms/submit",
+			body: { nonce: "one-time", status: "declined", values: {}, template: null },
+		});
+	});
+});

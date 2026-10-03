@@ -126,9 +126,12 @@ pub(crate) async fn create_pty(
         .session_maps
         .terminal_rows
         .insert(session_id.clone(), std::sync::atomic::AtomicU16::new(rows));
-    let mut ss = crate::state::SessionState::default();
+    let mut ss = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::Shell,
+        ..Default::default()
+    };
     if config.agent_type.is_some() {
-        ss.agent_type = config.agent_type;
+        ss.seed_configured_agent(config.agent_type);
         ss.hook_instrumented = hook_instrumented_for(
             &crate::config::load_agents_config(),
             ss.agent_type.as_deref(),
@@ -292,9 +295,12 @@ pub(crate) async fn create_pty_with_worktree(
         session_id.clone(),
         std::sync::atomic::AtomicU16::new(pty_rows),
     );
-    let mut ss = crate::state::SessionState::default();
+    let mut ss = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::Shell,
+        ..Default::default()
+    };
     if pty_config.agent_type.is_some() {
-        ss.agent_type = pty_config.agent_type;
+        ss.seed_configured_agent(pty_config.agent_type);
         ss.hook_instrumented = hook_instrumented_for(
             &crate::config::load_agents_config(),
             ss.agent_type.as_deref(),
@@ -561,94 +567,7 @@ pub(crate) fn get_session_foreground_process(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Option<String> {
-    const SHELLS: &[&str] = &[
-        "zsh",
-        "bash",
-        "fish",
-        "sh",
-        "dash",
-        "ksh",
-        "csh",
-        "tcsh",
-        "nushell",
-        "nu",
-        "powershell",
-        "pwsh",
-        "cmd",
-    ];
-
-    let (detected, fg_is_shell, fg_name) = {
-        let entry = state.session_maps.sessions.get(&session_id)?;
-        let session = entry.value().lock();
-        #[cfg(not(windows))]
-        {
-            let pgid = session.master.process_group_leader()?;
-            let name = process_name_from_pid(pgid as u32)?;
-            let is_shell = SHELLS.contains(&name.as_str());
-            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
-        }
-        #[cfg(windows)]
-        {
-            let child_pid = session._child.process_id()?;
-            let leaf = deepest_descendant_pid(child_pid)?;
-            let name = process_name_from_pid(leaf)?;
-            let is_shell = SHELLS.contains(&name.as_str());
-            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
-        }
-    };
-
-    // Fallback: unrecognised non-shell foreground + pre-set agent type → use preset.
-    // Covers custom commands (aliases, symlinks, wrappers) from run configs.
-    let effective = detected.clone().or_else(|| {
-        if fg_is_shell {
-            return None;
-        }
-        state
-            .session_maps
-            .session_states
-            .get(&session_id)
-            .and_then(|s| s.agent_type.clone())
-    });
-
-    if detected.is_none()
-        && !fg_is_shell
-        && effective.is_none()
-        && let Some(mut entry) = state.session_maps.session_states.get_mut(&session_id)
-        && !entry.unknown_foreground_warned
-    {
-        entry.unknown_foreground_warned = true;
-        tracing::warn!(session_id, foreground_process = %fg_name, "Unrecognized non-shell foreground process; if this is an agent, Enter uses the safe gap");
-    }
-
-    // Mirror the detected agent type into session_states so the PTY reader's
-    // `agent_active_for_parse` check flips on and plain-prefix structured
-    // tokens (`intent:`, `action:`, `suggest:`) start being parsed. Without
-    // this sync, sessions started by running `claude` inside a plain shell
-    // (as opposed to via the /agent spawn route) never enable plain-prefix
-    // parsing, so intents never rename the tab.
-    //
-    // Sticky: only set on Some, never clear on None. Foreground-pgid sampling
-    // is inherently flaky during subprocess transitions — when claude spawns a
-    // short-lived grandchild (git, sed, rg) the pgid leader briefly points to
-    // that unrecognized binary and classify_agent returns None. Writing that
-    // None back would flip agent_active off and drop the very next
-    // `suggest:`/`intent:` token even though claude is still the live agent.
-    // Frontend useAgentPolling.ts applies the same stickiness (streak +
-    // source=idle) on its store mirror; backend must match or the parser
-    // gates off while the UI still shows the agent active. Session teardown
-    // clears session_states entirely, so no explicit reset is needed here.
-    if let Some(mut entry) = state.session_maps.session_states.get_mut(&session_id)
-        && effective.is_some()
-        && entry.agent_type != effective
-    {
-        entry.agent_type = effective.clone();
-        entry.hook_instrumented = hook_instrumented_for(
-            &crate::config::load_agents_config(),
-            entry.agent_type.as_deref(),
-        );
-    }
-
-    effective
+    super::refresh_session_agent(&state, &session_id)
 }
 
 /// Get the PID of the deepest foreground process in a PTY session.
