@@ -6,9 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Remote file drops** — Dropping Mac files onto a connected remote repository copies them through the authenticated daemon connection. Directory drops keep the recursion confirmation; existing names are skipped. Uploads have a 17-minute total receive deadline, and read-only directories publish correctly. Abrupt daemon termination can leave a staging directory for manual removal.
+- **Remote agent notices** — MCP toasts from connected daemons reach the desktop notification bell with the host name, original level and requested sound. Open terminal selects the originating remote tab; unknown sessions leave focus unchanged. Disconnected notices are not queued for replay. Malformed remote notice text is discarded, and identically named connections retain separate notices.
+- **Telegram adapter groundwork** — Add offline owner, file authorization, safe Bot API and minimal inbound boundaries. Persist only the atomic polling cursor; unread inbox mail may be lost on restart. Harden offline polling with fixed ten-update batches under a 1 MiB response cap, one cursor write after each successful batch, shared retry scheduling and in-memory rejection stops. Daemon polling and native mail delivery remain disabled pending integration; no live Telegram channel is available yet.
+
+- **MCP Markdown tabs** — Documents opened with `ui action=tab` survive UI reloads in the same window, including native recovery without an unload event. Reopening their stable id updates the restored tab without creating a duplicate.
+- **Remote terminal stream failures** — A stalled initial replay, unreadable frame or disconnected stream now shows a persistent error toast. Reconnect attempts remain bounded until a frame reaches the renderer.
+- **Answers-only view** — Keep marked answers that precede the first tracked prompt. Show a short notice when no marked answers remain in the retained history.
+- **Stable MCP bridge** — Agent configs use an atomically installed bridge outside Cargo targets. Rebuilds and target cleanup no longer remove the executable needed by new MCP connections; previous bridge revisions remain available through updates.
+
 - **Hands-free controls** — Start conversation uses the accent action style. A coloured Running/Stopped indicator keeps the current state visible.
 
 - **Sidebar agents toggle** — A separate, always-visible chevron controls the agent list. The status icon selects the branch, and collapsed counts stay beside the chevron.
+- **Bodyless IPC replies** — CLI and bridge response decoding completes at the headers for HTTP 1xx, 204 and 304, and CLI HEAD replies, instead of waiting for a body or connection EOF.
+
+- **Named-instance IPC clients** — `tuic` and `tuic-bridge` now select the server's instance socket with `--instance <id>` or `TUIC_APP_INSTANCE`. The CLI background runner keeps the same namespace, and bridge fallback discovery cannot connect to another instance.
+- **Claude prompt copy** — Copying a wrapped prompt removes the composer marker and continuation margin, joins width-supported wraps, and retains typed newlines and pasted content. Cleanup requires a column-zero composer origin; partial selections and VT soft-wrap continuations retain literal prompt glyphs and indentation An oldest retained row with an unknown predecessor stays literal until fully erased and rewritten (#1411-097c, #1414-4366, #1418-48c7).
 
 - **Suspend Tab** — Right-click a terminal tab → Suspend Tab ends its process and agent to free memory and CPU, and keeps the tab (marked `zz`) restorable like after a restart. Resume Tab, or the Resume button in the tab, opens a new session in the same folder and resumes the agent. A suspended tab stays suspended across a restart. Suspend is refused while the agent is working or a question awaits input. MCP: `session action=suspend` returns the tab's verdict, or an error when no UI is attached. Unlike auto-standby, which only pauses an idle process, a suspended tab holds no process.
 

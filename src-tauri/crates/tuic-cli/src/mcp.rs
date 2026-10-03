@@ -315,14 +315,15 @@ mod tests {
     }
 
     fn response(status: u16, body: &str, headers: &[(&str, &str)]) -> ipc::Response {
-        ipc::Response {
+        ipc::Response::from(tuic_ipc::http::Response {
+            raw_headers: String::new(),
             status,
             body: body.to_string(),
             headers: headers
                 .iter()
                 .map(|(k, v)| (k.to_ascii_lowercase(), v.to_string()))
                 .collect(),
-        }
+        })
     }
 
     #[test]

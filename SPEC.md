@@ -599,7 +599,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Font selection setting
 - [x] Tab bar with keyboard navigation
 - [x] Density modes for readability
-- [x] Terminal selection copy unwraps soft-wrapped rows and removes coherent Claude visual gutters without altering literal block characters
+- [x] Terminal selection copy unwraps soft-wrapped rows, removes coherent Claude visual gutters and composer margins, and preserves literal block characters, pasted prompt glyphs, and short typed line breaks
 - [x] Status bar with branch and PR info
 - [x] Rate limit detection
 - [x] JSONL output parsing
@@ -622,6 +622,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Shared branch integration proofs: ancestry, patch equivalence, no-op merges, corroborated squash messages, and archived content heuristics; MCP list/single-branch queries and safe UI deletion (#1295-a2ce)
 - [x] Branch Panel (4th tab in Git Panel): checkout, create, delete, rename, merge, rebase, push, pull, fetch, prefix folding, inline search, context menu, stale/merged indicators. `Cmd+G` opens directly on Branches tab
 - [x] Context menu submenus and "New Group..." via PromptDialog
+- [x] Remote OS file drops copy through the existing authenticated daemon connection; bounded streaming, repository-confined staging, atomic publication, recursion confirmation and conflict skipping
 - [x] File Browser panel (`Cmd+E`) with content search (`Cmd+Shift+F`, case/regex/whole-word, streaming results)
 - [x] CodeMirror code editor
 - [x] Modified click on editor links and paths opens the matching browser or TUICommander view
@@ -633,6 +634,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Park repos feature
 - [x] Plugin system (see FEATURES.md section 17), with Plan Tracker and Stories Ticker shipped as one-time-seeded external packages rather than compiled built-ins; binary reads support bounded per-call budgets and panel messages can transfer buffer ownership
 - [x] Self-contained SQLite Viewer plugin under `plugins/`: sql.js/WebAssembly browsing, native filtering/pagination, indexes, visual plans, CSV copy, and explicit atomic inline-edit saves, with the engine and database scoped to the viewer iframe lifecycle
+- [x] Connected daemon MCP toasts reach the desktop Messages bell with host attribution, original level/sound and safe remote-terminal navigation; no disconnected replay
 - [x] Remote access / HTTP server
 - [x] SSH-managed remote daemon deployment, idle lifetime, pairing-token vaulting, and systemd/launchd installation
 - [x] Mobile Companion PWA (searchable sessions, live output, question reply including Codex interactive choices, activity feed)
@@ -737,3 +739,7 @@ For web deployment without Tauri:
 - [SolidJS Documentation](https://www.solidjs.com/docs/latest)
 - [alacritty_terminal crate](https://crates.io/crates/alacritty_terminal)
 - [Tauri Documentation](https://tauri.app/v1/guides/)
+
+## Telegram channel implementation status (#1438-79b4)
+
+Approved design: [Telegram channel](docs/design/telegram-channel.md). Offline slices 1–2 provide owner/config/API boundaries and offset-only inbound persistence, with fixed ten-update polling under a 1 MiB response cap, one cursor write after each successful batch, shared error backoff and in-memory 401/403/404/409 stops. Unread inbox mail may be lost on restart; there is no journal or loss detection. Native inbox/wake integration awaits 1419/1420; daemon polling, streaming, approval receipts and live deployment are not yet available. The target is a new coordinator-spawned managed marketeer peer on mint, not pe-3.

@@ -51,6 +51,7 @@ pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
 pub(crate) mod generators;
 pub(crate) mod git;
+pub(crate) mod remote_transfer;
 pub(crate) use tuic_git::git_cli;
 pub(crate) mod git_graph;
 pub(crate) mod idle_close;
@@ -135,6 +136,11 @@ pub(crate) mod stories;
 pub(crate) mod subagent_map;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
+#[expect(
+    dead_code,
+    reason = "Telegram offline ports await native integration after 1419/1420"
+)]
+pub(crate) mod telegram;
 pub(crate) use tuic_terminal::terminal_grid;
 #[cfg(feature = "desktop")]
 pub(crate) mod terminal_grid_commands;
@@ -2266,6 +2272,7 @@ pub fn run() {
             fs::copy_path_abs,
             fs::move_path_abs,
             fs::fs_transfer_paths,
+            remote_transfer::fs_transfer_remote_paths,
             fs::add_to_gitignore,
             plugins::list_user_plugins,
             plugins::get_plugin_readme_path,
