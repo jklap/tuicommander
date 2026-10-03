@@ -45,6 +45,22 @@ pub(crate) struct RemoteMail {
 }
 
 const MAX_FORWARDED_RECORDS: usize = 65_536;
+const FORWARDED_WINDOW: usize = 100;
+const MAX_SHADOWS: usize = 1024;
+// One record per possible live shadow (1024), or ten complete 100-id windows
+// per host. This reserves global capacity for 64 equally busy hosts instead of
+// allowing one host to fill all 65536 slots through its recipients or shadows.
+const MAX_HOST_RECORDS: usize = MAX_SHADOWS;
+
+#[derive(Default)]
+struct SenderHistory {
+    records: usize,
+    last_active: u64,
+}
+
+fn sender_host(sender: &str) -> &str {
+    sender.split_once('/').map_or(sender, |(host, _)| host)
+}
 
 #[derive(Default)]
 struct RecipientHistory {
@@ -53,16 +69,18 @@ struct RecipientHistory {
 }
 
 /// Native send checks registration under its identity lock before recording.
-/// Recipients disappear only when their peer unregisters, never through LRU.
+/// Live sender windows survive pressure; recipient unregister releases its ids.
 #[derive(Default)]
 struct ForwardedHistory {
     recipients: HashMap<String, RecipientHistory>,
     records: usize,
+    senders: HashMap<String, SenderHistory>,
+    hosts: HashMap<String, usize>,
+    activity: u64,
 }
 
 struct HostLock {
     mutex: tokio::sync::Mutex<()>,
-    runtime: tokio::runtime::Handle,
     generation: AtomicU64,
 }
 
@@ -72,9 +90,10 @@ pub(super) fn record_forwarded(
     state: &AppState,
     recipient: &str,
     message: &crate::state::AgentMessage,
-) -> Result<bool, &'static str> {
+) -> Result<bool, String> {
     remember_forwarded(
         &mut state.remote_mail.forwarded_history.lock(),
+        state,
         recipient,
         message,
     )
@@ -86,49 +105,94 @@ pub(super) fn enqueue_forwarded(
     state: &AppState,
     recipient: &str,
     message: crate::state::AgentMessage,
-) -> Result<Option<u64>, &'static str> {
+) -> Result<Option<u64>, String> {
     let mut history = state.remote_mail.forwarded_history.lock();
     if !state.peer_agents.contains_key(recipient) {
-        return Err("Forwarded recipient is no longer registered");
+        return Err("Forwarded recipient is no longer registered".into());
     }
-    if !remember_forwarded(&mut history, recipient, &message)? {
+    if !remember_forwarded(&mut history, state, recipient, &message)? {
         return Ok(None);
     }
     Ok(Some(state.push_agent_inbox(recipient, message)))
 }
 
-/// A full global budget rejects new ids visibly, preserving every other window.
+/// Pressure reclaims departed senders only; live windows reject growth visibly.
 fn remember_forwarded(
     history: &mut ForwardedHistory,
+    state: &AppState,
     recipient: &str,
     message: &crate::state::AgentMessage,
-) -> Result<bool, &'static str> {
+) -> Result<bool, String> {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update((message.from_tuic_session.len() as u64).to_le_bytes());
     hasher.update(message.from_tuic_session.as_bytes());
     hasher.update(message.content.as_bytes());
     let fingerprint: [u8; 32] = hasher.finalize().into();
+    history.activity = history.activity.saturating_add(1);
+    if let Some(sender) = history.senders.get_mut(&message.from_tuic_session) {
+        sender.last_active = history.activity;
+    }
     if let Some(records) = history.recipients.get(recipient)
         && let Some((sender, previous)) = records.ids.get(&message.id)
     {
         return if sender == &message.from_tuic_session && *previous == fingerprint {
             Ok(false)
         } else {
-            Err("Forwarded message identity collision")
+            Err("Forwarded message identity collision".into())
         };
     }
     let window_full = history
         .recipients
         .get(recipient)
         .and_then(|records| records.senders.get(&message.from_tuic_session))
-        .is_some_and(|window| window.len() >= 100);
-    if !window_full && history.records >= MAX_FORWARDED_RECORDS {
-        return Err("Forwarded replay history is full; new message was not queued");
-    }
+        .is_some_and(|window| window.len() >= FORWARDED_WINDOW);
+    let host = sender_host(&message.from_tuic_session);
     if !window_full {
+        loop {
+            let host_full = history.hosts.get(host).copied().unwrap_or(0) >= MAX_HOST_RECORDS;
+            let global_full = history.records >= MAX_FORWARDED_RECORDS;
+            if !host_full && !global_full {
+                break;
+            }
+            // No sound time expiry exists: the sender outbox lives until ack.
+            // Under pressure only, reclaim the least-recently-active departed
+            // sender. Retirement itself never purges dedupe. Accepted risk: a
+            // departed sender reconnecting after pressure eviction can deliver
+            // one duplicate. Live shadow windows are never eviction candidates.
+            let oldest = history
+                .senders
+                .iter()
+                .filter(|(sender, _)| {
+                    !state.peer_agents.contains_key(sender.as_str())
+                        && (!host_full || sender_host(sender) == host)
+                })
+                .min_by_key(|(_, records)| records.last_active)
+                .map(|(sender, _)| sender.clone());
+            let Some(oldest) = oldest else {
+                return Err(if host_full {
+                    format!(
+                        "Forwarded sender host '{host}' replay quota is full; new message was not queued"
+                    )
+                } else {
+                    "Forwarded replay history is full; new message was not queued".into()
+                });
+            };
+            forget_sender(history, &oldest);
+        }
         history.records += 1;
+        *history.hosts.entry(host.to_string()).or_default() += 1;
+        history
+            .senders
+            .entry(message.from_tuic_session.clone())
+            .or_default()
+            .records += 1;
     }
+    history
+        .senders
+        .get_mut(&message.from_tuic_session)
+        .expect("recorded sender")
+        .last_active = history.activity;
     let records = history.recipients.entry(recipient.to_string()).or_default();
     let window = records
         .senders
@@ -145,6 +209,28 @@ fn remember_forwarded(
     Ok(true)
 }
 
+fn forget_sender(history: &mut ForwardedHistory, sender: &str) {
+    let Some(sender_records) = history.senders.remove(sender) else {
+        return;
+    };
+    history.records -= sender_records.records;
+    let host = sender_host(sender);
+    if let Some(records) = history.hosts.get_mut(host) {
+        *records -= sender_records.records;
+        if *records == 0 {
+            history.hosts.remove(host);
+        }
+    }
+    history.recipients.retain(|_, records| {
+        if let Some(window) = records.senders.remove(sender) {
+            for id in window {
+                records.ids.remove(&id);
+            }
+        }
+        !records.ids.is_empty()
+    });
+}
+
 /// Every peer retirement uses this path so replay history cannot outlive the
 /// registered recipient. The history lock serializes removal with recording.
 pub(crate) fn unregister_peer(state: &AppState, recipient: &str) {
@@ -152,6 +238,21 @@ pub(crate) fn unregister_peer(state: &AppState, recipient: &str) {
     state.peer_agents.remove(recipient);
     if let Some(records) = history.recipients.remove(recipient) {
         history.records -= records.ids.len();
+        for (sender, window) in records.senders {
+            if let Some(sender_records) = history.senders.get_mut(&sender) {
+                sender_records.records -= window.len();
+                if sender_records.records == 0 {
+                    history.senders.remove(&sender);
+                }
+            }
+            let host = sender_host(&sender);
+            if let Some(host_records) = history.hosts.get_mut(host) {
+                *host_records -= window.len();
+                if *host_records == 0 {
+                    history.hosts.remove(host);
+                }
+            }
+        }
     }
 }
 
@@ -164,7 +265,6 @@ fn host_lock(state: &AppState, id: &str) -> Arc<HostLock> {
     } else {
         let lock = Arc::new(HostLock {
             mutex: tokio::sync::Mutex::new(()),
-            runtime: tokio::runtime::Handle::current(),
             generation: AtomicU64::new(0),
         });
         *slot = Arc::downgrade(&lock);
@@ -736,9 +836,12 @@ async fn native_call(
     let sid = if let Some(sender) = sender {
         let identity = format!("{}/{}", sender.host, sender.id);
         let sid = format!("remote-mail:{}:{identity}", uuid::Uuid::new_v4());
-        if state.peer_agents.len() >= 1024 && !state.peer_agents.contains_key(&identity) {
+        let _role_guard = state.remote_mail.role_lock.lock();
+        if state.peer_agents.len() >= MAX_SHADOWS && !state.peer_agents.contains_key(&identity) {
             return json!({"error":"Too many remote peer identities"});
         }
+        // Serialize shadow registration with replay eviction's liveness check.
+        let _history_guard = state.remote_mail.forwarded_history.lock();
         // Qualified shadow peers can never bind or impersonate a local PTY.
         state
             .peer_agents
@@ -920,39 +1023,20 @@ pub(crate) fn disconnect(state: &Arc<AppState>, host: &str) {
         .lock()
         .get(host)
         .and_then(Weak::upgrade);
-    let generation = {
-        let _role_guard = state.remote_mail.role_lock.lock();
-        let generation = gate
-            .as_ref()
-            .map(|gate| gate.generation.fetch_add(1, Ordering::AcqRel) + 1);
-        if let Some((_, supervisor)) = state.remote_mail.supervisors.remove(host) {
-            supervisor.abort();
-        }
-        if let Some((_, link)) = state.remote_mail.connections.remove(host) {
-            link.shutdown.notify_one();
-        }
-        generation
-    };
-    let Some(gate) = gate else {
-        cleanup_shadows(state, Some(host));
-        return;
-    };
-    if let Ok(_guard) = gate.mutex.try_lock() {
-        cleanup_shadows(state, Some(host));
-    } else {
-        // Sync runtime/mirror callbacks cannot await a pending handshake.
-        // Invalidation above is atomic with publication; final retirement takes
-        // that same host lock on its original runtime, even from a plain thread.
-        let state = state.clone();
-        let host = host.to_string();
-        let task_gate = gate.clone();
-        gate.runtime.spawn(async move {
-            let _guard = task_gate.mutex.lock().await;
-            if Some(task_gate.generation.load(Ordering::Acquire)) == generation {
-                cleanup_shadows(&state, Some(&host));
-            }
-        });
+    let _role_guard = state.remote_mail.role_lock.lock();
+    if let Some(gate) = gate {
+        gate.generation.fetch_add(1, Ordering::AcqRel);
     }
+    if let Some((_, supervisor)) = state.remote_mail.supervisors.remove(host) {
+        supervisor.abort();
+    }
+    if let Some((_, link)) = state.remote_mail.connections.remove(host) {
+        link.shutdown.notify_one();
+    }
+    // Retirement does not await the handshake lock. The role lock serializes
+    // it with publication and shadow creation, so a later generation cannot
+    // cancel cleanup or have its fresh shadows removed by a deferred task.
+    cleanup_shadows(state, Some(host));
 }
 
 /// Open the reverse path when the configured connection becomes ready, so a
@@ -1302,16 +1386,27 @@ mod tests {
         let original = forwarded("original", &sender);
         assert_eq!(record_forwarded(&state, &first, &original), Ok(true));
         let mut recipient = first.clone();
+        let mut active_sender = sender.clone();
         for n in 1..MAX_FORWARDED_RECORDS {
-            if n % 100 == 0 {
+            if n % MAX_HOST_RECORDS == 0 {
+                active_sender = peer(&state, "sender").await.1;
+                recipient = peer(&state, "recipient").await.1;
+            } else if n % MAX_HOST_RECORDS % FORWARDED_WINDOW == 0 {
                 recipient = peer(&state, "recipient").await.1;
             }
             assert_eq!(
-                record_forwarded(&state, &recipient, &forwarded(&format!("id-{n}"), &sender)),
+                record_forwarded(
+                    &state,
+                    &recipient,
+                    &forwarded(&format!("id-{n}"), &active_sender)
+                ),
                 Ok(true)
             );
         }
-        assert!(record_forwarded(&state, &recipient, &forwarded("overflow", &sender)).is_err());
+        let (_, overflow_sender) = peer(&state, "overflow").await;
+        assert!(
+            record_forwarded(&state, &recipient, &forwarded("overflow", &overflow_sender)).is_err()
+        );
         assert_eq!(record_forwarded(&state, &first, &original), Ok(false));
     }
 
@@ -1344,7 +1439,7 @@ mod tests {
         unregister_peer(&state, &recipient);
         assert_eq!(
             enqueue_forwarded(&state, &recipient, forwarded("notice", "sender")),
-            Err("Forwarded recipient is no longer registered")
+            Err("Forwarded recipient is no longer registered".into())
         );
         assert!(
             !state
@@ -1355,6 +1450,247 @@ mod tests {
                 .contains_key(&recipient)
         );
         assert!(!state.agent_inbox.contains_key(&recipient));
+    }
+
+    fn shadow(state: &AppState, sender: &str) {
+        state.peer_agents.insert(
+            sender.into(),
+            crate::state::PeerAgent {
+                tuic_session: sender.into(),
+                mcp_session_id: format!("remote-mail:test:{sender}"),
+                name: sender.into(),
+                project: None,
+                registered_at: 0,
+            },
+        );
+    }
+
+    fn seed_records(state: &AppState, sender: &str, count: usize) {
+        for n in 0..count {
+            assert_eq!(
+                record_forwarded(
+                    state,
+                    &format!("{sender}-r{}", n / FORWARDED_WINDOW),
+                    &forwarded(&format!("{sender}-{n}"), sender)
+                ),
+                Ok(true)
+            );
+        }
+    }
+
+    // Catches: multiple shadows of one remote host bypass the flooding quota.
+    #[test]
+    fn remote_peer_host_quota_cannot_be_bypassed_with_another_shadow() {
+        let state = test_state();
+        shadow(&state, "mint/a");
+        shadow(&state, "mint/b");
+        seed_records(&state, "mint/a", MAX_HOST_RECORDS / 2);
+        seed_records(&state, "mint/b", MAX_HOST_RECORDS / 2);
+        let reason = record_forwarded(&state, "new", &forwarded("overflow", "mint/b")).unwrap_err();
+        assert!(reason.contains("'mint'"), "{reason}");
+        assert_eq!(
+            record_forwarded(&state, "new", &forwarded("victim", "other/a")),
+            Ok(true)
+        );
+    }
+
+    // Catches: quota pressure rejects replays or in-place window replacement.
+    #[test]
+    fn remote_peer_full_host_quota_keeps_deduping_and_rotating_full_windows() {
+        let state = test_state();
+        shadow(&state, "mint/a");
+        seed_records(&state, "mint/a", MAX_HOST_RECORDS);
+        assert_eq!(
+            record_forwarded(&state, "mint/a-r0", &forwarded("mint/a-0", "mint/a")),
+            Ok(false)
+        );
+        assert_eq!(
+            record_forwarded(&state, "mint/a-r0", &forwarded("replacement", "mint/a")),
+            Ok(true)
+        );
+        let history = state.remote_mail.forwarded_history.lock();
+        assert_eq!(history.records, MAX_HOST_RECORDS);
+        assert_eq!(history.hosts["mint"], MAX_HOST_RECORDS);
+        assert_eq!(history.senders["mint/a"].records, MAX_HOST_RECORDS);
+    }
+
+    // Catches: recipient retirement frees the global count but leaks host quota.
+    #[test]
+    fn remote_peer_unregister_returns_host_quota_without_erasing_other_windows() {
+        let state = test_state();
+        shadow(&state, "mint/a");
+        seed_records(&state, "mint/a", MAX_HOST_RECORDS);
+        unregister_peer(&state, "mint/a-r0");
+        assert_eq!(
+            record_forwarded(&state, "new", &forwarded("new", "mint/a")),
+            Ok(true)
+        );
+        assert_eq!(
+            record_forwarded(&state, "mint/a-r1", &forwarded("mint/a-100", "mint/a")),
+            Ok(false)
+        );
+        let history = state.remote_mail.forwarded_history.lock();
+        assert_eq!(
+            history.hosts["mint"],
+            MAX_HOST_RECORDS - FORWARDED_WINDOW + 1
+        );
+        assert_eq!(history.records, history.hosts["mint"]);
+    }
+
+    // Catches: LRU treats a valid replay as inactivity and evicts the wrong sender.
+    #[test]
+    fn remote_peer_pressure_evicts_the_least_recent_departed_sender_only() {
+        let state = test_state();
+        shadow(&state, "mint/live");
+        seed_records(&state, "mint/live", MAX_HOST_RECORDS - 100);
+        seed_records(&state, "mint/old", 50);
+        seed_records(&state, "mint/recent", 50);
+        assert_eq!(
+            record_forwarded(&state, "mint/old-r0", &forwarded("mint/old-0", "mint/old")),
+            Ok(false)
+        );
+        assert_eq!(
+            record_forwarded(&state, "new", &forwarded("new", "mint/new")),
+            Ok(true)
+        );
+        let history = state.remote_mail.forwarded_history.lock();
+        assert!(history.senders.contains_key("mint/live"));
+        assert!(history.senders.contains_key("mint/old"));
+        assert!(!history.senders.contains_key("mint/recent"));
+        assert_eq!(history.records, MAX_HOST_RECORDS - 50 + 1);
+    }
+
+    // Catches: sender eviction forgets one recipient only or leaks budget metadata.
+    #[test]
+    fn remote_peer_pressure_reclaims_every_window_of_a_departed_sender() {
+        let state = test_state();
+        shadow(&state, "mint/live");
+        seed_records(&state, "mint/live", MAX_HOST_RECORDS - 24);
+        for n in 0..24 {
+            assert_eq!(
+                record_forwarded(
+                    &state,
+                    &format!("gone-r{n}"),
+                    &forwarded(&format!("gone-{n}"), "mint/gone")
+                ),
+                Ok(true)
+            );
+        }
+        assert_eq!(
+            record_forwarded(&state, "new", &forwarded("new", "mint/new")),
+            Ok(true)
+        );
+        let history = state.remote_mail.forwarded_history.lock();
+        assert!(!history.senders.contains_key("mint/gone"));
+        assert!(
+            history
+                .recipients
+                .values()
+                .all(|r| !r.senders.contains_key("mint/gone"))
+        );
+        assert_eq!(history.records, MAX_HOST_RECORDS - 24 + 1);
+        assert_eq!(
+            history.records,
+            history
+                .recipients
+                .values()
+                .map(|r| r.ids.len())
+                .sum::<usize>()
+        );
+        assert_eq!(
+            history.records,
+            history.senders.values().map(|s| s.records).sum::<usize>()
+        );
+        assert_eq!(history.records, history.hosts.values().sum::<usize>());
+    }
+
+    // Catches: retirement purges dedupe without pressure; pressure never reclaims it.
+    #[test]
+    fn remote_peer_departure_preserves_dedupe_until_pressure_accepts_duplicate_risk() {
+        let state = test_state();
+        shadow(&state, "mint/gone");
+        assert_eq!(
+            record_forwarded(&state, "r", &forwarded("lost-ack", "mint/gone")),
+            Ok(true)
+        );
+        unregister_peer(&state, "mint/gone");
+        assert_eq!(
+            record_forwarded(&state, "r", &forwarded("lost-ack", "mint/gone")),
+            Ok(false)
+        );
+        shadow(&state, "mint/live");
+        seed_records(&state, "mint/live", MAX_HOST_RECORDS - 1);
+        assert_eq!(
+            record_forwarded(&state, "new", &forwarded("new", "mint/live")),
+            Ok(true)
+        );
+        // Free the newly delivered recipient's slot before the reconnect.
+        unregister_peer(&state, "new");
+        // The explicitly accepted risk: an evicted departed sender may replay.
+        assert_eq!(
+            record_forwarded(&state, "r", &forwarded("lost-ack", "mint/gone")),
+            Ok(true)
+        );
+    }
+
+    // Catches: disconnect without a handshake lock removes unrelated host peers.
+    #[tokio::test]
+    async fn remote_peer_disconnect_without_a_gate_retires_only_its_host() {
+        let state = test_state();
+        shadow(&state, "mint/old");
+        shadow(&state, "other/live");
+        disconnect(&state, "mint");
+        assert!(!state.peer_agents.contains_key("mint/old"));
+        assert!(state.peer_agents.contains_key("other/live"));
+        disconnect(&state, "mint");
+        assert!(state.peer_agents.contains_key("other/live"));
+    }
+
+    // Catches: a pending handshake defers shadow retirement until lock release.
+    #[tokio::test]
+    async fn remote_peer_disconnect_retires_shadows_before_a_held_handshake_returns() {
+        let hub = test_state();
+        let (server, entered, release, _) = held_daemon(&hub).await;
+        shadow(&hub, "mint/old");
+        let opening_hub = hub.clone();
+        let opening = tokio::spawn(async move { connection(&opening_hub, "mint").await });
+        entered.await.unwrap();
+        disconnect(&hub, "mint");
+        assert!(!hub.peer_agents.contains_key("mint/old"));
+        release.notify_one();
+        assert!(opening.await.unwrap().is_err());
+        server.abort();
+    }
+
+    // Catches: delayed old-generation cleanup removes a reconnect's fresh shadow.
+    #[tokio::test]
+    async fn remote_peer_reconnect_shadow_survives_the_old_handshakes_completion() {
+        let hub = test_state();
+        let (server, entered, release, _) = held_daemon(&hub).await;
+        shadow(&hub, "mint/old");
+        let opening_hub = hub.clone();
+        let opening = tokio::spawn(async move { connection(&opening_hub, "mint").await });
+        entered.await.unwrap();
+        disconnect(&hub, "mint");
+        connect_configured(&hub, "mint".into());
+        assert!(!hub.peer_agents.contains_key("mint/old"));
+        let registered = native_call(
+            &hub,
+            Some(Sender {
+                host: "mint".into(),
+                id: "fresh".into(),
+                name: "fresh".into(),
+            }),
+            json!({"action":"register"}),
+            None,
+        )
+        .await;
+        assert_eq!(registered["tuic_session"], "mint/fresh");
+        release.notify_one();
+        assert!(opening.await.unwrap().is_err());
+        assert!(hub.peer_agents.contains_key("mint/fresh"));
+        disconnect(&hub, "mint");
+        server.abort();
     }
 
     // The native router performs the real authenticated WebSocket handshake.

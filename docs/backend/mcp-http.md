@@ -1847,6 +1847,18 @@ Peer handshakes serialize per configured connection, so a mute daemon cannot hol
 mail calls to another host behind its network deadline. Session targets reject empty
 ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
 reads: it retains fingerprints of the last 100 forwarded ids per sender and registered
-recipient. Recipient history is removed only on unregister; at 65,536 total ids,
-new ids that would grow the cache reject visibly without evicting another window, without retaining message bodies. This is a bounded replay horizon,
+recipient, without retaining message bodies. The cache holds at most 65,536
+ids globally and 1,024 per remote host. A host quota rejection names the host;
+one host cannot consume every other host's replay budget. Full 100-id windows
+can still rotate in place, and retained replays still deduplicate at either cap.
+
+There is no time expiry: the sender's outbox lives until acknowledgement.
+Only under global or host quota pressure, the cache reclaims all windows of
+the least-recently-active sender with no live peer shadow (within the pressured
+host when its quota is full). Live sender windows are never reclaimed.
+Sender retirement alone preserves dedupe; recipient unregister frees only
+that recipient's records and quota. Accepted risk: a departed sender that
+reconnects after pressure evicted its history can deliver one duplicate.
+Disconnect retires that host's existing shadows synchronously, independently
+of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.
