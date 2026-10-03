@@ -8478,6 +8478,161 @@ mod tests {
         );
     }
 
+    /// Catches: deleting a parsed-state arm silently drops usage, errors, menu
+    /// entries or subtask counts from the snapshot consumed by clients.
+    #[test]
+    fn parsed_agent_details_reach_the_client_snapshot_and_can_be_replaced() {
+        let state = fresh_state();
+        for (kind, payload) in [
+            ("usage-limit", serde_json::json!({ "percentage": 81 })),
+            (
+                "api-error",
+                serde_json::json!({ "matched_text": "authentication failed" }),
+            ),
+            (
+                "slash-menu",
+                serde_json::json!({ "items": [{
+                "command": "/help", "description": "Show commands", "highlighted": true
+            }] }),
+            ),
+            ("active-subtasks", serde_json::json!({ "count": 3 })),
+        ] {
+            apply(&state, &make_parsed(kind, payload));
+        }
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.usage_limit_pct, Some(81));
+        assert_eq!(
+            snapshot.last_error.as_deref(),
+            Some("authentication failed")
+        );
+        assert_eq!(
+            snapshot.slash_menu_items,
+            Some(vec![crate::output_parser::SlashMenuItem {
+                command: "/help".into(),
+                description: "Show commands".into(),
+                highlighted: true,
+            }])
+        );
+        assert_eq!(snapshot.active_sub_tasks, 3);
+
+        apply(
+            &state,
+            &make_parsed("usage-limit", serde_json::json!({ "percentage": 0 })),
+        );
+        apply(
+            &state,
+            &make_parsed("slash-menu", serde_json::json!({ "items": [] })),
+        );
+        apply(
+            &state,
+            &make_parsed("active-subtasks", serde_json::json!({ "count": 0 })),
+        );
+        apply(
+            &state,
+            &make_parsed("status-line", serde_json::json!({ "task_name": "Working" })),
+        );
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.usage_limit_pct, Some(0));
+        assert_eq!(snapshot.last_error, None);
+        assert_eq!(snapshot.slash_menu_items, Some(vec![]));
+        assert_eq!(snapshot.active_sub_tasks, 0);
+    }
+
+    /// Catches: an inverted or removed epoch guard retracts the current prompt
+    /// on a stale clear, or an always-false guard prevents its real answer.
+    #[test]
+    fn question_clear_preserves_current_prompt_until_matching_epoch_arrives() {
+        for (clear_kind, confident) in [
+            ("question-cleared", false),
+            ("protocol-question-cleared", true),
+        ] {
+            let state = fresh_state();
+            state
+                .session_maps
+                .session_states
+                .get_mut("s1")
+                .unwrap()
+                .turn_epoch = 2;
+            apply(
+                &state,
+                &make_parsed(
+                    "question",
+                    serde_json::json!({
+                        "prompt_text": "Proceed with the current operation?",
+                        "confident": confident,
+                        "_turn_epoch": 2,
+                    }),
+                ),
+            );
+            let before = state.session_state_with_shell("s1").unwrap();
+            assert!(before.awaiting_input);
+            let rank = state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank();
+            assert!(rank.is_some());
+            apply(
+                &state,
+                &make_parsed(
+                    clear_kind,
+                    serde_json::json!({
+                        "expected_question_text": "Proceed with the current operation?",
+                        "_turn_epoch": 1,
+                    }),
+                ),
+            );
+            let stale = state.session_state_with_shell("s1").unwrap();
+            assert!(
+                stale.awaiting_input,
+                "{clear_kind} cleared a newer question"
+            );
+            assert_eq!(
+                stale.question_text.as_deref(),
+                Some("Proceed with the current operation?")
+            );
+            assert_eq!(
+                state
+                    .session_maps
+                    .silence_states
+                    .get("s1")
+                    .unwrap()
+                    .lock()
+                    .awaiting_rank(),
+                rank
+            );
+
+            apply(
+                &state,
+                &make_parsed(
+                    clear_kind,
+                    serde_json::json!({
+                        "expected_question_text": "Proceed with the current operation?",
+                        "_turn_epoch": 2,
+                    }),
+                ),
+            );
+            let answered = state.session_state_with_shell("s1").unwrap();
+            assert!(
+                !answered.awaiting_input,
+                "{clear_kind} ignored the current answer"
+            );
+            assert_eq!(answered.question_text, None);
+            assert_eq!(
+                state
+                    .session_maps
+                    .silence_states
+                    .get("s1")
+                    .unwrap()
+                    .lock()
+                    .awaiting_rank(),
+                None
+            );
+        }
+    }
+
     #[test]
     fn pending_acp_question_alerts_the_chat_once_while_desktop_is_away() {
         let state = fresh_state();
