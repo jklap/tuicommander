@@ -49,15 +49,6 @@ pub(super) fn private_response(mut response: Response) -> Response {
         header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),
     );
-    response.headers_mut().insert(
-        header::REFERRER_POLICY,
-        axum::http::HeaderValue::from_static("no-referrer"),
-    );
-    response.headers_mut().insert(
-        header::X_FRAME_OPTIONS,
-        axum::http::HeaderValue::from_static("DENY"),
-    );
-    response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, axum::http::HeaderValue::from_static("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"));
     response
 }
 
@@ -73,7 +64,7 @@ pub(crate) fn secret_form_bootstrap(
         .as_ref()
         .ok_or("Unknown or expired secret form")?;
     if window.label() != format!("secret-{}", pending.form.id)
-        || !state.secrets.windows.lock().contains(window.label())
+        || !state.secrets.has_window(window.label())
     {
         return Err("Secret bootstrap requires the private native window".into());
     }
@@ -95,7 +86,7 @@ pub(crate) async fn secret_form_submit(
             .as_ref()
             .ok_or("Unknown or expired secret form")?;
         if window.label() != format!("secret-{}", pending.form.id)
-            || !state.secrets.windows.lock().contains(window.label())
+            || !state.secrets.has_window(window.label())
         {
             return Err("Secret submit requires the private native window".into());
         }
@@ -132,7 +123,7 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
             pending.response = Some(tx);
         }
         let label = format!("secret-{}", form.id);
-        state.secrets.windows.lock().insert(label.clone());
+        *state.secrets.window.lock() = Some(label.clone());
         let built = tauri::WebviewWindowBuilder::new(
             &handle,
             &label,
@@ -156,7 +147,7 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
         let window = match built {
             Ok(window) => window,
             Err(_) => {
-                state.secrets.windows.lock().remove(&label);
+                state.secrets.release_window(&label);
                 cancel(state, &form.id);
                 return Err("Could not open private secret form".into());
             }
@@ -168,7 +159,7 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
             if matches!(event, tauri::WindowEvent::Destroyed)
                 && let Some(state) = callback_state.upgrade()
             {
-                state.secrets.windows.lock().remove(&callback_label);
+                state.secrets.release_window(&callback_label);
                 cancel(&state, &id);
             }
         });

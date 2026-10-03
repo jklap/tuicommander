@@ -1,12 +1,34 @@
 //! Match known values before returning any child output, including line wraps.
 use base64::Engine;
+use std::fmt::Write;
 use zeroize::Zeroizing;
+
+/// JSON string body with `\uXXXX` escapes for the chars `escape` selects:
+/// Go's encoding/json escapes `& < >`, Python's `ensure_ascii` and `jq -a`
+/// escape non-ASCII.
+fn json_variant(inner: &str, escape: impl Fn(char) -> bool) -> Zeroizing<String> {
+    // Worst case 6 bytes per input byte, so the buffer never reallocates.
+    let mut out = Zeroizing::new(String::with_capacity(inner.len() * 6));
+    for c in inner.chars() {
+        if escape(c) {
+            for unit in c.encode_utf16(&mut [0; 2]) {
+                let _ = write!(out, "\\u{unit:04x}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
 
 pub(crate) fn representations(value: &str) -> Vec<Zeroizing<String>> {
     let mut result = vec![Zeroizing::new(value.to_owned())];
     let json =
         Zeroizing::new(serde_json::to_string(value).expect("string serialization cannot fail"));
-    result.push(Zeroizing::new(json[1..json.len() - 1].to_owned()));
+    let inner = &json[1..json.len() - 1];
+    result.push(Zeroizing::new(inner.to_owned()));
+    result.push(json_variant(inner, |c| matches!(c, '&' | '<' | '>')));
+    result.push(json_variant(inner, |c| !c.is_ascii()));
     for engine in [
         &base64::engine::general_purpose::STANDARD,
         &base64::engine::general_purpose::STANDARD_NO_PAD,
@@ -43,8 +65,6 @@ pub(crate) fn representations(value: &str) -> Vec<Zeroizing<String>> {
             ));
         }
     }
-    result.sort_by_key(|s| std::cmp::Reverse(s.len()));
-    result.dedup();
     result
 }
 
@@ -167,19 +187,17 @@ fn base64_decode(
     let mut de = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if !(bytes[i].is_ascii_alphanumeric() || b"+/-_=".contains(&bytes[i])) {
+        // `=` is never part of a token: trailing it is padding, interior it
+        // separates `key=<base64>`.
+        if !(bytes[i].is_ascii_alphanumeric() || b"+/-_".contains(&bytes[i])) {
             i += 1;
             continue;
         }
         let start = i;
-        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || b"+/-_=".contains(&bytes[i]))
-        {
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || b"+/-_".contains(&bytes[i])) {
             i += 1;
         }
-        let mut end = i;
-        while end > start && bytes[end - 1] == b'=' {
-            end -= 1;
-        }
+        let end = i;
         let token = &bytes[start..end];
         let value = base64::engine::general_purpose::STANDARD_NO_PAD
             .decode(token)
