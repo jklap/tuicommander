@@ -1503,8 +1503,8 @@ pub(crate) fn with_server_limits(routes: Router, timeout: std::time::Duration) -
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn(
             move |request: axum::extract::Request, next: axum::middleware::Next| async move {
-                // Upload bodies carry their own idle/size limits. A total deadline
-                // would reject a progressing transfer on a slow authenticated link.
+                // Upload bodies carry their own idle, size and total receive budgets.
+                // The ordinary response deadline is too short for large transfers.
                 if request.uri().path() == "/fs/upload-copy" {
                     return next.run(request).await;
                 }

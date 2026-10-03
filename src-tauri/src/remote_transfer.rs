@@ -17,6 +17,10 @@ use crate::state::AppState;
 const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
 const UPLOAD_SIZE_ERROR: &str = "upload exceeds 256 MiB including archive headers";
 const UPLOAD_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+// Allow small uploads a minute; larger ones must average at least 256 KiB/s.
+// Even an undeclared/chunked body is bounded to 17 minutes at the archive cap.
+const UPLOAD_MIN_BYTES_PER_SECOND: u64 = 256 * 1024;
+const UPLOAD_TOTAL_TIMEOUT_FLOOR: std::time::Duration = std::time::Duration::from_secs(60);
 const MAX_ENTRIES: usize = 10_000;
 const CHUNK_BYTES: usize = 64 * 1024;
 // At most two staged copies (including archive + extracted tree) at once.
@@ -360,6 +364,24 @@ pub(crate) async fn receive_copy(
     roots: &[String],
     body: Body,
 ) -> Result<TransferResult, String> {
+    use axum::body::HttpBody;
+    let declared_size = body.size_hint().upper().unwrap_or(MAX_UPLOAD_BYTES);
+    receive_copy_sized(query, roots, body, declared_size).await
+}
+
+pub(crate) async fn receive_copy_sized(
+    query: UploadQuery,
+    roots: &[String],
+    body: Body,
+    declared_size: u64,
+) -> Result<TransferResult, String> {
+    if declared_size > MAX_UPLOAD_BYTES {
+        return Err(UPLOAD_SIZE_ERROR.into());
+    }
+    let total_budget = UPLOAD_TOTAL_TIMEOUT_FLOOR.max(std::time::Duration::from_secs(
+        declared_size.div_ceil(UPLOAD_MIN_BYTES_PER_SECOND),
+    ));
+    let deadline = tokio::time::Instant::now() + total_budget;
     // Refuse excess concurrency rather than buffering bodies in a queue.
     let _slot = UPLOAD_SLOTS
         .try_acquire()
@@ -370,7 +392,9 @@ pub(crate) async fn receive_copy(
         Ok(_) => {
             // Consume the bounded request before returning headers: otherwise a
             // streaming sender can see a reset instead of this skipped result.
-            receive_body(body, None).await?;
+            tokio::time::timeout_at(deadline, receive_body(body, None))
+                .await
+                .map_err(|_| "remote upload total timeout".to_string())??;
             let mut answer = result();
             answer.skipped = 1;
             return Ok(answer);
@@ -398,7 +422,9 @@ pub(crate) async fn receive_copy(
         .open_with("archive", OpenOptions::new().write(true).create_new(true))
         .map_err(|e| e.to_string())?;
     let mut archive = tokio::fs::File::from_std(archive.into_std());
-    receive_body(body, Some(&mut archive)).await?;
+    tokio::time::timeout_at(deadline, receive_body(body, Some(&mut archive)))
+        .await
+        .map_err(|_| "remote upload total timeout".to_string())??;
     archive.sync_all().await.map_err(|e| e.to_string())?;
     drop(archive);
     tokio::task::spawn_blocking(move || {
@@ -488,8 +514,16 @@ pub(crate) fn sweep_staging(roots: &[String]) {
                 continue;
             }
             let name = entry.file_name();
-            if name.to_string_lossy().starts_with(".tuic-upload-") {
-                remove_staging(dir, &name)?;
+            let staging = name
+                .to_str()
+                .and_then(|name| name.strip_prefix(".tuic-upload-"))
+                .and_then(|suffix| uuid::Uuid::parse_str(suffix).ok().map(|id| (suffix, id)))
+                .is_some_and(|(suffix, id)| suffix == id.hyphenated().to_string());
+            if staging {
+                if let Err(e) = remove_staging(dir, &name) {
+                    tracing::warn!(source = "remote-transfer", name = ?name, error = %e,
+                        "Remote upload startup entry cleanup failed");
+                }
             } else {
                 // A directory replaced by a symlink during scanning is never followed.
                 let child = match dir.open_dir_nofollow(&name) {
@@ -582,22 +616,40 @@ fn extract_and_publish(stage: Staging, query: UploadQuery) -> io::Result<Transfe
             ));
         }
     }
-    #[cfg(unix)]
-    {
-        use cap_std::fs::PermissionsExt;
-        // Populate children before reducing directory permissions.
-        directory_modes.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
-        for (path, mode) in directory_modes {
-            data.set_permissions(path, cap_std::fs::Permissions::from_mode(mode))?;
-        }
-    }
     let meta = data.symlink_metadata(&query.name)?;
     if meta.is_dir() != query.directory {
         return Err(io::Error::other("upload type does not match target"));
     }
+    #[cfg(unix)]
+    let published_dir = if query.directory {
+        Some(data.open_dir(&query.name)?)
+    } else {
+        None
+    };
     let mut answer = result();
     match publish(&data, &stage.parent, &query.name) {
-        Ok(()) => answer.moved = 1,
+        Ok(()) => {
+            #[cfg(unix)]
+            {
+                use cap_std::fs::PermissionsExt;
+                // Rename needs writable directories; reduce modes only after publication.
+                // Held handles keep chmod on our tree if a destination name is replaced.
+                directory_modes
+                    .sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+                if let Some(dir) = published_dir {
+                    for (path, mode) in directory_modes {
+                        let relative = path.strip_prefix(&query.name).map_err(io::Error::other)?;
+                        let relative = if relative.as_os_str().is_empty() {
+                            Path::new(".")
+                        } else {
+                            relative
+                        };
+                        dir.set_permissions(relative, cap_std::fs::Permissions::from_mode(mode))?;
+                    }
+                }
+            }
+            answer.moved = 1;
+        }
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => answer.skipped = 1,
         Err(e) => return Err(e),
     }
