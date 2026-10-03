@@ -1,11 +1,11 @@
-use alacritty_terminal::grid::{Dimensions, ReflowMode};
+use alacritty_terminal::grid::ReflowMode;
 use tuic_terminal::terminal_grid::TerminalGrid;
 
 const COMPOSER: &str = "❯ new composer";
 
 // Absolute row of viewport row `row`: get_selection_text counts history rows first.
 fn abs(g: &TerminalGrid, row: usize) -> usize {
-    g.term().grid().history_size() + row
+    g.scrollback_count() + row
 }
 
 fn fill(rows: u16, scrollback: usize) -> TerminalGrid {
@@ -47,7 +47,7 @@ fn ed2_eviction_flag_survives_resize_pulling_history_back() {
     let _ = g.process("a\r\n❯ lit\r\nc\r\nd".as_bytes());
     let _ = g.process(b"\x1b[2J");
     g.resize_with_mode(5, 80, ReflowMode::None);
-    assert_eq!(g.term().grid().history_size(), 0);
+    assert_eq!(g.scrollback_count(), 0);
     assert_eq!(g.get_selection_text(0, 0, 0, 79), "❯ lit");
     let _ = g.process(format!("\x1b[5;1H{COMPOSER}").as_bytes());
     assert_eq!(g.get_selection_text(4, 0, 4, 79), "new composer");
