@@ -2654,6 +2654,31 @@ pub struct DamageGeometry {
 mod tests {
     use super::*;
 
+    // Catches DECALN keeping lost provenance or inheriting the active erase background.
+    #[test]
+    fn copied_selection_decaln_resets_loss_and_replaces_all_cells_with_default_e() {
+        let mut grid = TerminalGrid::new(2, 20, 1);
+        grid.process(b"aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n");
+        grid.resize_with_mode(3, 20, ReflowMode::None);
+        assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
+        assert!(grid.term().grid()[Line(0)].copy_predecessor_lost);
+        grid.process(b"\x1b[41m\x1b#8");
+        for line in 0..3 {
+            let row = &grid.term().grid()[Line(line)];
+            assert!(!row.copy_origin_unknown);
+            assert!(!row.copy_predecessor_lost);
+            assert!(!row.reflow_wrap);
+            for column in 0..20 {
+                let cell = &row[Column(column)];
+                assert_eq!(cell.c, 'E');
+                assert_eq!(cell.bg, alacritty_terminal::term::cell::Cell::default().bg);
+                assert!(cell.flags.is_empty());
+            }
+        }
+        grid.process("\x1b[H❯ hello\x1b[K".as_bytes());
+        assert_eq!(grid.get_selection_text(0, 0, 0, 19), "hello");
+    }
+
     // Catches whole-row ECH leaving latent loss behind, or partial ECH inventing a fresh origin.
     #[test]
     fn copied_selection_ech_full_row_clears_loss_but_partial_keeps_literal() {

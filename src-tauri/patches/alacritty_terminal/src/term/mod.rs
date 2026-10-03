@@ -1475,9 +1475,11 @@ impl<T: EventListener> Handler for Term<T> {
         trace!("Decalnning");
 
         for line in (0..self.screen_lines()).map(Line::from) {
-            for column in 0..self.columns() {
-                let cell = &mut self.grid[line][Column(column)];
-                *cell = Cell::default();
+            // DECALN replaces the entire row, including its origin provenance.
+            // Its cells use the default background rather than the cursor template.
+            let row = &mut self.grid[line];
+            row.reset(&Cell::default());
+            for cell in row {
                 cell.c = 'E';
             }
         }
