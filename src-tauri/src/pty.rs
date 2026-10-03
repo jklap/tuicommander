@@ -5402,7 +5402,10 @@ fn clean_action_required_title(title: &str) -> String {
 /// - `awaiting` → confident `Question` (sets `awaiting_input` + `question_confident`)
 /// - `busy`     → `UserInput` clear (hook busy is authoritative — clears an awaiting
 ///   set by a prior `PreToolUse(AskUserQuestion)`; empty content never overwrites
-///   `last_prompt`)
+///   `last_prompt`). Fires on every tool call too, so it carries no prompt row
+///   (`line = -1`).
+/// - `prompt`   → same clear, sent only by the user-prompt-submit hook, and the only
+///   one that carries the prompt row for the scrollbar marker
 /// - anything else (incl. `idle`, unknown) → `None`
 fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
     match payload {
@@ -5410,10 +5413,14 @@ fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
             prompt_text: String::new(),
             confident: true,
         }),
-        // `line` is the absolute prompt row (history_size + cursor row) at the
-        // busy transition — the row the user's submitted prompt sits on. Carried
-        // so the frontend can mark user-prompt lines on the scrollbar.
         "busy" => Some(ParsedEvent::UserInput {
+            content: String::new(),
+            line: -1,
+        }),
+        // `line` is the absolute prompt row (history_size + cursor row) at the
+        // submit — the row the user's prompt sits on. Carried so the frontend can
+        // mark user-prompt lines on the scrollbar.
+        "prompt" => Some(ParsedEvent::UserInput {
             content: String::new(),
             line,
         }),
@@ -5906,7 +5913,7 @@ impl ChunkProcessor {
     fn handle_tuic_state(&self, payload: &str, session_id: &str, state: &AppState) {
         let (target, label) = match payload {
             "idle" => (SHELL_IDLE, "idle"),
-            "busy" => (SHELL_BUSY, "busy"),
+            "busy" | "prompt" => (SHELL_BUSY, "busy"),
             _ => return,
         };
         transition_explicit_shell_state(state, session_id, target, label, true);
