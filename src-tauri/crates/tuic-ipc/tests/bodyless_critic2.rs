@@ -6,7 +6,10 @@ use tuic_ipc::http::ResponseDecoder;
 fn interim_100_continue_is_skipped_for_the_final_response() {
     let mut decoder = ResponseDecoder::default();
     decoder.push(b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
-    let response = decoder.response(false).unwrap().expect("final response is complete");
+    let response = decoder
+        .response(false)
+        .unwrap()
+        .expect("final response is complete");
     assert_eq!(response.status, 200);
     assert_eq!(response.body, "ok");
 }
@@ -17,7 +20,10 @@ fn non_head_request_keeps_its_content_length_body() {
     for method in ["GET", "POST", "DELETE"] {
         let mut decoder = ResponseDecoder::for_request(method);
         decoder.push(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhel");
-        assert!(decoder.response(false).unwrap().is_none(), "{method}: body still pending");
+        assert!(
+            decoder.response(false).unwrap().is_none(),
+            "{method}: body still pending"
+        );
         decoder.push(b"lo");
         assert_eq!(decoder.response(false).unwrap().unwrap().body, "hello");
     }
@@ -40,7 +46,10 @@ fn statuses_next_to_the_bodyless_set_still_wait_for_their_body() {
     for status in [200, 203, 205, 303, 305, 99] {
         let mut decoder = ResponseDecoder::default();
         decoder.push(format!("HTTP/1.1 {status} X\r\nContent-Length: 3\r\n\r\n").as_bytes());
-        assert!(decoder.response(false).unwrap().is_none(), "{status} must wait");
+        assert!(
+            decoder.response(false).unwrap().is_none(),
+            "{status} must wait"
+        );
         assert!(decoder.response(true).is_err(), "{status} truncated");
     }
 }
