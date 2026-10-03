@@ -27,6 +27,8 @@ mod critic_1420_r2;
 mod critic_1420_r3;
 #[cfg(test)]
 mod critic_1420_r4;
+#[cfg(test)]
+mod critic_1420_r5;
 #[cfg(feature = "desktop")]
 pub(crate) use commands::*;
 
