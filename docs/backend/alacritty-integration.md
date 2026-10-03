@@ -131,9 +131,13 @@ the entire reprinted history tail carries prior oldest-row loss or the last
 removed WRAPLINE/wide-spacer boundary into surviving content. Without those
 signals, an unwrapped predecessor preserves a known line origin on drop.
 Full row replacements (ECH, DCH, ICH, EL or ED covering every column from
-column zero) share the row-reset path and restore known origin without resetting
+column zero, and DECALN alignment-screen replacement) share the row-reset path and restore known origin without resetting
 absolute row counters. Partial edits preserve both provenance flags. Reflow truncation inspects discarded content just like
 history-cap trimming; dropping only blank rows preserves known origin.
+DECALN fills live rows with default-background E cells after resetting provenance;
+it does not inherit the active erase background. Ordinary printing, including
+insert-mode shifts and a sequence that overwrites every cell, preserves unknown
+provenance because it has no explicit whole-row replacement boundary.
 RI/IL retains the moved row's flags and literal copy behavior at its new position.
 Known conservative behavior: clearing or dropping history
 does not flag a blank live row zero; unlike scroll/resize, it does not carry
