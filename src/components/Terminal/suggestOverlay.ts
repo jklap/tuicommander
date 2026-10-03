@@ -57,7 +57,7 @@ export function answerExtent(start: number, totalRows: number, getRow: (i: numbe
 			inFence = !FENCE_RE.test(row.text);
 		} else {
 			if (OUTPUT_ROW_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text) || PROMPT_ROW_RE.test(row.text)) break;
-				if (SUGGEST_ANCHOR_RE.test(row.text) || INTENT_HIGHLIGHT_RE.test(row.text)) break;
+			if (SUGGEST_ANCHOR_RE.test(row.text) || INTENT_HIGHLIGHT_RE.test(row.text)) break;
 			inFence = FENCE_RE.test(row.text);
 		}
 		last = i;
