@@ -266,6 +266,7 @@ mod tests {
 
     fn fixture() -> (RunSnapshot, Plan, Story, NodeAttempt, PublishedWorkflow) {
         let mut run = RunSnapshot {
+            event_contract_version: 2,
             canonical_ref: None,
             id: "run-1".into(),
             project: "/project".into(),
@@ -287,6 +288,7 @@ mod tests {
             canonical_recertification: None,
             attempts: vec![],
             effects: vec![],
+            graph_executions: vec![],
         };
         let plan = Plan {
             id: "plan-1".into(),

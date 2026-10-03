@@ -33,3 +33,18 @@ A `needs_input` report includes `inputRequest {question,options}` and pauses the
 Launching attempts is explicit in this slice. Automatic graph scheduling, evaluation and review policy are subsequent slices.
 
 The active plan coordinator can call `workflow_story_create` with a stable proposal key. The story store commits the key and story in one transaction, so a lost MCP response and retry cannot create duplicates. The run separately reserves a bounded CreateStory effect and records its outcome; a crash between the two databases leaves an uncertain effect for operator reconciliation. A read-only proposal lookup can establish whether the story was committed, but the creation tool refuses uncertain effects and never replays them. A reused key with different content is rejected.
+
+
+## Graph contract foundation (slice A, 1446-ff21)
+
+Run-store schema version 2 adds `eventContractVersion` and `graphExecutions` to snapshots. The event stream remains authoritative: a graph-start event pins the entire published definition (graph, checks, closure, project and revision), and graph transitions replay activations, consumed predecessor tokens, selected decision edges, actor/evidence provenance, per-execution node repeat counters and resolved pauses. Transactions and existing payload-bound command receipts prevent duplicate successor creation. Counter values survive pause and database reopen. A cap of three permits three repeat traversals after the initial attempt; the run-wide loop budget also bounds repeats.
+
+The Rust-only `publish_executable` boundary requires deterministic final checks for both kinds and an explicit non-Start/non-Pause `Pause.resume_to`. Normal draft publication remains the legacy record-only boundary; it is not a promise of automatic execution. Duplicate links, unreachable nodes, unbounded cycles and missing End are rejected by the shared graph validator. Existing published revisions are never rewritten or assigned guessed resume targets.
+
+Schema additions: Pause optionally carries `resume_to` (required for executable graphs); Join has `mode: merge | all` and optional `fork_id`; Fork carries `join_id`. Legacy unit Join decodes as exclusive merge. Fork and all-Join must pair reciprocally, have separate read-only Reviewer/Validator branches, and accept no outside arrivals or early convergence. This first parallel schema deliberately excludes nested forks and other branch node types. Parallel execution is unavailable until slice G; draft designer controls are delivered in slice F.
+
+Graph mutation commands are internal and rejected by the public run-action transport. They do not spawn agents, evaluate approval policy, execute checks, merge or schedule work. Completing an activation in this ledger is not an agent report or a story approval. Those authoritative bindings belong to subsequent slices. Graph runs cannot use unscoped AdvanceLoop, StartAttempt, StartPlanAgent, Complete or status-only Resume to bypass graph position.
+
+Snapshots written before the event contract field existed decode as version zero with no graph positions. They replay and can be inspected or cancelled, but new mutation/resume commands are refused. Cancellation compares the actual stored projection encoding so additive default fields do not break the old-row update. New record-only runs retain their existing explicit command service during rollout. Older binaries refuse a version-2 run database.
+
+There is no autonomous executor in slice A. Story 956-9745 must land before slice B enables scheduling. Independent approval and explicit merge authority remain open until Boss decides before slice D.

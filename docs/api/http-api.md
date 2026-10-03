@@ -2715,3 +2715,6 @@ The following commands are accessible only via the Tauri `invoke()` bridge in th
 | `get_agent_mcp_status` | `agent_mcp.rs` | Check MCP config status for an agent |
 | `install_agent_mcp` | `agent_mcp.rs` | Install TUICommander MCP entry in agent config |
 | `remove_agent_mcp` | `agent_mcp.rs` | Remove TUICommander MCP entry from agent config |
+
+
+Workflow run snapshots add `eventContractVersion` and default-empty `graphExecutions`. Graph events use the existing paged history shape. Internal graph transition commands are rejected by public `workflow_run_action`; no autonomous-start action is added in slice A. Pre-contract runs can be inspected and cancelled but cannot resume.
