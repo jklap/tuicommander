@@ -32,7 +32,8 @@ Shell/interpreter evaluation (`-c`, `-e` and equivalents), `env` and `printenv`
 are denied when they are the executable, even with approval. Wrappers such as
 `nohup env` are an accepted limitation; approve only trusted executables. Evaluation-like options are rejected regardless
 of the executable name, so renaming an interpreter does not bypass the policy. Captured output masks exact values, standard and
-URL-safe base64, lower/upper hex and URL/form encodings, including line breaks
+URL-safe base64 (also inside Basic-auth payloads), JSON-escaped values,
+lower/upper hex and URL/form encodings, including line breaks
 inside an echo. Output over 1 MiB per stream or a 120-second timeout is withheld.
 No raw output is logged, journalled, or added to a terminal ring.
 
