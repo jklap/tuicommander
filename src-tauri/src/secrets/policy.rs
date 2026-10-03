@@ -1,15 +1,10 @@
 //! Argv consent policy. Templates are user-created and never model-created.
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub(crate) struct Template(Vec<String>);
 
 impl Template {
     pub(crate) fn new(argv: Vec<String>) -> Result<Self, String> {
         validate_argv(&argv)?;
-        if argv[0].contains(['*', '?', '[', ']']) {
-            return Err("A template must fix the program".into());
-        }
         Ok(Self(argv))
     }
 

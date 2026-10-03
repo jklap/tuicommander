@@ -64,11 +64,6 @@ struct Pending {
     form: Form,
     response: Option<tokio::sync::oneshot::Sender<Status>>,
 }
-impl Drop for Pending {
-    fn drop(&mut self) {
-        self.form.nonce.zeroize();
-    }
-}
 
 struct ApprovedTemplate {
     argv: policy::Template,
@@ -88,16 +83,17 @@ pub(crate) struct SecretStore {
     inner: parking_lot::Mutex<Inner>,
     // Window lifetime outlives the pending reply. Inspection stays blocked until
     // native destruction, including a submit/close race and failed destruction.
-    windows: parking_lot::Mutex<std::collections::BTreeSet<String>>,
+    // open() allows one form, so at most one window exists.
+    window: parking_lot::Mutex<Option<String>>,
 }
 
 impl SecretStore {
     pub(crate) fn tools_blocked(&self) -> bool {
-        self.inner.lock().pending.is_some() || !self.windows.lock().is_empty()
+        self.inner.lock().pending.is_some() || self.window.lock().is_some()
     }
     pub(crate) fn open(&self, form: Form) -> Result<Form, String> {
         let mut inner = self.inner.lock();
-        if inner.pending.is_some() || !self.windows.lock().is_empty() {
+        if inner.pending.is_some() || self.window.lock().is_some() {
             return Err("A secret form is already open".into());
         }
         inner.pending = Some(Pending {
@@ -105,6 +101,17 @@ impl SecretStore {
             response: None,
         });
         Ok(form)
+    }
+    #[cfg(feature = "desktop")]
+    fn has_window(&self, label: &str) -> bool {
+        self.window.lock().as_deref() == Some(label)
+    }
+    #[cfg(feature = "desktop")]
+    fn release_window(&self, label: &str) {
+        let mut window = self.window.lock();
+        if window.as_deref() == Some(label) {
+            *window = None;
+        }
     }
     fn form(&self, nonce: &str) -> Result<Form, String> {
         let inner = self.inner.lock();
