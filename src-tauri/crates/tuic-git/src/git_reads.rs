@@ -112,6 +112,12 @@ pub struct GixGitReads {
     handles: moka::sync::Cache<PathBuf, gix::ThreadSafeRepository>,
 }
 
+impl Default for GixGitReads {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GixGitReads {
     pub fn new() -> Self {
         Self {

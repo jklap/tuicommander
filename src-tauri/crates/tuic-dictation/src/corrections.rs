@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// Dictionary-based text corrector for common speech recognition errors.
 /// Applies case-insensitive string replacements, sorted by length (longest first)
 /// to avoid partial matches. The replacement value is always used as-is.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TextCorrector {
     replacements: HashMap<String, String>,
     /// Cached sorted keys (longest first) for correct replacement order
@@ -15,10 +15,7 @@ pub struct TextCorrector {
 
 impl TextCorrector {
     pub fn new() -> Self {
-        Self {
-            replacements: HashMap::new(),
-            sorted_keys: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn from_map(replacements: HashMap<String, String>) -> Self {

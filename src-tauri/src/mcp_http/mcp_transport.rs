@@ -6596,27 +6596,25 @@ fn handle_workflow_report(
                     &receipt.event.kind,
                     crate::workflows::RunEventKind::AttemptReported { .. }
                 )
-            {
-                if let Ok(Some(coordinator_session)) =
+                && let Ok(Some(coordinator_session)) =
                     crate::workflows::active_coordinator_session(&receipt.snapshot)
-                {
-                    match state.resolve_peer_ref_checked(&coordinator_session) {
-                        Ok(Some(peer)) => {
-                            queue_workflow_coordinator_wake(
-                                state,
-                                &peer,
-                                &pty,
-                                &receipt.snapshot.id,
-                                &reported_story_id,
-                                receipt.sequence,
-                            );
-                        }
-                        Ok(None) => {}
-                        Err(error) => tracing::warn!(
-                            "workflow coordinator wake skipped for run {}: {error}",
-                            receipt.snapshot.id
-                        ),
+            {
+                match state.resolve_peer_ref_checked(&coordinator_session) {
+                    Ok(Some(peer)) => {
+                        queue_workflow_coordinator_wake(
+                            state,
+                            &peer,
+                            &pty,
+                            &receipt.snapshot.id,
+                            &reported_story_id,
+                            receipt.sequence,
+                        );
                     }
+                    Ok(None) => {}
+                    Err(error) => tracing::warn!(
+                        "workflow coordinator wake skipped for run {}: {error}",
+                        receipt.snapshot.id
+                    ),
                 }
             }
             to_json_or_error(receipt)
@@ -6666,15 +6664,14 @@ fn queue_workflow_coordinator_wake(
         let live_pty = state.live_pty_for_peer(recipient);
         if state.assign_agent_delivery(recipient, &message_id, live_pty.is_some())
             == crate::state::AgentDeliveryAssignment::Terminal
+            && let Some(session_id) = live_pty
         {
-            if let Some(session_id) = live_pty {
-                let outcome = crate::pty::deliver_notice_to_managed_pty(
-                    state,
-                    &session_id,
-                    crate::pty::PEER_MAIL_WAKE,
-                );
-                crate::pty::settle_terminal_delivery(state, recipient, &message_id, outcome);
-            }
+            let outcome = crate::pty::deliver_notice_to_managed_pty(
+                state,
+                &session_id,
+                crate::pty::PEER_MAIL_WAKE,
+            );
+            crate::pty::settle_terminal_delivery(state, recipient, &message_id, outcome);
         }
     }
     true
@@ -6841,17 +6838,17 @@ fn launch_workflow_agent(
     if store.snapshot(&run.id)?.status != crate::workflows::RunStatus::Running {
         // No external action happened, so a paused run can close the intent.
         // Cancellation has already marked outstanding intents uncertain.
-        if store.snapshot(&run.id)?.status == crate::workflows::RunStatus::Paused {
-            if let Ok(failed) = store.command(
+        if store.snapshot(&run.id)?.status == crate::workflows::RunStatus::Paused
+            && let Ok(failed) = store.command(
                 &run.id,
                 &format!("spawn-aborted:{}", attempt.id),
                 crate::workflows::RunCommand::MarkEffect {
                     effect_id: effect.id.clone(),
                     succeeded: false,
                 },
-            ) {
-                crate::workflows::emit_run_changed(state, &run.project, &run.id, failed.sequence);
-            }
+            )
+        {
+            crate::workflows::emit_run_changed(state, &run.project, &run.id, failed.sequence);
         }
         return Err("workflow stopped before agent spawn".into());
     }

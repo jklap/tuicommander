@@ -1570,7 +1570,7 @@ fn initialize_submodules_with_allowed_protocol(
         let url_key = format!("submodule.{name}.url");
         let local = git_cmd(dest).args(["config", &url_key, &src.join(path).to_string_lossy()]).run().and_then(|_| git_cmd(dest).args(["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--", path]).run());
         if local.is_ok() { return None; }
-        let local_error = local.err().expect("failed above");
+        let local_error = local.expect_err("failed above");
         let _ = git_cmd(dest).args(["config", "--unset", &url_key]).run();
         let mut update = git_cmd(dest).args(["submodule", "update", "--init", "--", path]).timeout(FETCH_TIMEOUT);
         if let Some(protocol) = allowed_protocol {
@@ -1850,12 +1850,12 @@ fn remove_worktree_internal_with_lock(
             "{MAIN_WORKTREE_PREFIX}cannot remove the main worktree"
         ));
     }
-    if let Some(expected_missing) = expected_missing_checkout {
-        if expected_missing == path_entry_exists(&worktree.path)? {
-            return Err(
-                "Worktree presence changed since confirmation; review it before removal".into(),
-            );
-        }
+    if let Some(expected_missing) = expected_missing_checkout
+        && expected_missing == path_entry_exists(&worktree.path)?
+    {
+        return Err(
+            "Worktree presence changed since confirmation; review it before removal".into(),
+        );
     }
     let admin = registered_worktree_admin_dir(&worktree.base_repo, &worktree.path)?;
     if !path_entry_exists(&worktree.path)? {
@@ -1943,10 +1943,8 @@ fn remove_worktree_internal_with_lock(
         None
     };
 
-    if !force {
-        if dirty_files_at(&worktree.path)? != 0 {
-            return Err("Cannot remove worktree: the worktree has uncommitted changes".into());
-        }
+    if !force && dirty_files_at(&worktree.path)? != 0 {
+        return Err("Cannot remove worktree: the worktree has uncommitted changes".into());
     }
     if admin.is_some() {
         verify_submodules_at(&worktree.path, &worktree.base_repo, force)?;
@@ -2247,6 +2245,12 @@ pub fn remove_worktree_by_workspace_id_with_confirmation(
     )
 }
 
+// The flat removal boundary keeps each independently confirmed safety input explicit.
+// A parameter-count warning here does not justify changing the caller contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit removal confirmation boundary"
+)]
 pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
     repo_path: &str,
     workspace_id: &str,
@@ -2272,6 +2276,12 @@ pub fn remove_worktree_by_workspace_id_with_confirmation_and_pr(
 
 /// Transport-facing variant: `Some(true)` confirms a missing checkout, while
 /// `Some(false)` requires a live checkout and a fingerprint for force removal.
+// The flat removal boundary keeps each independently confirmed safety input explicit.
+// A parameter-count warning here does not justify changing the caller contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit removal confirmation boundary"
+)]
 pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     repo_path: &str,
     workspace_id: &str,
@@ -2326,19 +2336,16 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
     let branch_ref = format!("refs/heads/{branch_name}");
     let expected_branch_oid = rev_at(&base_repo, &branch_ref)?;
     let lifecycle = inspect_workspace_lifecycle_with_pr(&base_repo, workspace_id, pr_proves_tip);
-    if force && let Some(expected) = expected_fingerprint {
-        if lifecycle.dirty_fingerprint.as_deref() != Some(expected) {
-            return Err(
-                "Worktree state changed since confirmation; review it before removal".into(),
-            );
-        }
+    if force
+        && let Some(expected) = expected_fingerprint
+        && lifecycle.dirty_fingerprint.as_deref() != Some(expected)
+    {
+        return Err("Worktree state changed since confirmation; review it before removal".into());
     }
-    if !force {
-        if lifecycle.dirty_files != Some(0) {
-            return Err(lifecycle.error.clone().unwrap_or_else(|| {
-                format!("Cannot remove {branch_name}: the worktree has uncommitted changes")
-            }));
-        }
+    if !force && lifecycle.dirty_files != Some(0) {
+        return Err(lifecycle.error.clone().unwrap_or_else(|| {
+            format!("Cannot remove {branch_name}: the worktree has uncommitted changes")
+        }));
     }
     if has_operation_in_progress(&workspace.path) {
         return Err(format!(
@@ -2374,7 +2381,7 @@ pub fn remove_worktree_by_workspace_id_with_missing_confirmation_and_pr(
                         .ok_or_else(|| format!("Cannot verify merged commits for {branch_name}"))?;
                     require_integration_archive(
                         &base_repo,
-                        &branch_name,
+                        branch_name,
                         &expected_branch_oid,
                         proof,
                     )?;
@@ -2997,7 +3004,9 @@ pub fn get_worktree_paths_raw(
     Ok(map_worktree_workspace_paths(&output.stdout))
 }
 
-pub fn attach_warm_statuses(paths: &mut HashMap<String, WorkspaceWorktree>) {
+pub fn attach_warm_statuses<S: std::hash::BuildHasher>(
+    paths: &mut HashMap<String, WorkspaceWorktree, S>,
+) {
     for workspace in paths.values_mut() {
         workspace.warm_artifacts = Some(warm_status(Path::new(&workspace.path)));
     }

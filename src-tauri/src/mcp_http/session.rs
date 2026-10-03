@@ -648,6 +648,11 @@ const NEW_SESSION_MIN_VT_COLS: u16 = 220;
 /// A caller that pre-seeds `session_states` or queues injections must do so
 /// **before** calling: this emits `SessionCreated`, and the reader thread the
 /// caller starts afterwards is what consumes them.
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PTY registration boundary preserves explicit session metadata"
+)]
 pub(super) fn register_pty_session(
     state: &AppState,
     session_id: &str,

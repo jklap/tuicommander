@@ -71,6 +71,7 @@ dev: hooks
 	@pnpm build:sidecar
 	@pnpm exec vite build
 	@cd src-tauri && cargo build --bin tuic-remote --no-default-features
+	@cd src-tauri && cargo build -p tuic-bridge -p tuic-cli
 	@echo "Starting Tauri dev on $(if $(TUIC_APP_INSTANCE),the ISOLATED config instance '$(TUIC_APP_INSTANCE)' (instances/$(TUIC_APP_INSTANCE)) — not the shared one,the shared default config directory)"
 	TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) TUIC_PORT=$(TUIC_PORT) RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch
 
@@ -99,6 +100,7 @@ test: TUIC_APP_INSTANCE?=tuic-test
 test:
 	@echo "Building Vite frontend..."
 	@pnpm exec vite build
+	@cd src-tauri && cargo build -p tuic-bridge -p tuic-cli
 	@echo "Starting Tauri dev (isolated config instance: $(TUIC_APP_INSTANCE))..."
 	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore TUIC_APP_INSTANCE=$(TUIC_APP_INSTANCE) pnpm tauri dev
 

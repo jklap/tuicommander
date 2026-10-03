@@ -292,10 +292,10 @@ pub(crate) fn resolve(hints: &Value, maps: &mut ScriptMaps) -> Option<SourceLoc>
             if frame.contains("jsxDEV") {
                 continue;
             }
-            if let Some((url, line, column)) = parse_frame(frame) {
-                if let Some(location) = maps.lookup(url, line, column) {
-                    return Some(location);
-                }
+            if let Some((url, line, column)) = parse_frame(frame)
+                && let Some(location) = maps.lookup(url, line, column)
+            {
+                return Some(location);
             }
         }
     }

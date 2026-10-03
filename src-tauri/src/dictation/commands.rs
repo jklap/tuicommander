@@ -2389,15 +2389,15 @@ pub(crate) fn arm_hands_free(
 /// The seam exists so a test can drive the whole armed path — bind, capture,
 /// segment, transcribe, hold back, write — without a microphone or a
 /// multi-gigabyte model, against a real session and the real sink.
+type OpenVoiceEndpoint<'a> =
+    dyn Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> + 'a;
+
 pub(crate) fn arm_hands_free_with(
     state: &Arc<crate::state::AppState>,
     dictation: &DictationState,
     session_id: &str,
     owner: &str,
-    open_endpoint: &dyn Fn(
-        &DictationState,
-        &str,
-    ) -> Result<Box<dyn continuous::VoiceEndpoint>, String>,
+    open_endpoint: &OpenVoiceEndpoint<'_>,
 ) -> Result<HandsFreeStatus, String> {
     dictation.ensure_owner()?;
     check_binding_field(session_id, "Session id")?;
