@@ -1843,6 +1843,134 @@ mod tests {
         );
     }
 
+    fn run_with_attempt_and_effect(
+        store: &RunStore,
+        project: &str,
+        plan_id: &str,
+        story_id: &str,
+        definition_id: &str,
+    ) -> RunSnapshot {
+        let run = store
+            .start_plan(project, plan_id, definition_id, 1, RunLimits::default())
+            .unwrap();
+        store
+            .command(
+                &run.id,
+                "old-attempt",
+                RunCommand::StartAttempt {
+                    story_id: story_id.into(),
+                    node_id: "implement".into(),
+                },
+            )
+            .unwrap();
+        store
+            .command(
+                &run.id,
+                "old-effect",
+                RunCommand::ReserveEffect {
+                    key: "start-worker".into(),
+                    kind: EffectKind::SpawnAgent,
+                },
+            )
+            .unwrap()
+            .snapshot
+    }
+
+    #[test]
+    fn failed_restart_recovery_retries_on_second_open_without_interrupting_new_live_work() {
+        // catches: failed recovery being permanently cached as complete, or a retry
+        // sweeping every active run and interrupting workers started after first open.
+        let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let db = config.path().join("workflow_runs.sqlite3");
+        let store = RunStore::open_at(&db).unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let old =
+            run_with_attempt_and_effect(&store, &project_path, &plan_id, &story_id, &definition_id);
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET snapshot_json='temporarily broken' WHERE id=?1",
+            [&old.id],
+        )
+        .unwrap();
+        let first = RunStore::open().expect("one failure does not block the store");
+        // Repair only the corrupted durable snapshot; its projections came from real commands.
+        conn.execute(
+            "UPDATE workflow_runs SET snapshot_json=?1 WHERE id=?2",
+            rusqlite::params![serde_json::to_string(&old).unwrap(), old.id],
+        )
+        .unwrap();
+        let stories = StoryStore::open().unwrap();
+        let plan = stories
+            .create_plan(NewPlan {
+                project: project_path.clone(),
+                title: "New live work".into(),
+                source: "new.md".into(),
+            })
+            .unwrap();
+        let story = stories
+            .create_story(NewStory {
+                plan_id: plan.id.clone(),
+                title: "New worker".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let live =
+            run_with_attempt_and_effect(&first, &project_path, &plan.id, &story.id, &definition_id);
+        let second = RunStore::open().expect("recovery retries the repaired run");
+        let recovered = second.snapshot(&old.id).unwrap();
+        assert_eq!(recovered.attempts[0].state, AttemptState::Interrupted);
+        assert_eq!(recovered.effects[0].state, EffectState::Uncertain);
+        assert_eq!(recovered.status, RunStatus::Paused);
+        assert_eq!(second.snapshot(&live.id).unwrap(), live);
+        assert_eq!(RunStore::open().unwrap().snapshot(&live.id).unwrap(), live);
+    }
+
+    #[test]
+    fn runtime_reconciliation_retries_only_a_run_with_pending_restart_recovery() {
+        // catches: runtime reconcile treating an unrecovered pre-restart attempt
+        // and effect as live after their snapshot becomes readable again.
+        let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let db = config.path().join("workflow_runs.sqlite3");
+        let store = RunStore::open_at(&db).unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let old =
+            run_with_attempt_and_effect(&store, &project_path, &plan_id, &story_id, &definition_id);
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET snapshot_json='temporarily broken' WHERE id=?1",
+            [&old.id],
+        )
+        .unwrap();
+        let opened = RunStore::open().unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET snapshot_json=?1 WHERE id=?2",
+            rusqlite::params![serde_json::to_string(&old).unwrap(), old.id],
+        )
+        .unwrap();
+        let recovered = opened.reconcile(&old.id).unwrap();
+        assert_eq!(recovered.attempts[0].state, AttemptState::Interrupted);
+        assert_eq!(recovered.effects[0].state, EffectState::Uncertain);
+        assert_eq!(recovered.status, RunStatus::Paused);
+        assert_eq!(opened.reconcile(&old.id).unwrap(), recovered);
+        assert_eq!(
+            RunStore::open().unwrap().snapshot(&old.id).unwrap(),
+            recovered
+        );
+    }
+
     #[test]
     fn first_workflow_open_reconciles_existing_active_run_once() {
         let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();

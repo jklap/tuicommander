@@ -35,6 +35,36 @@ pub(super) fn git_output(path: &Path, args: &[&str]) -> Result<String, String> {
         .map_err(|error| format!("decode git output: {error}"))
 }
 
+pub(super) fn require_merge_tree_support(path: &Path) -> Result<(), String> {
+    let version = git_output(path, &["--version"])?;
+    let mut components = version
+        .strip_prefix("git version ")
+        .unwrap_or("")
+        .split('.');
+    let major = components
+        .next()
+        .and_then(|value| value.parse::<u32>().ok());
+    let minor = components
+        .next()
+        .and_then(|value| value.parse::<u32>().ok());
+    match (major, minor) {
+        (Some(major), Some(minor)) => require_merge_tree_git_version(major, minor),
+        _ => Err(format!(
+            "git >= 2.38 required; cannot verify installed version: {version}"
+        )),
+    }
+}
+
+fn require_merge_tree_git_version(major: u32, minor: u32) -> Result<(), String> {
+    if (major, minor) < (2, 38) {
+        Err(format!(
+            "git >= 2.38 required for workflow merge-tree verification (detected {major}.{minor})"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub(super) fn clean_artifact(path: &Path) -> Result<(String, String), String> {
     if !git_output(path, &["status", "--porcelain", "--untracked-files=all"])?.is_empty() {
         return Err("workflow check requires a clean worktree".into());
@@ -114,4 +144,21 @@ pub fn execute_pinned_check(check: &CheckDefinition, path: &Path) -> Result<Chec
         tree,
         duration_ms,
     })
+}
+
+#[cfg(test)]
+mod git_version_tests {
+    use super::*;
+
+    #[test]
+    fn old_git_is_refused_with_the_required_version_not_conflict_review() {
+        // catches: an unsupported merge-tree command being blamed on conflict resolution.
+        let error = require_merge_tree_git_version(2, 37).unwrap_err();
+        assert!(error.contains("git >= 2.38 required"), "{error}");
+        assert!(!error.contains("human review"), "{error}");
+        assert!(require_merge_tree_git_version(1, 99).is_err());
+        assert!(require_merge_tree_git_version(2, 38).is_ok());
+        assert!(require_merge_tree_git_version(2, 55).is_ok());
+        assert!(require_merge_tree_git_version(3, 0).is_ok());
+    }
 }

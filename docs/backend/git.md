@@ -413,4 +413,4 @@ Sorts branches by priority:
 
 ## Workflow integration receipts
 
-The workflow service checks both merge parents and compares the canonical merge tree with `git merge-tree --write-tree` for those exact parents before running pinned post-integration checks. A merge that adds unrelated content or drops checked source changes cannot receive an integration receipt. A conflicted merge is rejected with an explicit request for human review or a separately verified artifact; the current receipt path does not grant either exception.
+The workflow service checks both merge parents and compares the canonical merge tree with `git merge-tree --write-tree` for those exact parents before running pinned post-integration checks. A merge that adds unrelated content or drops checked source changes cannot receive an integration receipt. This verification requires Git >= 2.38; older installations receive an explicit version requirement. A conflicted merge is rejected with an explicit request for human review or a separately verified artifact; the current receipt path does not grant either exception.
