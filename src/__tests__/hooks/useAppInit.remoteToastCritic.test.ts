@@ -106,7 +106,14 @@ describe("remote mcp-toast (critic 1439-d84f)", () => {
 		const fire = await bootToastListener();
 		const id = terminalsStore.add(makeTerminal({ sessionId: "s-1" }));
 		setSessionConnectionLookup((sid) => (sid === "s-1" ? "vps" : undefined));
-		fire({ title: "t", message: "m", level: "info", sound: null, origin_session_id: "s-1", __tuic_origin: remote("vps") });
+		fire({
+			title: "t",
+			message: "m",
+			level: "info",
+			sound: null,
+			origin_session_id: "s-1",
+			__tuic_origin: remote("vps"),
+		});
 		terminalsStore.remove(id);
 		expect(() => activityStore.getForSection("messages")[0]?.onClick?.()).not.toThrow();
 		expect(mockNavigate).not.toHaveBeenCalled();
