@@ -12,6 +12,11 @@ import s from "./AIChatPanel.module.css";
 import { aiChatDraft } from "./draft";
 import type { AcpChat } from "./useAcpChat";
 
+const MIN_HEIGHT_PX = 36;
+const MAX_PANEL_FRACTION = 0.4;
+/** Used while the panel has no layout yet (hidden or not mounted). */
+const FALLBACK_CAP_PX = 150;
+
 export const Composer: Component<{
 	chat: AcpChat;
 	mobileAttachments?: boolean;
@@ -21,6 +26,7 @@ export const Composer: Component<{
 	const [pasteError, setPasteError] = createSignal<string | null>(null);
 	const [uploading, setUploading] = createSignal(false);
 	let textarea: HTMLTextAreaElement | undefined;
+	let inputArea: HTMLDivElement | undefined;
 	let fileInput: HTMLInputElement | undefined;
 	const hasContent = () =>
 		!!aiChatDraft.text().trim() || aiChatDraft.images().length > 0 || aiChatDraft.files().length > 0;
@@ -29,8 +35,19 @@ export const Composer: Component<{
 	createEffect(() => aiChatDraft.activate(props.chat.sessionId() ?? ""));
 	const resize = () => {
 		if (!textarea) return;
+		const previous = textarea.offsetHeight;
 		textarea.style.height = "auto";
-		textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, 36), 150)}px`;
+		const natural = textarea.scrollHeight;
+		const panelHeight = inputArea?.parentElement?.clientHeight ?? 0;
+		const cap = panelHeight > 0 ? Math.max(MIN_HEIGHT_PX, panelHeight * MAX_PANEL_FRACTION) : FALLBACK_CAP_PX;
+		const target = Math.min(Math.max(natural, MIN_HEIGHT_PX), cap);
+		// Re-assert the old height and force a reflow so the CSS transition animates to the new one.
+		if (previous > 0) {
+			textarea.style.height = `${previous}px`;
+			void textarea.offsetHeight;
+		}
+		textarea.style.height = `${target}px`;
+		textarea.style.overflowY = natural > cap ? "auto" : "hidden";
 	};
 	createEffect(() => {
 		aiChatDraft.text();
@@ -119,7 +136,7 @@ export const Composer: Component<{
 	};
 
 	return (
-		<div class={s.inputArea}>
+		<div ref={inputArea} class={s.inputArea}>
 			<Show when={props.mobileAttachments}>
 				<input
 					ref={fileInput}

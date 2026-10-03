@@ -541,7 +541,7 @@
 }
 
 .textarea {
-  flex: 1;
+  flex: 0 0 auto;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -551,10 +551,16 @@
   padding: 8px 12px;
   resize: none;
   min-height: 36px;
-  max-height: 150px;
   line-height: 1.4;
   box-sizing: border-box;
-  overflow-y: auto;
+  overflow-y: hidden;
+  transition: height 0.12s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .textarea {
+    transition: none;
+  }
 }
 
 .textarea:focus {
