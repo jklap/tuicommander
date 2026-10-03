@@ -14,7 +14,11 @@ fn run(sid: &str, initial: Flags, foregrounds: &[&str]) -> Vec<Flags> {
     let mut carried = initial;
     let mut out = Vec::new();
     for name in foregrounds {
-        let probe = ForegroundIdentityProbe::new(state.clone(), sid, name);
+        let probe = if *name == "ash" {
+            ForegroundIdentityProbe::shell_root(state.clone(), sid, name)
+        } else {
+            ForegroundIdentityProbe::shell_parent(state.clone(), sid, name)
+        };
         {
             let mut s = state.session_maps.session_states.get_mut(sid).unwrap();
             s.agent_type = carried.0.clone();

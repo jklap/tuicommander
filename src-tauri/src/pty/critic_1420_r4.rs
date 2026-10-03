@@ -31,7 +31,7 @@ fn restore(state: &AppState, sid: &str, f: (Option<String>, bool, bool)) {
 fn unrecognised_configured_wrapper_is_revoked_when_the_shell_returns() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "critic-1420r4-wrapper";
-    let probe = ForegroundIdentityProbe::new(state.clone(), sid, "mywrapper");
+    let probe = ForegroundIdentityProbe::shell_parent(state.clone(), sid, "mywrapper");
     restore(&state, sid, (Some("claude".into()), true, false));
     assert_eq!(
         refresh_session_agent(&state, sid).as_deref(),
@@ -39,7 +39,7 @@ fn unrecognised_configured_wrapper_is_revoked_when_the_shell_returns() {
     );
     let carried = flags(&state, sid);
     drop(probe);
-    let _shell = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let _shell = ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     restore(&state, sid, carried);
     refresh_session_agent(&state, sid);
     assert_eq!(
@@ -56,7 +56,7 @@ fn unrecognised_configured_wrapper_is_revoked_when_the_shell_returns() {
 fn preset_survives_repeated_shell_polls_before_the_agent_starts() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "critic-1420r4-startup";
-    let _shell = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let _shell = ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     restore(&state, sid, (Some("claude".into()), true, false));
     for _ in 0..3 {
         refresh_session_agent(&state, sid);
@@ -79,7 +79,7 @@ fn revoked_preset_session_can_rediscover_and_revoke_a_hand_launched_agent() {
     assert_eq!(after_agent, (Some("claude".into()), true, true));
     drop(agent);
 
-    let shell = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let shell = ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     restore(&state, sid, after_agent);
     refresh_session_agent(&state, sid);
     refresh_session_agent(&state, sid);
@@ -97,7 +97,7 @@ fn revoked_preset_session_can_rediscover_and_revoke_a_hand_launched_agent() {
     assert!(!relaunched.1, "a rediscovered agent must not be a preset");
     drop(again);
 
-    let _shell = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let _shell = ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     restore(&state, sid, relaunched);
     refresh_session_agent(&state, sid);
     assert_eq!(flags(&state, sid).0, None);
@@ -116,7 +116,7 @@ fn different_discovered_agent_drops_preset_and_is_revoked_on_exit() {
     let seen = flags(&state, sid);
     assert_eq!(seen, (Some("claude".into()), false, true));
     drop(probe);
-    let _shell = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let _shell = ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     restore(&state, sid, seen);
     refresh_session_agent(&state, sid);
     assert_eq!(flags(&state, sid).0, None);

@@ -119,7 +119,7 @@ fn repeat_refresh_does_not_move_the_recorded_offset() {
 fn shell_foreground_after_agent_exit_is_not_submittable() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "critic-1420r2-stale";
-    let probe = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    let probe = ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
     // What a previous refresh left behind while claude was foreground.
     state
         .session_maps
