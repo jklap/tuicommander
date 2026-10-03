@@ -29,7 +29,7 @@ fn composer_after(erase: &str) -> String {
 }
 
 // Catches an ECH count past the right margin (start + count beyond the width) not being clamped
-// into a "whole row" decision, or the latent flag resurrecting through a reflow resize cycle.
+// into a "whole row" decision, or the origin flag resurrecting through a reflow resize cycle.
 #[test]
 fn ech_count_far_past_right_margin_restores_origin_across_reflow_resize() {
     let mut g = purged();
@@ -129,7 +129,7 @@ fn reflow_truncation_splitting_a_wrapped_line_flags_the_continuation() {
     grid.resize(ReflowMode::All, 2, 5);
     let oldest = grid.topmost_line();
     assert_eq!(grid[oldest][Column(0)].c, 'b');
-    assert!(grid[oldest].copy_origin_unknown && grid[oldest].copy_predecessor_lost);
+    assert!(grid[oldest].copy_origin_unknown);
 }
 
 // Catches blank-only truncation (history 0, live screen) flagging the survivor.
@@ -140,5 +140,5 @@ fn reflow_truncation_of_a_leading_default_blank_row_keeps_survivor_known() {
     grid.resize(ReflowMode::All, 2, 5);
     let oldest = grid.topmost_line();
     assert_eq!(grid[oldest][Column(0)].c, 'b');
-    assert!(!grid[oldest].copy_origin_unknown && !grid[oldest].copy_predecessor_lost);
+    assert!(!grid[oldest].copy_origin_unknown);
 }

@@ -198,15 +198,8 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             let lost_content = (0..removed)
                 .any(|offset| !self.raw[Line(self.topmost_line().0 + offset as i32)].is_clear());
             self.raw.shrink_lines(removed);
-            let oldest = self.topmost_line();
             if lost_content {
-                self.raw[oldest].copy_predecessor_lost = true;
-            }
-            // Blank history is ineligible for cleanup, but its latent boundary
-            // loss becomes relevant again if that physical row returns live.
-            if (lost_content || self.raw[oldest].copy_predecessor_lost)
-                && (self.history_size() == 0 || !self.raw[oldest].is_clear())
-            {
+                let oldest = self.topmost_line();
                 self.raw[oldest].copy_origin_unknown = true;
             }
         }
@@ -236,22 +229,11 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
     pub fn drop_newest_history(&mut self, count: usize) -> usize {
         let old_history_size = self.history_size();
         let count = min(count, old_history_size);
-        let oldest = &self.raw[self.topmost_line()];
-        // An unwrapped last predecessor proves a fresh line origin, unless the
-        // removed oldest row already carries a real predecessor loss.
-        let unknown_predecessor = count != 0
-            && ((!oldest.is_clear() && oldest.copy_origin_unknown)
-                || self.raw[Line(-1)].last().is_some_and(|cell| {
-                    cell.flags().intersects(
-                        Flags::WRAPLINE | Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER,
-                    )
-                }));
+        let lost_content = (-(count as i32)..0).any(|line| !self.raw[Line(line)].is_clear());
         if count != 0 {
             self.raw.remove_newest_history(count);
-            if count == old_history_size && unknown_predecessor && !self.raw[Line(0)].is_clear() {
-                // Reprint-tail removal must not discard predecessor-loss provenance.
+            if lost_content {
                 self.raw[Line(0)].copy_origin_unknown = true;
-                self.raw[Line(0)].copy_predecessor_lost = true;
             }
             self.lines_scrolled = self.lines_scrolled.saturating_sub(count);
             // The oldest rows keep their place, so a viewport scrolled up keeps
@@ -446,12 +428,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         }
         if evicts_predecessor {
             let oldest = self.topmost_line();
-            self.raw[oldest].copy_predecessor_lost = true;
-            // The row can return live during resize; preserve loss even while
-            // blank retained history remains exempt from copy eligibility.
-            if self.history_size() == 0 || !self.raw[oldest].is_clear() {
-                self.raw[oldest].copy_origin_unknown = true;
-            }
+            self.raw[oldest].copy_origin_unknown = true;
         }
     }
 
@@ -539,9 +516,8 @@ impl<T> Grid<T> {
         let unknown_predecessor =
             (-(removed as i32)..0).any(|line| !self.raw[Line(line)].is_clear());
         self.raw.shrink_lines(removed);
-        if unknown_predecessor && !self.raw[Line(0)].is_clear() {
+        if unknown_predecessor {
             self.raw[Line(0)].copy_origin_unknown = true;
-            self.raw[Line(0)].copy_predecessor_lost = true;
         }
 
         // Reset display offset.

@@ -1998,7 +1998,6 @@ impl TerminalGrid {
             && grid[first_line][Column(1)].c == ' '
             // Lost provenance follows the physical row even when RI/IL moves it.
             && !grid[first_line].copy_origin_unknown
-            && !grid[first_line].copy_predecessor_lost
             && (first_line == grid.topmost_line()
                 || !grid[Line(first_line.0 - 1)][Column(num_cols - 1)]
                     .flags
@@ -2661,12 +2660,10 @@ mod tests {
         grid.process(b"aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n");
         grid.resize_with_mode(3, 20, ReflowMode::None);
         assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
-        assert!(grid.term().grid()[Line(0)].copy_predecessor_lost);
         grid.process(b"\x1b[41m\x1b#8");
         for line in 0..3 {
             let row = &grid.term().grid()[Line(line)];
             assert!(!row.copy_origin_unknown);
-            assert!(!row.copy_predecessor_lost);
             assert!(!row.reflow_wrap);
             for column in 0..20 {
                 let cell = &row[Column(column)];
@@ -2679,7 +2676,7 @@ mod tests {
         assert_eq!(grid.get_selection_text(0, 0, 0, 19), "hello");
     }
 
-    // Catches whole-row ECH leaving latent loss behind, or partial ECH inventing a fresh origin.
+    // Catches whole-row ECH leaving origin loss behind, or partial ECH inventing a fresh origin.
     #[test]
     fn copied_selection_ech_full_row_clears_loss_but_partial_keeps_literal() {
         for count in [19, 20, 999] {
@@ -2687,15 +2684,10 @@ mod tests {
             grid.process(b"aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n");
             grid.resize_with_mode(3, 20, ReflowMode::None);
             assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
-            assert!(grid.term().grid()[Line(0)].copy_predecessor_lost);
             grid.process(format!("\x1b[H\x1b[{count}X").as_bytes());
             let remains_unknown = count < 20;
             assert_eq!(
                 grid.term().grid()[Line(0)].copy_origin_unknown,
-                remains_unknown
-            );
-            assert_eq!(
-                grid.term().grid()[Line(0)].copy_predecessor_lost,
                 remains_unknown
             );
             grid.resize_with_mode(3, 24, ReflowMode::None);
@@ -2711,17 +2703,15 @@ mod tests {
         }
     }
 
-    // Catches reactivating latent predecessor loss after a full erase starts a new composer.
+    // Catches reactivating predecessor loss after a full erase starts a new composer.
     #[test]
-    fn copied_selection_full_screen_erase_clears_latent_loss_across_resize() {
+    fn copied_selection_full_screen_erase_clears_origin_across_resize() {
         let mut grid = TerminalGrid::new(2, 20, 1);
         let _ = grid.process("aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n".as_bytes());
         grid.resize_with_mode(3, 20, ReflowMode::None);
         assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
-        assert!(grid.term().grid()[Line(0)].copy_predecessor_lost);
         let _ = grid.process("\x1b[H\x1b[J❯ hello".as_bytes());
         assert!(!grid.term().grid()[Line(0)].copy_origin_unknown);
-        assert!(!grid.term().grid()[Line(0)].copy_predecessor_lost);
         grid.resize_with_mode(3, 24, ReflowMode::None);
         assert_eq!(grid.get_selection_text(0, 0, 0, 23), "hello");
     }

@@ -19,9 +19,8 @@ fn fill_wrapped(grid: &mut Grid<Cell>, line: i32, c: char) {
     grid[Line(line)][Column(9)].flags.insert(Flags::WRAPLINE);
 }
 
-// Catches treating a blank oldest HISTORY row as immutable forever: growing the screen pulls it
-// back to a live row (history 1 -> 0), where content written later continues the evicted wrapped
-// line but would read as a known line start.
+// Catches losing unknown origin when a blank history boundary is pulled live
+// (history 1 -> 0); it remains conservative until a full row erase.
 #[test]
 fn blank_oldest_history_row_pulled_back_by_grow_lines_keeps_loss() {
     let mut grid: Grid<Cell> = Grid::new(3, 10, 1);

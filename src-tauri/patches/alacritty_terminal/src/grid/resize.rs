@@ -44,14 +44,6 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             Ordering::Equal => (),
         }
 
-        // Resize can pull a blank loss boundary out of history and back live.
-        if self.history_size() == 0 {
-            let oldest = self.topmost_line();
-            if self.raw[oldest].copy_predecessor_lost {
-                self.raw[oldest].copy_origin_unknown = true;
-            }
-        }
-
         // Restore template cell.
         self.cursor.template = template;
     }
@@ -478,7 +470,6 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         if evicts_predecessor {
             if let Some(oldest) = reversed.last_mut() {
                 oldest.copy_origin_unknown = true;
-                oldest.copy_predecessor_lost = true;
             }
         }
         self.raw.replace_inner(reversed);

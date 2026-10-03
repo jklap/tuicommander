@@ -489,6 +489,5 @@ fn shrink_reflow_marks_lost_copy_origin_only_for_discarded_content() {
         let oldest = &grid[grid.topmost_line()];
         assert_eq!(oldest[Column(0)].c, '❯');
         assert_eq!(oldest.copy_origin_unknown, predecessor != ' ');
-        assert_eq!(oldest.copy_predecessor_lost, predecessor != ' ');
     }
 }
