@@ -41,7 +41,7 @@ pub enum NodeKind {
     Loop {
         max_iterations: u16,
     },
-    Join,
+    Join {},
     Notify,
     End,
 }
@@ -118,7 +118,7 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
                     );
                 }
             }
-            NodeKind::Join if workflow_kind != WorkflowKind::Story => {
+            NodeKind::Join {} if workflow_kind != WorkflowKind::Story => {
                 return Err("Join may combine only branches of one story attempt".into());
             }
             NodeKind::Loop { max_iterations } if !(1..=100).contains(max_iterations) => {
@@ -208,7 +208,7 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
                 node.id
             ));
         }
-        if matches!(node.kind, NodeKind::Join)
+        if matches!(node.kind, NodeKind::Join {})
             && incoming.get(node.id.as_str()).copied().unwrap_or(0) < 2
         {
             return Err(format!(
