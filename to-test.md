@@ -1,3 +1,7 @@
+## Remote hand-launched agent detection (1420-f3de) — Rust restart required
+
+- [ ] After Boss approves and loads the rebuilt desktop and remote daemon, use the configured Mac-mint connection through desktop MCP only: create a disposable shell PTY, start Claude by hand, confirm `agent_state` appears, submit one task after its composer is ready, send mail with a payload-free wake and read the reply. Check that a plain shell rejects submit with a cause and a corrective action. Do not restart or redeploy Mac-mint while its live PTYs must be preserved. Coordinator harness: `scripts/test-remote-mcp.py` from story 1419.
+
 ## Suspend Tab (1358-d008) — desktop menu
 
 - [ ] In the desktop app, right-click an idle agent tab: **Suspend Tab** is enabled; while the agent works or asks a question it is greyed out. Click it: the tab keeps its place and shows `zz`, the tab body shows "Suspended" with a Resume button, `ps` shows no process for it. Right-click it: **Resume Tab** is offered; click: a new shell opens in the same folder and the agent resumes its conversation. Suspend, quit and restart TUICommander: the tab is restored still suspended and not auto-resumed. Suspend a plain idle shell tab and repeat. _(Browser-mode part checked by tuic-1358-suspend; the Tauri window menu itself is not.)_
