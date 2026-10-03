@@ -1846,21 +1846,15 @@ duplicating an already retained destination message.
 Peer handshakes serialize per configured connection, so a mute daemon cannot hold
 mail calls to another host behind its network deadline. Session targets reject empty
 ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
-reads: it retains fingerprints of the last 100 forwarded ids per sender and registered
-recipient, without retaining message bodies. The cache holds at most 65,536
-ids globally and 1,024 per remote host. A host quota rejection names the host;
-one host cannot consume every other host's replay budget. Full 100-id windows
-can still rotate in place, and retained replays still deduplicate at either cap.
+reads: each registered recipient keeps a FIFO ring of the last 100 forwarded
+message ids and fingerprints, shared across senders, without retaining message
+bodies. A retained id with a different sender or body is rejected as an identity
+collision. Recipient unregister removes that recipient's ring; sender retirement
+does not. Beyond the last 100 ids, a retry may be delivered twice, including when
+another sender's burst pushes its id out of the ring. There are no global budgets,
+host quotas or sender eviction rules.
 
-There is no time expiry: the sender's outbox lives until acknowledgement.
-Only under global or host quota pressure, the cache reclaims all windows of
-the least-recently-active sender with no live peer shadow (within the pressured
-host when its quota is full). Live sender windows and the admitting sender's
-windows are never reclaimed, even if disconnect just retired its shadow. If no
-other departed sender can be reclaimed, admission fails with the quota error.
-Sender retirement alone preserves dedupe; recipient unregister frees only
-that recipient's records and quota. Accepted risk: a departed sender that
-reconnects after pressure evicted its history can deliver one duplicate.
 Disconnect retires that host's existing shadows synchronously, independently
-of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
-not unbounded or restart-persistent exactly-once delivery.
+of a pending handshake or a later reconnect generation. The registered-recipient
+check and enqueue remain atomic with recipient retirement. This is a bounded
+replay horizon, not unbounded or restart-persistent exactly-once delivery.

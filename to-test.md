@@ -4464,8 +4464,8 @@ or credential is touched.
 
 ## Remote desktop MCP routing (1419-ab18) — coordinated Rust rollout required
 
-- [ ] After Boss schedules the Rust restart, exercise a disposable host quota rejection, reconnect during a handshake, and departed-sender replay under pressure. The rejection must name only the flooded host, other hosts must still mail, and old shadows must disappear. A duplicate after departed-sender history eviction is an accepted retention risk. No desktop restart is performed by the implementer.
 
 - [ ] After Boss schedules the desktop restart and coordinator deploys the reviewed daemon build, run `scripts/test-remote-mcp.py --connection <Mac-mint-id> --session <disposable-agent> --exercise`. Confirm remote output/submit, destination wake and reply to the Mac. Run with `--second-connection` and `--second-session` for a disposable second daemon peer. The live desktop does not load Rust changes without a restart; never restart it or a daemon holding live PTYs just to perform this check.
 
-- [ ] After Boss schedules the Rust restart, verify forwarded mail under host quota pressure never clears the admitting sender's replay windows, including a disconnect between sender registration and enqueue. With no other departed sender, reject with the host quota error; otherwise reclaim only the other departed sender (#1419-ab18).
+
+- [ ] After Boss schedules the Rust restart, verify a forwarded notice retry does not enqueue again while its ID is within the recipient's last 100 forwarded IDs, including after inbox reads. A retry after 100 newer IDs may deliver again; unregister must clear only that recipient's ring (#1419-ab18).

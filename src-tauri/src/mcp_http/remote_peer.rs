@@ -44,39 +44,13 @@ pub(crate) struct RemoteMail {
     supervisors: DashMap<String, tokio::task::AbortHandle>,
 }
 
-const MAX_FORWARDED_RECORDS: usize = 65_536;
 const FORWARDED_WINDOW: usize = 100;
 const MAX_SHADOWS: usize = 1024;
-// One record per possible live shadow (1024), or ten complete 100-id windows
-// per host. This reserves global capacity for 64 equally busy hosts instead of
-// allowing one host to fill all 65536 slots through its recipients or shadows.
-const MAX_HOST_RECORDS: usize = MAX_SHADOWS;
 
-#[derive(Default)]
-struct SenderHistory {
-    records: usize,
-    last_active: u64,
-}
-
-fn sender_host(sender: &str) -> &str {
-    sender.split_once('/').map_or(sender, |(host, _)| host)
-}
-
-#[derive(Default)]
-struct RecipientHistory {
-    ids: HashMap<String, (String, [u8; 32])>,
-    senders: HashMap<String, VecDeque<String>>,
-}
-
-/// Native send checks registration under its identity lock before recording.
-/// Live sender windows survive pressure; recipient unregister releases its ids.
+/// Recipient retirement releases its ring; inbox reads preserve replay history.
 #[derive(Default)]
 struct ForwardedHistory {
-    recipients: HashMap<String, RecipientHistory>,
-    records: usize,
-    senders: HashMap<String, SenderHistory>,
-    hosts: HashMap<String, usize>,
-    activity: u64,
+    recipients: HashMap<String, VecDeque<(String, [u8; 32])>>,
 }
 
 struct HostLock {
@@ -93,7 +67,6 @@ pub(super) fn record_forwarded(
 ) -> Result<bool, String> {
     remember_forwarded(
         &mut state.remote_mail.forwarded_history.lock(),
-        state,
         recipient,
         message,
     )
@@ -110,16 +83,15 @@ pub(super) fn enqueue_forwarded(
     if !state.peer_agents.contains_key(recipient) {
         return Err("Forwarded recipient is no longer registered".into());
     }
-    if !remember_forwarded(&mut history, state, recipient, &message)? {
+    if !remember_forwarded(&mut history, recipient, &message)? {
         return Ok(None);
     }
     Ok(Some(state.push_agent_inbox(recipient, message)))
 }
 
-/// Pressure reclaims departed senders only; live windows reject growth visibly.
+/// A retry beyond the recipient's last 100 IDs may be delivered again.
 fn remember_forwarded(
     history: &mut ForwardedHistory,
-    state: &AppState,
     recipient: &str,
     message: &crate::state::AgentMessage,
 ) -> Result<bool, String> {
@@ -129,109 +101,19 @@ fn remember_forwarded(
     hasher.update(message.from_tuic_session.as_bytes());
     hasher.update(message.content.as_bytes());
     let fingerprint: [u8; 32] = hasher.finalize().into();
-    history.activity = history.activity.saturating_add(1);
-    if let Some(sender) = history.senders.get_mut(&message.from_tuic_session) {
-        sender.last_active = history.activity;
-    }
-    if let Some(records) = history.recipients.get(recipient)
-        && let Some((sender, previous)) = records.ids.get(&message.id)
-    {
-        return if sender == &message.from_tuic_session && *previous == fingerprint {
+    let ring = history.recipients.entry(recipient.to_string()).or_default();
+    if let Some((_, previous)) = ring.iter().find(|(id, _)| id == &message.id) {
+        return if *previous == fingerprint {
             Ok(false)
         } else {
             Err("Forwarded message identity collision".into())
         };
     }
-    let window_full = history
-        .recipients
-        .get(recipient)
-        .and_then(|records| records.senders.get(&message.from_tuic_session))
-        .is_some_and(|window| window.len() >= FORWARDED_WINDOW);
-    let host = sender_host(&message.from_tuic_session);
-    if !window_full {
-        loop {
-            let host_full = history.hosts.get(host).copied().unwrap_or(0) >= MAX_HOST_RECORDS;
-            let global_full = history.records >= MAX_FORWARDED_RECORDS;
-            if !host_full && !global_full {
-                break;
-            }
-            // No sound time expiry exists: the sender outbox lives until ack.
-            // Under pressure only, reclaim the least-recently-active departed
-            // sender. Retirement itself never purges dedupe. Accepted risk: a
-            // departed sender reconnecting after pressure eviction can deliver
-            // one duplicate. Live shadow windows are never eviction candidates.
-            // Disconnect can retire the admitting shadow between native_call
-            // registration and enqueue_forwarded; keep its windows regardless.
-            let oldest = history
-                .senders
-                .iter()
-                .filter(|(sender, _)| {
-                    sender.as_str() != message.from_tuic_session
-                        && !state.peer_agents.contains_key(sender.as_str())
-                        && (!host_full || sender_host(sender) == host)
-                })
-                .min_by_key(|(_, records)| records.last_active)
-                .map(|(sender, _)| sender.clone());
-            let Some(oldest) = oldest else {
-                return Err(if host_full {
-                    format!(
-                        "Forwarded sender host '{host}' replay quota is full; new message was not queued"
-                    )
-                } else {
-                    "Forwarded replay history is full; new message was not queued".into()
-                });
-            };
-            forget_sender(history, &oldest);
-        }
-        history.records += 1;
-        *history.hosts.entry(host.to_string()).or_default() += 1;
-        history
-            .senders
-            .entry(message.from_tuic_session.clone())
-            .or_default()
-            .records += 1;
+    if ring.len() == FORWARDED_WINDOW {
+        ring.pop_front();
     }
-    history
-        .senders
-        .get_mut(&message.from_tuic_session)
-        .expect("recorded sender")
-        .last_active = history.activity;
-    let records = history.recipients.entry(recipient.to_string()).or_default();
-    let window = records
-        .senders
-        .entry(message.from_tuic_session.clone())
-        .or_default();
-    if window_full && let Some(oldest) = window.pop_front() {
-        records.ids.remove(&oldest);
-    }
-    window.push_back(message.id.clone());
-    records.ids.insert(
-        message.id.clone(),
-        (message.from_tuic_session.clone(), fingerprint),
-    );
+    ring.push_back((message.id.clone(), fingerprint));
     Ok(true)
-}
-
-fn forget_sender(history: &mut ForwardedHistory, sender: &str) {
-    let Some(sender_records) = history.senders.remove(sender) else {
-        return;
-    };
-    history.records -= sender_records.records;
-    let host = sender_host(sender);
-    if let Some(records) = history.hosts.get_mut(host) {
-        *records -= sender_records.records;
-        if *records == 0 {
-            history.hosts.remove(host);
-        }
-    }
-    history.recipients.retain(|_, records| {
-        if let Some(window) = records.senders.remove(sender) {
-            for id in window {
-                records.ids.remove(&id);
-            }
-        }
-        !records.ids.is_empty()
-    });
 }
 
 /// Every peer retirement uses this path so replay history cannot outlive the
@@ -239,24 +121,7 @@ fn forget_sender(history: &mut ForwardedHistory, sender: &str) {
 pub(crate) fn unregister_peer(state: &AppState, recipient: &str) {
     let mut history = state.remote_mail.forwarded_history.lock();
     state.peer_agents.remove(recipient);
-    if let Some(records) = history.recipients.remove(recipient) {
-        history.records -= records.ids.len();
-        for (sender, window) in records.senders {
-            if let Some(sender_records) = history.senders.get_mut(&sender) {
-                sender_records.records -= window.len();
-                if sender_records.records == 0 {
-                    history.senders.remove(&sender);
-                }
-            }
-            let host = sender_host(&sender);
-            if let Some(host_records) = history.hosts.get_mut(host) {
-                *host_records -= window.len();
-                if *host_records == 0 {
-                    history.hosts.remove(host);
-                }
-            }
-        }
-    }
+    history.recipients.remove(recipient);
 }
 
 fn host_lock(state: &AppState, id: &str) -> Arc<HostLock> {
@@ -846,8 +711,6 @@ async fn native_call(
         if state.peer_agents.len() >= MAX_SHADOWS && !state.peer_agents.contains_key(&identity) {
             return json!({"error":"Too many remote peer identities"});
         }
-        // Serialize shadow registration with replay eviction's liveness check.
-        let _history_guard = state.remote_mail.forwarded_history.lock();
         // Qualified shadow peers can never bind or impersonate a local PTY.
         state
             .peer_agents
@@ -1381,6 +1244,48 @@ mod tests {
             timestamp: 0,
             delivered_via_channel: false,
         }
+    }
+
+    // Catches: sender-specific windows retain IDs beyond the shared recipient horizon,
+    // or ring overflow drops a still-retained ID instead of the oldest one.
+    #[tokio::test]
+    async fn remote_peer_recipient_ring_retains_only_the_last_100_ids_across_senders() {
+        let state = test_state();
+        let (_, recipient) = peer(&state, "recipient").await;
+        let first = forwarded("oldest", "sender-a");
+        assert!(
+            enqueue_forwarded(&state, &recipient, first.clone())
+                .unwrap()
+                .is_some()
+        );
+        state.agent_inbox.remove(&recipient);
+        assert_eq!(
+            enqueue_forwarded(&state, &recipient, first.clone()),
+            Ok(None)
+        );
+        for n in 1..=100 {
+            assert!(
+                enqueue_forwarded(
+                    &state,
+                    &recipient,
+                    forwarded(&format!("id-{n}"), "sender-b")
+                )
+                .unwrap()
+                .is_some()
+            );
+        }
+        assert_eq!(
+            enqueue_forwarded(&state, &recipient, forwarded("id-1", "sender-b")),
+            Ok(None)
+        );
+        assert!(
+            enqueue_forwarded(&state, &recipient, first)
+                .unwrap()
+                .is_some()
+        );
+        let inbox = state.agent_inbox.get(&recipient).unwrap();
+        assert_eq!(inbox.back().unwrap().id, "oldest");
+        assert_eq!(inbox.iter().filter(|m| m.id == "oldest").count(), 1);
     }
 
     // Catches: peer retirement leaks its replay budget or erases another peer's ids.
