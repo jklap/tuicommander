@@ -196,7 +196,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         if current_history_size > history_size {
             self.raw.shrink_lines(current_history_size - history_size);
             let oldest = self.topmost_line();
-            self.raw[oldest].copy_origin_unknown = true;
+            if !self.raw[oldest].is_clear() {
+                self.raw[oldest].copy_origin_unknown = true;
+            }
         }
         self.display_offset = min(self.display_offset, history_size);
         self.max_scroll_limit = history_size;
@@ -224,10 +226,16 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
     pub fn drop_newest_history(&mut self, count: usize) -> usize {
         let old_history_size = self.history_size();
         let count = min(count, old_history_size);
-        let unknown_predecessor = (-(count as i32)..0).any(|line| {
-            let row = &self.raw[Line(line)];
-            row.copy_origin_unknown || !row.is_clear()
-        });
+        let oldest = &self.raw[self.topmost_line()];
+        // An unwrapped last predecessor proves a fresh line origin, unless the
+        // removed oldest row already carries a real predecessor loss.
+        let unknown_predecessor = count != 0
+            && ((!oldest.is_clear() && oldest.copy_origin_unknown)
+                || self.raw[Line(-1)].last().is_some_and(|cell| {
+                    cell.flags().intersects(
+                        Flags::WRAPLINE | Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER,
+                    )
+                }));
         if count != 0 {
             self.raw.remove_newest_history(count);
             if count == old_history_size && unknown_predecessor && !self.raw[Line(0)].is_clear() {
@@ -513,10 +521,8 @@ impl<T> Grid<T> {
     {
         // Explicitly purge all lines from history without changing absolute row ids.
         let removed = self.history_size();
-        let unknown_predecessor = (-(removed as i32)..0).any(|line| {
-            let row = &self.raw[Line(line)];
-            row.copy_origin_unknown || !row.is_clear()
-        });
+        let unknown_predecessor =
+            (-(removed as i32)..0).any(|line| !self.raw[Line(line)].is_clear());
         self.raw.shrink_lines(removed);
         if unknown_predecessor && !self.raw[Line(0)].is_clear() {
             self.raw[Line(0)].copy_origin_unknown = true;
