@@ -119,6 +119,13 @@ describe("remote terminal replay health", () => {
 		await vi.advanceTimersByTimeAsync(0);
 		expect(errors).toHaveLength(1);
 		expect(String(errors[0])).toContain("unknown WebSocket frame tag");
+		await vi.advanceTimersByTimeAsync(1_000);
+		expect(Socket.instances).toHaveLength(2);
+		Socket.instances[1].onopen?.();
+		Socket.instances[1].onmessage?.({ data: replay });
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(Socket.instances).toHaveLength(2);
+		expect(errors).toHaveLength(1);
 	});
 	// Catches: successful handshakes reset retry attempts even though no replay arrived, creating an infinite reconnect loop.
 	it("bounds retries when each reopened socket closes before replay", async () => {

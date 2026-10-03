@@ -12,7 +12,9 @@ vi.mock("../../components/Terminal/canvasTerminalTransport", async (importOrigin
 	createTransport: () => ({
 		onStreamError: (handler: (error: unknown) => void) => eventHandlers.set("stream-error", handler),
 		onEvent: vi.fn(async (type: string, handler: (error: unknown) => void) => {
-			eventHandlers.set(type, handler);
+			// Stream failures are WS-local callbacks, never PTY events.
+			// Catches reverting the consumer to an orphan Tauri listener.
+			if (type !== "stream-error") eventHandlers.set(type, handler);
 		}),
 		subscribe,
 		unsubscribe,
