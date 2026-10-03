@@ -1908,6 +1908,24 @@ impl TerminalGrid {
         let mut index = 0;
 
         while index < lines.len() {
+            // Claude's composer supplies one prompt glyph and a two-column
+            // continuation margin. A second glyph belongs to the pasted input.
+            if let Some(first) = lines[index].strip_prefix("❯ ") {
+                let mut contents = vec![first];
+                index += 1;
+                while index < lines.len() {
+                    let Some(content) = lines[index].strip_prefix("  ") else {
+                        break;
+                    };
+                    if content.is_empty() || gutter_content(lines[index]).is_some() {
+                        break;
+                    }
+                    contents.push(content);
+                    index += 1;
+                }
+                out.extend(reflow_copied_run(&contents, num_cols, 2));
+                continue;
+            }
             if gutter_content(lines[index]).is_none() {
                 out.push(lines[index].to_string());
                 index += 1;
@@ -1931,7 +1949,7 @@ impl TerminalGrid {
                 >= 2;
 
             if should_strip {
-                out.extend(reflow_quoted_run(&contents, num_cols));
+                out.extend(reflow_copied_run(&contents, num_cols, 4));
             } else {
                 out.extend(lines[run_start..index].iter().map(|line| line.to_string()));
             }
@@ -2517,9 +2535,7 @@ fn gutter_content(line: &str) -> Option<&str> {
 ///
 /// Blank rows, list markers and deeper indents always start a new line: they
 /// mark structure the author chose, which the width rule alone cannot see.
-fn reflow_quoted_run(contents: &[&str], num_cols: usize) -> Vec<String> {
-    // Gutter overhead: two indent cells, the bar, and the separator space.
-    const GUTTER_COLS: usize = 4;
+fn reflow_copied_run(contents: &[&str], num_cols: usize, margin_cols: usize) -> Vec<String> {
     // Room for an agent's own right margin plus the ragged edge a greedy
     // wrapper leaves when the overflowing word is long.
     const WRAP_EVIDENCE_SLACK: usize = 24;
@@ -2532,7 +2548,7 @@ fn reflow_quoted_run(contents: &[&str], num_cols: usize) -> Vec<String> {
         .map(|line| line.chars().count())
         .max()
         .unwrap_or(0);
-    let wrap_threshold = num_cols.saturating_sub(GUTTER_COLS + WRAP_EVIDENCE_SLACK);
+    let wrap_threshold = num_cols.saturating_sub(margin_cols + WRAP_EVIDENCE_SLACK);
     if num_cols < MIN_REFLOW_COLS || width < wrap_threshold {
         return contents.iter().map(|line| (*line).to_string()).collect();
     }
@@ -5045,6 +5061,43 @@ mod tests {
         // Row 0: "abcdefghij" (WRAPLINE), Row 1: "klmno" (no wrap), Row 2: "second"
         let text = grid.get_selection_text(0, 0, 2, 5);
         assert_eq!(text, "abcdefghijklmno\nsecond");
+    }
+
+    // Catches raw Claude prompt chrome/width wraps leaking into copied text.
+    #[test]
+    fn copied_selection_normalizes_captured_claude_prompt_without_losing_typed_break() {
+        let capture = include_str!("fixtures/claude-prompt-copy-1411.txt");
+        let mut grid = TerminalGrid::new(5, 148, 0);
+        let _ = grid.process(capture.replace('\n', "\r\n").as_bytes());
+        let expected = concat!(
+            "❯ la porta del piano terra non si apre piu, dipende da qualche script o errore del codice che la manda in blocco? nel senso che se digito il codice\n",
+            "  di apertura sulla tastiera non succede nulla!!"
+        );
+        assert_eq!(grid.get_selection_text(0, 0, 2, 147), expected);
+        // Reversed drag coordinates must use the same normalization seam.
+        assert_eq!(grid.get_selection_text(2, 147, 0, 0), expected);
+        // Selecting only the continuation has no prompt anchor: keep content.
+        assert_eq!(
+            grid.get_selection_text(1, 0, 2, 147),
+            "  codice\n    di apertura sulla tastiera non succede nulla!!"
+        );
+    }
+
+    // Catches prompt cleanup consuming code/table content or short typed lines.
+    #[test]
+    fn copied_selection_preserves_unanchored_code_tables_and_short_prompt_breaks() {
+        let mut grid = TerminalGrid::new(8, 80, 0);
+        let _ = grid.process(b"    let x = 1;\r\n    | key | value |\r\n");
+        assert_eq!(
+            grid.get_selection_text(0, 0, 1, 79),
+            "    let x = 1;\n    | key | value |"
+        );
+        let mut grid = TerminalGrid::new(8, 80, 0);
+        let _ = grid.process("❯ first typed line\r\n  second typed line\r\n    indented code\r\n  ▎ first quote\r\n  ▎ second quote".as_bytes());
+        assert_eq!(
+            grid.get_selection_text(0, 0, 4, 79),
+            "first typed line\nsecond typed line\n  indented code\nfirst quote\nsecond quote"
+        );
     }
 
     #[test]
