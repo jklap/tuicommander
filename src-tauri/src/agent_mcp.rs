@@ -445,9 +445,7 @@ fn locate_installed_bridge(source: Option<&std::path::Path>) -> Option<PathBuf> 
     use sha2::{Digest, Sha256};
     if let Some(bytes) = source.and_then(|path| std::fs::read(path).ok()) {
         let target = bridge_install_path(&Sha256::digest(&bytes));
-        if usable_executable(&target) {
-            return Some(target);
-        }
+        return installed_revision_is_valid(&target).then_some(target);
     }
     std::fs::read_dir(crate::config::config_dir().join("mcp-bridge"))
         .ok()?
@@ -459,7 +457,7 @@ fn locate_installed_bridge(source: Option<&std::path::Path>) -> Option<PathBuf> 
                 return None;
             }
             let path = bridge_path_in(&entry.path());
-            if !usable_executable(&path) {
+            if !installed_revision_is_valid(&path) {
                 return None;
             }
             Some((path.metadata().ok()?.modified().ok()?, path))
@@ -468,12 +466,36 @@ fn locate_installed_bridge(source: Option<&std::path::Path>) -> Option<PathBuf> 
         .map(|(_, path)| path)
 }
 
+fn installed_revision_is_valid(path: &std::path::Path) -> bool {
+    use sha2::{Digest, Sha256};
+    let Some(revision) = path
+        .parent()
+        .and_then(|dir| dir.file_name())
+        .and_then(|name| name.to_str())
+    else {
+        return false;
+    };
+    usable_executable(path)
+        && std::fs::read(path).is_ok_and(|bytes| hex::encode(Sha256::digest(bytes)) == revision)
+}
+
 fn bridge_install_path(digest: &[u8]) -> PathBuf {
     bridge_path_in(
         &crate::config::config_dir()
             .join("mcp-bridge")
             .join(hex::encode(digest)),
     )
+}
+
+/// Publication is permitted only for one SHA-256 revision observed before,
+/// during and after copying. This decision owns both mismatch cases.
+pub(crate) fn verified_revision(
+    source_before: &[u8],
+    copy: &[u8],
+    source_after: &[u8],
+) -> Option<String> {
+    (source_before.len() == 32 && source_before == copy && source_before == source_after)
+        .then(|| hex::encode(source_before))
 }
 
 /// The copy must independently match the initial digest: copying the already
@@ -489,10 +511,15 @@ fn copy_verified_bridge(
         std::fs::read(temp.path()).map_err(|e| format!("Failed to verify bridge copy: {e}"))?;
     let current =
         std::fs::read(source).map_err(|e| format!("Failed to verify bridge source: {e}"))?;
-    if &Sha256::digest(&copied)[..] != expected || &Sha256::digest(&current)[..] != expected {
-        return Err("Bridge source changed during installation; leaving configs unchanged".into());
-    }
-    Ok(())
+    verified_revision(
+        expected,
+        &Sha256::digest(&copied),
+        &Sha256::digest(&current),
+    )
+    .ok_or_else(|| {
+        "Bridge source changed during installation; leaving configs unchanged".to_string()
+    })
+    .map(|_| ())
 }
 
 /// Content-addressed copies outlive target cleanup and app upgrades. Never rewrite
@@ -4614,24 +4641,25 @@ mod tests {
         }
     }
 
-    /// Catches: copying a source that changed after hashing and publishing it
-    /// under the old digest, instead of rejecting the mismatched executable.
+    /// Catches: accepting a matching copy after the source changed, or accepting
+    /// mismatched copied bytes (including when copy and final source agree).
     #[test]
-    fn bridge_copy_rejects_a_source_changed_after_the_initial_hash() {
-        use sha2::{Digest, Sha256};
-        let (_guard, config_dir) = with_temp_config_dir();
-        let dir = TempDir::new().unwrap();
-        let original = b"original executable bytes";
-        let source = fake_bridge(dir.path(), original);
-        let digest = Sha256::digest(original);
-        std::fs::write(&source, b"source replaced while linking").unwrap();
-        let mut temp = tempfile::NamedTempFile::new_in(config_dir.path()).unwrap();
-        let temp_path = temp.path().to_path_buf();
-        let error = copy_verified_bridge(&source, &mut temp, &digest).unwrap_err();
-        assert!(error.contains("changed during installation"));
-        drop(temp);
-        assert!(!temp_path.exists());
-        assert!(!config_dir.path().join("mcp-bridge").exists());
+    fn verified_revision_rejects_each_copy_or_source_mismatch() {
+        let initial = [0x11; 32];
+        let changed = [0x22; 32];
+        let revision = "1111111111111111111111111111111111111111111111111111111111111111";
+        for (before, copied, after, expected) in [
+            (&initial[..], &initial[..], &initial[..], Some(revision)),
+            (&initial[..], &initial[..], &changed[..], None),
+            (&initial[..], &changed[..], &initial[..], None),
+            (&initial[..], &changed[..], &changed[..], None),
+            (&[][..], &[][..], &[][..], None),
+        ] {
+            assert_eq!(
+                verified_revision(before, copied, after).as_deref(),
+                expected
+            );
+        }
     }
 
     // --- critic-1415r3 ---
@@ -4689,9 +4717,30 @@ mod tests {
         assert_eq!(std::fs::read(&bad).unwrap(), b"{malformed");
         let command = command_at_spec(&spec_at(good));
         assert!(
-            std::path::Path::new(&command).is_absolute() && usable_executable(std::path::Path::new(&command)),
+            std::path::Path::new(&command).is_absolute()
+                && usable_executable(std::path::Path::new(&command)),
             "{command}"
         );
         assert_ne!(command, source.to_string_lossy());
+    }
+    /// Catches: returning a valid older revision when the source has changed,
+    /// making a manual setup snippet select a stale protocol executable.
+    #[test]
+    fn bridge_info_does_not_report_an_old_revision_for_a_changed_source() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"old bridge revision");
+        let old = install_bridge_binary(&source).unwrap();
+        std::fs::write(&source, b"new bridge revision").unwrap();
+        assert_eq!(
+            bridge_info_from_location(Some(&source)).bridge_path,
+            BRIDGE_NAME
+        );
+        assert_eq!(std::fs::read(&old).unwrap(), b"old bridge revision");
+        // Without an available source, a verified installed copy remains useful.
+        assert_eq!(
+            bridge_info_from_location(None).bridge_path,
+            old.to_str().unwrap()
+        );
     }
 }
