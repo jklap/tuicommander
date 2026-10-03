@@ -2492,6 +2492,7 @@ fn begin_session_submit(
             "acknowledged": false,
             "retry_safe": true,
             "reason": "session_not_found",
+            "detail": crate::pty::agent_submission_rejection_detail(state, &session_id, "session_not_found"),
             "turn_epoch": turn_epoch,
             "composer_state": "unknown",
         }));
@@ -2505,6 +2506,7 @@ fn begin_session_submit(
             "acknowledged": false,
             "retry_safe": true,
             "reason": "observation_unavailable",
+            "detail": crate::pty::agent_submission_rejection_detail(state, &session_id, "observation_unavailable"),
             "turn_epoch": turn_epoch,
             "composer_state": "unknown",
         }));
@@ -2528,6 +2530,7 @@ fn begin_session_submit(
             "acknowledged": false,
             "retry_safe": true,
             "reason": reason,
+            "detail": crate::pty::agent_submission_rejection_detail(state, &session_id, reason),
             "turn_epoch": submission_turn_epoch(state, &session_id),
             "composer_state": composer_state,
             // What is actually parked ahead of this submission, by id and kind.
@@ -4679,11 +4682,14 @@ fn handle_agent_with_parent_cwd(
             // from the first output chunk and intent/suggest tokens are parsed
             // without waiting on foreground polling. Seeded before registration
             // because that is what publishes `session-created`.
-            let mut session_state = crate::state::SessionState::default();
+            let mut session_state = crate::state::SessionState {
+                spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
+                ..Default::default()
+            };
             if effective_agent_type.is_some() {
                 session_state.hook_instrumented =
                     crate::pty::hook_instrumented_for(&agents_cfg, effective_agent_type.as_deref());
-                session_state.agent_type = effective_agent_type.clone();
+                session_state.seed_configured_agent(effective_agent_type.clone());
             }
             state
                 .session_maps
@@ -5853,10 +5859,10 @@ fn handle_messaging_with_message_id(
                     .expect("send response is an object");
                 object.insert(
                     "warning".to_string(),
-                    serde_json::json!(if managed_recipient {
-                        "Recipient has a terminal but could not take the message and has no active wait — it stays in the inbox until the recipient reads it."
+                    serde_json::json!(if let Some(pty_session) = live_pty.as_deref() {
+                        crate::pty::agent_mail_wake_detail(state, pty_session)
                     } else {
-                        "Recipient has NO terminal and no active wait: nothing will wake it. The message stays in its inbox until it calls agent action=wait/inbox. If you need an answer, do not block on it."
+                        "Recipient has NO terminal and no active wait: nothing will wake it. The message stays in its inbox until it calls agent action=wait/inbox. If you need an answer, do not block on it.".to_string()
                     }),
                 );
             }
@@ -11015,6 +11021,9 @@ mod tests {
         state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState {
+                // This composer shim represents a known direct agent root;
+                // foreground discovery is not part of the delivery fixture.
+                spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
                 agent_type: Some("codex".to_string()),
                 ..Default::default()
             },
@@ -11360,6 +11369,55 @@ mod tests {
         assert_eq!(response["timeout_ms"], SUBMIT_ACK_MIN_MS);
     }
 
+    /// Catches: a shell-only PTY reports opaque not_managed_agent/inbox_only
+    /// receipts, leaving callers to retry blindly or inject raw input unsafely.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_submit_and_mail_plain_shell_rejections_explain_detection() {
+        let state = test_state();
+        let probe =
+            crate::test_support::ForegroundIdentityProbe::new(state.clone(), TEST_UUID_B, "bash");
+        state
+            .session_maps
+            .output_buffers
+            .insert(TEST_UUID_B.into(), Mutex::new(OutputRingBuffer::new(4096)));
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "shell", "mcp-recipient");
+        let receipt = handle_mcp_tool_call(&state, loopback_addr(), "session", &serde_json::json!({
+            "action": "submit", "session_id": TEST_UUID_B, "input": "do not type this into a shell",
+        }), None).await;
+        assert_eq!(receipt["reason"], "not_managed_agent");
+        let detail = receipt["detail"].as_str().unwrap();
+        assert!(detail.contains("foreground process: bash"), "{receipt}");
+        assert!(detail.contains("Start a supported agent"), "{receipt}");
+        assert!(
+            detail.contains("TUIC_SESSION identifies the terminal, not an agent"),
+            "{receipt}"
+        );
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": TEST_UUID_B, "message": "mail payload",
+            }),
+            Some("mcp-sender"),
+        );
+        assert_eq!(sent["delivery_path"], "inbox_only", "{sent}");
+        let warning = sent["warning"].as_str().unwrap();
+        assert!(warning.contains("foreground process: bash"), "{sent}");
+        assert!(warning.contains("agent action=inbox or wait"), "{sent}");
+        assert!(probe.bytes.lock().unwrap().is_empty());
+        assert_eq!(
+            state
+                .agent_inbox
+                .get(TEST_UUID_B)
+                .unwrap()
+                .back()
+                .unwrap()
+                .content,
+            "mail payload"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn session_submit_rejects_a_preexisting_partial_composer() {
@@ -11391,6 +11449,13 @@ mod tests {
         assert_eq!(response["write_state"], "not_started");
         assert_eq!(response["retry_safe"], true);
         assert_eq!(response["reason"], "partial_composer");
+        let detail = response["detail"]
+            .as_str()
+            .expect("actionable rejection detail");
+        assert_eq!(
+            detail,
+            "The composer contains unfinished user input. Submit or clear that input before sending another command."
+        );
         assert_eq!(response["composer_state"], "partial");
         assert!(bytes.lock().unwrap().is_empty());
         assert_eq!(
@@ -15666,6 +15731,9 @@ mod tests {
         state.session_maps.session_states.insert(
             session_id.to_string(),
             crate::state::SessionState {
+                // This composer shim represents a known direct agent root;
+                // foreground discovery is not part of the delivery fixture.
+                spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
                 agent_type: Some(agent_type.to_string()),
                 suggested_actions: Some(vec!["old completion".to_string()]),
                 ..Default::default()
@@ -22811,6 +22879,28 @@ mod tests {
         assert!(result.get("error").is_none(), "spawn failed: {result}");
         assert_eq!(result["name"], "linux-primary");
         let session_id = result["session_id"].as_str().unwrap();
+        // Catches: MCP direct spawn loses its root role, allowing shell-return
+        // revocation to misclassify the agent's own root process.
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .spawn_root_role,
+            crate::state::SpawnRootRole::DirectProgram
+        );
+        assert!(
+            state
+                .session_maps
+                .sessions
+                .get(session_id)
+                .unwrap()
+                .lock()
+                ._child
+                .process_id()
+                .is_some()
+        );
         let created = events
             .try_recv()
             .expect("named spawn must emit session-created");

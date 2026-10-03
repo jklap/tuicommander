@@ -15,6 +15,9 @@
 ## Stable MCP bridge (1415-ef32) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, confirm the primary instance migrates Claude and private Claude MCP commands to `mcp-bridge/<sha256>/tuic-bridge` under its config directory. Start a disposable Claude session and confirm MCP initialize succeeds. Existing desktop Rust code does not hot-reload. Target cleanup and executable lifetime are covered by the targeted regression tests; real Claude startup after the desktop restart remains to check.
+## Remote hand-launched agent detection (1420-f3de) — Rust restart required
+
+- [ ] After Boss approves and loads the rebuilt desktop and remote daemon, use the configured Mac-mint connection through desktop MCP only: create a disposable shell PTY, start Claude by hand, confirm `agent_state` appears, submit one task after its composer is ready, send mail with a payload-free wake and read the reply. Check that a plain shell rejects submit with a cause and a corrective action. Do not restart or redeploy Mac-mint while its live PTYs must be preserved. Coordinator harness: `scripts/test-remote-mcp.py` from story 1419.
 
 ## Suspend Tab (1358-d008) — desktop menu
 
@@ -4523,3 +4526,6 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 ## Debug sidecars for `make dev` / `make test` (1465-3d95) — desktop restart required
 
 - [ ] After a fresh `make dev` (or `make test`) on a checkout with an empty `src-tauri/target`, confirm `src-tauri/target/debug/tuic-bridge` and `tuic` exist and the app finds the bridge (`locate_bridge_binary`). After editing `crates/tuic-bridge/src`, restart: the bridge mtime must change. Do not launch a second desktop instance from an agent lane.
+- [ ] After the approved daemon update, launch Claude manually on the configured Mac-mint connection, exit back to the shell, and verify submit/mail no longer write there; a run-config preset must survive shell startup (#1420-f3de).
+
+- [ ] After the coordinated rebuild, verify shell-root return revokes a manually launched agent regardless of shell basename; a bash-script wrapper is observed, and a nested subshell under a directly spawned agent holds submit/mail until the agent regains foreground (#1420-f3de). Do not restart live PTYs for this check.

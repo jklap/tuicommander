@@ -1068,6 +1068,7 @@ immediately before Enter. One response returns:
 | `turn_epoch` | Epoch advanced by the shared input FSM |
 | `composer_state` | Tracked `InputLineBuffer`: `cleared`, `partial`, `empty`, or `unknown`; not the application's semantic state |
 | `acknowledgement` / `reason` | Terminal-movement evidence or the precise rejection/timeout |
+| `detail` | For pre-write rejections, a human-readable cause and corrective action; unknown agent identity includes the current foreground process |
 
 The acknowledgement does not claim semantic application acceptance or task
 success. Default acknowledgement timeout is 3,000 ms; callers may request
