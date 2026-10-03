@@ -1830,9 +1830,9 @@ When MCP-only (localhost):
 
 ## Security Model
 
-- **Default:** Localhost-only, no authentication, opt-in
-- **Remote access:** Configurable port, Basic Auth required
-- **CORS:** Enabled for all origins (browser mode support)
+- **Default:** Local IPC (Unix socket or Windows named pipe), with filesystem/user access controls and no HTTP credentials. The TCP listener is opt-in.
+- **HTTP authentication:** Every protected TCP request needs the existing URL token, session cookie or Basic Auth, including loopback and LAN clients. The legacy `lan_auth_bypass` preference no longer bypasses HTTP authentication. Login assets and CORS preflight are public; the headless health probe remains public.
+- **Request boundary:** Before authentication, every TCP request validates one Host authority (localhost, loopback/private literal IP, actual local interface IP, or the detected Tailscale FQDN). Missing, duplicate or foreign Host is rejected with 403. An Origin must be an exact bundled WebView/Vite origin or the HTTP/HTTPS origin of that validated Host. Foreign and opaque origins are rejected with 403 even with valid credentials. Cross-site browser requests are refused except from the explicit bundled/development origins. CORS uses the same origin policy and never a wildcard. Native clients without Origin still authenticate.
 - **Compression:** Gzip and Brotli via `CompressionLayer` (responses >860 bytes, auto-negotiated). SSE and WebSocket excluded by `DefaultPredicate`
 - **No TLS:** Intended for local network use; use SSH tunnel for remote
 - **Loopback-only session actions:** `session create`, `submit`, `input`, `kill`, `close`, `pause`, and `resume` are restricted to loopback connections — a non-loopback (remote/LAN) MCP client cannot pause/resume sessions, write to PTYs, or spawn/destroy sessions (those remain read-only: `list`, `output`, `status`)
@@ -1905,3 +1905,7 @@ Disconnect retires that host's existing shadows synchronously, independently
 of a pending handshake or a later reconnect generation. The registered-recipient
 check and enqueue remain atomic with recipient retirement. This is a bounded
 replay horizon, not unbounded or restart-persistent exactly-once delivery.
+
+## Telegram adapter groundwork
+
+The offline `telegram` module holds owner/config/API and SQLite inbound boundaries (story 1438-79b4). It is not started by desktop or daemon boot and registers no MCP tool yet. `MailPort` requires idempotent stable-ID insertion and safe wake from the future native-mail integration; consumption must be committed at the inbox read boundary. These integrations await 1419/1420. See [the approved design](../design/telegram-channel.md) for the proposed tool, authorization and receipt contract.

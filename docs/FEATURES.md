@@ -2430,6 +2430,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
   desktop restart so Connect can rejoin the same daemon
 
 ### 24.3 Authentication
+- Both desktop and `tuic-remote` require credentials on protected TCP requests, including loopback and LAN. Origin/Host checks reject foreign websites and DNS rebinding before any handler. Local IPC retains its existing trust.
 - `tuic-remote` authenticates every TCP request: the headless build has no loopback bypass and `run_remote` forces `lan_auth_bypass` off, so an SSH tunnel does not make it local. `GET /health` is the only unauthenticated route
 - On connect, the backend trades the vault password for the daemon's session token (`GET /api/auth/session-token`, Basic Auth) — in Rust, so the password never reaches the WebView
 - The token is appended as `?token=` to HTTP, the terminal WebSocket and the `/events` SSE stream by the single helper `withRemoteToken` (`transportRuntime.ts`). A WS upgrade cannot set a header and `Access-Control-Allow-Origin: *` rules out credentialed cookies, so the query string is the only credential all three share
