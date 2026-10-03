@@ -14,7 +14,13 @@ fn state() -> Arc<crate::state::AppState> {
 fn refresh_of_an_unknown_session_is_none_and_leaves_no_state() {
     let state = state();
     assert_eq!(refresh_session_agent(&state, "no-such-session"), None);
-    assert!(state.session_maps.session_states.get("no-such-session").is_none());
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get("no-such-session")
+            .is_none()
+    );
 }
 
 /// Catches: lock-order inversion or lost update when IPC, HTTP and the backend
@@ -39,9 +45,18 @@ fn concurrent_refreshes_agree_and_do_not_deadlock() {
             .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
-    assert!(results.iter().all(|r| r.as_deref() == Some("claude")), "{results:?}");
+    assert!(
+        results.iter().all(|r| r.as_deref() == Some("claude")),
+        "{results:?}"
+    );
     assert_eq!(
-        state.session_maps.session_states.get(sid).unwrap().agent_type.as_deref(),
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
         Some("claude")
     );
 }
@@ -59,7 +74,10 @@ fn not_managed_agent_detail_names_the_process_but_never_a_path() {
     assert!(!detail.contains('/') && !detail.contains('\\'), "{detail}");
     assert!(matches!(
         crate::pty::write_agent_submission_to_pty(&state, sid, "x"),
-        AgentSubmissionWrite::Rejected { reason: "not_managed_agent", .. }
+        AgentSubmissionWrite::Rejected {
+            reason: "not_managed_agent",
+            ..
+        }
     ));
     drop(probe);
     let gone = agent_submission_rejection_detail(&state, sid, "not_managed_agent");
