@@ -66,7 +66,11 @@ fn ed2_over_a_full_zero_scrollback_screen_leaves_row_zero_known() {
         let _ = g.process("a\r\nb\r\nc".as_bytes());
         let _ = g.process("\x1b[2J\x1b[H".as_bytes());
         let _ = g.process(COMPOSER.as_bytes());
-        assert_eq!(g.get_selection_text(0, 0, 0, 79), "new composer", "rows={rows}");
+        assert_eq!(
+            g.get_selection_text(0, 0, 0, 79),
+            "new composer",
+            "rows={rows}"
+        );
     }
 }
 
@@ -88,6 +92,10 @@ fn ed0_from_origin_restores_known_origin_even_with_a_scroll_region() {
     for pre in ["", "\x1b[2;3r"] {
         let mut g = purged4();
         let _ = g.process(format!("{pre}\x1b[1;1H\x1b[J\x1b[1;1H{COMPOSER}").as_bytes());
-        assert_eq!(g.get_selection_text(0, 0, 0, 79), "new composer", "pre={pre:?}");
+        assert_eq!(
+            g.get_selection_text(0, 0, 0, 79),
+            "new composer",
+            "pre={pre:?}"
+        );
     }
 }
