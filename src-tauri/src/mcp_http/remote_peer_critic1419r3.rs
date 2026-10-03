@@ -15,13 +15,29 @@ fn message(id: &str, from: &str) -> crate::state::AgentMessage {
     }
 }
 
+fn live_sender(state: &AppState, sender: &str) {
+    state.peer_agents.insert(
+        sender.into(),
+        crate::state::PeerAgent {
+            tuic_session: sender.into(),
+            mcp_session_id: format!("remote-mail:test:{sender}"),
+            name: sender.into(),
+            project: None,
+            registered_at: 0,
+        },
+    );
+}
+
 /// `recipients` recipients named `{tag}-{n}`, each holding `per` ids from `sender`.
 fn fill(state: &AppState, tag: &str, recipients: usize, per: usize, sender: &str) {
     for r in 0..recipients {
+        // Independent live hosts exercise global accounting, not one host quota.
+        let sender = format!("{tag}-host-{r}/{sender}");
+        live_sender(state, &sender);
         for i in 0..per {
             let id = format!("{tag}-{r}-{i}");
             assert_eq!(
-                record_forwarded(state, &format!("{tag}-{r}"), &message(&id, sender)),
+                record_forwarded(state, &format!("{tag}-{r}"), &message(&id, &sender)),
                 Ok(true),
                 "{id}"
             );
@@ -34,8 +50,28 @@ fn fill(state: &AppState, tag: &str, recipients: usize, per: usize, sender: &str
 #[test]
 fn one_sender_cannot_starve_every_other_sender_of_the_replay_budget() {
     let state = test_state();
-    fill(&state, "hostile", 655, 100, "mint/hostile");
-    fill(&state, "hostile-tail", 1, 36, "mint/hostile");
+    live_sender(&state, "mint/hostile");
+    let mut rejected = false;
+    for n in 0..MAX_FORWARDED_RECORDS {
+        let result = record_forwarded(
+            &state,
+            &format!("hostile-{}", n / 100),
+            &message(&format!("hostile-{n}"), "mint/hostile"),
+        );
+        if let Err(reason) = result {
+            assert!(
+                reason.contains("mint"),
+                "quota error must name the flooding host: {reason}"
+            );
+            rejected = true;
+            break;
+        }
+        assert_eq!(result, Ok(true));
+    }
+    assert!(
+        rejected,
+        "hostile quota rejection must be visible before the global cap"
+    );
     assert_eq!(
         record_forwarded(
             &state,
@@ -82,6 +118,7 @@ fn budget_is_exact_after_window_eviction_and_full_budget_still_dedupes() {
             Ok(true)
         );
     }
+    live_sender(&state, "mint/s");
     // churn holds exactly its last 100 ids.
     assert_eq!(
         record_forwarded(&state, "churn", &message("c-150", "mint/s")),
@@ -99,7 +136,7 @@ fn budget_is_exact_after_window_eviction_and_full_budget_still_dedupes() {
         "65537th id must be rejected"
     );
     assert_eq!(
-        record_forwarded(&state, "a-0", &message("a-0-0", "mint/other")),
+        record_forwarded(&state, "a-0", &message("a-0-0", "a-host-0/mint/other")),
         Ok(false),
         "a replay is still recognised when the budget is full"
     );
@@ -116,6 +153,7 @@ fn budget_is_exact_after_window_eviction_and_full_budget_still_dedupes() {
 fn unregister_returns_exactly_the_recipients_ids_to_the_budget() {
     let state = test_state();
     for s in 0..3 {
+        live_sender(&state, &format!("mint/s{s}"));
         for i in 0..100 {
             assert_eq!(
                 record_forwarded(
@@ -135,6 +173,7 @@ fn unregister_returns_exactly_the_recipients_ids_to_the_budget() {
     // Three senders x 100 ids are all net-new (a window evicts only past 100),
     // so exactly the 300 released ids fit and the fourth sender is rejected.
     for s in 0..3 {
+        live_sender(&state, &format!("mint/x{s}"));
         for i in 0..100 {
             assert_eq!(
                 record_forwarded(
