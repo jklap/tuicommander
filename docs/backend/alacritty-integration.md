@@ -119,7 +119,9 @@ when the ordered selection starts at grid column zero with the marker in the
 first two cells and the preceding row has no `WRAPLINE`. Partial body selections
 and VT soft-wrap continuation origins remain literal. At the oldest retained
 row, cleanup requires known row provenance. Loss of content-bearing predecessors marks
-retained content unknown; blank rows retain a fresh origin. History removal inspects discarded content and WRAPLINE, including existing
+retained content unknown; immutable blank history rows retain a fresh origin.
+With zero retained history, a blank oldest row is live and preserves predecessor
+loss for later writes until a full erase or reset. History removal inspects discarded content and WRAPLINE, including existing
 unknown-origin flags; it never derives provenance from scroll counts. Removing
 the entire reprinted history tail carries prior oldest-row loss or the last
 removed WRAPLINE/wide-spacer boundary into surviving content. Without those

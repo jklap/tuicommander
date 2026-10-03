@@ -119,3 +119,23 @@ fn copied_selection_history_cap_trim_then_redraw_keeps_blank_origin_known() {
         assert!(!grid[Line(0)].copy_origin_unknown);
     }
 }
+
+// Catches applying immutable blank-history exemption to a live screen continuation.
+#[test]
+fn copied_selection_eviction_keeps_live_blank_origin_unknown_but_blank_history_known() {
+    for (history_cap, expected_unknown) in [(0, true), (1, false)] {
+        let mut grid: Grid<Cell> = Grid::new(3, 10, history_cap);
+        grid[Line(0)][Column(0)].c = 'x';
+        grid[Line(0)][Column(9)].flags.insert(Flags::WRAPLINE);
+        grid.scroll_up(&(Line(0)..Line(3)), 1);
+        if history_cap != 0 {
+            // Evict the wrapped head, leaving an immutable blank history row.
+            grid.scroll_up(&(Line(0)..Line(3)), 1);
+        }
+        let oldest = grid.topmost_line();
+        assert_eq!(grid[oldest].copy_origin_unknown, expected_unknown);
+        // Screen content can arrive later without a full row reset.
+        grid[Line(0)][Column(1)].c = 's';
+        assert_eq!(grid[oldest].copy_origin_unknown, expected_unknown);
+    }
+}
