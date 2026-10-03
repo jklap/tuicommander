@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Claude prompt copy** — Copying a wrapped prompt removes the composer marker and continuation margin, joins width-supported wraps, and retains typed newlines and pasted content (#1411-097c).
+- **Claude prompt copy** — Copying a wrapped prompt removes the composer marker and continuation margin, joins width-supported wraps, and retains typed newlines and pasted content. Cleanup requires a column-zero composer origin; partial selections and VT soft-wrap continuations retain literal prompt glyphs and indentation (#1411-097c, #1414-4366).
 
 - **Suspend Tab** — Right-click a terminal tab → Suspend Tab ends its process and agent to free memory and CPU, and keeps the tab (marked `zz`) restorable like after a restart. Resume Tab, or the Resume button in the tab, opens a new session in the same folder and resumes the agent. A suspended tab stays suspended across a restart. Suspend is refused while the agent is working or a question awaits input. MCP: `session action=suspend` returns the tab's verdict, or an error when no UI is attached. Unlike auto-standby, which only pauses an idle process, a suspended tab holds no process.
 

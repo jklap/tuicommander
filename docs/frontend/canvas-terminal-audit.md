@@ -208,7 +208,7 @@ cell's full text span, since native search points have no subcell index.
 | Double-click word select | OK | `terminal_select_start` with `word:true` |
 | Triple-click line select | OK | |
 | Cmd+C copy with selection | OK | `terminal_get_selection_text` IPC/HTTP parity path |
-| Selection normalization | OK | Rust unwraps soft-wrapped rows, trims row padding, removes coherent Claude space/NBSP `▎` gutters, and strips one composer `❯ ` plus its continuation margin with conservative width reflow |
+| Selection normalization | OK | Rust unwraps soft-wrapped rows, trims row padding, removes coherent Claude space/NBSP `▎` gutters, and strips one composer `❯ ` plus its continuation margin with conservative width reflow only when selected from grid column zero outside a VT soft-wrap continuation |
 | Copy-on-select | OK | `copySelection()` called from `onMouseUp` |
 | getSelection() ref method | OK | Returns the cached backend selection; `getLocalSelectionText()` is the transient fallback |
 

@@ -1908,24 +1908,6 @@ impl TerminalGrid {
         let mut index = 0;
 
         while index < lines.len() {
-            // Claude's composer supplies one prompt glyph and a two-column
-            // continuation margin. A second glyph belongs to the pasted input.
-            if let Some(first) = lines[index].strip_prefix("❯ ") {
-                let mut contents = vec![first];
-                index += 1;
-                while index < lines.len() {
-                    let Some(content) = lines[index].strip_prefix("  ") else {
-                        break;
-                    };
-                    if content.is_empty() || gutter_content(lines[index]).is_some() {
-                        break;
-                    }
-                    contents.push(content);
-                    index += 1;
-                }
-                out.extend(reflow_copied_run(&contents, num_cols, 2));
-                continue;
-            }
             if gutter_content(lines[index]).is_none() {
                 out.push(lines[index].to_string());
                 index += 1;
@@ -1958,6 +1940,35 @@ impl TerminalGrid {
         out.join("\n")
     }
 
+    /// Normalize only the composer run whose first row was selected from column zero.
+    fn normalize_copied_composer(text: &str, num_cols: usize) -> String {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let Some(first) = lines[0].strip_prefix("❯ ") else {
+            return Self::normalize_copied_selection(text, num_cols);
+        };
+        // Strip one marker and one margin; a second glyph and deeper indent are input.
+        let mut contents = vec![first];
+        let mut index = 1;
+        while index < lines.len() {
+            let Some(content) = lines[index].strip_prefix("  ") else {
+                break;
+            };
+            if content.is_empty() || gutter_content(lines[index]).is_some() {
+                break;
+            }
+            contents.push(content);
+            index += 1;
+        }
+        let mut out = reflow_copied_run(&contents, num_cols, 2);
+        if index < lines.len() {
+            out.push(Self::normalize_copied_selection(
+                &lines[index..].join("\n"),
+                num_cols,
+            ));
+        }
+        out.join("\n")
+    }
+
     pub fn get_selection_text(
         &self,
         start_row: usize,
@@ -1975,6 +1986,20 @@ impl TerminalGrid {
             } else {
                 (end_row, end_col, start_row, start_col)
             };
+
+        let first_line = Line(r0 as i32 - history_size as i32);
+        // Selection text alone cannot distinguish a pasted glyph from composer chrome.
+        // Check the actual origin before cell extraction loses its column/wrap context.
+        let composer_anchor = c0 == 0
+            && num_cols >= 2
+            && first_line >= grid.topmost_line()
+            && first_line <= grid.bottommost_line()
+            && grid[first_line][Column(0)].c == '❯'
+            && grid[first_line][Column(1)].c == ' '
+            && (first_line == grid.topmost_line()
+                || !grid[first_line - 1][Column(num_cols - 1)]
+                    .flags
+                    .contains(Flags::WRAPLINE));
 
         let mut result = String::new();
 
@@ -2016,7 +2041,12 @@ impl TerminalGrid {
             }
         }
 
-        Self::normalize_copied_selection(result.trim_end_matches('\n'), num_cols)
+        let text = result.trim_end_matches('\n');
+        if composer_anchor {
+            Self::normalize_copied_composer(text, num_cols)
+        } else {
+            Self::normalize_copied_selection(text, num_cols)
+        }
     }
 
     /// Extract selection text using grid-relative rows from an optional frame snapshot.
@@ -5098,6 +5128,22 @@ mod tests {
             grid.get_selection_text(0, 0, 4, 79),
             "first typed line\nsecond typed line\n  indented code\nfirst quote\nsecond quote"
         );
+    }
+
+    // Catches prompt-shaped body rows restarting composer cleanup after the origin.
+    #[test]
+    fn copied_selection_keeps_later_literal_prompt_rows_and_indentation() {
+        for (input, expected) in [
+            ("header\r\n❯ literal\r\n  code", "header\n❯ literal\n  code"),
+            (
+                "❯ typed\r\nplain separator\r\n❯ literal\r\n  code",
+                "typed\nplain separator\n❯ literal\n  code",
+            ),
+        ] {
+            let mut grid = TerminalGrid::new(6, 80, 0);
+            let _ = grid.process(input.as_bytes());
+            assert_eq!(grid.get_selection_text(0, 0, 5, 79), expected);
+        }
     }
 
     #[test]
