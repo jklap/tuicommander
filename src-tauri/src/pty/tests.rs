@@ -21447,3 +21447,81 @@ fn unknown_spawn_root_role_refuses_submit_and_mail_wake() {
         }
     ));
 }
+
+/// Catches: exec into a different shell image at the same root PID is promoted
+/// to an agent or retains an old discovered agent's identity.
+#[cfg(unix)]
+#[test]
+fn shell_root_exec_into_another_shell_still_revokes_agent_identity() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "exec-root-shell";
+    let probe =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type,
+        None
+    );
+    assert!(!should_inject_now(&state, sid));
+    assert!(probe.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: an agent exec'd into the shell root leaves live agent identity and
+/// a mail/submit target behind after its process exits instead of a shell return.
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_root_agent_exit_clears_identity_and_refuses_submit_and_mail() {
+    use std::io::Write;
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "exec-root-agent-exit";
+    let _probe =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "claude");
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    // The probe's actual cat image exits normally on terminal EOF. The recorded
+    // writer remains untouched; use its native master solely to end our process.
+    {
+        let entry = state.session_maps.sessions.get(sid).unwrap();
+        let mut session = entry.lock();
+        session
+            .master
+            .take_writer()
+            .unwrap()
+            .write_all(b"\x04")
+            .unwrap();
+        assert!(session._child.wait().unwrap().success());
+    }
+    // Same lifecycle composition as the production reader after native EOF.
+    state.emit_pty_event(crate::state::AppEvent::SessionClosed {
+        session_id: sid.into(),
+        reason: "process_exit".into(),
+    });
+    state.metrics.active_sessions.store(1, Ordering::Relaxed);
+    mark_session_exited(sid, &state);
+    while state.session_maps.session_states.contains_key(sid) {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(!should_inject_now(&state, sid));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe"),
+        AgentSubmissionWrite::Rejected {
+            reason: "session_not_found",
+            ..
+        }
+    ));
+}

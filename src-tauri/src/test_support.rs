@@ -506,6 +506,18 @@ impl ForegroundIdentityProbe {
                 command.arg(&executable);
             }
             command
+        } else if role == crate::state::SpawnRootRole::Shell {
+            // A real shell exec preserves its root PID while replacing its image.
+            // This models exec into either an agent-name or a renamed shell root.
+            let mut command = CommandBuilder::new("/bin/sh");
+            if name == "bash" {
+                // Exercise a real shell-to-shell image replacement as well.
+                command.args(["-c", "exec /bin/bash -c 'read -r input'", "probe-root"]);
+            } else {
+                command.args(["-c", "exec \"$1\"", "probe-root"]);
+                command.arg(&executable);
+            }
+            command
         } else {
             CommandBuilder::new(&executable)
         };
