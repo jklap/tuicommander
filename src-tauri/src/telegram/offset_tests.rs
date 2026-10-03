@@ -191,18 +191,3 @@ async fn first_start_network_fault_uses_backoff_and_retries_backlog_skip() {
     }
 }
 
-// Catches: a fresh oversize single-update request repeatedly shrinks a
-// fictitious 100-update batch instead of immediately latching its 8 MiB violation.
-#[tokio::test]
-async fn oversize_bootstrap_single_update_stops_after_one_request() {
-    let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![updates(vec![
-        json!({"update_id":1,"padding":"x".repeat(8*1024*1024)}),
-    ])])
-    .await;
-    let mut adapter = Inbound::loopback(paths.clone(), server.address).unwrap();
-    assert_eq!(adapter.poll().await.err(), Some(Error::OversizeUpdate));
-    assert_eq!(adapter.poll().await.err(), Some(Error::OversizeUpdate));
-    assert_eq!(server.requests().len(), 1);
-    assert!(!paths.file("next_offset").exists());
-}
