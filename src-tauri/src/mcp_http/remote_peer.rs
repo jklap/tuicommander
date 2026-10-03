@@ -2,8 +2,9 @@
 //! daemons keep local delivery independent of that link. No process-control
 //! actions cross this protocol.
 
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocketUpgrade};
@@ -33,11 +34,61 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) struct RemoteMail {
     connections: DashMap<String, Arc<Link>>,
     hub: Mutex<Option<(String, Arc<Link>)>>,
-    connect_lock: tokio::sync::Mutex<()>,
+    // Role transitions are short; network handshakes serialize only per host.
+    role_lock: Mutex<()>,
+    connect_locks: Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
+    forwarded_history: Mutex<ForwardedHistory>,
     own_host: Mutex<Option<String>>,
     notice_notify: Arc<tokio::sync::Notify>,
     notice_started: AtomicBool,
     supervisors: DashMap<String, tokio::task::AbortHandle>,
+}
+
+/// Keep deduplication independent of inbox reads. History matches the bounded
+/// 100-message outbox horizon and caps recipient count as well as per-peer entries.
+#[derive(Default)]
+struct ForwardedHistory {
+    recipients: HashMap<String, VecDeque<(String, [u8; 32])>>,
+    order: VecDeque<String>,
+}
+
+/// Called under the native identity/enqueue lock. Only fingerprints are retained,
+/// never 64-KiB message bodies (at most 1024 * 100 compact records).
+pub(super) fn record_forwarded(
+    state: &AppState,
+    recipient: &str,
+    message: &crate::state::AgentMessage,
+) -> Result<bool, &'static str> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update((message.from_tuic_session.len() as u64).to_le_bytes());
+    hasher.update(message.from_tuic_session.as_bytes());
+    hasher.update(message.content.as_bytes());
+    let fingerprint: [u8; 32] = hasher.finalize().into();
+    let mut history = state.remote_mail.forwarded_history.lock();
+    if let Some(records) = history.recipients.get(recipient)
+        && let Some((_, previous)) = records.iter().find(|(id, _)| id == &message.id)
+    {
+        return if *previous == fingerprint {
+            Ok(false)
+        } else {
+            Err("Forwarded message identity collision")
+        };
+    }
+    history.order.retain(|id| id != recipient);
+    if !history.recipients.contains_key(recipient)
+        && history.recipients.len() >= 1024
+        && let Some(oldest) = history.order.pop_front()
+    {
+        history.recipients.remove(&oldest);
+    }
+    history.order.push_back(recipient.to_string());
+    let records = history.recipients.entry(recipient.to_string()).or_default();
+    if records.len() >= 100 {
+        records.pop_front();
+    }
+    records.push_back((message.id.clone(), fingerprint));
+    Ok(true)
 }
 
 struct Link {
@@ -206,7 +257,7 @@ pub(super) async fn endpoint(
             // Recheck after upgrade: concurrent authenticated upgrades cannot replace
             // a live hub and strand its outstanding calls.
             {
-                let _connection_guard = state.remote_mail.connect_lock.lock().await;
+                let _role_guard = state.remote_mail.role_lock.lock();
                 if state
                     .remote
                     .snapshot()
@@ -411,12 +462,29 @@ fn process(
 }
 
 async fn connection(state: &Arc<AppState>, id: &str) -> Result<Arc<Link>, Value> {
-    let _guard = state.remote_mail.connect_lock.lock().await;
-    if state.remote_mail.own_host.lock().is_some() {
-        return Err(error(
-            id,
-            "a daemon spoke routes remote mail through its desktop hub",
-        ));
+    // Weak locks disappear after the handshake callers finish, so unknown
+    // host probes cannot accumulate permanent lock entries.
+    let host_lock = {
+        let mut locks = state.remote_mail.connect_locks.lock();
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let slot = locks.entry(id.to_string()).or_default();
+        if let Some(lock) = slot.upgrade() {
+            lock
+        } else {
+            let lock = Arc::new(tokio::sync::Mutex::new(()));
+            *slot = Arc::downgrade(&lock);
+            lock
+        }
+    };
+    let _guard = host_lock.lock().await;
+    {
+        let _role_guard = state.remote_mail.role_lock.lock();
+        if state.remote_mail.own_host.lock().is_some() {
+            return Err(error(
+                id,
+                "a daemon spoke routes remote mail through its desktop hub",
+            ));
+        }
     }
     if let Some(link) = state.remote_mail.connections.get(id)
         && !link.outbound.is_closed()
@@ -465,15 +533,25 @@ async fn connection(state: &Arc<AppState>, id: &str) -> Result<Arc<Link>, Value>
         slots: tokio::sync::Semaphore::new(MAX_CALLS),
         shutdown: tokio::sync::Notify::new(),
     });
-    state
-        .remote_mail
-        .connections
-        .insert(id.to_string(), link.clone());
+    {
+        let _role_guard = state.remote_mail.role_lock.lock();
+        if state.remote_mail.own_host.lock().is_some()
+            || state.remote.base_url(id).as_deref() != Some(base.as_str())
+            || state.remote.token(id).as_deref() != Some(token.as_str())
+        {
+            return Err(error(id, "connection changed during peer handshake"));
+        }
+        state
+            .remote_mail
+            .connections
+            .insert(id.to_string(), link.clone());
+    }
     start_notices(state);
     state.remote_mail.notice_notify.notify_one();
     let task_state = state.clone();
     let task_link = link.clone();
     let id = id.to_string();
+    let task_host_lock = host_lock.clone();
     tokio::spawn(async move {
         drive(
             socket,
@@ -483,11 +561,15 @@ async fn connection(state: &Arc<AppState>, id: &str) -> Result<Arc<Link>, Value>
             Role::Hub(id.clone()),
         )
         .await;
-        task_state
+        let _guard = task_host_lock.lock().await;
+        if task_state
             .remote_mail
             .connections
-            .remove_if(&id, |_, current| Arc::ptr_eq(current, &task_link));
-        cleanup_shadows(&task_state, Some(&id));
+            .remove_if(&id, |_, current| Arc::ptr_eq(current, &task_link))
+            .is_some()
+        {
+            cleanup_shadows(&task_state, Some(&id));
+        }
     });
     Ok(link)
 }

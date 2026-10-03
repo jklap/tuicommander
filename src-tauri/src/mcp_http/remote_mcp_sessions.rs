@@ -11,7 +11,15 @@ use crate::AppState;
 
 pub(super) fn resolve(state: &AppState, args: &Value) -> Option<Result<(String, String), Value>> {
     let address = args["session_id"].as_str()?;
+    if address.trim().is_empty() {
+        return Some(Err(json!({"error":"session_id must not be empty"})));
+    }
     if let Some((host, id)) = address.split_once('/') {
+        if id.trim().is_empty() || id.contains('/') {
+            return Some(Err(
+                json!({"error":"Invalid connection-qualified session_id"}),
+            ));
+        }
         if host == "local" {
             if args["connection_id"]
                 .as_str()
@@ -69,6 +77,9 @@ pub(super) fn resolve(state: &AppState, args: &Value) -> Option<Result<(String, 
 }
 
 pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Value) -> Value {
+    if id.trim().is_empty() {
+        return failure(host, "session_id must not be empty");
+    }
     let Some(base) = state.remote.base_url(host) else {
         return failure(host, "connection is unavailable");
     };
@@ -316,6 +327,32 @@ mod tests {
         assert_eq!(result["detail"], expected["detail"], "{result}");
         assert_eq!(result["connection_id"], "mint");
         server.abort();
+    }
+
+    // Catches: direct owner calls bypass resolve's empty-prefix rejection.
+    #[tokio::test]
+    async fn empty_remote_target_never_reaches_alias_prefix_lookup() {
+        let state = test_state();
+        for id in ["", " ", "\t"] {
+            let result = call(
+                &state,
+                "mint",
+                id,
+                &json!({"action":"submit","input":"must never execute"}),
+            )
+            .await;
+            assert!(
+                result["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("must not be empty"),
+                "{result}"
+            );
+        }
+        for address in ["", " ", "mint/", "mint/ ", "local/"] {
+            let result = resolve(&state, &json!({"action":"submit","session_id":address})).unwrap();
+            assert!(result.is_err(), "{address:?} selected a target");
+        }
     }
 
     // Catches: qualified remote failures fall through to the local registry and

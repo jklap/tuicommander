@@ -2728,3 +2728,10 @@ Frames and outstanding requests are bounded; heartbeat loss closes the link.
 including `exited`, cursor and truncation fields. It accepts `limit`, `from_line`
 and `since_cursor`. `POST /sessions/{id}/submit` also accepts `timeout_ms`.
 These are the configured remote desktop MCP adapters, sharing native backend behavior.
+
+Peer handshakes serialize per configured connection, so a mute daemon cannot hold
+mail calls to another host behind its network deadline. Session targets reject empty
+ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
+reads: it retains fingerprints of the last 100 forwarded ids for up to 1024 recently
+active recipients, without retaining message bodies. This is a bounded replay horizon,
+not unbounded or restart-persistent exactly-once delivery.
