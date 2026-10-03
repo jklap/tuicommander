@@ -241,3 +241,103 @@ fn resolve_pause_keeps_the_uncertain_effect_fence() {
     assert_eq!(resumed.status, RunStatus::Running);
     assert!(resumed.graph_executions[0].pauses[0].resolution.is_some());
 }
+
+fn published_graph_run() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    RunStore,
+    RunSnapshot,
+    String,
+    impl Drop,
+) {
+    use crate::workflows::{NodeKind as K, WorkflowStore};
+    let (config, project, plan_id, story_id, definition_id, guard) = super::tests::fixture();
+    let definitions = WorkflowStore::open().unwrap();
+    let plan = definitions.get_draft(&definition_id).unwrap();
+    let (story_definition_id, _) = plan
+        .graph
+        .nodes
+        .iter()
+        .find_map(|n| match &n.kind {
+            K::StoryDispatch {
+                story_template_id,
+                story_revision,
+            } => Some((story_template_id.clone(), *story_revision)),
+            _ => None,
+        })
+        .unwrap();
+    let mut story = definitions.get_draft(&story_definition_id).unwrap();
+    for n in &mut story.graph.nodes {
+        if let K::Pause { resume_to } = &mut n.kind {
+            *resume_to = Some("implement".into());
+        }
+    }
+    let story = definitions
+        .update_draft(&story.id, story.draft_revision, story.graph)
+        .unwrap();
+    let published = definitions
+        .publish(&story.id, story.draft_revision)
+        .unwrap();
+    let mut graph = plan.graph;
+    for n in &mut graph.nodes {
+        if let K::StoryDispatch { story_revision, .. } = &mut n.kind {
+            *story_revision = published.revision;
+        }
+        if let K::Pause { resume_to } = &mut n.kind {
+            *resume_to = Some("coordinate".into());
+        }
+    }
+    let plan = definitions
+        .update_draft(&plan.id, plan.draft_revision, graph)
+        .unwrap();
+    let plan = definitions
+        .update_checks(
+            &plan.id,
+            plan.draft_revision,
+            published.required_checks.clone(),
+        )
+        .unwrap();
+    let published = definitions.publish(&plan.id, plan.draft_revision).unwrap();
+    let store = RunStore::open_at(&config.path().join("critic-runs.sqlite3")).unwrap();
+    let run = store
+        .start_plan(
+            project.path().to_str().unwrap(),
+            &plan_id,
+            &definition_id,
+            published.revision,
+            RunLimits::default(),
+        )
+        .unwrap();
+    (config, project, store, run, story_id, guard)
+}
+
+/// Catches: a manual Pause (or any non-graph pause) on a graph run that has no
+/// pending graph Pause node can never be resumed: Resume is refused for every
+/// graph run and ResolvePause needs a pending graph pause, so only Cancel is left.
+#[test]
+fn manual_pause_of_a_graph_run_without_graph_pause_can_be_resumed() {
+    let (_config, _project, store, run, story_id, _guard) = published_graph_run();
+    let seq = |s: &RunStore| s.snapshot(&run.id).unwrap().sequence;
+    store
+        .command_expected(
+            &run.id,
+            "g-start",
+            seq(&store),
+            RunCommand::Graph {
+                transition: GraphTransition::Start {
+                    execution_id: "x".into(),
+                    target_id: story_id,
+                },
+            },
+        )
+        .unwrap();
+    store
+        .command_expected(&run.id, "pause", seq(&store), RunCommand::Pause)
+        .unwrap();
+    let resumed = store.command_expected(&run.id, "resume", seq(&store), RunCommand::Resume);
+    assert!(
+        resumed.is_ok(),
+        "graph run stuck Paused after a manual Pause: {:?}",
+        resumed.err()
+    );
+}
