@@ -47,6 +47,8 @@ Keyboard Shortcuts if you want one. You can also choose a terminal in
 **Settings → Voice → Hands-free conversation** and select **Start
 conversation**.
 
+Hands-free conversation uses an accent **Start conversation** action and a distinct **Stop conversation** action. The state row shows a coloured indicator with **Running** or **Stopped**, alongside the backend phase when available.
+
 While it runs, the panel shows the state, the bound terminal, where the audio
 comes from, and the text that is about to be sent. The dictation hotkey stops
 the conversation, and so does **Stop conversation**.
