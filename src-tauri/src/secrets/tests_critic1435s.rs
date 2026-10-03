@@ -34,10 +34,7 @@ fn stored(name: &str, value: &str) -> Submission {
 /// terraform) prints a password containing them unmasked.
 #[test]
 fn go_html_escaped_json_does_not_leak_a_password_with_ampersand() {
-    let out = masked(
-        "p&ss<w>rd9",
-        r#"{"password":"p\u0026ss\u003cw\u003erd9"}"#,
-    );
+    let out = masked("p&ss<w>rd9", r#"{"password":"p\u0026ss\u003cw\u003erd9"}"#);
     assert!(!out.contains("u0026ss"), "leaked: {out}");
 }
 
@@ -71,10 +68,15 @@ fn base64_basic_payload_after_key_equals_is_masked() {
 fn consumed_nonce_cannot_overwrite_a_later_value() {
     let store = SecretStore::default();
     let first = store.open(form(&["TOKEN"])).unwrap();
-    store.submit(&first.nonce, stored("TOKEN", "first")).unwrap();
+    store
+        .submit(&first.nonce, stored("TOKEN", "first"))
+        .unwrap();
     let second = store.open(form(&["TOKEN"])).unwrap();
     assert!(store.submit(&first.nonce, stored("TOKEN", "evil")).is_err());
-    assert!(store.form(&second.nonce).is_ok(), "stale nonce closed the new form");
+    assert!(
+        store.form(&second.nonce).is_ok(),
+        "stale nonce closed the new form"
+    );
     let env = store.environment(&["TOKEN".into()]).unwrap();
     assert_eq!(env["TOKEN"].as_str(), "first");
 }
