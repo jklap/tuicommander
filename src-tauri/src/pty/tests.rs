@@ -21059,6 +21059,9 @@ fn retry_enter_only_when_composer_retained_and_clause_two() {
 #[cfg(unix)]
 #[test]
 fn submit_paths_do_not_toast_when_captured_codex_turn_already_reached_a_question() {
+    // The capture holds terminal queries whose replies need this writer's lock,
+    // which Enter still holds while the response is consumed inline. A cooked tty
+    // withholds replies (`tty_would_swallow_reply`), so they cannot self-deadlock.
     struct CapturedTurnWriter {
         state: Arc<AppState>,
         sid: String,
@@ -21162,7 +21165,7 @@ fn submit_paths_do_not_toast_when_captured_codex_turn_already_reached_a_question
                 response: response.clone(),
                 writes: Arc::clone(&writes),
             }),
-            TtyMode::Raw,
+            TtyMode::Cooked,
         );
         let injection = match path {
             "brief" => crate::state::PendingInjection::initial_prompt(&text),

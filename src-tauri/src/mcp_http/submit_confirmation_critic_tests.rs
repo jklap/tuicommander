@@ -26,7 +26,10 @@ async fn session_submit_repaint_that_keeps_text_in_the_composer_is_not_acknowled
     });
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
     while bytes.lock().unwrap().last() != Some(&b'\r') {
-        assert!(tokio::time::Instant::now() < deadline, "framed write missing");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "framed write missing"
+        );
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     let repaint = "\x1b[22;1H\u{203a} inspect the repository";
@@ -49,4 +52,3 @@ async fn session_submit_repaint_that_keeps_text_in_the_composer_is_not_acknowled
 
     assert_eq!(response["acknowledged"], false, "{response}");
 }
-

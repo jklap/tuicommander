@@ -49,7 +49,9 @@ fn wait_for_enter(bytes: &std::sync::Mutex<Vec<u8>>) {
     }
 }
 
-fn confirmation_toasts(alerts: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>) -> usize {
+fn confirmation_toasts(
+    alerts: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
+) -> usize {
     std::iter::from_fn(|| alerts.try_recv().ok())
         .filter(|event| {
             matches!(event, crate::state::AppEvent::McpToast { title, .. }
@@ -59,7 +61,12 @@ fn confirmation_toasts(alerts: &mut tokio::sync::broadcast::Receiver<crate::stat
 }
 
 fn enters(bytes: &std::sync::Mutex<Vec<u8>>) -> usize {
-    bytes.lock().unwrap().iter().filter(|b| **b == b'\r').count()
+    bytes
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|b| **b == b'\r')
+        .count()
 }
 
 /// Catches: confirmation that reads only the CURRENT screen. Codex accepts the
@@ -94,7 +101,11 @@ fn queued_codex_turn_that_already_finished_when_polled_is_confirmed() {
 
     assert_eq!(confirmation_toasts(&mut alerts), 0, "false failure toast");
     assert!(!silence.lock().injection_delivery_uncertain);
-    assert_eq!(enters(&bytes), 1, "a turn that ran must not get a second Enter");
+    assert_eq!(
+        enters(&bytes),
+        1,
+        "a turn that ran must not get a second Enter"
+    );
 }
 
 /// Catches: a Claude hook busy that is gone again (Stop hook ran) before the

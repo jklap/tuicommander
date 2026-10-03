@@ -2402,6 +2402,7 @@ struct StartedSubmission {
     turn_epoch: u64,
     acknowledgement_offset: u64,
     timeout_ms: u64,
+    text: String,
 }
 
 enum BeginSubmission {
@@ -2546,6 +2547,7 @@ fn begin_session_submit(
                 turn_epoch: submission_turn_epoch(state, &session_id),
                 acknowledgement_offset,
                 timeout_ms,
+                text: text.to_string(),
             })
         }
     }
@@ -2602,6 +2604,8 @@ pub(super) async fn handle_session_submit(
         }
         if let Some(output_offset) = submission_output_offset(state, &started.session_id)
             && output_offset > started.acknowledgement_offset
+            // A repaint that still shows the text in the composer is not a turn.
+            && !crate::pty::composer_retains_text(state, &started.session_id, &started.text)
         {
             return serde_json::json!({
                 "status": "acknowledged",
