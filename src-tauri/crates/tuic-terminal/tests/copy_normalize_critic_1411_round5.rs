@@ -28,7 +28,10 @@ fn dropping_all_history_does_not_flag_a_blank_new_oldest_row() {
     grid.scroll_up(&(Line(0)..Line(3)), 1);
     put(&mut grid, 0, 'y');
     grid.scroll_up(&(Line(0)..Line(3)), 1);
-    assert!(grid[grid.topmost_line()].copy_origin_unknown, "setup: y flagged");
+    assert!(
+        grid[grid.topmost_line()].copy_origin_unknown,
+        "setup: y flagged"
+    );
     assert_eq!(grid.drop_newest_history(1), 1);
     assert!(!grid[Line(0)].copy_origin_unknown);
 }
