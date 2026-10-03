@@ -6,7 +6,7 @@ use tuic_terminal::terminal_grid::TerminalGrid;
 fn composer_on_top_row_after_history_clear_still_normalizes() {
     let mut grid = TerminalGrid::new(3, 80, 10);
     let _ = grid.process(b"a\r\nb\r\nc\r\nd\r\n");
-    let _ = grid.process(b"\x1b[3J\x1b[2J\x1b[H\xe2\x9d\xaf hello");
+    let _ = grid.process(b"\x1b[3J\x1b[H\x1b[J\xe2\x9d\xaf hello");
     assert_eq!(grid.get_selection_text(0, 0, 0, 10), "hello");
 }
 
