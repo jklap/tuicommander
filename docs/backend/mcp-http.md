@@ -1842,3 +1842,10 @@ Local mail survives hub loss. Cross-host failure names the connection; uncertain
 acknowledgements must not be retried blindly. Lifecycle mail retains its message identity
 in the bounded native outbox until acknowledged. Reconnect retries those notices without
 duplicating an already retained destination message.
+
+Peer handshakes serialize per configured connection, so a mute daemon cannot hold
+mail calls to another host behind its network deadline. Session targets reject empty
+ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
+reads: it retains fingerprints of the last 100 forwarded ids for up to 1024 recently
+active recipients, without retaining message bodies. This is a bounded replay horizon,
+not unbounded or restart-persistent exactly-once delivery.
