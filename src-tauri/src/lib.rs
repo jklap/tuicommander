@@ -60,6 +60,8 @@ pub(crate) mod github;
 pub(crate) mod github_account;
 pub(crate) mod github_auth;
 #[cfg(test)]
+mod critic_1420_tests;
+#[cfg(test)]
 mod github_compat_tests;
 pub(crate) use tuic_git::github_debug;
 pub(crate) mod github_poller;
