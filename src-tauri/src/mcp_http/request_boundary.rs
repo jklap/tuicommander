@@ -2,7 +2,7 @@
 use super::auth::is_private_ip;
 use crate::AppState;
 use axum::extract::State;
-use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::net::IpAddr;
@@ -35,13 +35,15 @@ impl RequestBoundary {
         })
     }
 
-    fn allowed_host(&self, headers: &HeaderMap) -> Option<String> {
+    fn allowed_host(&self, headers: &HeaderMap, uri: &Uri) -> Option<String> {
         // Multiple Host headers and malformed authorities must not be interpreted
         // differently by a proxy and by our handler. Never trust forwarded headers.
-        if headers.get_all(header::HOST).iter().count() != 1 {
-            return None;
-        }
-        let host = headers.get(header::HOST)?.to_str().ok()?;
+        // HTTP/2 carries the authority in the URI and sends no Host header.
+        let host = match headers.get_all(header::HOST).iter().count() {
+            0 => uri.authority()?.as_str(),
+            1 => headers.get(header::HOST)?.to_str().ok()?,
+            _ => return None,
+        };
         let authority = host.parse::<axum::http::uri::Authority>().ok()?;
         if authority.as_str().contains('@') {
             return None;
@@ -78,7 +80,7 @@ impl RequestBoundary {
                     .to_str()
                     .is_ok_and(|origin| APP_ORIGINS.contains(&origin))
                     || boundary
-                        .allowed_host(&parts.headers)
+                        .allowed_host(&parts.headers, &parts.uri)
                         .is_some_and(|host| boundary.allowed_origin(origin, &host))
             }))
             .allow_credentials(true)
@@ -99,7 +101,7 @@ pub(super) async fn check(
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    let Some(host) = boundary.allowed_host(req.headers()) else {
+    let Some(host) = boundary.allowed_host(req.headers(), req.uri()) else {
         return (StatusCode::FORBIDDEN, "Untrusted Host").into_response();
     };
     let origins = req.headers().get_all(header::ORIGIN);
