@@ -12859,4 +12859,4 @@ where
 mod tests;
 
 #[cfg(test)]
-mod tests_submit_paths;
+mod submit_confirmation_critic_tests;
