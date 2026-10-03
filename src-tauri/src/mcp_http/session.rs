@@ -2493,6 +2493,117 @@ mod tests {
         server.abort();
     }
 
+    /// Catches: the empty-replay marker path returns or skips the live
+    /// subscription, so a session that is idle at attach and prints later
+    /// never reaches the client after the marker.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn grid_ws_empty_replay_marker_is_followed_by_later_live_frames() {
+        let state = super::super::tests::test_state();
+        let sid = "empty-grid-then-output";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        state
+            .grid
+            .watch
+            .insert(sid.into(), crate::grid_watch::new_grid_watch());
+
+        let app = super::super::build_router(state.clone(), false, true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind isolated test server");
+        let addr = listener.local_addr().expect("bound address");
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!(
+            "ws://{addr}/sessions/{sid}/stream?format=grid"
+        ))
+        .await
+        .expect("complete WS setup before replay deadline");
+        let marker = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
+            .await
+            .expect("marker must arrive")
+            .expect("stream open")
+            .expect("marker message");
+        assert!(marker.is_text(), "the empty replay is a text control frame");
+
+        let tx = state.grid.watch.get(sid).expect("watch channel").clone();
+        crate::grid_watch::publish_grid_frame(&tx, vec![7, 7, 7]);
+        let live = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
+            .await
+            .expect("a frame published after the marker must be delivered")
+            .expect("stream must stay open after the marker")
+            .expect("live frame message");
+        assert!(live.is_binary(), "live output is a binary grid frame");
+        socket.close(None).await.expect("close disposable client");
+        server.abort();
+    }
+
+    /// Catches: the marker is sent as a bare text message on a negotiated
+    /// socket, where the client reads every message as a tagged binary frame
+    /// and would reject it (or ignore it, leaving the replay watchdog armed).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn grid_ws_empty_replay_marker_is_tagged_on_a_negotiated_socket() {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        let state = super::super::tests::test_state();
+        let sid = "empty-grid-negotiated";
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        state
+            .grid
+            .watch
+            .insert(sid.into(), crate::grid_watch::new_grid_watch());
+
+        let app = super::super::build_router(state, false, true);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind isolated test server");
+        let addr = listener.local_addr().expect("bound address");
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+        let mut request =
+            format!("ws://{addr}/sessions/{sid}/stream?format=grid&compress=deflate")
+                .into_client_request()
+                .expect("client request");
+        request.headers_mut().insert(
+            "Sec-WebSocket-Protocol",
+            super::super::ws_compression::DEFLATE_SUBPROTOCOL
+                .parse()
+                .expect("header value"),
+        );
+        let (mut socket, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .expect("complete WS setup before replay deadline");
+        let marker = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
+            .await
+            .expect("marker must arrive")
+            .expect("stream open")
+            .expect("marker message");
+        let bytes = marker.into_data();
+        let tag = *bytes.first().expect("tagged frame is never empty");
+        assert!(
+            tag == 0x02 || tag == 0x03,
+            "marker must carry a text tag on a tagged socket, got {tag:#04x}"
+        );
+        if tag == 0x02 {
+            let json: serde_json::Value =
+                serde_json::from_slice(&bytes[1..]).expect("tagged text body is JSON");
+            assert_eq!(json, serde_json::json!({"type": "grid-replay-empty"}));
+        }
+        socket.close(None).await.expect("close disposable client");
+        server.abort();
+    }
+
     /// One WebSocket handshake, start to finish, against a real socket.
     ///
     /// `oneshot` cannot reach this: `WebSocketUpgrade` reads hyper's `OnUpgrade`
