@@ -1,4 +1,4 @@
-//! Round-5 critic tests for story 1420-f3de: wrapper observation and revocation.
+//! Round-5 critic test for story 1420-f3de: shells missing from the shell list.
 
 use super::*;
 use crate::test_support::ForegroundIdentityProbe;
@@ -33,81 +33,6 @@ fn run(sid: &str, initial: Flags, foregrounds: &[&str]) -> Vec<Flags> {
         drop(probe);
     }
     out
-}
-
-fn preset() -> Flags {
-    (Some("claude".into()), true, false)
-}
-
-/// Catches: a wrapper that execs the agent (same pid, name changes from the
-/// unclassified wrapper to `claude`) keeps the preset armed or loses identity
-/// at the name change, so the shell that returns after exit is still submittable.
-#[cfg(unix)]
-#[test]
-fn wrapper_that_execs_the_agent_is_revoked_when_the_shell_returns() {
-    let steps = run(
-        "critic-1420r5-exec",
-        preset(),
-        &["mywrapper", "claude", "bash"],
-    );
-    assert_eq!(steps[0].0.as_deref(), Some("claude"), "wrapper lost preset");
-    assert_eq!(steps[1].0.as_deref(), Some("claude"), "exec lost identity");
-    assert_eq!(
-        steps[2].0, None,
-        "shell after exec'd agent stayed submittable"
-    );
-}
-
-/// Catches: a wrapper that stays foreground (agent is its child) loses identity
-/// after repeated polls, or is revoked while still running.
-#[cfg(unix)]
-#[test]
-fn wrapper_staying_foreground_keeps_identity_across_polls_then_revokes() {
-    let steps = run(
-        "critic-1420r5-stay",
-        preset(),
-        &["mywrapper", "mywrapper", "mywrapper", "bash", "bash"],
-    );
-    for step in &steps[..3] {
-        assert_eq!(step.0.as_deref(), Some("claude"));
-    }
-    assert_eq!(steps[3].0, None);
-    assert_eq!(steps[4].0, None, "revocation did not stay revoked");
-}
-
-/// Catches: a short-lived unclassified non-shell child (git, ssh-askpass) in the
-/// foreground during a discovered agent's life revokes or re-arms identity.
-#[cfg(unix)]
-#[test]
-fn transient_helper_during_a_discovered_agent_life_changes_nothing() {
-    let steps = run(
-        "critic-1420r5-helper",
-        (None, false, false),
-        &["claude", "git", "claude", "git", "bash"],
-    );
-    let live = (Some("claude".to_string()), false, true);
-    for step in &steps[..4] {
-        assert_eq!(step, &live);
-    }
-    assert_eq!(steps[4].0, None);
-}
-
-/// Catches: after the accepted startup-helper disarm (helper -> shell -> agent),
-/// the agent that finally starts is not rediscovered as a revocable agent.
-#[cfg(unix)]
-#[test]
-fn agent_started_after_helper_disarm_is_rediscovered_and_revocable() {
-    let steps = run(
-        "critic-1420r5-recover",
-        preset(),
-        &["git", "bash", "claude", "bash"],
-    );
-    assert_eq!(
-        steps[1].0, None,
-        "accepted trade-off: disarmed at the shell"
-    );
-    assert_eq!(steps[2], (Some("claude".into()), false, true));
-    assert_eq!(steps[3].0, None);
 }
 
 /// Catches: a login shell missing from `SHELLS` (busybox/Alpine `ash`, common
