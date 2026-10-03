@@ -119,6 +119,7 @@ per cell and the configured history limit still apply.
 - Paste to terminal: `Cmd+V`
 - **Trailing whitespace trimmed** — All copy paths (Cmd+C, Ctrl+C, copy-on-select) strip trailing spaces from terminal rows
 - **Claude gutter normalization** — Multi-line terminal selections remove Claude's repeated non-breaking-space plus `▎` visual margin while preserving isolated block characters and the content's indentation
+- **Claude prompt copy** — Selections remove the composer prompt marker and continuation margin, rejoin width-supported wraps, and preserve typed breaks and pasted glyphs. Composer cleanup requires a column-zero origin outside VT soft-wrap continuations; partial body selections remain literal.
 - **Copy on Select** — When enabled (Settings > Terminal > Copy on select), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar.
 - **Copy feedback (Cmd+C)** — Copying via Cmd+C shows "Copied to clipboard" in the status bar, consistent with copy-on-select and Ctrl+C paths.
 - **OSC 52 clipboard writes** — Terminal programs (tmux, vim, ssh yank) can set the system clipboard via the OSC 52 escape sequence. Because any displayed file/log can also emit it, each write surfaces a non-blocking "Clipboard updated by &lt;session&gt;" notice, and the behavior can be disabled entirely via Settings > Terminal > "Allow OSC 52 clipboard writes". Suggestion chips (OSC 7770 `suggest=`) carrying shell metacharacters are inserted without auto-Enter so a click cannot silently execute a spoofed command.
@@ -384,6 +385,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Implemented in `ContentRenderer`, whose consumers are the Markdown panel and the AI Chat transcript
 
 ### 3.4 File Browser Panel (`Cmd+E`)
+- **Remote file drops**: native OS files dropped onto a connected remote repository are copied through its authenticated daemon connection; sources remain on the Mac. Directory copies require confirmation and existing names are skipped. Each top-level upload is limited to 256 MiB (including archive overhead) and 10,000 entries; symlinks and special files are rejected. Native destination filenames and safe executable permissions are preserved; uploads abort after 30 seconds without data.
 - Directory tree of active repository
 - **Auto-refresh**: directory watcher detects external file changes (create/delete/rename) and refreshes automatically within ~1s, preserving selection
 - Navigation: `↑/↓` (navigate), `Enter` (open/enter dir), `Backspace` (parent dir)
