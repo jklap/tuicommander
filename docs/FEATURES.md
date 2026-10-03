@@ -70,6 +70,8 @@ per cell and the configured history limit still apply.
 - PTY environment: `TERM=xterm-256color`, `COLORTERM=truecolor`, `LANG=en_US.UTF-8`. A parent `NO_COLOR` is stripped (`sanitize_pty_parent_env`) so a TUICommander launched from Codex does not leak that opt-out into independent sessions; per-command flags and per-agent environment can still request monochrome deliberately
 - Pause/resume PTY output (`pause_pty` / `resume_pty` Tauri commands) — suspends reader thread without killing the session
 
+- **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
+
 ### 1.2 Tab Bar
 - Create: `Cmd+T`, `+` button (click = new tab, right-click or long press = agent list)
 - Close: `Cmd+W`, middle-click, context menu

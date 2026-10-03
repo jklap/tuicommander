@@ -5,6 +5,8 @@
 
 CanvasTerminal is the sole terminal renderer. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel (desktop) or WebSocket (browser/PWA).
 
+Remote grid streams report handshake, initial-replay timeout (15 seconds), decode and unexpected-close failures through the transport-local `stream-error` event. CanvasTerminal displays a persistent error toast. Reconnect health resets only after the renderer receives a frame, not at socket open; intentional teardown cancels replay and reconnect timers. No silence deadline applies after initial replay.
+
 ## Architecture
 
 ```
