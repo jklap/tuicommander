@@ -1225,6 +1225,7 @@ mod tests {
     #[test]
     fn a_linked_worktree_source_warms_a_sibling_worktree() {
         let (temp, _repo, worktree) = warming_fixture();
+        std::fs::write(worktree.join(".gitignore"), "build/\n").unwrap();
         std::fs::create_dir_all(worktree.join("build/cache")).unwrap();
         std::fs::write(worktree.join("build/cache/data"), "from-worktree").unwrap();
         let child = temp.path().join("child");
