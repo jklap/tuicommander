@@ -12357,15 +12357,18 @@ pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Optio
             (crate::state::SpawnRootRole::Shell, Some(root), Some(fg)) => {
                 let at_root = fg == root;
                 let name = process_name_from_pid(fg);
-                let detected = if at_root {
-                    None
-                } else {
-                    name.as_deref().and_then(classify_agent).map(str::to_string)
-                };
+                // exec replaces the shell's image without changing its PID.
+                // Root equality proves shell return only if it is not an agent.
+                let detected = name.as_deref().and_then(classify_agent).map(str::to_string);
+                let fg_is_shell = at_root && name.is_some() && detected.is_none();
+                // DEFERRED (2026-10-03) — retain identity but hold input on a
+                // lookup error until the next refresh. A per-PID name cache
+                // needs exec-aware invalidation: an unchanged PID can now own
+                // a different image, so blindly retaining readiness is unsafe.
                 (
                     generation,
                     detected,
-                    at_root,
+                    fg_is_shell,
                     name.is_none(),
                     name.unwrap_or_else(|| "unavailable".into()),
                 )
