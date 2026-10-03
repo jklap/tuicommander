@@ -410,3 +410,7 @@ Sorts branches by priority:
 3. Open PR branches (alphabetical)
 4. Feature branches without PRs (alphabetical)
 5. Merged/closed PR branches (alphabetical, always last)
+
+## Workflow integration receipts
+
+The workflow service checks both merge parents and compares the canonical merge tree with `git merge-tree --write-tree` for those exact parents before running pinned post-integration checks. A merge that adds unrelated content or drops checked source changes cannot receive an integration receipt. A conflicted merge is rejected with an explicit request for human review or a separately verified artifact; the current receipt path does not grant either exception.

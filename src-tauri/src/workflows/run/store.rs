@@ -675,6 +675,15 @@ impl RunStore {
             return Err("canonical HEAD is not a merge of the checked story commit".into());
         }
         let base_commit = parts[1].to_owned();
+        let expected_tree = git_output(
+            canonical,
+            &["merge-tree", "--write-tree", "--no-messages", &base_commit, &source_commit],
+        ).map_err(|error| format!(
+            "clean merge could not be verified; conflict resolution requires explicit human review or a separately verified artifact: {error}"
+        ))?;
+        if expected_tree != merge_tree {
+            return Err("canonical merge tree differs from the verified clean merge".into());
+        }
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
             let receipt = execute_pinned_check(check, canonical)?;
