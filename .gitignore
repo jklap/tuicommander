@@ -53,6 +53,7 @@ scripts/*
 !scripts/build-docs.sh
 !scripts/dev-install.sh
 !scripts/dev-server.mjs
+!scripts/run-remote-fixture.sh
 !scripts/generate-release-notes.sh
 !scripts/report-frontend-bundles.mjs
 !scripts/check-frontend-cycles.mjs

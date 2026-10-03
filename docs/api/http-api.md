@@ -690,6 +690,8 @@ needs, each one the desktop Tauri payload plus a `type` key:
 Frames the server has no grid consumer for are dropped rather than forwarded, so this
 socket does not carry `output`, `parsed` or the activity pulse.
 
+**Initial replay.** Attachment sends a full binary viewport immediately. When a live grid watch has no available frame, the server sends `{"type":"grid-replay-empty"}` instead. This transport control message confirms a healthy empty replay; it is not a PTY event and has no Tauri listener. It uses the same negotiated text framing as the side-channel events. Clients can finish their initial replay deadline on a binary viewport or this marker, while unrelated text events do not establish grid health.
+
 **Dropped-frame recovery.** Binary frames are deltas, and the `watch` channel behind
 this socket keeps only the newest value — a client that cannot keep up skips frames
 and would apply a delta onto a row map missing rows. Each published frame therefore

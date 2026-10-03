@@ -4469,3 +4469,7 @@ or credential is touched.
 - [x] Sidebar: separate status and agents chevron hit areas, collapsed count, and Enter/Space (#1410-e201). _(verified: production components in agent-browser; expanded/collapsed screenshots, trusted keyboard input, and 13 filtered component tests)_
 
 - [x] Voice settings: accent Start, distinct Stop, and Running/Stopped indicator (#1409-4ec3). _(verified: accent colour in agent-browser screenshot; Running/Stopped component regression tests)_
+
+- [ ] Remote empty-grid replay control message (#1421-733e): staged Rust WS change requires a rebuilt backend; targeted loopback WS test and isolated headless fixture cover it before deployment. Keep the running desktop and mac-mint daemon intact until the coordinator schedules deployment.
+
+- [ ] Remote replay rollout (#1421-733e): deploy the updated daemon before the updated client. An older daemon without the explicit empty-replay marker can trigger a false 15-second stream error on a healthy idle session whose initial grid is unavailable. Coordinate deployment after live PTYs can be safely preserved or closed; do not restart mac-mint during this incident.
