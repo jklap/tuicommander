@@ -64,3 +64,54 @@ describe("toastsStore critic 1397", () => {
 		});
 	});
 });
+
+describe("toastsStore critic 1397 round 2", () => {
+	let toastsStore: typeof import("../../stores/toasts").toastsStore;
+	let activityStore: typeof import("../../stores/activityStore").activityStore;
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		vi.resetModules();
+		toastsStore = (await import("../../stores/toasts")).toastsStore;
+		activityStore = (await import("../../stores/activityStore")).activityStore;
+		await activityStore.hydrate();
+		activityStore.clearAll();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("the same agent notice ten minutes later is announced again", () => {
+		// catches: dedup keyed only on 'still in the bell' — a repeated failure an hour later is swallowed with its sound
+		testInScope(() => {
+			expect(toastsStore.addToBell("Build failed", "x", "error", "/repo", undefined, "s1")).not.toBe(-1);
+			vi.advanceTimersByTime(10 * 60_000);
+			expect(toastsStore.addToBell("Build failed", "x", "error", "/repo", undefined, "s1")).not.toBe(-1);
+		});
+	});
+
+	it("an error that displaces an info card gives it back when the error is dismissed", () => {
+		// catches: displaced card lost for good, or queue never pumped on remove
+		testInScope(() => {
+			toastsStore.add("I1", "", "info", false, undefined, 0);
+			toastsStore.add("I2", "", "info", false, undefined, 0);
+			const err = toastsStore.add("Boom", "", "error");
+			expect(toastsStore.toasts.some((t) => t.title === "Boom")).toBe(true);
+			expect(toastsStore.toasts).toHaveLength(2);
+			toastsStore.remove(err);
+			expect(toastsStore.toasts.map((t) => t.title).sort()).toEqual(["I1", "I2"]);
+		});
+	});
+
+	it("an error is not both shown and duplicated into the bell", () => {
+		// catches: error that takes a visible slot is also force-mirrored as if it had overflowed
+		testInScope(() => {
+			toastsStore.add("I1", "", "info", false, undefined, 0);
+			toastsStore.add("I2", "", "info", false, undefined, 0);
+			const before = activityStore.getActive().filter((i) => i.title === "Boom").length;
+			toastsStore.add("Boom", "", "error");
+			expect(activityStore.getActive().filter((i) => i.title === "Boom").length - before).toBeLessThanOrEqual(1);
+		});
+	});
+});
