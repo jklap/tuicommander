@@ -66,7 +66,10 @@ The server has two independent listeners:
 
 The shared `tuic-ipc` crate owns `AppInstance`, endpoint naming and HTTP
 framing. Informational responses (1xx except 101) are skipped until the final
-response arrives. Status 101, 204 and 304 responses finish at the header
+response arrives. More than 32 interim replies per response, or a status/header
+section above 64 KiB including its terminator, returns an invalid-data error.
+These limits persist across reads; response bodies are not subject to the header
+limit. Status 101, 204 and 304 responses finish at the header
 terminator regardless of Content-Length or Transfer-Encoding (RFC 9112 §6.3).
 The clients do not issue HEAD requests.
 The server reuses its short named socket path; CLI and bridge select it
