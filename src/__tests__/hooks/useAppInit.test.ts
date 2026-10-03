@@ -2542,6 +2542,7 @@ describe("initApp", () => {
 			sound: string | null;
 			origin_repo_path?: string;
 			origin_session_id?: string;
+			__tuic_origin?: { connection: string; name?: string };
 		};
 
 		function captureMcpToast() {
@@ -2555,6 +2556,135 @@ describe("initApp", () => {
 			}) as unknown as typeof listen);
 			return { getCallback: () => callback };
 		}
+
+		// Catches: malformed remote fields create a bell item/sound or leak their content into logs.
+		it.each([
+			{ title: null },
+			{ title: 42 },
+			{ message: 42 },
+			{ message: { secret: "do-not-log" } },
+			{ message: undefined },
+		])("1439 discards malformed remote text fields with a content-free debug log: %j", async (malformed) => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const payload = Object.assign(
+				{
+					title: "Private title",
+					message: "Private message",
+					level: "warn",
+					sound: "attention",
+					__tuic_origin: { connection: "mint", name: "mac-mint" },
+				},
+				malformed,
+			);
+			getCallback()!({ payload });
+			expect(activityStore.getForSection("messages")).toHaveLength(0);
+			expect(play).not.toHaveBeenCalled();
+			expect(debug).toHaveBeenCalledExactlyOnceWith("app", "Discarding malformed mirrored MCP toast");
+			debug.mockRestore();
+			play.mockRestore();
+		});
+
+		// Catches: remote toast has no host label, loses severity/sound, or clicks the wrong tab.
+		it("1439 labels a remote notice once and clicks its originating terminal", async () => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			repositoriesStore.add({ path: "/remote/repo", displayName: "Remote", connectionId: "mint" });
+			repositoriesStore.setWorkspace("/remote/repo", "main", { worktreePath: "/remote/repo" });
+			const remote = terminalsStore.add(makeTerminal({ sessionId: "remote-pty", cwd: "/remote/repo" }));
+			repositoriesStore.addTerminalToWorkspace("/remote/repo", "main", remote);
+			const local = terminalsStore.add(makeTerminal({ sessionId: "local-pty" }));
+			terminalsStore.setActive(local);
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const payload: ToastPayload = {
+				title: "Need input",
+				message: "Which branch?",
+				level: "warn",
+				sound: "attention",
+				origin_session_id: "remote-pty",
+				__tuic_origin: { connection: "mint", name: "mac-mint" },
+			};
+			getCallback()!({ payload });
+			getCallback()!({ payload });
+			const notices = activityStore.getForSection("messages");
+			expect(notices).toHaveLength(1);
+			expect(notices[0]).toMatchObject({
+				title: "[mac-mint] Need input",
+				subtitle: "Which branch?",
+				severity: "warn",
+				repoPath: "/remote/repo",
+			});
+			expect(play).toHaveBeenCalledOnce();
+			expect(play).toHaveBeenCalledWith("attention");
+			expect(terminalsStore.state.activeId).toBe(local);
+			notices[0].onClick!();
+			expect(terminalsStore.state.activeId).toBe(remote);
+			expect(repositoriesStore.state.activeRepoPath).toBe("/remote/repo");
+			play.mockRestore();
+		});
+
+		// Catches: an unknown, closed, or local session in a remote notice steals focus.
+		it("1439 remote notices cannot navigate to unknown or locally owned sessions", async () => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			repositoriesStore.add({ path: "/same/path", displayName: "Local" });
+			const local = terminalsStore.add(makeTerminal({ sessionId: "local-pty", cwd: "/same/path" }));
+			terminalsStore.setActive(local);
+			const setActive = vi.spyOn(terminalsStore, "setActive");
+			for (const session of ["unknown", "local-pty"]) {
+				getCallback()!({
+					payload: {
+						title: session,
+						message: null,
+						level: "error",
+						sound: null,
+						origin_repo_path: "/same/path",
+						origin_session_id: session,
+						__tuic_origin: { connection: "mint" },
+					},
+				});
+				const notice = activityStore.getForSection("messages").find((item) => item.title === `[mint] ${session}`)!;
+				expect(notice.repoPath).toBeUndefined();
+				expect(notice.severity).toBe("error");
+				notice.onClick!();
+			}
+			expect(setActive).not.toHaveBeenCalled();
+			expect(terminalsStore.state.activeId).toBe(local);
+			setActive.mockRestore();
+		});
+
+		// Catches: a retained remote notice uses a stale tab after it closes or changes owner.
+		it("1439 rechecks remote terminal ownership when a retained notice is clicked", async () => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			repositoriesStore.add({ path: "/remote/repo", displayName: "Remote", connectionId: "mint" });
+			const remote = terminalsStore.add(makeTerminal({ sessionId: "remote-pty", cwd: "/remote/repo" }));
+			const local = terminalsStore.add(makeTerminal({ sessionId: "local-pty" }));
+			terminalsStore.setActive(local);
+			getCallback()!({
+				payload: {
+					title: "Retained",
+					message: null,
+					level: "info",
+					sound: null,
+					origin_session_id: "remote-pty",
+					__tuic_origin: { connection: "mint", name: "mac-mint" },
+				},
+			});
+			const notice = activityStore.getForSection("messages")[0];
+			terminalsStore.remove(remote);
+			const replacement = terminalsStore.add(makeTerminal({ sessionId: "remote-pty", cwd: "/remote/repo" }));
+			repositoriesStore.add({ path: "/remote/repo", displayName: "Other", connectionId: "other-host" });
+			const setActive = vi.spyOn(terminalsStore, "setActive");
+			notice.onClick!();
+			terminalsStore.remove(replacement);
+			notice.onClick!();
+			expect(setActive).not.toHaveBeenCalled();
+			expect(terminalsStore.state.activeId).toBe(local);
+			setActive.mockRestore();
+		});
 
 		it("plays the named sound through the notification scheme, not the toast's own tone", async () => {
 			const { getCallback } = captureMcpToast();

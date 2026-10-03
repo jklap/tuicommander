@@ -194,7 +194,14 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
     pub fn update_history(&mut self, history_size: usize) {
         let current_history_size = self.history_size();
         if current_history_size > history_size {
-            self.raw.shrink_lines(current_history_size - history_size);
+            let removed = current_history_size - history_size;
+            let lost_content = (0..removed)
+                .any(|offset| !self.raw[Line(self.topmost_line().0 + offset as i32)].is_clear());
+            self.raw.shrink_lines(removed);
+            if lost_content {
+                let oldest = self.topmost_line();
+                self.raw[oldest].copy_origin_unknown = true;
+            }
         }
         self.display_offset = min(self.display_offset, history_size);
         self.max_scroll_limit = history_size;
@@ -220,9 +227,14 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
     /// printed again. Keeps a scrolled-up viewport on the same rows. Rewinds `total_scrolled` by the same amount, so the
     /// eviction base (`total_scrolled() - history_size()`) is unchanged.
     pub fn drop_newest_history(&mut self, count: usize) -> usize {
-        let count = min(count, self.history_size());
+        let old_history_size = self.history_size();
+        let count = min(count, old_history_size);
+        let lost_content = (-(count as i32)..0).any(|line| !self.raw[Line(line)].is_clear());
         if count != 0 {
             self.raw.remove_newest_history(count);
+            if lost_content {
+                self.raw[Line(0)].copy_origin_unknown = true;
+            }
             self.lines_scrolled = self.lines_scrolled.saturating_sub(count);
             // The oldest rows keep their place, so a viewport scrolled up keeps
             // its top row by moving `count` rows closer to the screen.
@@ -363,6 +375,12 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             self.display_offset = min(self.display_offset + positions, self.max_scroll_limit);
         }
 
+        let discarded = positions.saturating_sub(self.max_scroll_limit - self.history_size());
+        let evicts_predecessor = region.start == 0
+            && source == ScrollSource::Overflow
+            && (0..discarded)
+                .any(|offset| !self.raw[Line(self.topmost_line().0 + offset as i32)].is_clear());
+
         // Only rotate the entire history if the active region starts at the top
         // *and* the lines are leaving the screen rather than being removed. A
         // control scroll takes the branch below, which rotates within the
@@ -408,6 +426,10 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         for i in (region.end.0 - positions as i32..region.end.0).map(Line::from) {
             self.raw[i].reset(&self.cursor.template);
         }
+        if evicts_predecessor {
+            let oldest = self.topmost_line();
+            self.raw[oldest].copy_origin_unknown = true;
+        }
     }
 
     pub fn clear_viewport<D>(&mut self)
@@ -430,8 +452,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         // Clear the viewport.
         self.scroll_up(&region, positions);
 
-        // Reset rotated lines.
-        for line in (0..(self.lines - positions)).map(Line::from) {
+        // ED2 replaces every visible row. Overflow can mark a newly blank row
+        // as predecessor-lost after resetting it, so reset that provenance too.
+        for line in (0..self.lines).map(Line::from) {
             self.raw[line].reset(&self.cursor.template);
         }
     }
@@ -484,9 +507,18 @@ impl<T> Grid<T> {
     }
 
     #[inline]
-    pub fn clear_history(&mut self) {
-        // Explicitly purge all lines from history.
-        self.raw.shrink_lines(self.history_size());
+    pub fn clear_history(&mut self)
+    where
+        T: GridCell,
+    {
+        // Explicitly purge all lines from history without changing absolute row ids.
+        let removed = self.history_size();
+        let unknown_predecessor =
+            (-(removed as i32)..0).any(|line| !self.raw[Line(line)].is_clear());
+        self.raw.shrink_lines(removed);
+        if unknown_predecessor {
+            self.raw[Line(0)].copy_origin_unknown = true;
+        }
 
         // Reset display offset.
         self.display_offset = 0;
@@ -503,7 +535,10 @@ impl<T> Grid<T> {
     /// gets its own era instead — the frame protocol flags the alt transition
     /// and consumers drop their row caches there.
     #[inline]
-    pub fn reset_history_era(&mut self) {
+    pub fn reset_history_era(&mut self)
+    where
+        T: GridCell,
+    {
         self.clear_history();
         self.lines_scrolled = 0;
     }
