@@ -204,3 +204,7 @@ For Mac Keyboard, Boss approves the queue once as a process. Store a queue propo
 - Coordinator supplies the new managed peer UUID at deployment.
 - Authentic sanitized Bot API captures are acquired later on mint with Boss present. No live capture is required or claimed by offline slices 1–2.
 - Live end-to-end and pe-3 handover remain coordinator-owned and require Boss readiness. Approval/publisher tooling is a later slice, not implemented by the current offline ports.
+
+## Offline implementation status
+
+Slice 1 adds strict opt-in file configuration, a process-held OS owner lock, per-request zeroized credentials and a safe typed HTTP boundary. The module is deliberately not started by the daemon until native integration lands; synthetic-secret loopback tests exercise it. The recorded public text-update fixture documents its source; no live API equivalence is claimed.
