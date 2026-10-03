@@ -4457,3 +4457,5 @@ or credential is touched.
 ## Edge TTS default engine (1357-7d37)
 
 - [ ] After the next desktop rebuild, with network and a fresh config: Settings > Voice > Spoken replies shows Edge voices for the dictation language; Listen speaks the preview; the choice survives a restart. Run `cargo nextest run -p tuic-dictation --run-ignored only -E 'test(live_edge_service)'` once to confirm the live handshake (Sec-MS-GEC, Origin) still works. Start hands-free and get a reply spoken; say "hush" mid-reply and it stops. Turn the network off: the Voice section shows the "needs an internet connection" error and replies do not hang. Expert > Speech engine: Pocket and External still work; an install that had Pocket keeps Pocket.
+
+- [ ] #1411-097c: After a backend restart, copy a wrapped Claude prompt. Confirm only the outer `❯ ` and two-column margin disappear, width wraps join, and typed newlines remain. Rust changes require Boss to restart `make dev` or rebuild the release.

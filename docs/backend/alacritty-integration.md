@@ -112,7 +112,10 @@ make the two representations overlap.
 
 Clipboard selections use the same absolute grid coordinates. TUICommander joins
 rows marked with `WRAPLINE`, trims terminal padding, and then removes only
-coherent multi-line Claude `NBSP NBSP ▎` visual gutters. This normalization is
+coherent multi-line Claude space/NBSP `▎` visual gutters. Claude composer
+selections remove one leading `❯ ` and two continuation-margin columns; the
+same width-evidence rule rejoins wraps while preserving short typed lines
+and deeper content indentation. Pasted prompt glyphs remain content. This normalization is
 outside the Alacritty fork and is shared by desktop IPC and HTTP clients.
 
 Atomic MCP agent-submission receipts require no Alacritty patch. The receipt
