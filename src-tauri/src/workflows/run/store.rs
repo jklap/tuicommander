@@ -19,10 +19,10 @@ pub struct RunStore {
 }
 
 /// Layout version recorded in `PRAGMA user_version`. Stores created before the
-/// version was recorded report 0 and already have the version 1 layout. A
-/// change to a persisted event or snapshot shape bumps this and adds a step to
-/// `migrate_schema`.
-const RUN_STORE_SCHEMA_VERSION: i64 = 1;
+/// version was recorded report 0 and already have the version 1 layout.
+/// Version 2 adds graph events and additive JSON snapshot fields. Legacy JSON
+/// is decoded with defaults, without inventing graph positions.
+const RUN_STORE_SCHEMA_VERSION: i64 = 2;
 
 static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
 static RECONCILED_RUN_STORES: LazyLock<Mutex<HashSet<PathBuf>>> =
@@ -194,6 +194,7 @@ impl RunStore {
             require_nonempty_policy(&story_definition)?;
         }
         let initial = RunSnapshot {
+            event_contract_version: 2,
             id: Uuid::now_v7().to_string(),
             canonical_ref: git_output(Path::new(&owner), &["symbolic-ref", "HEAD"]).ok(),
             project: owner,
@@ -215,6 +216,7 @@ impl RunStore {
             canonical_recertification: None,
             attempts: vec![],
             effects: vec![],
+            graph_executions: vec![],
         };
         let event = RunEvent {
             sequence: 1,
@@ -1258,6 +1260,18 @@ fn persist_event(
         snapshot: snapshot.clone(),
     };
     insert_event(conn, &snapshot.id, &receipt)?;
+    // Compare the actual stored encoding: legacy snapshots omit additive fields
+    // and cannot be compared to a freshly serialized projection byte-for-byte.
+    let stored_json: String = conn
+        .query_row(
+            "SELECT snapshot_json FROM workflow_runs WHERE id=?1",
+            [&snapshot.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("read workflow projection encoding: {error}"))?;
+    if decode::<RunSnapshot>(&stored_json)? != previous {
+        return Err("workflow projection changed concurrently".into());
+    }
     let changed = conn
         .execute(
             "UPDATE workflow_runs SET status=?1,snapshot_json=?2 WHERE id=?3 AND snapshot_json=?4",
@@ -1265,7 +1279,7 @@ fn persist_event(
                 snapshot.status.as_str(),
                 encode(&snapshot)?,
                 snapshot.id,
-                encode(&previous)?
+                stored_json
             ],
         )
         .map_err(|e| format!("update workflow projection: {e}"))?;
@@ -1404,6 +1418,24 @@ fn choose_event(
     {
         return Err("terminal workflow cannot advance".into());
     }
+    if snapshot.event_contract_version == 0 && !matches!(command, RunCommand::Cancel) {
+        return Err("legacy workflow runs support inspect and cancel only; start a new run".into());
+    }
+    if snapshot.event_contract_version > 2 {
+        return Err("unsupported workflow event contract".into());
+    }
+    if !snapshot.graph_executions.is_empty()
+        && matches!(
+            command,
+            RunCommand::StartAttempt { .. }
+                | RunCommand::StartPlanAgent { .. }
+                | RunCommand::AdvanceLoop
+                | RunCommand::Resume
+                | RunCommand::Complete
+        )
+    {
+        return Err("graph runs require an eligible typed activation transition".into());
+    }
     let expired = at_ms > snapshot.started_ms + i64::from(snapshot.limits.max_duration_secs) * 1000;
     if expired
         && !matches!(
@@ -1446,6 +1478,9 @@ fn choose_event(
         && !matches!(
             command,
             RunCommand::Resume
+                | RunCommand::Graph {
+                    transition: super::graph::GraphTransition::ResolvePause { .. }
+                }
                 | RunCommand::Cancel
                 | RunCommand::ResolveUncertainEffect { .. }
                 | RunCommand::BindAgent { .. }
@@ -1459,6 +1494,39 @@ fn choose_event(
         return Err("workflow is paused".into());
     }
     match command {
+        RunCommand::Graph { transition } => {
+            let event = if let super::graph::GraphTransition::Start {
+                execution_id,
+                target_id,
+            } = &transition
+            {
+                let (id, revision) = if *target_id == snapshot.plan_id {
+                    (&snapshot.definition_id, snapshot.definition_revision)
+                } else {
+                    if !stories.iter().any(|story| story.id == *target_id) {
+                        return Err("graph target does not belong to run plan".into());
+                    }
+                    (
+                        &snapshot.story_definition_id,
+                        snapshot.story_definition_revision,
+                    )
+                };
+                let definition = WorkflowStore::open()?.get_published(id, revision)?;
+                if definition.project != snapshot.project {
+                    return Err("graph definition does not belong to run project".into());
+                }
+                super::graph::GraphEvent::Started {
+                    execution: Box::new(super::graph::GraphExecution::start(
+                        execution_id.clone(),
+                        target_id.clone(),
+                        definition,
+                    )?),
+                }
+            } else {
+                super::graph::GraphEvent::Transition { transition }
+            };
+            Ok(RunEventKind::Graph { event })
+        }
         RunCommand::ClosePlanning => Ok(RunEventKind::PlanningClosed {
             fingerprint: current_plan,
         }),

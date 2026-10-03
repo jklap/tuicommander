@@ -1,16 +1,24 @@
 mod api;
 mod check;
+mod graph;
 mod model;
 mod reducer;
 mod store;
 
 pub use api::*;
 pub use check::*;
+pub use graph::{
+    Activation, ActivationState, DecisionActor, DecisionEvidence, EdgeOutcome, EdgeToken,
+    GRAPH_CONTRACT_VERSION, GraphDecision, GraphEvent, GraphExecution, GraphPause, GraphTransition,
+    LoopCounter, PauseResolution,
+};
 pub use model::*;
 pub use store::*;
 
 #[cfg(test)]
 mod critic_tests;
+#[cfg(test)]
+mod graph_tests;
 
 #[cfg(test)]
 mod tests {
@@ -849,7 +857,7 @@ mod tests {
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
     }
 
-    fn fixture() -> (
+    pub(super) fn fixture() -> (
         tempfile::TempDir,
         tempfile::TempDir,
         String,
@@ -1698,7 +1706,7 @@ mod tests {
         let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
         let db = config.path().join("runs-versioned.sqlite3");
         let store = RunStore::open_at(&db).unwrap();
-        assert_eq!(stored_schema_version(&db), 1, "fresh store records version");
+        assert_eq!(stored_schema_version(&db), 2, "fresh store records version");
         let run = store
             .start_plan(
                 project.path().to_str().unwrap(),
@@ -1714,7 +1722,7 @@ mod tests {
             .pragma_update(None, "user_version", 0)
             .unwrap();
         let upgraded = RunStore::open_at(&db).unwrap();
-        assert_eq!(stored_schema_version(&db), 1);
+        assert_eq!(stored_schema_version(&db), 2);
         assert_eq!(
             upgraded.snapshot(&run.id).unwrap().sequence,
             run.sequence,

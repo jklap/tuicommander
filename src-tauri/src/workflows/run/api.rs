@@ -153,7 +153,8 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             scoped_snapshot(&store, &owner, &run_id)?;
             if matches!(
                 command,
-                RunCommand::BindAgent { .. }
+                RunCommand::Graph { .. }
+                    | RunCommand::BindAgent { .. }
                     | RunCommand::ReportBoundAttempt { .. }
                     | RunCommand::AssignWorktree { .. }
                     | RunCommand::RecordCheck { .. }
@@ -161,7 +162,7 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
                     | RunCommand::RecordRecertification { .. }
             ) {
                 return Err(
-                    "agent binding, reports, and worktree assignment require a managed MCP session"
+                    "graph transitions and verified receipts require their internal backend service; agent binding, reports, and worktree assignment require a managed MCP session"
                         .into(),
                 );
             }

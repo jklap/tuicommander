@@ -2548,3 +2548,6 @@ profile rules or allow/deny policy in `session/new`.
 ### Answers-only View
 
 Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marked answers and their tracked prompts. Turns without marked answers are omitted. Output before the first tracked prompt remains available as a prompt-less turn, from the retained history base. If no answers qualify, the view shows a one-line notice. Toggle the view again to return to the terminal.
+
+
+The graph runtime foundation now persists and replays pinned activations, predecessor tokens, edge decisions and repair counters. Executable validation requires Pause resume targets and deterministic final checks. Fork/all-Join schema is read-only; scheduling, parallel execution and designer controls for these settings remain in development. Old pre-contract runs support inspect/cancel only.

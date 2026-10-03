@@ -4476,3 +4476,6 @@ or credential is touched.
 - [ ] Remote empty-grid replay control message (#1421-733e): staged Rust WS change requires a rebuilt backend; targeted loopback WS test and isolated headless fixture cover it before deployment. Keep the running desktop and mac-mint daemon intact until the coordinator schedules deployment.
 
 - [ ] Remote replay rollout (#1421-733e): deploy the updated daemon before the updated client. An older daemon without the explicit empty-replay marker can trigger a false 15-second stream error on a healthy idle session whose initial grid is unavailable. Coordinate deployment after live PTYs can be safely preserved or closed; do not restart mac-mint during this incident.
+
+
+- [ ] Workflow graph slice A (1446-ff21): after Boss rebuilds/restarts, inspect and cancel a pre-contract run; it must refuse Resume without changing its history. Graph runtime remains disabled. Targeted native store/replay tests cover the backend; the running desktop has not loaded these Rust changes.

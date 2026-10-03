@@ -4,7 +4,12 @@ use super::model::*;
 /// the exact snapshot stored by the writer transaction.
 pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<RunSnapshot, String> {
     if let RunEventKind::Started { initial } = &event.kind {
-        if previous.is_some() || event.sequence != 1 || initial.sequence != 0 {
+        if previous.is_some()
+            || event.sequence != 1
+            || initial.sequence != 0
+            || initial.event_contract_version > 2
+            || !initial.graph_executions.is_empty()
+        {
             return Err("invalid workflow start event".into());
         }
         let mut snapshot = (**initial).clone();
@@ -22,6 +27,66 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
     }
     match &event.kind {
         RunEventKind::Started { .. } => unreachable!(),
+        RunEventKind::Graph { event } => match event {
+            super::graph::GraphEvent::Started { execution } => {
+                if snapshot.graph_executions.iter().any(|existing| {
+                    existing.id == execution.id || existing.target_id == execution.target_id
+                }) {
+                    return Err("graph target already has an execution".into());
+                }
+                let (id, revision) = if execution.target_id == snapshot.plan_id {
+                    (&snapshot.definition_id, snapshot.definition_revision)
+                } else {
+                    (
+                        &snapshot.story_definition_id,
+                        snapshot.story_definition_revision,
+                    )
+                };
+                if execution.definition.id != *id
+                    || execution.definition.revision != revision
+                    || execution.definition.project != snapshot.project
+                {
+                    return Err("graph execution has a foreign definition".into());
+                }
+                let initial = super::graph::GraphExecution::start(
+                    execution.id.clone(),
+                    execution.target_id.clone(),
+                    execution.definition.clone(),
+                )?;
+                if **execution != initial {
+                    return Err("graph start state is not pristine".into());
+                }
+                snapshot.graph_executions.push(initial);
+            }
+            super::graph::GraphEvent::Transition { transition } => {
+                let execution = snapshot
+                    .graph_executions
+                    .iter_mut()
+                    .find(|execution| execution.id == transition.execution_id())
+                    .ok_or("graph execution not found")?;
+                let remaining = snapshot
+                    .limits
+                    .max_loops
+                    .checked_sub(snapshot.loops)
+                    .ok_or("workflow loop budget exhausted")?;
+                snapshot.loops = snapshot
+                    .loops
+                    .checked_add(execution.apply(transition, remaining)?)
+                    .ok_or("loop counter overflow")?;
+                if snapshot
+                    .graph_executions
+                    .iter()
+                    .any(|graph| graph.pauses.iter().any(|pause| pause.resolution.is_none()))
+                {
+                    snapshot.status = RunStatus::Paused;
+                } else if matches!(
+                    transition,
+                    super::graph::GraphTransition::ResolvePause { .. }
+                ) {
+                    snapshot.status = RunStatus::Running;
+                }
+            }
+        },
         RunEventKind::PlanningClosed { fingerprint } => {
             snapshot.planning_fingerprint = Some(fingerprint.clone());
             snapshot.verification_fingerprint = None;

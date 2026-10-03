@@ -737,3 +737,6 @@ For web deployment without Tauri:
 - [SolidJS Documentation](https://www.solidjs.com/docs/latest)
 - [alacritty_terminal crate](https://crates.io/crates/alacritty_terminal)
 - [Tauri Documentation](https://tauri.app/v1/guides/)
+
+
+Graph runtime slice A adds a versioned activation/token/decision ledger and executable validation with pinned Pause targets and deterministic final checks. Fork/Join all schema is restricted to read-only review/validation branches; its execution is pending slice G. Pre-contract runs support inspect/cancel only. Autonomous scheduling remains disabled pending slice B and authorization story 956-9745.

@@ -48,3 +48,6 @@ An orchestrating session in another project cannot read or approve this repo's p
 ## MCP tool schema
 
 The `story` tool publishes the full `StoryAction` JSON Schema (actions, fields, types, enums, the `origin` tag shape, priority range 1 to 3) in its `inputSchema`. It is generated from the Rust types, so it follows the code. Inside `input` the story fields are camelCase (`planId`, `fileScope`) while the action fields are snake_case (`story_id`, `expected_revision`).
+
+
+The graph runtime is being delivered in stages. The first stage stores replayable graph positions and requires explicit pause destinations and final checks for executable definitions, but does not automatically run the Designer's graph. Existing pre-contract runs remain available for inspection and cancellation; resuming one requires starting a new run instead. New record-only runs retain the existing explicit command controls during rollout. Fork/all-Join settings and automatic execution are not yet Designer capabilities.

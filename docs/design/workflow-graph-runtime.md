@@ -1,8 +1,8 @@
 # Native workflow graph runtime
 
-**Status:** Design proposal, not implemented. **Date:** 2026-10-03.
+**Status:** Approved staged design; slice A implements the schema and ledger foundation. **Date:** 2026-10-03.
 **Story:** 1446-ff21. **Source baseline:** `140e8950deae7e4bb7a2f4498c7a23c95eacca21`.
-**Scope:** Execute published Story delivery and Resolve plan graphs in the owning Rust daemon. No production code, runtime tests or builds accompany this document.
+**Scope:** Execute published Story delivery and Resolve plan graphs in the owning Rust daemon. Slice A introduces no scheduler or agent effects; executable delivery remains unavailable.
 
 ## Consumer contract
 
@@ -66,7 +66,7 @@ Events include graph start, node activation/completion, selected edge, decision 
 
 Bump the persisted schema version and add explicit runtime-contract fields and event migrations. Published definitions retain their original bytes. New starts can use the approved runtime interpretation of an old valid graph; store that interpretation in the run. Published settings changed by this proposal require a new definition revision.
 
-Legacy command-driven runs lack graph positions. Preserve read/replay/cancel/receipt access; do not guess positions from their attempt list, silently start agents, or manufacture approval evidence. Proposed default is to refuse graph resume of a legacy run and offer cancellation followed by a new start after reservations are released. Boss must approve this behavior before implementing it. Older binaries must refuse a newer database rather than corrupt it. There is no parallel legacy graph executor.
+Legacy command-driven runs lack graph positions. Preserve read/replay/cancel/receipt access; do not guess positions from their attempt list, silently start agents, or manufacture approval evidence. Proposed default is to refuse graph resume of a legacy run and offer cancellation followed by a new start after reservations are released. Boss approved this behavior on 2026-10-03. Older binaries must refuse a newer database rather than corrupt it. There is no parallel legacy graph executor.
 
 ## Node semantics
 
@@ -244,7 +244,7 @@ Each slice has a truthful capability boundary. A graph may be saved as draft whi
 
 | Slice | Deliverable and reuse | Acceptance and focused validation |
 |---|---|---|
-| A. Semantics and schema | Approve open questions; add versioned activation/token/decision/loop state, replay and executable graph validator; retain definition store | Cases 12, 14, 15, 18-22. Target changed definition/reducer/store tests; schema reopen/replay |
+| A. Semantics and schema | Keep decision 1 open until D; add versioned activation/token/decision/loop state, replay and executable graph validator; retain definition store | Cases 12, 14, 15, 18-22. Target changed definition/reducer/store tests; schema reopen/replay |
 | B. Daemon executor | AppState runtime, owner lock, durable initial activation, predecessor checks, timers and pause/resume/cancel | Cases 01, 06-07, 25-26, 28, 37. Scheduler/store/ownership tests; no model/provider dependency |
 | C. Agent effects and identity | Extract launch adapter, worktree effects, reservations, operation keys, fenced reports/exits and durable role authority | Cases 08-11, 23-24, 27, 32. Managed launch/report tests plus real process boundary probes |
 | D. Story policy | Pre-approval checks, independent approval receipt, Judge/Gate/Loop/Pause/Notify/exclusive Join; typed resolution | Cases 02-05, 12-17, 33. Policy matrix, receipt and cross-store crash tests |
@@ -272,3 +272,12 @@ The coordinator owns broad integration validation after implementation: one fina
 **1 — Approval and integration authority:** independent reviewer approval under the existing human policy and explicit merge in the first runtime remain proposed, not approved. The coordinator will ask Boss before slice D. This question does not block A-C; no approval/merge policy is enabled in those slices. An included WontFix never releases dependents.
 
 The named Mac instance path `~/Library/Application Support/com.tuic.commander/instances/wf-verify` is authorized solely for later E2E and cleanup. It is not used in slice A.
+
+
+## Slice A implementation boundary
+
+Run-store schema 2 and graph contract 1 persist serial activation/token transitions through the existing immediate transaction and replay reducer. All settings/checks are copied from the run-pinned published revision; current drafts are never traversed. Judge/Gate/Dispatch decisions require one typed published outcome and recorded provenance, without granting approval authority. Loop counts are scoped to the graph execution and node and do not reset on resume. Pause resolution follows the copied target and retains typed resolution and reason/evidence history.
+
+The executable validator and Rust `publish_executable` boundary require deterministic final checks and pinned Pause targets. Legacy publication stays record-only for existing UI consumers until slice F switches to executable publication. Fork/Join all schema supports distinct linear read-only Reviewer/Validator branches; execution and broader composition wait for G. No executor, start control, new MCP surface, role authorization, process effect or approval/merge policy is enabled by A.
+
+Existing rows without `eventContractVersion` are replayable, inspectable and cancellable only. New record-only runs created during rollout remain usable through the existing explicit command service, and still never acquire guessed graph positions. Slice B must replace new-run creation with the graph start service before scheduling.

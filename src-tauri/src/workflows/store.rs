@@ -324,6 +324,21 @@ impl WorkflowStore {
         Ok(updated)
     }
 
+    /// Publish a revision that satisfies the graph execution contract.
+    /// The regular publication path remains available for legacy record-only definitions.
+    pub fn publish_executable(
+        &self,
+        id: &str,
+        expected_revision: i64,
+    ) -> Result<PublishedWorkflow, String> {
+        let draft = self.get_draft(id)?;
+        if draft.draft_revision != expected_revision {
+            return Err("workflow draft revision changed".into());
+        }
+        validate_executable_graph(&draft.graph, draft.kind, !draft.required_checks.is_empty())?;
+        self.publish(id, expected_revision)
+    }
+
     pub fn publish(
         &self,
         id: &str,
@@ -686,7 +701,7 @@ fn story_template_graph() -> WorkflowGraph {
             ),
             node("judge", NodeKind::Judge),
             node("repair", NodeKind::Loop { max_iterations: 3 }),
-            node("pause", NodeKind::Pause),
+            node("pause", NodeKind::Pause { resume_to: None }),
             node("end", NodeKind::End),
         ],
         edges: vec![
@@ -723,7 +738,7 @@ fn resolve_plan_graph(story_template_id: &str, story_revision: i64) -> WorkflowG
             ),
             node("judge", NodeKind::Judge),
             node("replan", NodeKind::Loop { max_iterations: 8 }),
-            node("pause", NodeKind::Pause),
+            node("pause", NodeKind::Pause { resume_to: None }),
             node("end", NodeKind::End),
         ],
         edges: vec![
