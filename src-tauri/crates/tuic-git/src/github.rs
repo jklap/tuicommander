@@ -891,7 +891,7 @@ pub fn truncate_ci_logs(logs: &str) -> String {
 }
 
 pub fn sanitize_ci_logs(logs: &str) -> String {
-    String::from_utf8_lossy(&strip_ansi_escapes::strip(logs.as_bytes()))
+    String::from_utf8_lossy(&tuic_ansi::strip(logs.as_bytes()))
         .chars()
         .filter(|character| {
             (*character == '\n' || *character == '\t' || !character.is_control())
