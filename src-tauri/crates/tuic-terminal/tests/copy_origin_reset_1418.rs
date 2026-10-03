@@ -29,3 +29,23 @@ fn copied_selection_partial_line_erase_keeps_unknown_origin_literal() {
     let _ = grid.process(b"\x1b[3J\x1b[1;10H\x1b[K");
     assert_eq!(grid.get_selection_text(0, 0, 0, 79), "❯ literal");
 }
+
+// Catches ED0 clearing every cell but leaving predecessor-loss provenance behind.
+#[test]
+fn copied_selection_full_erase_below_restores_known_origin() {
+    let mut grid = TerminalGrid::new(2, 80, 1);
+    let _ = grid.process("old\r\n❯ literal\r\nlast\r\nmore".as_bytes());
+    let _ = grid.process(b"\x1b[3J\x1b[H\x1b[J");
+    let _ = grid.process("❯ new composer".as_bytes());
+    assert_eq!(grid.get_selection_text(0, 0, 0, 79), "new composer");
+}
+
+// Catches ED1 clearing through the last column but failing to start a fresh row origin.
+#[test]
+fn copied_selection_full_erase_above_restores_known_origin() {
+    let mut grid = TerminalGrid::new(2, 80, 1);
+    let _ = grid.process("old\r\n❯ literal\r\nlast\r\nmore".as_bytes());
+    let _ = grid.process(b"\x1b[3J\x1b[1;80H\x1b[1J\x1b[H");
+    let _ = grid.process("❯ new composer".as_bytes());
+    assert_eq!(grid.get_selection_text(0, 0, 0, 79), "new composer");
+}
