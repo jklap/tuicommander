@@ -50,9 +50,7 @@ fn unrecognised_configured_wrapper_is_revoked_when_the_shell_returns() {
 }
 
 /// Catches: the preset is disarmed during shell startup (first poll sees the
-/// shell before the agent is launched), so a hand-typed or auto-run configured
-/// agent loses identity for its whole lifetime. Also catches revocation firing
-/// on the second shell poll.
+/// shell before the agent is launched), or revoked on the second shell poll.
 #[cfg(unix)]
 #[test]
 fn preset_survives_repeated_shell_polls_before_the_agent_starts() {
@@ -61,12 +59,28 @@ fn preset_survives_repeated_shell_polls_before_the_agent_starts() {
     let _shell = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
     restore(&state, sid, (Some("claude".into()), true, false));
     for _ in 0..3 {
-        assert_eq!(
-            refresh_session_agent(&state, sid).as_deref(),
-            Some("claude")
-        );
+        refresh_session_agent(&state, sid);
     }
     assert_eq!(flags(&state, sid), (Some("claude".into()), true, false));
+}
+
+/// Catches: `refresh_session_agent` returns the foreground-derived `effective`
+/// (None on a shell) while the stored identity is the retained preset; the IPC
+/// and HTTP callers hand that return value to the frontend, which then sees no
+/// agent for a session whose state says claude.
+#[cfg(unix)]
+#[test]
+fn refresh_result_matches_the_retained_preset_identity_during_shell_startup() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "critic-1420r4-startup-return";
+    let _shell = ForegroundIdentityProbe::new(state.clone(), sid, "bash");
+    restore(&state, sid, (Some("claude".into()), true, false));
+    let returned = refresh_session_agent(&state, sid);
+    assert_eq!(
+        returned,
+        flags(&state, sid).0,
+        "returned identity disagrees with stored identity"
+    );
 }
 
 /// Catches: after the observed preset agent exits and the identity is revoked,
