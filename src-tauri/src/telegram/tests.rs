@@ -64,14 +64,25 @@ impl FakeServer {
             State(state): State<Arc<Mutex<ServerState>>>,
             uri: Uri,
             Json(body): Json<Value>,
-        ) -> (StatusCode, Json<Value>) {
+        ) -> (
+            StatusCode,
+            [(axum::http::HeaderName, &'static str); 1],
+            Json<Value>,
+        ) {
             let mut state = state.lock().unwrap();
             state.requests.push((uri.path().into(), body));
             let (status, value) = state
                 .responses
                 .pop_front()
                 .unwrap_or((StatusCode::OK, json!({"ok":true,"result":[]})));
-            (status, Json(value))
+            (
+                status,
+                [(
+                    axum::http::header::LOCATION,
+                    "http://127.0.0.1:9/redirect-target",
+                )],
+                Json(value),
+            )
         }
         let router = Router::new().fallback(respond).with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -232,3 +243,8 @@ fn private_file_validation_rejects_links_permissions_and_malformed_allowlist() {
     std::fs::create_dir(paths.file("allowed_chat_ids")).unwrap();
     assert!(matches!(paths.allowlist(), Err(Error::PrivateFile)));
 }
+
+#[path = "inbound_tests.rs"]
+mod inbound;
+#[path = "journal_tests.rs"]
+mod journal;

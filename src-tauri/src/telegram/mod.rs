@@ -3,13 +3,22 @@
 // and the stable-ID mail/consumption port is implemented. Never auto-enable here.
 mod api;
 mod config;
+mod inbound;
+mod journal;
+mod mail;
 
 pub(crate) use api::BotApi;
 pub(crate) use config::{Config, Owner, Paths};
+pub(crate) use inbound::{Inbound, Poll};
+pub(crate) use mail::{MailPort, PendingMail};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Error {
     Config,
+    Store,
+    State,
+    Capacity,
+    BootstrapUncertain,
     PrivateFile,
     AlreadyOwned,
     Transport,
@@ -24,6 +33,10 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // No external body, path, URL, credential or chat text crosses this seam.
         f.write_str(match self {
+            Self::Store => "telegram_store_unavailable",
+            Self::State => "telegram_invalid_state",
+            Self::Capacity => "telegram_mail_capacity",
+            Self::BootstrapUncertain => "telegram_bootstrap_uncertain",
             Self::Config => "telegram_invalid_config",
             Self::PrivateFile => "telegram_private_file_unavailable",
             Self::AlreadyOwned => "telegram_already_owned",
