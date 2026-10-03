@@ -34,7 +34,8 @@ fn fill(state: &AppState, tag: &str, recipients: usize, per: usize, sender: &str
 #[test]
 fn one_sender_cannot_starve_every_other_sender_of_the_replay_budget() {
     let state = test_state();
-    fill(&state, "hostile", 656, 100, "mint/hostile");
+    fill(&state, "hostile", 655, 100, "mint/hostile");
+    fill(&state, "hostile-tail", 1, 36, "mint/hostile");
     assert_eq!(
         record_forwarded(
             &state,
