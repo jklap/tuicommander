@@ -91,6 +91,7 @@ describe("initApp", () => {
 		vi.useFakeTimers();
 		vi.mocked(listen).mockReset().mockResolvedValue(vi.fn());
 		resetStores();
+		sessionStorage.clear();
 	});
 
 	afterEach(() => {
@@ -107,6 +108,77 @@ describe("initApp", () => {
 		await initApp(createMockDeps());
 		expect(log).toHaveBeenCalledWith("app", expect.stringContaining("navigation=reload"));
 		expect(log).toHaveBeenCalledWith("app", expect.stringContaining(`documentStart=${performance.timeOrigin}`));
+	});
+
+	// Catches: ui-tab documents are saved but initApp returns after restoring a branch without restoring them.
+	it("restores an MCP Markdown document after unload and repository startup without duplicating its identity", async () => {
+		vi.resetModules();
+		const { initApp } = await import("../../hooks/useAppInit");
+		const { mdTabsStore } = await import("../../stores/mdTabs");
+		const { repositoriesStore } = await import("../../stores/repositories");
+		let send: ((event: { payload: unknown }) => void) | undefined;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") send = handler;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+		const events = vi.spyOn(window, "addEventListener");
+		repositoriesStore.add({ path: "/repo", displayName: "repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { branchName: "main", worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+		await initApp(createMockDeps());
+		const payload = {
+			id: "boss-digest",
+			title: "Digest",
+			html: "",
+			pinned: false,
+			url: "tuic://open//Users/boss/Gits/digest.md",
+		};
+		send!({ payload });
+		expect(mdTabsStore.getActive()).toMatchObject({ mcpUiId: "boss-digest" });
+		const unload = events.mock.calls.find(([name]) => name === "beforeunload")?.[1];
+		expect(unload).toBeTypeOf("function");
+		(unload as EventListener)(new Event("beforeunload"));
+		// A reload discards the old module graph; a repeated init in one graph is idempotent.
+		vi.resetModules();
+		const { initApp: reloadApp } = await import("../../hooks/useAppInit");
+		const { mdTabsStore: restored } = await import("../../stores/mdTabs");
+		const { repositoriesStore: restoredRepos } = await import("../../stores/repositories");
+		restoredRepos.add({ path: "/repo", displayName: "repo" });
+		restoredRepos.setWorkspace("/repo", "main", { branchName: "main", worktreePath: "/repo" });
+		restoredRepos.setActiveWorkspace("/repo", "main");
+		restoredRepos.setActive("/repo");
+		await reloadApp(createMockDeps());
+		expect(restored.getActive()).toMatchObject({
+			mcpUiId: "boss-digest",
+			filePath: "/Users/boss/Gits/digest.md",
+		});
+		send!({ payload });
+		expect(restored.getCount()).toBe(1);
+	});
+
+	// Catches: a rejected branch restore skips Markdown restore and leaves later MCP tabs unsaved.
+	it("arms MCP Markdown snapshots even when branch restoration rejects", async () => {
+		vi.resetModules();
+		const { initApp } = await import("../../hooks/useAppInit");
+		const { mdTabsStore } = await import("../../stores/mdTabs");
+		const { repositoriesStore } = await import("../../stores/repositories");
+		repositoriesStore.add({ path: "/repo", displayName: "repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { branchName: "main", worktreePath: "/repo" });
+		repositoriesStore.setActiveWorkspace("/repo", "main");
+		repositoriesStore.setActive("/repo");
+		const failure = new Error("branch restore failed");
+		await expect(initApp(createMockDeps({ handleBranchSelect: vi.fn().mockRejectedValue(failure) }))).rejects.toBe(
+			failure,
+		);
+		mdTabsStore.addMcpFile("boss-digest", "", "/Users/boss/Gits/digest.md", false, false);
+		vi.resetModules();
+		const { mdTabsStore: reloaded } = await import("../../stores/mdTabs");
+		reloaded.restoreAfterReload();
+		expect(reloaded.getActive()).toMatchObject({
+			mcpUiId: "boss-digest",
+			filePath: "/Users/boss/Gits/digest.md",
+		});
 	});
 
 	it("hydrates stores and detects platform", async () => {
