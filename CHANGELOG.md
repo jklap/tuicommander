@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Hands-free controls** — Start conversation uses the accent action style. A coloured Running/Stopped indicator keeps the current state visible.
 
 - **Sidebar agents toggle** — A separate, always-visible chevron controls the agent list. The status icon selects the branch, and collapsed counts stay beside the chevron.
+- **Bodyless IPC replies** — CLI and bridge response decoding completes at the headers for HTTP 1xx, 204 and 304, and CLI HEAD replies, instead of waiting for a body or connection EOF.
+
+- **Named-instance IPC clients** — `tuic` and `tuic-bridge` now select the server's instance socket with `--instance <id>` or `TUIC_APP_INSTANCE`. The CLI background runner keeps the same namespace, and bridge fallback discovery cannot connect to another instance.
 
 - **Suspend Tab** — Right-click a terminal tab → Suspend Tab ends its process and agent to free memory and CPU, and keeps the tab (marked `zz`) restorable like after a restart. Resume Tab, or the Resume button in the tab, opens a new session in the same folder and resumes the agent. A suspended tab stays suspended across a restart. Suspend is refused while the agent is working or a question awaits input. MCP: `session action=suspend` returns the tab's verdict, or an error when no UI is attached. Unlike auto-standby, which only pauses an idle process, a suspended tab holds no process.
 

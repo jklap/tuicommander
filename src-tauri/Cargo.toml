@@ -2,8 +2,10 @@
 members = [
     ".",
     "crates/tuic-terminal",
+    "crates/tuic-ansi",
     "crates/tuic-test-support",
     "crates/tuic-core",
+    "crates/tuic-ipc",
     "crates/tuic-git",
     "crates/tuic-dictation",
     "crates/tuic-bridge",
@@ -165,6 +167,7 @@ serde_json = "1"
 [dependencies]
 tuic-terminal = { path = "crates/tuic-terminal" }
 tuic-core = { path = "crates/tuic-core" }
+tuic-ipc = { path = "crates/tuic-ipc" }
 tuic-git = { path = "crates/tuic-git" }
 tuic-dictation = { path = "crates/tuic-dictation", optional = true }
 agent-client-protocol = { version = "=2.0.0", features = [
@@ -208,7 +211,6 @@ gix = { version = "0.85", default-features = false, features = [
 parking_lot = "0.12"
 regex = "1"
 # github.rs sanitize_ci_logs strips terminal escapes from CI logs in production.
-strip-ansi-escapes = "0.2"
 lazy_static = "1"
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 # Not test-only: `progress::export::atomic_replace` needs a uniquely named
