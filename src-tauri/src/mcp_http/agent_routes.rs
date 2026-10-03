@@ -414,7 +414,7 @@ pub(super) async fn spawn_agent_session(
             &crate::config::load_agents_config(),
             Some(agent_type.as_str()),
         );
-        session_state.agent_type = Some(agent_type.clone());
+        session_state.seed_configured_agent(Some(agent_type.clone()));
     }
     state
         .session_maps

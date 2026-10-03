@@ -34,7 +34,7 @@ Turn this setting off for an agent if you want to answer its normal trust questi
 
 ## Agent Detection
 
-A supported agent started by hand in a terminal is detected from its foreground process on macOS, Linux and Windows. The backend records that identity in both desktop and headless builds, without requiring an open UI. HTTP and desktop foreground queries use the same detection logic. `TUIC_SESSION` identifies the terminal; it does not turn a plain shell into an agent. A discovered agent stops being eligible when its foreground returns to a shell or another non-agent. Configured launch presets remain available during startup. Submission and mail wake still require a ready composer with no partial user input or approval prompt.
+A supported agent started by hand in a terminal is detected from its foreground process on macOS, Linux and Windows. The backend records that identity in both desktop and headless builds, without requiring an open UI. HTTP and desktop foreground queries use the same detection logic. `TUIC_SESSION` identifies the terminal; it does not turn a plain shell into an agent. An agent stops being eligible when its foreground returns to a shell. Configured launch presets remain available during startup until the agent is first observed; after that they are also revoked on return to a shell. Transient tool subprocesses preserve agent identity. Submission and mail wake still require a ready composer with no partial user input or approval prompt.
 
 TUICommander auto-detects which agent is running in each terminal by matching output patterns. Detection uses agent-specific status line markers:
 

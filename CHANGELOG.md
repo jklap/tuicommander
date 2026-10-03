@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - **Remote agent detection** — Agents started by hand in a headless terminal gain backend agent state, safe submit and mail wake. HTTP and desktop foreground detection now share the state update. Rejected submissions and unavailable mail wakes explain the cause and the next action.
-- Revoke process-discovered agent identity when the foreground returns to a non-agent, preserving run-config presets; recognise native versioned Claude executables on Linux.
+- Revoke agent identity when the foreground returns to a shell after the agent was observed, retaining startup presets and transient helpers; recognise native versioned and updater-replaced Claude executables on Linux.
 
 - **Hands-free controls** — Start conversation uses the accent action style. A coloured Running/Stopped indicator keeps the current state visible.
 

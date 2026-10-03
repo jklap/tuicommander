@@ -4616,8 +4616,7 @@ fn handle_agent_with_parent_cwd(
             if effective_agent_type.is_some() {
                 session_state.hook_instrumented =
                     crate::pty::hook_instrumented_for(&agents_cfg, effective_agent_type.as_deref());
-                session_state.agent_type = effective_agent_type.clone();
-                session_state.agent_type_from_run_config = true;
+                session_state.seed_configured_agent(effective_agent_type.clone());
             }
             state
                 .session_maps
