@@ -2177,8 +2177,8 @@ impl<T: EventListener> Handler for Term<T> {
             ansi::ClearMode::Above => {
                 let cursor = self.grid.cursor.point;
 
-                // If clearing more than one line.
-                if cursor.line > 1 {
+                // Upstream's > 1 guard skips row zero when the cursor is on row one.
+                if cursor.line > 0 {
                     // Fully clear all lines before the current line.
                     self.grid.reset_region(..cursor.line);
                 }

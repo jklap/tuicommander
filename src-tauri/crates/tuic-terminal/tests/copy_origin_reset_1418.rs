@@ -156,3 +156,33 @@ fn copied_selection_pulled_history_boundary_activates_then_full_reset_restores_k
     grid.resize(ReflowMode::None, 4, 12);
     assert!(!grid[Line(0)].copy_origin_unknown);
 }
+
+// Catches ED1 on row zero resetting rows below its cursor along with the erased row.
+#[test]
+fn copied_selection_ed1_on_first_row_restores_origin_without_erasing_second_row() {
+    let mut grid = TerminalGrid::new(2, 80, 1);
+    let _ = grid.process("old\r\nolder\r\n❯ literal\r\nlast\x1b[3J".as_bytes());
+    assert_eq!(grid.get_selection_text(0, 0, 0, 79), "❯ literal");
+    let _ = grid.process(b"\x1b[1;80H\x1b[1J");
+    assert_eq!(grid.get_selection_text(0, 0, 0, 79).trim_end(), "");
+    assert_eq!(grid.get_selection_text(1, 0, 1, 79), "last");
+    let _ = grid.process("\x1b[1;1H❯ new composer".as_bytes());
+    assert_eq!(grid.get_selection_text(0, 0, 0, 79), "new composer");
+}
+
+// Catches ED1 on the last row failing to reset all preceding rows or over-erasing its suffix.
+#[test]
+fn copied_selection_ed1_on_last_row_resets_preceding_rows_and_keeps_cursor_suffix() {
+    let mut grid = TerminalGrid::new(3, 80, 1);
+    let _ = grid.process("old\r\nolder\r\n❯ literal\r\nmiddle\r\nlast\x1b[3J".as_bytes());
+    assert_eq!(grid.get_selection_text(0, 0, 0, 79), "❯ literal");
+    let _ = grid.process(b"\x1b[3;1H\x1b[1J");
+    for row in 0..2 {
+        assert_eq!(grid.get_selection_text(row, 0, row, 79).trim_end(), "");
+    }
+    assert_eq!(grid.get_selection_text(2, 0, 2, 79), " ast");
+    let _ = grid.process("\x1b[1;1H❯ first composer\x1b[2;1H❯ second composer".as_bytes());
+    assert_eq!(grid.get_selection_text(0, 0, 0, 79), "first composer");
+    assert_eq!(grid.get_selection_text(1, 0, 1, 79), "second composer");
+    assert_eq!(grid.get_selection_text(2, 0, 2, 79), " ast");
+}
