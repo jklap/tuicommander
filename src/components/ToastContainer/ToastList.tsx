@@ -41,7 +41,10 @@ export const ToastList: Component<ToastListProps> = (props) => {
 						<span class={styles.body}>
 							<span class={styles.titleRow}>
 								<Show when={props.repoName(toast)}>{(name) => <span class={styles.repo}>{name()}</span>}</Show>
-								<span class={styles.title}>{toast.title}</span>
+								<span class={styles.title}>
+									{toast.title}
+									<Show when={(toast.count ?? 1) > 1}> ×{toast.count}</Show>
+								</span>
 							</span>
 							{toast.message && <span class={styles.message}>{toast.message}</span>}
 						</span>
