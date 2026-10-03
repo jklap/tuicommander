@@ -70,6 +70,8 @@ per cell and the configured history limit still apply.
 - PTY environment: `TERM=xterm-256color`, `COLORTERM=truecolor`, `LANG=en_US.UTF-8`. A parent `NO_COLOR` is stripped (`sanitize_pty_parent_env`) so a TUICommander launched from Codex does not leak that opt-out into independent sessions; per-command flags and per-agent environment can still request monochrome deliberately
 - Pause/resume PTY output (`pause_pty` / `resume_pty` Tauri commands) — suspends reader thread without killing the session
 
+- **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
+
 ### 1.2 Tab Bar
 - Create: `Cmd+T`, `+` button (click = new tab, right-click or long press = agent list)
 - Close: `Cmd+W`, middle-click, context menu
@@ -2542,3 +2544,7 @@ profile rules or allow/deny policy in `session/new`.
 - On desktop, `done` and `blocked` entries also send a native OS notification with the project and entry text while TUICommander is unfocused. A macOS click opens Progress at that project and terminal. `intent`, hand-off, and message entries remain silent; identical notices within five seconds are coalesced
 - The notification bell always offers Terminal Progress, including with zero unread updates; `Cmd/Ctrl+Shift+P` and the command palette open the same dialog
 - `progress_tracking` gate: a global setting ANDed with a per-agent override. Global off removes the tool from every agent's tool list
+
+### Answers-only View
+
+Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marked answers and their tracked prompts. Turns without marked answers are omitted. Output before the first tracked prompt remains available as a prompt-less turn, from the retained history base. If no answers qualify, the view shows a one-line notice. Toggle the view again to return to the terminal.
