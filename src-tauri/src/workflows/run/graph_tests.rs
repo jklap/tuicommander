@@ -1,3 +1,4 @@
+use super::graph::*;
 use super::*;
 use crate::workflows::{
     AgentRole, Edge, JoinMode, Node, NodeKind, WorkflowGraph, WorkflowKind, WorkflowStore,
@@ -569,7 +570,16 @@ fn legacy_run_replays_and_cancels_without_guessed_graph_state() {
     snapshot.as_object_mut().unwrap().remove("graphExecutions");
     let receipt = store.events_after(&run.id, 0, 1).unwrap().remove(0);
     let mut event = serde_json::to_value(receipt).unwrap();
-    event["kind"]["initial"] = snapshot.clone();
+    // Started contains the pre-commit sequence (zero), not the sequence-one
+    // projection returned by start_plan. Preserve the captured native event.
+    event["kind"]["initial"]
+        .as_object_mut()
+        .unwrap()
+        .remove("eventContractVersion");
+    event["kind"]["initial"]
+        .as_object_mut()
+        .unwrap()
+        .remove("graphExecutions");
     connection
         .execute(
             "UPDATE workflow_runs SET snapshot_json=?1 WHERE id=?2",
