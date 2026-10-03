@@ -283,7 +283,7 @@ pub enum RunEventKind {
     },
     PlanningReopened,
     AttemptStarted {
-        attempt: NodeAttempt,
+        attempt: Box<NodeAttempt>,
     },
     WorktreeAssigned {
         story_id: String,

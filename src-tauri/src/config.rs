@@ -254,7 +254,7 @@ fn resolve_real_config_dir() -> PathBuf {
     let platform_dir = dirs::config_dir();
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let instance = crate::app_instance::current_app_instance();
-    let new_dir = tuic_core::config_dir::production_path(platform_dir.as_deref(), &home, &instance);
+    let new_dir = tuic_core::config_dir::production_path(platform_dir.as_deref(), &home, instance);
 
     // Migrate if our config file is missing (the dir may already exist from Tauri's window-state plugin)
     if instance.is_default() && !new_dir.join(APP_CONFIG_FILE).exists() {
@@ -2076,6 +2076,7 @@ pub(crate) fn preserve_redacted_app_config_secrets(config: &mut AppConfig, curre
 /// Objects merge key by key; arrays and scalars replace wholesale, so a caller
 /// can still clear a list by sending an empty one or blank a string by sending
 /// `""`.
+#[cfg(test)]
 pub(crate) fn merge_partial_app_config(
     current: &AppConfig,
     incoming: serde_json::Value,
@@ -2394,6 +2395,7 @@ where
 
     /// Write `value` unconditionally under both locks — the "plain locked write" for
     /// callers replacing a whole document, as opposed to `update()`'s read-modify-write.
+    #[cfg(test)]
     pub(crate) fn save(&self, value: &T) -> Result<(), String> {
         let guard = config_write_lock();
         self.write_holding_lock(&guard, value)
@@ -2616,6 +2618,7 @@ pub(crate) fn rotate_session_token(state: &crate::AppState) -> Result<String, St
 /// overrides (forced port, forced `lan_auth_bypass = false`) that must not reach
 /// the file. Best effort for the caller: a host without a usable vault keeps the
 /// old in-memory behaviour.
+#[cfg(any(test, not(feature = "desktop")))]
 pub(crate) fn persist_session_token(token: &str) -> Result<(), String> {
     let mut stored = load_app_config();
     stored.services.auth.session_token = token.to_string();

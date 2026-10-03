@@ -613,6 +613,25 @@ pub(crate) struct SessionState {
     /// Detected agent type, if known
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// Run-config identity is armed before first observation; discovered identity
+    /// is revoked when a shell returns to the foreground.
+    #[serde(skip)]
+    pub(crate) agent_type_from_run_config: bool,
+    /// A preset is armed during shell startup only. Once its agent has been
+    /// observed, shell foreground means it has exited and cannot receive input.
+    #[serde(skip)]
+    pub(crate) agent_foreground_observed: bool,
+    /// Accepted OS foreground snapshot order; late completion cannot overwrite
+    /// a newer observation from another timer/IPC/HTTP caller.
+    #[serde(skip)]
+    pub(crate) foreground_probe_generation: u64,
+    #[serde(skip)]
+    pub(crate) spawn_root_role: SpawnRootRole,
+    /// A direct agent child owns foreground, or root observation is unavailable.
+    #[serde(skip)]
+    pub(crate) foreground_input_blocked: bool,
+    #[serde(skip)]
+    pub(crate) foreground_probe_result: Option<String>,
     /// Keep the foreground detection warning to one record per session.
     #[serde(skip)]
     pub(crate) unknown_foreground_warned: bool,
@@ -664,6 +683,15 @@ pub(crate) struct SessionState {
     /// Epoch ms of last push notification sent for this session (rate limiting)
     #[serde(skip)]
     pub last_push_ms: Option<u64>,
+}
+
+/// Immutable spawn metadata; unknown mirrors cannot authorize local injection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SpawnRootRole {
+    #[default]
+    Unknown,
+    Shell,
+    DirectProgram,
 }
 
 impl SessionState {
@@ -778,6 +806,15 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
 }
 
 /// PartialEq excludes last_activity_ms (telemetry, not logical state).
+impl SessionState {
+    /// Seed configured identity synchronously, before readers/events can use it.
+    pub(crate) fn seed_configured_agent(&mut self, agent_type: Option<String>) {
+        self.agent_type_from_run_config = agent_type.is_some();
+        self.agent_foreground_observed = false;
+        self.agent_type = agent_type;
+    }
+}
+
 /// Used by WS dedup to avoid sending identical state frames.
 impl PartialEq for SessionState {
     fn eq(&self, other: &Self) -> bool {
@@ -2199,6 +2236,8 @@ pub struct AppState {
     /// Sessions running on connected remote machines, mirrored from their own
     /// `GET /sessions` and `/events` so they raise the same badges as local ones.
     pub(crate) remote_sessions: crate::remote_mirror::RemoteSessions,
+    /// Duplex, authenticated agent mail links through this desktop hub.
+    pub(crate) remote_mail: crate::mcp_http::remote_peer::RemoteMail,
     /// Task registry for long-running MCP orchestration. Survives client
     /// reconnects, so an orchestrator is not bound by the 300s wait ceiling.
     pub(crate) tasks: Arc<crate::tasks::TaskRegistry>,
@@ -2429,7 +2468,9 @@ impl AppState {
 
     pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) -> u64 {
         self.track_blocked_hold(recipient, &msg);
-        self.store_agent_inbox(recipient, msg)
+        let timestamp = self.store_agent_inbox(recipient, msg);
+        crate::mcp_http::remote_peer::notice_stored(self, recipient);
+        timestamp
     }
 
     /// `push_agent_inbox` without touching BLOCKED holds, for replaying mail that
@@ -3417,6 +3458,7 @@ impl AppState {
             tunnel_manager,
             remote: Default::default(),
             remote_sessions: Default::default(),
+            remote_mail: Default::default(),
             tunnel_audit,
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
@@ -4238,6 +4280,10 @@ impl AppState {
         }
         state.agent_state = if state.agent_type.is_none() {
             None
+        } else if state.foreground_input_blocked {
+            // A direct program's child owns the terminal even if the retained
+            // ready screen or completion marker still describes the parent.
+            Some("working".to_string())
         } else if state.awaiting_input || state.choice_prompt.is_some() {
             Some("awaiting_input".to_string())
         } else if background_work {
@@ -4524,12 +4570,16 @@ impl AppState {
                     .entry(session_id.clone())
                     .and_modify(|session| {
                         session.last_activity_ms = now_ms;
-                        session.agent_type = agent_type.clone();
+                        // Creation may be applied after foreground discovery.
+                        // Never re-arm a preset whose agent was already seen.
+                        if session.agent_type.is_none() && !session.agent_foreground_observed {
+                            session.seed_configured_agent(agent_type.clone());
+                        }
                     })
-                    .or_insert_with(|| SessionState {
-                        last_activity_ms: now_ms,
-                        agent_type: agent_type.clone(),
-                        ..Default::default()
+                    .or_insert_with(|| {
+                        let mut session = SessionState { last_activity_ms: now_ms, ..Default::default() };
+                        session.seed_configured_agent(agent_type.clone());
+                        session
                     });
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
@@ -8327,6 +8377,31 @@ mod tests {
             display_name: None,
             parent_session: None,
         }
+    }
+
+    /// Catches: a delayed creation event re-arms a preset after the agent was
+    /// observed and exited, reopening unattended input into the returned shell.
+    #[test]
+    fn delayed_session_created_cannot_rearm_an_observed_agent_after_exit() {
+        let state = Arc::new(make_test_app_state());
+        let mut session = SessionState::default();
+        session.seed_configured_agent(Some("claude".into()));
+        session.agent_foreground_observed = true;
+        session.agent_type = None;
+        session.agent_type_from_run_config = false;
+        state
+            .session_maps
+            .session_states
+            .insert("late-created".into(), session);
+        AppState::apply_event_to_session_state(&state, &session_created("late-created", "claude"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("late-created")
+            .unwrap();
+        assert_eq!(row.agent_type, None);
+        assert!(!row.agent_type_from_run_config);
+        assert!(row.agent_foreground_observed);
     }
 
     /// Catches: SessionCreated building the row without `last_activity_ms` or

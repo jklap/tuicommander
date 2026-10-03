@@ -1157,6 +1157,19 @@ describe("transport", () => {
 			});
 		});
 
+		// Catches: exposing Finder source paths to HTTP token holders and enabling exfiltration.
+		it("keeps remote copy coordination desktop-only", () => {
+			expect(INTENTIONALLY_UNMAPPED.has("fs_transfer_remote_paths")).toBe(true);
+			expect(() =>
+				mapCommandToHttp("fs_transfer_remote_paths", {
+					connectionId: "mint",
+					destDir: "/repo/dst",
+					paths: ["/Mac/file"],
+					allowRecursive: false,
+				}),
+			).toThrow(/native\/host-only/);
+		});
+
 		// --- PTY/terminal read commands (story 062) ---
 		it("maps get_shell_state to GET with {state} unwrap transform", () => {
 			const result = mapCommandToHttp("get_shell_state", { sessionId: "s1" });

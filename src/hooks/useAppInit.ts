@@ -23,6 +23,7 @@ import { uiStore } from "../stores/ui";
 import { workflowRunSignals } from "../stores/workflowRunSignals";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, rpc, subscribeEvents } from "../transport";
+import { getSessionConnection } from "../transportRuntime";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { classifyFile, isImageFile } from "../utils/filePreview";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
@@ -57,6 +58,7 @@ interface McpToastPayload {
 	sound: string | null;
 	origin_repo_path?: string;
 	origin_session_id?: string;
+	__tuic_origin?: { connection: string; name?: string };
 }
 
 const MCP_TOAST_LISTENER_KEY = "__tuic_mcp_toast_listener__";
@@ -559,22 +561,41 @@ export async function initApp(deps: AppInitDeps) {
 	}
 
 	replaceMcpToastListener((event) => {
-		const { title, message, level, sound, origin_repo_path, origin_session_id } = event.payload;
+		const { title, message, level, sound, origin_repo_path, origin_session_id, __tuic_origin: origin } = event.payload;
+		if (origin && (typeof title !== "string" || (message !== null && typeof message !== "string"))) {
+			appLogger.debug("app", "Discarding malformed mirrored MCP toast");
+			return;
+		}
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
 		// Backend notifications stay in the bell; they never cover the active input.
 		// Only a registered repo may scope a bell item.
-		const repoPath = resolveRepoForCwd(origin_repo_path) ?? undefined;
+		const terminalId = origin_session_id ? terminalsStore.findBySessionId(origin_session_id) : undefined;
+		const repoPath = origin
+			? ((terminalId && getSessionConnection(origin_session_id) === origin.connection
+					? repositoriesStore.getRepoPathForTerminal(terminalId)
+					: undefined) ?? undefined)
+			: (resolveRepoForCwd(origin_repo_path) ?? undefined);
+		const visibleTitle = origin ? `[${origin.name ?? origin.connection}] ${title}` : title;
 		const visibleMessage = message ?? "";
 		const action = origin_session_id
 			? {
 					label: "Open terminal",
 					onClick: () => {
 						const id = terminalsStore.findBySessionId(origin_session_id);
-						if (id) navigateToTerminal(id);
+						if (id && (!origin || getSessionConnection(origin_session_id) === origin.connection))
+							navigateToTerminal(id);
 					},
 				}
 			: undefined;
-		const noticeId = toastsStore.addToBell(title, visibleMessage, safeLevel, repoPath, action, origin_session_id);
+		const noticeId = toastsStore.addToBell(
+			visibleTitle,
+			visibleMessage,
+			safeLevel,
+			repoPath,
+			action,
+			origin_session_id,
+			origin?.connection,
+		);
 		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
 

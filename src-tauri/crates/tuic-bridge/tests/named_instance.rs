@@ -81,11 +81,15 @@ fn named_instance_bridge_reaches_its_socket_and_override_wins() {
         );
         assert!(
             seen.iter().any(|line| line == "POST /mcp HTTP/1.1"),
-            "{mode}: {seen:?}"
+            "{mode}: {seen:?}; binary: {}; stderr: {}",
+            env!("CARGO_BIN_EXE_tuic-bridge"),
+            String::from_utf8_lossy(&output.stderr)
         );
         assert!(
             seen.iter().any(|line| line == "DELETE /mcp HTTP/1.1"),
-            "{mode}: {seen:?}"
+            "{mode}: {seen:?}; binary: {}; stderr: {}",
+            env!("CARGO_BIN_EXE_tuic-bridge"),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

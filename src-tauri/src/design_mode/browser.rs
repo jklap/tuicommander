@@ -87,10 +87,10 @@ pub(crate) fn chrome_candidates() -> Vec<PathBuf> {
 
 pub(crate) async fn launch_or_attach(repo_root: &Path) -> Result<(Browser, Handler), String> {
     let profile = profile_dir(repo_root);
-    if let Ok(port) = read_active_port(&profile) {
-        if let Ok(attached) = Browser::connect(format!("http://127.0.0.1:{port}")).await {
-            return Ok(attached);
-        }
+    if let Ok(port) = read_active_port(&profile)
+        && let Ok(attached) = Browser::connect(format!("http://127.0.0.1:{port}")).await
+    {
+        return Ok(attached);
     }
     let chrome = chrome_candidates()
         .into_iter()

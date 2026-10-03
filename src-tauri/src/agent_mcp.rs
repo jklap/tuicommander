@@ -546,8 +546,8 @@ fn install_bridge_binary(source: &std::path::Path) -> Result<PathBuf, String> {
     if matches() {
         return Ok(target);
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create bridge directory: {e}"))?;
-    let mut temp = tempfile::NamedTempFile::new_in(&dir)
+    std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create bridge directory: {e}"))?;
+    let mut temp = tempfile::NamedTempFile::new_in(dir)
         .map_err(|e| format!("Failed to create bridge temp file: {e}"))?;
     copy_verified_bridge(source, &mut temp, &digest)?;
     #[cfg(unix)]
@@ -632,11 +632,10 @@ fn backup_config_once(path: &std::path::Path, agent_label: &str, text: &str) {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = backup.symlink_metadata() {
-                if metadata.is_file() {
-                    let _ =
-                        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o600));
-                }
+            if let Ok(metadata) = backup.symlink_metadata()
+                && metadata.is_file()
+            {
+                let _ = std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o600));
             }
         }
         return;
@@ -1234,13 +1233,12 @@ fn yaml_edit_is_surgical(
             .get(key)
             .and_then(serde_yaml::Value::as_mapping)
             .is_some_and(serde_yaml::Mapping::is_empty)
+        && let Some(root) = after.as_mapping_mut()
     {
-        if let Some(root) = after.as_mapping_mut() {
-            root.insert(
-                serde_yaml::Value::String(key.to_string()),
-                serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
-            );
-        }
+        root.insert(
+            serde_yaml::Value::String(key.to_string()),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
     }
     if before.get(key).is_none()
         && after.get(key).is_some_and(|section| {
@@ -1799,12 +1797,12 @@ fn install_spec(spec: &McpConfigSpec, bridge_path: &str, agent_label: &str) -> R
             spec.config_path.display()
         ));
     }
-    if let Some(command) = working_configured_command(spec) {
-        if custom_command_should_be_kept(&command, bridge_path) {
-            tracing::info!(source = "mcp", agent = %agent_label, command,
+    if let Some(command) = working_configured_command(spec)
+        && custom_command_should_be_kept(&command, bridge_path)
+    {
+        tracing::info!(source = "mcp", agent = %agent_label, command,
                 "Keeping working bridge entry during explicit install");
-            return Ok(());
-        }
+        return Ok(());
     }
     if bridge_path == BRIDGE_NAME && has_bridge_entry(spec) {
         return Err(format!(

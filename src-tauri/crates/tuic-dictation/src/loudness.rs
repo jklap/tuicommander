@@ -151,6 +151,12 @@ fn limit(samples: &mut [f32], gain: &mut [f32], rate: NonZero<u32>, ceiling: f32
 /// computes that maximum from its own needs and the deficit carried in, so the
 /// only dependency from one block to the next is one multiply: a sample-serial
 /// chain would cost its latency per sample.
+// Both reductions evaluate every lane so the fixed-size block remains branch-free
+// and can be vectorized; short-circuiting changes the audio processing budget.
+#[expect(
+    clippy::needless_bitwise_bool,
+    reason = "branch-free SIMD lane reductions"
+)]
 fn recover<const BACKWARD: bool>(gain: &mut [f32], rate: f32) {
     const LANES: usize = 8;
     let keep = 1.0 - rate;
@@ -218,9 +224,8 @@ fn recover<const BACKWARD: bool>(gain: &mut [f32], rate: f32) {
         block(&mut padded);
         rest.copy_from_slice(&padded[LANES - len..]);
     } else {
-        let mut blocks = gain.chunks_exact_mut(LANES);
-        blocks.by_ref().for_each(|b| block(b.try_into().unwrap()));
-        let rest = blocks.into_remainder();
+        let (blocks, rest) = gain.as_chunks_mut::<LANES>();
+        blocks.iter_mut().for_each(&mut block);
         let len = rest.len();
         padded[..len].copy_from_slice(rest);
         block(&mut padded);
@@ -279,7 +284,7 @@ fn for_each_window_sum(samples: &[f32], width: usize, mut each: impl FnMut(usize
             // square, and what it adds it takes back when it leaves.
             *d = d.wrapping_sub(fixed_square(x));
         }
-        for group in diff.chunks_exact_mut(GROUP) {
+        for group in diff.as_chunks_mut::<GROUP>().0 {
             let mut step = 1;
             while step < GROUP {
                 for j in (step..GROUP).rev() {

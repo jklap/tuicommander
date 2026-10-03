@@ -53,13 +53,13 @@ exact framing is in
 
 ## Security
 
-- **Authentication** — Basic Auth with bcrypt-hashed passwords
+- **Authentication** — QR URL token, session cookie or Basic Auth with bcrypt-hashed passwords. HTTP requires credentials even from this computer or the LAN; the old LAN authentication bypass no longer applies. Local CLI/MCP IPC remains available without HTTP credentials.
 - **Secret storage** — Session tokens, relay bearer tokens, and push VAPID
   private keys are stored in the OS keyring-backed credential vault; config
   files and `/config` responses expose only non-secret settings and existence
   flags
 - **Local network only** — The server binds to your machine's IP; it's not exposed to the internet unless you configure port forwarding (don't do this without a VPN)
-- **CORS** — When remote access is enabled, any origin is allowed (necessary for browser access from different IPs)
+- **Browser request protection** — The HTTP listener rejects foreign Origin headers and unknown Host names before authentication. Use its literal IP or detected Tailscale FQDN; browser/PWA requests from that same server and bundled/development WebViews remain supported. CORS does not allow arbitrary websites.
 
 ## MCP HTTP Server
 
@@ -421,6 +421,16 @@ Once a remote connection is configured:
 
 Connections are stored in `<config_dir>/connections.json` with SSH and Direct transport types.
 
+#### Remote agent notices
+
+An agent's MCP toast on a connected machine appears in the desktop notification
+bell under **Messages**, with `[connection name]` before its title. It keeps the
+requested level and sound. **Open terminal** switches to the originating remote
+tab when it is still open; an unknown or closed session leaves focus unchanged.
+Notices from a disconnected machine are not queued or replayed on reconnect.
+Connections with the same display name retain separate notices. Malformed remote
+notice text is discarded.
+
 #### What runs on which machine
 
 A call is routed by its own arguments, not by which panel made it. TUICommander asks
@@ -675,7 +685,7 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 | Runs headless | No | Yes |
 | Tauri dependency | Yes | No |
 | Default port | 9876 | 9877 |
-| LAN auth bypass | Configurable | Always disabled |
+| LAN auth bypass | Disabled | Disabled |
 | Signal handling | N/A | Graceful SIGINT/SIGTERM/SIGHUP |
 | MCP bridge for local agents | Bundled sidecar | Downloaded next to the daemon |
 | Embedded assistant (watchers, scheduler) | Yes | No |
@@ -700,3 +710,29 @@ Open that path on your trusted TUICommander server address and enter only the
 requested fields. Entry uses the existing server authentication and transport;
 use HTTPS to protect values in transit. No separate private listener is created. The headless daemon cannot originate requests in this slice.
 See [Private secret forms](secrets.md).
+
+## Address remote terminals and peers from desktop MCP
+
+Use `session action=list` to discover connected remote terminals. Their
+`connection_id` identifies the saved remote connection. Pass that field with
+`session_id`, or use the returned `address`, for output and semantic submit.
+Use `agent action=list_peers` to find remote peer addresses, then send mail to
+`<connection_id>/<peer-id>`. Replies to `local/<peer-id>` return through the
+desktop hub. Daemons can also address peers on another configured connection.
+All traffic follows the configured daemon connection and credentials.
+
+Both desktop and daemon need a version supporting remote peer mail. Local daemon
+mail remains usable if the desktop disconnects. A cross-host error is explicit;
+a timeout with uncertain delivery is not permission to resend the body.
+
+The read-only reproduction harness is `scripts/test-remote-mcp.py`. Run
+`python3 scripts/test-remote-mcp.py --connection <id> --session <alias-or-id>`
+against the desktop MCP. `--exercise` submits and sends mail and must target a
+disposable idle agent; `--second-connection` and `--second-session` check a
+remote-to-remote reply through the same hub.
+
+For a local protocol fixture, build a test-support headless binary and run
+`python3 scripts/test-remote-mcp.py --fixture-bin <binary> --fixture-launcher scripts/run-remote-fixture.sh`.
+This launches three actual isolated daemons, exercises the hub MCP, remote-to-remote
+mail and replies, semantic shell rejection, then verifies intrahost mail with the hub
+stopped. It does not claim to test a real agent composer; use `--exercise` for that.

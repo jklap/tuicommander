@@ -1,5 +1,11 @@
 # HTTP API Reference
 
+## Request authentication and browser boundary
+
+Every TCP request validates its Host and Origin before reaching a handler, including login, health and preflight requests. Unknown/missing/duplicate Host or foreign/opaque Origin returns 403. Allowed hosts are localhost, loopback/private IP literals, local interface IPs and the detected Tailscale FQDN. Allowed origins are the exact bundled WebView origins, Vite `http://127.0.0.1:1421`/`http://localhost:1421`, and the HTTP/HTTPS origin of the validated Host. Cross-site requests are rejected except for the explicit WebView/development origins.
+
+Protected routes require the existing `?token=...`, `tui-session` cookie or Basic Auth even from loopback/LAN. Native HTTP clients may omit Origin, but must send Host and credentials. Login assets and valid preflight remain public; the headless `/health` probe remains public. Local Unix socket and Windows named-pipe clients keep their existing IPC access.
+
 ## Workflow runs
 
 `POST /workflows/run/action?path=<absolute-project>` accepts one tagged `RunAction` and returns `{type,value}`. Actions: `start_plan {plan_id,definition_id,definition_revision,limits}`, `get {run_id}`, `list_plan_runs {plan_id,limit}`, `events {run_id,after_sequence,limit}`, `command {run_id,command_id,expected_sequence,command}`, `execute_check {run_id,story_id,check_id,command_id,expected_sequence}`, `record_integration {run_id,story_id,command_id,expected_sequence}`, and `recertify_canonical {run_id,command_id,expected_sequence}`. `list_plan_runs` returns newest first and accepts a limit of 1–100. Run commands include planning closure, agent attempt and effect bookkeeping, loop advancement, story acceptance, final verification, pause/resume, cancellation, and completion. The server checks canonical project ownership for every action and rejects a command whose expected sequence is stale. Event cursors start at zero and return up to 500 entries. A duplicate command ID returns its original receipt only when the payload matches. See [Workflow runs](../backend/workflows.md) for recovery and completion rules. Automatic node execution is under development.
@@ -193,7 +199,7 @@ failures spend one shared budget. The service worker never caches
 
 ## Server Limits
 
-Every route on both the desktop and remote routers is subject to two bounds
+Both the desktop and remote routers apply request bounds
 (`with_server_limits` in `mcp_http/mod.rs`):
 
 - **`408 Request Timeout`** — a handler that has not produced a response within
@@ -203,6 +209,9 @@ Every route on both the desktop and remote routers is subject to two bounds
   body always wins the race instead of a bare 408 (`docs/backend/mcp-http.md` →
   "Server Limits"). SSE (`/events`) and WebSocket endpoints return their
   headers immediately and then stream for as long as they like, unaffected.
+  Streamed `/fs/upload-copy` uses a 30 s idle deadline per body chunk instead
+  of this total response deadline. A separate 17-minute total receive budget
+  also prevents trickling clients from retaining an upload slot.
 - **`413 Payload Too Large`** — a request body over 2 MB is refused rather than
   buffered.
 
@@ -484,7 +493,7 @@ Returns the current Kitty keyboard protocol flags (integer) for a session.
 GET /sessions/:id/foreground
 ```
 
-Returns the foreground process info for a session.
+Returns the foreground process info for a session. Detection uses the spawn-recorded root role and foreground process group. Returning to a shell root revokes an observed agent; a child of a direct agent holds unattended input without revoking its identity. Unknown root ownership refuses unattended input. Concurrent observations apply in generation order.
 
 ### PTY / Terminal Read State
 
@@ -1580,6 +1589,10 @@ GET /mcp/instructions
 Returns dynamic server instructions for the MCP bridge binary as `{"instructions": "..."}`.
 
 ## Filesystem Endpoints
+
+The sender-side `fs_transfer_remote_paths` coordinator is desktop IPC only (`INTENTIONALLY_UNMAPPED`), with no `/fs/transfer-remote` HTTP route. Data leaves the machine; Finder source paths cannot be gated to registered repository roots, so HTTP token holders must not trigger exfiltration. The desktop coordinator uses the existing authenticated daemon connection; only the receiving upload endpoint is exposed over HTTP.
+
+`POST /fs/upload-copy?destDir=<absolute-directory>&name=<leaf-name>&directory=true|false` accepts a streamed, uncompressed tar body under the existing daemon authentication. All archive paths must start with `name`; only files and directories are accepted. Limits: 256 MiB of archive and extracted file data, 10,000 entries, two concurrent uploads. Destination resolution uses registered repository directory capabilities, rejects traversal and escapes through symlinks, and never follows a target symlink. Staging is removed on failure/disconnect; the completed top-level file or directory is published with a no-replace atomic rename. A concurrently created target is skipped; existing targets drain the bounded body before returning `skipped`. The upload is exempt from the global response timeout and aborts after 30 s without a body chunk. Its total receive budget is 17 minutes. A connection below roughly 2 Mbit/s cannot finish a 256 MiB drop within that budget. The concurrency permit lasts through extraction even if the handler is cancelled. Filenames use the receiver platform rules (POSIX permits colon and backslash); Windows rejects colon and backslash. Unix tar permissions are masked to `0755` for executable files/directories and `0644` for ordinary files, with the receiving umask applied and no privilege bits. Normal request-drop cleanup removes staging. Abrupt process termination (for example, kill -9) can leave a `.tuic-upload-<uuid>` directory in the destination; there is no startup sweep, and the leftover can be removed manually once no upload is running. Final directory permissions are applied after publication; a permission failure is logged and the already published copy remains successful. The sender uses the existing `tui-session` cookie header; tokens are absent from upload URLs and reqwest error text. No new listener or credential is created.
 
 `POST /attachments/upload?kind=pty|acp&id=<session-or-connection-id>&name=<filename>`
 streams a binary request body into the target's working directory at
@@ -2732,3 +2745,38 @@ shown in that window on your trusted server address; it uses the existing
 application origin, authentication and transport. This feature does not enforce
 TLS or origin isolation. Responses carry
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer` and frame denial.
+
+### Remote peer mail
+
+`GET /mcp/peer?connection_id=<configured-id>&token=<daemon-token>` upgrades to
+the desktop-initiated duplex peer-mail WebSocket. A real daemon token is required even
+on loopback. One hub is admitted per daemon. JSON frames use `kind:call` with
+`id`, `sender`, `arguments` and optional `message_id`, or `kind:reply` with
+`id` and `result`. Calls allow register/list_peers/send/inbox/wait; daemon-to-hub
+calls allow send/list_peers. Sender host is bound to the authenticated connection.
+Frames and outstanding requests are bounded; heartbeat loss closes the link.
+
+`GET /sessions/{id}/output?format=mcp|mcp_raw` returns the native MCP output object,
+including `exited`, cursor and truncation fields. It accepts `limit`, `from_line`
+and `since_cursor`. `POST /sessions/{id}/submit` also accepts `timeout_ms`.
+These are the configured remote desktop MCP adapters, sharing native backend behavior.
+
+Peer handshakes serialize per configured connection, so a mute daemon cannot hold
+mail calls to another host behind its network deadline. Session targets reject empty
+ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
+reads: it retains fingerprints of the last 100 forwarded ids per sender and registered
+recipient, without retaining message bodies. The cache holds at most 65,536
+ids globally and 1,024 per remote host. A host quota rejection names the host;
+one host cannot consume every other host's replay budget. Full 100-id windows
+can still rotate in place, and retained replays still deduplicate at either cap.
+
+There is no time expiry: the sender's outbox lives until acknowledgement.
+Only under global or host quota pressure, the cache reclaims all windows of
+the least-recently-active sender with no live peer shadow (within the pressured
+host when its quota is full). Live sender windows are never reclaimed.
+Sender retirement alone preserves dedupe; recipient unregister frees only
+that recipient's records and quota. Accepted risk: a departed sender that
+reconnects after pressure evicted its history can deliver one duplicate.
+Disconnect retires that host's existing shadows synchronously, independently
+of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
+not unbounded or restart-persistent exactly-once delivery.
