@@ -97,6 +97,7 @@ mod native_keys;
 mod native_notification;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
+pub(crate) mod secrets;
 pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
@@ -2314,6 +2315,8 @@ pub fn run() {
             grok_usage::get_grok_usage_api,
             terminal_grid_commands::set_terminal_theme_colors,
             screenshot_response,
+            secrets::forms::secret_form_bootstrap,
+            secrets::forms::secret_form_submit,
             mcp_confirm_response,
             session_suspend_response,
             app_logger::push_log,
@@ -2428,6 +2431,7 @@ pub fn run() {
                     }
                     // Kill all SSH tunnel processes so ports are freed for restart
                     if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
+                        state.secrets.clear();
                         state.tunnel_manager.shutdown_all();
                         if let Some(manager) = state.design_mode.get() {
                             tauri::async_runtime::block_on(manager.stop_all());

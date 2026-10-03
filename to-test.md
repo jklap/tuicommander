@@ -4498,6 +4498,23 @@ or credential is touched.
 
 - [ ] Remote replay rollout (#1421-733e): deploy the updated daemon before the updated client. An older daemon without the explicit empty-replay marker can trigger a false 15-second stream error on a healthy idle session whose initial grid is unavailable. Coordinate deployment after live PTYs can be safely preserved or closed; do not restart mac-mint during this incident.
 
+## Private secret forms (#1435-6e1d) — Rust restart required
+
+- [ ] After restart, with a private form open, verify direct upstream MCP
+  `tools/call` rejects inspection, matching native and `call_tool` entry points.
+
+- [ ] After Boss restarts the desktop backend, request username/password/OTP
+  fields with synthetic data. Verify the separate native window, exact reduced
+  schema, main-window bootstrap rejection, decline, close and timeout cleanup.
+- [ ] On a trusted existing HTTPS server address, submit a desktop-opened request
+  from the one-time entry path; verify one-time consumption and cleared input UI.
+- [ ] Verify exact argv/name/directory approval and template consent. Run a
+  trusted test executable that prints synthetic encoded/wrapped values; confirm
+  masked output and no terminal/tcap entries.
+
+These desktop checks wait for Boss's restart; no second desktop instance is
+launched by the implementer. Security critic and cross-platform validation are
+required before treating the feature as complete.
 - [ ] After Boss restarts the desktop build and updates the remote daemon, drop a read-only directory from Finder onto a remote repository. Verify all files arrive, final directory permissions remain read-only, and the Mac source stays untouched. Rust does not hot-reload; this requires a manual restart when Boss is ready. _(Story 1434 round 3: Linux handler tests cover upload deadlines, staging cleanup and cancellation; native Finder/macOS publication awaits restart.)_
 ## Remote MCP toast mirror (1439-d84f) — Rust restart required
 

@@ -703,6 +703,14 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 | Authentication fails | Re-enter the password in settings — the stored bcrypt hash may be from a different password. |
 | Terminals not responding | WebSocket connection may have dropped. Refresh the browser page. |
 
+## Private secret entry on a phone
+
+A desktop secret request shows a one-time entry path in its private window.
+Open that path on your trusted TUICommander server address and enter only the
+requested fields. Entry uses the existing server authentication and transport;
+use HTTPS to protect values in transit. No separate private listener is created. The headless daemon cannot originate requests in this slice.
+See [Private secret forms](secrets.md).
+
 ## Address remote terminals and peers from desktop MCP
 
 Use `session action=list` to discover connected remote terminals. Their
