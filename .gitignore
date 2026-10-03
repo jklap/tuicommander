@@ -55,6 +55,8 @@ scripts/*
 !scripts/dev-server.mjs
 !scripts/run-remote-fixture.sh
 !scripts/generate-release-notes.sh
+!scripts/third-party-notices.mjs
+!scripts/check-release-tag.sh
 !scripts/report-frontend-bundles.mjs
 !scripts/check-frontend-cycles.mjs
 !scripts/check-make-instance-scope.sh
