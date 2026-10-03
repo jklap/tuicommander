@@ -4142,6 +4142,7 @@ fn sanitized_background_command_keeps_agent_working_across_adapters() {
         state.session_maps.session_states.insert(
             sid.clone(),
             crate::state::SessionState {
+                spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
                 agent_type: Some(agent.to_string()),
                 background_work: true,
                 ..Default::default()
@@ -11238,6 +11239,7 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     state.session_maps.session_states.insert(
         "q".to_string(),
         crate::state::SessionState {
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             agent_type: Some("claude".to_string()),
             awaiting_input: true,
             question_confident: true,
@@ -11265,6 +11267,7 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     state.session_maps.session_states.insert(
         "ready".to_string(),
         crate::state::SessionState {
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             agent_type: Some("codex".to_string()),
             awaiting_input: true,
             question_confident: false,
@@ -13608,6 +13611,7 @@ fn flush_keeps_pending_while_question_confident() {
     state.session_maps.session_states.insert(
         "sess".to_string(),
         crate::state::SessionState {
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             agent_type: Some("claude".to_string()),
             awaiting_input: true,
             question_confident: true,
@@ -16239,6 +16243,14 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
         .grid
         .vt_log_buffers
         .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    // Captured agent output owns this recording composer; the shell
+    // child is only its PTY holder, not a foreground-detection scenario.
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
     let bytes = insert_recording_session(&state, sid);
     // The turn is running when the user queues: the Enter of its own prompt
     // left the shell busy, as observed live (`shell-state` stayed `busy`).
@@ -17554,6 +17566,14 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
     #[cfg(unix)]
     {
         silence.lock().confirm_idle();
+        // Captured agent output owns this recording composer; the shell
+        // child is only its PTY holder, not a foreground-detection scenario.
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
         let bytes = insert_recording_session(&state, sid);
         assert!(matches!(
             write_agent_submission_to_pty(&state, sid, "echo ready"),
@@ -20293,6 +20313,14 @@ async fn critic_1302_queued_injection_flushes_after_a_dismissed_question() {
     use std::collections::VecDeque;
     let sid = "critic-1302-queue";
     let (state, _silence, _processor) = replay_claude_askuser_esc(sid).await;
+    // Captured agent output owns this recording composer; the shell
+    // child is only its PTY holder, not a foreground-detection scenario.
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
     let bytes = insert_recording_session(&state, sid);
     let mut queue = VecDeque::new();
     queue.push_back(crate::state::PendingInjection::notice("after esc"));
@@ -21491,7 +21519,22 @@ async fn exec_root_agent_exit_clears_identity_and_refuses_submit_and_mail() {
         refresh_session_agent(&state, sid).as_deref(),
         Some("claude")
     );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
+        Some("claude")
+    );
+    assert!(
+        should_inject_now(&state, sid),
+        "the live exec'd agent must receive input"
+    );
     crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    _probe.start_reader();
     // The probe's actual cat image exits normally on terminal EOF. The recorded
     // writer remains untouched; use its native master solely to end our process.
     {
@@ -21505,14 +21548,10 @@ async fn exec_root_agent_exit_clears_identity_and_refuses_submit_and_mail() {
             .unwrap();
         assert!(session._child.wait().unwrap().success());
     }
-    // Same lifecycle composition as the production reader after native EOF.
-    state.emit_pty_event(crate::state::AppEvent::SessionClosed {
-        session_id: sid.into(),
-        reason: "process_exit".into(),
-    });
-    state.metrics.active_sessions.store(1, Ordering::Relaxed);
-    mark_session_exited(sid, &state);
-    while state.session_maps.session_states.contains_key(sid) {
+    // Native reader EOF now owns lifecycle publication and process cleanup.
+    while state.session_maps.session_states.contains_key(sid)
+        || state.session_maps.sessions.contains_key(sid)
+    {
         tokio::task::yield_now().await;
     }
     assert_eq!(refresh_session_agent(&state, sid), None);

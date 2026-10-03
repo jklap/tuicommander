@@ -429,6 +429,36 @@ impl ForegroundIdentityProbe {
         Self::spawn(state, sid, "bash", role, true, true)
     }
 
+    /// Attach the production reader so normal EOF, rather than a manually
+    /// injected lifecycle event, removes the probe's live process and identity.
+    pub(crate) fn start_reader(&self) {
+        let (reader, paused) = {
+            let entry = self
+                .state
+                .session_maps
+                .sessions
+                .get(&self.session_id)
+                .unwrap();
+            let session = entry.lock();
+            (
+                session.master.try_clone_reader().unwrap(),
+                session.paused.clone(),
+            )
+        };
+        // Match spawn bookkeeping: the reader decrements this on native exit.
+        self.state
+            .metrics
+            .active_sessions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::pty::spawn_reader_thread(
+            reader,
+            paused,
+            self.session_id.clone(),
+            self.state.clone(),
+            None,
+        );
+    }
+
     pub(crate) fn return_to_root(&mut self) {
         let pid = self
             .foreground_child
