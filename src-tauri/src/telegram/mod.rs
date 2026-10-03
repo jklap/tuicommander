@@ -52,4 +52,6 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 #[cfg(test)]
+mod adversarial_tests;
+#[cfg(test)]
 mod tests;
