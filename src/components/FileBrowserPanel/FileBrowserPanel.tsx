@@ -1181,6 +1181,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 			tabIndex={-1}
 			data-drop-target={panelDropDir() ? "folder" : undefined}
 			data-abs-path={panelDropDir()}
+			data-drop-connection-id={repositoriesStore.getConnectionId(props.repoPath ?? "")}
 		>
 			<Show when={mode() === "inline"}>
 				<PanelResizeHandle panelId="file-browser-panel" />

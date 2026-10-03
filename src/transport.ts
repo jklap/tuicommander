@@ -2273,6 +2273,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
  * This is NOT a feature gap — these commands have no meaning off the host machine.
  */
 export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
+	// Data leaves the machine; source paths come from Finder and cannot be gated
+	// to registered roots. HTTP token holders must not trigger exfiltration.
+	"fs_transfer_remote_paths",
 	// Binary IPC uses byte arrays; browser uploads use a streaming fetch body to
 	// the equivalent /attachments/upload route instead of JSON rpc mapping.
 	"upload_attachment",
