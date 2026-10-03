@@ -1,4 +1,6 @@
-use super::check::{CheckReceipt, clean_artifact, execute_pinned_check, git_output};
+use super::check::{
+    CheckReceipt, clean_artifact, execute_pinned_check, git_output, require_merge_tree_support,
+};
 use super::model::*;
 use super::reducer::apply_event;
 use crate::stories::{NewStory, Story, StoryOrigin, StoryStatus, StoryStore};
@@ -25,19 +27,20 @@ pub struct RunStore {
 const RUN_STORE_SCHEMA_VERSION: i64 = 1;
 
 static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
-static RECONCILED_RUN_STORES: LazyLock<Mutex<HashSet<PathBuf>>> =
+// Restart recovery runs once per database path; later opens preserve live work.
+static RECONCILED_STORES: LazyLock<Mutex<HashSet<PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
 impl RunStore {
     pub fn open() -> Result<Self, String> {
         let db_path = crate::config::config_dir().join("workflow_runs.sqlite3");
-        let mut reconciled = RECONCILED_RUN_STORES
-            .lock()
-            .map_err(|_| "workflow recovery lock poisoned")?;
         let store = Self::open_at(&db_path)?;
-        if !reconciled.contains(&db_path) {
-            store.reconcile_active()?;
-            reconciled.insert(db_path);
+        let first_open = RECONCILED_STORES
+            .lock()
+            .map_err(|_| "workflow recovery lock poisoned")?
+            .insert(db_path);
+        if first_open {
+            store.reconcile_runs_after_restart(&store.active_run_ids()?);
         }
         Ok(store)
     }
@@ -676,6 +679,16 @@ impl RunStore {
             return Err("canonical HEAD is not a merge of the checked story commit".into());
         }
         let base_commit = parts[1].to_owned();
+        require_merge_tree_support(canonical)?;
+        let expected_tree = git_output(
+            canonical,
+            &["merge-tree", "--write-tree", "--no-messages", &base_commit, &source_commit],
+        ).map_err(|error| format!(
+            "clean merge could not be verified; conflict resolution requires explicit human review or a separately verified artifact: {error}"
+        ))?;
+        if expected_tree != merge_tree {
+            return Err("canonical merge tree differs from the verified clean merge".into());
+        }
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
             let receipt = execute_pinned_check(check, canonical)?;
@@ -813,17 +826,13 @@ impl RunStore {
         command_id: &str,
         expected_sequence: i64,
     ) -> Result<RunReceipt, String> {
-        let _service_guard = SERVICE_RECEIPT_LOCK
-            .lock()
-            .map_err(|_| "workflow receipt service lock is poisoned")?;
-        if let Some(prior) = self.existing_service_receipt(run_id, command_id, expected_sequence)? {
-            return match &prior.event.kind {
-                RunEventKind::CheckRecorded {
-                    story_id: prior_story,
-                    receipt,
-                } if prior_story == story_id && receipt.check_id == check_id => Ok(prior),
-                _ => Err("workflow command id was reused with a different payload".into()),
-            };
+        if expected_sequence < 1 {
+            return Err("invalid expected workflow sequence".into());
+        }
+        validate_key("command id", command_id)?;
+        let prior = read_command_receipt(&self.connect()?, run_id, command_id)?;
+        if let Some(prior) = prior {
+            return check_receipt_retry(prior, story_id, check_id, expected_sequence);
         }
         let snapshot = self.snapshot(run_id)?;
         if snapshot.sequence != expected_sequence {
@@ -848,12 +857,71 @@ impl RunStore {
             .find(|check| check.id == check_id)
             .ok_or("check is not pinned by the story definition")?;
         let receipt = execute_pinned_check(check, Path::new(path))?;
+        self.commit_completed_check(run_id, execution, command_id, expected_sequence, receipt)
+    }
+
+    /// Commit against the story inputs rather than the run-wide cursor: another
+    /// worker may have appended an unrelated event while the check was running.
+    pub(super) fn commit_completed_check(
+        &self,
+        run_id: &str,
+        execution: &StoryExecution,
+        command_id: &str,
+        expected_sequence: i64,
+        receipt: CheckReceipt,
+    ) -> Result<RunReceipt, String> {
+        validate_key("command id", command_id)?;
+        if command_id.starts_with("start:") || command_id.starts_with("reconcile-") {
+            return Err("reserved workflow command id".into());
+        }
+        let command = RunCommand::RecordCheck {
+            story_id: execution.story_id.clone(),
+            receipt: receipt.clone(),
+        };
+        let hash = command_hash(Some(expected_sequence), &command)?;
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| format!("begin workflow check receipt: {e}"))?;
+        if let Some(prior) = read_command_receipt(&tx, run_id, command_id)? {
+            return check_receipt_retry(
+                prior,
+                &execution.story_id,
+                &receipt.check_id,
+                expected_sequence,
+            );
+        }
+        let snapshot = read_snapshot(&tx, run_id)?;
+        let current = snapshot
+            .stories
+            .iter()
+            .find(|item| item.story_id == execution.story_id)
+            .ok_or("story execution not found")?;
+        if current.accepted != execution.accepted
+            || current.accepted_revision != execution.accepted_revision
+            || current.worktree_path != execution.worktree_path
+        {
+            return Err("workflow check inputs changed before receipt commit".into());
+        }
+        let path = current
+            .worktree_path
+            .as_deref()
+            .ok_or("story worktree is missing")?;
         if clean_artifact(Path::new(path))? != (receipt.commit.clone(), receipt.tree.clone())
             || git_output(Path::new(path), &["symbolic-ref", "HEAD"])? != receipt.ref_name
         {
             return Err("workflow check artifact moved before receipt commit".into());
         }
-        self.record_check_receipt(run_id, story_id, command_id, expected_sequence, receipt)
+        let at_ms = now_ms();
+        let kind = choose_event(&snapshot, command, at_ms)?;
+        // A policy-triggered pause or planning reopen must not look like a check receipt.
+        if !matches!(kind, RunEventKind::CheckRecorded { .. }) {
+            return Err("workflow no longer accepts the completed check".into());
+        }
+        let result = persist_event(&tx, snapshot, command_id, Some(hash), at_ms, kind)?;
+        tx.commit()
+            .map_err(|e| format!("commit workflow check receipt: {e}"))?;
+        Ok(result)
     }
 
     fn existing_service_receipt(
@@ -899,9 +967,7 @@ impl RunStore {
         if command_id.starts_with("start:") || command_id.starts_with("reconcile-") {
             return Err("reserved workflow command id".into());
         }
-        let command_hash = hex::encode(Sha256::digest(
-            encode(&(expected_sequence, &command))?.as_bytes(),
-        ));
+        let command_hash = command_hash(expected_sequence, &command)?;
         let mut conn = self.connect()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -923,8 +989,15 @@ impl RunStore {
         Ok(receipt)
     }
 
-    /// Mark uncertain external effects and interrupted attempts; never replay them.
+    /// Refresh projections at runtime without treating live work as crash debris.
     pub fn reconcile(&self, run_id: &str) -> Result<RunSnapshot, String> {
+        let snapshot = self.snapshot(run_id)?;
+        StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)?;
+        self.snapshot(run_id)
+    }
+
+    /// Recovery only: old effects are uncertain and old attempts interrupted.
+    pub(super) fn reconcile_after_restart(&self, run_id: &str) -> Result<RunSnapshot, String> {
         let snapshot = self.snapshot(run_id)?;
         if matches!(snapshot.status, RunStatus::Completed | RunStatus::Cancelled) {
             return Ok(snapshot);
@@ -966,8 +1039,7 @@ impl RunStore {
         self.snapshot(run_id)
     }
 
-    /// Called on first workflow use, before new workflow work is accepted.
-    pub fn reconcile_active(&self) -> Result<usize, String> {
+    fn active_run_ids(&self) -> Result<Vec<String>, String> {
         let conn = self.connect()?;
         let mut stmt = conn
             .prepare("SELECT id FROM workflow_runs WHERE status IN ('running','paused')")
@@ -979,11 +1051,33 @@ impl RunStore {
             .collect::<Result<_, _>>()?;
         drop(stmt);
         drop(conn);
-        for run_id in &run_ids {
-            let snapshot = self.reconcile(run_id)?;
-            StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)?;
+        Ok(run_ids)
+    }
+
+    #[cfg(test)]
+    pub(super) fn reconcile_active_after_restart(&self) -> Result<usize, String> {
+        Ok(self.reconcile_runs_after_restart(&self.active_run_ids()?))
+    }
+
+    fn reconcile_run_after_restart(&self, run_id: &str) -> Result<(), String> {
+        let snapshot = self.reconcile_after_restart(run_id)?;
+        StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)
+    }
+
+    fn reconcile_runs_after_restart(&self, run_ids: &[String]) -> usize {
+        let mut recovered = 0;
+        for run_id in run_ids {
+            match self.reconcile_run_after_restart(run_id) {
+                Ok(()) => recovered += 1,
+                Err(error) => {
+                    tracing::warn!(
+                        source = "workflows", run_id = %run_id, %error,
+                        "Workflow restart recovery failed for this run; continuing other runs"
+                    );
+                }
+            }
         }
-        Ok(run_ids.len())
+        recovered
     }
 
     fn append_reconcile_event(
@@ -1394,6 +1488,39 @@ pub(super) fn ready_to_verify(snapshot: &RunSnapshot, stories: &[Story]) -> Resu
         }
     }
     Ok(())
+}
+
+fn check_receipt_retry(
+    prior: RunReceipt,
+    story_id: &str,
+    check_id: &str,
+    expected_sequence: i64,
+) -> Result<RunReceipt, String> {
+    let RunEventKind::CheckRecorded {
+        story_id: prior_story,
+        receipt,
+    } = &prior.event.kind
+    else {
+        return Err("workflow command id was reused with a different payload".into());
+    };
+    let command = RunCommand::RecordCheck {
+        story_id: story_id.into(),
+        receipt: receipt.clone(),
+    };
+    if prior_story != story_id
+        || receipt.check_id != check_id
+        || prior.event.command_hash.as_deref()
+            != Some(command_hash(Some(expected_sequence), &command)?.as_str())
+    {
+        return Err("workflow command id was reused with a different payload".into());
+    }
+    Ok(prior)
+}
+
+fn command_hash(expected_sequence: Option<i64>, command: &RunCommand) -> Result<String, String> {
+    Ok(hex::encode(Sha256::digest(
+        encode(&(expected_sequence, command))?.as_bytes(),
+    )))
 }
 
 fn choose_event(
@@ -2046,5 +2173,45 @@ fn choose_event(
             Ok(RunEventKind::Resumed)
         }
         RunCommand::Cancel => Ok(RunEventKind::Cancelled),
+    }
+}
+
+#[cfg(test)]
+mod independent_check_tests {
+    use super::*;
+
+    #[test]
+    fn independent_check_does_not_wait_for_another_receipt_service() {
+        // catches: the global integration/recertification mutex serializing an
+        // unrelated check for the full duration of another service's subprocess.
+        let (flow, _config_guard) = super::super::critic_tests::accepted_flow(false);
+        let held = SERVICE_RECEIPT_LOCK.lock().unwrap();
+        std::thread::scope(|scope| {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let flow = &flow;
+            let worker = scope.spawn(move || {
+                sender
+                    .send(flow.store.execute_check(
+                        &flow.run_id,
+                        &flow.story_id,
+                        "repository-integrity",
+                        "check",
+                        flow.sequence,
+                    ))
+                    .unwrap();
+            });
+            // This bound checks lock independence, not subprocess performance.
+            // Release before asserting so a regressed worker can finish and join.
+            let result = receiver.recv_timeout(Duration::from_secs(120));
+            drop(held);
+            worker.join().unwrap();
+            let receipt = result
+                .expect("independent check waited for the held receipt lock")
+                .expect("published check passes");
+            assert!(matches!(
+                receipt.event.kind,
+                RunEventKind::CheckRecorded { .. }
+            ));
+        });
     }
 }

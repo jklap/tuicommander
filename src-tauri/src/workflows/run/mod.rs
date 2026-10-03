@@ -14,6 +14,12 @@ pub use store::*;
 mod critic_tests;
 
 #[cfg(test)]
+mod critic_957_tests;
+
+#[cfg(test)]
+mod critic_960_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::stories::{NewPlan, NewStory, StoryCommand, StoryOrigin, StoryStore};
@@ -659,7 +665,7 @@ mod tests {
         );
         drop(store);
         let store = RunStore::open().unwrap();
-        assert_eq!(store.reconcile_active().unwrap(), 1);
+        assert_eq!(store.reconcile_active_after_restart().unwrap(), 1);
         assert_eq!(store.snapshot(&run.id).unwrap().status, RunStatus::Paused);
         assert_eq!(
             store.replay(&run.id).unwrap(),
@@ -678,7 +684,7 @@ mod tests {
             .unwrap();
         assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
         assert!(super::store::ready_to_verify(&verification_snapshot, &[story.clone()]).is_err());
-        store.reconcile_active().unwrap();
+        store.reconcile_active_after_restart().unwrap();
         assert_eq!(
             stories.get_story(&dependent.id).unwrap().status,
             crate::stories::StoryStatus::Backlog
@@ -688,7 +694,7 @@ mod tests {
             .run()
             .unwrap();
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
-        store.reconcile_active().unwrap();
+        store.reconcile_active_after_restart().unwrap();
         assert_eq!(
             stories.get_story(&dependent.id).unwrap().status,
             crate::stories::StoryStatus::Ready
@@ -1738,6 +1744,110 @@ mod tests {
     }
 
     #[test]
+    fn runtime_reconciliation_preserves_live_attempts_and_in_flight_effects() {
+        // catches: invoking runtime reconciliation interrupting a healthy worker
+        // and marking an in-progress external effect uncertain.
+        let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
+        let run = store
+            .start_plan(
+                project.path().canonicalize().unwrap().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        store
+            .command(
+                &run.id,
+                "live-attempt",
+                RunCommand::StartAttempt {
+                    story_id,
+                    node_id: "implement".into(),
+                },
+            )
+            .unwrap();
+        let live = store
+            .command(
+                &run.id,
+                "live-effect",
+                RunCommand::ReserveEffect {
+                    key: "spawn-live-worker".into(),
+                    kind: EffectKind::SpawnAgent,
+                },
+            )
+            .unwrap()
+            .snapshot;
+        let observed = store.reconcile(&run.id).unwrap();
+        assert_eq!(observed, live);
+        assert_eq!(observed.attempts[0].state, AttemptState::Running);
+        assert_eq!(observed.effects[0].state, EffectState::Intended);
+        assert_eq!(observed.status, RunStatus::Running);
+        assert_eq!(store.replay(&run.id).unwrap(), live);
+    }
+
+    #[test]
+    fn opening_workflow_store_recovers_healthy_runs_past_a_corrupt_snapshot() {
+        // catches: one unreadable run aborting first-open recovery of every other run.
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let db = config.path().join("workflow_runs.sqlite3");
+        let store = RunStore::open_at(&db).unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let corrupt = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let stories = StoryStore::open().unwrap();
+        let healthy_plan = stories
+            .create_plan(NewPlan {
+                project: project_path.clone(),
+                title: "Healthy plan".into(),
+                source: "healthy.md".into(),
+            })
+            .unwrap();
+        let healthy = store
+            .start_plan(
+                &project_path,
+                &healthy_plan.id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET snapshot_json='broken JSON' WHERE id=?1",
+            [&corrupt.id],
+        )
+        .unwrap();
+        drop(conn);
+        let reopened = RunStore::open().expect("bad run must not prevent opening the store");
+        let recovered = reopened.snapshot(&healthy.id).unwrap();
+        assert_eq!(recovered.status, RunStatus::Paused);
+        assert_eq!(reopened.replay(&healthy.id).unwrap(), recovered);
+        assert!(reopened.snapshot(&corrupt.id).is_err());
+        assert_eq!(
+            RunStore::open()
+                .unwrap()
+                .snapshot(&healthy.id)
+                .unwrap()
+                .sequence,
+            recovered.sequence
+        );
+    }
+
+    #[test]
     fn first_workflow_open_reconciles_existing_active_run_once() {
         let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
         let db = config.path().join("workflow_runs.sqlite3");
@@ -2161,8 +2271,8 @@ mod tests {
             }
         ));
         let uncertain = store
-            .reconcile(&run.id)
-            .expect("reconcile remaining intent");
+            .reconcile_after_restart(&run.id)
+            .expect("reconcile remaining intent after restart");
         assert_eq!(uncertain.effects[1].state, EffectState::Uncertain);
         let resolved = store
             .command(
@@ -2239,7 +2349,9 @@ mod tests {
             3
         );
         assert_eq!(
-            reopened.reconcile_active().expect("restart reconciliation"),
+            reopened
+                .reconcile_active_after_restart()
+                .expect("restart reconciliation"),
             1
         );
         assert_eq!(
@@ -2377,7 +2489,9 @@ mod tests {
         drop(store);
         let reopened = RunStore::open_at(&config.path().join("runs.sqlite3")).expect("reopen");
         assert_eq!(
-            reopened.reconcile_active().expect("reconcile active runs"),
+            reopened
+                .reconcile_active_after_restart()
+                .expect("reconcile active runs"),
             1
         );
         let snapshot = reopened.snapshot(&run.id).expect("snapshot");

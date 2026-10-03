@@ -21133,6 +21133,148 @@ fn retry_enter_only_when_composer_retained_and_clause_two() {
     );
 }
 
+/// Catches: confirmation samples only the current Working screen and forgets a
+/// submitted turn that has already reached its question before the worker runs.
+/// The response is the real Codex request_user_input capture, not invented ANSI.
+#[cfg(unix)]
+#[test]
+fn submit_paths_do_not_toast_when_captured_codex_turn_already_reached_a_question() {
+    // The capture holds terminal queries whose replies need this writer's lock,
+    // which Enter still holds while the response is consumed inline. A cooked tty
+    // withholds replies (`tty_would_swallow_reply`), so they cannot self-deadlock.
+    struct CapturedTurnWriter {
+        state: Arc<AppState>,
+        sid: String,
+        response: Vec<Vec<u8>>,
+        writes: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+    }
+    impl std::io::Write for CapturedTurnWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.writes.lock().unwrap().push(bytes.to_vec());
+            if bytes == b"\r" {
+                let silence = self
+                    .state
+                    .session_maps
+                    .silence_states
+                    .get(&self.sid)
+                    .unwrap()
+                    .clone();
+                let mut reader = ChunkProcessor::new(None, None);
+                for chunk in &self.response {
+                    reader.process_chunk(
+                        &String::from_utf8_lossy(chunk),
+                        &silence,
+                        &self.sid,
+                        &self.state,
+                    );
+                }
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    use crate::pty_capture::CaptureDirection::{Input, Output};
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-request-user-input-20260929.tcap",
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let text_index = capture
+        .records
+        .iter()
+        .position(|record| {
+            record.direction == Input && record.data.starts_with(b"Before doing any work")
+        })
+        .unwrap();
+    let enter_index = text_index + 1;
+    assert_eq!(capture.records[enter_index].data, b"\r");
+    let text = String::from_utf8(capture.records[text_index].data.clone()).unwrap();
+    let question_end = capture
+        .records
+        .iter()
+        .enumerate()
+        .skip(enter_index + 1)
+        .find(|(_, record)| {
+            record
+                .data
+                .windows(b"state=idle".len())
+                .any(|w| w == b"state=idle")
+        })
+        .map(|(index, _)| index + 1)
+        .unwrap();
+    let response: Vec<Vec<u8>> = capture.records[enter_index + 1..question_end]
+        .iter()
+        .filter(|record| record.direction == Output)
+        .map(|record| record.data.clone())
+        .collect();
+
+    for path in ["brief", "queued_input", "lifecycle_wake", "mail_notice"] {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = format!("captured-confirmation-{path}");
+        agent_session(&state, &sid, SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(&sid)
+            .unwrap()
+            .agent_type = Some("codex".into());
+        let mut vt = VtLogBuffer::new(rows, cols, 2000);
+        for record in capture.records[..text_index]
+            .iter()
+            .filter(|record| record.direction == Output)
+        {
+            vt.process(&record.data);
+        }
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), Mutex::new(vt));
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), Mutex::new(OutputRingBuffer::new(1 << 20)));
+        let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        insert_session_with_writer(
+            &state,
+            &sid,
+            Box::new(CapturedTurnWriter {
+                state: Arc::clone(&state),
+                sid: sid.clone(),
+                response: response.clone(),
+                writes: Arc::clone(&writes),
+            }),
+            TtyMode::Cooked,
+        );
+        let injection = match path {
+            "brief" => crate::state::PendingInjection::initial_prompt(&text),
+            "queued_input" => crate::state::PendingInjection::user_command(&text),
+            _ => crate::state::PendingInjection::notice(&text),
+        };
+        state
+            .pending_injections
+            .entry(sid.clone())
+            .or_default()
+            .push_back(injection);
+        let mut alerts = state.event_bus.subscribe();
+        flush_pending_injections_blocking(&state, &sid);
+        assert!(std::iter::from_fn(|| alerts.try_recv().ok()).all(|event| !matches!(event,
+            crate::state::AppEvent::McpToast { ref title, .. } if title == "Agent input was not confirmed"
+        )), "{path}: the accepted turn must not produce a false failure toast");
+        assert_eq!(
+            writes
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|write| write.as_slice() == b"\r")
+                .count(),
+            1,
+            "{path}: a confirmed turn must not receive a duplicate Enter"
+        );
+    }
+}
+
 /// Catches: a headless terminal needs UI polling to discover an agent, or retains
 /// a shell-era screen cache after the foreground identity becomes known.
 #[cfg(unix)]
