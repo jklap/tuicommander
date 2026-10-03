@@ -4,15 +4,15 @@ use crate::stories::{NewPlan, NewStory, StoryCommand, StoryOrigin, StoryStore};
 use crate::workflows::{WorkflowKind, WorkflowStore};
 use std::path::PathBuf;
 
-struct Flow {
+pub(super) struct Flow {
     _config: tempfile::TempDir,
     _project: tempfile::TempDir,
     repo: PathBuf,
-    story_id: String,
+    pub(super) story_id: String,
     revision: i64,
-    store: RunStore,
-    run_id: String,
-    sequence: i64,
+    pub(super) store: RunStore,
+    pub(super) run_id: String,
+    pub(super) sequence: i64,
 }
 
 fn git(path: &std::path::Path, args: &[&str]) {
@@ -21,7 +21,7 @@ fn git(path: &std::path::Path, args: &[&str]) {
 
 /// A project repo, a story worktree on branch `story`, and a run whose story is accepted.
 /// `legacy` seeds the pre-policy built-ins (story_delivery rev 1 without checks).
-fn accepted_flow(legacy: bool) -> (Flow, impl Drop) {
+pub(super) fn accepted_flow(legacy: bool) -> (Flow, impl Drop) {
     let config = tempfile::tempdir().expect("config");
     let project = tempfile::tempdir().expect("project");
     let guard = crate::config::set_config_dir_override(config.path().to_path_buf());
@@ -472,4 +472,170 @@ fn run_started_before_the_upgrade_stays_pinned_to_its_unchecked_revision() {
         .unwrap_err();
     assert!(error.contains("revision 1"), "{error}");
     assert!(!story_integrated_at_revision(&flow.story_id, flow.revision).unwrap());
+}
+
+// Run the actual published check, retaining the same inputs execute_check holds
+// while its subprocess runs. The completion phase is exercised against real stores.
+fn completed_check(flow: &Flow) -> (StoryExecution, CheckReceipt) {
+    let snapshot = flow.store.snapshot(&flow.run_id).unwrap();
+    let execution = snapshot
+        .stories
+        .iter()
+        .find(|item| item.story_id == flow.story_id)
+        .unwrap()
+        .clone();
+    let definition = WorkflowStore::open()
+        .unwrap()
+        .get_published(
+            &snapshot.story_definition_id,
+            snapshot.story_definition_revision,
+        )
+        .unwrap();
+    let receipt = execute_pinned_check(
+        &definition.required_checks[0],
+        std::path::Path::new(execution.worktree_path.as_deref().unwrap()),
+    )
+    .unwrap();
+    (execution, receipt)
+}
+
+#[test]
+fn completed_check_survives_an_unrelated_event_and_replays_at_its_original_cursor() {
+    // catches: a different worker's event discarding valid check output, or making retries
+    // fail because the receipt sequence is no longer expected_sequence + 1.
+    let (flow, _guard) = accepted_flow(false);
+    let (execution, receipt) = completed_check(&flow);
+    let unrelated = flow
+        .store
+        .command(
+            &flow.run_id,
+            "notification",
+            RunCommand::ReserveEffect {
+                key: "notify-parent".into(),
+                kind: EffectKind::Notify,
+            },
+        )
+        .unwrap();
+    let recorded = flow
+        .store
+        .commit_completed_check(&flow.run_id, &execution, "check", flow.sequence, receipt)
+        .expect("unrelated event must not invalidate the check");
+    let mut duplicate = recorded.snapshot.stories[0].check_receipts[0].clone();
+    duplicate.duration_ms += 1;
+    assert_eq!(
+        flow.store
+            .commit_completed_check(&flow.run_id, &execution, "check", flow.sequence, duplicate,)
+            .expect("duplicate in-flight completion returns the first receipt"),
+        recorded
+    );
+    assert_eq!(recorded.sequence, unrelated.sequence + 1);
+    assert_eq!(recorded.snapshot.stories[0].check_receipts.len(), 1);
+    assert_eq!(
+        flow.store
+            .execute_check(
+                &flow.run_id,
+                &flow.story_id,
+                "repository-integrity",
+                "check",
+                flow.sequence,
+            )
+            .unwrap(),
+        recorded
+    );
+    assert!(
+        flow.store
+            .execute_check(
+                &flow.run_id,
+                &flow.story_id,
+                "repository-integrity",
+                "check",
+                recorded.sequence,
+            )
+            .unwrap_err()
+            .contains("different payload")
+    );
+    assert_eq!(
+        flow.store.snapshot(&flow.run_id).unwrap().sequence,
+        recorded.sequence
+    );
+}
+
+#[test]
+fn completed_check_rejects_a_changed_git_artifact_without_persisting() {
+    // catches: accepting a successful result after someone edits the checked worktree.
+    let (flow, _guard) = accepted_flow(false);
+    let (execution, receipt) = completed_check(&flow);
+    std::fs::write(
+        std::path::Path::new(execution.worktree_path.as_deref().unwrap()).join("story.txt"),
+        "changed after check\n",
+    )
+    .unwrap();
+    assert!(
+        flow.store
+            .commit_completed_check(&flow.run_id, &execution, "check", flow.sequence, receipt,)
+            .unwrap_err()
+            .contains("clean worktree")
+    );
+    let snapshot = flow.store.snapshot(&flow.run_id).unwrap();
+    assert_eq!(snapshot.sequence, flow.sequence);
+    assert!(snapshot.stories[0].check_receipts.is_empty());
+}
+
+#[test]
+fn completed_check_cannot_reuse_an_unrelated_command_id() {
+    // catches: an existing notification receipt being returned as the completed check.
+    let (flow, _guard) = accepted_flow(false);
+    let (execution, receipt) = completed_check(&flow);
+    let unrelated = flow
+        .store
+        .command(
+            &flow.run_id,
+            "check",
+            RunCommand::ReserveEffect {
+                key: "notify-parent".into(),
+                kind: EffectKind::Notify,
+            },
+        )
+        .unwrap();
+    assert!(
+        flow.store
+            .commit_completed_check(&flow.run_id, &execution, "check", flow.sequence, receipt,)
+            .unwrap_err()
+            .contains("different payload")
+    );
+    assert_eq!(
+        flow.store.snapshot(&flow.run_id).unwrap().sequence,
+        unrelated.sequence
+    );
+    assert!(
+        flow.store.snapshot(&flow.run_id).unwrap().stories[0]
+            .check_receipts
+            .is_empty()
+    );
+}
+
+#[test]
+fn completed_check_cannot_advance_a_cancelled_run() {
+    // catches: a check still running at cancellation appending usable evidence afterwards.
+    let (flow, _guard) = accepted_flow(false);
+    let (execution, receipt) = completed_check(&flow);
+    let cancelled = flow
+        .store
+        .command(&flow.run_id, "cancel", RunCommand::Cancel)
+        .unwrap();
+    assert!(
+        flow.store
+            .commit_completed_check(&flow.run_id, &execution, "check", flow.sequence, receipt,)
+            .unwrap_err()
+            .contains("terminal workflow")
+    );
+    assert_eq!(
+        flow.store.snapshot(&flow.run_id).unwrap().sequence,
+        cancelled.sequence
+    );
+    assert!(
+        flow.store.snapshot(&flow.run_id).unwrap().stories[0]
+            .check_receipts
+            .is_empty()
+    );
 }
