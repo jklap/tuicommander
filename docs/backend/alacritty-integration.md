@@ -116,7 +116,9 @@ coherent multi-line Claude space/NBSP `▎` visual gutters. Claude composer
 selections remove one leading `❯ ` and two continuation-margin columns only
 when the ordered selection starts at grid column zero with the marker in the
 first two cells and the preceding row has no `WRAPLINE`. Partial body selections
-and VT soft-wrap continuation origins remain literal; the
+and VT soft-wrap continuation origins remain literal. At the oldest retained
+row, cleanup requires no prior eviction; an unknown predecessor means literal
+content; the
 same width-evidence rule rejoins wraps while preserving short typed lines
 and deeper content indentation. Pasted prompt glyphs remain content. This normalization is
 outside the Alacritty fork and is shared by desktop IPC and HTTP clients.

@@ -1996,10 +1996,15 @@ impl TerminalGrid {
             && first_line <= grid.bottommost_line()
             && grid[first_line][Column(0)].c == '❯'
             && grid[first_line][Column(1)].c == ' '
-            && (first_line == grid.topmost_line()
-                || !grid[Line(first_line.0 - 1)][Column(num_cols - 1)]
+            && if first_line == grid.topmost_line() {
+                // An evicted predecessor may have wrapped into this row. Unknown
+                // origin is literal content, not evidence of composer chrome.
+                grid.total_scrolled() == history_size
+            } else {
+                !grid[Line(first_line.0 - 1)][Column(num_cols - 1)]
                     .flags
-                    .contains(Flags::WRAPLINE));
+                    .contains(Flags::WRAPLINE)
+            };
 
         let mut result = String::new();
 
