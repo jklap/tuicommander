@@ -4480,3 +4480,5 @@ or credential is touched.
 - [ ] Remote empty-grid replay control message (#1421-733e): staged Rust WS change requires a rebuilt backend; targeted loopback WS test and isolated headless fixture cover it before deployment. Keep the running desktop and mac-mint daemon intact until the coordinator schedules deployment.
 
 - [ ] Remote replay rollout (#1421-733e): deploy the updated daemon before the updated client. An older daemon without the explicit empty-replay marker can trigger a false 15-second stream error on a healthy idle session whose initial grid is unavailable. Coordinate deployment after live PTYs can be safely preserved or closed; do not restart mac-mint during this incident.
+
+- [ ] After Boss restarts the desktop build and updates the remote daemon, drop a read-only directory from Finder onto a remote repository. Verify all files arrive, final directory permissions remain read-only, and the Mac source stays untouched. Rust does not hot-reload; this requires a manual restart when Boss is ready. _(Story 1434 round 3: Linux handler tests cover upload deadlines, staging cleanup and cancellation; native Finder/macOS publication awaits restart.)_

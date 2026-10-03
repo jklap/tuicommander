@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- **Remote file drops** — Dropping Mac files onto a connected remote repository copies them through the authenticated daemon connection. Directory drops keep the recursion confirmation; existing names are skipped.
+- **Remote file drops** — Dropping Mac files onto a connected remote repository copies them through the authenticated daemon connection. Directory drops keep the recursion confirmation; existing names are skipped. Uploads have a total receive deadline, read-only directories publish correctly, and startup cleanup preserves user directories sharing the staging prefix.
 
 - **MCP Markdown tabs** — Documents opened with `ui action=tab` survive UI reloads in the same window, including native recovery without an unload event. Reopening their stable id updates the restored tab without creating a duplicate.
 - **Remote terminal stream failures** — A stalled initial replay, unreadable frame or disconnected stream now shows a persistent error toast. Reconnect attempts remain bounded until a frame reaches the renderer.

@@ -414,13 +414,26 @@ async fn tar_permissions_preserve_exec_but_strip_privileged_and_write_bits() {
 fn startup_sweep_removes_only_upload_directories_under_registered_roots() {
     let repo = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
     let outside = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
-    std::fs::create_dir_all(repo.path().join("nested/.tuic-upload-abandoned")).unwrap();
+    std::fs::create_dir_all(
+        repo.path()
+            .join("nested/.tuic-upload-11111111-1111-4111-8111-111111111111"),
+    )
+    .unwrap();
     std::fs::write(
-        repo.path().join("nested/.tuic-upload-abandoned/archive"),
+        repo.path()
+            .join("nested/.tuic-upload-11111111-1111-4111-8111-111111111111/archive"),
         b"partial",
     )
     .unwrap();
     std::fs::create_dir(repo.path().join(".other-stage")).unwrap();
+    for name in [
+        ".tuic-upload-notes",
+        ".tuic-upload-11111111111141118111111111111111",
+        ".tuic-upload-11111111-1111-4111-8111-111111111111-extra",
+    ] {
+        std::fs::create_dir(repo.path().join(name)).unwrap();
+        std::fs::write(repo.path().join(name).join("keep"), b"user data").unwrap();
+    }
     std::fs::write(repo.path().join(".tuic-upload-user-file"), b"keep").unwrap();
     std::fs::create_dir(outside.path().join(".tuic-upload-outside")).unwrap();
     #[cfg(unix)]
@@ -430,23 +443,24 @@ fn startup_sweep_removes_only_upload_directories_under_registered_roots() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::create_dir_all(
             repo.path()
-                .join("nested/.tuic-upload-restricted/data/locked"),
+                .join("nested/.tuic-upload-22222222-2222-4222-8222-222222222222/data/locked"),
         )
         .unwrap();
         std::fs::write(
             repo.path()
-                .join("nested/.tuic-upload-restricted/data/locked/file"),
+                .join("nested/.tuic-upload-22222222-2222-4222-8222-222222222222/data/locked/file"),
             b"partial",
         )
         .unwrap();
         std::os::unix::fs::symlink(
             outside.path(),
-            repo.path().join("nested/.tuic-upload-restricted/escape"),
+            repo.path()
+                .join("nested/.tuic-upload-22222222-2222-4222-8222-222222222222/escape"),
         )
         .unwrap();
         for relative in [
-            "nested/.tuic-upload-restricted/data/locked",
-            "nested/.tuic-upload-restricted/data",
+            "nested/.tuic-upload-22222222-2222-4222-8222-222222222222/data/locked",
+            "nested/.tuic-upload-22222222-2222-4222-8222-222222222222/data",
         ] {
             std::fs::set_permissions(
                 repo.path().join(relative),
@@ -459,7 +473,12 @@ fn startup_sweep_removes_only_upload_directories_under_registered_roots() {
             .permissions()
             .mode();
         sweep_staging(&[repo.path().to_str().unwrap().into()]);
-        assert!(!repo.path().join("nested/.tuic-upload-restricted").exists());
+        assert!(
+            !repo
+                .path()
+                .join("nested/.tuic-upload-22222222-2222-4222-8222-222222222222")
+                .exists()
+        );
         assert_eq!(
             std::fs::metadata(outside.path())
                 .unwrap()
@@ -470,8 +489,23 @@ fn startup_sweep_removes_only_upload_directories_under_registered_roots() {
     }
     #[cfg(not(unix))]
     sweep_staging(&[repo.path().to_str().unwrap().into()]);
-    assert!(!repo.path().join("nested/.tuic-upload-abandoned").exists());
+    assert!(
+        !repo
+            .path()
+            .join("nested/.tuic-upload-11111111-1111-4111-8111-111111111111")
+            .exists()
+    );
     assert!(repo.path().join(".other-stage").exists());
+    for name in [
+        ".tuic-upload-notes",
+        ".tuic-upload-11111111111141118111111111111111",
+        ".tuic-upload-11111111-1111-4111-8111-111111111111-extra",
+    ] {
+        assert_eq!(
+            std::fs::read(repo.path().join(name).join("keep")).unwrap(),
+            b"user data"
+        );
+    }
     assert!(repo.path().join(".tuic-upload-user-file").exists());
     assert!(outside.path().join(".tuic-upload-outside").exists());
 }
@@ -499,35 +533,175 @@ async fn idle_upload_aborts_and_cleans_staging() {
 
 // Catches: the global response timeout aborting a progressing upload despite its chunk idle budget.
 #[tokio::test(start_paused = true)]
+#[serial_test::serial]
 async fn upload_route_uses_idle_budget_instead_of_global_response_deadline() {
     use tower::ServiceExt;
-    let routes = axum::Router::new()
-        .route(
-            "/fs/upload-copy",
-            axum::routing::post(|| async {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                axum::http::StatusCode::OK
-            }),
-        )
-        .route(
-            "/ordinary",
-            axum::routing::post(|| async {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                axum::http::StatusCode::OK
-            }),
-        );
+    let config = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+    let repo = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    std::fs::write(config.path().join("repositories.json"), serde_json::json!({
+        "repos": { repo.path().to_str().unwrap(): { "path": repo.path().to_str().unwrap(), "branches": {} } }
+    }).to_string()).unwrap();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    *state.session_token.write() = "existing-token".into();
+    state.config.write().services.auth.lan_auth_bypass = false;
+    let routes = crate::mcp_http::build_remote_router(state).route(
+        "/ordinary",
+        axum::routing::post(|| async {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            axum::http::StatusCode::OK
+        }),
+    );
     let app = crate::mcp_http::with_server_limits(routes, std::time::Duration::from_secs(1));
-    for (path, status) in [
-        ("/fs/upload-copy", axum::http::StatusCode::OK),
-        ("/ordinary", axum::http::StatusCode::REQUEST_TIMEOUT),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(axum::http::Request::post(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), status);
+    for authenticated in [false, true] {
+        let tar = archive("file", b"slow remote bytes");
+        let size = tar.len();
+        let body = Body::from_stream(futures_util::stream::once(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            Ok::<_, io::Error>(tar)
+        }));
+        let mut request = axum::http::Request::post(format!(
+            "/fs/upload-copy?destDir={}&name=file&directory=false",
+            repo.path().display()
+        ))
+        .header("content-length", size)
+        .body(body)
+        .unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        if authenticated {
+            request
+                .headers_mut()
+                .insert("cookie", "tui-session=existing-token".parse().unwrap());
+        }
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            if authenticated {
+                axum::http::StatusCode::OK
+            } else {
+                axum::http::StatusCode::UNAUTHORIZED
+            }
+        );
+        if !authenticated {
+            assert!(!repo.path().join("file").exists());
+        }
     }
+    assert_eq!(
+        std::fs::read(repo.path().join("file")).unwrap(),
+        b"slow remote bytes"
+    );
+    let response = app
+        .oneshot(
+            axum::http::Request::post("/ordinary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::REQUEST_TIMEOUT);
+}
+
+// Catches: cancellation leaking a receive permit or leaving its partial archive behind.
+#[tokio::test]
+async fn cancelling_upload_releases_slot_and_removes_staging() {
+    let repo = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+    let roots = vec![repo.path().to_str().unwrap().to_owned()];
+    let query = UploadQuery {
+        dest_dir: roots[0].clone(),
+        name: "file".into(),
+        directory: false,
+    };
+    let (polled, waiting) = tokio::sync::oneshot::channel();
+    let stream = futures_util::stream::once(async move {
+        polled.send(()).unwrap();
+        futures_util::future::pending::<io::Result<Vec<u8>>>().await
+    });
+    let task =
+        tokio::spawn(async move { receive_copy(query, &roots, Body::from_stream(stream)).await });
+    waiting.await.unwrap();
+    assert_eq!(std::fs::read_dir(repo.path()).unwrap().count(), 1);
+    let other_slot = UPLOAD_SLOTS.try_acquire().unwrap();
+    assert!(UPLOAD_SLOTS.try_acquire().is_err());
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    let released = UPLOAD_SLOTS
+        .try_acquire()
+        .expect("cancelled upload leaked its slot");
+    assert_eq!(std::fs::read_dir(repo.path()).unwrap().count(), 0);
+    drop((released, other_slot));
+}
+
+// Catches: cancelling a handler during extraction dropping its staging tree or leaking its slot.
+#[tokio::test]
+async fn cancelling_handler_during_extraction_preserves_worker_and_releases_slot() {
+    let repo = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+    let roots = vec![repo.path().to_str().unwrap().to_owned()];
+    let mut tar = tar::Builder::new(Vec::new());
+    for index in 0..4096 {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(1);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, format!("folder/{index}"), &b"x"[..])
+            .unwrap();
+    }
+    let body = Body::from(tar.into_inner().unwrap());
+    let query = UploadQuery {
+        dest_dir: roots[0].clone(),
+        name: "folder".into(),
+        directory: true,
+    };
+    let task = tokio::spawn(async move { receive_copy(query, &roots, body).await });
+    // This is a setup/hang bound, not a performance assertion. The directory
+    // comes from the actual extraction worker, rather than a hand-set state.
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        loop {
+            if std::fs::read_dir(repo.path())
+                .unwrap()
+                .any(|entry| entry.unwrap().path().join("data").is_dir())
+            {
+                break;
+            }
+            assert!(
+                !task.is_finished(),
+                "upload ended before extraction could be cancelled"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("extraction did not start");
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        loop {
+            if repo.path().join("folder").is_dir() {
+                if let Ok(slots) = UPLOAD_SLOTS.try_acquire_many(2) {
+                    drop(slots);
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("cancelled extraction did not publish and release its permit");
+    assert_eq!(
+        std::fs::read_dir(repo.path().join("folder"))
+            .unwrap()
+            .count(),
+        4096
+    );
+    assert_eq!(
+        std::fs::read(repo.path().join("folder/4095")).unwrap(),
+        b"x"
+    );
+    assert_eq!(std::fs::read_dir(repo.path()).unwrap().count(), 1);
 }
 
 // Catches: authenticated HTTP callers exfiltrating arbitrary Finder/local source paths.
