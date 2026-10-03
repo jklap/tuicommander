@@ -4633,4 +4633,65 @@ mod tests {
         assert!(!temp_path.exists());
         assert!(!config_dir.path().join("mcp-bridge").exists());
     }
+
+    // --- critic-1415r3 ---
+
+    /// Catches: the read-only getter reporting a truncated or tampered file as a
+    /// usable bridge just because a executable sits in a revision directory.
+    #[test]
+    fn critic1415r3_bridge_info_ignores_a_copy_whose_bytes_do_not_match_its_revision() {
+        use sha2::{Digest, Sha256};
+        let (_guard, config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"full bridge bytes");
+        let revision = config_dir
+            .path()
+            .join("mcp-bridge")
+            .join(hex::encode(Sha256::digest(b"full bridge bytes")));
+        std::fs::create_dir_all(&revision).unwrap();
+        fake_bridge(&revision, b"trunc");
+        assert_eq!(
+            bridge_info_from_location(Some(&source)).bridge_path,
+            BRIDGE_NAME
+        );
+        std::fs::remove_file(source).unwrap();
+        assert_eq!(bridge_info_from_location(None).bridge_path, BRIDGE_NAME);
+    }
+
+    /// Catches: a getter call with neither a source nor a revision directory
+    /// reporting a path, or creating the revision directory.
+    #[test]
+    fn critic1415r3_bridge_info_without_source_or_copy_reports_the_bare_command() {
+        let (_guard, config_dir) = with_temp_config_dir();
+        let info = bridge_info_from_location(None);
+        assert_eq!(info.bridge_path, BRIDGE_NAME);
+        assert!(!config_dir.path().join("mcp-bridge").exists());
+    }
+
+    /// Catches: one malformed agent config blocking, or being rewritten by, the
+    /// startup repair of a healthy enabled agent.
+    #[test]
+    fn critic1415r3_startup_repairs_the_valid_agent_and_leaves_the_malformed_one() {
+        let (_guard, _config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"bridge bytes r3");
+        let bad = dir.path().join("bad.json");
+        std::fs::write(&bad, b"{malformed").unwrap();
+        let good = dir.path().join("good.json");
+        ensure_mcp_configs_for(
+            &[],
+            Some(&source),
+            [
+                ("claude", spec_at(bad.clone())),
+                ("gemini", spec_at(good.clone())),
+            ],
+        );
+        assert_eq!(std::fs::read(&bad).unwrap(), b"{malformed");
+        let command = command_at_spec(&spec_at(good));
+        assert!(
+            std::path::Path::new(&command).is_absolute() && usable_executable(std::path::Path::new(&command)),
+            "{command}"
+        );
+        assert_ne!(command, source.to_string_lossy());
+    }
 }
