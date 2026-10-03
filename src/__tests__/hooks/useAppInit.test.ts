@@ -2557,6 +2557,36 @@ describe("initApp", () => {
 			return { getCallback: () => callback };
 		}
 
+		// Catches: malformed remote fields create a bell item/sound or leak their content into logs.
+		it.each([
+			{ title: null },
+			{ title: 42 },
+			{ message: 42 },
+			{ message: { secret: "do-not-log" } },
+			{ message: undefined },
+		])("1439 discards malformed remote text fields with a content-free debug log: %j", async (malformed) => {
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			const debug = vi.spyOn(appLogger, "debug").mockImplementation(() => {});
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const payload = Object.assign(
+				{
+					title: "Private title",
+					message: "Private message",
+					level: "warn",
+					sound: "attention",
+					__tuic_origin: { connection: "mint", name: "mac-mint" },
+				},
+				malformed,
+			);
+			getCallback()!({ payload });
+			expect(activityStore.getForSection("messages")).toHaveLength(0);
+			expect(play).not.toHaveBeenCalled();
+			expect(debug).toHaveBeenCalledExactlyOnceWith("app", "Discarding malformed mirrored MCP toast");
+			debug.mockRestore();
+			play.mockRestore();
+		});
+
 		// Catches: remote toast has no host label, loses severity/sound, or clicks the wrong tab.
 		it("1439 labels a remote notice once and clicks its originating terminal", async () => {
 			const { getCallback } = captureMcpToast();

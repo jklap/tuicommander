@@ -562,6 +562,10 @@ export async function initApp(deps: AppInitDeps) {
 
 	replaceMcpToastListener((event) => {
 		const { title, message, level, sound, origin_repo_path, origin_session_id, __tuic_origin: origin } = event.payload;
+		if (origin && (typeof title !== "string" || (message !== null && typeof message !== "string"))) {
+			appLogger.debug("app", "Discarding malformed mirrored MCP toast");
+			return;
+		}
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
 		// Backend notifications stay in the bell; they never cover the active input.
 		// Only a registered repo may scope a bell item.
@@ -590,6 +594,7 @@ export async function initApp(deps: AppInitDeps) {
 			repoPath,
 			action,
 			origin_session_id,
+			origin?.connection,
 		);
 		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});

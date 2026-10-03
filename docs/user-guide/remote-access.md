@@ -428,6 +428,8 @@ bell under **Messages**, with `[connection name]` before its title. It keeps the
 requested level and sound. **Open terminal** switches to the originating remote
 tab when it is still open; an unknown or closed session leaves focus unchanged.
 Notices from a disconnected machine are not queued or replayed on reconnect.
+Connections with the same display name retain separate notices. Malformed remote
+notice text is discarded.
 
 #### What runs on which machine
 
