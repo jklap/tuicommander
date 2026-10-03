@@ -11,6 +11,7 @@ vi.mock("../../transport", async (importOriginal) => ({
 import { listen } from "@tauri-apps/api/event";
 import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
+import { activityStore } from "../../stores/activityStore";
 import { appLogger } from "../../stores/appLogger";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { globalWorkspaceStore, MANUAL_SCOPE } from "../../stores/globalWorkspace";
@@ -25,6 +26,7 @@ import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
 function resetStores() {
+	activityStore.clearAll();
 	for (const id of terminalsStore.getIds()) {
 		terminalsStore.remove(id);
 	}
@@ -2487,27 +2489,19 @@ describe("initApp", () => {
 			const deps = createMockDeps();
 			await initApp(deps);
 			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
-			const addToast = vi.spyOn(toastsStore, "add");
 
 			getCallback()!({
 				payload: { title: "need you", message: "which branch?", level: "warn", sound: "attention" },
 			});
 
 			expect(play).toHaveBeenCalledWith("attention");
-			// The toast store's own level-keyed tone would play a second, different
-			// sound over the buzzer and would ignore the user's volume/device/mutes.
-			expect(addToast).toHaveBeenCalledWith(
-				"need you",
-				"which branch?",
-				"warn",
-				false,
-				undefined,
-				undefined,
-				undefined,
-				undefined,
-			);
+			expect(toastsStore.toasts).toHaveLength(0);
+			expect(activityStore.getForSection("messages")[0]).toMatchObject({
+				title: "need you",
+				subtitle: "which branch?",
+				severity: "warn",
+			});
 			play.mockRestore();
-			addToast.mockRestore();
 		});
 
 		it("stays silent when no sound was requested or the name is unknown", async () => {
@@ -2523,12 +2517,11 @@ describe("initApp", () => {
 			play.mockRestore();
 		});
 
-		it("scopes the toast to the repository resolved from the caller cwd", async () => {
+		it("1397 scopes the bell-only notification to the repository resolved from the caller cwd", async () => {
 			repositoriesStore.add({ path: "/Gits/personal/tuicommander", displayName: "TUICommander" });
 			const { getCallback } = captureMcpToast();
 			const deps = createMockDeps();
 			await initApp(deps);
-			const addToast = vi.spyOn(toastsStore, "add");
 
 			getCallback()!({
 				payload: {
@@ -2541,21 +2534,14 @@ describe("initApp", () => {
 				},
 			});
 
-			// The session id rides along with the repo path: the repo scopes the
-			// toast, the session is what a click on it navigates to. The repo name
-			// is NOT glued onto the message — ToastContainer renders it as its own
-			// badge, so prefixing here would print it twice.
-			expect(addToast).toHaveBeenCalledWith(
-				"Release published",
-				"v1.7.4",
-				"info",
-				false,
-				undefined,
-				undefined,
-				"/Gits/personal/tuicommander",
-				"sess-abc",
-			);
-			addToast.mockRestore();
+			expect(toastsStore.toasts).toHaveLength(0);
+			expect(activityStore.getForSection("messages")[0]).toMatchObject({
+				title: "Release published",
+				subtitle: "v1.7.4",
+				repoPath: "/Gits/personal/tuicommander",
+				severity: "info",
+			});
+			expect(activityStore.getForSection("messages")[0].onClick).toBeTypeOf("function");
 		});
 	});
 
@@ -2582,6 +2568,17 @@ describe("initApp", () => {
 		beforeEach(() => {
 			paneLayoutStore.reset();
 			resetGroupCounter();
+		});
+
+		// Catches: a managed spawn interrupting input or leaving no retained notice.
+		it("1397 retains agent spawns in the bell without a toast", async () => {
+			const { getCallback } = captureSessionCreated();
+			await initApp(createMockDeps());
+			getCallback()!({
+				payload: { session_id: "1397-agent", cwd: null, agent_type: "claude", display_name: "Worker" },
+			});
+			expect(toastsStore.toasts).toHaveLength(0);
+			expect(activityStore.getForSection("messages")[0]).toMatchObject({ title: "Agent started", subtitle: "Worker" });
 		});
 
 		it("setActive not called when active terminal already exists", async () => {

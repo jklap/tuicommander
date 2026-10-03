@@ -14,6 +14,8 @@ export interface Toast {
 	message: string;
 	level: "info" | "warn" | "error";
 	createdAt: number;
+	/** Distinct messages grouped into this transient card. Bell entries stay separate. */
+	count?: number;
 	repoPath?: string;
 	/** Backend session that raised this toast. Set for MCP `ui action=toast`,
 	 *  where it is what makes the toast clickable: a repo holds many tabs, so
@@ -110,8 +112,8 @@ const LEVEL_ICONS: Record<Toast["level"], string> = {
 /** A toast auto-dismisses, often while the user is looking at another window, so
  *  the message is gone before it is read. Mirroring it into the bell keeps it
  *  readable afterwards. Opt out with the "Keep toasts in the bell" setting. */
-function mirrorToBell(toast: Toast): void {
-	if (!shouldMirrorToBell()) return;
+function mirrorToBell(toast: Toast, force = false): void {
+	if (!force && !shouldMirrorToBell()) return;
 	activityStore.addItem({
 		id: `toast-${toast.id}`,
 		pluginId: "core",
@@ -144,6 +146,19 @@ function createToastsStore() {
 			);
 		},
 
+		/** Backend/agent events are retained without interrupting the active input. */
+		addToBell(
+			title: string,
+			message = "",
+			level: Toast["level"] = "info",
+			repoPath?: string,
+			action?: Toast["action"],
+		) {
+			const id = nextId++;
+			mirrorToBell({ id, title, message, level, createdAt: Date.now(), repoPath, action }, true);
+			return id;
+		},
+
 		add(
 			title: string,
 			message = "",
@@ -160,8 +175,26 @@ function createToastsStore() {
 			}
 			const id = nextId++;
 			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action, repoPath, sessionId };
+			const group = state.toasts.find(
+				(item) =>
+					item.title === title &&
+					item.level === level &&
+					item.repoPath === repoPath &&
+					item.sessionId === sessionId &&
+					toast.createdAt - item.createdAt <= 5000,
+			);
+			const overflow = !group && state.toasts.length >= 2;
+			if (mirrorInBell) mirrorToBell(toast, overflow);
+			if (overflow) return id;
+			if (group) {
+				setState("toasts", (item) => item.id === group.id, {
+					message,
+					action,
+					count: (group.count ?? 1) + 1,
+				});
+				return group.id;
+			}
 			setState("toasts", (prev) => [...prev, toast]);
-			if (mirrorInBell) mirrorToBell(toast);
 			if (sound) playSound(level);
 			// A non-positive duration means "sticky" — no auto-dismiss timer, so the
 			// toast stays until the user clicks it away.

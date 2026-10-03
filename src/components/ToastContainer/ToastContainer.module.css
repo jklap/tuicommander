@@ -1,6 +1,9 @@
 .container {
   position: fixed;
-  bottom: calc(var(--status-bar-height, 24px) + 8px);
+  top: calc(var(--toolbar-height, 38px) + var(--tab-bar-height, 32px) + 8px);
+  /* Keep the lower half free for terminal prompts and the focused composer. */
+  max-height: max(0px, calc(50vh - var(--toolbar-height, 38px) - var(--tab-bar-height, 32px) - 16px));
+  overflow: hidden;
   /* --toast-right-inset is set while a docked side panel (AI Chat) would
      otherwise sit under the toasts. */
   right: calc(16px + var(--toast-right-inset, 0px));
@@ -13,6 +16,7 @@
 
 .toast {
   pointer-events: auto;
+  flex-shrink: 0;
   /* Two columns, two rows: the dot and the text share the first row, and the
      buttons get their own row underneath. Inline buttons took ~190px out of a
      480px toast, so the title wrapped one or two words deep while the buttons
@@ -24,7 +28,7 @@
   padding: 10px 14px;
   /* Never wider than the viewport: the container is right-anchored, so an
      over-wide toast would run off the left edge on a narrow window. */
-  max-width: min(480px, calc(100vw - 32px));
+  max-width: min(480px, calc(100vw - 32px - var(--toast-right-inset, 0px)));
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

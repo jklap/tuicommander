@@ -2,6 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackPanelWidth } from "../../components/AIChatPanel/trackPanelWidth";
 import { ToastContainer } from "../../components/ToastContainer/ToastContainer";
+import { activityStore } from "../../stores/activityStore";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
 
@@ -12,13 +13,18 @@ import { uiStore } from "../../stores/ui";
  * closed, or detached into a window of its own).
  */
 describe("toast inset for the docked AI Chat panel", () => {
-	beforeEach(() => {
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		await activityStore.hydrate();
 		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 		uiStore.setAiChatPanelMeasuredWidth(0);
 	});
-	afterEach(() => {
+	afterEach(async () => {
 		cleanup();
+		for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 		uiStore.setAiChatPanelMeasuredWidth(0);
+		await vi.runOnlyPendingTimersAsync();
+		vi.useRealTimers();
 	});
 
 	function container(): HTMLElement {
