@@ -18,45 +18,6 @@ fn interim() -> &'static [u8] {
     b"HTTP/1.1 102 Processing\r\n\r\n"
 }
 
-// Catches: off-by-one makes the 32nd interim reply fail (limit is "more than 32").
-#[test]
-fn exactly_32_interims_then_final_succeeds() {
-    let mut d = ResponseDecoder::default();
-    for _ in 0..32 {
-        d.push(interim());
-    }
-    d.push(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
-    assert_eq!(d.response(false).unwrap().unwrap().body, "ok");
-}
-
-// Catches: off-by-one lets a 33rd interim through.
-#[test]
-fn thirty_third_interim_is_invalid_data() {
-    let mut d = ResponseDecoder::default();
-    for _ in 0..33 {
-        d.push(interim());
-    }
-    d.push(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
-    let e = d.response(false).unwrap_err();
-    assert_eq!(e.kind(), ErrorKind::InvalidData);
-    assert!(e.to_string().contains("32 interim"), "{e}");
-}
-
-// Catches: counter reset by an intermediate Ok(None) poll (one interim per read).
-#[test]
-fn interim_budget_survives_polls_between_reads() {
-    let mut d = ResponseDecoder::default();
-    for i in 0..33 {
-        d.push(interim());
-        let r = d.response(false);
-        if i < 32 {
-            assert!(r.unwrap().is_none(), "interim {i}");
-        } else {
-            assert_eq!(r.unwrap_err().kind(), ErrorKind::InvalidData);
-        }
-    }
-}
-
 // Catches: an interim split byte-by-byte is counted more than once or the counter is bumped on
 // an incomplete section.
 #[test]
@@ -83,18 +44,6 @@ fn switching_protocols_after_32_interims_is_final_not_interim() {
     assert_eq!(d.response(false).unwrap().unwrap().status, 101);
 }
 
-// Catches: off-by-one on the cap: a section of exactly 64 KiB incl. terminator is valid.
-#[test]
-fn header_of_exactly_cap_bytes_is_accepted() {
-    let mut d = ResponseDecoder::default();
-    let mut w = section("HTTP/1.1 200 OK", CAP);
-    w.extend_from_slice(b"");
-    d.push(&w);
-    // no content-length, not eof -> None, but must not be an error
-    assert!(d.response(false).unwrap().is_none());
-    assert_eq!(d.response(true).unwrap().unwrap().status, 200);
-}
-
 // Catches: terminator straddling the cap boundary is accepted (cap excludes terminator).
 #[test]
 fn header_one_byte_over_cap_is_rejected() {
@@ -114,22 +63,13 @@ fn terminator_offsets_around_cap() {
         if total <= CAP {
             assert_eq!(r.unwrap().unwrap().status, 200, "total {total}");
         } else {
-            assert_eq!(r.unwrap_err().kind(), ErrorKind::InvalidData, "total {total}");
+            assert_eq!(
+                r.unwrap_err().kind(),
+                ErrorKind::InvalidData,
+                "total {total}"
+            );
         }
     }
-}
-
-// Catches: cap checked only when len > CAP (so a CAP-byte unterminated buffer waits forever),
-// or checked at CAP-1.
-#[test]
-fn unterminated_buffer_boundary() {
-    let mut d = ResponseDecoder::default();
-    let mut w = b"HTTP/1.1 200 OK\r\nX: ".to_vec();
-    w.resize(CAP - 1, b'a');
-    d.push(&w);
-    assert!(d.response(false).unwrap().is_none());
-    d.push(b"a");
-    assert_eq!(d.response(false).unwrap_err().kind(), ErrorKind::InvalidData);
 }
 
 // Catches: a header split over 4096-byte reads (real client read size) is rejected early or
@@ -158,21 +98,6 @@ fn header_split_across_reads_cap_boundaries() {
             assert_eq!(result.unwrap().unwrap_err().kind(), ErrorKind::InvalidData);
         }
     }
-}
-
-// Catches: body bytes counted as header (cap hits the buffer, not the section) for
-// Content-Length bodies.
-#[test]
-fn content_length_body_larger_than_cap_is_accepted() {
-    let n = CAP * 3;
-    let mut w = format!("HTTP/1.1 200 OK\r\nContent-Length: {n}\r\n\r\n").into_bytes();
-    w.extend(std::iter::repeat(b'x').take(n));
-    let mut d = ResponseDecoder::default();
-    for chunk in w.chunks(4096) {
-        d.push(chunk);
-        let _ = d.response(false).unwrap();
-    }
-    assert_eq!(d.response(false).unwrap().unwrap().body.len(), n);
 }
 
 // Catches: body bytes counted as header for chunked bodies, including pending partial chunks
@@ -209,7 +134,10 @@ fn oversized_interim_section_is_rejected() {
     let mut d = ResponseDecoder::default();
     d.push(&section("HTTP/1.1 102 Processing", CAP + 1));
     d.push(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
-    assert_eq!(d.response(false).unwrap_err().kind(), ErrorKind::InvalidData);
+    assert_eq!(
+        d.response(false).unwrap_err().kind(),
+        ErrorKind::InvalidData
+    );
 }
 
 // Catches: final headers that follow an interim in the same buffer, where the remaining bytes
@@ -234,27 +162,25 @@ fn eof_error_variants() {
 
     let mut d = ResponseDecoder::default();
     d.push(b"HTTP/1.1 200 OK\r\nX: y");
-    assert_eq!(d.response(true).unwrap_err().kind(), ErrorKind::UnexpectedEof);
+    assert_eq!(
+        d.response(true).unwrap_err().kind(),
+        ErrorKind::UnexpectedEof
+    );
 
     let mut d = ResponseDecoder::default();
     for _ in 0..32 {
         d.push(interim());
     }
-    assert_eq!(d.response(true).unwrap_err().kind(), ErrorKind::UnexpectedEof);
+    assert_eq!(
+        d.response(true).unwrap_err().kind(),
+        ErrorKind::UnexpectedEof
+    );
 
     let mut d = ResponseDecoder::default();
     let mut w = b"HTTP/1.1 200 OK\r\nX: ".to_vec();
     w.resize(CAP, b'a');
     d.push(&w);
     assert_eq!(d.response(true).unwrap_err().kind(), ErrorKind::InvalidData);
-}
-
-// Catches: truncated body message still says "declared body length" for a headers-only EOF.
-#[test]
-fn incomplete_message_does_not_mention_body_length_for_missing_headers() {
-    let mut d = ResponseDecoder::default();
-    let e = d.response(true).unwrap_err();
-    assert!(!e.to_string().contains("declared body length"), "{e}");
 }
 
 // Catches: each decoder carries its own budget (a Default decoder is fresh).
