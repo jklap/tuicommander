@@ -737,3 +737,7 @@ For web deployment without Tauri:
 - [SolidJS Documentation](https://www.solidjs.com/docs/latest)
 - [alacritty_terminal crate](https://crates.io/crates/alacritty_terminal)
 - [Tauri Documentation](https://tauri.app/v1/guides/)
+
+## Telegram channel implementation status (#1438-79b4)
+
+Approved design: [Telegram channel](docs/design/telegram-channel.md). Offline slices 1–2 provide owner/config/API boundaries and durable inbound ports. Native inbox/wake integration awaits 1419/1420; daemon polling, streaming, approval receipts and live deployment are not yet available. The target is a new coordinator-spawned managed marketeer peer on mint, not pe-3.

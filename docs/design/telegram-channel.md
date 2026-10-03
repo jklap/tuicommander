@@ -208,3 +208,5 @@ For Mac Keyboard, Boss approves the queue once as a process. Store a queue propo
 ## Offline implementation status
 
 Slice 1 adds strict opt-in file configuration, a process-held OS owner lock, per-request zeroized credentials and a safe typed HTTP boundary. The module is deliberately not started by the daemon until native integration lands; synthetic-secret loopback tests exercise it. The recorded public text-update fixture documents its source; no live API equivalence is claimed.
+
+Slice 2 implements a SQLite inbound journal, first-start discard state, atomic offset/mail commit, bounded pending mail, stop latches and retry scheduling. `MailPort` and consumption receipts are narrow explicit ports; they do not yet insert into the native inbox or wake any real peer. Stable-ID native insertion, atomic native inbox consumption, daemon startup and operator recovery remain DEFERRED until integration/later slices. Offline tests verify only the persistence/port contract, not idle/busy daemon wake.

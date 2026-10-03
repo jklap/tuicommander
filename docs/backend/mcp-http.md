@@ -1864,3 +1864,7 @@ The mobile companion UI (`/mobile`) uses the same HTTP/WebSocket infrastructure 
 - **Activity**: `GET /config/activity` returns the persisted array; the Activity tab hydrates that array when opened.
 
 The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop — no mobile-specific transport code.
+
+## Telegram adapter groundwork
+
+The offline `telegram` module holds owner/config/API and SQLite inbound boundaries (story 1438-79b4). It is not started by desktop or daemon boot and registers no MCP tool yet. `MailPort` requires idempotent stable-ID insertion and safe wake from the future native-mail integration; consumption must be committed at the inbox read boundary. These integrations await 1419/1420. See [the approved design](../design/telegram-channel.md) for the proposed tool, authorization and receipt contract.
