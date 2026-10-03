@@ -115,3 +115,40 @@ describe("toastsStore critic 1397 round 2", () => {
 		});
 	});
 });
+
+describe("toastsStore critic 1397 round 3", () => {
+	let toastsStore: typeof import("../../stores/toasts").toastsStore;
+	let activityStore: typeof import("../../stores/activityStore").activityStore;
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		vi.resetModules();
+		toastsStore = (await import("../../stores/toasts")).toastsStore;
+		activityStore = (await import("../../stores/activityStore")).activityStore;
+		await activityStore.hydrate();
+		activityStore.clearAll();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("an identical notice at exactly 5000 ms is still a duplicate, at 5001 ms it is new", () => {
+		// catches: off-by-one in the bell dedup window (< vs <=) or a window that slides with every suppressed repeat
+		testInScope(() => {
+			toastsStore.addToBell("N", "m", "info", "/repo", undefined, "s1");
+			vi.advanceTimersByTime(5000);
+			expect(toastsStore.addToBell("N", "m", "info", "/repo", undefined, "s1")).toBe(-1);
+			vi.advanceTimersByTime(1);
+			expect(toastsStore.addToBell("N", "m", "info", "/repo", undefined, "s1")).not.toBe(-1);
+		});
+	});
+
+	it("a different session raising the same notice within the window is not deduplicated", () => {
+		// catches: dedup ignoring sessionId, hiding a second agent's notice
+		testInScope(() => {
+			toastsStore.addToBell("N", "m", "info", "/repo", undefined, "s1");
+			expect(toastsStore.addToBell("N", "m", "info", "/repo", undefined, "s2")).not.toBe(-1);
+		});
+	});
+});
