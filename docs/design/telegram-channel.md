@@ -79,6 +79,18 @@ For publish approvals, add an explicit approval input `{artifact_id, exact_text}
 
 The publisher must obtain the decision through a deterministic receipt lookup and recompute the digest of the bytes it will publish. The LLM cannot mint, alter or reinterpret a decision, and free-text "yes" never creates an approval. Proposed `telegram decision` returns the stored receipt to the issuing peer; the marketeer's publishing code must check it, not trust an agent's paraphrase. TUIC cannot prove an external publisher consumes this record: the location/API of marketeer's approval store is an open integration question for Boss. This is application publish consent, separate from Claude MCP permission relay discussed in `ideas/mcp-channels.md:64`.
 
+### Publish previews cannot carry approval
+
+Coordinator constraint from br-3: content that might be published must never appear in the stream as already approved. The following is a required presentation and state contract, not an instruction for the LLM to decide whether approval exists.
+
+- Every nonempty draft is framed by adapter-owned preview wording. For marketeer: "Anteprima — non approvata. Per approvare usa il pulsante legato al testo esatto nel messaggio definitivo." The empty Thinking placeholder carries no content or approval claim. If publishable text appears later, show it as a clearly delimited preview below that wording. The label is display metadata and is excluded from the exact-text digest.
+- Draft state contains only request/turn/draft identifiers, preview text and activity scheduling. It has no approved flag, approval result, decision ID or publishing permission. `begin`, `activity`, `finish`, intent, progress and successful sends cannot create or change consent. For publication previews, activity uses neutral host templates such as preparing/reviewing text; agent-authored claims of approval are never used as status labels. Proposed publication bytes remain quoted preview content, even if those bytes contain the word "approved".
+- Stream finalization means message delivery finished, not publication approved. The persistent exact-text message with digest-bound buttons is still a proposal awaiting a choice. Finalization, retries, restarts and Stop do not promote the proposal to approved.
+- Only a validated approve-button callback creates a positive approval record, atomically bound to the immutable SHA-256 version described above. Reject records refusal. Free text, draft text and agent tool parameters cannot insert that record. Only after the callback transaction commits may the persistent decision message show the chosen approval; drafts are never edited to show an approval state.
+- The publisher requires that callback-created record and a byte-identical digest. A complete preview, a sent message or an agent assertion is insufficient. Edited publication text invalidates the old buttons and requires a new callback.
+
+This guarantees separation of preview, transport completion and approval authority. It does not attempt to infer truth from an LLM's prose: the approval record and publisher gate are deterministic Rust/application checks.
+
 ## 5. Config, secrets and restart recovery
 
 Confirmed by the coordinator via br-3: the sole allowlist source is mint `~/.config/tuic-telegram/allowed_chat_ids`, mode 0600, one decimal chat ID per line, beside `bot.token`. Boss's private chat is already authorized there. Read this file for authorization; never copy its real IDs into the repository, fixtures, tests, logs or memory. Tests use fake IDs. Missing, empty, unreadable or malformed content fails closed; refresh authorization before accepting inbound updates or sending outbound work, so removal also revokes queued sends. Never learn authorization from `/start`, usernames or first contact.
@@ -151,6 +163,7 @@ Use an in-process fake Bot API HTTP server, injected clock and fault injection a
 | `telegram_split_preserves_unicode_and_whitespace` | Byte slicing corrupts emoji or trims the approved text; boundary cases reassemble exact input within budget. |
 | `telegram_old_stop_cannot_interrupt_a_new_turn` | Reused draft/PTY mapping sends Esc to another task; matching Stop writes one Esc with bookkeeping, stale/replayed Stop writes none. |
 | `telegram_callbacks_bind_chat_message_and_issuer` | Forged handle or message moves a choice to another agent; only valid callback produces structured mail, ack and selected-message edit. |
+| `telegram_publish_preview_cannot_create_or_display_approval_state` | Forged agent approval prose or a finished draft masquerades as consent; preview framing remains explicit, draft schema rejects approval fields, no decision exists before a valid digest-bound callback, and the publisher refuses preview-only evidence. |
 | `telegram_approval_records_exact_bytes_before_mail` | LLM or formatting approves different text; immutable digest/decision precedes mail, and one-byte/newline changes invalidate publishing. |
 | `telegram_repeated_button_does_not_record_two_decisions` | Replayed callback, restart or ack/edit retry repeats publish consent; one decision and stable mail ID. |
 | `telegram_unrelated_turn_cannot_replace_active_stream` | Generic busy/done events are attributed to the wrong request; begin/epoch binding filters them and missing finish stays incomplete. |
@@ -170,7 +183,7 @@ At the end of each implementation story, run only the relevant `telegram::tests:
 6. **Buttons and approvals:** opaque handles, durable decisions, callback acknowledgement/edit retry, exact-text versioning and publisher receipt contract. Publisher integration must be identified before enabling approvals.
 7. **Operator docs and coordinated live verification:** apply sync matrix MCP/remote/progress sections (`docs/sync-matrix.md:112`, `:149`, `:318`, `:409`): API/backend/user guides, FEATURES, SPEC, CHANGELOG and restart checklist as each behavior lands. Use the confirmed allowlist file, obtain the stable peer binding, authentic sanitized fixtures and Boss readiness; coordinator schedules mint deployment while pe-3 is idle.
 
-## Decisions needed from Boss before implementation
+## Open design questions for Boss via br-3
 
 1. Provide the stable marketeer peer UUID. Chat authorization is already supplied by the confirmed allowed_chat_ids file; do not request or copy Boss's chat ID. No discovery poller is started here.
 2. Confirm the proposed primary stream: explicit begin/finish plus intents and safe agent-authored tool-step activity. Fully automatic tool-name streaming needs a separate captured hook/transcript contract.
