@@ -475,8 +475,9 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         // Clear the viewport.
         self.scroll_up(&region, positions);
 
-        // Reset rotated lines.
-        for line in (0..(self.lines - positions)).map(Line::from) {
+        // ED2 replaces every visible row. Overflow can mark a newly blank row
+        // as predecessor-lost after resetting it, so reset that provenance too.
+        for line in (0..self.lines).map(Line::from) {
             self.raw[line].reset(&self.cursor.template);
         }
     }
