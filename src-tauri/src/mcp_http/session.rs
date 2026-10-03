@@ -2396,12 +2396,11 @@ mod tests {
             let state = super::super::tests::test_state();
             let sid = "http-foreground-neighbour";
             let probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, name);
-            state
-                .session_maps
-                .session_states
-                .get_mut(sid)
-                .unwrap()
-                .agent_type = preset.map(str::to_string);
+            {
+                let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+                session.agent_type = preset.map(str::to_string);
+                session.agent_type_from_run_config = preset.is_some();
+            }
             let response = get_foreground_process(State(state.clone()), Path(sid.into()))
                 .await
                 .into_response();
@@ -2413,6 +2412,17 @@ mod tests {
                 body["agent"],
                 serde_json::json!(expected),
                 "{name}, preset={preset:?}"
+            );
+            assert_eq!(
+                state
+                    .session_maps
+                    .session_states
+                    .get(sid)
+                    .unwrap()
+                    .agent_type
+                    .as_deref(),
+                preset,
+                "run-config preset survives wrapper and shell foreground"
             );
             if preset.is_none() {
                 assert_eq!(

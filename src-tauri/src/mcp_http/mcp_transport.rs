@@ -4617,6 +4617,7 @@ fn handle_agent_with_parent_cwd(
                 session_state.hook_instrumented =
                     crate::pty::hook_instrumented_for(&agents_cfg, effective_agent_type.as_deref());
                 session_state.agent_type = effective_agent_type.clone();
+                session_state.agent_type_from_run_config = true;
             }
             state
                 .session_maps
@@ -11278,13 +11279,10 @@ mod tests {
         let detail = response["detail"]
             .as_str()
             .expect("actionable rejection detail");
-        assert!(!detail.is_empty());
-        for other in ["not_managed_agent", "agent_not_ready", "session_not_found"] {
-            assert_ne!(
-                detail,
-                crate::pty::agent_submission_rejection_detail(&state, session_id, other)
-            );
-        }
+        assert_eq!(
+            detail,
+            "The composer contains unfinished user input. Submit or clear that input before sending another command."
+        );
         assert_eq!(response["composer_state"], "partial");
         assert!(bytes.lock().unwrap().is_empty());
         assert_eq!(
