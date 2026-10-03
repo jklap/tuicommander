@@ -324,7 +324,7 @@ struct Staging {
 impl Drop for Staging {
     fn drop(&mut self) {
         if let Err(e) = self.parent.remove_dir_all(&self.name) {
-            log::warn!("Remote upload staging cleanup failed: {e}");
+            tracing::warn!(source = "remote-transfer", error = %e, "Remote upload staging cleanup failed");
         }
     }
 }
