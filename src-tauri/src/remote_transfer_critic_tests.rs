@@ -228,11 +228,8 @@ async fn cancelled_upload_removes_its_staging_directory() {
     std::fs::create_dir(&root).unwrap();
     let stream = futures_util::stream::iter([Ok::<_, io::Error>(vec![1u8; 4096])])
         .chain(futures_util::stream::pending());
-    let fut = receive_copy(
-        query(&root, "f", false),
-        &[root.to_str().unwrap().to_owned()],
-        Body::from_stream(stream),
-    );
+    let roots = [root.to_str().unwrap().to_owned()];
+    let fut = receive_copy(query(&root, "f", false), &roots, Body::from_stream(stream));
     assert!(tokio::time::timeout(std::time::Duration::from_millis(300), fut)
         .await
         .is_err());
