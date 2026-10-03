@@ -118,8 +118,10 @@ selections remove one leading `❯ ` and two continuation-margin columns only
 when the ordered selection starts at grid column zero with the marker in the
 first two cells and the preceding row has no `WRAPLINE`. Partial body selections
 and VT soft-wrap continuation origins remain literal. At the oldest retained
-row, cleanup requires known row provenance. Eviction or history purge marks
-the retained origin unknown; full row reset or erase restores known origin
+row, cleanup requires known row provenance. Loss of content-bearing predecessors marks
+retained content unknown; blank rows retain a fresh origin. Removing the entire
+reprinted history tail carries predecessor-loss provenance into the screen.
+Full row reset or erase restores known origin
 without resetting absolute row counters. Unknown content stays literal; the
 same width-evidence rule rejoins wraps while preserving short typed lines
 and deeper content indentation. Pasted prompt glyphs remain content. This normalization is
