@@ -62,6 +62,12 @@ sync check, `cargo fmt --check`, `cargo clippy --release -- -D warnings`,
 `cargo nextest run --workspace` plus doctests, Vitest, the plugin tests,
 `pnpm audit`, and `cargo audit`.
 
+Cargo owns the executables in `src-tauri/target/`: sidecar staging never
+copies back into that directory. `pnpm build:sidecar` builds the CLI and bridge
+with Cargo and stages them in `src-tauri/binaries/` for development and
+packaging. `build.rs` disables only tauri-build's reverse sidecar copy;
+`tauri.conf.json` and CLI packaging overrides keep the bundle entries.
+
 To run a single gate, copy its command out of the `check` target in the
 [Makefile](Makefile) — that target is the source of truth for what CI enforces.
 Prefix standalone test commands with `scripts/with-test-tmp.sh` from the

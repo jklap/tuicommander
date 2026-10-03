@@ -222,6 +222,7 @@ Native terminal renderer with full PTY integration.
 - Applies font, theme, and zoom settings
 - Link detection for clickable URLs
 - Selection management for copy operations
+- Terminal search retains match highlights across unchanged or colour-only grid frames; changed text invalidates affected rows before the backend refresh completes.
 
 `CanvasTerminal` keeps frame decode, reconciliation, scheduling, and paint in
 one imperative hot path. Sibling controllers own selection/search state, link

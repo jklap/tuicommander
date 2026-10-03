@@ -1724,6 +1724,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 			fullRepaintNeeded = true;
 		}
+		// Damage can include unchanged text (cursor, colours, or a full redraw).
+		// Compare before installing the new rows: clearing those matches while the
+		// asynchronous search refresh is pending makes every highlight blink.
+		const rewrittenSearchRows = new Set<number>();
+		if (searchQuery) {
+			const viewportTop = frame.historySize - frame.displayOffset;
+			for (const row of frame.rows) {
+				const previous = rowMap.get(row.index);
+				if (scrollChanged || !previous || rowToText(previous) !== rowToText(row)) {
+					rewrittenSearchRows.add(viewportTop + row.index);
+				}
+			}
+		}
 		installFrameRows(rowMap, frame, decision);
 		for (const row of frame.rows) {
 			pendingDirtyRows.add(row.index);
@@ -1739,18 +1752,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 		}
 
-		// Every row in this frame just had its text replaced. A search match anchored
-		// to one of those absolute rows describes text that no longer exists, so drop
-		// it now rather than painting a highlight over whatever the TUI wrote there
-		// (ink agents repaint their bottom rows continuously). The debounced re-search
-		// then re-establishes the matches that still hit.
+		// Invalidate only changed text; unchanged rows keep their decorations until
+		// the backend refresh adopts the next result. Changed rows still clear now
+		// so a highlight cannot linger over text that no longer matches.
 		if (searchQuery && frame.rows.length > 0) {
-			const viewportTop = frame.historySize - frame.displayOffset;
-			const rewritten = new Set<number>();
-			for (const row of frame.rows) rewritten.add(viewportTop + row.index);
-			// No repaint flag needed: repaintOverlay() clears and redraws the overlay
-			// canvas (where highlights live) on every frame.
-			search.dropRows(rewritten);
+			search.dropRows(rewrittenSearchRows);
 			scheduleSearchRefresh();
 		}
 

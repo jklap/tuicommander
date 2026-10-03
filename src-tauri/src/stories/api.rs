@@ -105,6 +105,7 @@ pub enum StoryReply {
 }
 
 /// All transports use this boundary, so an identifier alone never grants cross-project access.
+#[cfg(test)]
 pub fn story_action(
     project: &str,
     action: StoryAction,

@@ -2277,6 +2277,9 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	// A native window identity grants nonce bootstrap. HTTP clients use the
 	// capability link shown only in that window, never a discoverable bootstrap.
 	"secret_form_bootstrap",
+	// Data leaves the machine; source paths come from Finder and cannot be gated
+	// to registered roots. HTTP token holders must not trigger exfiltration.
+	"fs_transfer_remote_paths",
 	// Binary IPC uses byte arrays; browser uploads use a streaming fetch body to
 	// the equivalent /attachments/upload route instead of JSON rpc mapping.
 	"upload_attachment",

@@ -1,5 +1,9 @@
 # MCP & HTTP Server
 
+## Remote file copies
+
+The shared filesystem router exposes streamed `/fs/upload-copy` on the daemon through existing authentication. Sender-side `fs_transfer_remote_paths` coordination is desktop IPC only and intentionally unmapped: data leaves the machine, Finder source paths cannot be gated to registered roots, and HTTP token holders must not trigger exfiltration. There is no `/fs/transfer-remote` HTTP route. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. Uploads use the existing session-cookie header, a 30-second chunk idle deadline (exempt from the global response deadline), and hold their concurrency permit through blocking extraction. Daemon startup sweeps abandoned upload staging inside registered roots without following symlink directories. Cleanup restores owner directory access only inside disposable staging when restrictive tar modes would prevent removal; published permissions remain unchanged. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
+
 ## CI logs
 
 The MCP `repo` tool's `ci_logs` action accepts `path` and `branch` and fetches
@@ -143,7 +147,7 @@ Both `build_router` and `build_remote_router` pass their assembled routes throug
 
 | Limit | Value | Response | Why |
 |-------|-------|----------|-----|
-| `TimeoutLayer` | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
+| Response timeout middleware | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
 | `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB, with route-scoped ACP prompt and voice import exceptions | `413 Payload Too Large` | Bounds buffered JSON request bodies |
 
 **301 s, not 300 s — the layer must outlast every deadline it wraps.**
@@ -1064,6 +1068,7 @@ immediately before Enter. One response returns:
 | `turn_epoch` | Epoch advanced by the shared input FSM |
 | `composer_state` | Tracked `InputLineBuffer`: `cleared`, `partial`, `empty`, or `unknown`; not the application's semantic state |
 | `acknowledgement` / `reason` | Terminal-movement evidence or the precise rejection/timeout |
+| `detail` | For pre-write rejections, a human-readable cause and corrective action; unknown agent identity includes the current foreground process |
 
 The acknowledgement does not claim semantic application acceptance or task
 success. Default acknowledgement timeout is 3,000 ms; callers may request
@@ -1826,9 +1831,9 @@ When MCP-only (localhost):
 
 ## Security Model
 
-- **Default:** Localhost-only, no authentication, opt-in
-- **Remote access:** Configurable port, Basic Auth required
-- **CORS:** Enabled for all origins (browser mode support)
+- **Default:** Local IPC (Unix socket or Windows named pipe), with filesystem/user access controls and no HTTP credentials. The TCP listener is opt-in.
+- **HTTP authentication:** Every protected TCP request needs the existing URL token, session cookie or Basic Auth, including loopback and LAN clients. The legacy `lan_auth_bypass` preference no longer bypasses HTTP authentication. Login assets and CORS preflight are public; the headless health probe remains public.
+- **Request boundary:** Before authentication, every TCP request validates one Host authority (localhost, loopback/private literal IP, actual local interface IP, or the detected Tailscale FQDN). Missing, duplicate or foreign Host is rejected with 403. An Origin must be an exact bundled WebView/Vite origin or the HTTP/HTTPS origin of that validated Host. Foreign and opaque origins are rejected with 403 even with valid credentials. Cross-site browser requests are refused except from the explicit bundled/development origins. CORS uses the same origin policy and never a wildcard. Native clients without Origin still authenticate.
 - **Compression:** Gzip and Brotli via `CompressionLayer` (responses >860 bytes, auto-negotiated). SSE and WebSocket excluded by `DefaultPredicate`
 - **No TLS:** Intended for local network use; use SSH tunnel for remote
 - **Loopback-only session actions:** `session create`, `submit`, `input`, `kill`, `close`, `pause`, and `resume` are restricted to loopback connections — a non-loopback (remote/LAN) MCP client cannot pause/resume sessions, write to PTYs, or spawn/destroy sessions (those remain read-only: `list`, `output`, `status`)
@@ -1883,3 +1888,44 @@ also checks the form gate. The form mounts through the common frontend entry
 without starting App/debug/logging/terminal initialization. Run captures pipes,
 caps output and masks before serialization; it never writes raw output to
 logging or PTY paths. Consent templates match exact argv, names and directory.
+
+## Configured remote MCP ownership
+
+The desktop's native MCP session list includes the Rust remote mirror. Remote rows carry
+`connection_id` and `address` (`connection_id/session_id`). Session output and submit
+resolve that owner and use its configured HTTP URL and token. Output uses the daemon's
+native MCP cursor, redaction and exited-session contract through `format=mcp` or
+`format=mcp_raw`; submit uses the authenticated semantic submit endpoint.
+
+Peer discovery includes local and connected remote registries. Use a returned peer
+`address`, or pass `connection_id` with `to`. `local/id` addresses the desktop.
+The desktop opens an authenticated `/mcp/peer` WebSocket to each configured daemon.
+This duplex mail link carries register, list_peers, send, inbox and wait only; process
+creation is excluded. A daemon sends to the desktop or another daemon through the hub.
+The authenticated link determines sender provenance. Destination delivery reuses native
+inbox and wake handling, preserving the message body in the inbox.
+
+Local mail survives hub loss. Cross-host failure names the connection; uncertain
+acknowledgements must not be retried blindly. Lifecycle mail retains its message identity
+in the bounded native outbox until acknowledged. Reconnect retries those notices without
+duplicating an already retained destination message.
+
+Peer handshakes serialize per configured connection, so a mute daemon cannot hold
+mail calls to another host behind its network deadline. Session targets reject empty
+ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
+reads: each registered recipient keeps a FIFO ring of the last 100 forwarded
+message ids and fingerprints, shared across senders, without retaining message
+bodies. A retained id with a different sender or body is rejected as an identity
+collision. Recipient unregister removes that recipient's ring; sender retirement
+does not. Beyond the last 100 ids, a retry may be delivered twice, including when
+another sender's burst pushes its id out of the ring. There are no global budgets,
+host quotas or sender eviction rules.
+
+Disconnect retires that host's existing shadows synchronously, independently
+of a pending handshake or a later reconnect generation. The registered-recipient
+check and enqueue remain atomic with recipient retirement. This is a bounded
+replay horizon, not unbounded or restart-persistent exactly-once delivery.
+
+## Telegram adapter groundwork
+
+The offline `telegram` module holds owner/config/API and SQLite inbound boundaries (story 1438-79b4). It is not started by desktop or daemon boot and registers no MCP tool yet. `MailPort` requires idempotent stable-ID insertion and safe wake from the future native-mail integration; consumption must be committed at the inbox read boundary. These integrations await 1419/1420. See [the approved design](../design/telegram-channel.md) for the proposed tool, authorization and receipt contract.

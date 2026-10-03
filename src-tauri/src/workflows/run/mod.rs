@@ -5,6 +5,7 @@ mod reducer;
 mod store;
 
 pub use api::*;
+#[cfg(test)]
 pub use check::*;
 pub use model::*;
 pub use store::*;
@@ -2621,7 +2622,7 @@ mod tests {
                     run_id: run.id.clone(),
                     command_id: "other-project".into(),
                     expected_sequence: run.sequence,
-                    command: RunCommand::Pause,
+                    command: Box::new(RunCommand::Pause),
                 }
             )
             .is_err()
@@ -2644,7 +2645,7 @@ mod tests {
                 run_id: run.id.clone(),
                 command_id: "pause".into(),
                 expected_sequence: run.sequence,
-                command: RunCommand::Pause,
+                command: Box::new(RunCommand::Pause),
             },
         )
         .expect("pause") else {
@@ -2658,14 +2659,14 @@ mod tests {
                     run_id: run.id.clone(),
                     command_id: "forged-recertification".into(),
                     expected_sequence: paused.sequence,
-                    command: RunCommand::RecordRecertification {
+                    command: Box::new(RunCommand::RecordRecertification {
                         receipt: CanonicalReceipt {
                             canonical_ref: "refs/heads/main".into(),
                             commit: "a".repeat(40),
                             tree: "b".repeat(40),
                             post_checks: vec![],
                         },
-                    },
+                    }),
                 }
             )
             .is_err()
@@ -2677,7 +2678,7 @@ mod tests {
                     run_id: run.id,
                     command_id: "stale-cancel".into(),
                     expected_sequence: run.sequence,
-                    command: RunCommand::Cancel,
+                    command: Box::new(RunCommand::Cancel),
                 }
             )
             .is_err()
@@ -2688,7 +2689,7 @@ mod tests {
                 run_id: paused.snapshot.id,
                 command_id: "cancel-after-pause".into(),
                 expected_sequence: paused.sequence,
-                command: RunCommand::Cancel,
+                command: Box::new(RunCommand::Cancel),
             },
         )
         .expect("cancel") else {

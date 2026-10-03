@@ -150,6 +150,7 @@ quick inconclusive exits remain retryable after a short cooldown.
 
 | Command | Why it is still where it is |
 |---|---|
+| `fs_transfer_remote_paths` (`remote_transfer.rs`) | Async IPC/HTTP coordinator. Source enumeration, tar production and receiver extraction run on the blocking pool; HTTP and archive spooling are streamed asynchronously. |
 | `fs_transfer_paths` (`fs.rs`) | Still sync, so its recursive directory copy runs on the main thread. It is the backend of a drag-drop, and the D&D surface needs Boss's approval before it is touched. Conversion is mechanical when that comes — see the `DEFERRED` note at the site. |
 | `resolve_terminal_path` (`fs.rs`) | A single `canonicalize` + `is_dir`. Microseconds on a local disk; a stale network mount could stall it, which is a real but unobserved risk. Its batched sibling `resolve_terminal_paths` — the one a terminal screen actually calls, with tens of candidates — **is** on the blocking pool, so the risk that scaled with candidate count is gone. |
 | `resolve_markdown_link` (`fs.rs`) | `async fn` using `spawn_blocking_fs` for canonicalization of the source, target and root. UNC paths are rejected before any filesystem probe. |
