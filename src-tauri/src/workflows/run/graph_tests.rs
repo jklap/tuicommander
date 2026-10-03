@@ -1,9 +1,6 @@
 use super::graph::*;
 use super::*;
-use crate::workflows::{
-    AgentRole, Edge, Node, NodeKind, WorkflowGraph, WorkflowKind, WorkflowStore,
-    validate_executable_graph,
-};
+use crate::workflows::{Node, NodeKind, WorkflowKind, WorkflowStore, validate_executable_graph};
 
 fn evidence() -> DecisionEvidence {
     DecisionEvidence {
@@ -514,7 +511,7 @@ fn executable_contract_requires_checks_and_explicit_pause_target() {
             .contains("resume_to")
     );
     let join: NodeKind = serde_json::from_str(r#"{"type":"join"}"#).unwrap();
-    assert_eq!(join, NodeKind::Join);
+    assert_eq!(join, NodeKind::Join {});
     for unsupported in [
         r#"{"type":"fork","join_id":"join"}"#,
         r#"{"type":"join","mode":"all","fork_id":"fork"}"#,
