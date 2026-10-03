@@ -306,9 +306,9 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Agent rows show the agent icon, terminal name, current intent/task (falling back to the last substantial prompt), compact age since the backend's last semantic session activity, and the same busy/idle signal used by the terminal tab and branch icon. Terminal redraws do not reset this age. Plain shells remain visible as terminal rows.
 - A sub-agent row shows a muted robot tag with its parent agent in the tooltip; the repo GitHub badge retains the accent color to distinguish its action from session metadata.
 - Clicking a row switches to that session.
-- Every branch shows its list by default (`tabsCollapsed` absent); collapsing is remembered per workspace. The branch icon toggles the list: it swaps to a chevron on hover or keyboard focus (Enter/Space), inside the icon's own box, so branch rows have no chevron column and badges keep one right edge. Clicking the row only opens the branch — it never expands or collapses the list.
+- Every branch shows its agents by default; collapsing is remembered per workspace. A separate, always-visible chevron toggles the list by click or Enter/Space. The status icon and row select the branch without changing agent visibility.
 - Single-session branches can expand too.
-- A collapsed list shows its session count on the branch icon; an expanded list hides it, because the rows already show every session.
+- A collapsed list shows its session count beside the chevron; an expanded list hides the count.
 
 ### 2.4 Git Quick Actions
 - Bottom of sidebar when a repo is active

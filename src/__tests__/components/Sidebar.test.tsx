@@ -2426,7 +2426,7 @@ describe("Sidebar", () => {
 		});
 
 		// Rule (AGENTS.md "Sidebar clicks"): a row click opens the branch and
-		// nothing else. Only the branch icon expands or collapses the agents.
+		// nothing else. Only the separate chevron expands or collapses the agents.
 		it("row click on the already-active branch opens it and never toggles the agents", () => {
 			setRepos(
 				{
@@ -2494,7 +2494,7 @@ describe("Sidebar", () => {
 			expect(mockToggleBranchTabsCollapsed).not.toHaveBeenCalled();
 		});
 
-		it("branch icon click toggles the agents without opening the branch", () => {
+		it("chevron click prevents unintended branch selection when toggling agents", () => {
 			setRepos(
 				{
 					"/repo1": makeRepo({
@@ -2526,13 +2526,20 @@ describe("Sidebar", () => {
 			const onBranchSelect = vi.fn();
 			const { container } = render(() => <Sidebar {...defaultProps({ onBranchSelect })} />);
 
-			fireEvent.click(branchRow(container, "feature/x").querySelector(".branchIconToggle")!);
+			const row = branchRow(container, "feature/x");
+			const icon = row.querySelector(".branchIcon")!;
+			expect(icon.closest("button")).toBeNull();
+			fireEvent.click(icon);
+			expect(onBranchSelect).toHaveBeenCalledWith("/repo1", "feature/x");
+			expect(mockToggleBranchTabsCollapsed).not.toHaveBeenCalled();
+			onBranchSelect.mockClear();
+			fireEvent.click(row.querySelector(".branchIconToggle")!);
 
 			expect(mockToggleBranchTabsCollapsed).toHaveBeenCalledWith("/repo1", "feature/x");
 			expect(onBranchSelect).not.toHaveBeenCalled();
 		});
 
-		it("branch icon toggles the agents from the keyboard", () => {
+		it("chevron handles Enter and Space without selecting the branch", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -2551,11 +2558,13 @@ describe("Sidebar", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 
 			fireEvent.keyDown(branchRow(container, "main").querySelector(".branchIconToggle")!, { key: "Enter" });
+			fireEvent.keyDown(branchRow(container, "main").querySelector(".branchIconToggle")!, { key: " " });
+			expect(mockToggleBranchTabsCollapsed).toHaveBeenCalledTimes(2);
 
 			expect(mockToggleBranchTabsCollapsed).toHaveBeenCalledWith("/repo1", "main");
 		});
 
-		it("branch icon counts the sessions its toggle reveals, even while collapsed", () => {
+		it("collapsed chevron retains the session count beside the disclosure", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
@@ -2580,7 +2589,7 @@ describe("Sidebar", () => {
 			expect(toggle.getAttribute("aria-label")).toContain("3");
 		});
 
-		it("branch icon hides the session count while the list is expanded", () => {
+		it("expanded chevron hides the redundant session count", () => {
 			setRepos({
 				"/repo1": makeRepo({
 					workspaces: {
