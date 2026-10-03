@@ -4743,4 +4743,144 @@ mod tests {
             old.to_str().unwrap()
         );
     }
+
+    // --- critic-1415r4 ---
+
+    fn seed_command(path: &std::path::Path, command: &str) {
+        write_fixture(
+            path,
+            &serde_json::json!({"mcpServers": {TUIC_MCP_KEY: {"command": command, "args": ["--serve"]}}}),
+        );
+    }
+
+    /// Catches: migration treating any absolute command as ours — a user's wrapper script
+    /// (or a launcher inside `mcp-bridge-custom`, a sibling of our store) being rewritten,
+    /// or a bridge copy being installed for a config that will not use it.
+    #[test]
+    fn migration_leaves_custom_wrapper_commands_and_creates_no_install() {
+        let (_guard, config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"new bridge revision");
+        let lookalike = config_dir.path().join("mcp-bridge-custom");
+        std::fs::create_dir_all(&lookalike).unwrap();
+        let wrap_dir = dir.path().join("wrap");
+        std::fs::create_dir_all(&wrap_dir).unwrap();
+        let wrappers = [
+            fake_bridge(&wrap_dir, b"#!/bin/sh\nexec true\n"),
+            fake_bridge(&lookalike, b"user supplied launcher"),
+        ];
+        for (index, wrapper) in wrappers.iter().enumerate() {
+            let config = dir.path().join(format!("claude-{index}.json"));
+            seed_command(&config, wrapper.to_str().unwrap());
+            let before = std::fs::read(&config).unwrap();
+            ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at(config.clone()))]);
+            assert_eq!(std::fs::read(&config).unwrap(), before, "{}", wrapper.display());
+        }
+        assert!(!config_dir.path().join("mcp-bridge").exists());
+    }
+
+    /// Catches: re-publishing or re-writing on every launch — a second startup against an
+    /// already migrated config must not touch the config file (mtime and bytes) or the copy.
+    #[test]
+    fn second_migration_pass_does_not_rewrite_config_or_install() {
+        let (_guard, config_dir) = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"bridge revision");
+        let config = dir.path().join("claude.json");
+        seed_command(&config, source.to_str().unwrap());
+        ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at(config.clone()))]);
+        let installed = command_at_spec(&spec_at(config.clone()));
+        assert!(installed.starts_with(config_dir.path().to_str().unwrap()), "{installed}");
+        let text = std::fs::read(&config).unwrap();
+        let config_mtime = std::fs::metadata(&config).unwrap().modified().unwrap();
+        let bridge_mtime = std::fs::metadata(&installed).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at(config.clone()))]);
+        assert_eq!(std::fs::read(&config).unwrap(), text);
+        assert_eq!(std::fs::metadata(&config).unwrap().modified().unwrap(), config_mtime);
+        assert_eq!(std::fs::metadata(&installed).unwrap().modified().unwrap(), bridge_mtime);
+    }
+
+    /// Catches: validity checked by size/exec bit instead of content — a same-length
+    /// bit-flipped copy under the right digest directory being reported on either lookup path.
+    #[test]
+    fn getter_rejects_same_length_corruption_on_both_lookup_paths() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let source = fake_bridge(dir.path(), b"bridge revision AAAA");
+        let installed = install_bridge_binary(&source).unwrap();
+        std::fs::write(&installed, b"bridge revision BBBB").unwrap();
+        assert_eq!(locate_installed_bridge(Some(&source)), None);
+        assert_eq!(locate_installed_bridge(None), None);
+    }
+
+    /// Catches: the no-source scan returning the newest-mtime entry without verifying it,
+    /// so a fresh corrupt revision shadows an older valid one.
+    #[test]
+    fn getter_scan_skips_a_newer_corrupt_revision_for_an_older_valid_one() {
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let old = install_bridge_binary(&fake_bridge(dir.path(), b"older valid revision")).unwrap();
+        let bad = install_bridge_binary(&fake_bridge(dir.path(), b"newer revision")).unwrap();
+        std::fs::write(&bad, b"torn").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bad, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let file = std::fs::OpenOptions::new().write(true).open(&bad).unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(60))
+            .unwrap();
+        assert_eq!(locate_installed_bridge(None), Some(old));
+    }
+
+    /// Catches: leaving the temp copy beside the published file, or publishing with
+    /// group/world write or without the owner exec bit.
+    #[cfg(unix)]
+    #[test]
+    fn published_bridge_is_owner_only_executable_with_nothing_else_beside_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let installed = install_bridge_binary(&fake_bridge(dir.path(), b"bridge revision")).unwrap();
+        assert_eq!(std::fs::metadata(&installed).unwrap().permissions().mode() & 0o777, 0o700);
+        assert!(!std::fs::symlink_metadata(&installed).unwrap().file_type().is_symlink());
+        let names: Vec<_> = std::fs::read_dir(installed.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+    }
+
+    /// Catches: a reader observing a partially written executable under the final name
+    /// while several startups publish the same revision at once.
+    #[test]
+    fn concurrent_publication_never_exposes_a_partial_file_to_the_getter() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let _config = with_temp_config_dir();
+        let dir = TempDir::new().unwrap();
+        let bytes: Vec<u8> = (0..1_048_576u32).map(|i| (i % 251) as u8).collect();
+        let source = fake_bridge(dir.path(), &bytes);
+        let done = AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                while !done.load(Ordering::SeqCst) {
+                    if let Some(path) = locate_installed_bridge(Some(&source)) {
+                        assert_eq!(std::fs::read(path).unwrap(), bytes);
+                    }
+                    if let Some(path) = locate_installed_bridge(None) {
+                        assert_eq!(std::fs::read(path).unwrap(), bytes);
+                    }
+                }
+            });
+            let writers: Vec<_> = (0..6)
+                .map(|_| scope.spawn(|| install_bridge_binary(&source).unwrap()))
+                .collect();
+            for writer in writers {
+                writer.join().unwrap();
+            }
+            done.store(true, Ordering::SeqCst);
+            reader.join().unwrap();
+        });
+    }
 }
