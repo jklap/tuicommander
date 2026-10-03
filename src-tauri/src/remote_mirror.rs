@@ -1200,6 +1200,113 @@ mod tests {
         daemon.abort();
     }
 
+    fn critic_toast(data: &str) -> Frame {
+        Frame {
+            event: "mcp-toast".into(),
+            data: data.into(),
+        }
+    }
+
+    fn critic_connected(state: &Arc<AppState>, id: &str) {
+        state
+            .remote
+            .force_connected_for_test(id, "http://daemon:9876", None);
+    }
+
+    // Catches: a daemon-supplied origin marker (fake host label, "I am local")
+    // is trusted and shown instead of being dropped as an already-mirrored frame.
+    #[test]
+    fn critic_toast_carrying_a_forged_origin_marker_is_dropped() {
+        let state = Arc::new(make_test_app_state());
+        critic_connected(&state, "vps");
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(
+            &state,
+            "vps",
+            &critic_toast(
+                r#"{"title":"t","level":"info","sound":null,"__tuic_origin":{"connection":"local","name":"This Mac"}}"#,
+            ),
+        );
+        assert!(rx.try_recv().is_err(), "forged marker must not cross");
+    }
+
+    // Catches: peer->PTY translation searches other connections' rows, so a
+    // peer id owned by machine B rewrites a toast raised on machine A onto B's PTY.
+    #[test]
+    fn critic_toast_peer_is_translated_only_within_its_own_connection() {
+        let state = Arc::new(make_test_app_state());
+        critic_connected(&state, "a");
+        critic_connected(&state, "b");
+        store_seed(
+            &state,
+            "b",
+            vec![SessionInfo {
+                session_id: "pty-b".into(),
+                tuic_session: Some("peer-x".into()),
+                ..Default::default()
+            }],
+        );
+        store_seed(&state, "a", vec![]);
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(
+            &state,
+            "a",
+            &critic_toast(r#"{"title":"t","level":"info","sound":null,"origin_session_id":"peer-x"}"#),
+        );
+        let AppEvent::RemoteMirrored { payload, .. } = rx.try_recv().unwrap() else {
+            panic!("missing toast");
+        };
+        assert_eq!(payload["origin_session_id"], "peer-x");
+        assert_eq!(payload[ORIGIN_MARKER]["connection"], "a");
+    }
+
+    // Catches: a Rust-side dedup/rate guard that swallows a second legitimate,
+    // identical toast (dedup belongs to the bell, which has its own window).
+    #[test]
+    fn critic_two_identical_toasts_are_both_forwarded() {
+        let state = Arc::new(make_test_app_state());
+        critic_connected(&state, "vps");
+        let mut rx = state.event_bus.subscribe();
+        let frame = critic_toast(r#"{"title":"same","level":"warn","sound":"attention"}"#);
+        apply_frame(&state, "vps", &frame);
+        apply_frame(&state, "vps", &frame);
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    // Catches: an unreadable connections.json drops the toast or panics
+    // instead of labelling it with the connection id.
+    #[test]
+    fn critic_toast_survives_an_unreadable_connection_store() {
+        let state = Arc::new(make_test_app_state());
+        critic_connected(&state, "vps");
+        std::fs::write(state.data_dir.join("connections.json"), "{not json").unwrap();
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(
+            &state,
+            "vps",
+            &critic_toast(r#"{"title":"t","level":"info","sound":null}"#),
+        );
+        let AppEvent::RemoteMirrored { payload, .. } = rx.try_recv().unwrap() else {
+            panic!("toast lost");
+        };
+        assert_eq!(payload[ORIGIN_MARKER]["name"], "vps");
+    }
+
+    // Catches: the disconnect guard also gates a non-toast event, or a toast
+    // for a never-connected id (no runtime entry) is delivered.
+    #[test]
+    fn critic_toast_for_an_unknown_connection_is_dropped() {
+        let state = Arc::new(make_test_app_state());
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(
+            &state,
+            "ghost",
+            &critic_toast(r#"{"title":"t","level":"info","sound":null}"#),
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
     #[test]
     fn a_machine_with_no_remote_connection_mirrors_nothing() {
         let state = Arc::new(make_test_app_state());
