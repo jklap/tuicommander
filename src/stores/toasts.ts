@@ -26,6 +26,8 @@ export interface Toast {
 
 let nextId = 1;
 
+const NOTICE_WINDOW_MS = 5000;
+
 /** Auto-dismiss delay per level (ms). `info` is transient; `warn` lingers so
  *  actionable messages can be read; `error` is sticky (0 = never auto-dismiss)
  *  and stays until the user clicks it away. Callers can override per toast. */
@@ -180,6 +182,7 @@ function createToastsStore() {
 				lastBellNotice.level === level &&
 				lastBellNotice.repoPath === repoPath &&
 				lastBellNotice.sessionId === sessionId &&
+				Date.now() - lastBellNotice.createdAt <= NOTICE_WINDOW_MS &&
 				activityStore.getActive().some((item) => item.id === `toast-${lastBellNotice!.id}`)
 			)
 				return -1;
@@ -221,7 +224,7 @@ function createToastsStore() {
 					item.level === level &&
 					item.repoPath === repoPath &&
 					item.sessionId === sessionId &&
-					toast.createdAt - item.createdAt <= 5000,
+					toast.createdAt - item.createdAt <= NOTICE_WINDOW_MS,
 			);
 			const overflow = !group && state.toasts.length >= 2;
 			if (mirrorInBell) mirrorToBell(toast, overflow);

@@ -82,6 +82,18 @@ describe("1397 critic fix-round notification invariants", () => {
 		expect(bell.getForSection("messages").some((item) => item.title === "Overflow error")).toBe(true);
 	});
 
+	it.each([
+		{ elapsed: 5000, duplicate: true },
+		{ elapsed: 5001, duplicate: false },
+	])("bell dedup expires after five seconds ($elapsed ms)", ({ elapsed, duplicate }) => {
+		// catches: off-by-one or indefinitely suppressed recurring backend notices
+		store.addToBell("Build failed", "same", "error", "/repo", undefined, "session");
+		vi.setSystemTime(Date.now() + elapsed);
+		const id = store.addToBell("Build failed", "same", "error", "/repo", undefined, "session");
+		expect(id === -1).toBe(duplicate);
+		expect(bell.getForSection("messages")).toHaveLength(duplicate ? 1 : 2);
+	});
+
 	it("identical notices from different sessions keep separate navigation targets", () => {
 		// catches: dedup by text alone suppresses a different agent's actionable notice
 		store.addToBell("Done", "same", "info", "/repo", undefined, "first");
