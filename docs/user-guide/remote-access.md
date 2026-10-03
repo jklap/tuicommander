@@ -53,13 +53,13 @@ exact framing is in
 
 ## Security
 
-- **Authentication** — Basic Auth with bcrypt-hashed passwords
+- **Authentication** — QR URL token, session cookie or Basic Auth with bcrypt-hashed passwords. HTTP requires credentials even from this computer or the LAN; the old LAN authentication bypass no longer applies. Local CLI/MCP IPC remains available without HTTP credentials.
 - **Secret storage** — Session tokens, relay bearer tokens, and push VAPID
   private keys are stored in the OS keyring-backed credential vault; config
   files and `/config` responses expose only non-secret settings and existence
   flags
 - **Local network only** — The server binds to your machine's IP; it's not exposed to the internet unless you configure port forwarding (don't do this without a VPN)
-- **CORS** — When remote access is enabled, any origin is allowed (necessary for browser access from different IPs)
+- **Browser request protection** — The HTTP listener rejects foreign Origin headers and unknown Host names before authentication. Use its literal IP or detected Tailscale FQDN; browser/PWA requests from that same server and bundled/development WebViews remain supported. CORS does not allow arbitrary websites.
 
 ## MCP HTTP Server
 
@@ -685,7 +685,7 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 | Runs headless | No | Yes |
 | Tauri dependency | Yes | No |
 | Default port | 9876 | 9877 |
-| LAN auth bypass | Configurable | Always disabled |
+| LAN auth bypass | Disabled | Disabled |
 | Signal handling | N/A | Graceful SIGINT/SIGTERM/SIGHUP |
 | MCP bridge for local agents | Bundled sidecar | Downloaded next to the daemon |
 | Embedded assistant (watchers, scheduler) | Yes | No |

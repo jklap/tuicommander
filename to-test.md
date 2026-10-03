@@ -1,3 +1,7 @@
+## HTTP API origin boundary (1456-351c) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, confirm existing CLI/MCP Unix socket access, authenticated phone/PWA access and desktop remote peer access. Rust does not hot-reload; no desktop instance was launched by this lane. Foreign Origin/Host rejection and token-authenticated clients are covered by targeted router regressions.
+
 ## Bodyless IPC replies (1416-8ad4) — rebuilt clients required
 
 - [ ] Rebuild/reinstall the CLI and bridge before using this decoder fix. The running clients do not hot-reload Rust changes. Automated shared-decoder regression covers 204/304, protocol-switch, bounded headers/interims and final response boundaries; no desktop restart was performed by this lane.

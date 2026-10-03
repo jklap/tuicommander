@@ -1,5 +1,11 @@
 # HTTP API Reference
 
+## Request authentication and browser boundary
+
+Every TCP request validates its Host and Origin before reaching a handler, including login, health and preflight requests. Unknown/missing/duplicate Host or foreign/opaque Origin returns 403. Allowed hosts are localhost, loopback/private IP literals, local interface IPs and the detected Tailscale FQDN. Allowed origins are the exact bundled WebView origins, Vite `http://127.0.0.1:1421`/`http://localhost:1421`, and the HTTP/HTTPS origin of the validated Host. Cross-site requests are rejected except for the explicit WebView/development origins.
+
+Protected routes require the existing `?token=...`, `tui-session` cookie or Basic Auth even from loopback/LAN. Native HTTP clients may omit Origin, but must send Host and credentials. Login assets and valid preflight remain public; the headless `/health` probe remains public. Local Unix socket and Windows named-pipe clients keep their existing IPC access.
+
 ## Workflow runs
 
 `POST /workflows/run/action?path=<absolute-project>` accepts one tagged `RunAction` and returns `{type,value}`. Actions: `start_plan {plan_id,definition_id,definition_revision,limits}`, `get {run_id}`, `list_plan_runs {plan_id,limit}`, `events {run_id,after_sequence,limit}`, `command {run_id,command_id,expected_sequence,command}`, `execute_check {run_id,story_id,check_id,command_id,expected_sequence}`, `record_integration {run_id,story_id,command_id,expected_sequence}`, and `recertify_canonical {run_id,command_id,expected_sequence}`. `list_plan_runs` returns newest first and accepts a limit of 1–100. Run commands include planning closure, agent attempt and effect bookkeeping, loop advancement, story acceptance, final verification, pause/resume, cancellation, and completion. The server checks canonical project ownership for every action and rejects a command whose expected sequence is stale. Event cursors start at zero and return up to 500 entries. A duplicate command ID returns its original receipt only when the payload matches. See [Workflow runs](../backend/workflows.md) for recovery and completion rules. Automatic node execution is under development.
