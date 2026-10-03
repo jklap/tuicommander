@@ -379,7 +379,7 @@ fn source_size_precheck_accounts_for_tar_headers() {
 async fn tar_permissions_preserve_exec_but_strip_privileged_and_write_bits() {
     use std::os::unix::fs::PermissionsExt;
     let repo = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
-    let roots = vec![repo.path().to_str().unwrap().into()];
+    let roots: Vec<String> = vec![repo.path().to_str().unwrap().into()];
     for (name, mode, maximum) in [("script", 0o7777, 0o755), ("plain", 0o6666, 0o644)] {
         let mut builder = tar::Builder::new(Vec::new());
         let mut h = tar::Header::new_gnu();
@@ -435,7 +435,7 @@ fn startup_sweep_removes_only_upload_directories_under_registered_roots() {
 #[tokio::test(start_paused = true)]
 async fn idle_upload_aborts_and_cleans_staging() {
     let repo = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
-    let roots = vec![repo.path().to_str().unwrap().into()];
+    let roots: Vec<String> = vec![repo.path().to_str().unwrap().into()];
     let body = Body::from_stream(futures_util::stream::pending::<io::Result<Vec<u8>>>());
     let error = receive_copy(
         UploadQuery {
@@ -482,5 +482,40 @@ async fn upload_route_uses_idle_budget_instead_of_global_response_deadline() {
             .await
             .unwrap();
         assert_eq!(response.status(), status);
+    }
+}
+
+// Catches: authenticated HTTP callers exfiltrating arbitrary Finder/local source paths.
+#[tokio::test]
+#[serial_test::serial]
+async fn remote_transfer_coordinator_has_no_http_route_even_with_valid_token() {
+    use tower::ServiceExt;
+    let config = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    *state.session_token.write() = "existing-token".into();
+    state.config.write().services.auth.lan_auth_bypass = false;
+    for app in [
+        crate::mcp_http::build_remote_router(state.clone()),
+        crate::mcp_http::build_router(state.clone(), true, false),
+    ] {
+        let mut request = axum::http::Request::post("/fs/transfer-remote?token=existing-token")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"connectionId":"mint","destDir":"/repo","paths":["/private/source"],"allowRecursive":true}"#)).unwrap();
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))));
+        let response = app.oneshot(request).await.unwrap();
+        assert!(
+            matches!(
+                response.status(),
+                axum::http::StatusCode::NOT_FOUND | axum::http::StatusCode::METHOD_NOT_ALLOWED
+            ),
+            "HTTP coordinator must not be reachable: {}",
+            response.status()
+        );
     }
 }

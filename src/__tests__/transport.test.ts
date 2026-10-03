@@ -1157,14 +1157,17 @@ describe("transport", () => {
 			});
 		});
 
-		// Catches: the desktop upload coordinator losing its HTTP equivalent.
-		it("maps remote copy coordination to the sending backend with its owner intact", () => {
-			const args = { connectionId: "mint", destDir: "/repo/dst", paths: ["/Mac/file"], allowRecursive: false };
-			expect(mapCommandToHttp("fs_transfer_remote_paths", args)).toEqual({
-				method: "POST",
-				path: "/fs/transfer-remote",
-				body: args,
-			});
+		// Catches: exposing Finder source paths to HTTP token holders and enabling exfiltration.
+		it("keeps remote copy coordination desktop-only", () => {
+			expect(INTENTIONALLY_UNMAPPED.has("fs_transfer_remote_paths")).toBe(true);
+			expect(() =>
+				mapCommandToHttp("fs_transfer_remote_paths", {
+					connectionId: "mint",
+					destDir: "/repo/dst",
+					paths: ["/Mac/file"],
+					allowRecursive: false,
+				}),
+			).toThrow(/native\/host-only/);
 		});
 
 		// --- PTY/terminal read commands (story 062) ---
