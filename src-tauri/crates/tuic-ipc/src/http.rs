@@ -48,79 +48,78 @@ pub fn request(method: &str, path: &str, body: Option<&str>, headers: &[(&str, &
 #[derive(Default)]
 pub struct ResponseDecoder {
     bytes: Vec<u8>,
-    head_request: bool,
 }
 
 impl ResponseDecoder {
-    /// Use the originating method: HEAD responses never carry a message body.
-    pub fn for_request(method: &str) -> Self {
-        Self {
-            head_request: method == "HEAD",
-            ..Self::default()
-        }
-    }
-
     /// Add bytes received by either transport adapter.
     pub fn push(&mut self, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
     }
 
     /// Parse a complete response, or return None while more bytes are needed.
-    pub fn response(&self, eof: bool) -> io::Result<Option<Response>> {
-        let Some(header_end) = self.bytes.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
-            return if eof { Err(incomplete()) } else { Ok(None) };
-        };
-        let raw_headers = String::from_utf8_lossy(&self.bytes[..header_end]).into_owned();
-        let status = raw_headers
-            .lines()
-            .next()
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|status| status.parse().ok())
-            .ok_or_else(|| invalid("invalid HTTP response status"))?;
-        let headers: Vec<(String, String)> = raw_headers
-            .lines()
-            .skip(1)
-            .filter_map(|line| line.split_once(':'))
-            .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.trim().to_string()))
-            .collect();
-        let body_bytes = &self.bytes[header_end + 4..];
-        let chunked = headers.iter().any(|(key, value)| {
-            key == "transfer-encoding"
-                && value
-                    .split(',')
-                    .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
-        });
-        // RFC 9112 section 6.3: these boundaries precede all framing headers.
-        let body = if self.head_request
-            || (100..200).contains(&status)
-            || matches!(status, 204 | 304)
-        {
-            Vec::new()
-        } else if chunked {
-            match chunked_body(body_bytes)? {
-                Some(body) => body,
-                None if eof => return Err(incomplete()),
-                None => return Ok(None),
-            }
-        } else if let Some((_, length)) = headers.iter().find(|(key, _)| key == "content-length") {
-            let length: usize = length
-                .parse()
-                .map_err(|_| invalid("invalid Content-Length"))?;
-            if body_bytes.len() < length {
+    pub fn response(&mut self, eof: bool) -> io::Result<Option<Response>> {
+        loop {
+            let Some(header_end) = self.bytes.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+            else {
                 return if eof { Err(incomplete()) } else { Ok(None) };
+            };
+            let raw_headers = String::from_utf8_lossy(&self.bytes[..header_end]).into_owned();
+            let status = raw_headers
+                .lines()
+                .next()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|status| status.parse().ok())
+                .ok_or_else(|| invalid("invalid HTTP response status"))?;
+            // RFC 9110 section 15.2: informational replies precede the final response.
+            // 101 switches protocols and therefore ends HTTP response parsing.
+            if (100..200).contains(&status) && status != 101 {
+                self.bytes.drain(..header_end + 4);
+                continue;
             }
-            body_bytes[..length].to_vec()
-        } else if eof {
-            body_bytes.to_vec()
-        } else {
-            return Ok(None);
-        };
-        Ok(Some(Response {
-            status,
-            body: String::from_utf8_lossy(&body).into_owned(),
-            headers,
-            raw_headers,
-        }))
+            let headers: Vec<(String, String)> = raw_headers
+                .lines()
+                .skip(1)
+                .filter_map(|line| line.split_once(':'))
+                .map(|(key, value)| (key.trim().to_ascii_lowercase(), value.trim().to_string()))
+                .collect();
+            let body_bytes = &self.bytes[header_end + 4..];
+            let chunked = headers.iter().any(|(key, value)| {
+                key == "transfer-encoding"
+                    && value
+                        .split(',')
+                        .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"))
+            });
+            // RFC 9112 section 6.3: these boundaries precede all framing headers.
+            let body = if matches!(status, 101 | 204 | 304) {
+                Vec::new()
+            } else if chunked {
+                match chunked_body(body_bytes)? {
+                    Some(body) => body,
+                    None if eof => return Err(incomplete()),
+                    None => return Ok(None),
+                }
+            } else if let Some((_, length)) =
+                headers.iter().find(|(key, _)| key == "content-length")
+            {
+                let length: usize = length
+                    .parse()
+                    .map_err(|_| invalid("invalid Content-Length"))?;
+                if body_bytes.len() < length {
+                    return if eof { Err(incomplete()) } else { Ok(None) };
+                }
+                body_bytes[..length].to_vec()
+            } else if eof {
+                body_bytes.to_vec()
+            } else {
+                return Ok(None);
+            };
+            return Ok(Some(Response {
+                status,
+                body: String::from_utf8_lossy(&body).into_owned(),
+                headers,
+                raw_headers,
+            }));
+        }
     }
 }
 

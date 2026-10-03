@@ -103,7 +103,7 @@ pub fn request_with_headers_and_timeout(
 
     stream.write_all(&tuic_ipc::http::request(method, path, body, extra_headers))?;
     stream.flush()?;
-    let mut decoder = tuic_ipc::http::ResponseDecoder::for_request(method);
+    let mut decoder = tuic_ipc::http::ResponseDecoder::default();
     let mut bytes = [0; 4096];
     loop {
         let count = stream.read(&mut bytes)?;

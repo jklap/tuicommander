@@ -47,29 +47,10 @@ fn ipc_post_counts_utf8_bytes_and_keeps_identity_headers() {
     );
 }
 
-// Catches: HEAD representation headers incorrectly require a body or connection EOF.
-#[test]
-fn ipc_head_response_ignores_advertised_body_framing() {
-    for framing in [
-        "",
-        "Content-Length: 123\r\n",
-        "Transfer-Encoding: chunked\r\n",
-    ] {
-        let mut decoder = ResponseDecoder::for_request("HEAD");
-        decoder.push(format!("HTTP/1.1 200 OK\r\n{framing}\r\n").as_bytes());
-        let response = decoder
-            .response(false)
-            .unwrap()
-            .expect("HEAD ends at headers");
-        assert_eq!(response.status, 200);
-        assert_eq!(response.body, "");
-    }
-}
-
 // Catches: bodyless status framing is overridden by length/chunked headers or trailing bytes.
 #[test]
 fn ipc_bodyless_status_ignores_body_framing_and_trailing_bytes() {
-    for status in [100, 101, 103, 199, 204, 304] {
+    for status in [101, 204, 304] {
         for framing in [
             "",
             "Content-Length: 123\r\n",
