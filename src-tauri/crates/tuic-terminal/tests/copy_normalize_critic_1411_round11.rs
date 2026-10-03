@@ -64,7 +64,11 @@ fn moved_unknown_origin_row_stays_literal_until_erased() {
         let _ = g.process(mv.as_bytes());
         assert_eq!(g.get_selection_text(1, 0, 1, 79), "❯ literal", "mv={mv:?}");
         let _ = g.process(format!("\x1b[2;1H\x1b[K{COMPOSER}").as_bytes());
-        assert_eq!(g.get_selection_text(1, 0, 1, 79), "new composer", "mv={mv:?}");
+        assert_eq!(
+            g.get_selection_text(1, 0, 1, 79),
+            "new composer",
+            "mv={mv:?}"
+        );
     }
 }
 
