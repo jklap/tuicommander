@@ -1,3 +1,7 @@
+## Stable MCP bridge (1415-ef32) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, confirm the primary instance migrates Claude and private Claude MCP commands to `mcp-bridge/<sha256>/tuic-bridge` under its config directory. Start a disposable Claude session and confirm MCP initialize succeeds. Existing desktop Rust code does not hot-reload. Target cleanup and executable lifetime are covered by the targeted regression tests; real Claude startup after the desktop restart remains to check.
+
 ## Suspend Tab (1358-d008) — desktop menu
 
 - [ ] In the desktop app, right-click an idle agent tab: **Suspend Tab** is enabled; while the agent works or asks a question it is greyed out. Click it: the tab keeps its place and shows `zz`, the tab body shows "Suspended" with a Resume button, `ps` shows no process for it. Right-click it: **Resume Tab** is offered; click: a new shell opens in the same folder and the agent resumes its conversation. Suspend, quit and restart TUICommander: the tab is restored still suspended and not auto-resumed. Suspend a plain idle shell tab and repeat. _(Browser-mode part checked by tuic-1358-suspend; the Tauri window menu itself is not.)_
