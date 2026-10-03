@@ -1525,3 +1525,7 @@ mod critic1419;
 #[cfg(test)]
 #[path = "remote_peer_critic1419r2.rs"]
 mod critic1419r2;
+
+#[cfg(test)]
+#[path = "remote_peer_critic1419r3.rs"]
+mod critic1419r3;
