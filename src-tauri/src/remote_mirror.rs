@@ -461,6 +461,7 @@ pub(crate) fn spawn(state: &Arc<AppState>, connection_id: String) -> tokio::task
 /// state the machine was in. `session-closed` is what a local session sends
 /// when it goes, and a disconnect is the same news for a mirrored one.
 pub(crate) fn drop_connection(state: &Arc<AppState>, connection_id: &str) {
+    crate::mcp_http::remote_peer::disconnect(state, connection_id);
     let Some((_, rows)) = state.remote_sessions.by_connection.remove(connection_id) else {
         return;
     };

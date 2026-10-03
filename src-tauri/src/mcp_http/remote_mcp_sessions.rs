@@ -1,0 +1,338 @@
+//! MCP session ownership uses the same Rust mirror and configured credential as
+//! the HTTP session proxy. Read-only MCP preserves the daemon's output contract;
+//! submit uses the existing authenticated HTTP command, never raw PTY input.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::{Value, json};
+
+use crate::AppState;
+
+pub(super) fn resolve(state: &AppState, args: &Value) -> Option<Result<(String, String), Value>> {
+    let address = args["session_id"].as_str()?;
+    if let Some((host, id)) = address.split_once('/') {
+        if host == "local" {
+            if args["connection_id"]
+                .as_str()
+                .is_some_and(|explicit| explicit != "local")
+            {
+                return Some(Err(
+                    json!({"error":"connection_id conflicts with qualified session_id"}),
+                ));
+            }
+            return None;
+        }
+        if let Some(explicit) = args["connection_id"].as_str()
+            && explicit != host
+        {
+            return Some(Err(
+                json!({"error":"connection_id conflicts with qualified session_id"}),
+            ));
+        }
+        if id.is_empty() || id.contains('/') {
+            return Some(Err(
+                json!({"error":"Invalid connection-qualified session_id"}),
+            ));
+        }
+        return Some(Ok((host.to_string(), id.to_string())));
+    }
+    if let Some(host) = args["connection_id"].as_str() {
+        return (host != "local").then(|| Ok((host.to_string(), address.to_string())));
+    }
+    if state
+        .resolve_session_ref_checked(address)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return None;
+    }
+    let rows: Vec<_> = crate::remote_mirror::mirrored_rows(state)
+        .into_iter()
+        .filter(|row| {
+            row.session_id == address
+                || row.alias.as_deref() == Some(address)
+                || row.tuic_session.as_deref() == Some(address)
+                || row.display_name.as_deref() == Some(address)
+                || row.session_id.starts_with(address)
+        })
+        .collect();
+    if rows.len() > 1 {
+        return Some(Err(
+            json!({"error":format!("Remote session address '{address}' is ambiguous; use connection_id or connection/id")}),
+        ));
+    }
+    rows.into_iter()
+        .next()
+        .and_then(|row| row.connection_id.map(|host| Ok((host, row.session_id))))
+}
+
+pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Value) -> Value {
+    let Some(base) = state.remote.base_url(host) else {
+        return failure(host, "connection is unavailable");
+    };
+    let mut url = match reqwest::Url::parse(&base) {
+        Ok(url) => url,
+        Err(_) => return failure(host, "connection has an invalid URL"),
+    };
+    // Resolve against the daemon's actual session registry. This accepts aliases
+    // without guessing which host a desktop-local alias belongs to.
+    let direct_id = uuid::Uuid::parse_str(id).is_ok();
+    url.set_path("/sessions");
+    credential(state, host, &mut url);
+    let rows = if direct_id {
+        json!([{"session_id":id}])
+    } else {
+        match request(state, host, state.remote.http_client().get(url.clone())).await {
+            Ok(rows) => rows,
+            Err(value) => return value,
+        }
+    };
+    let Some(rows) = rows.as_array() else {
+        return failure(host, "invalid session list");
+    };
+    let matches: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row["session_id"] == id
+                || row["alias"] == id
+                || row["tuic_session"] == id
+                || row["display_name"] == id
+                || row["session_id"]
+                    .as_str()
+                    .is_some_and(|value| value.starts_with(id))
+        })
+        .collect();
+    let canonical = match matches.as_slice() {
+        [row] => match row["session_id"].as_str() {
+            Some(id) => id,
+            None => return failure(host, "invalid session identity"),
+        },
+        [] => return failure(host, format!("session '{id}' was not found")),
+        _ => return failure(host, format!("session '{id}' is ambiguous")),
+    };
+    let action = args["action"].as_str().unwrap_or("");
+    if !matches!(action, "output" | "submit") {
+        return failure(
+            host,
+            format!("MCP session action '{action}' is not supported remotely"),
+        );
+    }
+    url.set_path("/sessions");
+    match url.path_segments_mut() {
+        Ok(mut path) => {
+            path.push(canonical).push(action);
+        }
+        Err(_) => return failure(host, "invalid session URL"),
+    }
+    credential(state, host, &mut url);
+    let request_builder = if action == "submit" {
+        state
+            .remote
+            .http_client()
+            .post(url)
+            .json(&json!({"input":args.get("input"),"timeout_ms":args.get("timeout_ms")}))
+    } else {
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair(
+                "format",
+                if args["format"] == "raw" {
+                    "mcp_raw"
+                } else {
+                    "mcp"
+                },
+            );
+            for key in ["limit", "from_line", "since_cursor"] {
+                if let Some(value) = args[key].as_u64() {
+                    query.append_pair(key, &value.to_string());
+                }
+            }
+        }
+        state.remote.http_client().get(url)
+    };
+    match request(state, host, request_builder).await {
+        Ok(mut value) => {
+            if action == "output" && value.get("exited").is_none() {
+                return failure(
+                    host,
+                    "daemon does not support MCP output parity; update the daemon",
+                );
+            }
+            value["connection_id"] = json!(host);
+            value
+        }
+        Err(value) => value,
+    }
+}
+
+fn failure(host: &str, detail: impl std::fmt::Display) -> Value {
+    json!({"error":format!("Remote connection '{host}': {detail}"),"connection_id":host})
+}
+
+fn credential(state: &AppState, host: &str, url: &mut reqwest::Url) {
+    url.set_query(None);
+    if let Some(token) = state.remote.token(host) {
+        url.query_pairs_mut().append_pair("token", &token);
+    }
+}
+
+async fn request(
+    state: &AppState,
+    host: &str,
+    builder: reqwest::RequestBuilder,
+) -> Result<Value, Value> {
+    let response = builder
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|_| {
+            failure(
+                host,
+                "session transport failed; submit delivery may be uncertain, do not resend blindly",
+            )
+        })?;
+    let status = response.status();
+    let mut value: Value = response
+        .json()
+        .await
+        .map_err(|_| failure(host, format!("invalid session response ({status})")))?;
+    if value.get("error").is_some() {
+        let detail = value["error"].as_str().unwrap_or("session request failed");
+        value["error"] = json!(format!("Remote connection '{host}': {detail}"));
+        value["connection_id"] = json!(host);
+        return Err(value);
+    }
+    if !status.is_success() {
+        // Native submit rejects safe-to-retry preconditions with structured
+        // submitted/reason/detail fields, deliberately without an error string.
+        // Preserve that consumer contract instead of flattening it to HTTP 409.
+        if value["submitted"] == false && value["reason"].is_string() {
+            value["connection_id"] = json!(host);
+            return Err(value);
+        }
+        return Err(failure(host, format!("session request returned {status}")));
+    }
+    Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::test_state;
+    use super::*;
+
+    // Catches: remote output silently becomes raw HTTP output, loses tombstone
+    // state/cursors, or bypasses the native absolute-window rules.
+    #[tokio::test]
+    async fn remote_mcp_output_preserves_clean_raw_and_tombstone_contracts() {
+        let hub = test_state();
+        let remote = test_state();
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut log = crate::state::VtLogBuffer::new(2, 80, 100);
+        log.process(b"remote first\r\nremote second\r\nremote tail\r\n");
+        remote
+            .grid
+            .vt_log_buffers
+            .insert(id.clone(), parking_lot::Mutex::new(log));
+        let mut ring = crate::OutputRingBuffer::new(4096);
+        ring.write(b"\x1b[31mremote tail\x1b[0m\r\n");
+        remote
+            .session_maps
+            .output_buffers
+            .insert(id.clone(), parking_lot::Mutex::new(ring));
+        remote.session_maps.exit_codes.insert(id.clone(), 42);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let token = remote.session_token.read().clone();
+        hub.remote
+            .force_connected_for_test("mint", &url, Some(&token));
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                super::super::build_remote_router(remote)
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let clean = call(&hub, "mint", &id, &json!({"action":"output","limit":20})).await;
+        assert!(
+            clean["data"].as_str().unwrap().contains("remote tail"),
+            "{clean}"
+        );
+        assert_eq!(clean["exited"], true);
+        assert_eq!(clean["exit_code"], 42);
+        assert!(clean["cursor"].is_number());
+        assert_eq!(clean["connection_id"], "mint");
+        let window = call(
+            &hub,
+            "mint",
+            &id,
+            &json!({"action":"output","from_line":0,"limit":1}),
+        )
+        .await;
+        assert_eq!(window["data"], "remote first");
+        let raw = call(
+            &hub,
+            "mint",
+            &id,
+            &json!({"action":"output","format":"raw"}),
+        )
+        .await;
+        assert_eq!(raw["data"], "\u{1b}[31mremote tail\u{1b}[0m\r\n");
+        assert_eq!(raw["exited"], true);
+        assert_eq!(raw["exit_code"], 42);
+        server.abort();
+    }
+
+    // Catches: HTTP rejection status hides the native semantic submit reason.
+    #[tokio::test]
+    async fn remote_mcp_submit_rejection_keeps_the_native_reason_and_detail() {
+        let hub = test_state();
+        let remote = test_state();
+        let id = uuid::Uuid::new_v4().to_string();
+        let args = json!({"action":"submit", "session_id":id, "input":"must never execute"});
+        let expected =
+            super::super::mcp_transport::handle_session_submit(&remote, &args, true).await;
+        assert_eq!(expected["submitted"], false, "{expected}");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let token = remote.session_token.read().clone();
+        hub.remote
+            .force_connected_for_test("mint", &url, Some(&token));
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                super::super::build_remote_router(remote)
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let result = call(&hub, "mint", &id, &args).await;
+        assert_eq!(result["submitted"], false, "{result}");
+        assert_eq!(result["reason"], expected["reason"], "{result}");
+        assert_eq!(result["detail"], expected["detail"], "{result}");
+        assert_eq!(result["connection_id"], "mint");
+        server.abort();
+    }
+
+    // Catches: qualified remote failures fall through to the local registry and
+    // report not-found rather than naming the unavailable configured connection.
+    #[tokio::test]
+    async fn remote_mcp_unavailable_connection_is_explicit_and_never_local_fallback() {
+        let hub = test_state();
+        let result = call(&hub, "mint", "pe-3", &json!({"action":"output"})).await;
+        assert_eq!(result["connection_id"], "mint");
+        assert!(result["error"].as_str().unwrap().contains("mint"));
+        assert!(result["error"].as_str().unwrap().contains("unavailable"));
+        let ambiguity = resolve(
+            &hub,
+            &json!({"session_id":"mint/pe-3","connection_id":"other"}),
+        )
+        .unwrap()
+        .unwrap_err();
+        assert!(ambiguity["error"].as_str().unwrap().contains("conflicts"));
+    }
+}

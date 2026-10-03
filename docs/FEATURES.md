@@ -2541,3 +2541,9 @@ profile rules or allow/deny policy in `session/new`.
 - On desktop, `done` and `blocked` entries also send a native OS notification with the project and entry text while TUICommander is unfocused. A macOS click opens Progress at that project and terminal. `intent`, hand-off, and message entries remain silent; identical notices within five seconds are coalesced
 - The notification bell always offers Terminal Progress, including with zero unread updates; `Cmd/Ctrl+Shift+P` and the command palette open the same dialog
 - `progress_tracking` gate: a global setting ANDed with a per-agent override. Global off removes the tool from every agent's tool list
+
+### Remote MCP session ownership and peer mail
+
+Desktop MCP discovers configured remote PTYs and peers, routes output and semantic
+submit to the owning daemon, and delivers connection-qualified peer mail through an
+authenticated desktop hub. Local mail remains independent of the hub.

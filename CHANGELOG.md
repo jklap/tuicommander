@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Desktop MCP now discovers and addresses configured remote terminals and peers, preserving native output and semantic submit behavior. Authenticated peer mail supports remote replies and remote-to-remote delivery through the desktop hub.
+
 - **Hands-free controls** — Start conversation uses the accent action style. A coloured Running/Stopped indicator keeps the current state visible.
 
 - **Sidebar agents toggle** — A separate, always-visible chevron controls the agent list. The status icon selects the branch, and collapsed counts stay beside the chevron.

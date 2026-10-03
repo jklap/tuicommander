@@ -737,3 +737,11 @@ For web deployment without Tauri:
 - [SolidJS Documentation](https://www.solidjs.com/docs/latest)
 - [alacritty_terminal crate](https://crates.io/crates/alacritty_terminal)
 - [Tauri Documentation](https://tauri.app/v1/guides/)
+
+### Configured remote MCP ownership
+
+Session list/output/submit and agent list_peers/send cover configured remote daemons.
+Connection-qualified addresses disambiguate hosts. An authenticated desktop-initiated
+duplex mail link forms a star topology; remote replies and remote-to-remote delivery
+use the desktop hub. Daemon-local inbox/wake semantics are authoritative; spawn is
+excluded from this protocol and local mail survives hub loss.

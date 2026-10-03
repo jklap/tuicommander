@@ -692,3 +692,29 @@ Configure TLS in the instance's `config.json` under `services.tls`:
 | Connection refused | Verify the port isn't blocked by a firewall. The settings panel includes a reachability check. |
 | Authentication fails | Re-enter the password in settings — the stored bcrypt hash may be from a different password. |
 | Terminals not responding | WebSocket connection may have dropped. Refresh the browser page. |
+
+## Address remote terminals and peers from desktop MCP
+
+Use `session action=list` to discover connected remote terminals. Their
+`connection_id` identifies the saved remote connection. Pass that field with
+`session_id`, or use the returned `address`, for output and semantic submit.
+Use `agent action=list_peers` to find remote peer addresses, then send mail to
+`<connection_id>/<peer-id>`. Replies to `local/<peer-id>` return through the
+desktop hub. Daemons can also address peers on another configured connection.
+All traffic follows the configured daemon connection and credentials.
+
+Both desktop and daemon need a version supporting remote peer mail. Local daemon
+mail remains usable if the desktop disconnects. A cross-host error is explicit;
+a timeout with uncertain delivery is not permission to resend the body.
+
+The read-only reproduction harness is `scripts/test-remote-mcp.py`. Run
+`python3 scripts/test-remote-mcp.py --connection <id> --session <alias-or-id>`
+against the desktop MCP. `--exercise` submits and sends mail and must target a
+disposable idle agent; `--second-connection` and `--second-session` check a
+remote-to-remote reply through the same hub.
+
+For a local protocol fixture, build a test-support headless binary and run
+`python3 scripts/test-remote-mcp.py --fixture-bin <binary> --fixture-launcher scripts/run-remote-fixture.sh`.
+This launches three actual isolated daemons, exercises the hub MCP, remote-to-remote
+mail and replies, semantic shell rejection, then verifies intrahost mail with the hub
+stopped. It does not claim to test a real agent composer; use `--exercise` for that.
