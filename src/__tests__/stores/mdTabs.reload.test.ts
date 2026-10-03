@@ -41,6 +41,7 @@ describe("MCP Markdown tabs across document reload", () => {
 	// Catches: MCP file tabs survive only in the old document memory.
 	it("restores an external Markdown tab and its selected pane after reload", async () => {
 		const old = await freshStore();
+		old.restoreAfterReload();
 		old.addMcpFile("boss-digest", "", "/Users/boss/Gits/digest.md", false, false);
 		old.saveForReload();
 		const reloaded = await freshStore();
@@ -57,6 +58,7 @@ describe("MCP Markdown tabs across document reload", () => {
 	// Catches: restoring loses the stable MCP identity and a reopen adds a duplicate.
 	it("updates the restored tab when the same MCP identity is reopened", async () => {
 		const old = await freshStore();
+		old.restoreAfterReload();
 		old.addMcpFile("boss-digest", "", "/Users/boss/Gits/old.md", true, false);
 		old.saveForReload();
 		const reloaded = await freshStore();
@@ -69,6 +71,7 @@ describe("MCP Markdown tabs across document reload", () => {
 	// Catches: a stale snapshot resurrects a tab the user closed.
 	it("does not resurrect a closed tab on the next reload", async () => {
 		const old = await freshStore();
+		old.restoreAfterReload();
 		const id = old.addMcpFile("boss-digest", "", "/Users/boss/Gits/digest.md", false, false);
 		old.saveForReload();
 		old.remove(id);
@@ -81,6 +84,7 @@ describe("MCP Markdown tabs across document reload", () => {
 	// Catches: restoring a background document steals the active pane.
 	it("keeps background tabs inactive and excludes user and iframe tabs", async () => {
 		const old = await freshStore();
+		old.restoreAfterReload();
 		old.add("/repo", "README.md");
 		old.openUiTab("preview", "Preview", "<p>Preview</p>", false);
 		old.addMcpFile("boss-digest", "", "/Users/boss/Gits/digest.md", true, true);
@@ -94,6 +98,7 @@ describe("MCP Markdown tabs across document reload", () => {
 	// Catches: reload overwrites a newer MCP update delivered while startup is running.
 	it("keeps a fresh MCP tab instead of replacing it with the reload snapshot", async () => {
 		const old = await freshStore();
+		old.restoreAfterReload();
 		old.addMcpFile("boss-digest", "", "/Users/boss/Gits/old.md", false, false);
 		old.saveForReload();
 		const reloaded = await freshStore();

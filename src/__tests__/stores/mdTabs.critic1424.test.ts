@@ -13,6 +13,7 @@ describe("mdTabsStore MCP reload snapshot — critic 1424", () => {
 		vi.resetModules();
 		md = (await import("../../stores/mdTabs")).mdTabsStore;
 		editor = (await import("../../stores/editorTabs")).editorTabsStore;
+		md.restoreAfterReload(); // Normal startup arms explicit saves and mutation snapshots.
 	});
 
 	/** Simulate unload → fresh module graph → init. Returns the fresh store. */

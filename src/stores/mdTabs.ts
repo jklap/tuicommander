@@ -207,6 +207,8 @@ function createMdTabsStore() {
 
 		/** Keep MCP documents in this window across WebView/HMR reloads only. */
 		saveForReload(): void {
+			// An unload during boot must preserve the unread snapshot of the old document.
+			if (!untrack(reloadReady)) return;
 			const tabs = base.state._order
 				.map((id) => base.get(id))
 				.filter((tab): tab is FileTab => tab?.type === "file" && !!tab.mcpUiId)
