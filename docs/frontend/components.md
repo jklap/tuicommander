@@ -234,6 +234,9 @@ input-listener cleanup. These controllers do not use reactive state.
 
 Repository tree with branch management.
 
+Branch rows keep the status icon separate from the always-visible agents disclosure button. Clicking status selects the workspace; the chevron toggles its agents.
+
+
 **Features:**
 - Expandable/collapsible repository entries
 - Icon-only collapsed mode
@@ -344,8 +347,6 @@ One index entry carries one `configKey`, so one label must not cover two expert
 controls. On **Git & GitHub**, **Copy ignored files** and **Copy untracked files**
 are therefore two `SettingToggle` rows, each in its own `ExpertSetting`, and not
 one group under a shared label.
-
-Branch rows keep the status icon separate from the always-visible agents disclosure button. Clicking status selects the workspace; the chevron toggles its agents.
 
 #### DictationSettings (`SettingsPanel/DictationSettings.tsx`)
 
