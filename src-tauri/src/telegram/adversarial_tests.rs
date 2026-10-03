@@ -30,6 +30,10 @@ fn setup() -> (tempfile::TempDir, Paths) {
         .prefix("tg-adv")
         .tempdir_in(tuic_test_support::test_temp_root())
         .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let paths = Paths::new(dir.path().to_path_buf());
     private(&paths.file("allowed_chat_ids"), &format!("{OWNER_CHAT}\n"));
     private(&paths.file("bot.token"), TOKEN);
