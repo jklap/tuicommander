@@ -126,7 +126,7 @@ export function promptStarts(promptLines: readonly number[], historyBase: number
 /** Finished turns by start row, valid for one `historyBase` (eviction moves every row index). */
 export interface TurnCache {
 	base: number;
-	turns: Map<number, { endAbs: number; turn: AnswersTurn }>;
+	turns: Map<number, { endAbs: number; hasPrompt: boolean; turn: AnswersTurn }>;
 }
 
 export const newTurnCache = (): TurnCache => ({ base: -1, turns: new Map() });
@@ -137,6 +137,8 @@ type RangeReader = (start: number, count: number) => Promise<StyledRange | null>
  * The whole session as turns: one per user prompt still in the scrollback, each
  * with its full prompt and its 💬 answers; the last one is the running turn. With
  * no known prompt the last `TURN_MAX_ROWS` rows form a single prompt-less turn.
+ * Retained output before the first known prompt is also a prompt-less turn,
+ * from the retained history base: prompt tracking may start after the agent did.
  * Finished turns come from `cache` (same object each time, so the view keeps their
  * DOM); a failed read aborts the whole build (null).
  */
@@ -152,6 +154,9 @@ export async function readAnswersHistory(
 		const rows = await readTurnRows(fetchRange, Math.max(historyBase, endAbs - TURN_MAX_ROWS), endAbs);
 		return rows && [buildAnswersTurn(rows, false)];
 	}
+	const firstPrompt = starts[0];
+	const prefixStart = historyBase;
+	if (prefixStart < firstPrompt) starts.unshift(prefixStart);
 	if (cache.base !== historyBase) {
 		cache.base = historyBase;
 		cache.turns.clear();
@@ -161,15 +166,16 @@ export async function readAnswersHistory(
 		const start = starts[i];
 		const end = i + 1 < starts.length ? starts[i + 1] : endAbs;
 		const finished = i + 1 < starts.length;
+		const hasPrompt = start >= firstPrompt;
 		const hit = cache.turns.get(start);
-		if (finished && hit?.endAbs === end) {
+		if (finished && hit?.endAbs === end && hit.hasPrompt === hasPrompt) {
 			turns.push(hit.turn);
 			continue;
 		}
 		const rows = await readTurnRows(fetchRange, start, end);
 		if (!rows) return null;
-		const turn = buildAnswersTurn(rows, true);
-		if (finished) cache.turns.set(start, { endAbs: end, turn });
+		const turn = buildAnswersTurn(rows, hasPrompt);
+		if (finished) cache.turns.set(start, { endAbs: end, hasPrompt, turn });
 		turns.push(turn);
 	}
 	return turns;

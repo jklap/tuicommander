@@ -296,7 +296,7 @@ impl OutputParser {
 
         // Strip ANSI escape sequences for parsers that need clean text.
         // Uses the vt100 crate (already a dependency) to render a virtual screen
-        // and extract clean rows, avoiding the strip_ansi_escapes crate.
+        // and extract clean rows.
         let clean = strip_ansi_via_vt100(text);
 
         // Status line detection
@@ -952,11 +952,11 @@ fn parse_pr_url(text: &str) -> Option<ParsedEvent> {
 
 /// Strip ANSI escape sequences from raw PTY text.
 ///
-/// Uses `strip-ansi-escapes` to remove all CSI/OSC/ESC sequences.
+/// Uses the shared VTE 0.15 stripper to remove CSI/OSC/ESC sequences.
 /// Only used by the test-only [`OutputParser::parse`] method.
 #[cfg(test)]
 fn strip_ansi_via_vt100(text: &str) -> String {
-    let stripped = strip_ansi_escapes::strip(text);
+    let stripped = tuic_ansi::strip(text);
     String::from_utf8_lossy(&stripped)
         .lines()
         .filter(|l| !l.trim().is_empty())

@@ -244,3 +244,68 @@ describe("toastsStore — mirroring into the bell", () => {
 		});
 	});
 });
+
+describe("1397 toast bursts", () => {
+	let store: typeof import("../../stores/toasts").toastsStore;
+	let bell: typeof import("../../stores/activityStore").activityStore;
+	let mirror: typeof import("../../stores/toasts").setToastBellMirrorResolver;
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		vi.resetModules();
+		const mod = await import("../../stores/toasts");
+		store = mod.toastsStore;
+		mirror = mod.setToastBellMirrorResolver;
+		bell = (await import("../../stores/activityStore")).activityStore;
+		await bell.hydrate();
+		bell.clearAll();
+	});
+	afterEach(() => vi.useRealTimers());
+
+	// Catches: distinct messages of one kind producing a growing stack instead of a summary.
+	it("summarizes two messages of the same kind within five seconds", () => {
+		store.add("Saved", "first.md");
+		vi.advanceTimersByTime(5000);
+		store.add("Saved", "second.md");
+		expect(store.toasts).toHaveLength(1);
+		expect(store.toasts[0]).toMatchObject({ title: "Saved", count: 2 });
+		expect(bell.getForSection("messages").map((i) => i.subtitle)).toEqual(["second.md", "first.md"]);
+	});
+
+	// Catches: burst grouping eating an unrelated later action outside the five-second window.
+	it("keeps messages after five seconds separate", () => {
+		store.add("Saved", "first.md");
+		vi.advanceTimersByTime(5001);
+		store.add("Saved", "second.md");
+		expect(store.toasts).toHaveLength(2);
+	});
+
+	// Catches: a burst covering the input with five cards, or losing overflow when mirroring is off.
+	it.each([
+		[true, 5],
+		[false, 3],
+	] as const)("shows at most two groups and retains overflow with mirroring %s", (enabled, expected) => {
+		mirror(() => enabled);
+		for (let i = 1; i <= 5; i++) store.add(`Action ${i}`, `Details ${i}`);
+		expect(store.toasts).toHaveLength(2);
+		expect(bell.getForSection("messages")).toHaveLength(expected);
+	});
+
+	// Catches: coalescing notifications from different repositories losing their scoped actions.
+	it("keeps different repository groups separate", () => {
+		store.add("Saved", "first.md", "info", false, undefined, undefined, "/one");
+		store.add("Saved", "second.md", "info", false, undefined, undefined, "/two");
+		expect(store.toasts.map((item) => item.repoPath)).toEqual(["/one", "/two"]);
+	});
+
+	// Catches: bell-only agent notices being lost when the transient mirror preference is disabled.
+	it("retains bell-only notices without a transient card", () => {
+		mirror(() => false);
+		store.addToBell("Agent report", "Complete", "info", "/one");
+		expect(store.toasts).toHaveLength(0);
+		expect(bell.getForSection("messages")[0]).toMatchObject({
+			title: "Agent report",
+			subtitle: "Complete",
+			repoPath: "/one",
+		});
+	});
+});

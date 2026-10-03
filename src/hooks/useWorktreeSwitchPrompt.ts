@@ -4,7 +4,6 @@ import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
-import { toastsStore } from "../stores/toasts";
 import { pathBasename, pathDirname } from "../utils/pathUtils";
 
 interface WorktreeSwitchDeps {
@@ -38,7 +37,7 @@ interface WorktreeRemovedPayload {
  * rooted in the worktree; the agent terminal remains attached to its original
  * branch and CWD.
  *
- * Called from the toast's "Switch" action, so whether the active terminal can
+ * Called from the bell item's action, so whether the active terminal can
  * follow is decided HERE, at click time — by then the user may have moved to a
  * different tab than the one that was active when the worktree appeared.
  */
@@ -128,8 +127,7 @@ function worktreeLabel(worktreePath: string): string {
  * modal with a ten-second auto-cancel, which is exactly backwards for the only
  * case it fires in: an orchestrator creating a worktree every few minutes asked a
  * question nobody was at the keyboard to answer, and stole the screen until each
- * one timed out. It is a toast now, so the offer waits for the user instead of
- * the user waiting for the offer.
+ * one timed out. The bell keeps the offer reachable without covering the input.
  */
 export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 	let unlisten: (() => void) | null = null;
@@ -144,7 +142,7 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		};
 		// Register the branch in the store immediately so the sidebar shows the new
 		// worktree right away — independent of whether the user accepts the switch
-		// prompt below. Mirrors the in-app create path (setupNewWorktree → setWorkspace).
+		// offer below. Mirrors the in-app create path (setupNewWorktree → setWorkspace).
 		// Guarded on repo existence so we don't create a half-formed repo entry for a
 		// worktree on a repo that isn't open in the sidebar.
 		if (repositoriesStore.get(repo_path)) {
@@ -166,19 +164,10 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 			icon: '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M5 3.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0zm0 2.122a2.25 2.25 0 1 0-1.5 0v.878A2.25 2.25 0 0 0 5.75 8.5h1.5v2.128a2.251 2.251 0 1 0 1.5 0V8.5h1.5a2.25 2.25 0 0 0 2.25-2.25v-.878a2.25 2.25 0 1 0-1.5 0v.878a.75.75 0 0 1-.75.75h-5a.75.75 0 0 1-.75-.75v-.878zM8 12.25a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5zm3.25-9a.75.75 0 1 1 0 1.5.75.75 0 0 1 0-1.5z"/></svg>',
 			repoPath: repo_path,
 			dismissible: true,
-			// The bell outlives the toast, so the offer is still reachable after an
+			// The bell keeps the offer reachable after an
 			// unattended run finishes and the user comes back to the machine.
 			onClick: switchToWorktree,
 		});
-		toastsStore.add(
-			`Worktree "${branch}" created`,
-			label,
-			"info",
-			false,
-			{ label: "Switch", onClick: switchToWorktree },
-			undefined,
-			repo_path,
-		);
 	})
 		.then((fn) => {
 			unlisten = fn;

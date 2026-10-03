@@ -35,15 +35,13 @@ use axum::{
     Json, Router,
     extract::{ConnectInfo, Extension, Path as AxumPath, Query, State},
 };
-// Only `named_socket_path` hashes, and Unix domain sockets are the only reason
-// it exists — so on Windows this import is dead and `-D warnings` rejects it.
-#[cfg(unix)]
-use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
 use tower_http::cors::CorsLayer;
+#[cfg(unix)]
+use tuic_ipc::named_socket_path;
 
 /// Maximum terminal dimension (rows or cols). Prevents resource abuse from
 /// absurdly large allocations while still allowing generous sizes.
@@ -132,23 +130,11 @@ pub(crate) fn upstream_json_result<T: serde::Serialize>(result: Result<T, String
 /// Default IPC endpoint path for local MCP bridge connections (Unix domain socket).
 #[cfg(unix)]
 pub(crate) fn socket_path() -> std::path::PathBuf {
-    let instance = crate::app_instance::current_app_instance();
-    let Some(id) = instance.named_id() else {
-        return crate::config::config_dir().join("mcp.sock");
-    };
-
-    named_socket_path(id, &std::env::temp_dir())
-}
-
-#[cfg(unix)]
-fn named_socket_path(id: &str, temp_dir: &std::path::Path) -> std::path::PathBuf {
-    // macOS limits Unix-domain socket paths to 104 bytes. The platform config
-    // directory plus `instances/<id>/mcp.sock` exceeds that limit for ordinary
-    // named ids, so keep named-instance sockets in the OS temp directory while
-    // retaining a deterministic, collision-resistant name for the bridge.
-    let digest = Sha256::digest(id.as_bytes());
-    let short_id = hex::encode(&digest[..8]);
-    temp_dir.join(format!("tuic-mcp-{short_id}.sock"))
+    tuic_ipc::socket_path(
+        crate::app_instance::current_app_instance(),
+        &crate::config::config_dir(),
+        &std::env::temp_dir(),
+    )
 }
 
 /// Resolve which socket path this instance should bind to.
@@ -218,7 +204,7 @@ fn cleanup_stale_sockets() {
 
 /// Named pipe name for Windows IPC (without the \\.\pipe\ prefix for display).
 #[cfg(windows)]
-const PIPE_NAME: &str = r"\\.\pipe\tuicommander-mcp";
+const PIPE_NAME: &str = tuic_ipc::PIPE_NAME;
 
 /// axum::serve::Listener implementation for Windows named pipes.
 /// Uses the tokio reconnect pattern: pre-creates the next pipe instance before
@@ -7479,12 +7465,12 @@ mod tests {
 
     /// Catches: a device route answering 200 with an error body (a plain `Json(..)`
     /// instead of `json_result`) when the enumeration fails, which the client
-    /// would parse as a device list. A zero bound makes the real enumeration
-    /// time out; no mock layer.
+    /// would parse as a device list. The injected failure panics inside the real
+    /// blocking task, independent of enumeration speed; no mock layer.
     #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn the_device_routes_answer_500_when_the_enumeration_fails() {
-        crate::audio_enumeration::override_timeout_for_test(std::time::Duration::ZERO);
+        let _failure = crate::audio_enumeration::fail_enumeration_for_test();
         let app = build_router(test_state(), false, true);
         for path in ["/dictation/devices", "/audio/output-devices"] {
             let response = app
@@ -7502,9 +7488,7 @@ mod tests {
                 .unwrap();
             let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
             assert!(
-                json["error"]
-                    .as_str()
-                    .is_some_and(|e| e.contains("timed out")),
+                json["error"].as_str().is_some_and(|e| e.contains("failed")),
                 "GET {path}: {json}"
             );
         }
