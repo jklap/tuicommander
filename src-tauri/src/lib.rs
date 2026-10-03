@@ -56,11 +56,11 @@ pub(crate) mod git_graph;
 pub(crate) mod idle_close;
 pub(crate) use tuic_git::git_locks;
 pub(crate) use tuic_git::git_reads;
+#[cfg(test)]
+mod critic_1420_tests;
 pub(crate) mod github;
 pub(crate) mod github_account;
 pub(crate) mod github_auth;
-#[cfg(test)]
-mod critic_1420_tests;
 #[cfg(test)]
 mod github_compat_tests;
 pub(crate) use tuic_git::github_debug;
