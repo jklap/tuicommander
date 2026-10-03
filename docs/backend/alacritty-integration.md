@@ -121,7 +121,9 @@ and VT soft-wrap continuation origins remain literal. At the oldest retained
 row, cleanup requires known row provenance. Loss of content-bearing predecessors marks
 retained content unknown; blank rows retain a fresh origin. History removal inspects discarded content and WRAPLINE, including existing
 unknown-origin flags; it never derives provenance from scroll counts. Removing
-the entire reprinted history tail carries that provenance into surviving content.
+the entire reprinted history tail carries prior oldest-row loss or the last
+removed WRAPLINE/wide-spacer boundary into surviving content. Without those
+signals, an unwrapped predecessor preserves a known line origin on drop.
 Full row reset or erase restores known origin
 without resetting absolute row counters. Unknown content stays literal; the
 same width-evidence rule rejoins wraps while preserving short typed lines

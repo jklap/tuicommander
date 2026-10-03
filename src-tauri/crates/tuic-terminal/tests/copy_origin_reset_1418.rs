@@ -56,9 +56,11 @@ fn copied_selection_full_erase_above_restores_known_origin() {
 // Catches forgetting that a blank-looking WRAPLINE row still carries lost content origin.
 #[test]
 fn copied_selection_history_removal_distinguishes_blank_content_and_wrap_predecessors() {
-    for (predecessor, wrapped, expected_unknown) in
-        [(' ', false, false), ('x', false, true), (' ', true, true)]
-    {
+    for (predecessor, wrapped, purge_unknown, drop_unknown) in [
+        (' ', false, false, false),
+        ('x', false, true, false),
+        (' ', true, true, true),
+    ] {
         for drop_tail in [false, true] {
             let mut grid: Grid<Cell> = Grid::new(2, 10, 2);
             grid[Line(0)][Column(0)].c = predecessor;
@@ -72,6 +74,13 @@ fn copied_selection_history_removal_distinguishes_blank_content_and_wrap_predece
             } else {
                 grid.clear_history();
             }
+            // Reprint-tail drop preserves a known unwrapped boundary; purge
+            // conservatively treats removed content as lost predecessor evidence.
+            let expected_unknown = if drop_tail {
+                drop_unknown
+            } else {
+                purge_unknown
+            };
             assert_eq!(grid[Line(0)].copy_origin_unknown, expected_unknown);
         }
     }
@@ -90,5 +99,23 @@ fn copied_selection_history_removal_leaves_blank_survivor_known() {
             grid.clear_history();
         }
         assert!(!grid[grid.topmost_line()].copy_origin_unknown);
+    }
+}
+
+// Catches history-cap trimming poisoning a blank row before a later composer redraw.
+#[test]
+fn copied_selection_history_cap_trim_then_redraw_keeps_blank_origin_known() {
+    for drop_tail in [false, true] {
+        let mut grid: Grid<Cell> = Grid::new(2, 10, 4);
+        grid.scroll_up(&(Line(0)..Line(2)), 2);
+        grid.update_history(1);
+        assert!(!grid[grid.topmost_line()].copy_origin_unknown);
+        grid[Line(0)][Column(0)].c = 's';
+        if drop_tail {
+            grid.drop_newest_history(1);
+        } else {
+            grid.clear_history();
+        }
+        assert!(!grid[Line(0)].copy_origin_unknown);
     }
 }
