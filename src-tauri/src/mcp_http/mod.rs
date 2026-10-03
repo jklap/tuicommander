@@ -805,6 +805,7 @@ const API_PREFIXES: &[&str] = &[
     "registry",
     "remote",
     "repo",
+    "secrets",
     "sessions",
     "stats",
     "stories",
