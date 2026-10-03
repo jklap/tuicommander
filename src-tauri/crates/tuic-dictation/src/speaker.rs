@@ -797,8 +797,9 @@ fn next_reply(shared: &Shared, output: &dyn Output) -> Option<(Reply, SpeechCanc
 
 /// Playback through the system's audio output.
 pub struct DeviceOutput {
-    /// Held for as long as the player: dropping the stream silences it.
-    _stream: rodio::MixerDeviceSink,
+    /// Held for as long as the player: dropping the stream silences it. `None`
+    /// only in tests, which drive the player without a sound device.
+    _stream: Option<rodio::MixerDeviceSink>,
     player: rodio::Player,
 }
 
@@ -815,7 +816,7 @@ impl DeviceOutput {
             .ok_or_else(|| "no audio output device could be opened".to_string())?;
         let player = rodio::Player::connect_new(stream.mixer());
         Ok(Self {
-            _stream: stream,
+            _stream: Some(stream),
             player,
         })
     }
@@ -2081,5 +2082,47 @@ mod tests {
             !speaker.status().paused,
             "an output that cannot hold reported held"
         );
+    }
+
+    /// A `DeviceOutput` over a player nothing drains, so `Output` calls can be
+    /// observed on the player without a sound device.
+    fn deviceless_output() -> DeviceOutput {
+        let (player, _queue) = rodio::Player::new();
+        DeviceOutput {
+            _stream: None,
+            player,
+        }
+    }
+
+    /// Catches: `DeviceOutput::pause`/`resume` being no-ops, and `can_pause`
+    /// reporting false, which would make the speaker fall back to dropping the
+    /// reply instead of holding it.
+    #[test]
+    fn device_output_pause_and_resume_drive_the_player() {
+        let output = deviceless_output();
+        assert!(output.can_pause());
+        assert!(!output.player.is_paused());
+
+        output.pause();
+        assert!(output.player.is_paused(), "pause did not reach the player");
+
+        output.resume();
+        assert!(
+            !output.player.is_paused(),
+            "resume did not reach the player"
+        );
+    }
+
+    /// Catches: `DeviceOutput::stop` doing nothing, which leaves a paused
+    /// player paused, so the next reply is appended into silence.
+    #[test]
+    fn device_output_stop_leaves_a_paused_player_playing() {
+        let output = deviceless_output();
+        output.pause();
+        assert!(output.player.is_paused());
+
+        output.stop();
+
+        assert!(!output.player.is_paused(), "stop left the player paused");
     }
 }
