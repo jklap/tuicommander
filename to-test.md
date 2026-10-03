@@ -1,6 +1,6 @@
 ## Bodyless IPC replies (1416-8ad4) — rebuilt clients required
 
-- [ ] Rebuild/reinstall the CLI and bridge before using this decoder fix. The running clients do not hot-reload Rust changes. Automated shared-decoder regression covers 204/304, protocol-switch and interim/final response boundaries; no desktop restart was performed by this lane.
+- [ ] Rebuild/reinstall the CLI and bridge before using this decoder fix. The running clients do not hot-reload Rust changes. Automated shared-decoder regression covers 204/304, protocol-switch, bounded headers/interims and final response boundaries; no desktop restart was performed by this lane.
 
 ## Shared IPC instance routing (1390-cd42) — Rust rebuild required
 

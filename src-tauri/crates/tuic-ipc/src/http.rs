@@ -44,10 +44,16 @@ pub fn request(method: &str, path: &str, body: Option<&str>, headers: &[(&str, &
     request.into_bytes()
 }
 
+/// Allow repeated progress hints while bounding reads that never reach a final reply.
+const MAX_INTERIM_RESPONSES: usize = 32;
+/// Bound each status/header section, including its terminator, without limiting bodies.
+const MAX_HEADER_BYTES: usize = 64 * 1024;
+
 /// Accumulate stream fragments and finish at the declared body boundary, not EOF.
 #[derive(Default)]
 pub struct ResponseDecoder {
     bytes: Vec<u8>,
+    interim_responses: usize,
 }
 
 impl ResponseDecoder {
@@ -59,8 +65,13 @@ impl ResponseDecoder {
     /// Parse a complete response, or return None while more bytes are needed.
     pub fn response(&mut self, eof: bool) -> io::Result<Option<Response>> {
         loop {
-            let Some(header_end) = self.bytes.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+            let Some(header_end) = self.bytes[..self.bytes.len().min(MAX_HEADER_BYTES)]
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
             else {
+                if self.bytes.len() >= MAX_HEADER_BYTES {
+                    return Err(invalid("HTTP response headers exceed 64 KiB"));
+                }
                 return if eof { Err(incomplete()) } else { Ok(None) };
             };
             let raw_headers = String::from_utf8_lossy(&self.bytes[..header_end]).into_owned();
@@ -73,6 +84,10 @@ impl ResponseDecoder {
             // RFC 9110 section 15.2: informational replies precede the final response.
             // 101 switches protocols and therefore ends HTTP response parsing.
             if (100..200).contains(&status) && status != 101 {
+                if self.interim_responses >= MAX_INTERIM_RESPONSES {
+                    return Err(invalid("HTTP response exceeds 32 interim replies"));
+                }
+                self.interim_responses += 1;
                 self.bytes.drain(..header_end + 4);
                 continue;
             }
@@ -126,7 +141,7 @@ impl ResponseDecoder {
 fn incomplete() -> io::Error {
     io::Error::new(
         io::ErrorKind::UnexpectedEof,
-        "response ended before the declared body length",
+        "response ended before a complete final HTTP response",
     )
 }
 

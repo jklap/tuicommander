@@ -121,8 +121,7 @@ fn interim_plus_chunked_final_is_independent_of_the_split_point() {
     }
 }
 
-// Catches: the interim drain losing the cursor when many interims arrive in one read,
-// or a stale/failed state after a drain.
+// Catches: unbounded interim draining when a peer floods one read with progress replies.
 #[test]
 fn thousands_of_interims_in_one_read_then_final() {
     let mut wire = Vec::new();
@@ -131,8 +130,10 @@ fn thousands_of_interims_in_one_read_then_final() {
         wire.extend_from_slice(format!("HTTP/1.1 {status} I\r\n\r\n").as_bytes());
     }
     wire.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nz");
-    let response = decode(&wire, false).unwrap().unwrap();
-    assert_eq!((response.status, response.body.as_str()), (200, "z"));
+    assert_eq!(
+        decode(&wire, false).unwrap_err().kind(),
+        ErrorKind::InvalidData
+    );
 }
 
 // Catches: the drain being skipped on re-polling (response() called repeatedly while
@@ -169,7 +170,9 @@ fn only_100_to_199_except_101_is_interim() {
         assert_eq!(decode(wire.as_bytes(), false).unwrap().unwrap().status, 200);
     }
     for status in [200, 201, 299, 300, 404, 500] {
-        let wire = format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let wire = format!(
+            "HTTP/1.1 {status} X\r\nContent-Length: 0\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+        );
         assert_eq!(
             decode(wire.as_bytes(), false).unwrap().unwrap().status,
             status
