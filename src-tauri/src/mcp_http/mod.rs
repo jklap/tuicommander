@@ -18,6 +18,7 @@ mod plugin_routes;
 mod remote_mcp_sessions;
 pub(crate) mod remote_peer;
 mod remote_session_proxy;
+mod request_boundary;
 pub(crate) mod session;
 pub(crate) mod sse_routes;
 mod static_files;
@@ -29,7 +30,8 @@ mod worktree_routes;
 mod ws_compression;
 
 use crate::AppState;
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+#[cfg(test)]
+use axum::http::header::CONTENT_TYPE;
 use axum::http::{Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
@@ -41,7 +43,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
-use tower_http::cors::CorsLayer;
 #[cfg(unix)]
 use tuic_ipc::named_socket_path;
 
@@ -1521,33 +1522,9 @@ pub(crate) fn with_server_limits(routes: Router, timeout: std::time::Duration) -
 }
 
 pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
-    // When remote access is enabled, allow any origin (Basic Auth secures the endpoint).
-    // Otherwise, restrict to localhost and Tauri webview origins.
-    let cors = if remote_auth {
-        CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-    } else {
-        let allowed_origins = [
-            "http://localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "http://127.0.0.1"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "tauri://localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "https://tauri.localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-        ];
-        CorsLayer::new()
-            .allow_origin(allowed_origins.to_vec())
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-    };
+    // false selects the trusted local IPC transport; every TCP listener uses true.
+    let boundary = request_boundary::RequestBoundary::new(state.clone());
+    let cors = boundary.cors();
 
     let mut routes = Router::new()
         // Routes common to the remote daemon router live in shared_routes().
@@ -2208,10 +2185,15 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     let routes = with_server_limits(routes, REQUEST_TIMEOUT);
 
     if remote_auth {
-        routes.layer(axum::middleware::from_fn_with_state(
-            state,
-            auth::basic_auth_middleware,
-        ))
+        routes
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                auth::basic_auth_middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                boundary,
+                request_boundary::check,
+            ))
     } else {
         routes
     }
@@ -2230,10 +2212,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 /// Auth and compression layers are applied identically to `build_router()`.
 #[allow(dead_code)] // Used by tuic-remote binary (not(desktop) build)
 pub fn build_remote_router(state: Arc<AppState>) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([AUTHORIZATION, CONTENT_TYPE]);
+    let boundary = request_boundary::RequestBoundary::new(state.clone());
+    let cors = boundary.cors();
 
     let public_routes = Router::new()
         .route("/health", get(session::health))
@@ -2266,7 +2246,12 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
         axum::middleware::from_fn_with_state(state, auth::basic_auth_middleware),
     );
 
-    public_routes.merge(authed)
+    public_routes
+        .merge(authed)
+        .layer(axum::middleware::from_fn_with_state(
+            boundary,
+            request_boundary::check,
+        ))
 }
 
 /// Rebind the TCP listener after a config write changed remote-access settings.
@@ -2826,6 +2811,7 @@ mod tests {
         addr: std::net::SocketAddr,
     ) -> Request<Body> {
         let mut req = Request::post(url)
+            .header(header::HOST, "127.0.0.1:9876")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::to_string(body).expect("serialize JSON body"),
@@ -2842,6 +2828,7 @@ mod tests {
 
     fn get_localhost(url: &str) -> Request<Body> {
         let mut req = Request::get(url)
+            .header(header::HOST, "127.0.0.1:9876")
             .body(Body::empty())
             .expect("build GET request");
         req.extensions_mut()
@@ -2852,6 +2839,7 @@ mod tests {
     /// Build a PUT request with ConnectInfo from the given address.
     fn put_from(url: &str, body: &serde_json::Value, addr: std::net::SocketAddr) -> Request<Body> {
         let mut req = Request::put(url)
+            .header(header::HOST, "127.0.0.1:9876")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::to_string(body).expect("serialize JSON body"),
@@ -3010,6 +2998,7 @@ mod tests {
         state.config.write().services.auth.lan_auth_bypass = false;
         let app = build_remote_router(state);
         let mut request = Request::post("/remote/update")
+            .header(header::HOST, "127.0.0.1:9876")
             .body(Body::from("not a binary"))
             .unwrap();
         request
@@ -3035,6 +3024,7 @@ mod tests {
         }
         let credentials = base64::engine::general_purpose::STANDARD.encode("boss:known-password");
         let mut request = Request::post("/remote/update")
+            .header(header::HOST, "127.0.0.1:9876")
             .header(
                 axum::http::header::AUTHORIZATION,
                 format!("Basic {credentials}"),
@@ -3109,6 +3099,7 @@ mod tests {
             ),
         ] {
             let mut request = Request::post("/remote/update?token=update-secret")
+                .header(header::HOST, "127.0.0.1:9876")
                 .header("x-tuic-target", target)
                 .header("x-tuic-sha256", sha256)
                 .header("x-tuic-confirmed-sessions", sessions)
@@ -3157,6 +3148,7 @@ mod tests {
             ),
         ] {
             let mut request = Request::post("/remote/update?token=update-secret")
+                .header(header::HOST, "127.0.0.1:9876")
                 .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
                 .header("x-tuic-sha256", hash)
                 .header("x-tuic-confirmed-sessions", "0")
@@ -3174,6 +3166,7 @@ mod tests {
             assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
         }
         let mut duplicate = Request::post("/remote/update?token=update-secret")
+            .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header("x-tuic-sha256", good_hash)
             .header("x-tuic-confirmed-sessions", "0")
@@ -3221,6 +3214,7 @@ mod tests {
             Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"replacement"))
         }));
         let mut first = Request::post("/remote/update?token=update-secret")
+            .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
                 "x-tuic-sha256",
@@ -3239,6 +3233,7 @@ mod tests {
         first_chunk_received.await.unwrap();
 
         let mut second = Request::post("/remote/update?token=update-secret")
+            .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
                 "x-tuic-sha256",
@@ -3532,7 +3527,10 @@ mod tests {
             format!("/fs/markdown-image?{}", params.finish())
         };
         let request = |path: String, addr: std::net::SocketAddr| {
-            let mut req = Request::get(path).body(Body::empty()).unwrap();
+            let mut req = Request::get(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .body(Body::empty())
+                .unwrap();
             req.extensions_mut().insert(ConnectInfo(addr));
             req
         };
@@ -3548,27 +3546,13 @@ mod tests {
             .unwrap();
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
-        #[cfg(feature = "desktop")]
-        {
-            let accepted_local = app
-                .clone()
-                .oneshot(request(uri("docs/images/chart.png", None), local))
-                .await
-                .unwrap();
-            assert_eq!(accepted_local.status(), StatusCode::OK);
-        }
-
-        // Headless serves remote clients and requires auth even over loopback.
-        // The desktop-only webview bypass is intentionally unavailable there.
-        #[cfg(not(feature = "desktop"))]
-        {
-            let denied_local = app
-                .clone()
-                .oneshot(request(uri("docs/images/chart.png", None), local))
-                .await
-                .unwrap();
-            assert_eq!(denied_local.status(), StatusCode::UNAUTHORIZED);
-        }
+        // Loopback HTTP must authenticate in desktop and headless builds alike.
+        let denied_local = app
+            .clone()
+            .oneshot(request(uri("docs/images/chart.png", None), local))
+            .await
+            .unwrap();
+        assert_eq!(denied_local.status(), StatusCode::UNAUTHORIZED);
 
         let accepted_remote = app
             .clone()
@@ -4508,6 +4492,7 @@ mod tests {
                 ("GET", "/tunnels/agent-keys"),
             ] {
                 let mut req = Request::builder()
+                    .header(header::HOST, "127.0.0.1:9876")
                     .method(method)
                     .uri(path)
                     .header("content-type", "application/json")
@@ -4550,6 +4535,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::get("/api/auth/session-token")
+                    .header(header::HOST, "127.0.0.1:9876")
                     .extension(remote())
                     .body(Body::empty())
                     .unwrap(),
@@ -4563,6 +4549,7 @@ mod tests {
         let authenticated = app
             .oneshot(
                 Request::get("/api/auth/session-token")
+                    .header(header::HOST, "127.0.0.1:9876")
                     .header(header::AUTHORIZATION, format!("Basic {credentials}"))
                     .extension(remote())
                     .body(Body::empty())
@@ -9629,7 +9616,10 @@ mod tests {
             .unwrap();
         assert_eq!(put.status(), StatusCode::OK);
 
-        let mut get = Request::get(url).body(Body::empty()).unwrap();
+        let mut get = Request::get(url)
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
         get.extensions_mut().insert(ConnectInfo(address));
         let response = app.oneshot(get).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
