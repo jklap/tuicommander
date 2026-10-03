@@ -1,5 +1,9 @@
 # MCP & HTTP Server
 
+## Remote file copies
+
+The shared filesystem router exposes streamed `/fs/upload-copy` on the daemon through existing authentication. Sender-side `fs_transfer_remote_paths` coordination is desktop IPC only and intentionally unmapped: data leaves the machine, Finder source paths cannot be gated to registered roots, and HTTP token holders must not trigger exfiltration. There is no `/fs/transfer-remote` HTTP route. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. Uploads use the existing session-cookie header, a 30-second chunk idle deadline (exempt from the global response deadline), and hold their concurrency permit through blocking extraction. Daemon startup sweeps abandoned upload staging inside registered roots without following symlink directories. Cleanup restores owner directory access only inside disposable staging when restrictive tar modes would prevent removal; published permissions remain unchanged. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
+
 ## CI logs
 
 The MCP `repo` tool's `ci_logs` action accepts `path` and `branch` and fetches
@@ -57,12 +61,48 @@ and HTTP `POST /progress/list?path=…` use the same input and response.
 
 Optional HTTP/WebSocket server that exposes all Tauri commands as REST endpoints. Enables browser-mode operation and MCP (Model Context Protocol) integration for external AI tools.
 
+## Installed bridge lifetime
+
+The primary instance installs the adjacent `tuic-bridge` into
+`<config_dir>/mcp-bridge/<sha256>/tuic-bridge` (`.exe` on Windows) before updating
+agent MCP configs, only when an eligible integration needs repair. Publication
+uses a temporary file in the destination directory and atomic rename, with
+executable permissions set before publication. The source is hashed before copying;
+both the copy and a second source read must match before publication. Identical
+bytes reuse the existing file. Different builds get separate revision directories;
+old revisions remain available to running agents and saved config commands.
+Cargo target cleanup, mbx view refreshes and app upgrades therefore cannot remove
+the configured executable. Failed installation leaves agent configs unchanged.
+Startup migrates TUIC bridge commands from cargo/mbx targets and its installed
+revision directory, while preserving custom working commands and transports.
+Secondary-instance ownership rules still apply. An explicit Settings > Agents
+Install can install under user authority. Manual setup snippets only inspect
+installed copies and never create them; without a copy they report the bare
+`tuic-bridge` command. Revision cleanup is deferred until every agent config root,
+including private Claude and `CLAUDE_CONFIG_DIR` roots, can be discovered.
+
 ## Activation
 
 The server has two independent listeners:
 
 - **IPC listener** (always started): On macOS/Linux, listens at `<config_dir>/mcp.sock` for the default instance. Named instances use a deterministic short socket name in the OS temp directory because macOS limits Unix socket paths to 104 bytes. On Windows, listens on `\\.\pipe\tuicommander-mcp` (named pipe). No authentication — used by the local `tuic-bridge` sidecar.
 - **TCP listener** (opt-in): Only starts when remote access is enabled. Binds to `0.0.0.0:<port>` (port from `services.server`) with Basic Auth.
+
+The shared `tuic-ipc` crate owns `AppInstance`, endpoint naming and HTTP
+framing. Informational responses (1xx except 101) are skipped until the final
+response arrives. More than 32 interim replies per response, or a status/header
+section above 64 KiB including its terminator, returns an invalid-data error.
+These limits persist across reads; response bodies are not subject to the header
+limit. Status 101, 204 and 304 responses finish at the header
+terminator regardless of Content-Length or Transfer-Encoding (RFC 9112 §6.3).
+The clients do not issue HEAD requests.
+The server reuses its short named socket path; CLI and bridge select it
+with `--instance <id>` or `TUIC_APP_INSTANCE`. An explicit Unix `TUIC_SOCKET`
+wins. Bridge fallback discovery stays within the selected instance's socket
+prefix, so an unavailable named instance cannot fall through to the default
+instance. Sync CLI and async bridge adapters retain their separate I/O and timeout
+policies. Both finish length-delimited responses without waiting for EOF and
+decode chunked bodies before converting UTF-8.
 
 The `mcp_server_enabled` config flag controls whether the `/mcp` protocol route is active (MCP tool discovery and invocation), not whether the server itself starts. The HTTP API endpoints (sessions, git, config, etc.) are always available on the IPC listener.
 
@@ -107,7 +147,7 @@ Both `build_router` and `build_remote_router` pass their assembled routes throug
 
 | Limit | Value | Response | Why |
 |-------|-------|----------|-----|
-| `TimeoutLayer` | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
+| Response timeout middleware | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
 | `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB, with route-scoped ACP prompt and voice import exceptions | `413 Payload Too Large` | Bounds buffered JSON request bodies |
 
 **301 s, not 300 s — the layer must outlast every deadline it wraps.**
@@ -1541,6 +1581,13 @@ These tabs remain in the existing tab stores while another repository is
 selected. Unpinned tabs reappear when the opening repository is selected again;
 pinned MCP tabs remain visible across repositories. Unpinning restores the
 opening repository scope.
+Native Markdown tabs opened through `ui action=tab` survive UI document reloads
+within the same window, including native recovery without a working unload
+handler. The frontend snapshots tab changes synchronously and restores their
+target, scope, pin state and selected tab from session storage; reopening the
+same MCP id updates that tab.
+Closed tabs are not restored. This does not persist tabs across app restarts.
+
 Native file tabs use the MCP `id` as their identity, so distinct ids do not
 collapse onto one file-path tab and repeating an id updates its target. The tab
 bar also keeps repo-scoped tabs visible when a repository has no active workspace.
@@ -1821,3 +1868,7 @@ The mobile companion UI (`/mobile`) uses the same HTTP/WebSocket infrastructure 
 - **Activity**: `GET /config/activity` returns the persisted array; the Activity tab hydrates that array when opened.
 
 The mobile entry point shares `transport.ts` and `invoke.ts` with the desktop — no mobile-specific transport code.
+
+## Telegram adapter groundwork
+
+The offline `telegram` module holds owner/config/API and SQLite inbound boundaries (story 1438-79b4). It is not started by desktop or daemon boot and registers no MCP tool yet. `MailPort` requires idempotent stable-ID insertion and safe wake from the future native-mail integration; consumption must be committed at the inbox read boundary. These integrations await 1419/1420. See [the approved design](../design/telegram-channel.md) for the proposed tool, authorization and receipt contract.

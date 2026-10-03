@@ -1,7 +1,7 @@
 //! Critic 1148: the session DELETE that `McpClient` sends from `Drop`.
 #![cfg(unix)]
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::{Command, Output};
 use std::sync::Arc;
@@ -39,28 +39,18 @@ impl Seen {
 }
 
 fn read_request(stream: &mut UnixStream) -> Option<(Seen, String)> {
-    let mut reader = BufReader::new(stream.try_clone().ok()?);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line).ok()?;
-    let method = request_line.split_whitespace().next()?.to_string();
-    let mut headers = Vec::new();
-    let mut length = 0usize;
-    loop {
-        let mut line = String::new();
-        reader.read_line(&mut line).ok()?;
-        if line == "\r\n" || line.is_empty() {
-            break;
-        }
-        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-            length = v.trim().parse().unwrap_or(0);
-        }
-        headers.push(line.trim_end().to_string());
-    }
-    let mut body = vec![0; length];
-    reader.read_exact(&mut body).ok()?;
+    let request = tuic_test_support::read_http_request(stream).ok()?;
+    let method = request.request_line.split_whitespace().next()?.to_string();
     Some((
-        Seen { method, headers },
-        String::from_utf8_lossy(&body).to_string(),
+        Seen {
+            method,
+            headers: request
+                .headers
+                .iter()
+                .map(|line| line.trim_end().to_string())
+                .collect(),
+        },
+        String::from_utf8_lossy(&request.body).into_owned(),
     ))
 }
 

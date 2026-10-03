@@ -1,4 +1,5 @@
 import { render } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AnswersPanel } from "../AnswersPanel";
 
@@ -41,6 +42,21 @@ describe("AnswersPanel", () => {
 		));
 		expect(panelOf(container).textContent).toBe("❯ answered💬 yes");
 		expect(container.querySelectorAll("[data-turn]")).toHaveLength(1);
+	});
+
+	it("shows a notice for empty and answerless history, then removes it when an answer arrives", () => {
+		// catches: filtering all turns leaves a silent black overlay, or the notice stays over real answers
+		const [view, setView] = createSignal<Array<{ prompt: string | null; answers: string[] }>>([]);
+		const { container } = render(() => <AnswersPanel view={view()} fontFamily="monospace" fontSize={13} />);
+		expect(container.querySelector('[role="status"]')?.textContent).toBe(
+			"No marked answers in the retained terminal history.",
+		);
+		setView([{ prompt: "❯ pending", answers: [] }]);
+		expect(container.querySelector('[role="status"]')).not.toBeNull();
+		expect(container.querySelectorAll("[data-turn]")).toHaveLength(0);
+		setView([{ prompt: "❯ pending", answers: ["💬 ready"] }]);
+		expect(container.querySelector('[role="status"]')).toBeNull();
+		expect(container.querySelector("[data-answer]")?.textContent).toBe("💬 ready");
 	});
 
 	it("renders a 300-character multi-line prompt in full", () => {

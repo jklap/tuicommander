@@ -12,6 +12,7 @@ import {
 } from "../answersTurn";
 import type { DecodedRow, StyledRange } from "../canvasTerminalUtils";
 import type { RowSnapshot } from "../suggestOverlay";
+import recordedClaude from "./fixtures/claude-answers-before-first-prompt.json";
 
 const row = (text: string, isWrapped = false): RowSnapshot => ({ text, isWrapped });
 
@@ -238,13 +239,61 @@ describe("readAnswersHistory", () => {
 		const log: Array<[number, number]> = [];
 		// two rows evicted: the old line 3 now sits two rows earlier in the grid and base is 2
 		const turns = await readAnswersHistory(serve(log, 0), [1, 4], 2, SESSION.length, cache);
-		expect(log.length).toBe(2);
-		expect(turns?.map((t) => t.prompt)).toEqual(["❯ second question", "❯ third question, still running"]);
+		expect(log.length).toBe(3);
+		expect(turns?.map((t) => t.prompt)).toEqual([null, "❯ second question", "❯ third question, still running"]);
 	});
 
 	it("falls back to one prompt-less turn when no prompt is known", async () => {
 		const turns = await readAnswersHistory(serve(), [], 0, SESSION.length, newTurnCache());
 		expect(turns).toEqual([{ prompt: null, answers: ["💬 Answer one.", "💬 Answer two."] }]);
+	});
+
+	it("keeps recorded Claude answers before prompt tracking began", async () => {
+		// catches: reading only from the first tracked prompt leaves an answer-filled session empty
+		const turns = await readAnswersHistory(
+			async (start, count) => ({
+				startAbs: start,
+				historySize: 10000,
+				cols: 149,
+				rows: recordedClaude.rows
+					.filter((r) => r.abs >= start && r.abs < start + count)
+					.map((r) => ({ abs: r.abs, row: decoded(r.text, r.isWrapped) })),
+			}),
+			recordedClaude.promptLines,
+			recordedClaude.historyBase,
+			recordedClaude.endAbs,
+			newTurnCache(),
+		);
+		expect(turns?.[0].prompt).toBeNull();
+		expect(turns?.[0].answers).toEqual([
+			"💬 Green bar in the terminal scrollbar: green is the colour TUIC uses to mark the",
+			'💬 Project by project: the full status is in the tab "Stato progetti 03/10"',
+			"💬 Worktrees: I closed the 5 that were finished:",
+			"💬 The ones still open each have a reason:",
+		]);
+	});
+
+	it("reads only retained prefix rows and caches them while the tracked turn grows", async () => {
+		// catches: every refresh re-reading the retained history before the first tracked prompt
+		const log: Array<[number, number]> = [];
+		const cache = newTurnCache();
+		const fetch = async (start: number, count: number): Promise<StyledRange> => {
+			log.push([start, count]);
+			return { startAbs: start, historySize: 10000, cols: 40, rows: [] };
+		};
+		await readAnswersHistory(fetch, [9000], 1000, 10010, cache);
+		expect(log[0][0]).toBe(1000);
+		log.length = 0;
+		await readAnswersHistory(fetch, [9000], 1000, 10011, cache);
+		expect(log).toEqual([[10000, 11]]);
+	});
+
+	it("rebuilds a cached prefix when a prompt is discovered at its start", async () => {
+		// catches: a cached prompt-less turn losing the newly discovered prompt association
+		const cache = newTurnCache();
+		await readAnswersHistory(serve(), [3, 6], 0, SESSION.length, cache);
+		const turns = await readAnswersHistory(serve(), [0, 3, 6], 0, SESSION.length, cache);
+		expect(turns?.[0]).toEqual({ prompt: "❯ first question", answers: ["💬 Answer one."] });
 	});
 
 	it("aborts the whole build when a read fails", async () => {

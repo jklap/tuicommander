@@ -23,8 +23,10 @@ import { uiStore } from "../stores/ui";
 import { workflowRunSignals } from "../stores/workflowRunSignals";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri, rpc, subscribeEvents } from "../transport";
+import { getSessionConnection } from "../transportRuntime";
 import type { RepoChangeKind, SavedTerminal } from "../types";
 import { classifyFile, isImageFile } from "../utils/filePreview";
+import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
@@ -56,6 +58,7 @@ interface McpToastPayload {
 	sound: string | null;
 	origin_repo_path?: string;
 	origin_session_id?: string;
+	__tuic_origin?: { connection: string; name?: string };
 }
 
 const MCP_TOAST_LISTENER_KEY = "__tuic_mcp_toast_listener__";
@@ -340,6 +343,7 @@ export async function initApp(deps: AppInitDeps) {
 		activityStore.flushSave();
 		uiStore.flushSave();
 		paneLayoutStore.flushSave();
+		mdTabsStore.saveForReload();
 
 		// 1. Snapshot terminal metadata per repo/branch before closing
 		const snapshots = collectTerminalSnapshots();
@@ -557,21 +561,42 @@ export async function initApp(deps: AppInitDeps) {
 	}
 
 	replaceMcpToastListener((event) => {
-		const { title, message, level, sound, origin_repo_path, origin_session_id } = event.payload;
+		const { title, message, level, sound, origin_repo_path, origin_session_id, __tuic_origin: origin } = event.payload;
+		if (origin && (typeof title !== "string" || (message !== null && typeof message !== "string"))) {
+			appLogger.debug("app", "Discarding malformed mirrored MCP toast");
+			return;
+		}
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
-		// The repo is not glued into the message any more — the toast renders it as
-		// its own badge, so an unregistered origin still names its repo and a
-		// registered one does not say it twice.
-		// Still only a REGISTERED repo: this field scopes the toast (and the bell
-		// item mirrored from it), so an unregistered cwd must not become a repo key.
-		const repoPath = resolveRepoForCwd(origin_repo_path) ?? undefined;
+		// Backend notifications stay in the bell; they never cover the active input.
+		// Only a registered repo may scope a bell item.
+		const terminalId = origin_session_id ? terminalsStore.findBySessionId(origin_session_id) : undefined;
+		const repoPath = origin
+			? ((terminalId && getSessionConnection(origin_session_id) === origin.connection
+					? repositoriesStore.getRepoPathForTerminal(terminalId)
+					: undefined) ?? undefined)
+			: (resolveRepoForCwd(origin_repo_path) ?? undefined);
+		const visibleTitle = origin ? `[${origin.name ?? origin.connection}] ${title}` : title;
 		const visibleMessage = message ?? "";
-		const duplicate = toastsStore.hasVisible(title, visibleMessage, safeLevel, repoPath);
-		// repoPath is already undefined without an origin, and the session id is
-		// independent of it — an agent can be bound to a PTY whose cwd resolves to
-		// no registered repo — so both ride along on one call.
-		toastsStore.add(title, visibleMessage, safeLevel, false, undefined, undefined, repoPath, origin_session_id);
-		if (!duplicate && isNotificationSound(sound)) void notificationsStore.play(sound);
+		const action = origin_session_id
+			? {
+					label: "Open terminal",
+					onClick: () => {
+						const id = terminalsStore.findBySessionId(origin_session_id);
+						if (id && (!origin || getSessionConnection(origin_session_id) === origin.connection))
+							navigateToTerminal(id);
+					},
+				}
+			: undefined;
+		const noticeId = toastsStore.addToBell(
+			visibleTitle,
+			visibleMessage,
+			safeLevel,
+			repoPath,
+			action,
+			origin_session_id,
+			origin?.connection,
+		);
+		if (noticeId !== -1 && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
@@ -625,6 +650,17 @@ export async function initApp(deps: AppInitDeps) {
 		// sessions. The tab is docked but never selected: an MCP spawn must
 		// not take over the pane the user is working in.
 		if (agent_type) {
+			toastsStore.addToBell(
+				"Agent started",
+				display_name || agent_type,
+				"info",
+				resolveRepoForCwd(cwd ?? "") ?? undefined,
+				{
+					label: "Open terminal",
+					onClick: () => navigateToTerminal(id),
+				},
+				session_id,
+			);
 			// In split mode, ensure there is an active group so assignTabToActiveGroup
 			// doesn't silently no-op and leave the tab invisible.
 			if (paneLayoutStore.isSplit() && !paneLayoutStore.state.activeGroupId) {
@@ -1011,37 +1047,40 @@ export async function initApp(deps: AppInitDeps) {
 	// Start tracking user activity (click/keydown) for PR display timeouts
 	deps.stores.startUserActivityListening();
 
-	// Restore active repo/branch from persisted state
-	const repoPaths = repositoriesStore.getPaths();
-	if (repoPaths.length > 0) {
-		// Use persisted active repo, falling back to first
-		const persistedActive = repositoriesStore.state.activeRepoPath;
-		const firstPath = persistedActive && repoPaths.includes(persistedActive) ? persistedActive : repoPaths[0];
-		const firstRepo = repositoriesStore.get(firstPath);
-		repositoriesStore.setActive(firstPath);
-		if (firstRepo?.activeWorkspaceId) {
-			if (survivingSessions.length > 0) {
-				const branch = firstRepo.workspaces[firstRepo.activeWorkspaceId];
-				const validTerminals = branch?.terminals.filter((id) => terminalsStore.getIds().includes(id)) || [];
-				if (validTerminals.length > 0) {
-					const remembered = branch?.lastActiveTerminal;
-					const target = remembered && validTerminals.includes(remembered) ? remembered : validTerminals[0];
-					appLogger.info(
-						"terminal",
-						`initApp RESTORE activeTerminal=${target} (remembered=${remembered}, valid=${JSON.stringify(validTerminals)})`,
-					);
-					terminalsStore.setActive(target);
+	try {
+		// Restore active repo/branch from persisted state
+		const repoPaths = repositoriesStore.getPaths();
+		if (repoPaths.length > 0) {
+			// Use persisted active repo, falling back to first
+			const persistedActive = repositoriesStore.state.activeRepoPath;
+			const firstPath = persistedActive && repoPaths.includes(persistedActive) ? persistedActive : repoPaths[0];
+			const firstRepo = repositoriesStore.get(firstPath);
+			repositoriesStore.setActive(firstPath);
+			if (firstRepo?.activeWorkspaceId) {
+				if (survivingSessions.length > 0) {
+					const branch = firstRepo.workspaces[firstRepo.activeWorkspaceId];
+					const validTerminals = branch?.terminals.filter((id) => terminalsStore.getIds().includes(id)) || [];
+					if (validTerminals.length > 0) {
+						const remembered = branch?.lastActiveTerminal;
+						const target = remembered && validTerminals.includes(remembered) ? remembered : validTerminals[0];
+						appLogger.info(
+							"terminal",
+							`initApp RESTORE activeTerminal=${target} (remembered=${remembered}, valid=${JSON.stringify(validTerminals)})`,
+						);
+						terminalsStore.setActive(target);
+					} else {
+						await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
+					}
 				} else {
+					// Eagerly restore terminals when a pane layout was loaded from disk —
+					// the layout references terminal IDs that must exist for panes to render.
+					// Without this, the split layout shows empty boxes after a fresh start.
 					await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
 				}
-			} else {
-				// Eagerly restore terminals when a pane layout was loaded from disk —
-				// the layout references terminal IDs that must exist for panes to render.
-				// Without this, the split layout shows empty boxes after a fresh start.
-				await deps.handleBranchSelect(firstPath, firstRepo.activeWorkspaceId);
 			}
-			return;
 		}
+	} finally {
+		mdTabsStore.restoreAfterReload();
 	}
 
 	// Lazy restore: don't create terminals on startup.

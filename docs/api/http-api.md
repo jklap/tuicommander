@@ -193,7 +193,7 @@ failures spend one shared budget. The service worker never caches
 
 ## Server Limits
 
-Every route on both the desktop and remote routers is subject to two bounds
+Both the desktop and remote routers apply request bounds
 (`with_server_limits` in `mcp_http/mod.rs`):
 
 - **`408 Request Timeout`** — a handler that has not produced a response within
@@ -203,6 +203,9 @@ Every route on both the desktop and remote routers is subject to two bounds
   body always wins the race instead of a bare 408 (`docs/backend/mcp-http.md` →
   "Server Limits"). SSE (`/events`) and WebSocket endpoints return their
   headers immediately and then stream for as long as they like, unaffected.
+  Streamed `/fs/upload-copy` uses a 30 s idle deadline per body chunk instead
+  of this total response deadline. A separate 17-minute total receive budget
+  also prevents trickling clients from retaining an upload slot.
 - **`413 Payload Too Large`** — a request body over 2 MB is refused rather than
   buffered.
 
@@ -689,6 +692,8 @@ needs, each one the desktop Tauri payload plus a `type` key:
 
 Frames the server has no grid consumer for are dropped rather than forwarded, so this
 socket does not carry `output`, `parsed` or the activity pulse.
+
+**Initial replay.** Attachment sends a full binary viewport immediately. When a live grid watch has no available frame, the server sends `{"type":"grid-replay-empty"}` instead. This transport control message confirms a healthy empty replay; it is not a PTY event and has no Tauri listener. It uses the same negotiated text framing as the side-channel events. Clients can finish their initial replay deadline on a binary viewport or this marker, while unrelated text events do not establish grid health.
 
 **Dropped-frame recovery.** Binary frames are deltas, and the `watch` channel behind
 this socket keeps only the newest value — a client that cannot keep up skips frames
@@ -1578,6 +1583,10 @@ GET /mcp/instructions
 Returns dynamic server instructions for the MCP bridge binary as `{"instructions": "..."}`.
 
 ## Filesystem Endpoints
+
+The sender-side `fs_transfer_remote_paths` coordinator is desktop IPC only (`INTENTIONALLY_UNMAPPED`), with no `/fs/transfer-remote` HTTP route. Data leaves the machine; Finder source paths cannot be gated to registered repository roots, so HTTP token holders must not trigger exfiltration. The desktop coordinator uses the existing authenticated daemon connection; only the receiving upload endpoint is exposed over HTTP.
+
+`POST /fs/upload-copy?destDir=<absolute-directory>&name=<leaf-name>&directory=true|false` accepts a streamed, uncompressed tar body under the existing daemon authentication. All archive paths must start with `name`; only files and directories are accepted. Limits: 256 MiB of archive and extracted file data, 10,000 entries, two concurrent uploads. Destination resolution uses registered repository directory capabilities, rejects traversal and escapes through symlinks, and never follows a target symlink. Staging is removed on failure/disconnect; the completed top-level file or directory is published with a no-replace atomic rename. A concurrently created target is skipped; existing targets drain the bounded body before returning `skipped`. The upload is exempt from the global response timeout and aborts after 30 s without a body chunk. Its total receive budget is 17 minutes. A connection below roughly 2 Mbit/s cannot finish a 256 MiB drop within that budget. The concurrency permit lasts through extraction even if the handler is cancelled. Filenames use the receiver platform rules (POSIX permits colon and backslash); Windows rejects colon and backslash. Unix tar permissions are masked to `0755` for executable files/directories and `0644` for ordinary files, with the receiving umask applied and no privilege bits. Normal request-drop cleanup removes staging. Abrupt process termination (for example, kill -9) can leave a `.tuic-upload-<uuid>` directory in the destination; there is no startup sweep, and the leftover can be removed manually once no upload is running. Final directory permissions are applied after publication; a permission failure is logged and the already published copy remains successful. The sender uses the existing `tui-session` cookie header; tokens are absent from upload URLs and reqwest error text. No new listener or credential is created.
 
 `POST /attachments/upload?kind=pty|acp&id=<session-or-connection-id>&name=<filename>`
 streams a binary request body into the target's working directory at

@@ -40,6 +40,7 @@ const { FileBrowserPanel } = await import("../../../components/FileBrowserPanel/
 const { uiStore } = await import("../../../stores/ui");
 const { mdTabsStore } = await import("../../../stores/mdTabs");
 const { editorTabsStore } = await import("../../../stores/editorTabs");
+const { repositoriesStore } = await import("../../../stores/repositories");
 
 const dir = (name: string, path = name): DirEntry => ({
 	name,
@@ -155,6 +156,20 @@ const clickRow = (container: HTMLElement, name: string) => {
 };
 
 describe("FileBrowserPanel tree cache", () => {
+	// Catches: remote folder descendants losing the panel's actual repository owner.
+	it("exposes the repository connection on the native file-drop surface", () => {
+		const owner = vi.spyOn(repositoriesStore, "getConnectionId").mockReturnValue("mint");
+		try {
+			const { container } = render(() => (
+				<FileBrowserPanel visible={true} repoPath="/remote/repo" onClose={() => {}} onFileOpen={() => {}} />
+			));
+			expect(container.querySelector("#file-browser-panel")?.getAttribute("data-drop-connection-id")).toBe("mint");
+			expect(owner).toHaveBeenCalledWith("/remote/repo");
+		} finally {
+			owner.mockRestore();
+		}
+	});
+
 	it("clears cached children and expanded dirs when the repo changes", async () => {
 		listings.set("/repoA|.", [dir("src")]);
 		listings.set("/repoA|src", [file("from-repo-a.ts", "src/from-repo-a.ts")]);
