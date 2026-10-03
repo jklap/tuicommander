@@ -2548,3 +2548,14 @@ profile rules or allow/deny policy in `session/new`.
 ### Answers-only View
 
 Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marked answers and their tracked prompts. Turns without marked answers are omitted. Output before the first tracked prompt remains available as a prompt-less turn, from the retained history base. If no answers qualify, the view shows a one-line notice. Toggle the view again to return to the terminal.
+
+## Private secret forms
+
+The `secret` MCP tool opens an isolated native form for requested sensitive
+fields and returns names/status only. Approved argv commands receive values in
+the child environment; pipe output is masked for exact and common encoded
+values, including wraps. User-created templates bind program, subcommand, names
+and directory. Values and templates live only until exit. One-time nonce links
+support browser entry on a separate origin; phones require existing Tailscale
+HTTPS. TUIC inspection tools are gated while a form is open. See
+[Private secret forms](user-guide/secrets.md) for limits and consent.

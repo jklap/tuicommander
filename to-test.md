@@ -4476,3 +4476,18 @@ or credential is touched.
 - [ ] Remote empty-grid replay control message (#1421-733e): staged Rust WS change requires a rebuilt backend; targeted loopback WS test and isolated headless fixture cover it before deployment. Keep the running desktop and mac-mint daemon intact until the coordinator schedules deployment.
 
 - [ ] Remote replay rollout (#1421-733e): deploy the updated daemon before the updated client. An older daemon without the explicit empty-replay marker can trigger a false 15-second stream error on a healthy idle session whose initial grid is unavailable. Coordinate deployment after live PTYs can be safely preserved or closed; do not restart mac-mint during this incident.
+
+## Private secret forms (#1435-6e1d) — Rust restart required
+
+- [ ] After Boss restarts the desktop backend, request username/password/OTP
+  fields with synthetic data. Verify the separate native window, exact reduced
+  schema, main-window bootstrap rejection, decline, close and timeout cleanup.
+- [ ] With existing Tailscale HTTPS, submit a desktop-opened request from the
+  dedicated phone link; verify one-time consumption and cleared input UI.
+- [ ] Verify exact argv/name/directory approval and template consent. Run a
+  trusted test executable that prints synthetic encoded/wrapped values; confirm
+  masked output and no terminal/tcap entries.
+
+These desktop checks wait for Boss's restart; no second desktop instance is
+launched by the implementer. Security critic and cross-platform validation are
+required before treating the feature as complete.
