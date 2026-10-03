@@ -21,6 +21,8 @@ use crate::worktree::{
 
 #[cfg(feature = "desktop")]
 mod commands;
+#[cfg(test)]
+mod critic_1420_r2;
 #[cfg(feature = "desktop")]
 pub(crate) use commands::*;
 
