@@ -1,3 +1,6 @@
+use alacritty_terminal::grid::{Dimensions, Grid};
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::cell::{Cell, Flags};
 use tuic_terminal::terminal_grid::TerminalGrid;
 
 // Catches history purge inventing a composer origin for retained literal content.
@@ -48,4 +51,44 @@ fn copied_selection_full_erase_above_restores_known_origin() {
     let _ = grid.process(b"\x1b[3J\x1b[1;80H\x1b[1J\x1b[H");
     let _ = grid.process("❯ new composer".as_bytes());
     assert_eq!(grid.get_selection_text(0, 0, 0, 79), "new composer");
+}
+
+// Catches forgetting that a blank-looking WRAPLINE row still carries lost content origin.
+#[test]
+fn copied_selection_history_removal_distinguishes_blank_content_and_wrap_predecessors() {
+    for (predecessor, wrapped, expected_unknown) in
+        [(' ', false, false), ('x', false, true), (' ', true, true)]
+    {
+        for drop_tail in [false, true] {
+            let mut grid: Grid<Cell> = Grid::new(2, 10, 2);
+            grid[Line(0)][Column(0)].c = predecessor;
+            if wrapped {
+                grid[Line(0)][Column(9)].flags.insert(Flags::WRAPLINE);
+            }
+            grid.scroll_up(&(Line(0)..Line(2)), 1);
+            grid[Line(0)][Column(0)].c = 's';
+            if drop_tail {
+                grid.drop_newest_history(1);
+            } else {
+                grid.clear_history();
+            }
+            assert_eq!(grid[Line(0)].copy_origin_unknown, expected_unknown);
+        }
+    }
+}
+
+// Catches history removal poisoning a fresh blank survivor after real content was lost.
+#[test]
+fn copied_selection_history_removal_leaves_blank_survivor_known() {
+    for drop_tail in [false, true] {
+        let mut grid: Grid<Cell> = Grid::new(2, 10, 2);
+        grid[Line(0)][Column(0)].c = 'x';
+        grid.scroll_up(&(Line(0)..Line(2)), 1);
+        if drop_tail {
+            grid.drop_newest_history(1);
+        } else {
+            grid.clear_history();
+        }
+        assert!(!grid[grid.topmost_line()].copy_origin_unknown);
+    }
 }
