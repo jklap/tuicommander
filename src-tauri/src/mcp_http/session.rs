@@ -920,21 +920,7 @@ pub(super) async fn get_foreground_process(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let agent = (|| -> Option<String> {
-        let entry = state.session_maps.sessions.get(&session_id)?;
-        let session = entry.value().lock();
-        #[cfg(not(windows))]
-        {
-            let pgid = session.master.process_group_leader()?;
-            let name = crate::pty::process_name_from_pid(pgid as u32)?;
-            crate::pty::classify_agent(&name).map(|s| s.to_string())
-        }
-        #[cfg(windows)]
-        {
-            drop(session);
-            None
-        }
-    })();
+    let agent = crate::pty::refresh_session_agent(&state, &session_id);
 
     match agent {
         Some(name) => (StatusCode::OK, Json(serde_json::json!({"agent": name}))),
@@ -943,9 +929,8 @@ pub(super) async fn get_foreground_process(
 }
 
 // --- PTY/terminal read-state queries (browser/remote parity, story 062). ---
-// These mirror the desktop-only `#[tauri::command]`s in pty.rs by reading the
-// same AppState directly — the commands themselves are cfg'd out of the remote
-// build, so the access logic is replicated here (as get_foreground_process does).
+// These mirror desktop commands through the same AppState. Foreground identity
+// discovery uses the shared pty::refresh_session_agent path on both transports.
 
 /// Shell state atom ("busy"/"idle") for a session, or null if never produced output.
 pub(super) async fn get_shell_state(
@@ -2332,6 +2317,119 @@ pub(super) async fn get_session_shell_family(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: HTTP detects a hand-launched agent but leaves the backend as a
+    /// shell, rejecting submit and refusing a mail wake in the headless build.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_foreground_hand_launched_claude_enables_submit_and_mail_wake() {
+        use crate::pty::{AgentSubmissionWrite, PtyDelivery, SHELL_IDLE};
+        use crate::test_support::ForegroundIdentityProbe;
+
+        let state = super::super::tests::test_state();
+        let sid = "http-hand-launched-claude";
+        let probe = ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+        let response = get_foreground_process(State(state.clone()), Path(sid.into()))
+            .await
+            .into_response();
+        let snapshot = state.session_state_with_shell(sid).unwrap();
+        let submit = crate::pty::write_agent_submission_to_pty(&state, sid, "task");
+        // Model the next independently confirmed idle window, after submit.
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .store(SHELL_IDLE, Ordering::Release);
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .confirm_idle();
+        let wake_allowed = crate::pty::managed_mail_wake_allowed(&state, sid);
+        let wake = crate::pty::deliver_notice_to_pty(&state, sid, crate::pty::PEER_MAIL_WAKE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            body["agent"], "claude",
+            "the OS foreground probe must detect the executable"
+        );
+        assert_eq!(
+            snapshot.agent_state.as_deref(),
+            Some("idle"),
+            "HTTP must persist detected identity for lifecycle consumers"
+        );
+        assert!(
+            matches!(submit, AgentSubmissionWrite::Complete { .. }),
+            "submit: {submit:?}"
+        );
+        assert!(
+            wake_allowed,
+            "a recognised idle agent must be eligible for mail wake"
+        );
+        assert_eq!(wake, PtyDelivery::Typed);
+        let written = probe.bytes.lock().unwrap().clone();
+        assert!(written.windows(4).any(|part| part == b"task"));
+        assert!(
+            String::from_utf8(written)
+                .unwrap()
+                .contains("agent action=inbox")
+        );
+    }
+
+    /// Catches: the HTTP path loses configured wrapper identity, or promotes a
+    /// plain shell/unknown executable to an agent and enables unsafe injection.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_foreground_preserves_wrapper_fallback_and_rejects_plain_shells() {
+        for (name, preset, expected) in [
+            ("cat", None, None),
+            ("bash", None, None),
+            ("cat", Some("claude"), Some("claude")),
+            ("bash", Some("claude"), None),
+        ] {
+            let state = super::super::tests::test_state();
+            let sid = "http-foreground-neighbour";
+            let probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, name);
+            state
+                .session_maps
+                .session_states
+                .get_mut(sid)
+                .unwrap()
+                .agent_type = preset.map(str::to_string);
+            let response = get_foreground_process(State(state.clone()), Path(sid.into()))
+                .await
+                .into_response();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                body["agent"],
+                serde_json::json!(expected),
+                "{name}, preset={preset:?}"
+            );
+            if preset.is_none() {
+                assert_eq!(
+                    state.session_state_with_shell(sid).unwrap().agent_state,
+                    None
+                );
+                assert!(matches!(
+                    crate::pty::write_agent_submission_to_pty(&state, sid, "task"),
+                    crate::pty::AgentSubmissionWrite::Rejected {
+                        reason: "not_managed_agent",
+                        ..
+                    }
+                ));
+                assert!(probe.bytes.lock().unwrap().is_empty());
+            }
+        }
+    }
 
     /// A silent agent may use the full confirmation window, but the async
     /// request handler must yield its runtime worker during that window.

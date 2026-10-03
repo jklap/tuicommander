@@ -361,3 +361,111 @@ pub(crate) fn insert_session_with_writer(
         }),
     );
 }
+
+/// A real foreground OS executable with a chosen basename, plus recorded PTY
+/// writes. This probes process identity, never a third-party CLI's behavior.
+#[cfg(unix)]
+pub(crate) struct ForegroundIdentityProbe {
+    pub(crate) bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    state: std::sync::Arc<crate::state::AppState>,
+    session_id: String,
+    _scratch: tempfile::TempDir,
+}
+
+#[cfg(unix)]
+impl ForegroundIdentityProbe {
+    pub(crate) fn new(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        name: &str,
+    ) -> Self {
+        use parking_lot::Mutex;
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use std::sync::{Arc, atomic::AtomicBool};
+
+        let scratch = tempfile::tempdir_in(test_temp_root()).unwrap();
+        let executable = scratch.path().join(name);
+        std::fs::copy("/bin/cat", &executable).unwrap();
+        // macOS kills a relocated Apple platform binary (verified exit -9).
+        // Ad-hoc signing the scratch copy makes it a local identity probe.
+        #[cfg(target_os = "macos")]
+        {
+            let signed = std::process::Command::new("/usr/bin/codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&executable)
+                .output()
+                .expect("sign scratch identity probe");
+            assert!(
+                signed.status.success(),
+                "codesign: {}",
+                String::from_utf8_lossy(&signed.stderr)
+            );
+        }
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut child = pair
+            .slave
+            .spawn_command(CommandBuilder::new(&executable))
+            .unwrap();
+        let child_pid = child.process_id().unwrap();
+        // fork precedes setsid/exec. This is setup, not a latency assertion;
+        // nextest bounds a genuine hang without charging startup to behavior.
+        while crate::pty::process_name_from_pid(child_pid).as_deref() != Some(name)
+            || pair.master.process_group_leader() != Some(child_pid as i32)
+        {
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("identity probe exited before setup: {status:?}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        state.session_maps.sessions.insert(
+            sid.into(),
+            Mutex::new(crate::state::PtySession {
+                writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
+                    bytes: bytes.clone(),
+                }))),
+                master: pair.master,
+                _child: child,
+                paused: Arc::new(AtomicBool::new(false)),
+                worktree: None,
+                cwd: None,
+                display_name: None,
+                display_name_is_custom: false,
+                display_name_from_spawn: false,
+                is_remote: false,
+                shell: "/bin/sh".into(),
+            }),
+        );
+        agent_session(&state, sid, crate::pty::SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = None;
+        Self {
+            bytes,
+            state,
+            session_id: sid.into(),
+            _scratch: scratch,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ForegroundIdentityProbe {
+    fn drop(&mut self) {
+        if let Some((_, session)) = self.state.session_maps.sessions.remove(&self.session_id) {
+            let mut session = session.into_inner();
+            session._child.kill().expect("kill our identity probe");
+            session._child.wait().expect("reap our identity probe");
+        }
+    }
+}

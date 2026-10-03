@@ -279,6 +279,8 @@ Without this enforcement a single BSU whose ESU is delayed or lost freezes the t
 
 ### Headless Reader Thread
 
+Foreground agent detection is shared by the desktop command, HTTP foreground endpoint and backend silence timer. It stores the effective agent type and hook configuration in `session_states`; returning the name alone does not enable submit, mail wake or agent parsing. Known agent identities remain sticky through subprocess transitions. A non-shell wrapper can use a preset agent type, while a shell is never newly classified from that preset. An identity change reclassifies the existing terminal screen so a quiet, already-rendered composer does not retain a shell-era cache.
+
 The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
 
 PTY identity applies Claude's primary-screen environment control only while that agent's `prevent_alt_screen` setting is enabled. `apply_agent_screen_env` covers IPC, HTTP and MCP spawns before explicit caller environment values are installed. Rust also probes Codex, Grok and OpenCode when creating a shell PTY and exports supported flags and subcommand exclusions into its environment. The zsh, bash and fish wrappers apply those values to manually typed agent commands; `command <agent>` bypasses them. The same Rust policy builds structured launch arguments, with a bounded CLI help probe that retries inconclusive checks.

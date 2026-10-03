@@ -1619,6 +1619,19 @@ pub(crate) struct SilenceState {
 }
 
 impl SilenceState {
+    /// Keep semantic transitions and their output offsets consistent across
+    /// reader chunks and late foreground-identity discovery.
+    fn record_screen_activity(&mut self, activity: AgentScreenActivity, offset: u64) {
+        if self.cached_screen_activity != activity {
+            match activity {
+                AgentScreenActivity::Ready => self.last_ready_screen_offset = offset,
+                AgentScreenActivity::Working => self.last_working_screen_offset = offset,
+                _ => {}
+            }
+        }
+        self.cached_screen_activity = activity;
+    }
+
     fn close_open_intent(&mut self) -> Option<ParsedEvent> {
         let open = self.open_intent.take()?;
         let mut text = open.text;
@@ -2855,8 +2868,22 @@ fn normalized_process_name(value: &str) -> &str {
 fn classify_agent_name_or_path(value: &str) -> Option<&'static str> {
     let normalized = value.to_ascii_lowercase();
     let basename = normalized_process_name(&normalized);
-    classify_agent(basename)
-        .or_else(|| normalized.split(['/', '\\']).rev().find_map(classify_agent))
+    classify_agent(basename).or_else(|| {
+        // Claude installs version-number executables under this exact layout.
+        // Arbitrary agent-named ancestors do not identify the running program.
+        let parts: Vec<_> = normalized.split(['/', '\\']).collect();
+        let tail = parts.as_slice();
+        if tail.len() >= 3
+            && tail[tail.len() - 3] == "claude"
+            && tail[tail.len() - 2] == "versions"
+            && basename.starts_with(|c: char| c.is_ascii_digit())
+            && basename.chars().all(|c| c.is_ascii_digit() || c == '.')
+        {
+            Some("claude")
+        } else {
+            None
+        }
+    })
 }
 
 fn is_persistent_agent_helper(process: &ProcessTreeEntry) -> bool {
@@ -4960,6 +4987,10 @@ fn spawn_silence_timer(
             {
                 silence.lock().expire_orchestrator_notice_uncertainty();
             }
+
+            // Discovery must not depend on a frontend polling the desktop IPC.
+            // Headless/manual launches need the same parser and mail eligibility.
+            refresh_session_agent(&state, &session_id);
 
             // Reconcile high-confidence screen evidence before the silence
             // fallback. Working here means Codex's presence-based status line
@@ -7513,18 +7544,7 @@ impl ChunkProcessor {
             // changed since this classification unless a later chunk arrives
             // to overwrite it, so the timer reuses this instead of calling
             // `detect_agent_screen_activity` itself — see `cached_screen_activity`.
-            if sl.cached_screen_activity != screen_activity {
-                match screen_activity {
-                    AgentScreenActivity::Ready => {
-                        sl.last_ready_screen_offset = output_offset_after_chunk;
-                    }
-                    AgentScreenActivity::Working => {
-                        sl.last_working_screen_offset = output_offset_after_chunk;
-                    }
-                    _ => {}
-                }
-            }
-            sl.cached_screen_activity = screen_activity;
+            sl.record_screen_activity(screen_activity, output_offset_after_chunk);
             sl.on_chunk(
                 regex_found_question,
                 last_q_line,
@@ -8699,7 +8719,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
     format!("{}…", text.chars().take(max).collect::<String>())
 }
 
-fn agent_submission_rejection(
+fn agent_composer_rejection(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
@@ -8722,15 +8742,72 @@ fn agent_submission_rejection(
     {
         return Some(("awaiting_input", "empty"));
     }
+    if !submission_ready(state, session_id, human_reply) {
+        return Some(("agent_not_ready", "empty"));
+    }
+    None
+}
+
+/// Explain a safe submission refusal without changing delivery or composer state.
+pub(crate) fn agent_submission_rejection_detail(
+    state: &AppState,
+    session_id: &str,
+    reason: &str,
+) -> String {
+    match reason {
+        "session_not_found" => "The PTY session is closed or unknown. List sessions and choose a live terminal.".into(),
+        "observation_unavailable" => "The PTY output observer is not available, so submission cannot be acknowledged. Wait for session initialization or choose a live terminal.".into(),
+        "not_managed_agent" => {
+            let foreground = session_leaf_pid(state, session_id)
+                .and_then(process_name_from_pid)
+                .unwrap_or_else(|| "unknown (process lookup unavailable)".into());
+            format!("No supported agent has been detected in this PTY; foreground process: {foreground}. Start a supported agent and wait for backend detection, or launch a custom wrapper through an agent run configuration. TUIC_SESSION identifies the terminal, not an agent.")
+        }
+        "partial_composer" => "The composer contains unfinished user input. Submit or clear that input before sending another command.".into(),
+        "awaiting_input" => "An approval or question owns the composer. Have the user answer it, or use an explicit human reply; automated submit must wait.".into(),
+        "agent_not_ready" => {
+            if state.session_maps.silence_states.get(session_id)
+                .is_some_and(|silence| silence.lock().injection_delivery_uncertain)
+            {
+                "A previous PTY write has an uncertain outcome. Inspect terminal output and wait for confirmed readiness; do not resend text that may already have reached the agent.".into()
+            } else if state.session_maps.shell_states.get(session_id)
+                .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_BUSY)
+            {
+                "The agent is still busy or starting. Wait for its idle composer or Stop signal before submitting.".into()
+            } else {
+                "The backend has not confirmed a ready agent composer. Bring the normal prompt into view or wait for an agent idle hook; then retry.".into()
+            }
+        }
+        "queued_commands_pending" => "Earlier commands still own the delivery queue. Wait for them to drain or inspect and remove unwanted queued entries before submitting.".into(),
+        "claim_lost" => "The composer changed while submission was claiming it. Wait for confirmed readiness and retry this unwritten command.".into(),
+        _ => "The terminal could not safely accept input. Inspect its state and output before retrying.".into(),
+    }
+}
+
+/// Describe why a terminal could not receive an inbox wake; never drains a queue.
+pub(crate) fn agent_mail_wake_detail(state: &AppState, session_id: &str) -> String {
+    let reason = agent_composer_rejection(state, session_id, false)
+        .map(|(reason, _)| agent_submission_rejection_detail(state, session_id, reason))
+        .unwrap_or_else(|| "The terminal wake path is unavailable. Inspect the recipient's lifecycle before retrying.".into());
+    format!(
+        "{reason} Mail remains in the inbox; the recipient can read it with agent action=inbox or wait."
+    )
+}
+
+fn agent_submission_rejection(
+    state: &AppState,
+    session_id: &str,
+    human_reply: bool,
+) -> Option<(&'static str, &'static str)> {
+    if let Some(rejection) = agent_composer_rejection(state, session_id, human_reply) {
+        return Some(rejection);
+    }
     // Readiness is checked BEFORE the queue, and the order is the fix. An agent
     // whose idle is unconfirmed can never drain its queue — `flush_pending_injections`
     // is gated on the same predicate — so reporting `queued_commands_pending`
     // named the symptom and hid the cause, and the caller retried submit for
     // minutes against a queue that by construction could not move.
     // `agent_not_ready` is the truth, and it is the state that actually changes.
-    if !submission_ready(state, session_id, human_reply) {
-        return Some(("agent_not_ready", "empty"));
-    }
     // A confident question belongs to the human. Its parked automated entries
     // cannot drain until the answer clears the question, and must not prevent
     // that answer from reaching the composer.
@@ -12217,6 +12294,124 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
         CloseHandle(snapshot);
         found
     }
+}
+
+/// Discover and record the foreground agent for desktop and headless consumers.
+/// Identity alone never confirms readiness or bypasses the composer guards.
+pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Option<String> {
+    const SHELLS: &[&str] = &[
+        "zsh",
+        "bash",
+        "fish",
+        "sh",
+        "dash",
+        "ksh",
+        "csh",
+        "tcsh",
+        "nushell",
+        "nu",
+        "powershell",
+        "pwsh",
+        "cmd",
+    ];
+
+    let (detected, fg_is_shell, fg_name) = {
+        let entry = state.session_maps.sessions.get(session_id)?;
+        let session = entry.value().lock();
+        #[cfg(not(windows))]
+        {
+            let pgid = session.master.process_group_leader()?;
+            let name = process_name_from_pid(pgid as u32)?;
+            let is_shell = SHELLS.contains(&name.as_str());
+            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
+        }
+        #[cfg(windows)]
+        {
+            let child_pid = session._child.process_id()?;
+            let leaf = deepest_descendant_pid(child_pid)?;
+            let name = process_name_from_pid(leaf)?;
+            let is_shell = SHELLS.contains(&name.as_str());
+            (classify_agent(&name).map(|s| s.to_string()), is_shell, name)
+        }
+    };
+
+    // Fallback: unrecognised non-shell foreground + pre-set agent type → use preset.
+    // Covers custom commands (aliases, symlinks, wrappers) from run configs.
+    let effective = detected.clone().or_else(|| {
+        if fg_is_shell {
+            return None;
+        }
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .and_then(|s| s.agent_type.clone())
+    });
+
+    if detected.is_none()
+        && !fg_is_shell
+        && effective.is_none()
+        && let Some(mut entry) = state.session_maps.session_states.get_mut(session_id)
+        && !entry.unknown_foreground_warned
+    {
+        entry.unknown_foreground_warned = true;
+        tracing::warn!(session_id, foreground_process = %fg_name, "Unrecognized non-shell foreground process; if this is an agent, Enter uses the safe gap");
+    }
+
+    // Mirror the detected agent type into session_states so the PTY reader's
+    // `agent_active_for_parse` check flips on and plain-prefix structured
+    // tokens (`intent:`, `action:`, `suggest:`) start being parsed. Without
+    // this sync, sessions started by running `claude` inside a plain shell
+    // (as opposed to via the /agent spawn route) never enable plain-prefix
+    // parsing, so intents never rename the tab.
+    //
+    // Sticky: only set on Some, never clear on None. Foreground-pgid sampling
+    // is inherently flaky during subprocess transitions — when claude spawns a
+    // short-lived grandchild (git, sed, rg) the pgid leader briefly points to
+    // that unrecognized binary and classify_agent returns None. Writing that
+    // None back would flip agent_active off and drop the very next
+    // `suggest:`/`intent:` token even though claude is still the live agent.
+    // Frontend useAgentPolling.ts applies the same stickiness (streak +
+    // source=idle) on its store mirror; backend must match or the parser
+    // gates off while the UI still shows the agent active. Session teardown
+    // clears session_states entirely, so no explicit reset is needed here.
+    let identity_changed = if let Some(mut entry) =
+        state.session_maps.session_states.get_mut(session_id)
+        && effective.is_some()
+        && entry.agent_type != effective
+    {
+        entry.agent_type = effective.clone();
+        entry.hook_instrumented = hook_instrumented_for(
+            &crate::config::load_agents_config(),
+            entry.agent_type.as_deref(),
+        );
+        true
+    } else {
+        false
+    };
+
+    // The screen may already be quiet when the process is discovered. Its
+    // cached shell-era verdict is not evidence about the newly known agent.
+    // Use the reader's grid -> silence lock order; future chunks share the cache.
+    if identity_changed && let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
+        let vt = vt.lock();
+        let activity = detect_agent_screen_activity_at(
+            effective.as_deref(),
+            &vt.screen_rows(),
+            Some(vt.grid_columns()),
+        );
+        let offset = state
+            .session_maps
+            .output_buffers
+            .get(session_id)
+            .map(|buffer| buffer.lock().total_written)
+            .unwrap_or(0);
+        if let Some(silence) = state.session_maps.silence_states.get(session_id) {
+            silence.lock().record_screen_activity(activity, offset);
+        }
+    }
+
+    effective
 }
 
 /// Walk the process tree from `root_pid` and return the deepest descendant PID.

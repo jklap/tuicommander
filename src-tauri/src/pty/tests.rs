@@ -680,6 +680,17 @@ fn test_classify_agent_version_strip_does_not_overreach() {
     assert_eq!(classify_agent("grok-wrapper"), None);
     assert_eq!(classify_agent("not-grok"), None);
     assert_eq!(classify_agent("postgres-16"), None);
+    // Catches: installer support misidentifies any agent-named ancestor.
+    assert_eq!(classify_agent_name_or_path("/opt/pi/tool"), None);
+    assert_eq!(classify_agent_name_or_path("/opt/claude/bin/tool"), None);
+    assert_eq!(
+        classify_agent_name_or_path("/opt/claude/versions/tool"),
+        None
+    );
+    assert_eq!(
+        classify_agent_name_or_path("/opt/claude/versions/2.1.87"),
+        Some("claude")
+    );
 }
 
 /// The ready-screen adapter is the whole point of detecting the agent: grok
@@ -21051,4 +21062,63 @@ fn retry_enter_only_when_composer_retained_and_clause_two() {
         !retry("retry-flush-fails", RetryWriterFault::Flush),
         "a failed flush is not a confirmed submission"
     );
+}
+
+/// Catches: a headless terminal needs UI polling to discover an agent, or retains
+/// a shell-era screen cache after the foreground identity becomes known.
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_foreground_timer_discovers_claude_and_reclassifies_quiet_screen() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "headless-foreground-discovery";
+    let _probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-askuser-esc-20260929.tcap",
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    // Recorded ready composer after Esc, before record 195 paints the next draft.
+    for record in capture.records.into_iter().take(195) {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            vt.process(&record.data);
+            state
+                .session_maps
+                .output_buffers
+                .get(sid)
+                .unwrap()
+                .lock()
+                .write(&record.data);
+        }
+    }
+    let output_offset = state
+        .session_maps
+        .output_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .total_written;
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let running = Arc::new(AtomicBool::new(true));
+    // Paused Tokio time advances the timer without asserting startup latency.
+    tokio::time::pause();
+    spawn_silence_timer(silence.clone(), running.clone(), sid.into(), state.clone());
+    // Sleeping past the first scheduled tick lets Tokio dispatch its sleeper;
+    // advance(interval) followed by yield can inspect before that dispatch.
+    tokio::time::sleep(SILENCE_CHECK_INTERVAL * 2).await;
+    running.store(false, Ordering::Release);
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("idle")
+    );
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready
+    );
+    assert_eq!(silence.lock().last_ready_screen_offset, output_offset);
 }

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Remote agent detection** — Agents started by hand in a headless terminal gain backend agent state, safe submit and mail wake. HTTP and desktop foreground detection now share the state update. Rejected submissions and unavailable mail wakes explain the cause and the next action.
+
 - **Hands-free controls** — Start conversation uses the accent action style. A coloured Running/Stopped indicator keeps the current state visible.
 
 - **Sidebar agents toggle** — A separate, always-visible chevron controls the agent list. The status icon selects the branch, and collapsed counts stay beside the chevron.

@@ -381,6 +381,8 @@ ParsedEvent::ShellState {
 
 Emitted by the reader thread on real-output→busy and idle transitions. The frontend consumes this instead of deriving busy/idle from raw PTY data. See `docs/backend/pty.md` for idle detection details.
 
+The backend foreground probe enables agent parsing for hand-launched agents in both desktop and headless sessions. HTTP foreground queries update the same stored identity. Screen activity cached before identity discovery is reclassified when that identity changes.
+
 Ordinary output and spinner repaints cannot override a protocol idle marker.
 The reader preserves that evidence until the ranked busy decision, and the
 ready-screen timer preserves its rank. A new submission or accepted semantic
