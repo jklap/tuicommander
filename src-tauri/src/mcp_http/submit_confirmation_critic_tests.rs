@@ -1,6 +1,4 @@
 //! Submit-confirmation gap found by the 1423 path audit (MCP submit receipt).
-use super::*;
-
 /// Catches: `acknowledged` meaning "any byte after Enter". Codex re-renders its
 /// composer while it ingests a long paste; when the Enter was swallowed that
 /// repaint still carries the text, and reporting `acknowledged: true,

@@ -8618,8 +8618,8 @@ pub(crate) fn test_validate_mcp_repo_path(path: &str) -> Result<(), serde_json::
 mod tests {
     use super::*;
 
-    #[path = "../../submit_confirmation_critic_tests.rs"]
-    mod submit_confirmation_critic;
+    // Needs this module's private helpers, so it is textually included.
+    include!("submit_confirmation_critic_tests.rs");
     // Only the cfg(unix) PTY tests below buffer real output.
     #[cfg(unix)]
     use crate::OutputRingBuffer;
