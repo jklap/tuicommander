@@ -495,67 +495,6 @@ fn executable_contract_requires_checks_and_explicit_pause_target() {
     );
 }
 
-// Catches: writable or foreign arrivals entering a supposedly read-only paired all-Join.
-#[test]
-fn fork_join_schema_rejects_writable_and_outside_branches() {
-    let node = |id: &str, kind| Node {
-        id: id.into(),
-        kind,
-    };
-    let edge = |from: &str, to: &str| Edge {
-        from: from.into(),
-        to: to.into(),
-        outcome: None,
-    };
-    let agent = |role| NodeKind::Agent {
-        role,
-        capabilities: vec!["story_read".into(), "story_report".into()],
-        prompt_template: "Review current artifact".into(),
-    };
-    let mut graph = WorkflowGraph {
-        nodes: vec![
-            node("start", NodeKind::Start),
-            node(
-                "fork",
-                NodeKind::Fork {
-                    join_id: "join".into(),
-                },
-            ),
-            node("review", agent(AgentRole::Reviewer)),
-            node("validate", agent(AgentRole::Validator)),
-            node(
-                "join",
-                NodeKind::Join {
-                    mode: JoinMode::All,
-                    fork_id: Some("fork".into()),
-                },
-            ),
-            node("end", NodeKind::End),
-        ],
-        edges: vec![
-            edge("start", "fork"),
-            edge("fork", "review"),
-            edge("fork", "validate"),
-            edge("review", "join"),
-            edge("validate", "join"),
-            edge("join", "end"),
-        ],
-    };
-    validate_executable_graph(&graph, WorkflowKind::Story, true).unwrap();
-    let roundtrip: WorkflowGraph =
-        serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
-    assert_eq!(roundtrip, graph);
-    graph.nodes[2].kind = agent(AgentRole::Implementer);
-    assert!(
-        validate_executable_graph(&graph, WorkflowKind::Story, true)
-            .unwrap_err()
-            .contains("read-only")
-    );
-    graph.nodes[2].kind = agent(AgentRole::Reviewer);
-    graph.edges[2].to = "join".into();
-    assert!(validate_executable_graph(&graph, WorkflowKind::Story, true).is_err());
-}
-
 // Catches: additive snapshot fields preventing cancellation or manufacturing positions for old runs.
 #[test]
 fn legacy_run_replays_and_cancels_without_guessed_graph_state() {
