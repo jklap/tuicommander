@@ -305,8 +305,11 @@ async fn http_submission_rejects_guessed_and_replayed_nonce_without_echoing_valu
     }
 }
 
+// Catches: direct upstream MCP calls bypassing the private-form inspection gate.
 #[tokio::test]
 async fn open_form_blocks_native_and_proxied_inspection_tools() {
+    use axum::{body::Body, extract::ConnectInfo, http::Request};
+    use tower::ServiceExt;
     let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
     state.config.write().disabled_native_tools.clear();
     state
@@ -334,16 +337,33 @@ async fn open_form_blocks_native_and_proxied_inspection_tools() {
         ),
         ("maccontrol__screenshot", serde_json::json!({})),
     ] {
-        let result = crate::mcp_http::mcp_transport::handle_mcp_tool_call(
-            &state,
-            "127.0.0.1:12345".parse().unwrap(),
-            tool,
-            &args,
-            None,
-        )
-        .await;
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": tool, "arguments": args}
+        });
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        let response = crate::mcp_http::build_router(state.clone(), false, true)
+            .oneshot(request)
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(result["result"]["isError"], true, "{tool}: {result}");
         assert!(
-            result.to_string().contains("inspection is disabled"),
+            result["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("inspection is disabled"),
             "{tool}: {result}"
         );
     }
