@@ -4514,4 +4514,4 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 ## Workflow recovery boundaries (story 960-8670) — Rust restart required
 
-- [ ] After Boss restarts the backend, verify restart recovery marks old attempts interrupted. On disposable active runs, a runtime reconciliation must preserve healthy attempts and intended effects; one corrupt run must not prevent a healthy run from recovering. Repair its snapshot and reopen: only the pending old run recovers, while workers started after the first open remain live. Startup Git-probe latency remains pending story 959-c69c.
+- [ ] After Boss restarts the backend, verify restart recovery marks old attempts interrupted. On disposable active runs, a runtime reconciliation must preserve healthy attempts and intended effects; one corrupt run must not prevent a healthy run from recovering. After a dependency-refresh failure during recovery, resume the run and start a worker; reopening must preserve that live worker. Failed recovery is not retried by later opens or runtime reconciliation. Startup Git-probe latency remains pending story 959-c69c.
