@@ -51,7 +51,14 @@ export const AnswersPanel: Component<AnswersPanelProps> = (props) => {
 				cursor: "text",
 			}}
 		>
-			<For each={answered()}>
+			<For
+				each={answered()}
+				fallback={
+					<div role="status" style={{ color: "var(--fg-muted)" }}>
+						No marked answers in the retained terminal history.
+					</div>
+				}
+			>
 				{(turn) => (
 					<div data-turn style={{ "margin-bottom": "14px" }}>
 						<Show when={turn.prompt}>
