@@ -639,3 +639,95 @@ fn completed_check_cannot_advance_a_cancelled_run() {
             .is_empty()
     );
 }
+
+fn check_story_before_merge(flow: &Flow) -> RunReceipt {
+    flow.store
+        .execute_check(
+            &flow.run_id,
+            &flow.story_id,
+            "repository-integrity",
+            "check",
+            flow.sequence,
+        )
+        .unwrap()
+}
+
+#[test]
+fn integration_rejects_an_evil_merge_with_an_unreviewed_extra_file() {
+    // catches: valid merge parents certifying an unrelated file inserted by the integrator.
+    let (flow, _guard) = accepted_flow(false);
+    let checked = check_story_before_merge(&flow);
+    git(&flow.repo, &["merge", "--no-ff", "--no-commit", "story"]);
+    std::fs::write(flow.repo.join("unreviewed.txt"), "unreviewed\n").unwrap();
+    git(&flow.repo, &["add", "unreviewed.txt"]);
+    git(&flow.repo, &["commit", "-qm", "evil merge"]);
+    assert!(
+        flow.store
+            .record_integrated_story(&flow.run_id, &flow.story_id, "integrate", checked.sequence,)
+            .unwrap_err()
+            .contains("differs from the verified clean merge")
+    );
+    let snapshot = flow.store.snapshot(&flow.run_id).unwrap();
+    assert_eq!(snapshot.sequence, checked.sequence);
+    assert!(snapshot.stories[0].integration_receipt.is_none());
+    assert!(!story_integrated_at_revision(&flow.story_id, flow.revision).unwrap());
+}
+
+#[test]
+fn integration_rejects_an_evil_merge_that_drops_the_checked_story_change() {
+    // catches: correct-parent merges that silently remove the accepted story's content.
+    let (flow, _guard) = accepted_flow(false);
+    let checked = check_story_before_merge(&flow);
+    git(&flow.repo, &["merge", "--no-ff", "--no-commit", "story"]);
+    git(&flow.repo, &["rm", "-f", "story.txt"]);
+    git(&flow.repo, &["commit", "-qm", "drop reviewed content"]);
+    assert!(
+        flow.store
+            .record_integrated_story(&flow.run_id, &flow.story_id, "integrate", checked.sequence,)
+            .unwrap_err()
+            .contains("differs from the verified clean merge")
+    );
+    assert_eq!(
+        flow.store.snapshot(&flow.run_id).unwrap().sequence,
+        checked.sequence
+    );
+    assert!(!story_integrated_at_revision(&flow.story_id, flow.revision).unwrap());
+}
+
+#[test]
+fn integration_rejects_manual_conflict_resolution_without_separate_review() {
+    // catches: a conflict resolution receiving the source story's approval by ancestry alone.
+    let (flow, _guard) = accepted_flow(false);
+    let worktree = flow.store.snapshot(&flow.run_id).unwrap().stories[0]
+        .worktree_path
+        .clone()
+        .unwrap();
+    let worktree = std::path::Path::new(&worktree);
+    std::fs::write(flow.repo.join("README.md"), "canonical edit\n").unwrap();
+    git(&flow.repo, &["add", "README.md"]);
+    git(&flow.repo, &["commit", "-qm", "canonical edit"]);
+    std::fs::write(worktree.join("README.md"), "source edit\n").unwrap();
+    git(worktree, &["add", "README.md"]);
+    git(worktree, &["commit", "-qm", "source edit"]);
+    let checked = check_story_before_merge(&flow);
+    crate::git_cli::git_cmd(&flow.repo)
+        .args(["merge", "--no-ff", "--no-edit", "story"])
+        .run()
+        .expect_err("real merge must conflict");
+    std::fs::write(flow.repo.join("README.md"), "manually resolved\n").unwrap();
+    git(&flow.repo, &["add", "README.md"]);
+    git(&flow.repo, &["commit", "-qm", "manual resolution"]);
+    let error = flow
+        .store
+        .record_integrated_story(&flow.run_id, &flow.story_id, "integrate", checked.sequence)
+        .unwrap_err();
+    assert!(
+        error.contains("conflict resolution requires explicit human review"),
+        "{error}"
+    );
+    assert_eq!(
+        flow.store.snapshot(&flow.run_id).unwrap().sequence,
+        checked.sequence
+    );
+    assert!(!story_integrated_at_revision(&flow.story_id, flow.revision).unwrap());
+}

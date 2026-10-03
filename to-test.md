@@ -4507,3 +4507,7 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 ## Concurrent workflow checks (story 953-feed) — Rust restart required
 
 - [ ] After Boss restarts the Rust backend, run independent published checks on disposable workflow runs. Confirm both subprocesses can progress concurrently and a notification event during a check does not discard its receipt. Confirm a changed worktree or cancelled run cannot acquire a receipt. The current backend cannot load this Rust change without a manual restart.
+
+## Workflow merge-tree verification (story 957-dc59) — Rust restart required
+
+- [ ] After Boss restarts the backend, use disposable repositories to verify a clean checked merge receives a receipt, an extra integration-time file does not, and a manually resolved conflict requests separate review. The running Rust backend cannot load the change without a manual restart.
