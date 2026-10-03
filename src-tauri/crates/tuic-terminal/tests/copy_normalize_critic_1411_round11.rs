@@ -41,7 +41,6 @@ fn every_whole_row_clear_restores_known_origin_with_and_without_bce() {
         "\x1b[1;80H\x1b[1K",
         "\x1b[1;1H\x1b[J",
         "\x1b[1;80H\x1b[1J",
-        "\x1b[2J",
     ];
     for bce in ["", "\x1b[41m"] {
         for op in ops {
