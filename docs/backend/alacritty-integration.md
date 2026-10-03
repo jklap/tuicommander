@@ -129,8 +129,14 @@ unknown-origin flags; it never derives provenance from scroll counts. Removing
 the entire reprinted history tail carries prior oldest-row loss or the last
 removed WRAPLINE/wide-spacer boundary into surviving content. Without those
 signals, an unwrapped predecessor preserves a known line origin on drop.
-Full row reset or erase restores known origin
-without resetting absolute row counters. Unknown content stays literal; the
+Full row reset or erase (including ECH covering every column from column zero)
+restores known origin without resetting absolute row counters. Partial ECH keeps
+both provenance flags. Reflow truncation inspects discarded content just like
+history-cap trimming; dropping only blank rows preserves known origin.
+Known conservative behavior: RI/IL can move a flagged physical row away from
+the oldest position while retaining its flags. Clearing or dropping history
+does not flag a blank live row zero; unlike scroll/resize, it does not carry
+that ambiguous blank boundary into later writes. Unknown content stays literal; the
 same width-evidence rule rejoins wraps while preserving short typed lines
 and deeper content indentation. Pasted prompt glyphs remain content. This normalization is
 outside the Alacritty fork and is shared by desktop IPC and HTTP clients.
