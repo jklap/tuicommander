@@ -12920,3 +12920,6 @@ mod tests;
 
 #[cfg(test)]
 mod submit_confirmation_critic_tests;
+
+#[cfg(test)]
+mod submit_confirmation_critic2_tests;
