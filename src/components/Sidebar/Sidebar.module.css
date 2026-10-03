@@ -685,6 +685,8 @@
 .branchIconChevron {
   position: absolute;
   inset: 0;
+  /* A decorative chevron must not intercept clicks on the branch below it. */
+  pointer-events: none;
   display: flex;
   align-items: center;
   justify-content: center;
