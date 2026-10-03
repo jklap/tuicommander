@@ -307,7 +307,7 @@ fn pause_pins_resume_target_and_pending_request() {
         reopened
             .command(&run.id, "untyped-resume", RunCommand::Resume)
             .unwrap_err()
-            .contains("typed activation")
+            .contains("ResolvePause")
     );
     let invalid = RunCommand::Graph {
         transition: GraphTransition::ResolvePause {
