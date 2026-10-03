@@ -2,7 +2,7 @@
 
 ## Remote file copies
 
-The shared filesystem router exposes `/fs/transfer-remote` for sender-side copy coordination and streamed `/fs/upload-copy` on the daemon. Both use the existing authentication middleware. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
+The shared filesystem router exposes `/fs/transfer-remote` for sender-side copy coordination and streamed `/fs/upload-copy` on the daemon. Both use the existing authentication middleware. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. Uploads use the existing session-cookie header, a 30-second chunk idle deadline (exempt from the global response deadline), and hold their concurrency permit through blocking extraction. Daemon startup sweeps abandoned upload staging inside registered roots without following symlink directories. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
 
 ## CI logs
 
@@ -147,7 +147,7 @@ Both `build_router` and `build_remote_router` pass their assembled routes throug
 
 | Limit | Value | Response | Why |
 |-------|-------|----------|-----|
-| `TimeoutLayer` | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
+| Response timeout middleware | `REQUEST_TIMEOUT` = 301 s | `408 Request Timeout` | A wedged handler otherwise holds its connection forever. 301 s includes warming a linked worktree with large ignored build artifacts and remains far below "never" |
 | `DefaultBodyLimit` | `MAX_BODY_BYTES` = 2 MB, with route-scoped ACP prompt and voice import exceptions | `413 Payload Too Large` | Bounds buffered JSON request bodies |
 
 **301 s, not 300 s — the layer must outlast every deadline it wraps.**

@@ -15,6 +15,8 @@ use crate::fs::TransferResult;
 use crate::state::AppState;
 
 const MAX_UPLOAD_BYTES: u64 = 256 * 1024 * 1024;
+const UPLOAD_SIZE_ERROR: &str = "upload exceeds 256 MiB including archive headers";
+const UPLOAD_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const MAX_ENTRIES: usize = 10_000;
 const CHUNK_BYTES: usize = 64 * 1024;
 // At most two staged copies (including archive + extracted tree) at once.
@@ -106,7 +108,7 @@ fn source_entries(source: &Path) -> io::Result<Vec<(PathBuf, PathBuf)>> {
         .ok_or_else(|| io::Error::other("source has no filename"))?;
     let mut pending = vec![(source.to_owned(), PathBuf::from(name))];
     let mut entries = Vec::new();
-    let mut bytes = 0u64;
+    let mut bytes = 1024u64; // tar end-of-archive blocks
     while let Some((path, relative)) = pending.pop() {
         let meta = std::fs::symlink_metadata(&path)?;
         if !meta.is_dir() && !meta.is_file() {
@@ -114,11 +116,29 @@ fn source_entries(source: &Path) -> io::Result<Vec<(PathBuf, PathBuf)>> {
                 "source symlinks and special files are not supported",
             ));
         }
+        // GNU paths longer than the normal header carry an extra header and
+        // a NUL-terminated padded name. Sparse encoding is disabled below.
+        let name_bytes = relative.as_os_str().as_encoded_bytes().len() as u64;
+        let mut header = tar::Header::new_gnu();
+        let long_name_bytes = if header.set_path(&relative).is_err() {
+            512 + (name_bytes + 1).div_ceil(512) * 512
+        } else {
+            0
+        };
+        let content = if meta.is_file() { meta.len() } else { 0 };
         bytes = bytes
-            .checked_add(meta.len())
-            .ok_or_else(|| io::Error::other("upload size overflow"))?;
-        if bytes > MAX_UPLOAD_BYTES || entries.len() + pending.len() >= MAX_ENTRIES {
-            return Err(io::Error::other("upload exceeds 256 MiB or 10000 entries"));
+            .checked_add(512 + long_name_bytes)
+            .and_then(|n| {
+                content
+                    .checked_add(511)
+                    .and_then(|v| n.checked_add(v / 512 * 512))
+            })
+            .ok_or_else(|| io::Error::other(UPLOAD_SIZE_ERROR))?;
+        if bytes > MAX_UPLOAD_BYTES {
+            return Err(io::Error::other(UPLOAD_SIZE_ERROR));
+        }
+        if entries.len() + pending.len() >= MAX_ENTRIES {
+            return Err(io::Error::other("too many upload entries"));
         }
         if meta.is_dir() {
             for child in std::fs::read_dir(&path)? {
@@ -143,7 +163,7 @@ impl Write for ChunkWriter {
         let len = bytes.len().min(CHUNK_BYTES);
         self.bytes += len as u64;
         if self.bytes > MAX_UPLOAD_BYTES {
-            return Err(io::Error::other("archive exceeds 256 MiB"));
+            return Err(io::Error::other(UPLOAD_SIZE_ERROR));
         }
         self.sender
             .blocking_send(Ok(bytes[..len].to_vec()))
@@ -210,15 +230,13 @@ pub(crate) async fn send_copies(
                 .append_pair("destDir", dest)
                 .append_pair("name", &name)
                 .append_pair("directory", if directory { "true" } else { "false" });
-            if let Some(token) = token {
-                query.append_pair("token", token);
-            }
         }
         let (sender, receiver) = tokio::sync::mpsc::channel(2);
         let failure_sender = sender.clone();
         let producer = tokio::task::spawn_blocking(move || {
             let outcome = (|| {
                 let mut tar = tar::Builder::new(ChunkWriter { sender, bytes: 0 });
+                tar.sparse(false);
                 for (path, relative) in entries {
                     // Recheck types after the bounded source enumeration.
                     let meta = std::fs::symlink_metadata(&path)?;
@@ -239,17 +257,24 @@ pub(crate) async fn send_copies(
         let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
             receiver.recv().await.map(|chunk| (chunk, receiver))
         });
-        let response = client
+        let mut request = client
             .post(url)
             .header("Content-Type", "application/x-tar")
-            .body(reqwest::Body::wrap_stream(stream))
-            .send()
-            .await;
+            .body(reqwest::Body::wrap_stream(stream));
+        if let Some(token) = token {
+            request = request.header(
+                reqwest::header::COOKIE,
+                format!("{}={token}", crate::mcp_http::auth::SESSION_COOKIE),
+            );
+        }
+        let response = request.send().await;
         producer.await.map_err(|e| e.to_string())?;
         match response {
             Ok(response) if response.status().is_success() => {
-                let transferred: TransferResultWire =
-                    response.json().await.map_err(|e| e.to_string())?;
+                let transferred: TransferResultWire = response
+                    .json()
+                    .await
+                    .map_err(|e| e.without_url().to_string())?;
                 answer.moved += transferred.moved;
                 answer.skipped += transferred.skipped;
             }
@@ -276,8 +301,9 @@ fn safe_relative(path: &Path) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("path is not UTF-8"))?;
     if value.is_empty()
         || value.len() > 4096
-        || value.contains(['\\', '\0', ':'])
-        || crate::fs::is_absolute_on_any_platform(value)
+        || value.contains('\0')
+        || path.is_absolute()
+        || cfg!(windows) && value.contains(['\\', ':'])
         || path
             .components()
             .any(|p| !matches!(p, Component::Normal(_)))
@@ -342,6 +368,9 @@ pub(crate) async fn receive_copy(
     match dest.symlink_metadata(&query.name) {
         Ok(meta) if meta.is_symlink() => return Err("upload target is a symlink".into()),
         Ok(_) => {
+            // Consume the bounded request before returning headers: otherwise a
+            // streaming sender can see a reset instead of this skipped result.
+            receive_body(body, None).await?;
             let mut answer = result();
             answer.skipped = 1;
             return Ok(answer);
@@ -350,7 +379,14 @@ pub(crate) async fn receive_copy(
         Err(e) => return Err(e.to_string()),
     }
     let name = format!(".tuic-upload-{}", uuid::Uuid::new_v4());
-    dest.create_dir(&name).map_err(|e| e.to_string())?;
+    let mut staging_options = cap_std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use cap_std::fs::DirBuilderExt;
+        staging_options.mode(0o700);
+    }
+    dest.create_dir_with(&name, &staging_options)
+        .map_err(|e| e.to_string())?;
     let staging_dir = dest.open_dir(&name).map_err(|e| e.to_string())?;
     let stage = Staging {
         parent: dest,
@@ -362,24 +398,83 @@ pub(crate) async fn receive_copy(
         .open_with("archive", OpenOptions::new().write(true).create_new(true))
         .map_err(|e| e.to_string())?;
     let mut archive = tokio::fs::File::from_std(archive.into_std());
+    receive_body(body, Some(&mut archive)).await?;
+    archive.sync_all().await.map_err(|e| e.to_string())?;
+    drop(archive);
+    tokio::task::spawn_blocking(move || {
+        // A cancelled handler cannot release a slot while extraction still runs.
+        let _slot = _slot;
+        extract_and_publish(stage, query)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+async fn receive_body(body: Body, mut archive: Option<&mut tokio::fs::File>) -> Result<(), String> {
     let mut stream = body.into_data_stream();
     let mut size = 0u64;
-    while let Some(chunk) = stream.next().await {
+    loop {
+        let chunk = tokio::time::timeout(UPLOAD_IDLE_TIMEOUT, stream.next())
+            .await
+            .map_err(|_| "remote upload idle timeout".to_string())?;
+        let Some(chunk) = chunk else { break };
         let chunk = chunk.map_err(|e| e.to_string())?;
         size = size
             .checked_add(chunk.len() as u64)
-            .ok_or("upload size overflow")?;
+            .ok_or(UPLOAD_SIZE_ERROR)?;
         if size > MAX_UPLOAD_BYTES {
-            return Err("upload exceeds 256 MiB".into());
+            return Err(UPLOAD_SIZE_ERROR.into());
         }
-        archive.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        if let Some(file) = archive.as_mut() {
+            file.write_all(&chunk).await.map_err(|e| e.to_string())?;
+        }
     }
-    archive.sync_all().await.map_err(|e| e.to_string())?;
-    drop(archive);
-    tokio::task::spawn_blocking(move || extract_and_publish(stage, query))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    Ok(())
+}
+
+/// Called before the daemon starts accepting uploads. Directory capabilities
+/// and no-follow traversal keep cleanup inside registered roots.
+pub(crate) fn sweep_staging(roots: &[String]) {
+    use cap_fs_ext::DirExt;
+    fn sweep(dir: &Dir) -> io::Result<()> {
+        for entry in dir.entries()? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with(".tuic-upload-") {
+                dir.remove_dir_all(&name)?;
+            } else {
+                // A directory replaced by a symlink during scanning is never followed.
+                let child = match dir.open_dir_nofollow(&name) {
+                    Ok(child) => child,
+                    Err(_) => continue,
+                };
+                sweep(&child)?;
+            }
+        }
+        Ok(())
+    }
+    for root in roots {
+        let cleaned =
+            Dir::open_ambient_dir(root, cap_std::ambient_authority()).and_then(|dir| sweep(&dir));
+        if let Err(e) = cleaned {
+            tracing::warn!(source = "remote-transfer", root, error = %e, "Remote upload startup cleanup failed");
+        }
+    }
+}
+
+fn create_upload_dirs(data: &Dir, path: &Path) -> io::Result<()> {
+    let mut builder = cap_std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::DirBuilderExt;
+        builder.mode(0o755);
+    }
+    data.create_dir_with(path, &builder)
 }
 
 fn extract_and_publish(stage: Staging, query: UploadQuery) -> io::Result<TransferResult> {
@@ -387,6 +482,8 @@ fn extract_and_publish(stage: Staging, query: UploadQuery) -> io::Result<Transfe
     let data = stage.dir.open_dir("data")?;
     let mut tar = tar::Archive::new(stage.dir.open("archive")?.into_std());
     let mut bytes = 0u64;
+    #[cfg(unix)]
+    let mut directory_modes = Vec::new();
     for (index, entry) in tar.entries()?.enumerate() {
         if index >= MAX_ENTRIES {
             return Err(io::Error::other("too many upload entries"));
@@ -403,7 +500,14 @@ fn extract_and_publish(stage: Staging, query: UploadQuery) -> io::Result<Transfe
         }
         let kind = entry.header().entry_type();
         if kind.is_dir() && query.directory {
-            data.create_dir_all(&path)?;
+            create_upload_dirs(&data, &path)?;
+            #[cfg(unix)]
+            {
+                use cap_std::fs::PermissionsExt;
+                let allowed =
+                    data.metadata(&path)?.permissions().mode() & entry.header().mode()? & 0o755;
+                directory_modes.push((path.clone(), allowed));
+            }
         } else if kind.is_file() {
             bytes = bytes
                 .checked_add(entry.size())
@@ -412,11 +516,17 @@ fn extract_and_publish(stage: Staging, query: UploadQuery) -> io::Result<Transfe
                 return Err(io::Error::other("extracted upload exceeds 256 MiB"));
             }
             if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-                data.create_dir_all(parent)?;
+                create_upload_dirs(&data, parent)?;
             }
-            let mut file = data
-                .open_with(&path, OpenOptions::new().write(true).create_new(true))?
-                .into_std();
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use cap_std::fs::OpenOptionsExt;
+                let mode = entry.header().mode()?;
+                options.mode(mode & if mode & 0o111 != 0 { 0o755 } else { 0o644 });
+            }
+            let mut file = data.open_with(&path, &options)?.into_std();
             let copied = io::copy(&mut entry, &mut file)?;
             if copied != entry.size() {
                 return Err(io::Error::other("truncated upload entry"));
@@ -426,6 +536,15 @@ fn extract_and_publish(stage: Staging, query: UploadQuery) -> io::Result<Transfe
             return Err(io::Error::other(
                 "archive links and special files are forbidden",
             ));
+        }
+    }
+    #[cfg(unix)]
+    {
+        use cap_std::fs::PermissionsExt;
+        // Populate children before reducing directory permissions.
+        directory_modes.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+        for (path, mode) in directory_modes {
+            data.set_permissions(path, cap_std::fs::Permissions::from_mode(mode))?;
         }
     }
     let meta = data.symlink_metadata(&query.name)?;
