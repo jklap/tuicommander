@@ -1542,8 +1542,10 @@ selected. Unpinned tabs reappear when the opening repository is selected again;
 pinned MCP tabs remain visible across repositories. Unpinning restores the
 opening repository scope.
 Native Markdown tabs opened through `ui action=tab` survive UI document reloads
-within the same window. The frontend restores their target, scope, pin state and
-selected tab from session storage; reopening the same MCP id updates that tab.
+within the same window, including native recovery without a working unload
+handler. The frontend snapshots tab changes synchronously and restores their
+target, scope, pin state and selected tab from session storage; reopening the
+same MCP id updates that tab.
 Closed tabs are not restored. This does not persist tabs across app restarts.
 
 Native file tabs use the MCP `id` as their identity, so distinct ids do not

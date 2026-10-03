@@ -8,6 +8,36 @@ async function freshStore() {
 describe("MCP Markdown tabs across document reload", () => {
 	beforeEach(() => sessionStorage.clear());
 
+	// Catches: snapshots written only on beforeunload lose documents after native recovery.
+	it("restores the latest MCP document after a reload without beforeunload", async () => {
+		const old = await freshStore();
+		old.restoreAfterReload(); // Normal startup arms persistence after consuming prior state.
+		const id = old.addMcpFile("boss-digest", "", "/Users/boss/Gits/old.md", false, true);
+		old.addMcpFile("boss-digest", "", "/Users/boss/Gits/latest.md", false, true);
+		old.setPinned(id, true);
+		old.setActive(id);
+		// Drop the document graph without saveForReload or an unload event.
+		const reloaded = await freshStore();
+		reloaded.restoreAfterReload();
+		expect(reloaded.getCount()).toBe(1);
+		expect(reloaded.getActive()).toMatchObject({
+			mcpUiId: "boss-digest",
+			filePath: "/Users/boss/Gits/latest.md",
+			pinned: true,
+		});
+	});
+
+	// Catches: mutation snapshots save opens but resurrect a tab closed before native recovery.
+	it("keeps a closed MCP document absent after a reload without beforeunload", async () => {
+		const old = await freshStore();
+		old.restoreAfterReload();
+		const id = old.addMcpFile("boss-digest", "", "/Users/boss/Gits/digest.md", false, false);
+		old.remove(id);
+		const reloaded = await freshStore();
+		reloaded.restoreAfterReload();
+		expect(reloaded.getCount()).toBe(0);
+	});
+
 	// Catches: MCP file tabs survive only in the old document memory.
 	it("restores an external Markdown tab and its selected pane after reload", async () => {
 		const old = await freshStore();

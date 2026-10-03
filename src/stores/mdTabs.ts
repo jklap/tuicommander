@@ -1,4 +1,4 @@
-import { batch } from "solid-js";
+import { batch, createComputed, createRoot, createSignal, untrack } from "solid-js";
 import { pathBasename } from "../utils/pathUtils";
 import { appLogger } from "./appLogger";
 import { editorTabsStore } from "./editorTabs";
@@ -194,6 +194,7 @@ const pluginPanelClosedListeners = new Set<(tabId: string) => void>();
 
 function createMdTabsStore() {
 	const base = createTabManager<MdTabData>("markdown");
+	const [reloadReady, setReloadReady] = createSignal(false);
 
 	/** Announce a plugin-panel closure to every subscriber. */
 	function announceIfPluginPanel(tabId: string): void {
@@ -201,7 +202,7 @@ function createMdTabsStore() {
 		for (const listener of pluginPanelClosedListeners) listener(tabId);
 	}
 
-	return {
+	const store = {
 		state: base.state,
 
 		/** Keep MCP documents in this window across WebView/HMR reloads only. */
@@ -217,6 +218,10 @@ function createMdTabsStore() {
 					pinned: tab.pinned === true,
 				}));
 			try {
+				if (tabs.length === 0) {
+					sessionStorage.removeItem(MCP_RELOAD_KEY);
+					return;
+				}
 				sessionStorage.setItem(
 					MCP_RELOAD_KEY,
 					JSON.stringify({
@@ -225,7 +230,7 @@ function createMdTabsStore() {
 					}),
 				);
 			} catch (err) {
-				appLogger.warn("store", "Could not save MCP Markdown tabs for reload", err);
+				untrack(() => appLogger.warn("store", "Could not save MCP Markdown tabs for reload", err));
 			}
 		},
 
@@ -266,6 +271,8 @@ function createMdTabsStore() {
 				}
 			} catch (err) {
 				appLogger.warn("store", "Could not restore MCP Markdown tabs after reload", err);
+			} finally {
+				setReloadReady(true);
 			}
 		},
 
@@ -792,6 +799,16 @@ function createMdTabsStore() {
 			);
 		},
 	};
+
+	// The store lives for the document lifetime. Save synchronously on changes,
+	// including close/pin/selection, so recovery needs no surviving unload handler.
+	// Wait until restore consumes the old snapshot before observing the empty store.
+	createRoot(() => {
+		createComputed(() => {
+			if (reloadReady()) store.saveForReload();
+		});
+	});
+	return store;
 }
 
 export const mdTabsStore = createMdTabsStore();
