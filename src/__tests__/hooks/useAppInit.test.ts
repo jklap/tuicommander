@@ -2527,6 +2527,30 @@ describe("initApp", () => {
 			play.mockRestore();
 		});
 
+		it("1397 a repeated backend failure ten minutes later creates a fresh item and sound", async () => {
+			// catches: dedup lasts as long as the old bell item, silencing a new failure
+			const { getCallback } = captureMcpToast();
+			await initApp(createMockDeps());
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const event = {
+				payload: {
+					title: "Repeated failure",
+					message: "same",
+					level: "error",
+					sound: "error",
+					origin_session_id: "caller",
+				},
+			};
+			getCallback()!(event);
+			vi.setSystemTime(Date.now() + 10 * 60_000);
+			getCallback()!(event);
+			expect(activityStore.getForSection("messages").filter((item) => item.title === "Repeated failure")).toHaveLength(
+				2,
+			);
+			expect(play).toHaveBeenCalledTimes(2);
+			play.mockRestore();
+		});
+
 		it("stays silent when no sound was requested or the name is unknown", async () => {
 			const { getCallback } = captureMcpToast();
 			const deps = createMockDeps();

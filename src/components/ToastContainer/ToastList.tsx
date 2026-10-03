@@ -23,51 +23,53 @@ export const ToastList: Component<ToastListProps> = (props) => {
 	}
 
 	return (
-		<div
-			class={styles.container}
-			style={props.rightInset ? { "--toast-right-inset": `${props.rightInset}px` } : undefined}
-		>
-			<For each={toastsStore.toasts}>
-				{(toast) => (
-					<div
-						class={styles.toast}
-						data-level={toast.level}
-						role="button"
-						tabIndex={0}
-						onClick={() => props.onDismiss(toast)}
-						onKeyDown={onClickKeyDown(() => props.onDismiss(toast))}
-					>
-						<span class={styles.level} data-level={toast.level} />
-						<span class={styles.body}>
-							<span class={styles.titleRow}>
-								<Show when={props.repoName(toast)}>{(name) => <span class={styles.repo}>{name()}</span>}</Show>
-								<span class={styles.title}>
-									{toast.title}
-									<Show when={(toast.count ?? 1) > 1}> ×{toast.count}</Show>
+		<Show when={toastsStore.toasts.length > 0}>
+			<div
+				class={styles.container}
+				style={props.rightInset ? { "--toast-right-inset": `${props.rightInset}px` } : undefined}
+			>
+				<For each={toastsStore.toasts}>
+					{(toast) => (
+						<div
+							class={styles.toast}
+							data-level={toast.level}
+							role="button"
+							tabIndex={0}
+							onClick={() => props.onDismiss(toast)}
+							onKeyDown={onClickKeyDown(() => props.onDismiss(toast))}
+						>
+							<span class={styles.level} data-level={toast.level} />
+							<span class={styles.body}>
+								<span class={styles.titleRow}>
+									<Show when={props.repoName(toast)}>{(name) => <span class={styles.repo}>{name()}</span>}</Show>
+									<span class={styles.title}>
+										{toast.title}
+										<Show when={(toast.count ?? 1) > 1}> ×{toast.count}</Show>
+									</span>
 								</span>
+								{toast.message && <span class={styles.message}>{toast.message}</span>}
 							</span>
-							{toast.message && <span class={styles.message}>{toast.message}</span>}
-						</span>
-						<span class={styles.actions}>
-							<For each={toastActions(toast)}>
-								{(action) => (
-									<button
-										class={action === toast.action ? styles.action : `${styles.action} ${styles.repoAction}`}
-										onClick={(event) => {
-											event.stopPropagation();
-											// A toast's own action always dismisses it; only the repo action reports failure.
-											const navigated = action.onClick();
-											if (action === toast.action || navigated !== false) toastsStore.remove(toast.id);
-										}}
-									>
-										{action.label}
-									</button>
-								)}
-							</For>
-						</span>
-					</div>
-				)}
-			</For>
-		</div>
+							<span class={styles.actions}>
+								<For each={toastActions(toast)}>
+									{(action) => (
+										<button
+											class={action === toast.action ? styles.action : `${styles.action} ${styles.repoAction}`}
+											onClick={(event) => {
+												event.stopPropagation();
+												// A toast's own action always dismisses it; only the repo action reports failure.
+												const navigated = action.onClick();
+												if (action === toast.action || navigated !== false) toastsStore.remove(toast.id);
+											}}
+										>
+											{action.label}
+										</button>
+									)}
+								</For>
+							</span>
+						</div>
+					)}
+				</For>
+			</div>
+		</Show>
 	);
 };
