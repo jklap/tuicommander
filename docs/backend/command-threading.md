@@ -227,3 +227,7 @@ worse than no comment — each one had already talked a reader out of checking:
   the executor)". Its grep phase opens up to 50 files.
 - `fs.rs` — "BM25 phase: get top-ranked files (~1ms)". Nothing bounds it; the
   cost is proportional to the index.
+
+Private secret entry: `secret_form_bootstrap` is a short synchronous identity
+check; `secret_form_submit` is async. MCP request/consent waits on a oneshot
+without holding the blocking pool. Run uses Tokio child pipes; no PTY or shell.

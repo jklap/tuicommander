@@ -805,3 +805,11 @@ Errors are an `EgoCliError` — `code` (`notConfigured`, `invalidInput`,
 `stdout`, `stderr`, `exitCode` — identical on both transports. `command` is
 spelled by file name only, and the captured output is clipped to 4000
 characters on a character boundary.
+
+## Private secret form commands
+
+`secret_form_bootstrap` takes no arguments and checks the native caller window
+against the backend-created private window. It is intentionally unmapped: an
+HTTP client must already possess the privately delivered capability.
+`secret_form_submit {submission}` checks the same native identity and uses the
+same schema and consumption logic as `POST /secrets/forms/submit`.
