@@ -65,9 +65,10 @@ The server has two independent listeners:
 - **TCP listener** (opt-in): Only starts when remote access is enabled. Binds to `0.0.0.0:<port>` (port from `services.server`) with Basic Auth.
 
 The shared `tuic-ipc` crate owns `AppInstance`, endpoint naming and HTTP
-framing. Responses with status 1xx, 204 or 304, and responses to HEAD, finish
-at the header terminator regardless of Content-Length or Transfer-Encoding
-(RFC 9112 §6.3); the CLI passes its request method to the decoder.
+framing. Informational responses (1xx except 101) are skipped until the final
+response arrives. Status 101, 204 and 304 responses finish at the header
+terminator regardless of Content-Length or Transfer-Encoding (RFC 9112 §6.3).
+The clients do not issue HEAD requests.
 The server reuses its short named socket path; CLI and bridge select it
 with `--instance <id>` or `TUIC_APP_INSTANCE`. An explicit Unix `TUIC_SOCKET`
 wins. Bridge fallback discovery stays within the selected instance's socket
