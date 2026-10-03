@@ -1214,6 +1214,52 @@ describe("AIChatPanel: without a configured binary", () => {
 	});
 });
 
+describe("AIChatPanel: composer height", () => {
+	const LINE_PX = 20;
+	const PANEL_PX = 500;
+	const scrollHeight = vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get");
+	const clientHeight = vi.spyOn(HTMLElement.prototype, "clientHeight", "get");
+
+	beforeEach(() => {
+		scrollHeight.mockImplementation(function (this: HTMLTextAreaElement) {
+			return this.value.split("\n").length * LINE_PX + 16;
+		});
+		clientHeight.mockReturnValue(PANEL_PX);
+	});
+	afterEach(() => {
+		scrollHeight.mockReset();
+		clientHeight.mockReset();
+	});
+
+	async function typeLines(container: HTMLElement, lines: number): Promise<HTMLTextAreaElement> {
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = Array.from({ length: lines }, (_, i) => `line ${i}`).join("\n");
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		await settle();
+		return textarea;
+	}
+
+	it("grows with the text and scrolls only past 40% of the panel (catches a fixed height or a 150px cap)", async () => {
+		const { container } = await renderPanel();
+		const grown = await typeLines(container, 5);
+		expect(grown.style.height).toBe(`${5 * LINE_PX + 16}px`);
+		expect(grown.style.overflowY).toBe("hidden");
+		const capped = await typeLines(container, 40);
+		expect(capped.style.height).toBe(`${PANEL_PX * 0.4}px`);
+		expect(capped.style.overflowY).toBe("auto");
+	});
+
+	it("returns to one line after Send (catches a height kept from the previous message)", async () => {
+		const { container } = await renderPanel();
+		await typeLines(container, 8);
+		await typeAndSend(container, "short");
+		await settle();
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		expect(textarea.value).toBe("");
+		expect(textarea.style.height).toBe("36px");
+	});
+});
+
 describe("AIChatPanel: a turn", () => {
 	it("removes the complete first-turn ack after ego streams it in tiny chunks", async () => {
 		const { container } = await renderPanel();

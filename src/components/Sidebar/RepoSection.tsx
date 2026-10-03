@@ -623,7 +623,7 @@ export const BranchItem: Component<{
 	};
 
 	// A row click opens the branch and nothing else (AGENTS.md "Sidebar clicks").
-	// Only the branch icon expands or collapses the agents, and it stops
+	// Only the separate chevron expands or collapses the agents, and it stops
 	// propagation so the toggle never also opens the branch.
 	const toggleAgents = (e: MouseEvent | KeyboardEvent) => {
 		e.stopPropagation();
@@ -801,13 +801,11 @@ export const BranchItem: Component<{
 				onClick={() => props.onSelect()}
 				onContextMenu={ctxMenu.open}
 			>
-				{/* The icon doubles as the agents toggle: it turns into a chevron on
-				    hover, so expanding costs no width in the row. */}
-				<Show when={getBranchTabsAvailable(props.branch)} fallback={branchIcon()}>
-					<span
+				{branchIcon()}
+				<Show when={getBranchTabsAvailable(props.branch)}>
+					<button
+						type="button"
 						class={cx(s.branchIconToggle, !props.branch.tabsCollapsed && s.expanded)}
-						role="button"
-						tabIndex={0}
 						aria-expanded={!props.branch.tabsCollapsed}
 						aria-label={`${t("sidebar.toggleAgents", "Show or hide agents")} (${props.branch.terminals.length})`}
 						data-tooltip={t("sidebar.toggleAgents", "Show or hide agents")}
@@ -815,19 +813,15 @@ export const BranchItem: Component<{
 						onClick={toggleAgents}
 						onKeyDown={onClickKeyDown(toggleAgents)}
 					>
-						{branchIcon()}
 						<span class={s.branchIconChevron}>
 							<ChevronIcon />
 						</span>
-						{/* Rides the icon's corner so the count costs no width; it is the
-						    only trace of the sessions while the list is collapsed. Expanded,
-						    the rows themselves show them, so the count is only noise. */}
 						<Show when={props.branch.tabsCollapsed}>
 							<span class={s.branchAgentCount} aria-hidden="true">
 								{props.branch.terminals.length}
 							</span>
 						</Show>
-					</span>
+					</button>
 				</Show>
 				<div class={s.branchContent}>
 					<span

@@ -676,24 +676,29 @@
   justify-content: center;
 }
 
-/* Branch icon as the agents toggle: the chevron sits in the icon's own box and
-   swaps in on hover or focus, so the row gives up no width. */
+/* A separate disclosure control keeps status and agent visibility independent. */
 .branchIconToggle {
-  position: relative;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 20px;
+  height: 20px;
+  padding: 2px;
   flex-shrink: 0;
   cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
   border-radius: var(--radius-sm);
 }
 
 .branchIconChevron {
-  position: absolute;
-  inset: 0;
+  /* A decorative chevron must not intercept clicks on the branch below it. */
+  pointer-events: none;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--fg-primary);
-  opacity: 0;
 }
 
 .branchIconChevron svg {
@@ -704,39 +709,23 @@
   transform: rotate(90deg);
 }
 
-.branchIconToggle:hover .branchIcon,
-.branchIconToggle:focus-visible .branchIcon {
-  opacity: 0;
+.branchIconToggle:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
 }
 
-.branchIconToggle:hover .branchIconChevron,
-.branchIconToggle:focus-visible .branchIconChevron {
-  opacity: 1;
+.branchIconToggle:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
 }
 
-/* A bare digit below the icon's right edge, not a pill: at 12px a pill covered
-   the part of the glyph that tells main, branch and worktree apart. The halo in
-   the sidebar background keeps it legible where it touches the glyph. */
 .branchAgentCount {
-  position: absolute;
-  bottom: -4px;
-  right: -3px;
   color: var(--fg-primary);
   font-size: var(--font-3xs);
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  text-shadow:
-    0 0 1px var(--bg-secondary),
-    0 0 1px var(--bg-secondary),
-    0 0 2px var(--bg-secondary),
-    0 0 2px var(--bg-secondary);
   pointer-events: none;
-}
-
-.branchIconToggle:hover .branchAgentCount,
-.branchIconToggle:focus-visible .branchAgentCount {
-  opacity: 0;
 }
 
 .branchIconMain {
