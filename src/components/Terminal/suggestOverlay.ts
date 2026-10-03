@@ -24,6 +24,47 @@ export const INTENT_HIGHLIGHT_RE = /^[\s●⏺]*intent:\s+/;
  * Like `intent:`, it may sit behind the agent's own bullet.
  */
 export const ANSWER_MARKER_RE = /^[\s●⏺]*💬/;
+/** An agent output row: a bullet glyph at the start of the line. */
+const OUTPUT_ROW_RE = /^\s*[●⏺]/;
+/** A continuation row of an answer: indented under the agent's bullet. */
+const ANSWER_CONTINUATION_RE = /^ {2,}\S/;
+/** A user prompt row; an indented one still ends the answer. */
+const PROMPT_ROW_RE = /^\s*❯/;
+/** A fenced code block delimiter. Inside a fence a bullet, marker or prompt glyph is content. */
+const FENCE_RE = /^\s*```/;
+
+/**
+ * Last row of the answer that starts at `start` (a row matching
+ * [`ANSWER_MARKER_RE`]). An answer is the marker row, every row it wraps onto and
+ * the indented rows that follow, blank paragraph gaps included. It ends before the
+ * next bullet (a tool call or another answer), before a `suggest:`/`intent:` row, before a row that starts at column
+ * 0 (user prompt, separator, status line) and before the trailing blank rows.
+ * Rows inside a fenced code block belong to the answer whatever glyph they start with.
+ */
+export function answerExtent(start: number, totalRows: number, getRow: (i: number) => RowSnapshot | null): number {
+	let last = start;
+	let inFence = false;
+	for (let i = start + 1; i < totalRows; i++) {
+		const row = getRow(i);
+		if (!row) break;
+		if (row.isWrapped) {
+			last = i;
+			continue;
+		}
+		if (row.text.trim() === "") continue;
+		if (!ANSWER_CONTINUATION_RE.test(row.text)) break;
+		if (inFence) {
+			inFence = !FENCE_RE.test(row.text);
+		} else {
+			if (OUTPUT_ROW_RE.test(row.text) || ANSWER_MARKER_RE.test(row.text) || PROMPT_ROW_RE.test(row.text)) break;
+			if (SUGGEST_ANCHOR_RE.test(row.text) || INTENT_HIGHLIGHT_RE.test(row.text)) break;
+			inFence = FENCE_RE.test(row.text);
+		}
+		last = i;
+	}
+	return last;
+}
+
 /** Match a NEW `suggest:` anchor for stop-detection during a continuation
  *  walk. Does NOT require `|` on the same row — the Rust parser allows the
  *  first `|` to arrive on a wrapped continuation line, so a row like
@@ -134,16 +175,14 @@ export function planSuggestOverlay(
 			}
 			if (hiddenRows.length > 0) row = hiddenRows[hiddenRows.length - 1];
 		} else if (!snapshot.isWrapped && ANSWER_MARKER_RE.test(text)) {
-			// The marker line and every row it wraps onto are one answer. A wrapped
-			// row is never a line start, so an emoji the wrap happens to land on
-			// is not a marker.
-			blocks.push({ row, kind: "answer" });
-			parts.push(`a${row}`);
-			while (getRow(row + 1)?.isWrapped) {
-				row++;
+			// The whole answer, not only its marker row. A wrapped row is never a
+			// line start, so an emoji the wrap happens to land on is not a marker.
+			const last = answerExtent(row, totalRows, getRow);
+			for (; row <= last; row++) {
 				blocks.push({ row, kind: "answer" });
 				parts.push(`a${row}`);
 			}
+			row = last;
 		} else if (INTENT_HIGHLIGHT_RE.test(text)) {
 			blocks.push({ row, kind: "intent" });
 			parts.push(`i${row}`);

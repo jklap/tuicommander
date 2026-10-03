@@ -14224,17 +14224,56 @@ fn tuic_state_awaiting_yields_confident_question() {
 }
 
 #[test]
-fn tuic_state_busy_yields_userinput_clear_with_prompt_line() {
-    // The busy transition's absolute prompt row (history_size + cursor row,
-    // here 42) must reach the UserInput event so the frontend can mark the
-    // user-prompt line on the scrollbar.
-    match tuic_state_awaiting_event("busy", 42) {
+fn tuic_state_prompt_yields_userinput_clear_with_prompt_line() {
+    // The submit hook's absolute prompt row (history_size + cursor row, here 42)
+    // must reach the UserInput event so the frontend can mark the user-prompt
+    // line on the scrollbar.
+    match tuic_state_awaiting_event("prompt", 42) {
         Some(ParsedEvent::UserInput { content, line }) => {
-            assert_eq!(content, "", "busy clear must not overwrite last_prompt");
-            assert_eq!(line, 42, "busy UserInput must carry the prompt row");
+            assert_eq!(content, "", "prompt clear must not overwrite last_prompt");
+            assert_eq!(line, 42, "prompt UserInput must carry the prompt row");
         }
         other => panic!("expected UserInput clear, got {other:?}"),
     }
+}
+
+#[test]
+fn tuic_state_busy_carries_no_prompt_row() {
+    // Catches #1388: PreToolUse fires state=busy on every tool call, and each one
+    // used to mark a user-prompt tick at the cursor row, painting a solid green
+    // band on the scrollbar. Busy still clears awaiting but has no prompt row.
+    match tuic_state_awaiting_event("busy", 42) {
+        Some(ParsedEvent::UserInput { content, line }) => {
+            assert_eq!(content, "");
+            assert_eq!(line, -1, "busy must not claim a prompt row");
+        }
+        other => panic!("expected UserInput clear, got {other:?}"),
+    }
+}
+
+#[test]
+fn tuic_state_prompt_drives_shell_busy() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-tuic-prompt";
+    state.session_maps.shell_states.insert(
+        session_id.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+    );
+    state
+        .session_maps
+        .shell_state_since_ms
+        .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
+
+    let proc = ChunkProcessor::new(None, None);
+    proc.handle_tuic_state("prompt", session_id, &state);
+
+    let current = state
+        .session_maps
+        .shell_states
+        .get(session_id)
+        .unwrap()
+        .load(std::sync::atomic::Ordering::Acquire);
+    assert_eq!(current, SHELL_BUSY);
 }
 
 #[test]
