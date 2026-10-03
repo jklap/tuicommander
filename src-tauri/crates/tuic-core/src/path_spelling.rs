@@ -94,4 +94,31 @@ mod tests {
             "C:/Users/me/repo"
         );
     }
+
+    /// Catches `||` -> `&&` in `is_absolute_on_any_platform`: each shape is
+    /// absolute by exactly one disjunct, so a host-independent verdict fails if
+    /// any `||` becomes `&&` (`\\host\share` is relative on unix, `/etc/passwd`
+    /// is merely rooted on Windows).
+    #[test]
+    fn each_foreign_absolute_shape_is_absolute_on_every_host() {
+        assert!(is_absolute_on_any_platform(r"\\host\share\repo"));
+        assert!(is_absolute_on_any_platform("/etc/passwd"));
+        assert!(!is_absolute_on_any_platform("repo/sub"));
+        assert!(!is_absolute_on_any_platform(r"repo\sub"));
+    }
+
+    /// Catches `portable_spelling` replaced by `String::new()` or `"xyzzy"`.
+    /// Only Windows hosts rewrite; elsewhere `\` is a legal file-name character
+    /// and the path must come back byte-identical.
+    #[test]
+    fn portable_spelling_rewrites_only_on_windows() {
+        let (windows_path, posix_path) = (r"C:\Users\me\repo", "/home/me/repo");
+        assert_eq!(portable_spelling(posix_path), posix_path);
+        let expected = if cfg!(windows) {
+            "C:/Users/me/repo"
+        } else {
+            windows_path
+        };
+        assert_eq!(portable_spelling(windows_path), expected);
+    }
 }
