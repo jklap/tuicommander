@@ -763,6 +763,9 @@ fn next_reply(shared: &Shared, output: &dyn Output) -> Option<(Reply, SpeechCanc
         if !state.changes.is_empty() {
             let changes = std::mem::take(&mut state.changes);
             parking_lot::MutexGuard::unlocked(&mut state, || shared.dispatch(changes));
+            // Shutdown or a new reply may have arrived while dispatch released
+            // the lock. Its wake has already fired: recheck before sleeping.
+            continue;
         }
         match state.queue.pop_front() {
             Some(reply) if reply.generation == state.generation => {
@@ -1829,6 +1832,62 @@ mod tests {
         fn changed(&self, id: UtteranceId, state: &Utterance, generation: u64) {
             self.seen.lock().push((id, state.clone(), generation));
         }
+    }
+
+    // Catches: a shutdown wake lost while Finished dispatch releases the lock,
+    // leaving the render worker asleep forever after its last reply.
+    #[test]
+    fn shutdown_during_finished_dispatch_does_not_need_another_wake() {
+        struct HoldFinished {
+            entered: std::sync::mpsc::Sender<()>,
+            release: Mutex<std::sync::mpsc::Receiver<()>>,
+        }
+
+        impl UtteranceObserver for HoldFinished {
+            fn changed(&self, _id: UtteranceId, state: &Utterance, _generation: u64) {
+                if *state == Utterance::Finished {
+                    self.entered.send(()).expect("test waits for Finished");
+                    self.release.lock().recv().expect("test releases dispatch");
+                }
+            }
+        }
+
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let output = Arc::new(FakeOutput::default());
+        let mut speaker =
+            Speaker::new(Arc::new(FakeSpeech::instant()), Arc::clone(&output) as _, 0);
+        speaker.observe(Arc::new(HoldFinished {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        }));
+        let id = speaker.say(0, "ciao", "alba").expect("queued");
+        eventually("the reply to reach the device", || {
+            speaker.utterance(id) == Some(Utterance::Speaking)
+        });
+        output.finish_playing();
+        entered_rx.recv().expect("Finished dispatch started");
+
+        // Run the real shutdown before dispatch can reacquire the lock. Join
+        // separately so a regression can fail and wake the worker for cleanup.
+        let worker = speaker.worker.take().expect("render worker");
+        let shared = Arc::clone(&speaker.shared);
+        drop(speaker);
+        release_tx.send(()).expect("release Finished dispatch");
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let joiner = std::thread::spawn(move || {
+            let result = worker.join();
+            done_tx.send(result).expect("test waits for worker exit");
+        });
+        let stopped = done_rx.recv_timeout(PATIENCE);
+        if stopped.is_err() {
+            // The old worker is asleep after consuming the shutdown wake.
+            shared.wake.notify_all();
+        }
+        joiner.join().expect("worker joiner");
+        stopped
+            .expect("shutdown needed another wake after Finished dispatch")
+            .expect("render worker panicked");
     }
 
     /// A reply's whole life is pushed, not polled for.
