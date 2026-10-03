@@ -168,16 +168,30 @@ async fn stranger_flood_larger_than_response_cap_does_not_wedge_polling() {
     shared.lock().unwrap().updates = (20001..20031)
         .map(|id| message(id, 999, "private", &flood))
         .collect();
-    let mut progressed = false;
+    let mut accepted = false;
     for _ in 0..12 {
-        if inbound.poll().await.is_ok() {
-            progressed = true;
-            break;
+        match inbound.poll().await {
+            // Backoff is not progress: wait it out, then the next request must succeed.
+            Ok(Poll::Backoff(_)) => {
+                tokio::time::pause();
+                tokio::time::advance(std::time::Duration::from_secs(61)).await;
+                tokio::time::resume();
+            }
+            Ok(Poll::Accepted(_)) => {
+                accepted = true;
+                break;
+            }
+            Err(_) => {}
         }
     }
     assert!(
-        progressed,
-        "polling never recovered from an oversized stranger batch"
+        accepted,
+        "polling never accepted an oversized stranger batch"
+    );
+    let _ = inbound.poll().await;
+    assert!(
+        shared.lock().unwrap().requests.last().unwrap().0 > 20001,
+        "cursor did not advance past the stranger updates"
     );
 }
 
