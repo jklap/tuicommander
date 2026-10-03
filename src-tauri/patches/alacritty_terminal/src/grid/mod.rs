@@ -223,12 +223,14 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
     /// eviction base (`total_scrolled() - history_size()`) is unchanged.
     pub fn drop_newest_history(&mut self, count: usize) -> usize {
         let old_history_size = self.history_size();
-        let unknown_predecessor = self.raw[self.topmost_line()].copy_origin_unknown
-            || self.lines_scrolled > old_history_size;
         let count = min(count, old_history_size);
+        let unknown_predecessor = (-(count as i32)..0).any(|line| {
+            let row = &self.raw[Line(line)];
+            row.copy_origin_unknown || !row.is_clear()
+        });
         if count != 0 {
             self.raw.remove_newest_history(count);
-            if count == old_history_size && unknown_predecessor {
+            if count == old_history_size && unknown_predecessor && !self.raw[Line(0)].is_clear() {
                 // Reprint-tail removal must not discard predecessor-loss provenance.
                 self.raw[Line(0)].copy_origin_unknown = true;
             }
@@ -511,8 +513,12 @@ impl<T> Grid<T> {
     {
         // Explicitly purge all lines from history without changing absolute row ids.
         let removed = self.history_size();
+        let unknown_predecessor = (-(removed as i32)..0).any(|line| {
+            let row = &self.raw[Line(line)];
+            row.copy_origin_unknown || !row.is_clear()
+        });
         self.raw.shrink_lines(removed);
-        if removed != 0 && !self.raw[Line(0)].is_clear() {
+        if unknown_predecessor && !self.raw[Line(0)].is_clear() {
             self.raw[Line(0)].copy_origin_unknown = true;
         }
 
