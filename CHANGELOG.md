@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.
 - Open terminal directory links in the File Browser and report missing paths without creating empty editor tabs.
 
 - Build bundled WebRTC with Visual Studio for Windows MSVC targets even when MinGW is on `PATH`.

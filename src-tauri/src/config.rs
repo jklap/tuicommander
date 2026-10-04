@@ -496,6 +496,16 @@ fn reap_corrupt_backups(keep: &std::path::Path) {
 /// containing stale or zero-length content on filesystems that reorder data
 /// writes past metadata writes (e.g. ext4 `data=writeback`).
 pub(crate) fn persist_atomic(target: &std::path::Path, data: &[u8]) -> Result<(), String> {
+    persist_atomic_with_mode(target, data, 0o600)
+}
+
+/// Set the Unix mode on the temporary inode before publishing it atomically.
+/// Other platforms retain their normal file permissions.
+pub(crate) fn persist_atomic_with_mode(
+    target: &std::path::Path,
+    data: &[u8],
+    _mode: u32,
+) -> Result<(), String> {
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {e}"))?;
     }
@@ -512,7 +522,7 @@ pub(crate) fn persist_atomic(target: &std::path::Path, data: &[u8]) -> Result<()
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
+        let perms = std::fs::Permissions::from_mode(_mode);
         std::fs::set_permissions(&temp, perms).map_err(|e| {
             let _ = std::fs::remove_file(&temp);
             format!("Failed to set permissions: {e}")
