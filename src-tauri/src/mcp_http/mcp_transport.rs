@@ -8851,6 +8851,103 @@ pub(crate) fn test_validate_mcp_repo_path(path: &str) -> Result<(), serde_json::
 mod tests {
     use super::*;
 
+    // Catches: Codex option values named like subcommands turn submitted tasks into unsent prefill.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn critic_codex_profile_named_review_keeps_task_submission() {
+        use std::os::unix::fs::PermissionsExt;
+        for profile in ["review", "exec", "e"] {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let output = root.path().join("argv");
+            let binary = root.path().join("codex");
+            std::fs::write(
+                &binary,
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let _config = crate::config::set_config_dir_override(root.path().join("config"));
+            let cfg = serde_json::from_value(serde_json::json!({"agents": {"codex": {
+                "codex_bypass_migrated": true, "prevent_alt_screen": false,
+                "skip_trust_dialog": false, "native_status_signals": false,
+                "run_configs": [{"name": "Default", "command": binary,
+                    "args": ["--profile", profile], "is_default": true,
+                    "env": {"ARGV_OUTPUT": output}}]
+            }}}))
+            .unwrap();
+            crate::config::save_agents_config(crate::config::AgentsConfig::default(), cfg).unwrap();
+            let state = test_state();
+            let spawned = handle_agent(
+                &state,
+                "127.0.0.1:1".parse().unwrap(),
+                &serde_json::json!({"action": "spawn", "agent_type": "codex",
+                    "prompt": "perform the task", "cwd": root.path()}),
+                None,
+            );
+            assert!(spawned.get("error").is_none(), "{spawned}");
+            let actual =
+                wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+            assert!(
+                !actual.lines().any(|arg| arg == "perform the task"),
+                "profile {profile} is an option value, not a subcommand; argv={actual:?}"
+            );
+            let session = spawned["session_id"].as_str().unwrap();
+            assert_eq!(
+                state
+                    .pending_injections
+                    .get(session)
+                    .unwrap()
+                    .front()
+                    .unwrap()
+                    .text(),
+                "perform the task"
+            );
+        }
+    }
+
+    // Catches: prefill-only agent identity steals a named wrapper's positional task.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn critic_named_wrappers_deliver_positional_task_for_every_agent() {
+        use std::os::unix::fs::PermissionsExt;
+        for agent in [
+            "claude", "codex", "gemini", "grok", "opencode", "aider", "amp", "cursor", "goose",
+            "droid", "pi", "ego",
+        ] {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let output = root.path().join("argv");
+            let binary = root.path().join("wrapper");
+            std::fs::write(&binary, "#!/bin/sh\nif [ \"${1-}\" = --version ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let _config = crate::config::set_config_dir_override(root.path().join("config"));
+            let cfg = serde_json::from_value(serde_json::json!({"agents": {(agent): {
+                "codex_bypass_migrated": true, "prevent_alt_screen": false,
+                "skip_trust_dialog": false, "native_status_signals": false,
+                "run_configs": [{"name": "My wrapper", "command": binary,
+                    "args": ["run"], "is_default": true, "env": {"ARGV_OUTPUT": output}}]
+            }}}))
+            .unwrap();
+            crate::config::save_agents_config(crate::config::AgentsConfig::default(), cfg).unwrap();
+            let state = test_state();
+            let spawned = handle_agent(
+                &state,
+                "127.0.0.1:1".parse().unwrap(),
+                &serde_json::json!({"action": "spawn", "agent_type": "My wrapper",
+                    "prompt": "perform the task", "cwd": root.path()}),
+                None,
+            );
+            assert!(spawned.get("error").is_none(), "{agent}: {spawned}");
+            let actual =
+                wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+            assert_eq!(actual, "run\nperform the task\n", "agent {agent}");
+            assert!(
+                !state
+                    .pending_injections
+                    .contains_key(spawned["session_id"].as_str().unwrap())
+            );
+        }
+    }
+
     // Needs this module's private helpers, so it is textually included.
     include!("submit_confirmation_critic_tests.rs");
 
