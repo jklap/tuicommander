@@ -9,7 +9,11 @@ fn open(dir: &Path) -> StoryStore {
 fn plan(store: &StoryStore, title: &str) -> Plan {
     store
         .create_plan(NewPlan {
-            project: "/project".into(),
+            project: crate::test_support::test_temp_root()
+                .canonicalize()
+                .expect("project")
+                .to_string_lossy()
+                .into_owned(),
             title: title.into(),
             source: format!("{title}.md"),
         })
@@ -56,18 +60,25 @@ fn to_done(store: &StoryStore, id: &str) -> Story {
 
 /// Registers a workflow run row for `plan_id`, as a started workflow would.
 fn own_plan_by_run(dir: &Path, plan_id: &str) {
-    let run_db = dir.join("workflow_runs.sqlite3");
-    // Opening the run store creates its schema.
-    assert!(
-        !crate::workflows::story_integrated_at_revision_in(&run_db, "none", 1).expect("schema")
-    );
-    rusqlite::Connection::open(&run_db)
-        .expect("run db")
-        .execute(
-            "INSERT INTO workflow_runs(id,project,plan_id,status,snapshot_json) VALUES ('run-1','/project',?1,'completed','{}')",
-            [plan_id],
+    let _guard = crate::config::set_config_dir_override(dir.to_path_buf());
+    let project = open(dir).get_plan(plan_id).expect("plan").project;
+    let definitions = crate::workflows::WorkflowStore::open().expect("definitions");
+    let template = definitions
+        .seed_templates(&project)
+        .expect("templates")
+        .into_iter()
+        .find(|draft| draft.kind == crate::workflows::WorkflowKind::Plan)
+        .expect("plan template");
+    crate::workflows::RunStore::open()
+        .expect("runs")
+        .start_plan(
+            &project,
+            plan_id,
+            &template.id,
+            template.latest_published_revision,
+            crate::workflows::RunLimits::default(),
         )
-        .expect("insert run");
+        .expect("valid persisted run");
 }
 
 /// Catches: an empty or schema-less workflow_runs.sqlite3 beside the story DB making every
@@ -252,73 +263,37 @@ fn a_story_database_from_before_this_change_opens_and_keeps_working() {
     assert_eq!(store.list_stories(&p.id).expect("list").len(), 2);
 }
 
-/// Catches: an agent refusal that still writes a history row or bumps the revision, and any
-/// user-only command slipping through for a session that did not claim the story.
+/// Catches: actor metadata refusing administrative transitions or dropping managed provenance.
 #[test]
-fn refused_agent_transitions_leave_no_trace_and_name_the_cause() {
-    let dir = tempfile::tempdir().expect("dir");
+fn managed_administrative_transitions_record_each_actor() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("dir");
     let store = open(dir.path());
     let p = plan(&store, "p");
-    let a = story(&store, &p.id, "A");
-    let claimed = store.claim(&a.id, "impl", a.revision).expect("claim");
-    let checked = store
-        .transition_for_actor(
-            &a.id,
-            claimed.revision,
-            StoryCommand::CheckCriterion(0),
-            Some("impl"),
-        )
-        .expect("check");
-    let review = store
-        .transition_for_actor(
-            &a.id,
-            checked.revision,
-            StoryCommand::SubmitReview,
-            Some("impl"),
-        )
-        .expect("review");
-    let before = store.transition_history(&a.id).expect("history").len();
-
-    for (command, name) in [
-        (StoryCommand::Block, "block"),
-        (StoryCommand::WontFix, "wont_fix"),
-        (StoryCommand::Unblock, "unblock"),
-        (StoryCommand::RejectReview, "reject_review"),
-        (StoryCommand::StartManual, "start_manual"),
+    let mut a = story(&store, &p.id, "A");
+    for (command, actor) in [
+        (StoryCommand::Block, "impl"),
+        (StoryCommand::Unblock, "reviewer"),
+        (StoryCommand::StartManual, "impl"),
+        (StoryCommand::CheckCriterion(0), "reviewer"),
+        (StoryCommand::SubmitReview, "reviewer"),
+        (StoryCommand::RejectReview, "impl"),
+        (StoryCommand::WontFix, "reviewer"),
     ] {
-        for actor in ["impl", "reviewer"] {
-            let err = store
-                .transition_for_actor(&a.id, review.revision, command.clone(), Some(actor))
-                .expect_err("user-only");
-            assert!(
-                err.contains(name) && err.contains("user-only"),
-                "{actor}: {err}"
-            );
-        }
+        a = store
+            .transition_for_actor(&a.id, a.revision, command.clone(), Some(actor))
+            .expect("trusted actor action");
+        let history = store.transition_history(&a.id).expect("history");
+        let last = history.last().expect("transition");
+        assert_eq!(last.command, command);
+        assert_eq!(
+            last.actor,
+            StoryTransitionActor::ManagedSession {
+                session_id: actor.into()
+            }
+        );
+        assert_eq!(last.revision, a.revision);
     }
-    let err = store
-        .transition_for_actor(&a.id, review.revision, StoryCommand::Approve, Some("impl"))
-        .expect_err("implementer");
-    assert!(err.contains("implementer"), "{err}");
-    // A reviewer cannot check criteria on a story it did not claim.
-    let err = store
-        .transition_for_actor(
-            &a.id,
-            review.revision,
-            StoryCommand::CheckCriterion(0),
-            Some("reviewer"),
-        )
-        .expect_err("not claimed by reviewer");
-    assert!(err.contains("claimed by another session"), "{err}");
-
-    let after = store.get_story(&a.id).expect("story");
-    assert_eq!(after.revision, review.revision);
-    assert_eq!(after.status, StoryStatus::Review);
-    assert_eq!(after.claim_session.as_deref(), Some("impl"));
-    assert_eq!(
-        store.transition_history(&a.id).expect("history").len(),
-        before
-    );
+    assert_eq!(a.status, StoryStatus::WontFix);
 }
 
 /// Catches: an agent approving a story that is not in review, or approving with a stale
@@ -462,4 +437,41 @@ fn concurrent_proposals_with_one_key_create_one_story() {
         .collect();
     assert!(ids.iter().all(|id| *id == ids[0]), "{ids:?}");
     assert_eq!(store.list_stories(&p.id).expect("list").len(), 1);
+}
+
+/// Catches: tracking-only local requests bypassing revision or criterion bounds,
+/// or a refused update leaving persisted state or a transition history row behind.
+#[test]
+fn refused_local_updates_preserve_story_and_transition_history() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("dir");
+    let store = open(dir.path());
+    let p = plan(&store, "local refusals");
+    let initial = story(&store, &p.id, "A");
+    let started = store
+        .transition_from_local_api(&initial.id, initial.revision, StoryCommand::StartManual)
+        .expect("trusted local start");
+    let before = store.transition_history(&initial.id).expect("history");
+
+    for (revision, command, cause) in [
+        (
+            started.revision,
+            StoryCommand::CheckCriterion(1),
+            "out of range",
+        ),
+        (initial.revision, StoryCommand::WontFix, "revision"),
+    ] {
+        let error = store
+            .transition_from_local_api(&initial.id, revision, command)
+            .expect_err("invalid local update");
+        assert!(error.contains(cause), "{error}");
+        let persisted = store.get_story(&initial.id).expect("persisted story");
+        assert_eq!(persisted.status, StoryStatus::InProgress);
+        assert_eq!(persisted.revision, started.revision);
+        assert_eq!(persisted.checked, vec![false]);
+        assert_eq!(persisted.claim_session, None);
+        assert_eq!(
+            store.transition_history(&initial.id).expect("history"),
+            before
+        );
+    }
 }

@@ -491,9 +491,13 @@ fn completed_check(flow: &Flow) -> (StoryExecution, CheckReceipt) {
             snapshot.story_definition_revision,
         )
         .unwrap();
-    let receipt = execute_pinned_check(
+    let path = std::path::Path::new(execution.worktree_path.as_deref().unwrap());
+    let receipt = super::check::execute_run_check(
         &definition.required_checks[0],
-        std::path::Path::new(execution.worktree_path.as_deref().unwrap()),
+        path,
+        path,
+        &flow.run_id,
+        false,
     )
     .unwrap();
     (execution, receipt)

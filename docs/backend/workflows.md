@@ -2,7 +2,7 @@
 
 Workflow definitions are owned by a canonical project path and stored in `workflows.sqlite3` under the TUICommander configuration directory. A definition has a mutable draft revision and immutable published revisions. Editing a draft uses an expected revision; publishing validates the graph, resolves pinned story-template revisions, and inserts a new published row in one SQLite transaction. A run must pin a published revision; this definition layer does not execute nodes.
 
-Each definition has a `closure` policy. Existing records migrate to `human`, and new drafts default to `human`; this legacy policy name means an explicit approval transition, which may be performed by an independent reviewer agent. `update_closure` edits a draft with an expected revision. `automatic` can be saved as a draft but publishing it is refused until TUIC has an automatic evidence gate. Published revisions retain their pinned closure policy.
+Each definition has a `closure` policy. Existing records migrate to `human`, and new drafts default to `human`; this legacy policy name means an explicit approval transition, which may be performed by any trusted caller. `update_closure` edits a draft with an expected revision. `automatic` can be saved as a draft but publishing it is refused until TUIC has an automatic evidence gate. Published revisions retain their pinned closure policy.
 
 A definition also pins `requiredChecks`: up to 16 check commands, each with a stable ID, an `argv` array, and a timeout of 1–600 seconds. `update_checks` edits the draft with an expected revision; publication stores the exact set on that immutable revision. Commands invoke executables directly, without a shell. `execute_check` runs a pinned check in the assigned, clean story worktree and appends a durable `CheckRecorded` event with command, exit code, branch ref, commit/tree digest, and duration. A failed command also receives a receipt, but it cannot authorize integration. A changed worktree or ref makes the receipt stale.
 
@@ -33,3 +33,14 @@ A `needs_input` report includes `inputRequest {question,options}` and pauses the
 Launching attempts is explicit in this slice. Automatic graph scheduling, evaluation and review policy are subsequent slices.
 
 The active plan coordinator can call `workflow_story_create` with a stable proposal key. The story store commits the key and story in one transaction, so a lost MCP response and retry cannot create duplicates. The run separately reserves a bounded CreateStory effect and records its outcome; a crash between the two databases leaves an uncertain effect for operator reconciliation. A read-only proposal lookup can establish whether the story was committed, but the creation tool refuses uncertain effects and never replays them. A reused key with different content is rejected.
+
+Published checks own their process trees (Unix process groups; Windows suspended
+job assignment with kill-on-close). Cancelling a run synchronously stops its
+active checks and fences late starts. Host shutdown tears down every active check
+before exit; cancellation yields no successful receipt.
+
+Workflow definition and run APIs do not accept or persist actor metadata. HTTP adapters call the same actorless services as desktop IPC. Story transition actors are tracking metadata, not action permissions. Story transitions through desktop IPC and credential-authenticated HTTP record Human; sessionless local HTTP (including missing caller-address metadata on Unix sockets) implies LocalApi. Managed story calls record their session identity. Local token exchange is accepted. Actor identity never refuses story or workflow actions; state, revision, project and integration checks still apply. The actor is host-selected; request JSON cannot choose it.
+
+Plan aggregation uses the same receipt freshness authority as dependency release and final verification. Workflow-owned plans are Done only while every approved story has current integration evidence at its accepted revision; ref movement returns Active until recertification. Manual plans keep Done/WontFix aggregation. Explicit recertification remains available after cancellation to renew already integrated evidence.
+
+Git receipt and dependency probes run before SQLite write transactions and before the story-store mutex is acquired. The short commit transaction revalidates the persisted run sequence and relevant story revisions; a concurrent change fails with a retry error. No filesystem fingerprint is persisted: ref movement after a probe invalidates receipt freshness on the next read.

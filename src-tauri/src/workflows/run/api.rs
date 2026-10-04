@@ -282,3 +282,38 @@ fn scoped_snapshot(store: &RunStore, owner: &str, run_id: &str) -> Result<RunSna
     }
     Ok(snapshot)
 }
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn run_decisions_reject_relative_projects() {
+        // Catches: run decisions accepting a relative project path.
+        for command in [
+            RunCommand::AnswerInput {
+                attempt_id: "attempt".into(),
+                answer: "yes".into(),
+            },
+            RunCommand::Resume,
+            RunCommand::FinalVerificationPassed,
+            RunCommand::Complete,
+            RunCommand::ResolveUncertainEffect {
+                effect_id: "effect".into(),
+                succeeded: true,
+            },
+        ] {
+            let error = run_action(
+                "relative",
+                RunAction::Command {
+                    run_id: "run".into(),
+                    command_id: "decision".into(),
+                    expected_sequence: 1,
+                    command: Box::new(command),
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, "project must be an absolute path");
+        }
+    }
+}

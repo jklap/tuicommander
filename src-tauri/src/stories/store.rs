@@ -296,12 +296,29 @@ impl StoryStore {
             .iter()
             .filter(|story| story.status == StoryStatus::WontFix)
             .count();
+        let run_db = self
+            .db_path
+            .parent()
+            .ok_or("story store has no parent directory")?
+            .join("workflow_runs.sqlite3");
+        let requires_receipts = crate::workflows::plan_has_workflow_run_in(&run_db, plan_id)?;
+        let mut complete = !stories.is_empty();
+        for story in &stories {
+            let accepted = if requires_receipts {
+                story.status == StoryStatus::Done
+                    && crate::workflows::story_integrated_at_revision_in(
+                        &run_db,
+                        &story.id,
+                        story.revision,
+                    )?
+            } else {
+                matches!(story.status, StoryStatus::Done | StoryStatus::WontFix)
+            };
+            complete &= accepted;
+        }
         let state = if stories.is_empty() {
             PlanState::Draft
-        } else if stories
-            .iter()
-            .all(|story| matches!(story.status, StoryStatus::Done | StoryStatus::WontFix))
-        {
+        } else if complete {
             PlanState::Done
         } else {
             PlanState::Active
@@ -340,21 +357,7 @@ impl StoryStore {
 
     pub fn plan_state(&self, plan_id: &str) -> Result<PlanState, String> {
         self.get_plan(plan_id)?;
-        let (total, unfinished): (i64, i64) = self
-            .connect()?
-            .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN status IN ('done', 'wontfix') THEN 0 ELSE 1 END), 0) FROM stories WHERE plan_id=?1",
-                [plan_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|e| format!("read plan state: {e}"))?;
-        if total == 0 {
-            return Ok(PlanState::Draft);
-        }
-        if unfinished == 0 {
-            return Ok(PlanState::Done);
-        }
-        Ok(PlanState::Active)
+        Ok(self.plan_view(plan_id)?.state)
     }
 
     pub fn claim(
@@ -364,12 +367,15 @@ impl StoryStore {
         expected_revision: i64,
     ) -> Result<Story, String> {
         validate_text("session", session, 200)?;
+        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
+        preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
         if story.status != StoryStatus::Ready {
-            let unmet = unmet_dependencies(&tx, &story, &self.db_path)?;
+            let unmet = unmet_dependencies(&tx, &story, &preflight)?;
             return Err(if unmet.is_empty() {
                 format!(
                     "story is not ready (status: {}); only a ready story can be claimed",
@@ -383,7 +389,7 @@ impl StoryStore {
                 )
             });
         }
-        if !dependencies_integrated(&tx, &story, &self.db_path)? {
+        if !dependencies_integrated(&tx, &story, &preflight)? {
             return Err("story dependency lacks a current integration receipt".into());
         }
         story.status = StoryStatus::InProgress;

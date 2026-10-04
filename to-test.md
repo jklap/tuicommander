@@ -4604,6 +4604,11 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
 
+- [ ] After the next backend restart, cancel a workflow while a published check is running and confirm its workers stop (#954-4f33). Automated regression covers process-tree teardown; the running backend must be restarted to load this change.
+
+- [ ] After backend restart, verify CLI/local and authenticated browser workflow actions succeed and story history records local_api or human provenance (#956-9745, #1497-4f55). Actor identity is tracking only. Rust changes require a manual make dev restart (or make build); automated route and provenance regressions cover the backend contract.
+
+- [ ] After backend restart, verify workflow plan Done becomes Active after canonical branch movement and Done after recertification (#962-0888); manual approval completion is preserved. Targeted Git integration tests cover both projections.
 - [ ] After Boss restarts `make dev` (Rust does not hot-reload), exceed the scrollback cap and verify retained command navigation, gutter selection, green prompt ticks and answers-only associations stay on their original rows (#1370-0077). Restart must load backend and frontend together because stored OSC row coordinates changed.
 - [ ] Queue retry idempotency (1106): after Boss rebuilds/restarts the backend, send the same `idempotencyKey` twice to an isolated agent queue, then retry after it drains; verify one wake and `accepted: true` without requeue. Automated HTTP/PTY tests cover bytes and queue state; this check loads the Rust change into the running app. Live per-CLI turn acceptance and composer/reconnect convergence remain separate open criteria.
 ## Remote transfer cancellation fixture (1528-cee8) — Rust rebuild
