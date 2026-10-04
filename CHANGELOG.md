@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Initialise headless VT screens at the requested terminal width.
+
 - Preserve Claude subcommand arguments without injecting launch-scoped settings.
 
 - Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.
