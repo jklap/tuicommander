@@ -151,7 +151,11 @@ pub(in crate::telegram) async fn runtime(
             .unwrap();
     runtime.outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, address));
     runtime
-        .tool(PEER, "target-mcp", crate::telegram::tool::Input::Register)
+        .tool(
+            PEER,
+            "target-mcp",
+            crate::telegram::tool::Input::Register {},
+        )
         .await
         .unwrap();
     runtime

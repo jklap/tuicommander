@@ -10,8 +10,8 @@ use std::sync::Arc;
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Input {
-    Register,
-    Unregister,
+    Register {},
+    Unregister {},
     Begin {
         request_id: String,
     },
@@ -125,6 +125,7 @@ mod tests {
         );
         for value in [
             json!({"action":"register","peer":"other"}),
+            json!({"action":"unregister","peer":"other"}),
             json!({"action":"register","tuic_session":"other"}),
             json!({"action":"send","text":"hello","approved":true}),
             json!({"action":"begin","request_id":"r","peer":"other"}),

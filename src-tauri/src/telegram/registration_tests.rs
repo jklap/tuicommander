@@ -13,6 +13,24 @@ async fn inbox(runtime: &Runtime, sid: &str) -> Value {
     .await
 }
 
+async fn assert_no_agent_reply(runtime: &mut Runtime, server: &FakeServer) {
+    let value = inbound::text_update(7, 1111111, "after exit");
+    let parsed = crate::telegram::mail::Update::parse(
+        &value,
+        &runtime.outbound.paths.allowlist().unwrap(),
+        "test-bot",
+        "",
+    )
+    .unwrap();
+    let result = runtime.deliver(parsed.mail.unwrap()).await.unwrap();
+    assert_eq!(result["accepted"], false);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].0.ends_with("sendMessage"));
+    assert_eq!(requests[0].1["text"], "Nessun agent registrato");
+    assert_eq!(requests[0].1["chat_id"], 1111111);
+}
+
 // Catches: registration is still restricted to a configured peer, replacement
 // sends repeated notices, or old buttons/requests migrate to the new agent.
 #[tokio::test]
@@ -56,11 +74,11 @@ async fn second_register_replaces_first_and_notifies_it_once() {
         })
         .unwrap();
     runtime
-        .tool(OTHER, "second-mcp", Input::Register)
+        .tool(OTHER, "second-mcp", Input::Register {})
         .await
         .unwrap();
     runtime
-        .tool(OTHER, "second-mcp", Input::Register)
+        .tool(OTHER, "second-mcp", Input::Register {})
         .await
         .unwrap();
     runtime.update(json!({"callback_query":{"id":"old-query","from":{"id":1111111},
@@ -76,7 +94,7 @@ async fn second_register_replaces_first_and_notifies_it_once() {
     assert!(runtime.pending.is_empty());
     assert_eq!(
         runtime
-            .tool(PEER, "target-mcp", Input::Unregister)
+            .tool(PEER, "target-mcp", Input::Unregister {})
             .await
             .unwrap_err(),
         Error::NotRegistered
@@ -93,7 +111,7 @@ async fn unregistered_caller_cannot_send_and_restart_has_no_registration() {
     let server = FakeServer::start(vec![]).await;
     let mut runtime = outbound_tests::runtime(paths.clone(), server.address).await;
     runtime
-        .tool(PEER, "target-mcp", Input::Unregister)
+        .tool(PEER, "target-mcp", Input::Unregister {})
         .await
         .unwrap();
     for input in [
@@ -118,7 +136,7 @@ async fn unregistered_caller_cannot_send_and_restart_has_no_registration() {
         assert!(error.to_string().contains("register"));
     }
     runtime
-        .tool(PEER, "target-mcp", Input::Register)
+        .tool(PEER, "target-mcp", Input::Register {})
         .await
         .unwrap();
     let fresh = Runtime::new(
@@ -139,12 +157,16 @@ async fn unregistered_caller_cannot_send_and_restart_has_no_registration() {
 async fn exited_agent_mcp_session_and_closed_pty_unregister() {
     for end in ["mcp", "pty"] {
         let (_dir, paths) = setup();
-        let server = FakeServer::start(vec![]).await;
+        let server = FakeServer::start(vec![(
+            StatusCode::OK,
+            json!({"ok":true,"result":{"message_id":9}}),
+        )])
+        .await;
         let mut runtime = outbound_tests::runtime(paths, server.address).await;
         crate::state::tests_support::insert_dummy_session(&runtime.state, PEER);
         crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_IDLE);
         runtime
-            .tool(PEER, "target-mcp", Input::Register)
+            .tool(PEER, "target-mcp", Input::Register {})
             .await
             .unwrap();
         let mut removed = None;
@@ -178,7 +200,7 @@ async fn exited_agent_mcp_session_and_closed_pty_unregister() {
         {
             let _ = session.lock()._child.kill();
         }
-        assert!(server.requests().is_empty());
+        assert_no_agent_reply(&mut runtime, &server).await;
     }
 }
 
@@ -188,7 +210,11 @@ async fn exited_agent_mcp_session_and_closed_pty_unregister() {
 #[tokio::test]
 async fn foreground_agent_exit_unregisters_even_when_shell_stays() {
     let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![]).await;
+    let server = FakeServer::start(vec![(
+        StatusCode::OK,
+        json!({"ok":true,"result":{"message_id":9}}),
+    )])
+    .await;
     let mut runtime = outbound_tests::runtime(paths, server.address).await;
     let state = runtime.state.clone();
     let agent =
@@ -204,7 +230,7 @@ async fn foreground_agent_exit_unregisters_even_when_shell_stays() {
         Some("claude")
     );
     runtime
-        .tool(PEER, "target-mcp", Input::Register)
+        .tool(PEER, "target-mcp", Input::Register {})
         .await
         .unwrap();
     let seen = state.session_maps.session_states.get(PEER).unwrap().clone();
@@ -229,7 +255,7 @@ async fn foreground_agent_exit_unregisters_even_when_shell_stays() {
             .unwrap_err(),
         Error::NotRegistered
     );
-    assert!(server.requests().is_empty());
+    assert_no_agent_reply(&mut runtime, &server).await;
 }
 
 // Catches: no-agent inbound is retained or silently lost, stranger text gets a
@@ -248,7 +274,7 @@ async fn inbound_without_registration_replies_and_drops_but_strangers_stay_silen
     .await;
     let mut runtime = outbound_tests::runtime(paths.clone(), server.address).await;
     runtime
-        .tool(PEER, "target-mcp", Input::Unregister)
+        .tool(PEER, "target-mcp", Input::Unregister {})
         .await
         .unwrap();
     let state = runtime.state.clone();
