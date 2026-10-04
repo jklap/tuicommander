@@ -2426,6 +2426,7 @@ pub fn run() {
                 // streaming thread (which holds an Arc<WhisperContext>), then drops
                 // the transcriber while the process is still alive.
                 tauri::RunEvent::Exit => {
+                    workflows::run::shutdown_checks();
                     if let Some(dictation) = app_handle.try_state::<dictation::DictationState>() {
                         dictation.shutdown();
                     }
@@ -2893,6 +2894,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
         }
     }
 
+    workflows::run::shutdown_checks();
     // Flush the last buffered log lines to disk before the process exits
     // (story #672-c1a3) — the lines a shutdown bug needs most.
     app_logger::flush_logs_on_exit();

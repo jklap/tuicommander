@@ -33,3 +33,8 @@ A `needs_input` report includes `inputRequest {question,options}` and pauses the
 Launching attempts is explicit in this slice. Automatic graph scheduling, evaluation and review policy are subsequent slices.
 
 The active plan coordinator can call `workflow_story_create` with a stable proposal key. The story store commits the key and story in one transaction, so a lost MCP response and retry cannot create duplicates. The run separately reserves a bounded CreateStory effect and records its outcome; a crash between the two databases leaves an uncertain effect for operator reconciliation. A read-only proposal lookup can establish whether the story was committed, but the creation tool refuses uncertain effects and never replays them. A reused key with different content is rejected.
+
+Published checks own their process trees (Unix process groups; Windows suspended
+job assignment with kill-on-close). Cancelling a run synchronously stops its
+active checks and fences late starts. Host shutdown tears down every active check
+before exit; cancellation yields no successful receipt.
