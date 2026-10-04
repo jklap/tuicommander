@@ -216,8 +216,7 @@ async fn manual_chat_revocation_and_disable_use_persisted_state() {
 #[tokio::test]
 async fn registered_agent_snapshot_uses_shared_status_and_retires_stale_names() {
     use crate::telegram::{
-        outbound_tests,
-        tests::{FakeServer, PEER},
+        tests::{FakeServer, PEER, outbound_tests},
         tool::Input,
     };
     let (_dir, paths) = crate::telegram::tests::setup();
