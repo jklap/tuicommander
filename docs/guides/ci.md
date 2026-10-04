@@ -68,9 +68,9 @@ compiler that `release.yml` does not use.
 
 ## Note on clippy scope
 
-CI runs `cargo clippy -- -D warnings`, which lints the default targets. The
-`--all-targets` form in the bump checklist above is stricter — it also lints test
-and bench code — so a clean local `--all-targets` run implies CI's narrower one.
+CI runs `cargo clippy --workspace --exclude bm25 --all-targets -- -D warnings`.
+It includes test and bench code. The vendored `bm25` patch is excluded from
+Clippy, but remains in workspace tests.
 
 ## Headless workspace scope
 
@@ -87,3 +87,19 @@ Nextest fixture setup scope check is named `scripts/check-nextest-fixture-scope.
 and runs explicitly in the Linux Rust job after workspace tests. That job
 installs Nextest and already has the compiled test binaries. The check retains
 its positive fixture-consumer and negative non-consumer assertions.
+
+## macOS CI test compilation
+
+The macOS cross-platform job has a 90-minute timeout. On `9a49ff1cb`, Clippy
+finished in 9m27s and the test build took 67m17s. Nextest fixture setup then
+spent 532.140s building the headless fixture binaries. Actual test execution
+had only about 4m18s before cancellation, with 6483 of 7391 tests passing.
+The longest completed test took 41.268s. This log does not separate compiler
+optimization from linking, and does not measure a complete suite duration.
+
+The macOS Tests step sets `CARGO_PROFILE_TEST_OPT_LEVEL=0` to avoid optimizing
+workspace test harnesses. Non-workspace dependencies retain the inherited
+`[profile.dev.package."*"]` optimization level of 1. Windows keeps test
+optimization level 1. Test selection, retries, hang detection and the job
+budget stay the same. This does not change release builds. The next CI run
+must measure the compile-time benefit and check for runtime regressions.

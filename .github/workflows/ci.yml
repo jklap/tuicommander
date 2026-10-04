@@ -449,6 +449,10 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
           CARGO_INCREMENTAL: "0"
+          # The macOS 9a49ff1cb run spent 67m17s compiling tests before its
+          # 90-minute cancellation. Test inherits dev's opt-level 1; keep
+          # dependencies at that level, but skip optimizing workspace harnesses.
+          CARGO_PROFILE_TEST_OPT_LEVEL: ${{ matrix.label == 'macOS-ARM' && '0' || '1' }}
           CMAKE_C_COMPILER_LAUNCHER: "sccache"
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
           CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
