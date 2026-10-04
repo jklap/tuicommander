@@ -1,10 +1,11 @@
 //! App-specific fixtures built on the shared platform-neutral test helpers.
 
 pub(crate) use crate::fs::system32_exe;
+#[cfg(unix)]
+pub(crate) use tuic_test_support::short_socket_test_temp_root;
 pub(crate) use tuic_test_support::{
     dir_outside_home, fail_with_stderr_script, fake_ssh_script, host_shell, normalize_newlines,
-    print_var_script, replay_file_command, short_socket_test_temp_root, slashed, sleep_script,
-    test_temp_root,
+    print_var_script, replay_file_command, slashed, sleep_script, test_temp_root,
 };
 
 /// Scratch dir short enough to bind a Unix socket whatever the checkout path.
@@ -52,68 +53,6 @@ pub(crate) fn assert_fake_ssh_stopped(pids: Vec<i32>) {
         surviving.is_empty(),
         "fake SSH processes survived shutdown: {surviving:?}"
     );
-}
-
-#[cfg(test)]
-mod temp_root_tests {
-    #[test]
-    fn bare_test_binary_keeps_tempfile_dirs_inside_test_root() {
-        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        let inside = repo.join(".tmp/tuic-tests/980-inside");
-        let default_root = repo.join(".tmp/tuic-tests");
-        let outside = repo.join(".tmp/980-outside");
-        std::fs::create_dir_all(&inside).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        for (configured_root, expected_root) in [
-            (Some(inside.as_path()), inside.as_path()),
-            (None, default_root.as_path()),
-        ] {
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-            child
-                .args([
-                    "--exact",
-                    "test_support::temp_root_tests::bare_test_binary_child",
-                ])
-                .env("TUIC_TEST_TMP_EXPECTED_ROOT", expected_root)
-                .env("TMPDIR", &outside)
-                .env("TMP", &outside)
-                .env("TEMP", &outside);
-            if let Some(root) = configured_root {
-                child.env("TUIC_TEST_TMP_ROOT", root);
-            } else {
-                child.env_remove("TUIC_TEST_TMP_ROOT");
-            }
-            let output = child.output().unwrap();
-            assert!(
-                output.status.success(),
-                "child used ambient temp: {}",
-                String::from_utf8_lossy(&output.stdout)
-            );
-        }
-    }
-
-    #[test]
-    fn bare_test_binary_child() {
-        let Some(expected) = std::env::var_os("TUIC_TEST_TMP_EXPECTED_ROOT") else {
-            return;
-        };
-        let expected = std::path::PathBuf::from(expected).canonicalize().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let actual = dir.path().canonicalize().unwrap();
-        assert!(
-            actual.starts_with(&expected),
-            "{} escaped the test root",
-            actual.display()
-        );
-        let std_temp = std::env::temp_dir().canonicalize().unwrap();
-        assert!(
-            std_temp.starts_with(&expected),
-            "{} escaped the test root",
-            std_temp.display()
-        );
-    }
 }
 
 /// Feed everything a PTY master produces to `sink`, in the small chunks the
@@ -639,5 +578,67 @@ impl Drop for ForegroundIdentityProbe {
             drop(session);
             drain.join().expect("join probe output drain");
         }
+    }
+}
+
+#[cfg(test)]
+mod temp_root_tests {
+    #[test]
+    fn bare_test_binary_keeps_tempfile_dirs_inside_test_root() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let inside = repo.join(".tmp/tuic-tests/980-inside");
+        let default_root = repo.join(".tmp/tuic-tests");
+        let outside = repo.join(".tmp/980-outside");
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        for (configured_root, expected_root) in [
+            (Some(inside.as_path()), inside.as_path()),
+            (None, default_root.as_path()),
+        ] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "test_support::temp_root_tests::bare_test_binary_child",
+                ])
+                .env("TUIC_TEST_TMP_EXPECTED_ROOT", expected_root)
+                .env("TMPDIR", &outside)
+                .env("TMP", &outside)
+                .env("TEMP", &outside);
+            if let Some(root) = configured_root {
+                child.env("TUIC_TEST_TMP_ROOT", root);
+            } else {
+                child.env_remove("TUIC_TEST_TMP_ROOT");
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "child used ambient temp: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+    }
+
+    #[test]
+    fn bare_test_binary_child() {
+        let Some(expected) = std::env::var_os("TUIC_TEST_TMP_EXPECTED_ROOT") else {
+            return;
+        };
+        let expected = std::path::PathBuf::from(expected).canonicalize().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let actual = dir.path().canonicalize().unwrap();
+        assert!(
+            actual.starts_with(&expected),
+            "{} escaped the test root",
+            actual.display()
+        );
+        let std_temp = std::env::temp_dir().canonicalize().unwrap();
+        assert!(
+            std_temp.starts_with(&expected),
+            "{} escaped the test root",
+            std_temp.display()
+        );
     }
 }

@@ -628,11 +628,6 @@ pub(super) async fn close_session(
     }
 }
 
-/// Column floor for a freshly registered VT screen, kept from the shell-session
-/// path: the grid starts at least this wide whatever geometry the caller asked
-/// for, and `VtLogBuffer::resize` only ever widens `max_cols` from there.
-const NEW_SESSION_MIN_VT_COLS: u16 = 220;
-
 /// Wire a freshly spawned PTY into `AppState`: the session handle, its terminal
 /// alias, the spawn metrics, the output ring, the VT screen **at the geometry the
 /// PTY was actually opened with**, the idle clock, the grid-watch channel, and
@@ -682,11 +677,7 @@ pub(super) fn register_pty_session(
     );
     state.grid.vt_log_buffers.insert(
         session_id.to_string(),
-        Mutex::new(state.new_vt_log_buffer(
-            rows,
-            cols.max(NEW_SESSION_MIN_VT_COLS),
-            VT_LOG_BUFFER_CAPACITY,
-        )),
+        Mutex::new(state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY)),
     );
     state
         .session_maps
@@ -3887,6 +3878,50 @@ mod tests {
         let rx2 = tx.subscribe();
         let current = rx2.borrow().clone();
         assert_eq!(current, vec![10, 20, 30]);
+    }
+
+    /// Catches: registration floors the VT at 220 columns, and a no-op resize
+    /// preserves that incorrect width instead of the real headless PTY geometry.
+    #[tokio::test]
+    async fn headless_registration_and_same_size_resize_preserve_requested_width() {
+        let state = super::super::tests::test_state();
+        let (shell, _) = crate::test_support::host_shell();
+        let session_id = spawn_pty_session(
+            state.clone(),
+            shell.into(),
+            None,
+            24,
+            148,
+            None,
+            RequestedIdentity::default(),
+        )
+        .expect("create isolated geometry PTY");
+        assert_eq!(
+            state
+                .grid
+                .vt_log_buffers
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                .grid_columns(),
+            148,
+            "registration must preserve the requested width"
+        );
+        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148)
+            .await
+            .expect("same-size resize");
+        assert_eq!(
+            state
+                .grid
+                .vt_log_buffers
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                .grid_columns(),
+            148,
+            "same-size resize must not preserve a stale 220-column floor"
+        );
+        crate::pty::close_pty_core(&state, &session_id, false);
     }
 
     /// Verifies that spawn_pty_session registers a grid_watch channel for the session,

@@ -708,7 +708,7 @@ Some frontend-only stores persist to localStorage:
 - [ ] Error handling strategy config
 
 ### Agent Configuration (Done)
-- [x] Settings > Agents tab with per-agent run configurations
+- [x] Settings > Agents tab with per-agent run configurations and an explicit, removable Codex bypass argument with warning icon
 - [x] MCP spawn accepts caller environment overrides and an overrideable run-config model while preserving legacy model arguments
 - [x] MCP bridge install/remove for every MCP-capable agent in the canonical registry
 - [x] Terminal context menu > Agents submenu with run configs
