@@ -4610,6 +4610,14 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss rebuilds/restarts the headless daemon, register an agent, let it exit to its shell, then restart an agent in that terminal. Phone mail must receive `Nessun agent registrato` until the replacement explicitly registers. Offline native foreground/inbox coverage: `observed_agent_exit_does_not_transfer_registration_to_restarted_agent` (#1524-dcc1). The running backend needs a restart to load this Rust change.
 - [ ] After Boss rebuilds/restarts the headless daemon, verify drafts have no phone Stop, send/notifications use the single configured chat, and a button press or new message retires previous handles. Live mint verification remains coordinator-owned; no instance was launched here. Rust changes do not hot-reload.
+- [ ] After Boss rebuilds/restarts the headless daemon, verify Telegram Stop on
+  a throwaway phone request: one Escape reaches only the draft-bound current
+  epoch, including a replacement Enter delivered before input bookkeeping;
+  duplicate/stale Stop never revives a draft. Confirm the selected
+  callback label stays disabled. The running Rust backend cannot load these
+  changes until rebuilt/restarted; no restart was performed by this peer.
+
+- [ ] Telegram setup (#1515-cb81): after rebuilding/restarting tuic-remote, use Settings on desktop and phone to replace/check a token, observe the MCP-registered agent read-only, enable, pair once within ten minutes or type a chat ID, remove a chat, and inspect safe status. Rust changes require a restart; no desktop instance was launched by the peer. Live Telegram authentication was not exercised.
 - [ ] After Boss rebuilds/restarts TUIC: Settings > Agents > Codex shows the migrated bypass argument and warning; remove it and confirm terminal and managed launches preserve the removal. The durable migration stamp and wrapper task routing require a rebuilt backend; also confirm a default wrapper receives its positional task. Rust migration requires restart. Visual screenshot attempt could not render the isolated harness while the macOS screen was locked. (#1399-17bd)
 
 - [ ] After Boss rebuilds/restarts the backend, confirm an interactive Codex default with `--profile review` (or `exec`/`e`) receives and submits its managed task. Actual subcommands after root options must retain positional tasks. The public spawn regression covers argv and queued delivery; the running Rust backend requires restart. (#1513-701d)
