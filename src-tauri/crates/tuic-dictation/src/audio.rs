@@ -465,13 +465,18 @@ mod tests {
         assert_samples(&up.captured(), &[0.1, 0.1, 0.2, 0.2, 0.3, 0.3]);
     }
 
-    /// Catches the cap comparison (`len > max_samples` becoming `>=` or `==`)
-    /// and the drop count (`len - max_samples` becoming `+` or `/`): exactly
-    /// the cap keeps everything, a few samples over drops the oldest ones.
+    /// Catches the cap comparison (`len > max_samples` becoming `==` or `<`)
+    /// and the drop count (`len - max_samples` becoming `+` or `/`): a few
+    /// samples over the cap drops exactly the oldest ones.
+    /// `len > max_samples` -> `>=` (audio.rs:315) is an equivalent mutant: at
+    /// `len == max_samples` it drops 0 samples either way, so no test can
+    /// tell the two apart.
     #[test]
     fn process_audio_chunk_caps_the_buffer_at_the_recording_horizon() {
         let max = (16_000.0 * crate::streaming::MAX_RECORDING_S) as usize;
 
+        // Boundary sanity check, not a mutant-killer: exactly the cap keeps
+        // everything and drops nothing.
         let mut at_cap = ChunkFixture::new();
         at_cap.process(&vec![0.25; max], 16_000, 1);
         assert_eq!(at_cap.buffer.lock().len(), max);
