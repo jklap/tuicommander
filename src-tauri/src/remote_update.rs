@@ -1015,7 +1015,7 @@ mod cookie_critic_tests {
         });
         let app = crate::mcp_http::build_remote_router(Arc::new(state));
         let binary = b"unwanted replacement";
-        let digest = format!("{:x}", Sha256::digest(binary));
+        let digest = "f602ffe15523d9d24bf76461d09e2836933cf4efd30e1a6e09eb3df13129e38a";
         for (origin, site) in [
             ("https://foreign.example", "cross-site"),
             ("http://127.0.0.1:9999", "same-site"),
@@ -1029,7 +1029,7 @@ mod cookie_critic_tests {
                 ("origin", origin),
                 ("sec-fetch-site", site),
                 ("x-tuic-target", env!("TUIC_TARGET_TRIPLE")),
-                ("x-tuic-sha256", digest.as_str()),
+                ("x-tuic-sha256", digest),
                 ("x-tuic-confirmed-sessions", "0"),
             ] {
                 req.headers_mut().insert(
