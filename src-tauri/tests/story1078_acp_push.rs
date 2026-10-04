@@ -162,3 +162,40 @@ fn ordinary_acp_activity_does_not_generate_a_mobile_wake_notice() {
     };
     assert_eq!(AcpNotice::from_envelope(&envelope), None);
 }
+
+// Catches: card SessionUpdates silently discarded before the push pump, or
+// ordinary/activity messages promoted to phone alerts.
+#[test]
+fn ego_cards_wake_the_phone_but_activity_and_plain_text_do_not() {
+    for (salience, expected) in [
+        (Some("card"), true),
+        (Some("activity"), false),
+        (None, false),
+    ] {
+        let mut chunk = v1::ContentChunk::new(text("Worker finished: RESULT"));
+        chunk.meta = salience.map(|salience| {
+            serde_json::Map::from_iter([(
+                "ego".to_string(),
+                serde_json::json!({ "salience": salience }),
+            )])
+        });
+        let envelope = AcpEventEnvelope {
+            connection_id: AcpConnectionId::new(),
+            generation: 1,
+            sequence: 9,
+            session_id: Some(v1::SessionId::new("conversation-1")),
+            turn_id: None,
+            event: AcpClientEvent::SessionUpdate {
+                update: Box::new(v1::SessionUpdate::AgentMessageChunk(chunk)),
+            },
+        };
+        let notice = AcpNotice::from_envelope(&envelope);
+        assert_eq!(notice.is_some(), expected, "{salience:?}");
+        if let Some(notice) = notice {
+            assert_eq!(notice.kind, AcpNoticeKind::Card);
+            assert_eq!(notice.session_id, envelope.session_id);
+            assert_eq!(notice.sequence, envelope.sequence);
+            assert_eq!(notice.request_id, None);
+        }
+    }
+}

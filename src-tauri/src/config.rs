@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 mod dictation_config {
     use super::*;
 
@@ -221,9 +221,9 @@ mod dictation_config {
     }
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub use dictation_config::DictationConfig;
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) use dictation_config::default_hold_back_ms;
 
 use std::collections::HashMap;
@@ -1657,6 +1657,9 @@ fn default_idle_close_minutes() -> u32 {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct AgentSettings {
+    /// One-time migration marker: a removed bypass must stay removed.
+    #[serde(default)]
+    pub(crate) codex_bypass_migrated: bool,
     #[serde(default)]
     pub(crate) run_configs: Vec<AgentRunConfig>,
     /// Minutes a finished managed child stays available for follow-up. Zero disables cleanup.
@@ -1703,6 +1706,7 @@ impl Default for AgentSettings {
     fn default() -> Self {
         Self {
             run_configs: Vec::new(),
+            codex_bypass_migrated: false,
             idle_close_minutes: DEFAULT_IDLE_CLOSE_MINUTES,
             auto_retry_on_error: false,
             headless_template: None,
@@ -2359,6 +2363,7 @@ where
 
     /// Repair a caller's malformed load without overwriting a valid document
     /// another process saved since that load. Both cases are decided under one lock.
+    #[cfg(feature = "dictation")]
     pub(crate) fn save_delta_recovering(&self, base: &T, desired: &T) -> Result<(), String> {
         let base_json = serde_json::to_value(base).map_err(|e| e.to_string())?;
         let desired_json = serde_json::to_value(desired).map_err(|e| e.to_string())?;
@@ -3980,7 +3985,69 @@ pub(crate) fn save_keybindings(
 // Agents config
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_agents_config() -> AgentsConfig {
-    load_json_config(AGENTS_CONFIG_FILE)
+    let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
+    match file.update_with_strict(|config| {
+        // Older typed agents.json writers discard unknown fields. Keep the
+        // durable migration bit outside their document, under the existing lock.
+        let stamp = config_dir().join("codex-bypass-migrated");
+        if stamp.try_exists().map_err(|error| error.to_string())? {
+            let settings = config.agents.entry("codex".into()).or_default();
+            let changed = !settings.codex_bypass_migrated;
+            settings.codex_bypass_migrated = true;
+            return Ok((config.clone(), changed));
+        }
+        let changed = migrate_codex_bypass(config);
+        persist_atomic(&stamp, b"1")?;
+        Ok((config.clone(), changed))
+    }) {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::error!(source = "config", "Codex args migration failed: {error}");
+            load_json_config(AGENTS_CONFIG_FILE)
+        }
+    }
+}
+
+pub(crate) const CODEX_BYPASS_ARG: &str = "--dangerously-bypass-approvals-and-sandbox";
+
+fn migrate_codex_bypass(config: &mut AgentsConfig) -> bool {
+    let settings = config.agents.entry("codex".into()).or_default();
+    if settings.codex_bypass_migrated {
+        return false;
+    }
+    if settings.run_configs.is_empty() {
+        settings.run_configs.push(AgentRunConfig {
+            name: "Codex Default".into(),
+            command: "codex".into(),
+            args: vec![CODEX_BYPASS_ARG.into()],
+            model: None,
+            env: HashMap::new(),
+            is_default: true,
+        });
+    } else {
+        let index = settings
+            .run_configs
+            .iter()
+            .position(|rc| rc.is_default)
+            .unwrap_or(0);
+        let rc = &mut settings.run_configs[index];
+        let name = rc.command.rsplit(['/', '\\']).next().unwrap_or(&rc.command);
+        let direct = std::path::Path::new(name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("codex"));
+        if direct
+            && !rc
+                .args
+                .iter()
+                .take_while(|arg| arg.as_str() != "--")
+                .any(|arg| arg == CODEX_BYPASS_ARG)
+        {
+            rc.args.insert(0, CODEX_BYPASS_ARG.into());
+        }
+    }
+    settings.codex_bypass_migrated = true;
+    true
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -3996,7 +4063,7 @@ pub(crate) fn save_agents_config(base: AgentsConfig, config: AgentsConfig) -> Re
 /// The default value of every config domain a Settings page edits. An expert
 /// control compares its live value against the matching field here to decide
 /// whether it is "at default" (hidden in basic mode) or "modified" (always
-/// shown). Every field comes from that domain's own `Default` impl — the same
+/// shown). Fields use each domain's defaults and its startup migrations — the same
 /// value deserialization falls back to when a config file is missing or a
 /// field is absent (see `load_json_config`) — never a hand-copied literal.
 #[derive(Serialize)]
@@ -4017,23 +4084,25 @@ pub(crate) struct ConfigDefaults {
     /// Absent (not merely empty) outside desktop builds: `mod dictation` does
     /// not exist under `--no-default-features` (e.g. `tuic-remote`), and this
     /// route is never registered there either (see `build_remote_router`).
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     pub(crate) dictation: DictationConfig,
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn get_config_defaults() -> ConfigDefaults {
+    let mut agents = AgentsConfig::default();
+    migrate_codex_bypass(&mut agents);
     ConfigDefaults {
         app: AppConfig::default(),
         notifications: NotificationConfig::default(),
         agent_settings: AgentSettings::default(),
         repo_defaults: RepoDefaultsConfig::default(),
-        agents: AgentsConfig::default(),
+        agents,
         github_accounts: crate::github_account::GitHubAccountRegistry::default(),
         // `speech_engine` is empty in the struct so a file without it can be
         // told apart from a choice (`dictation::commands`); a brand-new install
         // loads it as "edge", and the settings panel compares against that.
-        #[cfg(feature = "desktop")]
+        #[cfg(feature = "dictation")]
         dictation: DictationConfig {
             speech_engine: "edge".to_string(),
             ..DictationConfig::default()
@@ -4162,6 +4231,31 @@ pub(crate) fn get_note_images_dir() -> String {
 
 #[cfg(test)]
 mod tests {
+    // Catches: the durable migration stamp overrides a user's later bypass opt-in.
+    #[test]
+    fn critic_migration_does_not_undo_deliberate_bypass_reenable() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(root.path().to_path_buf());
+        let initial = load_agents_config();
+        let mut removed = initial.clone();
+        removed.agents.get_mut("codex").unwrap().run_configs[0]
+            .args
+            .clear();
+        save_agents_config(initial, removed).unwrap();
+        let disabled = load_agents_config();
+        assert!(disabled.agents["codex"].run_configs[0].args.is_empty());
+        let mut enabled = disabled.clone();
+        enabled.agents.get_mut("codex").unwrap().run_configs[0].args =
+            vec!["--dangerously-bypass-approvals-and-sandbox".into()];
+        save_agents_config(disabled, enabled).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                load_agents_config().agents["codex"].run_configs[0].args,
+                vec!["--dangerously-bypass-approvals-and-sandbox"]
+            );
+        }
+    }
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;
@@ -5716,6 +5810,108 @@ mod tests {
         assert_eq!(loaded.tab_ordering_mode, TabOrderingMode::Free);
     }
 
+    // Catches: a pre-migration backend save discards the marker and re-enables a removed bypass.
+    #[test]
+    #[serial_test::serial]
+    fn codex_removed_bypass_survives_legacy_backend_save() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _override = set_config_dir_override(dir.path().to_path_buf());
+        let base = load_agents_config();
+        let mut desired = base.clone();
+        desired.agents.get_mut("codex").unwrap().run_configs[0]
+            .args
+            .clear();
+        save_agents_config(base, desired).unwrap();
+
+        // Baseline 33faf1183 AgentSettings has no codex_bypass_migrated field.
+        // Its typed ConfigFile read-modify-write omits that unknown field even
+        // when the user only changes idle-close. Record that on-disk result.
+        let path = dir.path().join(AGENTS_CONFIG_FILE);
+        let mut legacy_saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        legacy_saved["agents"]["codex"]
+            .as_object_mut()
+            .unwrap()
+            .remove("codex_bypass_migrated");
+        legacy_saved["agents"]["codex"]["idle_close_minutes"] = serde_json::json!(30);
+        persist_atomic(&path, &serde_json::to_vec(&legacy_saved).unwrap()).unwrap();
+
+        let reloaded = load_agents_config();
+        assert!(
+            reloaded.agents["codex"].run_configs[0].args.is_empty(),
+            "an unrelated save by an older backend must not reactivate sandbox bypass"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn codex_bypass_migration_does_not_restore_a_removed_flag() {
+        // Catches: every load silently re-enabling bypass after Settings removes it.
+        let dir = TempDir::new().unwrap();
+        assert!(
+            dir.path()
+                .starts_with(crate::test_support::test_temp_root())
+        );
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let base = load_agents_config();
+        assert_eq!(
+            base.agents["codex"].run_configs[0].args,
+            vec!["--dangerously-bypass-approvals-and-sandbox"]
+        );
+        let mut desired = base.clone();
+        desired.agents.get_mut("codex").unwrap().run_configs[0]
+            .args
+            .clear();
+        save_agents_config(base, desired).unwrap();
+        assert!(
+            load_agents_config().agents["codex"].run_configs[0]
+                .args
+                .is_empty()
+        );
+        let disk: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join("agents.json")).unwrap()).unwrap();
+        assert_eq!(
+            disk["agents"]["codex"]["run_configs"][0]["args"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn codex_bypass_migration_preserves_wrappers_and_custom_configs() {
+        // Catches: migration putting direct CLI flags before a wrapper subcommand,
+        // or enabling bypass for a non-default authored config.
+        for (command, expected) in [("codex", true), ("/opt/company/codex-wrapper", false)] {
+            let dir = TempDir::new().unwrap();
+            assert!(
+                dir.path()
+                    .starts_with(crate::test_support::test_temp_root())
+            );
+            let _guard = set_config_dir_override(dir.path().to_path_buf());
+            fs::write(dir.path().join("agents.json"), serde_json::to_vec(&serde_json::json!({
+                "agents": {"codex": {"run_configs": [
+                    {"name":"Custom", "command":"codex", "args":["--search"]},
+                    {"name":"Default", "command":command, "args":["--search"], "is_default":true}
+                ]}}
+            })).unwrap()).unwrap();
+            let loaded = load_agents_config();
+            let configs = &loaded.agents["codex"].run_configs;
+            assert_eq!(configs[0].args, vec!["--search"]);
+            assert_eq!(
+                configs[1]
+                    .args
+                    .iter()
+                    .any(|s| s == "--dangerously-bypass-approvals-and-sandbox"),
+                expected,
+                "{command}"
+            );
+            assert_eq!(
+                load_agents_config().agents["codex"].run_configs[1].args,
+                configs[1].args
+            );
+        }
+    }
+
     #[test]
     fn agents_config_round_trip() {
         let dir = TempDir::new().unwrap();
@@ -5748,6 +5944,7 @@ mod tests {
                     },
                 ],
                 idle_close_minutes: DEFAULT_IDLE_CLOSE_MINUTES,
+                codex_bypass_migrated: false,
                 auto_retry_on_error: false,
                 headless_template: None,
                 env_flags: HashMap::new(),
@@ -8869,7 +9066,7 @@ mod tests {
         assert_no_field_default_drift(&AgentsConfig::default());
     }
 
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     #[test]
     fn dictation_config_field_defaults_match_default_impl() {
         assert_no_field_default_drift(&crate::dictation::commands::DictationConfig::default());
@@ -8897,15 +9094,26 @@ mod tests {
             serde_json::to_value(&defaults.repo_defaults).unwrap(),
             serde_json::to_value(RepoDefaultsConfig::default()).unwrap()
         );
+        let mut expected = serde_json::to_value(AgentsConfig::default()).unwrap();
+        expected["agents"]["codex"] = serde_json::to_value(AgentSettings::default()).unwrap();
+        expected["agents"]["codex"]["codex_bypass_migrated"] = serde_json::json!(true);
+        expected["agents"]["codex"]["run_configs"] = serde_json::json!([{
+            "name": "Codex Default",
+            "command": "codex",
+            "args": ["--dangerously-bypass-approvals-and-sandbox"],
+            "env": {},
+            "is_default": true
+        }]);
         assert_eq!(
             serde_json::to_value(&defaults.agents).unwrap(),
-            serde_json::to_value(AgentsConfig::default()).unwrap()
+            expected,
+            "the settings baseline includes the same persisted Codex launch migration"
         );
         assert_eq!(
             serde_json::to_value(&defaults.github_accounts).unwrap(),
             serde_json::to_value(crate::github_account::GitHubAccountRegistry::default()).unwrap()
         );
-        #[cfg(feature = "desktop")]
+        #[cfg(feature = "dictation")]
         assert_eq!(
             serde_json::to_value(&defaults.dictation).unwrap(),
             // The one deliberate difference: a fresh install resolves the engine
@@ -8980,11 +9188,98 @@ mod tests {
             serde_json::to_value(crate::github_account::GitHubAccountRegistry::load()).unwrap(),
             "must match what a fresh github_accounts.json-less install loads"
         );
-        #[cfg(feature = "desktop")]
+        #[cfg(feature = "dictation")]
         assert_eq!(
             serde_json::to_value(&defaults.dictation).unwrap(),
             serde_json::to_value(crate::dictation::commands::get_dictation_config()).unwrap(),
             "must match what a fresh dictation.json-less install loads"
         );
+    }
+    // Catches: arithmetic or sentinel defaults silently change new-install attachment limits.
+    #[test]
+    fn new_install_attachment_defaults_preserve_upload_and_retention_contract() {
+        let defaults = AppConfig::default();
+        assert_eq!(defaults.attachment_max_bytes, 26_214_400);
+        assert_eq!(defaults.attachment_retention_days, 7);
+        let mut old_document = serde_json::to_value(defaults).unwrap();
+        old_document
+            .as_object_mut()
+            .unwrap()
+            .remove("attachment_max_bytes");
+        old_document
+            .as_object_mut()
+            .unwrap()
+            .remove("attachment_retention_days");
+        let migrated: AppConfig = serde_json::from_value(old_document).unwrap();
+        assert_eq!(migrated.attachment_max_bytes, 26_214_400);
+        assert_eq!(migrated.attachment_retention_days, 7);
+    }
+
+    // Catches: missing mobile-theme keys deserialize to an empty or invalid theme.
+    #[test]
+    fn missing_mobile_theme_preserves_the_new_install_commander_theme() {
+        assert_eq!(UIPrefsConfig::default().mobile_theme, "commander");
+        let mut old_document = serde_json::to_value(UIPrefsConfig::default()).unwrap();
+        old_document.as_object_mut().unwrap().remove("mobile_theme");
+        let migrated: UIPrefsConfig = serde_json::from_value(old_document).unwrap();
+        assert_eq!(migrated.mobile_theme, "commander");
+    }
+
+    // Catches: a recovering save reports success while leaving the corrupt document unrepaired.
+    #[test]
+    fn recovering_delta_persists_desired_document_after_a_corrupt_load() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("recovery.json");
+        fs::write(&path, b"{broken").unwrap();
+        let file = ConfigFile::<serde_json::Value>::at_path(path.clone());
+        let desired = serde_json::json!({"setting": "chosen"});
+        file.save_delta_recovering(&serde_json::json!({}), &desired)
+            .unwrap();
+        let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(stored, desired);
+        assert_eq!(corrupt_backups(dir.path()).len(), 1);
+    }
+
+    // Catches: repairing an earlier load discards another writer's valid document.
+    #[test]
+    fn recovering_delta_preserves_a_document_repaired_by_another_writer() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("recovery.json");
+        fs::write(&path, br#"{"other":"new"}"#).unwrap();
+        let file = ConfigFile::<serde_json::Value>::at_path(path.clone());
+        file.save_delta_recovering(
+            &serde_json::json!({}),
+            &serde_json::json!({"setting": "chosen"}),
+        )
+        .unwrap();
+        let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(
+            stored,
+            serde_json::json!({"other": "new", "setting": "chosen"})
+        );
+    }
+
+    // Catches: the activity IPC save reports success without persisting the new entries.
+    #[test]
+    #[serial_test::serial]
+    fn activity_save_persists_entries_for_the_next_load() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let desired = serde_json::json!([{"id": "new", "message": "finished"}]);
+        save_activity(serde_json::Value::Null, desired.clone()).unwrap();
+        assert_eq!(load_activity(), desired);
+        assert!(dir.path().join(ACTIVITY_FILE).is_file());
+    }
+
+    // Catches: the keybindings IPC save drops a changed binding while reporting success.
+    #[test]
+    #[serial_test::serial]
+    fn keybindings_save_persists_custom_bindings_for_the_next_load() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let desired = serde_json::json!({"search-files": "Ctrl+Shift+P"});
+        save_keybindings(serde_json::Value::Null, desired.clone()).unwrap();
+        assert_eq!(load_keybindings(), desired);
+        assert!(dir.path().join(KEYBINDINGS_FILE).is_file());
     }
 }

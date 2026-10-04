@@ -193,9 +193,9 @@ jobs:
           # whisper.cpp build flags per platform:
           # - macOS: override -march to avoid i8mm detection mismatch on M-series < M4 (Metal GPU always active)
           # - Linux: -fPIC required for whisper-rs-sys static linking
-          # - Windows: whisper-rs is CPU-only (Vulkan backend's shader build is broken on the runner); /Z7 for sccache MSVC compat
-          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
+          # - Windows: whisper-rs is CPU-only (Vulkan backend's shader build is broken on the runner); -Z7 for sccache MSVC compat
+          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
+          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
         with:
           tauriScript: pnpm tauri
           tagName: v__VERSION__
@@ -204,6 +204,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
+          # tauri.conf.json enables the non-default dictation feature for bundles.
           args: ${{ matrix.args }}
 
       - name: Cleanup macOS keychain

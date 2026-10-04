@@ -5,6 +5,17 @@ An agent can request named username, password, OTP or SSO-link fields with the
 those fields. The tool receives names and `stored` or `declined`, never values.
 SSO links are displayed as text; they do not navigate automatically.
 
+`request` waits for entry or decline; the form expires after five minutes.
+The CLI and MCP bridge keep this request open for 305 seconds. `run` allows
+another 120 seconds for the approved child (425 seconds in the transports).
+Update both companions when installing this fix. Restart the rebuilt desktop
+manually; Rust does not hot-reload.
+
+If no window appears, inspect logs with source `secrets`: `Secret tool dispatched`,
+`Opening private secret form`, `Creating private secret window`, then
+`Private secret window created` or `Private secret window creation failed`.
+These stages do not include field values or the private entry capability.
+
 The form states: **the agent cannot read this value, but a command you approve
 can send it anywhere**. Approve only commands you trust. This boundary protects
 TUICommander tool results and its entry UI; it is not an OS sandbox against an

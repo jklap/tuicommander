@@ -184,6 +184,38 @@ describe("agentConfigsStore", () => {
 		});
 	});
 
+	it("does not drop the migration marker when Settings removes Codex bypass", async () => {
+		let persisted: AgentsConfig = {
+			agents: {
+				codex: {
+					codex_bypass_migrated: true,
+					run_configs: [
+						{
+							name: "Default",
+							command: "codex",
+							args: ["--dangerously-bypass-approvals-and-sandbox"],
+							env: {},
+							is_default: true,
+						},
+					],
+				},
+			},
+		};
+		const machine = createAgentConfigsStore({
+			load: async () => persisted,
+			save: async (_base, config) => {
+				persisted = config;
+			},
+		});
+		await machine.hydrate();
+		const config = machine.getDefaultConfig("codex")!;
+		await machine.updateRunConfig("codex", 0, { ...config, args: [] });
+		expect(persisted.agents.codex.codex_bypass_migrated).toBe(true);
+		expect(persisted.agents.codex.run_configs[0].args).toEqual([]);
+		await machine.hydrate();
+		expect(machine.getDefaultConfig("codex")?.args).toEqual([]);
+	});
+
 	describe("updateRunConfig()", () => {
 		it("updates a config at index", async () => {
 			await testInScopeAsync(async () => {
