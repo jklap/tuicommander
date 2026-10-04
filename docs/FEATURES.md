@@ -2573,3 +2573,7 @@ and directory. Values and templates live only until exit. One-time nonce links
 support browser entry on the existing application origin and transport. Use
 HTTPS for phone entry. TUIC inspection tools are gated while a form is open. See
 [Private secret forms](user-guide/secrets.md) for limits and consent.
+
+### Stored terminal marker coordinates
+
+Command boundaries and user prompt ticks retain their physical row after capped scrollback evicts older output. Answers-only history uses the same stable prompt coordinates.
