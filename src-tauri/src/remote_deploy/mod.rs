@@ -213,7 +213,7 @@ mod tests {
         };
         let findstr = system32_exe("findstr.exe");
         let windows = format!(
-            "setlocal EnableDelayedExpansion\r\nset \"last=\"\r\n:args\r\nif \"%~1\"==\"\" goto args_done\r\nset \"last=%~1\"\r\nshift\r\ngoto args\r\n:args_done\r\necho(!last!>>\"%~f0.log\"\r\necho(!last!>\"%~f0.args\"\r\n{findstr} /C:\"uname -sm\" \"%~f0.args\" >nul\r\nif not errorlevel 1 (echo Linux x86_64& exit /b 0)\r\n{findstr} /C:\"sha256sum\" \"%~f0.args\" >nul\r\nif not errorlevel 1 (echo {remote_hash}  tuic-remote& exit /b 0)\r\n{findstr} /C:\"read -r T\" \"%~f0.args\" >nul\r\nif not errorlevel 1 ({windows_launch})\r\n{findstr} /C:\"tail -n 5\" \"%~f0.args\" >nul\r\nif not errorlevel 1 (echo line1& echo line2& echo line3& echo line4& echo Address already in use& exit /b 0)\r\nexit /b 0"
+            "setlocal EnableDelayedExpansion\r\nset \"last=\"\r\n:args\r\nif \"%~1\"==\"\" goto args_done\r\nset \"last=%~1\"\r\nshift /1\r\ngoto args\r\n:args_done\r\necho(!last!>>\"%~f0.log\"\r\necho(!last!>\"%~f0.args\"\r\n{findstr} /C:\"uname -sm\" \"%~f0.args\" >nul\r\nif not errorlevel 1 (echo Linux x86_64& exit /b 0)\r\n{findstr} /C:\"sha256sum\" \"%~f0.args\" >nul\r\nif not errorlevel 1 (echo {remote_hash}  tuic-remote& exit /b 0)\r\n{findstr} /C:\"read -r T\" \"%~f0.args\" >nul\r\nif not errorlevel 1 ({windows_launch})\r\n{findstr} /C:\"tail -n 5\" \"%~f0.args\" >nul\r\nif not errorlevel 1 (echo line1& echo line2& echo line3& echo line4& echo Address already in use& exit /b 0)\r\nexit /b 0"
         );
         fake_ssh_script(name, &posix, &windows)
     }
