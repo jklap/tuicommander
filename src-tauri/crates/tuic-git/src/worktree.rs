@@ -5987,6 +5987,44 @@ branch refs/heads/feat
         }
     }
 
+    // Catches public command wrappers returning an empty/constant name or
+    // ignoring an existing collision instead of a valid new branch name.
+    #[test]
+    fn public_name_commands_return_valid_noncolliding_names_1450() {
+        let existing = vec!["xyzzy".to_string()];
+        let name = generate_worktree_name_cmd(existing.clone());
+        assert!(!name.is_empty());
+        assert!(!existing.contains(&name));
+        assert!(name.rsplit('-').next().unwrap().parse::<u16>().unwrap() < 1000);
+        let clone = generate_clone_branch_name_cmd("feat/auth".into(), existing);
+        assert!(clone.starts_with("feat-auth--"), "{clone}");
+        let repo = setup_test_repo();
+        for generated in [name, clone] {
+            git_cmd(repo.path()).args(["check-ref-format", "--branch", &generated]).run().unwrap();
+        }
+    }
+
+    // Catches splitting origin/main at the slash itself or dropping its fetch:
+    // the caller must observe a new upstream commit, not the stale tracking tip.
+    #[test]
+    fn fetch_remote_refreshes_the_requested_tracking_ref_1450() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let origin = add_origin(&repo);
+        let old = rev_at(&repo, "refs/remotes/origin/main").unwrap();
+        let writer = repo.parent().unwrap().join("writer");
+        git_cmd(repo.parent().unwrap()).args(["clone", "--branch", "main", &origin.to_string_lossy(), &writer.to_string_lossy()]).run().unwrap();
+        git_cmd(&writer).args(["config", "user.email", "test@test.com"]).run().unwrap();
+        git_cmd(&writer).args(["config", "user.name", "Test"]).run().unwrap();
+        commit_file(&writer, "remote.txt", "new upstream
+");
+        git_cmd(&writer).args(["push", "origin", "main"]).run().unwrap();
+        let expected = rev_at(&writer, "HEAD").unwrap();
+        assert_ne!(old, expected);
+        fetch_if_remote(&repo.to_string_lossy(), "origin/main").unwrap();
+        assert_eq!(rev_at(&repo, "refs/remotes/origin/main").unwrap(), expected);
+    }
+
     #[test]
     fn test_fetch_remote_ref_for_local_is_noop() {
         let repo = setup_test_repo();
