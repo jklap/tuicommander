@@ -281,3 +281,5 @@ When you switch branches:
 - If the new branch has no terminals, a fresh one is created
 
 Force-deleting a branch preserves its tip at `refs/archive/<branch>`. It refuses a branch checked out in any worktree and never replaces a different existing archive.
+
+Worktree names that sanitize to an existing checkout name produce an error when they target a different branch. TUICommander keeps that checkout and its uncommitted files.

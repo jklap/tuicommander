@@ -4566,3 +4566,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] After the next Rust restart, verify force branch deletion retains its tip at refs/archive and refuses archive collisions (#1462-e0e9).
 
 - [ ] After the next Rust restart, verify plugin CLI output over a pipe buffer completes and overflow returns an explicit error (#1461-8d36).
+
+- [ ] After the next Rust restart, verify creating feat-x cannot remove an existing worktree for feat/x (#1458-e1f6).
