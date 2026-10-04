@@ -1483,12 +1483,12 @@ mod tests {
             .expect("ordinary IPC was pinned by pending secret entry")
             .expect("ordinary IPC failed while secret entry was pending");
         };
-        let (direct_result, collapsed_result, ()) =
-            tokio::time::timeout(std::time::Duration::from_secs(30), async {
-                tokio::join!(direct_call, collapsed_call, fast_call)
-            })
-            .await
-            .expect("bridge never returned after the server answered secret entry");
+        let (direct_result, collapsed_result, ()) = Box::pin(tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            async { tokio::join!(direct_call, collapsed_call, fast_call) },
+        ))
+        .await
+        .expect("bridge never returned after the server answered secret entry");
         assert!(
             direct_result.is_ok(),
             "direct secret entry expired: {direct_result:?}"
