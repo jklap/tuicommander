@@ -4562,3 +4562,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] Load this manifest fix in the next Windows build. The `tuic-core` MSVC cross-check passes; a separate WebRTC/Abseil C++ build failure is tracked in 1479-f956. Existing desktop processes do not hot-reload Rust; restart only when Boss is ready.
 
 - [ ] After the next Rust restart, verify run-git rejects unsupported options and GitPanel fetch/push/merge still work (#1460-9ed8).
+
+- [ ] After the next Rust restart, verify force branch deletion retains its tip at refs/archive and refuses archive collisions (#1462-e0e9).

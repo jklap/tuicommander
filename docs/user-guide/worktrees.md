@@ -279,3 +279,5 @@ When you switch branches:
 - Previous branch's terminals are hidden (but remain alive)
 - New branch's terminals are shown
 - If the new branch has no terminals, a fresh one is created
+
+Force-deleting a branch preserves its tip at `refs/archive/<branch>`. It refuses a branch checked out in any worktree and never replaces a different existing archive.

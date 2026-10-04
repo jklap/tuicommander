@@ -2605,6 +2605,44 @@ pub fn archive_ref_name(branch_name: &str) -> String {
     format!("refs/archive/{branch_name}")
 }
 
+/// Preserve a force-deleted branch tip without replacing an earlier archive.
+pub(crate) fn delete_local_branch_with_archive(repo: &Path, branch: &str) -> Result<(), String> {
+    git_cmd(repo)
+        .args(["check-ref-format", "--branch", branch])
+        .run()
+        .map_err(|error| format!("Invalid local branch name '{branch}': {error}"))?;
+    let listed = git_cmd(repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|error| format!("Cannot verify branch checkouts: {error}"))?;
+    if parse_worktree_entries(&listed.stdout)
+        .iter()
+        .any(|entry| entry.branch.as_deref() == Some(branch))
+    {
+        return Err(format!(
+            "Cannot delete '{branch}': checked out in a worktree"
+        ));
+    }
+    let branch_ref = format!("refs/heads/{branch}");
+    let tip = rev_at(repo, &branch_ref)?;
+    let archive = archive_ref_name(branch);
+    if !archived_at_tip(repo, branch, &tip) {
+        // An empty old value means the archive must not exist. Never overwrite
+        // earlier unmerged work when a branch name is reused.
+        git_cmd(repo)
+            .args(["update-ref", &archive, &tip, ""])
+            .run()
+            .map_err(|error| format!("Cannot preserve '{branch}' at {archive}: {error}"))?;
+    }
+    git_cmd(repo)
+        .args(["update-ref", "-d", &branch_ref, &tip])
+        .run()
+        .map_err(|error| {
+            format!("Cannot delete '{branch}': local ref moved or deletion failed: {error}")
+        })?;
+    Ok(())
+}
+
 /// True when `refs/archive/<branch>` points at exactly `tip`: the branch's work
 /// is preserved. An archive taken before later commits does not qualify.
 fn archived_at_tip(repo: &Path, branch_name: &str, tip: &str) -> bool {
