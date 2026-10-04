@@ -40,14 +40,19 @@ class RunnerBoundaryTests(unittest.TestCase):
                                        (signal.SIGINT, "INT"),
                                        (signal.SIGHUP, "HUP")):
             with self.subTest(signal=trap_name):
-                code = f'trap "echo stopped; exit 23" {trap_name}; echo ready; read answer'
+                # dash can defer a trap while blocked in read; wait is interruptible.
+                code = (f'sleep 30 & sleeper=$!; '
+                        f"trap 'kill \"$sleeper\"; echo stopped; exit 23' {trap_name}; "
+                        'echo ready; wait "$sleeper"')
                 process = subprocess.Popen(self.command(code), env=self.env,
                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                           stderr=subprocess.PIPE, text=True)
+                                           stderr=subprocess.PIPE, text=True,
+                                           # rb launches asynchronously; restore the foreground
+                                           # SIGINT disposition before recording shell behavior.
+                                           preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
                 try:
                     self.assertEqual(process.stdout.readline(), "ready\n")
                     process.send_signal(stop_signal)
-                    # Keep stdin open: EOF would let read exit before the signal arrives.
                     process.wait(timeout=10)
                     stdout, stderr = process.communicate()
                     self.assertEqual(process.returncode, 23, stderr)
