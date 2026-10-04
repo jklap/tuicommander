@@ -814,6 +814,10 @@ HTTP client must already possess the privately delivered capability.
 `secret_form_submit {submission}` checks the same native identity and uses the
 same schema and consumption logic as `POST /secrets/forms/submit`.
 
+### Stored terminal marker coordinates
+
+OSC 133 event `line` and hook-generated `UserInput.line` use all-time rows. `terminal_scroll_to`, `terminal_get_lines` and search results keep their retained-grid coordinates; callers subtract the current frame `historyBase` when using stored markers.
+
 ### Telegram Settings
 
 - `telegram_settings`: safe settings snapshot (`enabled`, `token_set`, `bot_alias`, `registered_agent_name` (nullable), decimal-string `chats`, `connected`, `last_error`, `last_message_time`). Never returns a token or message text.

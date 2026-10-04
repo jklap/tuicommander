@@ -222,13 +222,15 @@ describe("useAppShortcutHandlers", () => {
 	// path and CanvasTerminal's Cmd+Shift+. branch obey one check. The gate is
 	// covered in stores/terminalBlockFold.test.ts — asserting it here would
 	// only re-test a mock.
-	it("folds the block nearest the viewport centre", async () => {
+	// Catches: eviction leaves the viewport centre relative while stored blocks are absolute.
+	it("folds the block nearest the viewport centre after eviction", async () => {
 		mockStores.terminals.getActive.mockReturnValue({
 			id: "term-1",
 			ref: { getSessionId: () => "session-1" },
-			commandBlocks: [{ promptLine: 40 }, { promptLine: 90 }],
+			historyBase: 100,
+			commandBlocks: [{ promptLine: 40 }, { promptLine: 140 }, { promptLine: 190 }],
 		});
-		// [displayOffset, historySize, screenRows] — centres the view on line 90
+		// [displayOffset, historySize, screenRows] — centres the view on absolute line 190
 		mockInvoke.mockResolvedValue([0, 80, 20]);
 		const handlers = useAppShortcutHandlers(createOptions() as never);
 
@@ -236,7 +238,7 @@ describe("useAppShortcutHandlers", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 
-		expect(mockStores.terminals.toggleBlockFold).toHaveBeenCalledWith("term-1", 90);
+		expect(mockStores.terminals.toggleBlockFold).toHaveBeenCalledWith("term-1", 190);
 	});
 
 	it("executes and marks matching smart-prompt shortcuts", async () => {

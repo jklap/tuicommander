@@ -306,3 +306,7 @@ cell's full text span, since native search points have no subcell index.
 ## Remaining Gaps
 
 None. All tracked gaps have been resolved or marked wontfix.
+
+### Stored terminal marker coordinates
+
+Stored command blocks and user prompt markers use all-time rows. Answers history consumes them directly. Gutter, scrollbar, search scope, navigation and buffer reads subtract the current frame history base at grid-relative boundaries. Evicted markers are omitted.

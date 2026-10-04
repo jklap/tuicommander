@@ -146,12 +146,12 @@ describe("rowCopyText", () => {
 });
 
 describe("promptStarts", () => {
-	it("shifts the prompts to all-time rows, ascending and unique", () => {
-		expect(promptStarts([90, 3, 40, 40], 1000, 1200)).toEqual([1003, 1040, 1090]);
+	it("keeps absolute prompt rows stable while filtering eviction, ascending and unique", () => {
+		expect(promptStarts([1090, 1003, 1040, 1040, 999], 1000, 1200)).toEqual([1003, 1040, 1090]);
 	});
 
 	it("ignores prompts beyond the end and negative ones", () => {
-		expect(promptStarts([-1, 500], 1000, 1200)).toEqual([]);
+		expect(promptStarts([-1, 500, 1200], 1000, 1200)).toEqual([]);
 	});
 });
 
@@ -256,8 +256,8 @@ describe("readAnswersHistory", () => {
 		const cache = newTurnCache();
 		await readAnswersHistory(serve(), [0, 3, 6], 0, SESSION.length, cache);
 		const log: Array<[number, number]> = [];
-		// two rows evicted: the old line 3 now sits two rows earlier in the grid and base is 2
-		const turns = await readAnswersHistory(serve(log, 0), [1, 4], 2, SESSION.length, cache);
+		// Catches: retained prompt 3 being rebased to 5 after two rows are evicted.
+		const turns = await readAnswersHistory(serve(log, 0), [0, 3, 6], 2, SESSION.length, cache);
 		expect(log.length).toBe(3);
 		expect(turns?.map((t) => t.prompt)).toEqual([null, "❯ second question", "❯ third question, still running"]);
 	});
@@ -278,7 +278,7 @@ describe("readAnswersHistory", () => {
 					.filter((r) => r.abs >= start && r.abs < start + count)
 					.map((r) => ({ abs: r.abs, row: decoded(r.text, r.isWrapped) })),
 			}),
-			recordedClaude.promptLines,
+			recordedClaude.promptLines.map((line) => line + recordedClaude.historyBase),
 			recordedClaude.historyBase,
 			recordedClaude.endAbs,
 			newTurnCache(),
@@ -316,10 +316,10 @@ describe("readAnswersHistory", () => {
 			log.push([start, count]);
 			return { startAbs: start, historySize: 10000, cols: 40, rows: [] };
 		};
-		await readAnswersHistory(fetch, [9000], 1000, 10010, cache);
+		await readAnswersHistory(fetch, [10000], 1000, 10010, cache);
 		expect(log[0][0]).toBe(1000);
 		log.length = 0;
-		await readAnswersHistory(fetch, [9000], 1000, 10011, cache);
+		await readAnswersHistory(fetch, [10000], 1000, 10011, cache);
 		expect(log).toEqual([[10000, 11]]);
 	});
 

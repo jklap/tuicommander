@@ -101,6 +101,7 @@ export interface TerminalData {
 	tuicSession: string | null; // Stable tab UUID — injected as TUIC_SESSION env var, persists across restarts
 	suggestedActions: string[] | null; // Follow-up suggestions from suggest: token
 	suggestDismissed: boolean; // true after user dismissed/selected/typed — resets on shell-state:idle
+	historyBase: number; // Evicted rows in the latest grid frame; stored markers use all-time rows.
 	commandBlocks: CommandBlock[]; // Completed command blocks from OSC 133
 	activeBlock: CommandBlock | null; // Current in-progress block (A received, D not yet)
 	lastCommandExecAt: number | null; // Timestamp of last OSC 133 "C" (real command execution); monotonic, never evicted — used to gate completion against prompt-redraw/wake false-busy
@@ -148,6 +149,7 @@ type TerminalCreateData = Omit<
 	| "suggestedActions"
 	| "suggestDismissed"
 	| "awaitingInputConfident"
+	| "historyBase"
 	| "commandBlocks"
 	| "activeBlock"
 	| "lastCommandExecAt"
@@ -461,6 +463,7 @@ function createTerminalsStore() {
 				suggestedActions: null,
 				suggestDismissed: false,
 				awaitingInputConfident: false,
+				historyBase: 0,
 				commandBlocks: [],
 				activeBlock: null,
 				lastCommandExecAt: null,
@@ -516,6 +519,7 @@ function createTerminalsStore() {
 				suggestedActions: null,
 				suggestDismissed: false,
 				awaitingInputConfident: false,
+				historyBase: 0,
 				commandBlocks: [],
 				activeBlock: null,
 				lastCommandExecAt: null,
@@ -733,7 +737,7 @@ function createTerminalsStore() {
 
 		/** OSC 133: Handle shell integration marker.
 		 *  A=prompt start, B=command start, C=pre-execution, D=command finished.
-		 *  `line` is the absolute buffer line (baseY + cursorY) when the marker was processed. */
+		 *  `line` is the eviction-stable all-time row (total_scrolled + cursorY) when the marker was processed. */
 		handleOsc133(id: string, type: string, line: number, exitCode?: number): void {
 			const term = state.terminals[id];
 			if (!term) return;

@@ -2797,6 +2797,10 @@ Disconnect retires that host's existing shadows synchronously, independently
 of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.
 
+### Stored terminal marker coordinates
+
+OSC 133 event `line` and hook-generated `UserInput.line` are eviction-stable all-time rows, identical to IPC. Scroll-to, line reads and search results keep retained-grid coordinates. Convert stored marker rows using the current grid frame `historyBase`.
+
 ### Telegram Settings
 
 `GET /config/telegram` mirrors `telegram_settings`. `PUT /config/telegram` accepts `{ "change": { "action": "..." } }` and mirrors `telegram_setup`, including token replacement/check, one-use pairing, typed chat IDs and enable/target updates. Both routes require local access or the existing authenticated remote session. The read response contains only `token_set`, never the token. Chat IDs are decimal strings.
