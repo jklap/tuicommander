@@ -11,10 +11,11 @@ pub(super) static HANDLE: OnceLock<mpsc::Sender<Command>> = OnceLock::new();
 pub(super) enum Command {
     Tool {
         caller: String,
+        sid: String,
         input: Input,
         reply: oneshot::Sender<Result<Value, Error>>,
     },
-    Track {
+    Deliver {
         mail: PendingMail,
         reply: oneshot::Sender<Result<Value, Error>>,
     },
@@ -31,6 +32,7 @@ pub(super) struct Runtime {
     pub pending: VecDeque<(String, i64)>,
     pub callbacks: super::callbacks::Callbacks,
     pub adapter_sid: String,
+    pub(super) registration: Option<super::registration::Registration>,
 }
 impl Runtime {
     pub fn new(
@@ -46,15 +48,16 @@ impl Runtime {
             pending: VecDeque::new(),
             callbacks: Default::default(),
             adapter_sid,
+            registration: None,
         })
     }
     pub fn live(&self, peer: &str, pty: &str, epoch: u64) -> bool {
-        peer == self.config.target_tuic_session && live(&self.state, peer, pty, epoch)
+        self.registered_peer() == Some(peer) && live(&self.state, peer, pty, epoch)
     }
     pub fn current(&self) -> Result<(String, u64), Error> {
         let pty = self
             .state
-            .live_pty_for_peer(&self.config.target_tuic_session)
+            .live_pty_for_peer(self.registered_peer().ok_or(Error::NotRegistered)?)
             .ok_or(Error::State)?;
         let state = self
             .state
@@ -76,16 +79,38 @@ impl Runtime {
             .next()
             .ok_or(Error::Config)
     }
-    pub async fn tool(&mut self, caller: &str, input: Input) -> Result<Value, Error> {
-        // Check opt-in and target at use, including after a queued command.
+    pub async fn tool(&mut self, caller: &str, sid: &str, input: Input) -> Result<Value, Error> {
+        self.retire_registration();
+        // Check opt-in at use, including after a queued command.
         let config = Config::load(&self.outbound.paths)?.ok_or(Error::Config)?;
-        if caller != self.config.target_tuic_session
-            || config.target_tuic_session != caller
-            || config.bot_alias != self.config.bot_alias
-        {
+        if config.bot_alias != self.config.bot_alias {
             return Err(Error::State);
         }
+        if matches!(input, Input::Register) {
+            self.register(caller, sid).await?;
+            return Ok(json!({"registered":true}));
+        }
+        let bound = self
+            .state
+            .mcp
+            .to_session
+            .get(sid)
+            .map(|entry| entry.value().clone());
+        if self.registered_peer() != Some(caller)
+            || bound
+                .as_deref()
+                .and_then(|peer| self.state.resolve_peer_ref_checked(peer).ok().flatten())
+                .as_deref()
+                != Some(caller)
+        {
+            return Err(Error::NotRegistered);
+        }
         match input {
+            Input::Register => unreachable!(),
+            Input::Unregister => {
+                self.clear_registration();
+                Ok(json!({"registered":false}))
+            }
             Input::Begin { request_id } => {
                 let chat = self
                     .pending
@@ -139,7 +164,31 @@ impl Runtime {
         }
         Ok(json!({"accepted":true}))
     }
+    pub async fn deliver(&mut self, mut mail: PendingMail) -> Result<Value, Error> {
+        self.retire_registration();
+        if !self.enabled() {
+            return Err(Error::Config);
+        }
+        let envelope: Value = serde_json::from_str(&mail.content).map_err(|_| Error::Protocol)?;
+        let chat = envelope["chat_id"]
+            .as_str()
+            .and_then(|s| s.parse::<i64>().ok())
+            .ok_or(Error::Protocol)?;
+        if !self.outbound.paths.allowlist()?.contains(&chat) {
+            return Ok(json!({"accepted":false}));
+        }
+        let Some(peer) = self.registered_peer() else {
+            self.outbound
+                .send(chat, "Nessun agent registrato", None)
+                .await?;
+            return Ok(json!({"accepted":false}));
+        };
+        mail.recipient = peer.into();
+        super::native::offer(&self.state, &self.adapter_sid, &mail).await?;
+        self.track(mail)
+    }
     pub async fn update(&mut self, value: Value) -> Result<Value, Error> {
+        self.retire_registration();
         if !self.enabled() {
             return Err(Error::Config);
         }
@@ -150,19 +199,17 @@ impl Runtime {
         Config::load(&self.outbound.paths)
             .ok()
             .flatten()
-            .is_some_and(|c| {
-                c.target_tuic_session == self.config.target_tuic_session
-                    && c.bot_alias == self.config.bot_alias
-            })
+            .is_some_and(|c| c.bot_alias == self.config.bot_alias)
     }
     pub async fn event(&mut self, event: AppEvent) {
+        self.retire_registration();
         if !self.enabled() {
             self.outbound.active = None;
             return;
         }
         let Some(pty) = self
             .state
-            .live_pty_for_peer(&self.config.target_tuic_session)
+            .live_pty_for_peer(self.registered_peer().unwrap_or_default())
         else {
             self.outbound.active = None;
             return;
@@ -192,6 +239,7 @@ impl Runtime {
         }
     }
     pub async fn tick(&mut self) {
+        self.retire_registration();
         if !self.enabled() {
             self.outbound.active = None;
             return;
@@ -217,8 +265,8 @@ impl Runtime {
                 command = commands.recv() => {
                     let Some(command) = command else { break; };
                     let (reply,result) = match command {
-                        Command::Tool { caller,input,reply } => (reply,self.tool(&caller,input).await),
-                        Command::Track { mail,reply } => (reply,self.track(mail)),
+                        Command::Tool { caller,sid,input,reply } => (reply,self.tool(&caller,&sid,input).await),
+                        Command::Deliver { mail,reply } => (reply,self.deliver(mail).await),
                         Command::Update { value,reply } => (reply,self.update(value).await),
                     };
                     let _ = reply.send(result);

@@ -9,6 +9,7 @@ mod native;
 mod notifications;
 mod offset;
 mod outbound;
+mod registration;
 mod runtime;
 mod tool;
 pub(crate) use native::start;
@@ -27,6 +28,7 @@ pub(crate) use mail::{MailPort, PendingMail};
 pub(crate) enum Error {
     Config,
     State,
+    NotRegistered,
     Capacity,
     PrivateFile,
     AlreadyOwned,
@@ -43,6 +45,7 @@ impl std::fmt::Display for Error {
         // No external body, path, URL, credential or chat text crosses this seam.
         f.write_str(match self {
             Self::State => "telegram_invalid_state",
+            Self::NotRegistered => "telegram_not_registered: call telegram register first",
             Self::Capacity => "telegram_mail_capacity",
             Self::Config => "telegram_invalid_config",
             Self::PrivateFile => "telegram_private_file_unavailable",

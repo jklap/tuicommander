@@ -21,6 +21,7 @@ async fn final_chunks_preserve_exact_unicode_and_whitespace() {
     runtime
         .tool(
             PEER,
+            "target-mcp",
             crate::telegram::tool::Input::Send {
                 text: text.clone(),
                 buttons: vec![],
@@ -42,6 +43,7 @@ async fn final_chunks_preserve_exact_unicode_and_whitespace() {
         runtime
             .tool(
                 PEER,
+                "target-mcp",
                 crate::telegram::tool::Input::Send {
                     text: String::new(),
                     buttons: vec![]
@@ -149,6 +151,10 @@ pub(in crate::telegram) async fn runtime(
             .unwrap();
     runtime.outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, address));
     runtime
+        .tool(PEER, "target-mcp", crate::telegram::tool::Input::Register)
+        .await
+        .unwrap();
+    runtime
 }
 
 // Catches: opaque payload is used as wire callback data, a stranger or wrong
@@ -170,6 +176,7 @@ async fn buttons_route_one_opaque_choice_through_native_mail_and_retire_keyboard
     runtime
         .tool(
             PEER,
+            "target-mcp",
             Input::Send {
                 text: " exact text ".into(),
                 buttons: vec![vec![
@@ -253,6 +260,7 @@ async fn callback_replacement_and_ack_failure_do_not_reoffer_old_handles() {
         runtime
             .tool(
                 PEER,
+                "target-mcp",
                 Input::Send {
                     text: label.into(),
                     buttons: vec![vec![Button {
@@ -300,6 +308,7 @@ async fn tool_requires_bound_caller_and_pending_request() {
         runtime
             .tool(
                 "foreign",
+                "foreign-mcp",
                 Input::Send {
                     text: "hello".into(),
                     buttons: vec![]
@@ -312,6 +321,7 @@ async fn tool_requires_bound_caller_and_pending_request() {
         runtime
             .tool(
                 PEER,
+                "target-mcp",
                 Input::Begin {
                     request_id: "unknown".into()
                 }
@@ -395,6 +405,7 @@ async fn begin_uses_derived_agent_lifecycle_and_retires_when_turn_completes() {
     let begun = runtime
         .tool(
             PEER,
+            "target-mcp",
             Input::Begin {
                 request_id: "request".into(),
             },
@@ -405,6 +416,7 @@ async fn begin_uses_derived_agent_lifecycle_and_retires_when_turn_completes() {
     runtime
         .tool(
             PEER,
+            "target-mcp",
             Input::Activity {
                 request_id: "request".into(),
                 text: "checking".into(),
@@ -425,6 +437,7 @@ async fn begin_uses_derived_agent_lifecycle_and_retires_when_turn_completes() {
         runtime
             .tool(
                 PEER,
+                "target-mcp",
                 Input::Finish {
                     request_id: "request".into(),
                     text: "too late".into()

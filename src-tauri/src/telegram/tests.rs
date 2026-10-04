@@ -34,7 +34,7 @@ pub(super) fn setup() -> (tempfile::TempDir, Paths) {
     let paths = Paths::new(dir.path().into());
     write_private(
         &paths.file("config.json"),
-        &json!({"enabled":true,"bot_alias":"test-bot","target_tuic_session":PEER}).to_string(),
+        &json!({"enabled":true,"bot_alias":"test-bot"}).to_string(),
     );
     write_private(&paths.file("allowed_chat_ids"), "1111111\n");
     write_private(&paths.file("bot.token"), "111:fake-one\n");
@@ -114,13 +114,13 @@ fn missing_disabled_and_invalid_config_never_enable_the_adapter() {
     assert!(Config::load(&paths).unwrap().is_none());
     write_private(
         &paths.file("config.json"),
-        &json!({"enabled":false,"bot_alias":"","target_tuic_session":""}).to_string(),
+        &json!({"enabled":false,"bot_alias":""}).to_string(),
     );
     assert!(Config::load(&paths).unwrap().is_none());
     assert!(!paths.file("owner.lock").exists());
     write_private(
         &paths.file("config.json"),
-        &json!({"enabled":true,"bot_alias":"x","target_tuic_session":"pe-3"}).to_string(),
+        &json!({"enabled":true,"bot_alias":"invalid alias"}).to_string(),
     );
     assert!(matches!(Config::load(&paths), Err(Error::Config)));
 }
@@ -258,3 +258,6 @@ pub(super) mod outbound_tests;
 
 #[path = "round4_tests.rs"]
 mod round4;
+
+#[path = "registration_tests.rs"]
+mod registration;

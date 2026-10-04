@@ -52,6 +52,10 @@ impl Runtime {
     }
 
     pub async fn callback(&mut self, value: &Value) -> Result<(), Error> {
+        self.retire_registration();
+        let Some(peer) = self.registered_peer().map(str::to_owned) else {
+            return Ok(());
+        };
         let Some(query) = value.get("callback_query") else {
             return Ok(());
         };
@@ -88,7 +92,7 @@ impl Runtime {
         let id = format!("tg:{}:choice:{}", self.config.bot_alias, handle);
         let selected = PendingMail {
             id: id.clone(),
-            recipient: self.config.target_tuic_session.clone(),
+            recipient: peer,
             content: json!({"channel":"telegram","kind":"callback","request_id":id,"chat_id":chat_id.to_string(),"message_id":message_id,"callback_id":query_id,"data":choice.data}).to_string(),
         };
         super::native::offer(&self.state, &self.adapter_sid, &selected).await?;

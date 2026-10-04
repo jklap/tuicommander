@@ -10,6 +10,8 @@ use std::sync::Arc;
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum Input {
+    Register,
+    Unregister,
     Begin {
         request_id: String,
     },
@@ -35,8 +37,8 @@ pub(super) struct Button {
 }
 
 pub(crate) fn definition() -> Value {
-    json!({"name":"telegram","description":"Send to the daemon's allowlisted Telegram chat. Only the configured peer can call this tool. begin accepts a request_id from Telegram mail and binds the current live turn; activity sends concise safe activity; finish persists the complete exact reply. send accepts text and optional rows of {label,data} opaque buttons. Buttons return structured peer mail and confer no publish approval. No raw terminal output or hidden reasoning is streamed.","inputSchema":{"type":"object","properties":{
-        "action":{"type":"string","enum":["begin","activity","finish","send"]},
+    json!({"name":"telegram","description":"Call register to opt your own MCP-bound TUIC agent into Telegram; it replaces the previous agent and sends it one TUIC notice. unregister releases your registration. Registration ends on agent exit, PTY close, MCP session end or daemon restart. Only the registered agent may begin/activity/finish/send. With no registered agent, allowed inbound text is dropped after the bot replies Nessun agent registrato. begin accepts a request_id from Telegram mail and binds the current live turn; activity sends concise safe activity; finish sends the complete exact reply. send uses the single allowlisted outbound destination with optional rows of {label,data} opaque buttons. Buttons return structured peer mail and confer no publish approval. No raw terminal output or hidden reasoning is streamed.","inputSchema":{"type":"object","properties":{
+        "action":{"type":"string","enum":["register","unregister","begin","activity","finish","send"]},
         "request_id":{"type":"string"},"text":{"type":"string"},
         "buttons":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string"},"data":{"type":"string"}},"required":["label","data"],"additionalProperties":false}}}
     },"required":["action"],"additionalProperties":false}})
@@ -57,6 +59,7 @@ pub(crate) async fn handle(state: &Arc<AppState>, args: &Value, sid: Option<&str
         sender
             .try_send(Command::Tool {
                 caller,
+                sid: sid.ok_or(Error::State)?.to_string(),
                 input,
                 reply,
             })
@@ -103,12 +106,26 @@ mod tests {
                 .await
             }
         };
+        assert_eq!(
+            invoke(json!({"action":"unregister"})).await["registered"],
+            false
+        );
+        assert_eq!(
+            invoke(json!({"action":"send","text":"before registration"})).await["error"],
+            "telegram_not_registered: call telegram register first"
+        );
+        assert_eq!(
+            invoke(json!({"action":"register"})).await["registered"],
+            true
+        );
         // The same authenticated dispatch reaches real outbound delivery.
         assert_eq!(
             invoke(json!({"action":"send","text":"hello"})).await["message_ids"],
             json!([7])
         );
         for value in [
+            json!({"action":"register","peer":"other"}),
+            json!({"action":"register","tuic_session":"other"}),
             json!({"action":"send","text":"hello","approved":true}),
             json!({"action":"begin","request_id":"r","peer":"other"}),
             json!({"action":"send","text":"hello","buttons":[[{"label":"ok","data":"x","approved":true}]]}),

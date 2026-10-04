@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Offline verification is complete; live mint deployment and end-to-end approval remain pending.
+- Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
 
 ### Fixed
 
