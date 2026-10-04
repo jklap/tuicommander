@@ -191,3 +191,7 @@ impl Outbound {
         self.send(active.chat, text, None).await
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "critic_tests.rs"]
+mod critic_tests;
