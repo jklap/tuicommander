@@ -4560,3 +4560,6 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 ## Windows core dependency (1478-ead1) — rebuild required
 
 - [ ] Load this manifest fix in the next Windows build. The `tuic-core` MSVC cross-check passes; a separate WebRTC/Abseil C++ build failure is tracked in 1479-f956. Existing desktop processes do not hot-reload Rust; restart only when Boss is ready.
+## Windows WebRTC compiler (1479-f956) — native Nightly required
+
+- [ ] After landing and pushing, the Windows Nightly must report MSVC for both Meson C/C++ compilers, compile Abseil/WebRTC without MinGW header errors, and finish the Tauri NSIS build. This Rust build-script change requires rebuilding; no desktop instance was started for verification.
