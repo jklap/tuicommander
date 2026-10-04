@@ -18205,6 +18205,7 @@ mod tests {
             names,
             vec![
                 "secret",
+                "telegram",
                 "session",
                 "agent",
                 "task",
