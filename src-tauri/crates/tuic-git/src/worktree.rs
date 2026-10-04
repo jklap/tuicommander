@@ -3812,6 +3812,62 @@ mod tests {
         );
     }
 
+    // Catches: recovery replacing a non-stale Git error with a cleanup error.
+    #[test]
+    fn non_stale_creation_failure_preserves_git_error_1437() {
+        let repo = setup_test_repo();
+        let config = WorktreeConfig {
+            task_name: "invalid-base".into(),
+            base_repo: repo.path().to_string_lossy().into_owned(),
+            branch: Some("invalid-base".into()),
+            create_branch: true,
+        };
+        let error = create_worktree_with_stale_recovery(
+            &repo.path().join("worktrees"), &config, Some("missing-ref-1437"),
+        ).unwrap_err();
+        assert!(error.contains("missing-ref-1437"), "{error}");
+        assert!(!error.contains("cleanup"), "{error}");
+        assert!(!repo.path().join("worktrees/invalid-base").exists());
+    }
+
+    // Catches: stale cleanup returning success without deleting the orphan's contents.
+    #[test]
+    fn stale_cleanup_removes_directory_and_contents_1437() {
+        let repo = setup_test_repo();
+        let stale = repo.path().join("stale/nested");
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("old.txt"), "stale artifact").unwrap();
+        let stale = stale.parent().unwrap();
+        cleanup_stale_worktree_dir(&repo.path().to_string_lossy(), stale).unwrap();
+        assert!(!stale.exists());
+    }
+
+    // Catches: a zero unpushed-commit count being reported as outstanding submodule work.
+    #[test]
+    fn clean_submodule_has_no_unpushed_commits_1437() {
+        let (_temp, repo, _) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let path = add_worktree(&repo, "zero-unpushed");
+        git_cmd(&path).args(["-c", "protocol.file.allow=always", "submodule", "update", "--init"]).run().unwrap();
+        let status = inspect_workspace_lifecycle(&repo, "zero-unpushed");
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+        assert!(status.submodule_unpushed_commits.is_empty(), "{status:?}");
+    }
+
+    // Catches: an unsafe module name OR checkout path being accepted when the other is valid.
+    // This admin-path confinement invariant has no observable alternate public result:
+    // git submodule status itself rejects malformed declarations before removal reaches it.
+    #[test]
+    fn unsafe_submodule_declarations_cannot_escape_admin_root_1437() {
+        let repo = setup_test_repo();
+        let admin = repo.path().join(".git");
+        for (name, path) in [("../outside", "module"), ("module", "../outside")] {
+            git_cmd(repo.path()).args(["config", "--file", ".gitmodules", &format!("submodule.{name}.path"), path]).run().unwrap();
+            assert!(submodule_admin_dir_at(repo.path(), &admin, Path::new(path)).is_err());
+            fs::remove_file(repo.path().join(".gitmodules")).unwrap();
+        }
+    }
+
     #[test]
     fn test_sanitize_name() {
         assert_eq!(sanitize_name("my-task"), "my-task");
