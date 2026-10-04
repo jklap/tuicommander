@@ -90,10 +90,12 @@ describe("CanvasTerminal link context menu, critic 1336 round 4", () => {
 				}
 				if (cmd === "terminal_get_row_text") return ROW0.trimEnd();
 				if (cmd === "terminal_get_logical_line") return [0, ROW0.trimEnd()];
-				const resolve = (c: string) =>
-					c.startsWith("followups") || c.startsWith("other")
+				const resolve = (candidate: string) => {
+					const c = candidate.replace(/^\/cwd\//, "");
+					return c.startsWith("followups") || c.startsWith("other")
 						? { absolute_path: `/cwd/${c}`, is_directory: false }
 						: null;
+				};
 				if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
 				if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
 				return null;

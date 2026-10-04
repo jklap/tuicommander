@@ -96,10 +96,12 @@ describe("CanvasTerminal link press tracker (critic round 2)", () => {
 			}
 			if (cmd === "terminal_get_row_text") return rowText.trimEnd();
 			if (cmd === "terminal_get_logical_line") return [0, rowText.trimEnd()];
-			const resolve = (c: string) =>
-				c.startsWith("followups") || c.startsWith("otherfile")
+			const resolve = (candidate: string) => {
+				const c = candidate.replace(/^\/cwd\//, "");
+				return c.startsWith("followups") || c.startsWith("otherfile")
 					? { absolute_path: `/cwd/${c}`, is_directory: false }
 					: null;
+			};
 			if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
 			if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
 			return null;
@@ -195,7 +197,7 @@ describe("CanvasTerminal link press tracker (critic round 2)", () => {
 			fire(canvas, "mouseup", NAME_COL);
 			fire(canvas, "click", NAME_COL); // its check runs 60..120 ms; the probe starts at 100 ms
 			await sleep(400);
-			expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined);
+			await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined));
 		});
 
 		// Catches: a leftover Shift-drag selection making every later link click dead,
@@ -210,7 +212,7 @@ describe("CanvasTerminal link press tracker (critic round 2)", () => {
 			fire(canvas, "mouseup", NAME_COL);
 			fire(canvas, "click", NAME_COL);
 			await sleep(300);
-			expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined);
+			await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined));
 		});
 
 		// Catches: a claim that outlives a release outside the canvas (no click ever fires)
