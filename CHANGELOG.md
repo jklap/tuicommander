@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Bound nightly release notes and link to the full comparison when the commit list exceeds the release body budget.
 - Expose the Codex approvals/sandbox bypass in its default run configuration with a warning icon; removing the argument stays effective across restart, older-backend saves, and managed launches. Codex wrapper defaults retain positional task delivery; interactive profiles named `review`, `exec`, or `e` retain submitted task delivery.
+- Initialise headless VT screens at the requested terminal width.
+
+- Preserve Claude subcommand arguments without injecting launch-scoped settings.
 
 - Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.
 - Open terminal directory links in the File Browser and report missing paths without creating empty editor tabs.
