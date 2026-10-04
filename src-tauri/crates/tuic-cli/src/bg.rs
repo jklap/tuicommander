@@ -303,3 +303,44 @@ fn queue_wake(caller: &str, wake: &str) -> Result<(), WakeError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: inverted length/character guards permit path traversal or reject boundary IDs.
+    #[test]
+    fn marker_path_accepts_safe_boundary_ids_and_refuses_unsafe_names() {
+        for caller in [
+            "a".to_string(),
+            "A0-_".to_string(),
+            "a".repeat(127),
+            "a".repeat(128),
+        ] {
+            let path = marker_path(&caller).expect("safe caller ID");
+            assert_eq!(
+                path.file_name().unwrap().to_str().unwrap(),
+                format!("{caller}.json")
+            );
+        }
+        for caller in [
+            "".to_string(),
+            "a".repeat(129),
+            "../escape".into(),
+            "a/b".into(),
+            "a\\b".into(),
+            "..".into(),
+            ".".into(),
+            "a.b".into(),
+            "a b".into(),
+            "a\n".into(),
+            "é".into(),
+        ] {
+            assert_eq!(
+                marker_path(&caller).unwrap_err(),
+                "Invalid TUIC_SESSION for background wake marker",
+                "{caller:?}"
+            );
+        }
+    }
+}
