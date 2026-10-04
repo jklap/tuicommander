@@ -1,3 +1,7 @@
+## Main build integration — Rust rebuild required
+
+- [ ] Load the cfg and GitHub lint fixes on Boss's next planned backend rebuild/restart. Rust does not hot-reload; this lane does not restart the live desktop. The fixes preserve config recovery and GitHub emission behavior.
+
 ## Telegram channel adapter (1438-79b4) — headless rebuild required
 
 - [ ] After Boss authorizes mint deployment and the bound agent is idle, rebuild/restart tuic-remote and verify registration/replacement/unregister, automatic retirement on agent exit with the shell still open, MCP session end and PTY close, and the allowlisted phone conversation: no-agent reply "Nessun agent registrato", Thinking/activity refresh, exact final reply, authored done/blocked notices and opaque-button callback mail. The Rust changes do not hot-reload. No live token/chat-ID reads, mint deployment or desktop restart were performed by this lane. Offline targeted tests use fake credentials and chats; deterministic publish receipts remain outside this slice.
