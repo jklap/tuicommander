@@ -255,3 +255,6 @@ mod offset;
 
 #[path = "outbound_tests.rs"]
 pub(super) mod outbound_tests;
+
+#[path = "round4_tests.rs"]
+mod round4;
