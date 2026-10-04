@@ -96,7 +96,9 @@ describe.each([
 		onOpen.mockClear();
 		invoke.mockReset();
 		const resolve = (cwd: string, c: string) =>
-			cwd === SESSION_CWD && c === REL ? { absolute_path: `${cwd}/${c}`, is_directory: false } : null;
+			cwd === SESSION_CWD && (c === REL || c === `${cwd}/${REL}`)
+				? { absolute_path: `${cwd}/${REL}`, is_directory: false }
+				: null;
 		invoke.mockImplementation(
 			async (cmd: string, args: { cwd?: string; candidate?: string; candidates?: string[] }) => {
 				if (cmd === "terminal_hyperlink_span") return null;
@@ -188,7 +190,9 @@ describe.each([
 		click(canvas, PATH_COL);
 		await waitFor(() => expect(onOpen).toHaveBeenCalled());
 		const resolves = invoke.mock.calls.filter(([c]) => c === "resolve_terminal_path");
-		for (const [, a] of resolves) expect(a).toMatchObject({ cwd: SESSION_CWD, candidate: REL });
+		expect(resolves.map(([, a]) => a)).toContainEqual({ cwd: SESSION_CWD, candidate: REL });
+		for (const [, a] of resolves) expect(a).toMatchObject({ cwd: SESSION_CWD });
+		expect(onOpen).toHaveBeenCalledWith(`${SESSION_CWD}/${REL}`, undefined, undefined);
 	});
 
 	// Catches: the open firing for a click beside the path.

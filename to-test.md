@@ -4572,3 +4572,6 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] After the next Rust restart, verify creating feat-x cannot remove an existing worktree for feat/x (#1458-e1f6).
 
 - [ ] After the next Rust restart, verify remote connection failures contain no token in logs or status and session/SSE mirroring authenticates with the existing cookie (#1457-91e0).
+## Windows WebRTC compiler (1479-f956) — native Nightly required
+
+- [ ] After landing and pushing, the Windows Nightly must report MSVC for both Meson C/C++ compilers, compile Abseil/WebRTC without MinGW header errors, and finish the Tauri NSIS build. This Rust build-script change requires rebuilding; no desktop instance was started for verification.
