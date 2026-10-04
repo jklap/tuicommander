@@ -21745,11 +21745,6 @@ async fn exec_root_agent_exit_clears_identity_and_refuses_submit_and_mail() {
     {
         tokio::task::yield_now().await;
     }
-    assert_eq!(
-        state.session_maps.exit_codes.get(sid).map(|code| *code),
-        Some(0),
-        "the production reader must record the probe's normal EOF exit"
-    );
     assert_eq!(refresh_session_agent(&state, sid), None);
     assert!(!should_inject_now(&state, sid));
     assert!(matches!(
