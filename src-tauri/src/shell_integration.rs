@@ -34,6 +34,7 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
+  [[ -n "$TUIC_CLAUDE_HELP" ]] || TUIC_CLAUDE_HELP=__TUIC_RECORDED_CLAUDE_HELP__
   __tuic_screen_arg() {
     local flag="$1" skip="$2" a; shift 2
     [[ -n "$flag" && ( -z "$skip" || "$1" != "$skip" ) ]] || return 0
@@ -43,7 +44,7 @@ if [[ -n "$TUIC_SESSION" ]]; then
   claude() {
     case "$1" in
       ""|-*) ;;
-      doctor|mcp|plugin|plugins|update|upgrade|remote-control) command claude "$@"; return;;
+      remote-control) command claude "$@"; return;;
       *) if printf '%s\n' "$TUIC_CLAUDE_HELP" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
     esac
     local a; for a in "$@"; do
@@ -108,6 +109,7 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
+  [[ -n "$TUIC_CLAUDE_HELP" ]] || TUIC_CLAUDE_HELP=__TUIC_RECORDED_CLAUDE_HELP__
   __tuic_screen_arg() {
     local flag="$1" skip="$2" a; shift 2
     [[ -n "$flag" && ( -z "$skip" || "$1" != "$skip" ) ]] || return 0
@@ -117,7 +119,7 @@ if [[ -n "$TUIC_SESSION" ]]; then
   claude() {
     case "$1" in
       ""|-*) ;;
-      doctor|mcp|plugin|plugins|update|upgrade|remote-control) command claude "$@"; return;;
+      remote-control) command claude "$@"; return;;
       *) if printf '%s\n' "$TUIC_CLAUDE_HELP" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
     esac
     local a; for a in "$@"; do
@@ -174,6 +176,9 @@ function tuic_suggest; printf '\e]7770;suggest=%s\a' (string join " " $argv); en
 function tuic_intent;  printf '\e]7770;intent=%s\a' (string join " " $argv); end
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if set -q TUIC_SESSION
+  if not set -q TUIC_CLAUDE_HELP; or test -z "$TUIC_CLAUDE_HELP"
+    set -gx TUIC_CLAUDE_HELP __TUIC_RECORDED_CLAUDE_HELP__
+  end
   function __tuic_screen_arg
     set -l flag $argv[1]
     set -l skip $argv[2]
@@ -195,7 +200,7 @@ if set -q TUIC_SESSION
     if test (count $argv) -gt 0
       switch $argv[1]
         case '-*'
-        case doctor mcp plugin plugins update upgrade remote-control
+        case remote-control
           command claude $argv; return
         case '*'
           if printf '%s\n' "$TUIC_CLAUDE_HELP" | awk -v verb="$argv[1]" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'
@@ -292,10 +297,16 @@ pub(crate) fn inject(app_data_dir: &Path, shell: &str, cmd: &mut portable_pty::C
         return;
     }
     if crate::agent_hook_launch::enabled("claude") {
-        // Cache the installed CLI's advertised verbs for this shell session.
-        if let Some(help) = crate::agent::cli_help("claude") {
-            cmd.env("TUIC_CLAUDE_HELP", help);
-        }
+        // Publish installed help, or the same recorded fallback used by managed launches.
+        let help = crate::agent::cli_help("claude").unwrap_or_default();
+        cmd.env(
+            "TUIC_CLAUDE_HELP",
+            if help.trim().is_empty() {
+                crate::agent_hook_launch::RECORDED_CLAUDE_HELP
+            } else {
+                &help
+            },
+        );
         cmd.env(
             "TUIC_CLAUDE_SETTINGS",
             app_data_dir.join("agent-hooks/claude.json"),
@@ -365,10 +376,16 @@ fn write_if_changed(path: &Path, content: &str) -> bool {
     }
 }
 
+/// Embed the recorded help as one shell-quoted value, shared by all wrappers.
+fn render_integration(template: &str) -> String {
+    let help = crate::agent_hook_launch::RECORDED_CLAUDE_HELP.replace('\'', "'\\''");
+    template.replace("__TUIC_RECORDED_CLAUDE_HELP__", &format!("'{help}'"))
+}
+
 fn inject_zsh(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
     // Write the integration script
     let script_path = base.join("tuic-integration.zsh");
-    if !write_if_changed(&script_path, ZSH_INTEGRATION) {
+    if !write_if_changed(&script_path, &render_integration(ZSH_INTEGRATION)) {
         return;
     }
 
@@ -411,7 +428,7 @@ fn inject_zsh(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
 
 fn inject_bash(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
     let script_path = base.join("tuic-integration.bash");
-    if write_if_changed(&script_path, BASH_INTEGRATION) {
+    if write_if_changed(&script_path, &render_integration(BASH_INTEGRATION)) {
         // BASH_ENV is sourced for non-interactive bash; for interactive login
         // shells we rely on the user sourcing it or a future --init-file approach.
         cmd.env("TUIC_SHELL_INTEGRATION", script_path_str(&script_path));
@@ -422,7 +439,7 @@ fn inject_fish(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
     // Fish auto-sources scripts in conf.d/ directories under XDG_CONFIG_HOME.
     // For now, just point to the script via env var.
     let script_path = base.join("tuic-integration.fish");
-    if write_if_changed(&script_path, FISH_INTEGRATION) {
+    if write_if_changed(&script_path, &render_integration(FISH_INTEGRATION)) {
         cmd.env("TUIC_SHELL_INTEGRATION", script_path_str(&script_path));
     }
 }
@@ -432,7 +449,7 @@ fn inject_fish(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
 /// they're accessible inside the WSL Linux environment.
 fn inject_bash_wsl(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
     let script_path = base.join("tuic-integration.bash");
-    if write_if_changed(&script_path, BASH_INTEGRATION) {
+    if write_if_changed(&script_path, &render_integration(BASH_INTEGRATION)) {
         let wsl_path = crate::pty::windows_to_wsl_path(&script_path_str(&script_path));
         cmd.env("TUIC_SHELL_INTEGRATION", wsl_path);
     }
@@ -599,7 +616,9 @@ mod tests {
     mod launch {
         // Named, not a glob: these constants live two modules up, and a glob of
         // the parent's own glob is easy to break by accident.
-        use super::super::{BASH_INTEGRATION, FISH_INTEGRATION, ZSH_INTEGRATION};
+        use super::super::{
+            BASH_INTEGRATION, FISH_INTEGRATION, ZSH_INTEGRATION, render_integration,
+        };
         use std::path::{Path, PathBuf};
         use std::process::Command;
 
@@ -685,7 +704,7 @@ mod tests {
             std::fs::create_dir_all(&dir).expect("create integration script dir");
             let path = dir.join(name);
             let staging = staging_path(&dir, name);
-            std::fs::write(&staging, body).expect("write integration script");
+            std::fs::write(&staging, render_integration(body)).expect("write integration script");
             std::fs::rename(&staging, &path).expect("install integration script");
             path
         }

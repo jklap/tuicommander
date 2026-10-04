@@ -4,6 +4,10 @@ use crate::agent_hook::{SENTINEL, claude_hook_map};
 use serde_json::{Map, Value};
 use std::path::Path;
 
+/// Recorded installed Claude help supplies advertised verbs when a probe is unavailable.
+pub(crate) const RECORDED_CLAUDE_HELP: &str =
+    include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt");
+
 pub(crate) fn enabled(agent_type: &str) -> bool {
     crate::config::load_agents_config()
         .agents
@@ -224,16 +228,19 @@ fn claude_is_subcommand(args: &[String], help: &str) -> bool {
     else {
         return false;
     };
-    matches!(
-        first.as_str(),
-        "doctor" | "mcp" | "plugin" | "plugins" | "update" | "upgrade" | "remote-control"
-    ) || help
-        .lines()
-        .skip_while(|line| line.trim() != "Commands:")
-        .skip(1)
-        .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
-        .filter_map(|line| line.split_whitespace().next())
-        .any(|names| names.split('|').any(|name| name == first))
+    let help = if help.trim().is_empty() {
+        RECORDED_CLAUDE_HELP
+    } else {
+        help
+    };
+    first == "remote-control"
+        || help
+            .lines()
+            .skip_while(|line| line.trim() != "Commands:")
+            .skip(1)
+            .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+            .filter_map(|line| line.split_whitespace().next())
+            .any(|names| names.split('|').any(|name| name == first))
 }
 
 fn augment_args_when(

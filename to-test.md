@@ -4580,6 +4580,6 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
 
-- [ ] After Boss restarts `make dev`, verify `claude remote-control --resume main` passes through without TUIC settings and normal Claude launches retain status hooks (#1405-a5e4).
+- [ ] After Boss restarts `make dev`, verify `claude remote-control --resume main` and `claude auth status` pass through without TUIC settings and normal Claude launches retain status hooks, including when cached help is empty (#1405-a5e4).
 
 - [ ] After Boss restarts the Rust backend, verify a new headless terminal at 148 columns retains that width after a same-size resize (#1413-7dcc).
