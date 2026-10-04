@@ -134,5 +134,7 @@ describe("PrSection critic r4", () => {
 			/^Merg(e|ing\.\.\.)$/.test(x.textContent?.trim() ?? ""),
 		);
 		expect(second.some((x) => x.textContent?.trim() === "Merging..." && x.disabled)).toBe(true);
+		resolvers.get(13)?.();
+		await vi.waitFor(() => expect(buttons(container, "Merging...")).toHaveLength(0));
 	});
 });

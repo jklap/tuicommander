@@ -193,10 +193,15 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	const isCheckoutGone = async (worktreePath: string): Promise<boolean> => {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			const timeout = new Promise<never>((_, reject) => {
-				timer = setTimeout(() => reject(new Error("checkout probe timed out")), CHECKOUT_PROBE_TIMEOUT_MS);
+			// One settled result instead of a race whose losing timeout promise
+			// stays pending after its timer has been cleared.
+			return await new Promise<boolean>((resolve) => {
+				timer = setTimeout(() => resolve(false), CHECKOUT_PROBE_TIMEOUT_MS);
+				deps.repo
+					.getInfo(worktreePath)
+					.then((info) => resolve(!info.is_git_repo))
+					.catch(() => resolve(false));
 			});
-			return !(await Promise.race([deps.repo.getInfo(worktreePath), timeout])).is_git_repo;
 		} catch {
 			return false;
 		} finally {

@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from "@solidjs/testing-library";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupToasts } from "../../helpers/toasts";
 import "../../mocks/tauri";
 
 import { AiChatTab } from "../../../components/SettingsPanel/tabs/AiChatTab";
@@ -409,4 +410,9 @@ describe("AiChatTab — no ego executable control", () => {
 		expect(screen.queryByRole("button", { name: "Select…" })).toBeNull();
 		expect(screen.queryByText("ego executable")).toBeNull();
 	});
+});
+
+afterEach(() => {
+	cleanup();
+	cleanupToasts();
 });

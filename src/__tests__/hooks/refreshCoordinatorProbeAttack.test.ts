@@ -89,13 +89,49 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 		await refresh("/repo");
 		const tid = addWorktreeWithTerminal("hung", "/wt/hung");
 		await ageOut();
-		probe = () => new Promise(() => {});
+		let finishProbe!: (value: Awaited<ReturnType<Probe>>) => void;
+		probe = () =>
+			new Promise((resolve) => {
+				finishProbe = resolve;
+			});
 		const settled = vi.fn();
 		void refresh("/repo").then(settled);
 		await vi.advanceTimersByTimeAsync(120_000);
 		expect(settled).toHaveBeenCalled();
 		expect(closeTerminal).not.toHaveBeenCalledWith(tid, true);
+		finishProbe({ branch: "main", is_git_repo: true });
+		await Promise.resolve();
 	});
+
+	// Catches: a timed-out probe's late absence/error closes a preserved terminal or
+	// leaves the single-flight refresh stuck, preventing a fresh verdict from applying.
+	it.each(["absent", "rejected"] as const)(
+		"ignores a late %s probe after timeout and accepts the next refresh",
+		async (late) => {
+			await refresh("/repo");
+			const tid = addWorktreeWithTerminal("late", "/wt/late");
+			await ageOut();
+			let finish!: (value: Awaited<ReturnType<Probe>>) => void;
+			let fail!: (reason: Error) => void;
+			probe = () =>
+				new Promise((resolve, reject) => {
+					finish = resolve;
+					fail = reject;
+				});
+			const timedOut = refresh("/repo");
+			await vi.advanceTimersByTimeAsync(5_000);
+			await timedOut;
+			if (late === "absent") finish({ branch: "", is_git_repo: false });
+			else fail(new Error("late IPC failure"));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(closeTerminal).not.toHaveBeenCalled();
+			expect(repositoriesStore.get("/repo")?.workspaces.late?.terminals).toContain(tid);
+			probe = async () => ({ branch: "", is_git_repo: false });
+			await refresh("/repo");
+			expect(closeTerminal).toHaveBeenCalledExactlyOnceWith(tid, true);
+			expect(repositoriesStore.get("/repo")?.workspaces.late).toBeUndefined();
+		},
+	);
 
 	it("probes a burst of omitted worktrees concurrently, not one after the other", async () => {
 		// Bug caught: the probe is awaited inside the per-workspace loop, so the refresh (and

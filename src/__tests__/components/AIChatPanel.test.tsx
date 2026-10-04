@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanupToasts } from "../helpers/toasts";
 
 const { mockDetachPanel, mockReattachPanel, mockClosePanel } = vi.hoisted(() => ({
 	mockDetachPanel: vi.fn().mockResolvedValue(undefined),
@@ -313,7 +314,10 @@ beforeEach(() => {
 	client.prompt.mockResolvedValue("turn-1");
 });
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	cleanupToasts();
+});
 
 describe("AIChatPanel: the frame it keeps", () => {
 	// The panel keeps its slot, its id and its detach control across the engine
