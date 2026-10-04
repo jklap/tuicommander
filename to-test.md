@@ -4607,3 +4607,9 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss restarts the Rust backend, confirm untracked files with tabs/newlines or boundary spaces appear with their literal names and correct line counts (#1502-8a5e). Backend regressions cover listing and file-diff consumers; Rust does not hot-reload.
 - [ ] After rebuilding/restarting TUIC, verify sidebar dirty and merged badges with 11 writing worktrees, including initialized submodules; sample Git child spawns with the same before/after method (1491-2ae4). Rust backend changes require a manual restart. Include recovery after a PR proof lookup failure without moving refs, and `git rm --cached` leaving both a staged deletion and an untracked file (dirty count 2).
+## Hands-free reply controls audit (#1377-16e1)
+
+- [x] Pause and resume preserve playback ownership without opening a user turn. _(verified: src-tauri/crates/tuic-dictation/src/speaker.rs:590 pause_by_user/resume_by_user only change playback and hold flags; generation changes in hush, not pause. src-tauri/src/dictation/commands.rs:1285 does not change capture state.)_
+- [x] Browser resume continues from the saved sample position without suspending the microphone context. _(verified: src/utils/browserVoice.ts:186 saves the elapsed offset and restarts playback from it; capture remains connected.)_
+- [ ] [VISUAL] Capture the pill while speaking and while user-paused after Boss loads the desktop build. Check Pause/Stop and Play/Stop respectively. No test desktop may be launched by a managed peer.
+- [ ] [HUMAN] On a real phone, tap Pause, Play and Stop during a spoken reply. The reply resumes at its position; Stop drops queued replies; microphone capture stays active. Mouse command dispatch, accessible labels and 44px coarse-pointer targets are present in source; they do not prove real-phone touch/audio behavior.
