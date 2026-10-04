@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Expose the Codex approvals/sandbox bypass in its default run configuration with a warning icon; removing the argument stays effective across restart, older-backend saves, and managed launches. Codex wrapper defaults retain positional task delivery.
+- Expose the Codex approvals/sandbox bypass in its default run configuration with a warning icon; removing the argument stays effective across restart, older-backend saves, and managed launches. Codex wrapper defaults retain positional task delivery; interactive profiles named `review`, `exec`, or `e` retain submitted task delivery.
 
 - Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.
 - Open terminal directory links in the File Browser and report missing paths without creating empty editor tabs.

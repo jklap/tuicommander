@@ -8633,13 +8633,48 @@ fn finalize_explicit_spawn_args(
     if explicit.iter().any(|arg| arg.contains("{prompt}")) {
         return (substitute_prompt_in_args(explicit, prompt), None);
     }
+    // Value-taking root options from installed `codex --help` (2026-10-04).
+    // Attached values (`--profile=review`, `-preview`) stay in the option token.
+    const CODEX_VALUE_OPTIONS: &[&str] = &[
+        "-c",
+        "--config",
+        "--enable",
+        "--disable",
+        "--remote",
+        "--remote-auth-token-env",
+        "-i",
+        "--image",
+        "-m",
+        "--model",
+        "--local-provider",
+        "-p",
+        "--profile",
+        "-s",
+        "--sandbox",
+        "-C",
+        "--cd",
+        "--add-dir",
+        "-a",
+        "--ask-for-approval",
+    ];
+    let mut codex_subcommand = false;
+    if agent_type == "codex" {
+        let mut args = explicit.iter();
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                break;
+            }
+            if CODEX_VALUE_OPTIONS.contains(&arg.as_str()) {
+                args.next();
+            } else if !arg.starts_with('-') {
+                codex_subcommand = matches!(arg.as_str(), "exec" | "e" | "review");
+                break;
+            }
+        }
+    }
     if crate::agent::prompt_prefill_only(agent_type)
         && !(agent_type == "codex"
-            && (explicit.first().is_some_and(|arg| !arg.starts_with('-'))
-                || explicit
-                    .iter()
-                    .take_while(|arg| arg.as_str() != "--")
-                    .any(|arg| matches!(arg.as_str(), "exec" | "e" | "review"))))
+            && (explicit.first().is_some_and(|arg| !arg.starts_with('-')) || codex_subcommand))
     {
         return (explicit.to_vec(), Some(prompt.to_string()));
     }
@@ -25204,24 +25239,131 @@ mod tests {
         assert_eq!(result, vec!["{prompt}".to_string()]);
     }
 
-    #[test]
-    fn direct_codex_composition_does_not_restore_removed_bypass() {
-        let args = vec!["{prompt}".to_string()];
-        let result =
-            compose_mcp_run_config_args("codex", &args, "task", None, false, None).unwrap();
-        assert_eq!(result, vec!["task"]);
+    #[cfg(unix)]
+    async fn capture_codex_spawn(
+        args: &[&str],
+        prompt: &str,
+        command_name: &str,
+        requested_agent: &str,
+    ) -> (Vec<String>, serde_json::Value, Option<String>) {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let output = root.path().join("argv");
+        let binary = root.path().join(command_name);
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        let cfg = serde_json::from_value(serde_json::json!({"agents": {"codex": {
+            "codex_bypass_migrated": true, "prevent_alt_screen": false,
+            "skip_trust_dialog": false, "native_status_signals": false,
+            "run_configs": [{"name": "Recorded Codex", "command": binary,
+                "args": args, "is_default": true, "env": {"ARGV_OUTPUT": output}}]
+        }}}))
+        .unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), cfg).unwrap();
+        let state = test_state();
+        let spawned = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action": "spawn", "agent_type": requested_agent,
+                "prompt": prompt, "cwd": root.path()}),
+            None,
+        )
+        .await;
+        assert!(spawned.get("error").is_none(), "{spawned}");
+        let deferred = state
+            .pending_injections
+            .get(spawned["session_id"].as_str().unwrap())
+            .and_then(|queue| queue.front().map(|injection| injection.text().to_string()));
+        let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+        (
+            actual.lines().map(str::to_string).collect(),
+            spawned,
+            deferred,
+        )
     }
 
-    #[test]
-    fn direct_codex_composition_does_not_promote_positional_bypass() {
-        let args = vec![
-            "--".to_string(),
-            CODEX_BYPASS_ARG.to_string(),
-            "task text".to_string(),
+    // Catches: option values or later positional tokens select a Codex subcommand,
+    // or a real subcommand following root options loses its positional task.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_subcommand_position_controls_public_task_delivery() {
+        let cases: &[(&[&str], bool)] = &[
+            (&["--profile=review"], false),
+            (&["-preview"], false),
+            (&["--model", "exec"], false),
+            (&["--profile", "review", "resume", "exec"], false),
+            (&["--", "review"], false),
+            (&["--search", "exec"], true),
+            (&["--profile", "review", "e"], true),
+            (&["--model", "exec", "review"], true),
         ];
-        let result =
-            compose_mcp_run_config_args("codex", &args, "task", None, false, None).unwrap();
-        assert_eq!(result, vec!["--", CODEX_BYPASS_ARG, "task text", "task"]);
+        for (args, positional_task) in cases {
+            let (argv, spawned, deferred) =
+                capture_codex_spawn(args, "perform the task", "codex", "codex").await;
+            let mut expected = vec!["-c", "check_for_update_on_startup=false"];
+            expected.extend_from_slice(args);
+            if *positional_task {
+                expected.push("perform the task");
+                assert!(deferred.is_none(), "{args:?}");
+            } else {
+                assert_eq!(deferred.as_deref(), Some("perform the task"), "{args:?}");
+            }
+            assert_eq!(argv, expected, "{args:?}");
+            assert!(spawned.get("launch_warning").is_none(), "{spawned}");
+        }
+    }
+
+    // Catches: Public spawn silently restores a removed approval bypass.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_codex_composition_does_not_restore_removed_bypass() {
+        let (argv, spawned, deferred) =
+            capture_codex_spawn(&["{prompt}"], "task", "codex", "Recorded Codex").await;
+        assert_eq!(argv, ["-c", "check_for_update_on_startup=false", "task"]);
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
+    }
+
+    // Catches: Public spawn promotes a positional bypass token into an option.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_codex_composition_does_not_promote_positional_bypass() {
+        let (argv, spawned, deferred) = capture_codex_spawn(
+            &[
+                "--",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "task text",
+            ],
+            "task",
+            "codex",
+            "Recorded Codex",
+        )
+        .await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "--",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "task text",
+                "task"
+            ]
+        );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
     }
 
     #[test]
@@ -25235,78 +25377,153 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn named_codex_run_config_preserves_existing_bypass() {
-        let args = vec![
-            "--dangerously-bypass-approvals-and-sandbox".to_string(),
-            "--search".to_string(),
-        ];
-        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result =
-            compose_mcp_run_config_args(&agent_type, &args, "perform the task", None, false, None)
-                .unwrap();
-
+    // Catches: Named spawn strips the configured approval bypass.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_run_config_preserves_existing_bypass() {
+        let (argv, spawned, deferred) = capture_codex_spawn(
+            &["--dangerously-bypass-approvals-and-sandbox", "--search"],
+            "perform the task",
+            "codex",
+            "Recorded Codex",
+        )
+        .await;
         assert_eq!(
-            result,
-            vec![CODEX_BYPASS_ARG, "--search", "perform the task"],
-            "authored run-config argv must remain the prefix of the legacy positional prompt"
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--search",
+                "perform the task"
+            ]
         );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
     }
 
-    #[test]
-    fn named_codex_run_config_removed_bypass_stays_removed() {
-        let args = vec!["--search".to_string()];
-        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result =
-            compose_mcp_run_config_args(&agent_type, &args, "perform the task", None, false, None)
-                .unwrap();
-
-        assert_eq!(result, vec!["--search", "perform the task"]);
+    // Catches: Named spawn restores a removed approval bypass.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_run_config_removed_bypass_stays_removed() {
+        let (argv, spawned, deferred) =
+            capture_codex_spawn(&["--search"], "perform the task", "codex", "Recorded Codex").await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "--search",
+                "perform the task"
+            ]
+        );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
     }
 
-    #[test]
-    fn named_codex_exec_run_config_preserves_positional_prompt() {
-        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
-            &["exec".to_string()],
+    // Catches: Named exec spawn loses its positional task to deferred PTY delivery.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_exec_run_config_preserves_positional_prompt() {
+        let (argv, spawned, deferred) =
+            capture_codex_spawn(&["exec"], "perform the task", "codex", "Recorded Codex").await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "exec",
+                "perform the task"
+            ]
+        );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
+    }
+
+    // Catches: Named spawn appends the task instead of substituting its authored placeholder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_placeholder_run_config_remains_authoritative() {
+        let (argv, spawned, deferred) = capture_codex_spawn(
+            &["exec", "{prompt}"],
             "perform the task",
-            None,
-            false,
-            None,
+            "codex",
+            "Recorded Codex",
         )
-        .unwrap();
-
-        assert_eq!(result, vec!["exec", "perform the task"]);
-    }
-
-    #[test]
-    fn named_codex_placeholder_run_config_remains_authoritative() {
-        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
-            &["exec".to_string(), "{prompt}".to_string()],
+        .await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "exec",
+                "perform the task"
+            ]
+        );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
+        // A non-final placeholder distinguishes substitution from positional append.
+        let (argv, _, deferred) = capture_codex_spawn(
+            &["exec", "{prompt}", "--json"],
             "perform the task",
-            None,
-            false,
-            None,
+            "codex",
+            "Recorded Codex",
         )
-        .unwrap();
-
-        assert_eq!(result, vec!["exec", "perform the task"]);
+        .await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "exec",
+                "perform the task",
+                "--json"
+            ]
+        );
+        assert!(deferred.is_none());
     }
 
-    #[test]
-    fn named_codex_wrapper_preserves_positional_prompt_and_is_warned() {
-        let args = vec!["launch-codex".to_string()];
-        let command = "/opt/company/bin/agent-wrapper";
-        let agent_type = resolve_spawn_agent_type(command, Some("codex")).unwrap();
-        let result =
-            compose_mcp_run_config_args(&agent_type, &args, "perform the task", None, false, None)
-                .unwrap();
-
-        assert_eq!(result, vec!["launch-codex", "perform the task"]);
-        assert!(codex_wrapper_launch_warning(Some(agent_type.as_str()), command).is_some());
+    // Catches: Wrapper spawn loses its positional task or omits the public launch warning.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_wrapper_preserves_positional_prompt_and_is_warned() {
+        let (argv, spawned, deferred) = capture_codex_spawn(
+            &["launch-codex"],
+            "perform the task",
+            "agent-wrapper",
+            "Recorded Codex",
+        )
+        .await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "launch-codex",
+                "perform the task"
+            ]
+        );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        let warning = spawned["launch_warning"].as_str().expect("wrapper warning");
+        assert!(
+            warning.contains("agent-wrapper") && warning.contains("cannot validate"),
+            "{warning}"
+        );
     }
 
     #[test]
