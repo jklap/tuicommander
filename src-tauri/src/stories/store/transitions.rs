@@ -20,9 +20,12 @@ impl StoryStore {
     /// Rebuild dependent readiness from durable integration receipts. Safe to
     /// repeat after a crash between the run event and the story projection.
     pub fn reconcile_integrated_dependencies(&self, plan_id: &str) -> Result<(), String> {
+        let preflight_plan = plan_id.to_owned();
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
-        reconcile_ready(&tx, plan_id, &self.db_path)?;
+        preflight.validate(&tx)?;
+        reconcile_ready(&tx, plan_id, &preflight)?;
         tx.commit()
             .map_err(|error| format!("commit dependency release: {error}"))
     }
@@ -63,8 +66,11 @@ impl StoryStore {
         dependency_id: &str,
         expected_revision: i64,
     ) -> Result<Story, String> {
+        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
+        preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         let dependency = read_story(&tx, dependency_id)?;
         check_revision(&story, expected_revision)?;
@@ -95,7 +101,7 @@ impl StoryStore {
             }
         }
         story.dependencies.push(dependency_id.into());
-        if !dependencies_integrated(&tx, &story, &self.db_path)? {
+        if !dependencies_integrated(&tx, &story, &preflight)? {
             // A ready story with an unfinished or unintegrated dependency is no longer claimable.
             story.status = StoryStatus::Backlog;
         }
@@ -114,8 +120,11 @@ impl StoryStore {
         if actor_session.is_some() {
             return Err("remove_dependency is user-only and requires a user action: an agent session cannot remove a dependency; ask the user to remove it from the Plans and Stories dialog".into());
         }
+        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
+        preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
         if story.status != StoryStatus::Backlog {
@@ -141,7 +150,7 @@ impl StoryStore {
             ));
         }
         story.dependencies.retain(|id| id != dependency_id);
-        if dependencies_integrated(&tx, &story, &self.db_path)? {
+        if dependencies_integrated(&tx, &story, &preflight)? {
             story.status = StoryStatus::Ready;
         }
         save_story(&tx, &mut story, expected_revision)?;
@@ -196,8 +205,11 @@ impl StoryStore {
         command: StoryCommand,
         actor: StoryTransitionActor,
     ) -> Result<Story, String> {
+        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
+        preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
         if actor == StoryTransitionActor::LocalApi
@@ -247,7 +259,7 @@ impl StoryStore {
                 if story.status != StoryStatus::Ready {
                     return Err(wrong_status(&story, "ready"));
                 }
-                if !dependencies_integrated(&tx, &story, &self.db_path)? {
+                if !dependencies_integrated(&tx, &story, &preflight)? {
                     return Err("story dependency lacks a current integration receipt".into());
                 }
                 story.status = StoryStatus::InProgress;
@@ -317,7 +329,7 @@ impl StoryStore {
                 if story.status != StoryStatus::Blocked {
                     return Err(wrong_status(&story, "blocked"));
                 }
-                story.status = if dependencies_integrated(&tx, &story, &self.db_path)? {
+                story.status = if dependencies_integrated(&tx, &story, &preflight)? {
                     StoryStatus::Ready
                 } else {
                     StoryStatus::Backlog
@@ -345,7 +357,7 @@ impl StoryStore {
             ],
         ).map_err(|e| format!("record story transition: {e}"))?;
         if story.status == StoryStatus::Done {
-            reconcile_ready(&tx, &story.plan_id, &self.db_path)?;
+            reconcile_ready(&tx, &story.plan_id, &preflight)?;
         }
         tx.commit()
             .map_err(|e| format!("commit story transition: {e}"))?;

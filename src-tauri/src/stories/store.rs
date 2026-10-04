@@ -367,12 +367,15 @@ impl StoryStore {
         expected_revision: i64,
     ) -> Result<Story, String> {
         validate_text("session", session, 200)?;
+        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
+        preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
         if story.status != StoryStatus::Ready {
-            let unmet = unmet_dependencies(&tx, &story, &self.db_path)?;
+            let unmet = unmet_dependencies(&tx, &story, &preflight)?;
             return Err(if unmet.is_empty() {
                 format!(
                     "story is not ready (status: {}); only a ready story can be claimed",
@@ -386,7 +389,7 @@ impl StoryStore {
                 )
             });
         }
-        if !dependencies_integrated(&tx, &story, &self.db_path)? {
+        if !dependencies_integrated(&tx, &story, &preflight)? {
             return Err("story dependency lacks a current integration receipt".into());
         }
         story.status = StoryStatus::InProgress;

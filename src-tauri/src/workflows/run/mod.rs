@@ -154,7 +154,7 @@ mod tests {
             while !pid_file.exists() {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            super::check::cancel_checks(&db_path, "cancelled-run", false);
+            super::check::cancel_checks(&db_path, "cancelled-run");
             assert!(
                 worker
                     .join()
@@ -419,17 +419,22 @@ mod tests {
 
     #[test]
     fn recorded_merge_releases_dependents_and_ref_movement_invalidates_receipts() {
-        assert_recorded_merge_receipts(true);
+        assert_recorded_merge_receipts(true, false);
     }
 
     #[test]
     fn workflow_plan_done_requires_receipts_and_reopens_until_recertified() {
         // catches: approved stories make a workflow plan Done before integration,
         // or Done survives canonical ref movement which invalidates run completion.
-        assert_recorded_merge_receipts(false);
+        assert_recorded_merge_receipts(false, false);
     }
 
-    fn assert_recorded_merge_receipts(with_dependent: bool) {
+    #[test]
+    fn preflight_git_does_not_hold_writers_and_post_probe_ref_movement_is_rejected_on_read() {
+        assert_recorded_merge_receipts(false, true);
+    }
+
+    fn assert_recorded_merge_receipts(with_dependent: bool, preflight_races: bool) {
         let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
         let definitions = WorkflowStore::open().unwrap();
         let plan_draft = definitions.get_draft(&definition_id).unwrap();
@@ -693,6 +698,17 @@ mod tests {
             .args(["config", "workflow.testpass", "true"])
             .run()
             .unwrap();
+        if preflight_races {
+            let canonical = repo.to_path_buf();
+            super::store::BEFORE_COMMIT.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move || {
+                    crate::git_cli::git_cmd(&canonical)
+                        .args(["switch", "-qc", "probe-commit-race"])
+                        .run()
+                        .unwrap();
+                }))
+            });
+        }
         let integrated = store
             .record_integrated_story(&run.id, &story_id, "integrate", checked.sequence)
             .unwrap();
@@ -700,6 +716,37 @@ mod tests {
             integrated.event.kind,
             RunEventKind::StoryIntegrated { .. }
         ));
+        if preflight_races {
+            assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
+            crate::git_cli::git_cmd(repo)
+                .args(["switch", "-q", "main"])
+                .run()
+                .unwrap();
+            let writer = store.clone();
+            let run_id = run.id.clone();
+            let project_path = run.project.clone();
+            super::check::BEFORE_GIT.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move || {
+                    // catches: receipt Git probes holding story/run writer locks and timing out unrelated writes.
+                    StoryStore::open()
+                        .unwrap()
+                        .create_plan(NewPlan {
+                            project: project_path,
+                            title: "Unrelated writer".into(),
+                            source: "unrelated.md".into(),
+                        })
+                        .unwrap();
+                    writer
+                        .command(&run_id, "writer-during-git", RunCommand::Pause)
+                        .unwrap();
+                }))
+            });
+            let error = stories
+                .reconcile_integrated_dependencies(&plan_id)
+                .unwrap_err();
+            assert!(error.contains("revisions changed"), "{error}");
+            stories.reconcile_integrated_dependencies(&plan_id).unwrap();
+        }
         assert_plan_state(crate::stories::PlanState::Done);
         let receipt = integrated
             .snapshot
@@ -965,7 +1012,7 @@ mod tests {
         assert_plan_state(crate::stories::PlanState::Done);
     }
 
-    fn fixture() -> (
+    pub(super) fn fixture() -> (
         tempfile::TempDir,
         tempfile::TempDir,
         String,
