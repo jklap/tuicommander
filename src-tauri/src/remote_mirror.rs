@@ -163,12 +163,15 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 5] = [
+const WINDOW_MIRRORABLE_EVENTS: [&str; 8] = [
     "session-state-changed",
     "session-closed",
     "progress-recorded",
     "workflow-run-changed",
     "mcp-toast",
+    "review-progress",
+    "proposals-ready",
+    "conflict-assist-status",
 ];
 
 /// Whether a mirrored event may be repeated on the desktop window.
@@ -294,7 +297,12 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
     // deliver a toast from a chunk already buffered when that happens.
     if matches!(
         frame.event.as_str(),
-        "mcp-toast" | "mcp-confirm" | "mcp-confirm-resolved"
+        "mcp-toast"
+            | "mcp-confirm"
+            | "mcp-confirm-resolved"
+            | "review-progress"
+            | "proposals-ready"
+            | "conflict-assist-status"
     ) && state.remote.base_url(connection_id).is_none()
     {
         return false;
@@ -825,6 +833,9 @@ mod tests {
             "session-closed",
             "progress-recorded",
             "workflow-run-changed",
+            "review-progress",
+            "proposals-ready",
+            "conflict-assist-status",
         ] {
             assert!(window_may_hear(event), "{event} has a safe window consumer");
         }
