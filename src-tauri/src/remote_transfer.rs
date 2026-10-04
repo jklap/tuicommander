@@ -347,12 +347,23 @@ fn destination(query: &UploadQuery, roots: &[String]) -> io::Result<Dir> {
 
 struct Staging {
     parent: Dir,
-    name: String,
-    dir: Dir,
+    dir: Option<Dir>,
 }
+impl Staging {
+    fn dir(&self) -> &Dir {
+        self.dir
+            .as_ref()
+            .expect("staging directory is open until drop")
+    }
+}
+
 impl Drop for Staging {
     fn drop(&mut self) {
-        if let Err(e) = self.parent.remove_dir_all(&self.name) {
+        // Windows directory handles deny deletion. Consume our handle before
+        // removing the tree; deleting through the parent keeps it open.
+        if let Some(dir) = self.dir.take()
+            && let Err(e) = dir.remove_open_dir_all()
+        {
             tracing::warn!(source = "remote-transfer", error = %e, "Remote upload staging cleanup failed");
         }
     }
@@ -397,11 +408,10 @@ pub(crate) async fn receive_copy(
     let staging_dir = dest.open_dir(&name).map_err(|e| e.to_string())?;
     let stage = Staging {
         parent: dest,
-        name,
-        dir: staging_dir,
+        dir: Some(staging_dir),
     };
     let archive = stage
-        .dir
+        .dir()
         .open_with("archive", OpenOptions::new().write(true).create_new(true))
         .map_err(|e| e.to_string())?;
     let mut archive = tokio::fs::File::from_std(archive.into_std());
@@ -454,9 +464,9 @@ fn create_upload_dirs(data: &Dir, path: &Path) -> io::Result<()> {
 }
 
 fn extract_and_publish(stage: Staging, query: UploadQuery) -> io::Result<TransferResult> {
-    stage.dir.create_dir("data")?;
-    let data = stage.dir.open_dir("data")?;
-    let mut tar = tar::Archive::new(stage.dir.open("archive")?.into_std());
+    stage.dir().create_dir("data")?;
+    let data = stage.dir().open_dir("data")?;
+    let mut tar = tar::Archive::new(stage.dir().open("archive")?.into_std());
     let mut bytes = 0u64;
     #[cfg(unix)]
     let mut directory_modes = Vec::new();

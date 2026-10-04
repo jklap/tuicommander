@@ -635,7 +635,14 @@ mod tests {
     #[tokio::test]
     async fn a_long_successful_answer_is_returned_whole() {
         let long = "x".repeat(MAX_CAPTURED * 3);
-        let (program, args) = shell(format!("echo {long}"));
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let answer = dir.path().join("answer.txt");
+        std::fs::write(&answer, &long).unwrap();
+        // cmd.exe has an 8191-character command-line limit; the output does not.
+        let (program, args) = shell(tuic_test_support::print_file_script(&format!(
+            "\"{}\"",
+            answer.display()
+        )));
         let stdout = run(&program, &args).await.expect("the shell must succeed");
         assert_eq!(stdout, long);
     }

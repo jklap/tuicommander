@@ -2060,7 +2060,8 @@ mod tests {
         let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         assert!(log.contains("WARN"), "{log}");
         for path in searched {
-            assert!(log.contains(&path.to_string_lossy().to_string()), "{log}");
+            let encoded = format!("{path:?}");
+            assert!(log.contains(&encoded), "{log}");
         }
     }
 
@@ -3775,6 +3776,10 @@ mod tests {
             "tuic-bridge"
         };
         let exe = sandbox.path().join(runner_name);
+        // The CI target and checkout can live on different Windows drives.
+        #[cfg(windows)]
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        #[cfg(not(windows))]
         std::fs::hard_link(std::env::current_exe().unwrap(), &exe).unwrap();
         std::fs::hard_link(&exe, sandbox.path().join(bridge_name)).unwrap();
         let linked_worktree = sandbox.path().join("linked");
