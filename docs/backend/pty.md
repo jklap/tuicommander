@@ -77,9 +77,10 @@ returns `400` and does not enter the session map.
 
 ### Monitoring
 
-Foreground-agent exit also retires the terminal's volatile Telegram registration
+Foreground-agent exit or an observed agent-type change also retires the terminal's volatile Telegram registration
 lifetime synchronously. A restarted agent using the same terminal and MCP identity
-must opt in again, even if the Telegram worker was busy during the exit.
+must opt in again, even if the Telegram worker was busy during the transition. Unrecognized
+non-shell probes retain the previous identity and do not revoke registration.
 
 | Command | Description |
 |---------|-------------|
