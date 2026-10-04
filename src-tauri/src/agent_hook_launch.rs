@@ -137,7 +137,14 @@ pub(crate) fn augment_args(
     args: &[String],
     config_dir: &Path,
 ) -> Vec<String> {
-    let result = augment_args_when(enabled(agent_type), agent_type, args, config_dir);
+    let enabled = enabled(agent_type);
+    if enabled && agent_type == "claude" && args.first().is_some_and(|arg| !arg.starts_with('-')) {
+        let help = crate::agent::cli_help(binary_path).unwrap_or_default();
+        if claude_is_subcommand(args, &help) {
+            return args.to_vec();
+        }
+    }
+    let result = augment_args_when(enabled, agent_type, args, config_dir);
     if screen_flag_candidate(agent_type, args).is_none() {
         return result;
     }
@@ -207,6 +214,25 @@ fn add_screen_flag(
     result
 }
 
+/// Help owns the advertised verbs and aliases. Hidden hyphenated commands pass
+/// through conservatively; a single hyphenated prompt can use --print explicitly.
+fn claude_is_subcommand(args: &[String], help: &str) -> bool {
+    let Some(first) = args
+        .first()
+        .filter(|arg| !arg.is_empty() && !arg.starts_with('-'))
+    else {
+        return false;
+    };
+    first.contains('-')
+        || help
+            .lines()
+            .skip_while(|line| line.trim() != "Commands:")
+            .skip(1)
+            .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+            .filter_map(|line| line.split_whitespace().next())
+            .any(|names| names.split('|').any(|name| name == first))
+}
+
 fn augment_args_when(
     enabled: bool,
     agent_type: &str,
@@ -219,9 +245,10 @@ fn augment_args_when(
     }
     match agent_type {
         "claude"
-            if !args.iter().any(|arg| {
-                arg == "--settings" || arg.starts_with("--settings=") || arg == "--bare"
-            }) =>
+            if !claude_is_subcommand(args, "")
+                && !args.iter().any(|arg| {
+                    arg == "--settings" || arg.starts_with("--settings=") || arg == "--bare"
+                }) =>
         {
             result.push("--settings".into());
             result.push(
@@ -254,6 +281,32 @@ fn augment_args_when(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: launch-scoped settings corrupt a verb or its alias, while a
+    /// positional prompt gets misclassified as a command.
+    #[test]
+    fn claude_subcommands_use_captured_help_and_preserve_prompt_launches() {
+        let help = include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt");
+        for verb in ["doctor", "plugins", "upgrade", "remote-control"] {
+            assert!(claude_is_subcommand(&[verb.into()], help), "{verb}");
+        }
+        for args in [
+            vec![],
+            vec!["prompt".into()],
+            vec!["--resume".into(), "x".into()],
+        ] {
+            assert!(!claude_is_subcommand(&args, help), "{args:?}");
+            assert!(
+                augment_args_when(true, "claude", &args, Path::new("config"))
+                    .contains(&"--settings".into())
+            );
+        }
+        let args = vec!["remote-control".into(), "--resume".into(), "x".into()];
+        assert_eq!(
+            augment_args_when(true, "claude", &args, Path::new("config")),
+            args
+        );
+    }
 
     #[cfg(unix)]
     #[test]

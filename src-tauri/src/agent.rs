@@ -771,6 +771,21 @@ impl Drop for ScreenProbeTree {
 /// A help probe owns and tears down its process tree, including descendants
 /// that inherited stdout or stderr. The shared git deadline helper deliberately
 /// has different child-only semantics, so screen probes keep this local.
+pub(crate) fn cli_help(path: &str) -> Option<String> {
+    let executable = resolve_probe_executable(path);
+    let mut cmd = agent_probe_command(executable.to_str().unwrap_or(path));
+    cmd.arg("--help");
+    crate::cli::apply_no_window(&mut cmd);
+    let output = screen_probe_output(&mut cmd, std::time::Duration::from_secs(2)).ok()?;
+    output.status.success().then(|| {
+        format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
 fn screen_probe_output(
     cmd: &mut Command,
     timeout: std::time::Duration,
