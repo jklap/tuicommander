@@ -1,3 +1,6 @@
+## Telegram channel adapter (1438-79b4) — headless rebuild required
+
+- [ ] After Boss authorizes mint deployment and the bound agent is idle, rebuild/restart tuic-remote and verify registration/replacement/unregister, automatic retirement on agent exit with the shell still open, MCP session end and PTY close, and the allowlisted phone conversation: no-agent reply "Nessun agent registrato", Thinking/activity refresh, exact final reply, authored done/blocked notices and opaque-button callback mail. The Rust changes do not hot-reload. No live token/chat-ID reads, mint deployment or desktop restart were performed by this lane. Offline targeted tests use fake credentials and chats; deterministic publish receipts remain outside this slice.
 ## Optional dictation build graph (1394-ff2c) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, confirm push-to-talk, hands-free speech, notification output-device selection, and the global window hotkey still work. Tauri builds enable dictation explicitly; plain Cargo desktop builds omit it. Rust changes do not hot-reload. This lane does not restart the live app or launch another desktop instance.
@@ -4600,6 +4603,12 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 ## Remote transfer cancellation fixture (1528-cee8) — Rust rebuild
 
 - [x] The cancellation regression must retain worker staging and its upload permit after handler abort, publish both fixture files, clean staging, and release both slots. Production still passes the unchanged extractor. _(verified by source inspection: `remote_transfer.rs` receive/worker ownership and channel-gated regression in `remote_transfer_tests.rs`; targeted execution is recorded in the story worklog. Rust changes require Boss to restart `make dev` or rebuild release before loading; this refactor adds no new runtime behavior.)_
+## Telegram minimal outbound (#1438-79b4) — Rust rebuild required
+
+- [ ] After Boss rebuilds/restarts the headless daemon, a directly observed Claude-to-Codex replacement in the same terminal must require fresh Telegram registration, even without a shell observation. Offline regression: `observed_agent_type_change_does_not_transfer_registration` (#1526-22f3).
+
+- [ ] After Boss rebuilds/restarts the headless daemon, register an agent, let it exit to its shell, then restart an agent in that terminal. Phone mail must receive `Nessun agent registrato` until the replacement explicitly registers. Offline native foreground/inbox coverage: `observed_agent_exit_does_not_transfer_registration_to_restarted_agent` (#1524-dcc1). The running backend needs a restart to load this Rust change.
+- [ ] After Boss rebuilds/restarts the headless daemon, verify drafts have no phone Stop, send/notifications use the single configured chat, and a button press or new message retires previous handles. Live mint verification remains coordinator-owned; no instance was launched here. Rust changes do not hot-reload.
 - [ ] After Boss rebuilds/restarts TUIC: Settings > Agents > Codex shows the migrated bypass argument and warning; remove it and confirm terminal and managed launches preserve the removal. The durable migration stamp and wrapper task routing require a rebuilt backend; also confirm a default wrapper receives its positional task. Rust migration requires restart. Visual screenshot attempt could not render the isolated harness while the macOS screen was locked. (#1399-17bd)
 
 - [ ] After Boss rebuilds/restarts the backend, confirm an interactive Codex default with `--profile review` (or `exec`/`e`) receives and submits its managed task. Actual subcommands after root options must retain positional tasks. The public spawn regression covers argv and queued delivery; the running Rust backend requires restart. (#1513-701d)

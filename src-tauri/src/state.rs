@@ -624,6 +624,9 @@ pub(crate) struct SessionState {
     /// observed, shell foreground means it has exited and cannot receive input.
     #[serde(skip)]
     pub(crate) agent_foreground_observed: bool,
+    /// Telegram opt-in lifetime, retired synchronously on observed agent exit.
+    #[serde(skip)]
+    pub(crate) telegram_registration_lifetime: Option<Arc<()>>,
     /// Accepted OS foreground snapshot order; late completion cannot overwrite
     /// a newer observation from another timer/IPC/HTTP caller.
     #[serde(skip)]

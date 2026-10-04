@@ -2575,6 +2575,18 @@ support browser entry on the existing application origin and transport. Use
 HTTPS for phone entry. TUIC inspection tools are gated while a form is open. See
 [Private secret forms](user-guide/secrets.md) for limits and consent.
 
+## Headless Telegram channel
+
+Any MCP-bound TUIC agent opts in with `telegram register`; one volatile
+registration replaces the previous agent with one native notice. It ends on
+MCP session end, PTY close, foreground-agent exit or daemon restart.
+Allowlisted private text arrives as native peer mail. Without an agent the bot
+replies "Nessun agent registrato" and drops the text; strangers stay silent.
+The registered agent can stream concise activity, send exact replies and offer
+opaque buttons. Proactive sends use one allowlisted destination. Only the polling
+cursor persists; live mint deployment remains pending. See
+[Telegram channel](design/telegram-channel.md).
+
 Connected daemon notices carry their host identity. MCP confirmation responses and ACP permission/elicitation answers return to that daemon; disconnected questions disappear without changing local connections. AI Chat shows remote questions separately, with their ACP connection identity. Remote GitHub transitions fetch PR data from the repository owner, notify once, and do not run local repository automation. GitHub polling also works on the headless daemon. MCP upstream health refreshes use a separate host snapshot rather than this machine’s editable configuration.
 
 - AI Chat mobile push: pending questions and ego notice cards share the 30-second per-conversation limit.

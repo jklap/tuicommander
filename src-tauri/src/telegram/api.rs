@@ -30,7 +30,7 @@ pub(crate) struct BotApi {
 #[derive(Deserialize)]
 struct Envelope {
     ok: bool,
-    result: Option<Vec<Value>>,
+    result: Option<Value>,
     error_code: Option<u16>,
     parameters: Option<Parameters>,
 }
@@ -76,16 +76,34 @@ impl BotApi {
             return Err(Error::Config);
         }
         let limit = if offset == -1 { 1 } else { BATCH_LIMIT };
+        let result = self
+            .request(
+                "getUpdates",
+                serde_json::json!({
+                    "offset":offset,"timeout":timeout,"limit":limit,
+                    "allowed_updates":["message","callback_query"]
+                }),
+            )
+            .await?;
+        let updates: Vec<Value> = serde_json::from_value(result).map_err(|_| Error::Protocol)?;
+        if updates.len() > usize::from(limit) {
+            return Err(Error::Protocol);
+        }
+        Ok(updates)
+    }
+
+    /// The method is host-owned. External errors never retain credential URLs.
+    pub(super) async fn request(&self, method: &str, payload: Value) -> Result<Value, Error> {
         // Reading the allowlist here also revokes pending network work when its
         // source is missing/invalid. The caller checks each incoming chat again.
         self.paths.allowlist()?;
         let token = self.paths.token()?;
-        let url = Zeroizing::new(format!("{}/bot{}/getUpdates", self.base, token.as_str()));
+        let url = Zeroizing::new(format!("{}/bot{}/{method}", self.base, token.as_str()));
         // Never trace the URL or retain reqwest errors (their Display includes it).
         let mut response = self
             .client
             .post(url.as_str())
-            .json(&serde_json::json!({"offset":offset,"timeout":timeout,"limit":limit}))
+            .json(&payload)
             .send()
             .await
             .map_err(|_| Error::Transport)?;
@@ -125,10 +143,6 @@ impl BotApi {
                 code => Error::Rejected(code),
             });
         }
-        let updates = envelope.result.ok_or(Error::Protocol)?;
-        if updates.len() > usize::from(limit) {
-            return Err(Error::Protocol);
-        }
-        Ok(updates)
+        envelope.result.ok_or(Error::Protocol)
     }
 }
