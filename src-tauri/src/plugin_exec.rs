@@ -516,6 +516,7 @@ mod tests {
         assert!(result.is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolve_binary_rejects_untrusted_symlink() {
         // Create a temp dir outside trusted dirs with a symlink to /bin/echo

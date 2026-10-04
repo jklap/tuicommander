@@ -1,6 +1,7 @@
 //! Round-4 critic tests for story 1420-f3de: preset arming and revocation.
 
 use super::*;
+#[cfg(unix)]
 use crate::test_support::ForegroundIdentityProbe;
 
 #[cfg(unix)]
