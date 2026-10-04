@@ -14,10 +14,10 @@ use crate::state::{AppEvent, AppState};
 /// Desktop delivery is optional; the event bus is authoritative on headless daemons.
 fn emit_window<T: Serialize + Clone>(state: &AppState, event: &str, payload: T) {
     #[cfg(feature = "desktop")]
-    if let Some(handle) = state.app_handle.read().as_ref() {
-        if let Err(error) = handle.emit(event, payload) {
-            tracing::warn!(source = "github", event, %error, "GitHub window emission failed");
-        }
+    if let Some(handle) = state.app_handle.read().as_ref()
+        && let Err(error) = handle.emit(event, payload)
+    {
+        tracing::warn!(source = "github", event, %error, "GitHub window emission failed");
     }
     #[cfg(not(feature = "desktop"))]
     let _ = (state, event, payload);
