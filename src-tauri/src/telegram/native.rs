@@ -64,73 +64,89 @@ impl MailPort for NativeMail {
     }
 }
 
-/// Explicit headless startup only; absent/disabled config does not open secrets.
+/// One daemon owner, restarted explicitly by setup changes; desktop never polls.
 pub(crate) fn start(state: &Arc<AppState>) {
-    let Some(home) = dirs::home_dir() else {
+    let Ok(paths) = super::settings::paths() else {
         return;
     };
-    let paths = super::Paths::new(home.join(".config/tuic-telegram"));
-    let config = match super::Config::load(&paths) {
-        Ok(Some(config)) => config,
-        Ok(None) => return,
-        Err(error) => {
-            super::runtime::alert(state, error);
-            return;
-        }
-    };
-    let sid = format!("telegram:{}", uuid::Uuid::new_v4());
-    let (commands, receive) = mpsc::channel(100);
-    let port = NativeMail::new(commands.clone());
-    let inbound = match super::inbound::Inbound::with_port(paths.clone(), port) {
-        Ok(Some(inbound)) => inbound,
-        Ok(None) => return,
-        Err(error) => {
-            super::runtime::alert(state, error);
-            return;
-        }
-    };
-    let runtime = match Runtime::new(state.clone(), config, paths, sid.clone()) {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            super::runtime::alert(state, error);
-            return;
-        }
-    };
-    if HANDLE.set(commands).is_err() {
+    let (commands, mut receive) = mpsc::channel(100);
+    if HANDLE.set(commands.clone()).is_err() {
         super::runtime::alert(state, Error::AlreadyOwned);
         return;
     }
     let state = state.clone();
     tokio::spawn(async move {
-        let registered = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
-            &state,
-            &json!({"action":"register","name":"telegram-adapter"}),
-            Some(&sid),
-            None,
-        )
-        .await;
-        if registered.get("error").is_some() {
-            super::runtime::alert(&state, Error::State);
-            return;
-        }
-        let worker = tokio::spawn(runtime.run(receive));
-        let mut inbound = inbound;
+        let sid = format!("telegram:{}", uuid::Uuid::new_v4());
         loop {
-            match inbound.poll().await {
-                Ok(super::inbound::Poll::Backoff(delay)) => tokio::time::sleep(delay).await,
-                Ok(super::inbound::Poll::Accepted(_)) => {}
-                Err(
-                    error @ (Error::Unauthorized | Error::Conflict | Error::Rejected(403 | 404)),
-                ) => {
-                    super::runtime::alert(&state, error);
-                    worker.abort();
-                    break;
+            super::settings::registration_status(&paths, None);
+            let revision = super::settings::revision(&paths);
+            let config = match super::Config::load(&paths) {
+                Ok(Some(config)) => config,
+                Ok(None) => {
+                    super::settings::status(false, None, false);
+                    super::settings::changed(&paths, &revision).await;
+                    continue;
                 }
                 Err(error) => {
+                    super::settings::status(false, Some(error), false);
                     super::runtime::alert(&state, error);
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    super::settings::changed(&paths, &revision).await;
+                    continue;
                 }
+            };
+            let port = NativeMail::new(commands.clone());
+            let mut inbound = match super::inbound::Inbound::with_port(paths.clone(), port) {
+                Ok(Some(inbound)) => inbound,
+                Ok(None) => continue,
+                Err(error) => {
+                    super::settings::status(false, Some(error), false);
+                    super::settings::changed(&paths, &revision).await;
+                    continue;
+                }
+            };
+            let runtime = match Runtime::new(state.clone(), config, paths.clone(), sid.clone()) {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    super::settings::status(false, Some(error), false);
+                    super::settings::changed(&paths, &revision).await;
+                    continue;
+                }
+            };
+            let registered = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+                &state,
+                &json!({"action":"register","name":"telegram-adapter"}),
+                Some(&sid),
+                None,
+            )
+            .await;
+            if registered.get("error").is_some() {
+                super::settings::status(false, Some(Error::State), false);
+                super::settings::changed(&paths, &revision).await;
+                continue;
             }
+            tokio::select! {
+                _ = super::settings::changed(&paths, &revision) => {},
+                _ = runtime.run_ref(&mut receive) => {},
+                _ = async {
+                    loop {
+                        match inbound.poll().await {
+                            Ok(super::inbound::Poll::Backoff(delay)) => tokio::time::sleep(delay).await,
+                            Ok(super::inbound::Poll::Accepted(count)) => super::settings::status(true, None, count > 0),
+                            Err(error) => {
+                                super::settings::status(false, Some(error), false);
+                                super::runtime::alert(&state, error);
+                                if matches!(error, Error::Unauthorized | Error::Conflict | Error::Rejected(403 | 404)) {
+                                    super::settings::changed(&paths, &revision).await;
+                                    break;
+                                }
+                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            }
+                        }
+                    }
+                } => {},
+            }
+            super::settings::registration_status(&paths, None);
+            super::settings::status(false, None, false);
         }
     });
 }

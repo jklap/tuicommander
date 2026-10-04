@@ -129,6 +129,8 @@ type CommandTableEntry = { map: (args: Record<string, unknown>, p: ArgEncoder) =
  * The `p` helper encodes a required argument for URL usage (throws if missing).
  */
 const COMMAND_TABLE: Record<string, CommandTableEntry> = {
+	telegram_settings: { map: () => ({ method: "GET", path: "/config/telegram" }) },
+	telegram_setup: { map: (args) => ({ method: "PUT", path: "/config/telegram", body: { change: args.change } }) },
 	secret_form_submit: { map: (args) => ({ method: "POST", path: "/secrets/forms/submit", body: args.submission }) },
 	// --- Dictation ---
 	get_dictation_status: { map: () => ({ method: "GET", path: "/dictation/status" }) },

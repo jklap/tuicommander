@@ -145,11 +145,22 @@ async fn each_request_reads_rotated_token_and_current_allowlist() {
     write_private(&paths.file("bot.token"), "222:fake-two\n");
     api.get_updates(1, 0).await.unwrap();
     write_private(&paths.file("allowed_chat_ids"), "");
-    assert!(matches!(api.get_updates(2, 0).await, Err(Error::Config)));
+    // Empty authorization permits collecting a pairing credential, never sending.
+    assert!(matches!(
+        api.request("sendMessage", json!({})).await,
+        Err(Error::Config)
+    ));
+    api.get_updates(2, 0).await.unwrap();
+    std::fs::remove_file(paths.file("allowed_chat_ids")).unwrap();
+    assert!(matches!(
+        api.get_updates(3, 0).await,
+        Err(Error::PrivateFile)
+    ));
     let requests = server.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     assert_eq!(requests[0].0, "/bot111:fake-one/getUpdates");
     assert_eq!(requests[1].0, "/bot222:fake-two/getUpdates");
+    assert_eq!(requests[2].0, "/bot222:fake-two/getUpdates");
 }
 
 // Catches: Telegram's error description leaks a URL token, or status faults become successful polls.
