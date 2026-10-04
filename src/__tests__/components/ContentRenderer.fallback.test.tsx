@@ -9,7 +9,7 @@ import { appLogger } from "../../stores/appLogger";
 describe("ContentRenderer parser failure", () => {
 	// Catches: parser errors bypassing sanitization and inserting raw source as live HTML.
 	it.each([false, true])("escapes fallback HTML instead of injecting live elements (incremental=%s)", (incremental) => {
-		const source = '<img src=x onerror=alert(1)> &lt;literal&gt; </pre><script>alert(1)</script>';
+		const source = "<img src=x onerror=alert(1)> &lt;literal&gt; </pre><script>alert(1)</script>";
 		const failure = new Error("parser failure");
 		const parser = vi.spyOn(marked, "parse").mockImplementation(() => {
 			throw failure;
