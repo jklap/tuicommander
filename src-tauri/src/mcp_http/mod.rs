@@ -3731,10 +3731,18 @@ mod tests {
             .oneshot(mcp_post_from(&path, &body, local))
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        assert!(String::from_utf8_lossy(&bytes).contains("not found"));
+        // Catches: administrative local actions being refused or attributed to Human.
+        assert_eq!(response.status(), StatusCode::OK);
+        let blocked = store.get_story(&other.id).unwrap();
+        assert_eq!(blocked.status, StoryStatus::Blocked);
+        assert_eq!(
+            store.transition_history(&other.id).unwrap()[0].actor,
+            StoryTransitionActor::LocalApi
+        );
+        let body = serde_json::json!({"action": {
+            "action": "transition", "story_id": other.id,
+            "expected_revision": blocked.revision, "command": "unblock"
+        }});
         let response = app
             .oneshot(mcp_post_from(
                 &format!("{path}&token={token}"),
@@ -3745,9 +3753,12 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            store.transition_history(&other.id).unwrap()[0].actor,
-            StoryTransitionActor::Human
+            store.get_story(&other.id).unwrap().status,
+            StoryStatus::Ready
         );
+        let history = store.transition_history(&other.id).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].actor, StoryTransitionActor::Human);
     }
 
     #[tokio::test]
@@ -3784,7 +3795,7 @@ mod tests {
             let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .unwrap();
-            assert!(String::from_utf8_lossy(&bytes).contains("authenticated user"));
+            assert!(String::from_utf8_lossy(&bytes).contains("not found"));
             let path = format!("{path}&token={token}");
             let response = app
                 .clone()
@@ -3794,7 +3805,7 @@ mod tests {
             let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .unwrap();
-            assert!(!String::from_utf8_lossy(&bytes).contains("authenticated user"));
+            assert!(String::from_utf8_lossy(&bytes).contains("not found"));
         }
     }
 

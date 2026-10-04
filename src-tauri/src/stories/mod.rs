@@ -191,19 +191,21 @@ mod tests {
                 file_scope: vec![],
             })
             .expect("story");
-        assert!(
-            store
-                .transition_for_actor(
-                    &story.id,
-                    story.revision,
-                    StoryCommand::StartManual,
-                    Some("agent")
-                )
-                .is_err()
-        );
+        // Catches: tracking metadata refusing a valid manual start without creating a claim.
         let started = store
-            .transition_for_actor(&story.id, story.revision, StoryCommand::StartManual, None)
-            .expect("start");
+            .transition_for_actor(
+                &story.id,
+                story.revision,
+                StoryCommand::StartManual,
+                Some("agent"),
+            )
+            .expect("trusted manual start");
+        assert_eq!(
+            store.transition_history(&story.id).expect("history")[0].actor,
+            StoryTransitionActor::ManagedSession {
+                session_id: "agent".into()
+            }
+        );
         assert_eq!(started.status, StoryStatus::InProgress);
         assert_eq!(started.claim_session, None);
         let checked = store
@@ -806,19 +808,27 @@ mod tests {
         let claimed = store
             .claim(&story.id, "tab-one", story.revision)
             .expect("claim");
-        assert!(
-            store
-                .transition_for_actor(
-                    &story.id,
-                    claimed.revision,
-                    StoryCommand::CheckCriterion(0),
-                    Some("tab-two"),
-                )
-                .is_err()
-        );
+        // Catches: provenance restricting another caller's criterion update or stealing the claim.
+        let claimed = store
+            .transition_for_actor(
+                &story.id,
+                claimed.revision,
+                StoryCommand::CheckCriterion(0),
+                Some("tab-two"),
+            )
+            .expect("trusted update");
+        assert_eq!(claimed.checked, vec![true]);
+        assert_eq!(claimed.claim_session.as_deref(), Some("tab-one"));
         assert_eq!(
-            store.get_story(&story.id).expect("story").revision,
-            claimed.revision
+            store
+                .transition_history(&story.id)
+                .expect("history")
+                .last()
+                .expect("update")
+                .actor,
+            StoryTransitionActor::ManagedSession {
+                session_id: "tab-two".into()
+            }
         );
         assert!(store.claim(&story.id, "tab-two", claimed.revision).is_err());
         assert_eq!(store.release_session_claims("tab-one").expect("release"), 1);
