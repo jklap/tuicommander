@@ -14,6 +14,7 @@ import s from "./AIChatPanel.module.css";
 import { Composer } from "./Composer";
 import { aiChatDraft } from "./draft";
 import { Interactions } from "./Interactions";
+import { RemoteInteractions } from "./RemoteInteractions";
 import { SessionControls } from "./SessionControls";
 import { Transcript } from "./Transcript";
 import { trackPanelWidth } from "./trackPanelWidth";
@@ -254,6 +255,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 					if (session) acpTranscript.clear(session);
 				}}
 			>
+				<RemoteInteractions />
 				<Interactions
 					interactions={chat.interactions}
 					onPermission={(requestId, optionId) => void chat.answerPermission(requestId, optionId)}

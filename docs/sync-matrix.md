@@ -632,3 +632,5 @@ When adding, renaming or moving a docs page:
 | `examples/plugins/` | Reference plugin implementations (7 examples) |
 
 Remote upstream health (#1444-95a4): remote_mirror forwards upstream-status-changed with the locally saved host label; mcpPopupStore refreshes the originating daemon through explicit RPC into remoteStatus. Remote events never refresh or save local server configuration. App-lifetime notices remain visible while the popup is closed; disconnect invalidates in-flight snapshots.
+
+Remote ACP notices wake a separate daemon-scoped interaction queue in AI Chat. Pending questions and responses use the existing ACP HTTP routes with an explicit remote owner; settlement/disconnection remove only that daemon’s questions. Local ACP connections are not attached or changed.
