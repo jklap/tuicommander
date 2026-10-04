@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Show every registered native MCP tool in Settings, including disabled tools, using backend descriptions and switches that follow the existing MCP access filters.
+
 - Bound nightly release notes and link to the full comparison when the commit list exceeds the release body budget.
 - Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.
 - Open terminal directory links in the File Browser and report missing paths without creating empty editor tabs.
