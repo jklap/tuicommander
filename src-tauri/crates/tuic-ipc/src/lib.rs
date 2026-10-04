@@ -3,6 +3,20 @@
 pub mod app_instance;
 pub mod http;
 
+/// Backend deadlines shared with the CLI and stdio bridge.
+pub const SECRET_FORM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+pub const SECRET_CHILD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Allow private entry/consent and execution to finish before transport expiry.
+pub fn secret_response_timeout(action: &str) -> Option<std::time::Duration> {
+    let margin = std::time::Duration::from_secs(5);
+    match action {
+        "request" => Some(SECRET_FORM_TIMEOUT + margin),
+        "run" => Some(SECRET_FORM_TIMEOUT + SECRET_CHILD_TIMEOUT + margin),
+        _ => None,
+    }
+}
+
 use app_instance::AppInstance;
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
