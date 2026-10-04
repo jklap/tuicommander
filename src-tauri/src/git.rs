@@ -605,29 +605,6 @@ pub(crate) const ALLOWED_GIT_SUBCOMMANDS: &[&str] = &[
     "rev-parse",
 ];
 
-/// TUIC-private marker (never passed to git) that the background auto-fetch adds
-/// to its `fetch` to get the low-speed abort settings. A manual fetch on a slow
-/// link must not be aborted after 15 s, so the settings are opt-in.
-pub(crate) const AUTO_FETCH_MARKER: &str = "--tuic-auto-fetch";
-
-/// Final argv for git: the marker is replaced by the low-speed `-c` options.
-fn git_invocation_args(args: &[String]) -> Vec<String> {
-    let mut argv = Vec::with_capacity(args.len() + 4);
-    if args.iter().any(|arg| arg == AUTO_FETCH_MARKER) {
-        argv.extend(
-            [
-                "-c",
-                "http.lowSpeedLimit=1000",
-                "-c",
-                "http.lowSpeedTime=15",
-            ]
-            .map(str::to_owned),
-        );
-    }
-    argv.extend(args.iter().filter(|arg| *arg != AUTO_FETCH_MARKER).cloned());
-    argv
-}
-
 /// Reject caller-controlled Git options outside the flags used by the UI.
 pub(crate) fn validate_git_command_args(args: &[String]) -> Result<(), String> {
     let subcommand = args.first().map(String::as_str).unwrap_or("");
@@ -635,7 +612,7 @@ pub(crate) fn validate_git_command_args(args: &[String]) -> Result<(), String> {
         return Err(format!("Git subcommand \"{subcommand}\" is not allowed"));
     }
     let flags: &[&str] = match subcommand {
-        "fetch" => &["--all", AUTO_FETCH_MARKER],
+        "fetch" => &["--all"],
         "pull" => &["--ff-only"],
         "push" => &["-u", "--delete"],
         "diff" => &["--name-status"],
@@ -673,8 +650,8 @@ pub(crate) fn run_git_command_blocking(
         };
     }
     let repo_path = PathBuf::from(path);
-    let argv = git_invocation_args(args);
-    let mut builder = git_cmd(&repo_path).args(&argv);
+    let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let mut builder = git_cmd(&repo_path).args(&args_str);
 
     // A network subcommand is the only one that can park this thread forever —
     // a credential helper on a prompt, a half-open connection, a wedged mount.
@@ -1097,27 +1074,14 @@ mod tests {
             stats.last_commit_ts.keys().collect::<Vec<_>>()
         );
     }
-    // Catches: low-speed abort applied to manual fetches (aborting them after 15 s on a slow
-    // link), auto-fetch losing it, or the private marker reaching git as an unknown option.
+    // Catches: the retired private auto-fetch marker being accepted again and reaching git as an
+    // unknown option.
     #[test]
-    fn only_auto_fetch_gets_low_speed_options_and_the_marker_never_reaches_git() {
-        let vec_of = |args: &[&str]| args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
-        let auto = vec_of(&["fetch", "--all", AUTO_FETCH_MARKER]);
-        assert_eq!(validate_git_command_args(&auto), Ok(()));
-        assert_eq!(
-            git_invocation_args(&auto),
-            vec_of(&[
-                "-c",
-                "http.lowSpeedLimit=1000",
-                "-c",
-                "http.lowSpeedTime=15",
-                "fetch",
-                "--all"
-            ])
-        );
-        let manual = vec_of(&["fetch", "--all"]);
-        assert_eq!(git_invocation_args(&manual), manual);
-        assert!(validate_git_command_args(&vec_of(&["pull", AUTO_FETCH_MARKER])).is_err());
+    fn the_retired_auto_fetch_marker_is_rejected() {
+        let args = ["fetch", "--all", "--tuic-auto-fetch"]
+            .map(str::to_owned)
+            .to_vec();
+        assert!(validate_git_command_args(&args).is_err());
     }
 
     // Catches: a flag-table edit that rejects an argument vector the frontend still sends
