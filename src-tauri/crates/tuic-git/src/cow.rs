@@ -356,9 +356,11 @@ pub(crate) fn restore_owner_write(path: &Path) -> Result<(), String> {
             std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         if permissions.readonly() {
+            // Windows readonly is a file attribute; clearing it does not grant Unix world-write.
+            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
         }
