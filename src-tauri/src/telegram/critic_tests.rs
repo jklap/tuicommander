@@ -37,7 +37,7 @@ async fn selected_button_uses_disabled_object_without_callback_data() {
         ("bot.token", "123456:FAKE_critic_token".to_string()),
         (
             "config.json",
-            json!({"enabled":true,"bot_alias":"critic","target_tuic_session":peer}).to_string(),
+            json!({"enabled":true,"bot_alias":"critic"}).to_string(),
         ),
     ] {
         use std::os::unix::fs::PermissionsExt;
@@ -82,6 +82,14 @@ async fn selected_button_uses_disabled_object_without_callback_data() {
         paths.clone(),
         super::super::BotApi::loopback(paths, address),
     );
+    runtime
+        .tool(
+            peer,
+            "critic-target-mcp",
+            super::super::tool::Input::Register,
+        )
+        .await
+        .unwrap();
     runtime
         .send_buttons(
             1111111,

@@ -19,6 +19,7 @@ async fn final_reply_and_done_notice_retire_previous_button_mail() {
         runtime
             .tool(
                 PEER,
+                "target-mcp",
                 Input::Send {
                     text: "Choose".into(),
                     buttons: vec![vec![Button {
@@ -50,6 +51,7 @@ async fn final_reply_and_done_notice_retire_previous_button_mail() {
             runtime
                 .tool(
                     PEER,
+                    "target-mcp",
                     Input::Begin {
                         request_id: "request".into(),
                     },
@@ -59,6 +61,7 @@ async fn final_reply_and_done_notice_retire_previous_button_mail() {
             runtime
                 .tool(
                     PEER,
+                    "target-mcp",
                     Input::Finish {
                         request_id: "request".into(),
                         text: "Finished".into(),
@@ -119,6 +122,7 @@ async fn multiple_inbound_chats_do_not_broadcast_single_destination_send() {
     runtime
         .tool(
             PEER,
+            "target-mcp",
             Input::Send {
                 text: "One destination".into(),
                 buttons: vec![],

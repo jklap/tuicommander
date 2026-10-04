@@ -80,9 +80,7 @@ impl<P: MailPort> Inbound<P> {
 
     async fn poll_once(&mut self) -> Result<Poll, Error> {
         let current = Config::load(&self.paths)?.ok_or(Error::Config)?;
-        if current.bot_alias != self.config.bot_alias
-            || current.target_tuic_session != self.config.target_tuic_session
-        {
+        if current.bot_alias != self.config.bot_alias {
             return Err(Error::State);
         }
         let saved = offset::read(&self.paths);
@@ -109,13 +107,7 @@ impl<P: MailPort> Inbound<P> {
         let mut updates = values
             .iter()
             .map(|value| {
-                Update::parse(
-                    value,
-                    &ids,
-                    &self.config.bot_alias,
-                    &self.config.target_tuic_session,
-                )
-                .map(|update| (update, value))
+                Update::parse(value, &ids, &self.config.bot_alias, "").map(|update| (update, value))
             })
             .collect::<Result<Vec<_>, _>>()?;
         updates.sort_by_key(|(update, _)| update.id);
@@ -132,8 +124,9 @@ impl<P: MailPort> Inbound<P> {
             }
             let candidate = update.id.checked_add(1).ok_or(Error::Protocol)?;
             self.port.update(value).await?;
-            if let Some(mail) = update.mail {
-                self.port.offer(&mail).await?;
+            if let Some(mail) = update.mail
+                && self.port.offer(&mail).await?
+            {
                 accepted += 1;
             }
             next = candidate;

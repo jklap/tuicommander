@@ -86,7 +86,7 @@ impl Update {
 /// Native integration offers to the in-memory inbox under the identity lock,
 /// then arbitrates safe wake. No adapter persistence or consumption receipts.
 pub(crate) trait MailPort {
-    async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error>;
+    async fn offer(&mut self, mail: &PendingMail) -> Result<bool, Error>;
     /// Validated update id; concrete ports authorize non-text update payloads.
     async fn update(&mut self, _value: &Value) -> Result<(), Error> {
         Ok(())
@@ -100,10 +100,10 @@ pub(super) struct TestInbox {
 }
 #[cfg(test)]
 impl MailPort for TestInbox {
-    fn offer(&mut self, mail: &PendingMail) -> impl Future<Output = Result<(), Error>> {
+    fn offer(&mut self, mail: &PendingMail) -> impl Future<Output = Result<bool, Error>> {
         self.by_id
             .entry(mail.id.clone())
             .or_insert_with(|| mail.clone());
-        std::future::ready(Ok(()))
+        std::future::ready(Ok(true))
     }
 }

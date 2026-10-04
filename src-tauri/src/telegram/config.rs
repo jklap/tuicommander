@@ -65,7 +65,6 @@ pub(crate) struct Config {
     #[serde(default)]
     pub(crate) enabled: bool,
     pub(crate) bot_alias: String,
-    pub(crate) target_tuic_session: String,
 }
 impl Config {
     /// Missing configuration is disabled and never reads allowlist or token.
@@ -86,7 +85,6 @@ impl Config {
                 .bot_alias
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-            || uuid::Uuid::parse_str(&config.target_tuic_session).is_err()
         {
             return Err(Error::Config);
         }

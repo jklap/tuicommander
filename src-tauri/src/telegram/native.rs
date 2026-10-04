@@ -26,37 +26,26 @@ pub(super) async fn offer(
     // Inbox-only is a valid handoff; readiness/wake arbitration belongs to TUIC.
     Ok(())
 }
-struct NativeMail {
-    state: Arc<AppState>,
-    sid: String,
+pub(super) struct NativeMail {
     commands: mpsc::Sender<Command>,
-    paths: super::Paths,
+}
+impl NativeMail {
+    pub(super) fn new(commands: mpsc::Sender<Command>) -> Self {
+        Self { commands }
+    }
 }
 impl MailPort for NativeMail {
-    async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error> {
-        if !self.state.peer_agents.contains_key(&mail.recipient) {
-            return Err(Error::State);
-        }
+    async fn offer(&mut self, mail: &PendingMail) -> Result<bool, Error> {
         let (reply, receive) = oneshot::channel();
         self.commands
-            .send(Command::Track {
+            .send(Command::Deliver {
                 mail: mail.clone(),
                 reply,
             })
             .await
             .map_err(|_| Error::State)?;
-        receive.await.map_err(|_| Error::State)??;
-        let config = super::Config::load(&self.paths)?.ok_or(Error::Config)?;
-        let envelope: Value = serde_json::from_str(&mail.content).map_err(|_| Error::Protocol)?;
-        let chat = envelope["chat_id"]
-            .as_str()
-            .and_then(|s| s.parse::<i64>().ok())
-            .ok_or(Error::Protocol)?;
-        if config.target_tuic_session != mail.recipient || !self.paths.allowlist()?.contains(&chat)
-        {
-            return Err(Error::Config);
-        }
-        offer(&self.state, &self.sid, mail).await
+        let value = receive.await.map_err(|_| Error::State)??;
+        value["accepted"].as_bool().ok_or(Error::Protocol)
     }
     async fn update(&mut self, value: &Value) -> Result<(), Error> {
         if value.get("callback_query").is_none() {
@@ -91,12 +80,7 @@ pub(crate) fn start(state: &Arc<AppState>) {
     };
     let sid = format!("telegram:{}", uuid::Uuid::new_v4());
     let (commands, receive) = mpsc::channel(100);
-    let port = NativeMail {
-        state: state.clone(),
-        sid: sid.clone(),
-        commands: commands.clone(),
-        paths: paths.clone(),
-    };
+    let port = NativeMail::new(commands.clone());
     let inbound = match super::inbound::Inbound::with_port(paths.clone(), port) {
         Ok(Some(inbound)) => inbound,
         Ok(None) => return,
