@@ -13,11 +13,12 @@
 #
 # That section already states the rule in prose: "A reproduced failure becomes a
 # fixture, always." This hook makes it mechanical. A commit that changes
-# agent-state detection LOGIC is blocked unless it also stages something under
+# agent-state detection LOGIC is blocked unless it also stages a TCAP with provenance under
 # src-tauri/src/fixtures/agent_prompts/. The corpus was 2 captures against 14
 # agent-state fixes, which is how a regression ships twice.
 #
 # Deliberately narrow, because a gate that cries wolf gets bypassed by reflex:
+#   • cfg(test) modules and test functions are excluded from HEAD/index views;
 #   • only ADDED/REMOVED lines count — a change elsewhere in pty.rs is invisible;
 #   • comment-only and blank-line changes are stripped — a doc edit or a rustfmt
 #     reflow is not a behaviour change;
@@ -89,18 +90,15 @@ src-tauri/src/mcp_http/session.rs
 # them. 7770 is the TUIC hook's state sequence.
 detection_symbols='awaiting_input|question_confident|question_text|question-cleared|suppress_heuristic_question|rearm_awaiting_for_open_dialog|find_chrome_cutoff|parse_clean_lines|parse_choice_prompt|parse_slash_menu|is_ink_dialog_footer_row|resolve_choice_prompt_input|raw_stream_events|7770'
 
-# A capture staged alongside satisfies the gate, whatever else changed.
-staged_fixtures="$(git diff --cached --name-only --diff-filter=ACMR -- "$fixtures_dir" 2>/dev/null || true)"
-[ -n "$staged_fixtures" ] && exit 0
+# Only framed captures with provenance satisfy production edits; a handwritten raw
+# fixture or a documentation-only addition is not recorded external evidence.
+hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if python3 "$hook_dir/fixture-production-diff.py" --capture; then
+  exit 0
+fi
 
 staged_diff() {
-  case "$1" in
-    src-tauri/crates/tuic-terminal/src/*)
-      local old_path="src-tauri/src/${1#src-tauri/crates/tuic-terminal/src/}"
-      git diff --cached --find-renames -U0 --diff-filter=ACMR -- "$old_path" "$1" 2>/dev/null || true
-      ;;
-    *) git diff --cached -U0 --diff-filter=ACMR -- "$1" 2>/dev/null || true ;;
-  esac
+  python3 "$hook_dir/fixture-production-diff.py" "$1"
 }
 
 # Added/removed lines, minus diff headers, blanks and comments.
@@ -144,6 +142,12 @@ for f in $scoped_files; do
 done
 
 [ "${#offenders[@]}" -eq 0 ] && exit 0
+
+new_raw="$(git diff --cached --name-only --diff-filter=A -- "$fixtures_dir" | grep -E '\.(raw|txt)$' || true)"
+if [ -n "$new_raw" ]; then
+  printf 'pre-commit blocked: new external fixtures must be recorded TCAP captures, not handwritten text: %s\n' "$new_raw" >&2
+  exit 1
+fi
 
 printf '\n\033[1;31m✗ pre-commit blocked:\033[0m agent-state detection changed with no capture\n\n' >&2
 printf '%s\n' "${offenders[@]}" | sed 's/^/  /' >&2

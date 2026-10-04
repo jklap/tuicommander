@@ -480,12 +480,14 @@ pub enum AppEvent {
     /// A Whisper model download moved. `payload` is the body the desktop
     /// `dictation-download-progress` emit carries, built once so the two
     /// transports cannot describe the same download differently.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "dictation-download-progress")]
     DictationDownloadProgress { payload: serde_json::Value },
     /// A speech asset download moved — the runtime library or one language
     /// bundle. Keyed by asset inside the payload, because a user can start two
     /// downloads at once and one shared percent would show each of them the
     /// other's.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-download-progress")]
     SpeechDownloadProgress { payload: serde_json::Value },
     /// A spoken reply changed state: queued, rendering, speaking, finished,
@@ -501,6 +503,7 @@ pub enum AppEvent {
     /// interesting ones (`finished`, `interrupted`) happen on the render thread
     /// long after `speak` returned, and a consumer that had to discover them
     /// would be polling.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-utterance")]
     SpeechUtterance { payload: serde_json::Value },
 }
@@ -3960,6 +3963,7 @@ pub(crate) struct SettledReviewThreads {
 pub(crate) struct GitCacheState {
     pub(crate) repo_info: GitCache<crate::git::RepoInfo>,
     pub(crate) merged_branches: GitCache<Vec<String>>,
+    pub(crate) repo_diff_stats: GitCache<crate::git::RepoDiffStats>,
     pub(crate) branches_detail: GitCache<Vec<crate::git::BranchDetail>>,
     pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
@@ -3986,6 +3990,7 @@ impl GitCacheState {
         Self {
             repo_info: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             merged_branches: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            repo_diff_stats: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             branches_detail: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_status: build_git_cache(GITHUB_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
@@ -4005,6 +4010,7 @@ impl GitCacheState {
     pub(crate) fn clear_all(&self) {
         self.repo_info.invalidate_all();
         self.merged_branches.invalidate_all();
+        self.repo_diff_stats.invalidate_all();
         self.branches_detail.invalidate_all();
         self.github_status.invalidate_all();
         self.git_status.invalidate_all();
@@ -4016,6 +4022,7 @@ impl GitCacheState {
     pub(crate) fn invalidate_repo(&self, path: &str) {
         self.repo_info.invalidate(path);
         self.merged_branches.invalidate(path);
+        self.repo_diff_stats.invalidate(path);
         self.branches_detail.invalidate(path);
         // github_status (remote PR/CI data) is NOT invalidated here — local git
         // changes don't affect remote PRs. The poller and head-changed → pollRepo
@@ -4362,6 +4369,23 @@ impl AppState {
                             ) {
                                 Self::send_mobile_push_url(&state, url, &body);
                             }
+                        } else if notice.kind == crate::acp::AcpNoticeKind::Card {
+                            let repo = state
+                                .acp
+                                .snapshot(notice.connection_id)
+                                .ok()
+                                .filter(|snapshot| snapshot.generation == notice.generation)
+                                .and_then(|snapshot| {
+                                    snapshot.attachments.into_iter().find(|attachment| {
+                                        Some(&attachment.session_id) == notice.session_id.as_ref()
+                                    })
+                                })
+                                .and_then(|attachment| attachment.cwd.to_str().map(str::to_owned));
+                            if let Some((url, body)) = repo.as_deref().and_then(|repo| {
+                                Self::mobile_push_for_acp_session(&state, &notice, repo)
+                            }) {
+                                Self::send_mobile_push_url(&state, url, &body);
+                            }
                         }
                     }
                     // A notice carries nothing that cannot be re-read: a client
@@ -4389,6 +4413,15 @@ impl AppState {
             return None;
         }
         let (_, repo) = pending?;
+        Self::mobile_push_for_acp_session(state, notice, repo)
+    }
+
+    /// Questions and ego cards spend the same conversation budget.
+    fn mobile_push_for_acp_session(
+        state: &Arc<AppState>,
+        notice: &crate::acp::AcpNotice,
+        repo: &str,
+    ) -> Option<(String, String)> {
         let session_id = notice.session_id.as_ref()?;
         let ready = {
             let config = state.config.read();
@@ -4420,7 +4453,12 @@ impl AppState {
             .finish();
         Some((
             format!("/mobile?{query}"),
-            "AI Chat: response needed".to_string(),
+            if notice.kind == crate::acp::AcpNoticeKind::Card {
+                "AI Chat: new notice"
+            } else {
+                "AI Chat: response needed"
+            }
+            .to_string(),
         ))
     }
 
@@ -5066,11 +5104,12 @@ impl AppState {
             // A mirrored event is the far end's accumulator output. Feeding it
             // in here would build a second, local row for a session this
             // machine does not run.
-            | AppEvent::RemoteMirrored { .. }
+            | AppEvent::RemoteMirrored { .. } => {}
             // Dictation is bound to a session but says nothing about it: a
             // download belongs to the installation, and a spoken reply belongs
             // to the conversation rather than to the terminal it will reach.
-            | AppEvent::DictationDownloadProgress { .. }
+            #[cfg(feature = "dictation")]
+            AppEvent::DictationDownloadProgress { .. }
             | AppEvent::SpeechDownloadProgress { .. }
             | AppEvent::SpeechUtterance { .. } => {}
         }
@@ -8481,6 +8520,61 @@ mod tests {
         );
     }
 
+    // Catches: admitting a current non-question as awaiting evidence when && becomes ||.
+    #[test]
+    fn current_non_question_does_not_record_awaiting_evidence() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "intent",
+                serde_json::json!({"text": "Working", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(!state.session_state_with_shell("s1").unwrap().awaiting_input);
+        assert_eq!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank(),
+            None
+        );
+    }
+
+    // Catches: a same-epoch clear for another question retracts the current approval.
+    #[test]
+    fn protocol_clear_for_another_question_preserves_the_current_approval() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({"prompt_text": "Approve deploy?", "confident": true, "_turn_epoch": 0}),
+            ),
+        );
+        let row = apply(
+            &state,
+            &make_parsed(
+                "protocol-question-cleared",
+                serde_json::json!({"expected_question_text": "Approve delete?", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(row.awaiting_input);
+        assert_eq!(row.question_text.as_deref(), Some("Approve deploy?"));
+        let row = apply(
+            &state,
+            &make_parsed(
+                "protocol-question-cleared",
+                serde_json::json!({"expected_question_text": "Approve deploy?", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(!row.awaiting_input);
+        assert_eq!(row.question_text, None);
+    }
+
     /// Catches: deleting a parsed-state arm silently drops usage, errors, menu
     /// entries or subtask counts from the snapshot consumed by clients.
     #[test]
@@ -8709,6 +8803,38 @@ mod tests {
             )),
             "repository paths must stay inside the deep-link query value"
         );
+        let mut card = notice.clone();
+        card.kind = crate::acp::AcpNoticeKind::Card;
+        card.request_id = None;
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            None,
+            "a card must not bypass the question's 30-second conversation budget"
+        );
+        card.session_id = Some(agent_client_protocol::schema::v1::SessionId::new(
+            "card-only",
+        ));
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            Some((
+                "/mobile?repo=%2Frepo&session=card-only".to_string(),
+                "AI Chat: new notice".to_string()
+            ))
+        );
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            None,
+            "repeated cards must not flood the phone"
+        );
+        let first_card = state
+            .acp_push_last_ms
+            .get("card-only")
+            .unwrap()
+            .value()
+            .unwrap();
+        *state.acp_push_last_ms.get_mut("card-only").unwrap() =
+            Some(first_card.saturating_sub(31_000));
+        assert!(AppState::mobile_push_for_acp_session(&state, &card, "/repo").is_some());
         let key = "conversation-1";
         let first = state.acp_push_last_ms.get(key).unwrap().value().unwrap();
         *state.acp_push_last_ms.get_mut(key).unwrap() = Some(first.saturating_sub(31_000));

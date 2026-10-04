@@ -532,7 +532,7 @@ pub enum AcpClientEvent {
 /// Why a host might want to come and look, and where.
 ///
 /// Deliberately not the event itself. Every chunk of a turn is an event; only
-/// these four are worth waking a client that is not currently reading the
+/// these notices are worth waking a client that is not currently reading the
 /// stream, and only they are cheap enough to put on a broadcast that every
 /// other subscriber in the app shares.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -551,6 +551,8 @@ pub enum AcpNoticeKind {
     InteractionPending,
     /// A pending question was answered — possibly by somebody else's client.
     InteractionSettled,
+    /// An ego card has arrived on the ordered session stream.
+    Card,
 }
 
 /// A low-frequency wake signal about one connection.
@@ -597,6 +599,15 @@ impl AcpNotice {
             AcpClientEvent::PermissionSettled { request_id, .. }
             | AcpClientEvent::ElicitationSettled { request_id, .. } => {
                 (AcpNoticeKind::InteractionSettled, Some(*request_id))
+            }
+            AcpClientEvent::SessionUpdate { update }
+                if matches!(update.as_ref(), v1::SessionUpdate::AgentMessageChunk(chunk)
+                    if chunk.meta.as_ref()
+                        .and_then(|meta| meta.get("ego"))
+                        .and_then(|ego| ego.get("salience"))
+                        .and_then(serde_json::Value::as_str) == Some("card")) =>
+            {
+                (AcpNoticeKind::Card, None)
             }
             _ => return None,
         };

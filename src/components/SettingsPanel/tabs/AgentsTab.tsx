@@ -344,6 +344,21 @@ const RunConfigRow: Component<{
 			<div class={a.configRow}>
 				<span class={a.configName}>{props.config.name}</span>
 				<span class={a.configCommand}>{cmdPreview()}</span>
+				<Show
+					when={props.config.args
+						.slice(0, props.config.args.indexOf("--") < 0 ? undefined : props.config.args.indexOf("--"))
+						.includes("--dangerously-bypass-approvals-and-sandbox")}
+				>
+					<span
+						class={a.envBadge}
+						title="Approvals and sandbox are bypassed. Remove the flag in Edit configuration to disable bypass."
+						aria-label="Approvals and sandbox bypassed"
+					>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+							<path d="M12 2 1 22h22L12 2zm-1 7h2v6h-2V9zm0 8h2v2h-2v-2z" />
+						</svg>
+					</span>
+				</Show>
 				<Show when={envCount() > 0}>
 					<span class={a.envBadge}>{envCount()} env</span>
 				</Show>
