@@ -1,13 +1,13 @@
 ---
 id: 1520-46b1
 title: Fix secret-form client deadlines and diagnose missing native window
-status: pending
+status: in_progress
 priority: P1
 type: fix
 created: "2026-10-04T15:00:23.086Z"
-updated: "2026-10-04T15:14:01.613Z"
+updated: "2026-10-04T15:16:41.752Z"
 dependencies: []
-started_at: "2026-10-04T15:01:00.504Z"
+started_at: "2026-10-04T15:16:41.700Z"
 ---
 
 # Fix secret-form client deadlines and diagnose missing native window
@@ -42,4 +42,6 @@ Coordinator reproduced twice 2026-10-04 around 17:15 on desktop started 14:59 in
 ### 2026-10-04T15:05:02.305Z - Implementation preserves blocking submit/decline contract. Shared tuic-ipc deadlines now drive both clients and backend form/child bounds; request=305s, run=425s. Added CLI socket regression secret_request_accepts_user_entry_after_four_seconds and CLI/bridge secret_calls_do_not_expire_before_form_and_child_deadlines, including collapsed calls and short remove. Added safe stage logs and restart observations. Native-window absence is still unproven: no speculative window threading change. Instruction links pass (2 pairs); no tests run yet. Final validation will target these client tests, existing transport deadline test and secrets tests only, plus touched-crate Clippy.
 
 ### 2026-10-04T15:13:59.776Z - Status reset to pending by the coordinator on 2026-10-04: no live agent; last state: Implementation preserves blocking submit/decline contract.
+
+### 2026-10-04T15:16:40.186Z - Coordinator: status restored to in_progress; tuic-stale-status reset it by mistake while tuic-secret-window owns it.
 
