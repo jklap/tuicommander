@@ -2880,7 +2880,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
             result.map_err(|e| anyhow::anyhow!("TCP server error: {e}"))
         }
         signal = remote_shutdown_signal() => {
-            signal.map(|()| {
+            signal.map_err(anyhow::Error::from).map(|()| {
                 tracing::info!(source = "remote", "Received shutdown signal");
             })
         }

@@ -255,17 +255,6 @@ pub fn story_action_for_session(
     story_action_for_session_with_source(state, project, action, session_id, false)
 }
 
-/// Sessionless HTTP transitions record LocalApi provenance. A managed session
-/// may approve only a story claimed by a different session.
-pub fn story_action_for_http(
-    state: &crate::AppState,
-    project: &str,
-    action: StoryAction,
-    session_id: Option<&str>,
-) -> Result<StoryReply, String> {
-    story_action_for_http_authenticated(state, project, action, session_id, false)
-}
-
 pub(crate) fn story_action_for_http_authenticated(
     state: &crate::AppState,
     project: &str,
