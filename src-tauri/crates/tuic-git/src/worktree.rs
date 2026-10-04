@@ -8043,6 +8043,101 @@ branch refs/heads/feat
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
     }
 
+    // Catches: a transient PR proof-provider failure permanently poisons the merged badge.
+    #[test]
+    fn critic_gitpoll_pr_lookup_recovery_refreshes_merged_badge_without_ref_move() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branch = "critic-pr-recovery";
+        let path = add_worktree(&repo, branch);
+        commit_file(&path, "feature.txt", "own work\n");
+        commit_file(&repo, "default.txt", "unrelated default work\n");
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        let key = monitoring_ref_key(&repo).unwrap();
+        let first = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        assert_eq!(first.commit_status, WorkspaceCommitStatus::Unmerged);
+        // The existing proof-provider boundary uses false for both no proof and lookup failure.
+        // No fake GitHub payload is involved: the provider is now able to prove this tip.
+        let fresh = inspect_workspace_lifecycle_with_pr(&repo, branch, |_, _, _| true);
+        assert_eq!(fresh.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(fresh.merge_proof, Some("github_pr"));
+        let next_key = monitoring_ref_key(&repo).unwrap();
+        assert_eq!(key, next_key);
+        let recovered =
+            inspect_workspace_monitoring_with_pr(&repo, &workspace, &next_key, |_, _, _| true);
+        assert_eq!(recovered.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(recovered.merge_proof, Some("github_pr"));
+    }
+
+    // Catches: deduplicating by pathname collapses separate staged-deletion and untracked rows.
+    #[test]
+    fn critic_gitpoll_cached_removal_keeps_porcelain_dirty_badge_count() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branch = "critic-index-removal";
+        let path = add_worktree(&repo, branch);
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        git_cmd(&path)
+            .args(["rm", "--cached", "README.md"])
+            .run()
+            .unwrap();
+        let porcelain = git_cmd(&path)
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(porcelain.lines().any(|line| line == "D  README.md"));
+        assert!(porcelain.lines().any(|line| line == "?? README.md"));
+        let key = monitoring_ref_key(&repo).unwrap();
+        let status = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        assert_eq!(status.dirty_files, Some(2));
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::RequiresForce);
+    }
+
+    // Catches: removal trusting a cached clean badge after an initialized submodule is edited.
+    #[test]
+    fn critic_gitpoll_removal_rechecks_submodule_after_clean_monitoring() {
+        let (_temp, repo, _) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let branch = "critic-submodule-dirty";
+        let path = add_worktree(&repo, branch);
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        let key = monitoring_ref_key(&repo).unwrap();
+        let clean = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        assert_eq!(clean.dirty_files, Some(0));
+        fs::write(
+            path.join("modules/local/module.txt"),
+            "unsaved module work\n",
+        )
+        .unwrap();
+        let dirty = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        assert_eq!(dirty.dirty_files, Some(1));
+        let removal =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), branch, true, None, false);
+        let error = removal.expect_err("removal must refuse newly dirty submodule state");
+        assert!(
+            error.contains("uncommitted changes"),
+            "unexpected refusal: {error}"
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("modules/local/module.txt")).unwrap(),
+            "unsaved module work\n",
+        );
+    }
+
     // Catches file-save fan-out re-running destructive preflight and integration
     // commands. Compare old and monitoring paths with identical real repositories.
     #[test]
