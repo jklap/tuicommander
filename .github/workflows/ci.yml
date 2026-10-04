@@ -284,6 +284,8 @@ jobs:
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
         run: cargo check --no-default-features --bin tuic-remote
 
+      # --workspace selects desktop-only members independently of feature gates.
+      # Dictation remains covered by the desktop workspace jobs.
       - name: Headless tests
         working-directory: src-tauri
         env:
@@ -295,7 +297,7 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: bash ../scripts/with-test-tmp.sh cargo nextest run --no-default-features --workspace --profile ci
+        run: bash ../scripts/with-test-tmp.sh cargo nextest run --no-default-features --workspace --exclude tuic-dictation --profile ci
 
   # Push to main only: verify build on macOS and Windows.
   # GPU notes:
