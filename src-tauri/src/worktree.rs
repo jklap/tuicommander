@@ -2033,15 +2033,29 @@ mod tests {
 
         assert!(error.starts_with(tuic_git::worktree::LOCKED_WORKTREE_PREFIX));
         assert!(worktree.exists());
+        let listed = git_cmd(repo.path())
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap()
+            .stdout;
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/worktrees/feat-archive-locked",
+            repo.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/worktrees/feat-archive-locked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert!(listed.contains(&expected));
         assert!(
-            git_cmd(repo.path())
-                .args(["worktree", "list", "--porcelain"])
-                .run()
-                .unwrap()
-                .stdout
-                .contains(&tuic_core::path_spelling::portable_spelling(
-                    &worktree.to_string_lossy()
-                ))
+            listed
+                .lines()
+                .filter_map(|line| line.strip_prefix("worktree "))
+                .any(|path| {
+                    Path::new(path).canonicalize().unwrap() == worktree.canonicalize().unwrap()
+                })
         );
     }
 

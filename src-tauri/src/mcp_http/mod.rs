@@ -6342,9 +6342,19 @@ mod tests {
             .await
             .unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        #[cfg(unix)]
+        let expected = format!("{}/linked", repo.path().canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/linked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(rows[0]["path"], expected);
         assert_eq!(
-            rows[0]["path"],
-            tuic_core::path_spelling::portable_spelling(&linked.to_string_lossy())
+            std::path::Path::new(rows[0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap()
         );
         assert_eq!(rows[0]["safe"], false);
         assert!(rows[0]["reason"].as_str().unwrap().contains("untracked"));
@@ -6400,9 +6410,19 @@ mod tests {
             .await
             .unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        #[cfg(unix)]
+        let expected = format!("{}/linked", repo.path().canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/linked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(rows[0]["path"], expected);
         assert_eq!(
-            rows[0]["path"],
-            tuic_core::path_spelling::portable_spelling(&linked.to_string_lossy())
+            std::path::Path::new(rows[0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap()
         );
         assert_eq!(rows[0]["safe"], false);
         assert!(rows[0]["reason"].as_str().unwrap().contains("branch"));
@@ -6498,9 +6518,19 @@ mod tests {
             .await
             .unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        #[cfg(unix)]
+        let expected = format!("{}/linked", repo.path().canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/linked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(rows[0]["path"], expected);
         assert_eq!(
-            rows[0]["path"],
-            tuic_core::path_spelling::portable_spelling(&linked.to_string_lossy())
+            std::path::Path::new(rows[0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap()
         );
         assert_eq!(rows[0]["safe"], false);
         assert!(

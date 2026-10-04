@@ -3581,20 +3581,40 @@ mod tests {
         let home = TempDir::new().unwrap();
         fs::create_dir(home.path().join("notes")).unwrap();
         fs::write(home.path().join("notes/design.md"), "").unwrap();
-        let canonical = home.path().canonicalize().unwrap();
-        let expected = canonical.join("notes/design.md");
-        let expected = portable_spelling(&expected.to_string_lossy());
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/notes/design.md",
+            home.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/notes/design.md",
+            home.path().display().to_string().replace('\\', "/")
+        );
         for (href, line) in [
             ("~/notes/design.md", None),
             ("~/notes/design.md:7", Some(7)),
         ] {
+            let target = resolve_markdown_link_with_home(
+                "/repo",
+                "/repo/review.md",
+                href,
+                Some(home.path()),
+            );
             assert!(
                 matches!(
-                    resolve_markdown_link_with_home("/repo", "/repo/review.md", href, Some(home.path())),
+                    &target,
                     MarkdownLinkTarget::File { absolute_path, open_path, line: actual, .. }
-                        if absolute_path == expected && open_path == expected && actual == line
+                        if absolute_path == &expected && open_path == &expected && *actual == line
                 ),
                 "{href}"
+            );
+            let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+                unreachable!()
+            };
+            assert_eq!(
+                Path::new(&absolute_path).canonicalize().unwrap(),
+                home.path().join("notes/design.md").canonicalize().unwrap()
             );
         }
         assert!(matches!(
@@ -3615,25 +3635,35 @@ mod tests {
         let home = TempDir::new().unwrap();
         fs::create_dir(home.path().join("notes")).unwrap();
         fs::write(home.path().join("notes/design.md"), "").unwrap();
-        let expected = home
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("notes/design.md")
-            .to_string_lossy()
-            .into_owned();
-        let expected = portable_spelling(&expected);
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/notes/design.md",
+            home.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/notes/design.md",
+            home.path().display().to_string().replace('\\', "/")
+        );
+        let target = resolve_markdown_link_with_home(
+            "/repo",
+            "/repo/review.md",
+            "~//notes/design.md",
+            Some(home.path()),
+        );
         assert!(
             matches!(
-                resolve_markdown_link_with_home(
-                    "/repo",
-                    "/repo/review.md",
-                    "~//notes/design.md",
-                    Some(home.path())
-                ),
-                MarkdownLinkTarget::File { absolute_path, .. } if absolute_path == expected
+                &target,
+                MarkdownLinkTarget::File { absolute_path, .. } if absolute_path == &expected
             ),
             "~//notes/design.md must resolve inside home"
+        );
+        let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+            unreachable!()
+        };
+        assert_eq!(
+            Path::new(&absolute_path).canonicalize().unwrap(),
+            home.path().join("notes/design.md").canonicalize().unwrap()
         );
     }
 
@@ -3641,17 +3671,23 @@ mod tests {
     fn critic_markdown_link_home_prefix_alone_is_the_home_directory() {
         // Catches: a bare `~/` treated as a relative path next to the file.
         let home = TempDir::new().unwrap();
-        let canonical = home
-            .path()
-            .canonicalize()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let canonical = portable_spelling(&canonical);
+        #[cfg(unix)]
+        let canonical = home.path().canonicalize().unwrap().display().to_string();
+        #[cfg(windows)]
+        let canonical = home.path().display().to_string().replace('\\', "/");
+        let target =
+            resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/", Some(home.path()));
         assert!(matches!(
-            resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/", Some(home.path())),
-            MarkdownLinkTarget::File { absolute_path, is_directory: true, .. } if absolute_path == canonical
+            &target,
+            MarkdownLinkTarget::File { absolute_path, is_directory: true, .. } if absolute_path == &canonical
         ));
+        let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+            unreachable!()
+        };
+        assert_eq!(
+            Path::new(&absolute_path).canonicalize().unwrap(),
+            home.path().canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -3731,16 +3767,58 @@ mod tests {
         let home = Path::new("/home/boss");
         assert_eq!(
             expand_home_prefix("~/a/b.md", home).as_deref(),
-            Some(home.join("a/b.md").to_string_lossy().as_ref())
+            Some(if cfg!(windows) {
+                r"/home/boss\a/b.md"
+            } else {
+                "/home/boss/a/b.md"
+            })
         );
         assert_eq!(
             expand_home_prefix("~//a.md", home).as_deref(),
-            Some(home.join("a.md").to_string_lossy().as_ref())
+            Some(if cfg!(windows) {
+                r"/home/boss\a.md"
+            } else {
+                "/home/boss/a.md"
+            })
         );
         // A drive-prefixed rest would replace home in a Windows join.
         assert_eq!(expand_home_prefix("~/C:\\x.md", home), None);
         assert_eq!(expand_home_prefix("~/c:/x.md", home), None);
         assert_eq!(expand_home_prefix("notes/a.md", home), None);
+
+        let fixture = TempDir::new().unwrap();
+        fs::create_dir_all(fixture.path().join("a")).unwrap();
+        fs::write(fixture.path().join("a/b.md"), "nested").unwrap();
+        fs::write(fixture.path().join("a.md"), "flat").unwrap();
+        for (href, relative) in [("~/a/b.md", "a/b.md"), ("~//a.md", "a.md")] {
+            let target = resolve_markdown_link_with_home(
+                "/repo",
+                "/repo/review.md",
+                href,
+                Some(fixture.path()),
+            );
+            let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+                panic!("{href}: {target:?}")
+            };
+            assert_eq!(
+                Path::new(&absolute_path).canonicalize().unwrap(),
+                fixture.path().join(relative).canonicalize().unwrap()
+            );
+        }
+        for href in ["~/C:\\x.md", "~/c:/x.md", "notes/a.md"] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home(
+                        "/repo",
+                        "/repo/review.md",
+                        href,
+                        Some(fixture.path())
+                    ),
+                    MarkdownLinkTarget::Missing { .. }
+                ),
+                "{href}"
+            );
+        }
     }
 
     #[test]
@@ -3754,18 +3832,88 @@ mod tests {
         assert_eq!(expand_home_prefix("~/C:", home), None);
         assert_eq!(
             expand_home_prefix("~/é:x", home).as_deref(),
-            Some(home.join("é:x").to_string_lossy().as_ref())
+            Some(if cfg!(windows) {
+                r"/home/boss\é:x"
+            } else {
+                "/home/boss/é:x"
+            })
         );
         assert_eq!(
             expand_home_prefix("~/CD:x", home).as_deref(),
-            Some(home.join("CD:x").to_string_lossy().as_ref())
+            Some(if cfg!(windows) {
+                r"/home/boss\CD:x"
+            } else {
+                "/home/boss/CD:x"
+            })
         );
         assert_eq!(
             expand_home_prefix("~/", home).as_deref(),
-            Some(home.join("").to_string_lossy().as_ref())
+            Some(if cfg!(windows) {
+                r"/home/boss\"
+            } else {
+                "/home/boss/"
+            })
         );
         assert_eq!(expand_home_prefix("~", home), None);
         assert_eq!(expand_home_prefix("~user/a", home), None);
+
+        let fixture = TempDir::new().unwrap();
+        for href in ["~/\\C:\\x.md", "~//c:/x.md", "~/C:", "~", "~user/a"] {
+            assert!(
+                matches!(
+                    resolve_markdown_link_with_home(
+                        "/repo",
+                        "/repo/review.md",
+                        href,
+                        Some(fixture.path())
+                    ),
+                    MarkdownLinkTarget::Missing { .. }
+                ),
+                "{href}"
+            );
+        }
+        for name in ["é:x", "CD:x"] {
+            // These are literal Unix filenames; Windows forbids colons in a filename.
+            #[cfg(unix)]
+            fs::write(fixture.path().join(name), "literal colon").unwrap();
+            let href = format!("~/{name}");
+            let target = resolve_markdown_link_with_home(
+                "/repo",
+                "/repo/review.md",
+                &href,
+                Some(fixture.path()),
+            );
+            #[cfg(unix)]
+            {
+                let MarkdownLinkTarget::File { absolute_path, .. } = target else {
+                    panic!("{href}: {target:?}")
+                };
+                assert_eq!(
+                    Path::new(&absolute_path).canonicalize().unwrap(),
+                    fixture.path().join(name).canonicalize().unwrap()
+                );
+            }
+            #[cfg(windows)]
+            assert!(
+                matches!(target, MarkdownLinkTarget::Missing { .. }),
+                "{href}: {target:?}"
+            );
+        }
+        let target =
+            resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/", Some(fixture.path()));
+        let MarkdownLinkTarget::File {
+            absolute_path,
+            is_directory,
+            ..
+        } = target
+        else {
+            panic!("{target:?}")
+        };
+        assert!(is_directory);
+        assert_eq!(
+            Path::new(&absolute_path).canonicalize().unwrap(),
+            fixture.path().canonicalize().unwrap()
+        );
     }
 
     #[test]
