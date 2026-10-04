@@ -23,6 +23,8 @@ authors and communities behind each project.
 | bcrypt | 0.19.2 | MIT |
 | bitflags | 2.13.1 | MIT OR Apache-2.0 |
 | cached | 0.56.0 | MIT |
+| cap-fs-ext | 3.4.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| cap-std | 3.4.6 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
 | cc | 1.3.0 | MIT OR Apache-2.0 |
 | chromey | 2.58.2 | MIT OR Apache-2.0 |
 | chrono | 0.4.45 | MIT OR Apache-2.0 |
@@ -181,12 +183,12 @@ authors and communities behind each project.
 | @tauri-apps/api | 2.11.1 | Apache-2.0 OR MIT |
 | @tauri-apps/plugin-deep-link | 2.4.10 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-dialog | 2.7.3 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-notification | 2.5.0 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-notification | 2.4.0 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-opener | 2.5.5 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-process | 2.3.1 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-updater | 2.11.0 | MIT OR Apache-2.0 |
 | ansi-to-html | 0.7.2 | MIT |
-| dompurify | 3.4.13 | MPL-2.0 OR Apache-2.0 |
+| dompurify | 3.4.16 | MPL-2.0 OR Apache-2.0 |
 | marked | 18.0.12 | MIT |
 | mermaid | 11.17.2 | MIT |
 | qrcode | 1.5.4 | MIT |
@@ -230,12 +232,12 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 <!-- BEGIN GENERATED:summary -->
 | License | Count |
 |---------|-------|
-| MIT OR Apache-2.0 | 84 |
+| MIT OR Apache-2.0 | 83 |
 | MIT | 66 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 6 |
+| Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |
 | BSD-3-Clause | 3 |
-| Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 2 |
 | MIT OR Apache-2.0 OR Zlib | 2 |
 | Apache-2.0 AND ISC | 1 |
 | Apache-2.0 OR ISC OR MIT | 1 |

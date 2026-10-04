@@ -452,8 +452,8 @@ mod tests {
             f32::from_bits(fx.level.load(Ordering::Relaxed))
         };
         assert!((meter(&[0.0125; 4]) - 0.5).abs() < 1e-3);
-        assert_eq!(meter(&[1.0; 4]), 1.0);
-        assert_eq!(meter(&[0.0; 4]), 0.0);
+        assert_eq!(meter(&[1.0; 4]).to_bits(), 1.0_f32.to_bits());
+        assert_eq!(meter(&[0.0; 4]).to_bits(), 0.0_f32.to_bits());
     }
 
     /// Catches the resample index arithmetic flipping (`i / ratio`): 48 kHz
@@ -492,7 +492,10 @@ mod tests {
         assert_eq!(over.buffer.lock().len(), max);
         assert_eq!(over.dropped_samples.load(Ordering::Relaxed), 3);
         assert!(
-            over.buffer.lock().iter().all(|&s| s == 0.25),
+            over.buffer
+                .lock()
+                .iter()
+                .all(|&s| s.to_bits() == 0.25_f32.to_bits()),
             "the oldest samples must be the ones dropped"
         );
     }
@@ -511,10 +514,10 @@ mod tests {
         let out = fx.captured();
         assert_eq!(out.len(), 160, "442 * 16000 / 44100 = 160.36, floored");
         assert!(out.windows(2).all(|w| w[0] <= w[1]), "order lost: {out:?}");
-        assert_eq!(out[0], 0.0);
-        assert_eq!(out[1], 2.0);
-        assert_eq!(out[100], 275.0);
-        assert_eq!(out[159], 438.0);
+        assert_eq!(out[0].to_bits(), 0.0_f32.to_bits());
+        assert_eq!(out[1].to_bits(), 2.0_f32.to_bits());
+        assert_eq!(out[100].to_bits(), 275.0_f32.to_bits());
+        assert_eq!(out[159].to_bits(), 438.0_f32.to_bits());
     }
 
     /// A device reporting 0 Hz makes `ratio` infinite, and
