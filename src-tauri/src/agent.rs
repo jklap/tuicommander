@@ -680,7 +680,7 @@ impl ScreenProbeTree {
             SetInformationJobObject(
                 job.0,
                 JobObjectExtendedLimitInformation,
-                &limits as *const _ as *const _,
+                std::ptr::from_ref(&limits).cast(),
                 std::mem::size_of_val(&limits) as u32,
             )
         };
@@ -836,14 +836,14 @@ fn screen_probe_output(
 }
 
 fn preferred_agent_path(output: &str) -> Option<&str> {
-    let mut paths = output
+    let paths = output
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty());
     #[cfg(windows)]
     {
         let choices: Vec<&str> = paths.collect();
-        return choices
+        choices
             .iter()
             .copied()
             .find(|path| {
@@ -858,10 +858,11 @@ fn preferred_agent_path(output: &str) -> Option<&str> {
                         .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("cmd"))
                 })
             })
-            .or_else(|| choices.first().copied());
+            .or_else(|| choices.first().copied())
     }
     #[cfg(not(windows))]
     {
+        let mut paths = paths;
         paths.next()
     }
 }
