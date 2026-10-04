@@ -35,6 +35,7 @@ mod tests {
         .await;
         let runtime = crate::telegram::tests::outbound_tests::runtime(paths, server.address).await;
         crate::state::tests_support::insert_dummy_session(&runtime.state, PEER);
+        crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_IDLE);
         let state = runtime.state.clone();
         let (commands, receive) = tokio::sync::mpsc::channel(1);
         let worker = tokio::spawn(runtime.run(receive));

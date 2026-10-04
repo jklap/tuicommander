@@ -86,7 +86,7 @@ async fn selected_button_uses_disabled_object_without_callback_data() {
         .tool(
             peer,
             "critic-target-mcp",
-            super::super::tool::Input::Register,
+            super::super::tool::Input::Register {},
         )
         .await
         .unwrap();

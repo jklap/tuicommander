@@ -86,7 +86,7 @@ impl Runtime {
         if config.bot_alias != self.config.bot_alias {
             return Err(Error::State);
         }
-        if matches!(input, Input::Register) {
+        if matches!(input, Input::Register {}) {
             self.register(caller, sid).await?;
             return Ok(json!({"registered":true}));
         }
@@ -106,8 +106,8 @@ impl Runtime {
             return Err(Error::NotRegistered);
         }
         match input {
-            Input::Register => unreachable!(),
-            Input::Unregister => {
+            Input::Register {} => unreachable!(),
+            Input::Unregister {} => {
                 self.clear_registration();
                 Ok(json!({"registered":false}))
             }
