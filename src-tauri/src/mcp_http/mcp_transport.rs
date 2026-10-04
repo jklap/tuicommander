@@ -24652,6 +24652,37 @@ mod tests {
         );
     }
 
+    // Catches: literal Codex rewrites a configured wrapper task into an undeliverable PTY injection.
+    #[test]
+    fn literal_codex_wrapper_default_keeps_positional_task_delivery() {
+        let cfg: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+            "agents": {"codex": {"run_configs": [
+                {"name": "Wrapper", "command": "codex-wrapper", "args": ["run"], "is_default": true}
+            ]}}
+        }))
+        .unwrap();
+        let resolved = resolve_run_config("codex", &cfg);
+        let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
+            agent_type: &resolved.agent_type,
+            args: resolved.args.as_ref().unwrap(),
+            prompt: "perform the task",
+            model: None,
+            print_mode: false,
+            output_format: None,
+            default_template: false,
+        })
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec!["run", "perform the task"],
+            "default wrapper argv must keep the run-config positional prompt contract"
+        );
+        assert!(
+            deferred.is_none(),
+            "wrapper commands must not receive a deferred PTY task"
+        );
+    }
+
     #[test]
     fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypass() {
         // Catches: literal MCP "codex" ignoring the menu default or secretly
