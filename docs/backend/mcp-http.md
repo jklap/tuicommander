@@ -1417,12 +1417,13 @@ the final positional argument rather than converted to deferred PTY delivery.
 Structured `model` is composed with `args`; a matching run config can supply a
 default `model`, overridden by the spawn parameter. Existing `--model` in
 run-config `args` stays authoritative and conflicts with an explicit model
-parameter. Direct Codex commands include the approval-bypass default. Outside
-authoritative run-config argv, direct executable identity also selects Codex
-prompt deferral and parser state, even when `agent_type` is omitted or
-disagrees. That bypass-default step leaves canonical Codex wrapper run-config
-argv untouched and adds `launch_warning` because TUIC cannot validate the
-wrapper's internal Codex flags.
+parameter. Literal `codex` selects the persisted default run configuration,
+including its editable approval-bypass argument. Only direct interactive Codex
+defaults defer the task through PTY injection; wrappers and subcommands retain
+run-config positional or placeholder task delivery. Direct executable identity
+also selects Codex parser state when `agent_type` is omitted or disagrees.
+Composition never restores a removed bypass. Wrapper configs receive
+`launch_warning` because TUIC cannot validate their internal Codex flags.
 
 The optional `env` map uses the same field name and string values as HTTP
 `POST /sessions/agent` and desktop IPC spawn. Its values override run-config
