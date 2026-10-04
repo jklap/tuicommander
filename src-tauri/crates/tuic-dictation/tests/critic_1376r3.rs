@@ -41,7 +41,9 @@ const fn frames(n: usize) -> usize {
 fn first_diff(seen: &[f32], expected: &[f32]) -> (usize, Option<usize>) {
     (
         seen.len(),
-        seen.iter().zip(expected).position(|(a, b)| a != b),
+        seen.iter()
+            .zip(expected)
+            .position(|(a, b)| a.to_bits() != b.to_bits()),
     )
 }
 

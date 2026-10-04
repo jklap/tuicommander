@@ -98,10 +98,10 @@ pub(super) struct TestInbox {
 }
 #[cfg(test)]
 impl MailPort for TestInbox {
-    async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error> {
+    fn offer(&mut self, mail: &PendingMail) -> impl Future<Output = Result<(), Error>> {
         self.by_id
             .entry(mail.id.clone())
             .or_insert_with(|| mail.clone());
-        Ok(())
+        std::future::ready(Ok(()))
     }
 }

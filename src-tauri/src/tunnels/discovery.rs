@@ -455,9 +455,11 @@ mod critic_round5_tests {
             user: None,
             port: None,
         }];
-        let text: String = (0..MAX_KNOWN_HOSTS + 1)
-            .map(|i| format!("h{i}.example ssh-rsa AAAA\n"))
-            .collect();
+        let text = (0..=MAX_KNOWN_HOSTS).fold(String::new(), |mut text, i| {
+            use std::fmt::Write as _;
+            let _ = writeln!(text, "h{i}.example ssh-rsa AAAA");
+            text
+        });
         let merged = merge_discovered(config, parse_known_hosts(&text));
         let known = merged
             .hosts

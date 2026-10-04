@@ -230,7 +230,7 @@ mod tests {
             samples: vec![0.0; 24_000],
             sample_rate: 24_000,
         };
-        assert_eq!(audio.duration_seconds(), 1.0);
+        assert_eq!(audio.duration_seconds().to_bits(), 1.0_f32.to_bits());
     }
 
     #[test]
@@ -239,7 +239,7 @@ mod tests {
             samples: vec![0.0; 24_000],
             sample_rate: 0,
         };
-        assert_eq!(audio.duration_seconds(), 0.0);
+        assert_eq!(audio.duration_seconds().to_bits(), 0.0_f32.to_bits());
     }
 
     #[test]

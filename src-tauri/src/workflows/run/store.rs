@@ -569,6 +569,7 @@ impl RunStore {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn record_check_receipt(
         &self,
         run_id: &str,
