@@ -2791,11 +2791,18 @@ pub fn branch_integrations_with_pr(
     results.into_iter().map(|(_, result)| result).collect()
 }
 
+/// Evidence captured by branch deletion before the local ref disappears.
+#[derive(Debug)]
+pub struct DeletedBranch {
+    pub proof: &'static str,
+    pub archive_ref: Option<String>,
+}
+
 /// A linked checkout is never detached or removed by this operation.
 pub fn delete_integrated_local_branch(
     repo_path: &str,
     branch_name: &str,
-) -> Result<&'static str, String> {
+) -> Result<DeletedBranch, String> {
     delete_integrated_local_branch_with_pr(repo_path, branch_name, |_, _, _| false)
 }
 
@@ -2803,7 +2810,7 @@ pub fn delete_integrated_local_branch_with_pr(
     repo_path: &str,
     branch_name: &str,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
-) -> Result<&'static str, String> {
+) -> Result<DeletedBranch, String> {
     let repo = Path::new(repo_path);
     if branch_name.is_empty()
         || git_cmd(repo)
@@ -2873,13 +2880,19 @@ pub fn delete_integrated_local_branch_with_pr(
         }
     };
     require_integration_archive(repo, branch_name, &tip, proof)?;
+    let archive_ref = archive_ref_at_tip(repo, branch_name, &tip);
+    if proof == "archived" && archive_ref.is_none() {
+        return Err(format!(
+            "Cannot delete '{branch_name}': archive no longer holds the captured tip"
+        ));
+    }
     git_cmd(repo)
         .args(["update-ref", "-d", &branch_ref, &tip])
         .run()
         .map_err(|error| {
             format!("Cannot delete '{branch_name}': local ref moved or deletion failed: {error}")
         })?;
-    Ok(proof)
+    Ok(DeletedBranch { proof, archive_ref })
 }
 
 /// One block of `git worktree list --porcelain` output.
@@ -3816,6 +3829,12 @@ mod tests {
     #[test]
     fn non_stale_creation_failure_preserves_git_error_1437() {
         let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         let config = WorktreeConfig {
             task_name: "invalid-base".into(),
             base_repo: repo.path().to_string_lossy().into_owned(),
@@ -3823,8 +3842,11 @@ mod tests {
             create_branch: true,
         };
         let error = create_worktree_with_stale_recovery(
-            &repo.path().join("worktrees"), &config, Some("missing-ref-1437"),
-        ).unwrap_err();
+            &repo.path().join("worktrees"),
+            &config,
+            Some("missing-ref-1437"),
+        )
+        .unwrap_err();
         assert!(error.contains("missing-ref-1437"), "{error}");
         assert!(!error.contains("cleanup"), "{error}");
         assert!(!repo.path().join("worktrees/invalid-base").exists());
@@ -3834,6 +3856,12 @@ mod tests {
     #[test]
     fn stale_cleanup_removes_directory_and_contents_1437() {
         let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         let stale = repo.path().join("stale/nested");
         fs::create_dir_all(&stale).unwrap();
         fs::write(stale.join("old.txt"), "stale artifact").unwrap();
@@ -3846,9 +3874,24 @@ mod tests {
     #[test]
     fn clean_submodule_has_no_unpushed_commits_1437() {
         let (_temp, repo, _) = workspace_fixture();
+        assert!(
+            repo.as_path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         add_populated_submodule(&repo);
         let path = add_worktree(&repo, "zero-unpushed");
-        git_cmd(&path).args(["-c", "protocol.file.allow=always", "submodule", "update", "--init"]).run().unwrap();
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
         let status = inspect_workspace_lifecycle(&repo, "zero-unpushed");
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
         assert!(status.submodule_unpushed_commits.is_empty(), "{status:?}");
@@ -3860,9 +3903,24 @@ mod tests {
     #[test]
     fn unsafe_submodule_declarations_cannot_escape_admin_root_1437() {
         let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         let admin = repo.path().join(".git");
         for (name, path) in [("../outside", "module"), ("module", "../outside")] {
-            git_cmd(repo.path()).args(["config", "--file", ".gitmodules", &format!("submodule.{name}.path"), path]).run().unwrap();
+            git_cmd(repo.path())
+                .args([
+                    "config",
+                    "--file",
+                    ".gitmodules",
+                    &format!("submodule.{name}.path"),
+                    path,
+                ])
+                .run()
+                .unwrap();
             assert!(submodule_admin_dir_at(repo.path(), &admin, Path::new(path)).is_err());
             fs::remove_file(repo.path().join(".gitmodules")).unwrap();
         }
@@ -5999,8 +6057,17 @@ branch refs/heads/feat
         let clone = generate_clone_branch_name_cmd("feat/auth".into(), existing);
         assert!(clone.starts_with("feat-auth--"), "{clone}");
         let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         for generated in [name, clone] {
-            git_cmd(repo.path()).args(["check-ref-format", "--branch", &generated]).run().unwrap();
+            git_cmd(repo.path())
+                .args(["check-ref-format", "--branch", &generated])
+                .run()
+                .unwrap();
         }
     }
 
@@ -6009,16 +6076,44 @@ branch refs/heads/feat
     #[test]
     fn fetch_remote_refreshes_the_requested_tracking_ref_1450() {
         let (_temp, repo, _) = workspace_fixture();
+        assert!(
+            repo.as_path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
         let origin = add_origin(&repo);
         let old = rev_at(&repo, "refs/remotes/origin/main").unwrap();
         let writer = repo.parent().unwrap().join("writer");
-        git_cmd(repo.parent().unwrap()).args(["clone", "--branch", "main", &origin.to_string_lossy(), &writer.to_string_lossy()]).run().unwrap();
-        git_cmd(&writer).args(["config", "user.email", "test@test.com"]).run().unwrap();
-        git_cmd(&writer).args(["config", "user.name", "Test"]).run().unwrap();
-        commit_file(&writer, "remote.txt", "new upstream
-");
-        git_cmd(&writer).args(["push", "origin", "main"]).run().unwrap();
+        git_cmd(repo.parent().unwrap())
+            .args([
+                "clone",
+                "--branch",
+                "main",
+                &origin.to_string_lossy(),
+                &writer.to_string_lossy(),
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&writer)
+            .args(["config", "user.email", "test@test.com"])
+            .run()
+            .unwrap();
+        git_cmd(&writer)
+            .args(["config", "user.name", "Test"])
+            .run()
+            .unwrap();
+        commit_file(
+            &writer,
+            "remote.txt",
+            "new upstream
+",
+        );
+        git_cmd(&writer)
+            .args(["push", "origin", "main"])
+            .run()
+            .unwrap();
         let expected = rev_at(&writer, "HEAD").unwrap();
         assert_ne!(old, expected);
         fetch_if_remote(&repo.to_string_lossy(), "origin/main").unwrap();
@@ -8543,7 +8638,9 @@ branch refs/heads/feat
         assert!(after.archived);
         assert_eq!(after.archive_ref, suffixed);
         assert_eq!(
-            delete_integrated_local_branch(&repo.to_string_lossy(), "suffixed-1462").unwrap(),
+            delete_integrated_local_branch(&repo.to_string_lossy(), "suffixed-1462")
+                .unwrap()
+                .proof,
             "content_superset"
         );
         assert!(rev_at(&repo, "refs/heads/suffixed-1462").is_err());
@@ -8724,7 +8821,9 @@ branch refs/heads/feat
             .run()
             .unwrap();
         assert_eq!(
-            delete_integrated_local_branch(&repo.to_string_lossy(), "content-1295").unwrap(),
+            delete_integrated_local_branch(&repo.to_string_lossy(), "content-1295")
+                .unwrap()
+                .proof,
             "content_superset"
         );
         assert_eq!(rev_at(&repo, "refs/archive/content-1295").unwrap(), tip);
@@ -8901,7 +9000,9 @@ branch refs/heads/feat
             .run()
             .unwrap();
         assert_eq!(
-            delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295").unwrap(),
+            delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295")
+                .unwrap()
+                .proof,
             "squash_message"
         );
         assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
@@ -8918,7 +9019,9 @@ branch refs/heads/feat
             .run()
             .unwrap();
         assert_eq!(
-            delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295").unwrap(),
+            delete_integrated_local_branch(&repo.to_string_lossy(), "audit-1295")
+                .unwrap()
+                .proof,
             "noop_merge"
         );
         assert!(rev_at(&repo, "refs/heads/audit-1295").is_err());
