@@ -5617,6 +5617,61 @@ mod tests {
         }
     }
 
+    /// Catches: a Settings switch hides critical tools but direct or collapsed
+    /// calls still execute them (the stdio bridge forwards to this same route).
+    #[tokio::test]
+    async fn disabled_critical_native_tools_cannot_bypass_settings_through_dispatch() {
+        let state = test_state();
+        state.config.write().disabled_native_tools =
+            vec!["session".into(), "agent".into(), "progress".into()];
+        let app = build_router(state.clone(), false, true);
+        for collapse in [false, true] {
+            state.config.write().collapse_tools = collapse;
+            for (name, arguments) in [
+                ("session", serde_json::json!({"action": "list"})),
+                ("agent", serde_json::json!({"action": "list_peers"})),
+                (
+                    "progress",
+                    serde_json::json!({"type": "done", "message": "must not run"}),
+                ),
+            ] {
+                for meta in [false, true] {
+                    let params = if meta {
+                        serde_json::json!({"name": "call_tool", "arguments": {
+                            "tool_name": name, "arguments": arguments
+                        }})
+                    } else {
+                        serde_json::json!({"name": name, "arguments": arguments})
+                    };
+                    let response = app
+                        .clone()
+                        .oneshot(mcp_post(
+                            "/mcp",
+                            &serde_json::json!({
+                                "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params
+                            }),
+                        ))
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(
+                        reply["result"]["isError"], true,
+                        "{name} collapse={collapse} meta={meta}: {reply}"
+                    );
+                    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+                    assert!(
+                        text.contains(&format!("Tool '{name}' is disabled by configuration")),
+                        "{reply}"
+                    );
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_mcp_tools_list_respects_disabled_native_tools() {
         let state = test_state();
