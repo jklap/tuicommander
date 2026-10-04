@@ -1,6 +1,9 @@
 //! Critic tests for story 1420-f3de (foreground agent discovery).
 
-use crate::pty::{AgentSubmissionWrite, agent_submission_rejection_detail, refresh_session_agent};
+use crate::pty::refresh_session_agent;
+#[cfg(unix)]
+use crate::pty::{AgentSubmissionWrite, agent_submission_rejection_detail};
+#[cfg(unix)]
 use crate::test_support::ForegroundIdentityProbe;
 use std::sync::Arc;
 
