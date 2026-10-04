@@ -1,5 +1,14 @@
 //! App-specific fixtures built on the shared platform-neutral test helpers.
 
+// Tests construct reqwest clients without running the desktop/headless startup,
+// which installs this provider before any production client is built.
+#[ctor::ctor]
+fn install_test_tls_provider() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("install the production TLS provider before libtest");
+}
+
 pub(crate) use crate::fs::system32_exe;
 #[cfg(unix)]
 pub(crate) use tuic_test_support::short_socket_test_temp_root;

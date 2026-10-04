@@ -18,7 +18,7 @@ struct Probe {
     fail_id: Option<String>,
 }
 impl MailPort for Probe {
-    fn offer(&mut self, mail: &PendingMail) -> impl Future<Output = Result<(), Error>> {
+    fn offer(&mut self, mail: &PendingMail) -> impl Future<Output = Result<bool, Error>> {
         if self.full.load(Ordering::Relaxed)
             && self.fail_id.as_ref().is_none_or(|id| id == &mail.id)
         {
@@ -28,7 +28,7 @@ impl MailPort for Probe {
             .lock()
             .unwrap()
             .push((offset(&self.paths), mail.id.clone()));
-        std::future::ready(Ok(()))
+        std::future::ready(Ok(true))
     }
 }
 

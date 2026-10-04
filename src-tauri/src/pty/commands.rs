@@ -730,8 +730,9 @@ pub(crate) fn enqueue_agent_command(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     text: String,
+    idempotency_key: Option<String>,
 ) -> Result<EnqueuedCommand, String> {
-    enqueue_user_command(&state, &session_id, &text)
+    enqueue_user_command(&state, &session_id, &text, idempotency_key.as_deref())
 }
 
 /// Discard every command still queued for a session. Returns how many were dropped.
