@@ -3583,7 +3583,7 @@ mod tests {
         fs::write(home.path().join("notes/design.md"), "").unwrap();
         let canonical = home.path().canonicalize().unwrap();
         let expected = canonical.join("notes/design.md");
-        let expected = expected.to_string_lossy();
+        let expected = portable_spelling(&expected.to_string_lossy());
         for (href, line) in [
             ("~/notes/design.md", None),
             ("~/notes/design.md:7", Some(7)),
@@ -3622,6 +3622,7 @@ mod tests {
             .join("notes/design.md")
             .to_string_lossy()
             .into_owned();
+        let expected = portable_spelling(&expected);
         assert!(
             matches!(
                 resolve_markdown_link_with_home(
@@ -3646,6 +3647,7 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .into_owned();
+        let canonical = portable_spelling(&canonical);
         assert!(matches!(
             resolve_markdown_link_with_home("/repo", "/repo/review.md", "~/", Some(home.path())),
             MarkdownLinkTarget::File { absolute_path, is_directory: true, .. } if absolute_path == canonical
@@ -3729,11 +3731,11 @@ mod tests {
         let home = Path::new("/home/boss");
         assert_eq!(
             expand_home_prefix("~/a/b.md", home).as_deref(),
-            Some("/home/boss/a/b.md")
+            Some(home.join("a/b.md").to_string_lossy().as_ref())
         );
         assert_eq!(
             expand_home_prefix("~//a.md", home).as_deref(),
-            Some("/home/boss/a.md")
+            Some(home.join("a.md").to_string_lossy().as_ref())
         );
         // A drive-prefixed rest would replace home in a Windows join.
         assert_eq!(expand_home_prefix("~/C:\\x.md", home), None);
@@ -3752,15 +3754,15 @@ mod tests {
         assert_eq!(expand_home_prefix("~/C:", home), None);
         assert_eq!(
             expand_home_prefix("~/é:x", home).as_deref(),
-            Some("/home/boss/é:x")
+            Some(home.join("é:x").to_string_lossy().as_ref())
         );
         assert_eq!(
             expand_home_prefix("~/CD:x", home).as_deref(),
-            Some("/home/boss/CD:x")
+            Some(home.join("CD:x").to_string_lossy().as_ref())
         );
         assert_eq!(
             expand_home_prefix("~/", home).as_deref(),
-            Some("/home/boss/")
+            Some(home.join("").to_string_lossy().as_ref())
         );
         assert_eq!(expand_home_prefix("~", home), None);
         assert_eq!(expand_home_prefix("~user/a", home), None);

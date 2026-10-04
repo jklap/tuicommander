@@ -3138,7 +3138,10 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
 
     let entry = parse_worktree_entries(&out.stdout)
         .into_iter()
-        .find(|entry| entry.path == worktree_path)
+        .find(|entry| {
+            tuic_core::path_spelling::portable_spelling(&entry.path)
+                == tuic_core::path_spelling::portable_spelling(worktree_path)
+        })
         .ok_or_else(|| {
             format!(
                 "Refused: '{}' is not a known worktree of '{}'",
@@ -3688,6 +3691,7 @@ fn run_shell_script(
 
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(flag).arg(script).current_dir(cwd);
+    cmd.env("PATH", tuic_core::cli::enriched_path());
     tuic_core::cli::apply_no_window(&mut cmd);
     crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|e| match e {
         crate::git_cli::GitError::TimedOut { after } => format!(
@@ -7443,7 +7447,7 @@ branch refs/heads/feat
         .unwrap();
         assert_eq!(
             rev_at(&destination, "--absolute-git-dir").unwrap(),
-            repo.join(".git").to_string_lossy()
+            tuic_core::path_spelling::portable_spelling(&repo.join(".git").to_string_lossy())
         );
 
         let error = preserve_submodule_refs(&repo, &path, "modules/local").unwrap_err();
@@ -8404,7 +8408,12 @@ branch refs/heads/feat
         commit_file(&repo, name, "rule B\nrule A\n++literal\nextra\n");
         let query = branch_integration_with_pr(&repo, "literal-1295", |_, _, _| false).unwrap();
         assert_eq!(query.proof, Some("content_superset"));
-        assert_eq!(query.worktree_paths, vec![wt.to_string_lossy().to_string()]);
+        assert_eq!(
+            query.worktree_paths,
+            vec![tuic_core::path_spelling::portable_spelling(
+                &wt.to_string_lossy()
+            )]
+        );
         git_cmd(&repo)
             .args(["update-ref", &query.archive_ref, &query.tip])
             .run()
@@ -8467,7 +8476,9 @@ branch refs/heads/feat
             let query = branch_integration_with_pr(&repo, branch, |_, _, _| false).unwrap();
             assert_eq!(
                 query.worktree_paths,
-                vec![own.to_string_lossy().to_string()]
+                vec![tuic_core::path_spelling::portable_spelling(
+                    &own.to_string_lossy()
+                )]
             );
         }
     }

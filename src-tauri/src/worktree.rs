@@ -1296,9 +1296,12 @@ pub(crate) fn begin_orphan_cleanup_internal(
 ) -> Result<(), String> {
     let current = tuic_git::worktree::assess_orphan_worktrees(repo_path)?;
     if paths.is_empty()
-        || paths
-            .iter()
-            .any(|path| !current.iter().any(|entry| &entry.path == path))
+        || paths.iter().any(|path| {
+            !current.iter().any(|entry| {
+                tuic_core::path_spelling::portable_spelling(&entry.path)
+                    == tuic_core::path_spelling::portable_spelling(path)
+            })
+        })
     {
         return Err("Pending cleanup must list current orphan worktrees".into());
     }
@@ -2036,7 +2039,9 @@ mod tests {
                 .run()
                 .unwrap()
                 .stdout
-                .contains(&worktree.to_string_lossy().to_string())
+                .contains(&tuic_core::path_spelling::portable_spelling(
+                    &worktree.to_string_lossy()
+                ))
         );
     }
 
