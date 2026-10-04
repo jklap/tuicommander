@@ -208,6 +208,12 @@ pub fn create_worktree_internal(
     // rebase/bisect/`git checkout <sha>` on a worktree we created. Forcing cleanup there would
     // destroy an agent's in-progress work.
     if worktree_path.exists() {
+        if !worktree_path.join(".git").exists() {
+            return Err(format!(
+                "{STALE_DIR_PREFIX} directory '{}' is not a Git checkout",
+                worktree_path.display()
+            ));
+        }
         let actual_branch = crate::git::read_branch_from_head(&worktree_path);
         if let Some(ref expected) = config.branch
             && let Some(ref actual) = actual_branch
@@ -379,28 +385,22 @@ pub const MAIN_WORKTREE_PREFIX: &str = "worktree_is_main:";
 /// don't drift on the literal string.
 pub const STALE_DIR_PREFIX: &str = "STALE_DIR:";
 
-/// Force-remove a stale worktree directory.
-///
-/// Runs `git worktree remove --force` (cleans the registry entry) and then verifies
-/// the directory is gone, falling back to `fs::remove_dir_all` (async then blocking
-/// to handle file-locks on Windows / AV scanners). Returns `Ok(())` only when the
-/// path is verified absent. Synchronous wrapper used by callers that can't spawn a
-/// background task (PTY creation, MCP request handlers).
+/// Remove only an unregistered stale directory without a Git checkout.
+/// Registered worktrees and orphan Git repositories are preserved, even when clean.
 pub fn cleanup_stale_worktree_dir(base_repo: &str, stale_path: &Path) -> Result<(), String> {
-    if let Err(e) = git_cmd(&PathBuf::from(base_repo))
-        .args([
-            "worktree",
-            "remove",
-            "--force",
-            &stale_path.to_string_lossy(),
-        ])
+    let listed = git_cmd(Path::new(base_repo))
+        .args(["worktree", "list", "--porcelain"])
         .run()
+        .map_err(|error| format!("Cannot verify stale directory registration: {error}"))?;
+    if parse_worktree_entries(&listed.stdout)
+        .iter()
+        .any(|entry| warm_key(Path::new(&entry.path)) == warm_key(stale_path))
+        || stale_path.join(".git").exists()
     {
-        tracing::warn!(
-            source = "worktree",
-            stale = %stale_path.display(),
-            "cleanup_stale_worktree_dir: git worktree remove --force failed (falling back to fs removal): {e}"
-        );
+        return Err(format!(
+            "Cannot clean stale directory '{}': registered worktree or Git checkout",
+            stale_path.display()
+        ));
     }
 
     if stale_path.exists()
@@ -3715,6 +3715,73 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
     use tuic_test_support::{fail_with_stderr_script, print_file_script, touch_script};
+
+    // Catches: lossy-name recovery deleting another branch's dirty or clean registered checkout.
+    #[test]
+    fn stale_recovery_preserves_registered_name_collisions_and_detached_head() {
+        for (first, second, dirty) in [("feat/x", "feat-x", true), ("Feat.X", "feat-x", false)] {
+            let repo = setup_test_repo();
+            let dir = repo.path().join("worktrees");
+            let mut config = WorktreeConfig {
+                task_name: first.to_owned(),
+                base_repo: repo.path().to_string_lossy().into_owned(),
+                branch: Some(first.to_owned()),
+                create_branch: true,
+            };
+            let original =
+                create_worktree_with_stale_recovery(&dir, &config, None).expect("first worktree");
+            if dirty {
+                fs::write(original.path.join("uncommitted.txt"), "keep me").expect("write");
+            }
+            config.task_name = second.to_owned();
+            config.branch = Some(second.to_owned());
+            assert!(
+                create_worktree_with_stale_recovery(&dir, &config, None).is_err(),
+                "{first} collides with {second}"
+            );
+            assert_eq!(
+                crate::git::read_branch_from_head(&original.path).as_deref(),
+                Some(first)
+            );
+            if dirty {
+                assert_eq!(
+                    fs::read_to_string(original.path.join("uncommitted.txt")).expect("preserved"),
+                    "keep me"
+                );
+            }
+            git_cmd(&original.path)
+                .args(["checkout", "--detach"])
+                .run()
+                .expect("detach");
+            create_worktree_with_stale_recovery(&dir, &config, None)
+                .expect("detached checkout preserved");
+            assert!(original.path.join(".git").is_file());
+            assert!(crate::git::read_branch_from_head(&original.path).is_none());
+            assert!(cleanup_stale_worktree_dir(&config.base_repo, &original.path).is_err());
+        }
+    }
+
+    // Catches: mistaking a non-Git orphan directory for an existing detached checkout.
+    #[test]
+    fn stale_recovery_recreates_plain_orphan_directory() {
+        let repo = setup_test_repo();
+        let dir = repo.path().join("worktrees");
+        let orphan = dir.join("orphan");
+        fs::create_dir_all(&orphan).expect("orphan dir");
+        let config = WorktreeConfig {
+            task_name: "orphan".to_owned(),
+            base_repo: repo.path().to_string_lossy().into_owned(),
+            branch: Some("orphan".to_owned()),
+            create_branch: true,
+        };
+        let recovered =
+            create_worktree_with_stale_recovery(&dir, &config, None).expect("recover orphan");
+        assert!(recovered.path.join(".git").is_file());
+        assert_eq!(
+            crate::git::read_branch_from_head(&recovered.path).as_deref(),
+            Some("orphan")
+        );
+    }
 
     #[test]
     fn test_sanitize_name() {

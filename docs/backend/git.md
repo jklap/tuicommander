@@ -418,3 +418,5 @@ The workflow service checks both merge parents and compares the canonical merge 
 The `run_git_command` IPC command and `/repo/run-git` HTTP route share a subcommand and flag allowlist. Each argument is checked before Git starts; caller-controlled configuration, executable helpers, and output paths are rejected. Fetch applies fixed HTTP low-speed settings in the backend. Supported UI flags are fetch `--all`, pull `--ff-only`, push `-u`/`--delete`, diff `--name-status`, and status `--porcelain`.
 
 Force branch deletion first preserves the exact tip at `refs/archive/<branch>` and uses an expected-old-tip ref deletion. A different existing archive or a checkout of the branch refuses deletion. An archive already at the same tip is reusable.
+
+Stale creation recovery deletes only unregistered directories without a Git checkout. A sanitized-name collision with a registered worktree fails, preserving clean, dirty, and detached checkouts. Plain orphan directories can be recreated as worktrees.
