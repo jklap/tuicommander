@@ -153,14 +153,10 @@ impl Runtime {
             return Err(Error::Config);
         }
         let state = self.state.clone();
-        let stopped = self.outbound.stop(
-            &value,
-            |peer, pty, epoch| live(&state, peer, pty, epoch),
-            |pty| {
-                crate::mcp_http::session::write_pty_input(&state, pty, "\u{1b}")
-                    .map_err(|_| Error::State)
-            },
-        )?;
+        let stopped = self.outbound.stop(&value, |peer, pty, epoch| {
+            crate::mcp_http::session::interrupt_turn_if_current(&state, peer, pty, epoch)
+                .map_err(|_| Error::State)
+        })?;
         if stopped {
             let chat = value["stopped_message_generation"]["chat"]["id"]
                 .as_i64()

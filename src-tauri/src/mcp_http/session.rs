@@ -240,6 +240,66 @@ pub(crate) fn write_pty_input(
     write_pty_input_parts(state, session_id, &[data])
 }
 
+/// Compare the live turn and write Escape while submission cannot advance it.
+/// Uses the same SilenceState -> SessionState order as note_submitted_input.
+pub(crate) fn interrupt_turn_if_current(
+    state: &Arc<AppState>,
+    peer: &str,
+    session_id: &str,
+    epoch: u64,
+) -> Result<bool, String> {
+    let Some(writer) = state.pty_writer(session_id) else {
+        return Ok(false);
+    };
+    let Some(silence) = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .map(|s| s.clone())
+    else {
+        return Ok(false);
+    };
+    {
+        let silence_guard = silence.lock();
+        let Some(session) = state.session_maps.session_states.get(session_id) else {
+            return Ok(false);
+        };
+        if session.turn_epoch != epoch
+            || state.live_pty_for_peer(peer).as_deref() != Some(session_id)
+            || state.session_maps.exit_codes.contains_key(session_id)
+        {
+            return Ok(false);
+        }
+        let mut snapshot = session.clone();
+        snapshot.shell_state = state
+            .session_maps
+            .shell_states
+            .get(session_id)
+            .and_then(|atom| {
+                crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Acquire))
+            })
+            .map(str::to_string);
+        snapshot.derive_agent_state(
+            snapshot.suggested_actions.is_some()
+                || silence_guard.completion_declared_for_epoch(epoch),
+        );
+        if !matches!(
+            snapshot.agent_state.as_deref(),
+            Some("working" | "awaiting_input")
+        ) {
+            return Ok(false);
+        }
+        let mut writer = writer.lock();
+        writer
+            .write_all(b"\x1b")
+            .map_err(|e| format!("Write failed: {e}"))?;
+        writer.flush().map_err(|e| format!("Flush failed: {e}"))?;
+    }
+    crate::pty_capture::record_input(session_id, b"\x1b");
+    apply_input_bookkeeping(state, session_id, "\x1b");
+    Ok(true)
+}
+
 /// Write all input parts to the PTY under one writer lock, then apply capture
 /// and input bookkeeping once per original request, in order.
 pub(crate) fn write_pty_input_parts(

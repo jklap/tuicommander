@@ -123,74 +123,103 @@ async fn unchanged_draft_refreshes_at_twenty_seconds() {
 
 // Catches: stale/foreign/duplicate Stop interrupts a newer request, or a
 // successful Stop leaves a refresh able to resurrect the stopped draft.
+#[cfg(unix)]
 #[tokio::test]
 async fn stop_matches_chat_draft_and_live_epoch_only_once() {
     let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![(StatusCode::OK, json!({"ok":true,"result":true}))]).await;
-    let mut outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, server.address));
-    let draft = outbound
-        .begin("request".into(), PEER.into(), "pty".into(), 1, 1111111)
+    let server = FakeServer::start(vec![
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":7}})),
+    ])
+    .await;
+    let mut runtime = runtime(paths, server.address).await;
+    let bytes = crate::test_support::insert_recording_session(&runtime.state, PEER);
+    crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_BUSY);
+    crate::pty::note_submitted_input(&runtime.state, PEER);
+    runtime
+        .track(crate::telegram::mail::PendingMail {
+            id: "request".into(),
+            recipient: PEER.into(),
+            content: json!({"chat_id":"1111111"}).to_string(),
+        })
+        .unwrap();
+    let begun = runtime
+        .tool(
+            PEER,
+            crate::telegram::tool::Input::Begin {
+                request_id: "request".into(),
+            },
+        )
         .await
         .unwrap();
+    let draft = begun["draft_id"].as_i64().unwrap();
     let stopped = |chat, id| json!({"stopped_message_generation":{"chat":{"id":chat,"type":"private"},"draft_id":id}});
-    assert!(
-        !outbound
-            .stop(
-                &stopped(2222222, draft),
-                |_, _, _| panic!("foreign chat"),
-                |_| panic!("foreign chat")
-            )
-            .unwrap()
-    );
-    assert!(
-        !outbound
-            .stop(
-                &stopped(1111111, draft + 1),
-                |_, _, _| panic!("foreign draft"),
-                |_| panic!("foreign draft")
-            )
-            .unwrap()
-    );
-    let mut bytes = Vec::new();
-    assert!(
-        outbound
-            .stop(
-                &stopped(1111111, draft),
-                |peer, pty, epoch| peer == PEER && pty == "pty" && epoch == 1,
-                |pty| {
-                    assert_eq!(pty, "pty");
-                    bytes.push(27);
-                    Ok(())
-                }
-            )
-            .unwrap()
-    );
-    assert!(
-        !outbound
-            .stop(
-                &stopped(1111111, draft),
-                |_, _, _| panic!("duplicate"),
-                |_| panic!("duplicate")
-            )
-            .unwrap()
-    );
-    outbound.refresh().await.unwrap();
-    assert_eq!(bytes, vec![27]);
+    runtime.update(stopped(2222222, draft)).await.unwrap();
+    runtime.update(stopped(1111111, draft ^ 1)).await.unwrap();
+    assert!(bytes.lock().unwrap().is_empty());
     assert_eq!(server.requests().len(), 1);
+    runtime.update(stopped(1111111, draft)).await.unwrap();
+    runtime.update(stopped(1111111, draft)).await.unwrap();
+    runtime.tick().await;
+    let result = bytes.lock().unwrap().clone();
+    let requests = server.requests();
+    let (_, session) = runtime.state.session_maps.sessions.remove(PEER).unwrap();
+    let mut session = session.lock();
+    session._child.kill().unwrap();
+    session._child.wait().unwrap();
+    assert_eq!(result, vec![27]);
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].0.ends_with("sendMessage"));
+    assert_eq!(requests[1].1["text"], "Stop requested.");
 }
 
 // Catches: matching Stop writes into a newer turn that reuses the same PTY.
+#[cfg(unix)]
 #[tokio::test]
 async fn stale_epoch_stop_retires_without_writing() {
     let (_dir, paths) = setup();
     let server = FakeServer::start(vec![(StatusCode::OK, json!({"ok":true,"result":true}))]).await;
-    let mut outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, server.address));
-    let draft = outbound
-        .begin("request".into(), PEER.into(), "pty".into(), 1, 1111111)
+    let mut runtime = runtime(paths, server.address).await;
+    let bytes = crate::test_support::insert_recording_session(&runtime.state, PEER);
+    crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_BUSY);
+    crate::pty::note_submitted_input(&runtime.state, PEER);
+    runtime
+        .track(crate::telegram::mail::PendingMail {
+            id: "request".into(),
+            recipient: PEER.into(),
+            content: json!({"chat_id":"1111111"}).to_string(),
+        })
+        .unwrap();
+    let begun = runtime
+        .tool(
+            PEER,
+            crate::telegram::tool::Input::Begin {
+                request_id: "request".into(),
+            },
+        )
         .await
         .unwrap();
-    assert!(!outbound.stop(&json!({"stopped_message_generation":{"chat":{"id":1111111,"type":"private"},"draft_id":draft}}), |_,_,_| false, |_| panic!("stale write")).unwrap());
-    assert!(outbound.active.is_none());
+    crate::pty::note_submitted_input(&runtime.state, PEER);
+    runtime.update(json!({"stopped_message_generation":{"chat":{"id":1111111,"type":"private"},"draft_id":begun["draft_id"]}})).await.unwrap();
+    runtime.tick().await;
+    let result = bytes.lock().unwrap().clone();
+    let requests = server.requests();
+    let late = runtime
+        .tool(
+            PEER,
+            crate::telegram::tool::Input::Finish {
+                request_id: "request".into(),
+                text: "too late".into(),
+            },
+        )
+        .await;
+    let (_, session) = runtime.state.session_maps.sessions.remove(PEER).unwrap();
+    let mut session = session.lock();
+    session._child.kill().unwrap();
+    session._child.wait().unwrap();
+    assert!(result.is_empty());
+    assert_eq!(requests.len(), 1);
+    assert!(late.is_err());
 }
 
 pub(in crate::telegram) async fn runtime(
