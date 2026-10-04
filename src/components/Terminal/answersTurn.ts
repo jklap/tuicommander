@@ -132,16 +132,15 @@ export async function readTurnRows(
 
 /**
  * All-time row indexes of the user prompts still in the scrollback, ascending and
- * unique. `promptLines` are grid-relative; `historyBase` shifts them to all-time.
+ * unique. Stored `promptLines` already use all-time coordinates.
  */
 export function promptStarts(promptLines: readonly number[], historyBase: number, endAbs: number): number[] {
-	const total = endAbs - historyBase;
 	const starts = new Set<number>();
-	for (const line of promptLines) if (line >= 0 && line < total) starts.add(historyBase + line);
+	for (const line of promptLines) if (line >= historyBase && line < endAbs) starts.add(line);
 	return [...starts].sort((a, b) => a - b);
 }
 
-/** Finished turns by start row, valid for one `historyBase` (eviction moves every row index). */
+/** Finished turns by start row, valid for one `historyBase` (eviction changes the retained prefix). */
 export interface TurnCache {
 	base: number;
 	turns: Map<number, { endAbs: number; hasPrompt: boolean; turn: AnswersTurn }>;

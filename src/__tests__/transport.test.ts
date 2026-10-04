@@ -452,6 +452,16 @@ describe("transport", () => {
 			expect(result.body).toEqual({ text: "run tests" });
 		});
 
+		// Catches: HTTP drops the idempotency key supplied to the desktop command.
+		it("preserves queue idempotency keys across HTTP and Tauri arguments", () => {
+			const result = mapCommandToHttp("enqueue_agent_command", {
+				sessionId: "abc",
+				text: "run tests",
+				idempotencyKey: "bg-job-1",
+			});
+			expect(result.body).toEqual({ text: "run tests", idempotencyKey: "bg-job-1" });
+		});
+
 		it("maps clear_queued_agent_commands to DELETE /sessions/{id}/queue", () => {
 			const result = mapCommandToHttp("clear_queued_agent_commands", { sessionId: "abc" });
 			expect(result.method).toBe("DELETE");
@@ -3778,6 +3788,19 @@ describe("private secret transport boundary", () => {
 			method: "POST",
 			path: "/secrets/forms/submit",
 			body: { nonce: "one-time", status: "declined", values: {}, template: null },
+		});
+	});
+});
+
+// Catches: phone setup drops the action or reaches a different config surface than IPC.
+describe("Telegram Settings transport", () => {
+	it("maps reads and writes to the same guarded settings route", () => {
+		expect(mapCommandToHttp("telegram_settings", {})).toEqual({ method: "GET", path: "/config/telegram" });
+		const change = { action: "add_chat", chat_id: "123" };
+		expect(mapCommandToHttp("telegram_setup", { change })).toEqual({
+			method: "PUT",
+			path: "/config/telegram",
+			body: { change },
 		});
 	});
 });

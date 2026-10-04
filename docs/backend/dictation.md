@@ -4,6 +4,17 @@
 
 **Application adapters:** `src-tauri/src/dictation/`
 
+The application enables native dictation with the non-default Cargo feature
+`dictation`. Plain application Cargo dev/test builds omit Whisper and WebRTC;
+use `--features dictation` to check or test the voice adapters. Tauri builds
+(including `make dev` and releases) enable the feature in `tauri.conf.json`,
+and desktop CI enables it explicitly. `cuda` and `vulkan` imply `dictation`.
+Headless `tuic-remote --no-default-features` does not compile the audio stack.
+
+Notification audio remains available in desktop builds without dictation. Both
+notification and speech output share `tuic-core::audio_output`, behind its
+optional `audio-output` feature. The output-device selection is unchanged.
+
 Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk workflow with streaming partial results: hold hotkey to record, see partial transcriptions in real-time, release to finalize.
 
 ## Module Structure

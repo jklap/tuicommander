@@ -16,6 +16,7 @@ const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(200);
 struct WakeError {
     message: String,
     retryable: bool,
+    acceptance_uncertain: bool,
 }
 
 impl WakeError {
@@ -23,6 +24,7 @@ impl WakeError {
         Self {
             message: message.into(),
             retryable: false,
+            acceptance_uncertain: false,
         }
     }
 
@@ -32,6 +34,7 @@ impl WakeError {
             std::io::ErrorKind::WouldBlock
                 | std::io::ErrorKind::TimedOut
                 | std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::UnexpectedEof
                 | std::io::ErrorKind::ConnectionReset
                 | std::io::ErrorKind::BrokenPipe
                 | std::io::ErrorKind::NotConnected
@@ -40,13 +43,21 @@ impl WakeError {
         Self {
             message: error.to_string(),
             retryable,
+            acceptance_uncertain: false,
         }
+    }
+
+    fn after_post(mut self) -> Self {
+        // No complete receipt: bytes may already have reached the queue.
+        self.acceptance_uncertain = true;
+        self
     }
 
     fn from_http(operation: &str, status: u16, body: &str) -> Self {
         Self {
             message: format!("{operation} answered HTTP {status}: {body}"),
             retryable: status >= 500,
+            acceptance_uncertain: operation == "Queue" && status >= 500,
         }
     }
 }
@@ -198,12 +209,21 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
         .map_err(|e| format!("Cannot write exit file {exit_file}: {e}"))?;
     let wake = format!("BG DONE exit={code} log={log} cmd={}", command.join(" "));
     let wake_file = format!("{log}.wake");
+    // No mail id exists before enqueue. One runner identity distinguishes jobs
+    // even when they reuse the same log path and command, and survives retries.
+    let started = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_nanos();
+    let key = format!("bg-{}-{started}", std::process::id());
+    let mut acceptance_uncertain = false;
     for attempt in 1..=WAKE_ATTEMPTS {
-        let wake_status = match queue_wake(caller, &wake) {
+        let wake_status = match queue_wake(caller, &wake, &key) {
             Ok(()) => {
                 serde_json::json!({"status": "queued", "tuic_session": caller, "attempts": attempt})
             }
             Err(queue_error) => {
+                acceptance_uncertain |= queue_error.acceptance_uncertain;
                 let _ = writeln!(
                     output,
                     "tuic bg: queue wake attempt {attempt} failed: {}",
@@ -239,10 +259,15 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
                             let status = serde_json::json!({"status": "retrying", "tuic_session": caller, "attempts": attempt, "error": error});
                             write_marker(caller, &status)?;
                             write_wake_status(&wake_file, &status)?;
-                            std::thread::sleep(INITIAL_RETRY_DELAY * (1 << (attempt - 1)));
+                            sleep_before_wake_retry(attempt, std::thread::sleep);
                             continue;
                         }
-                        serde_json::json!({"status": "failed", "tuic_session": caller, "attempts": attempt, "error": error})
+                        let status = if acceptance_uncertain {
+                            "uncertain"
+                        } else {
+                            "failed"
+                        };
+                        serde_json::json!({"status": status, "tuic_session": caller, "attempts": attempt, "error": error})
                     }
                 }
             }
@@ -257,7 +282,12 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn queue_wake(caller: &str, wake: &str) -> Result<(), WakeError> {
+// The retry schedule is private; accepting the sleeper keeps tests off wall-clock time.
+fn sleep_before_wake_retry(attempt: u64, sleep: impl FnOnce(Duration)) {
+    sleep(INITIAL_RETRY_DELAY * (1 << (attempt - 1)));
+}
+
+fn queue_wake(caller: &str, wake: &str, key: &str) -> Result<(), WakeError> {
     let sessions = ipc::get("/sessions").map_err(WakeError::from_io)?;
     if !sessions.is_success() {
         return Err(WakeError::from_http(
@@ -282,9 +312,9 @@ fn queue_wake(caller: &str, wake: &str) -> Result<(), WakeError> {
             matches.len()
         )));
     };
-    let body = serde_json::json!({"text": wake}).to_string();
-    let response =
-        ipc::post(&format!("/sessions/{session_id}/queue"), &body).map_err(WakeError::from_io)?;
+    let body = serde_json::json!({"text": wake, "idempotencyKey": key}).to_string();
+    let response = ipc::post(&format!("/sessions/{session_id}/queue"), &body)
+        .map_err(|e| WakeError::from_io(e).after_post())?;
     if !response.is_success() {
         return Err(WakeError::from_http(
             "Queue",
@@ -294,12 +324,67 @@ fn queue_wake(caller: &str, wake: &str) -> Result<(), WakeError> {
     }
     let receipt: Value = response
         .json()
-        .map_err(|e| WakeError::permanent(e.to_string()))?;
-    if receipt["typed"] != true && receipt["queued"].as_u64().is_none_or(|count| count == 0) {
+        .map_err(|e| WakeError::permanent(e.to_string()).after_post())?;
+    if receipt["accepted"] != true
+        && receipt["typed"] != true
+        && receipt["queued"].as_u64().is_none_or(|count| count == 0)
+    {
         return Err(WakeError::permanent(format!(
             "Queue did not accept wake: {}",
             response.body
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Catches: division, reversed shifts or an off-by-one exponent collapses the retry backoff.
+    #[test]
+    fn failed_wake_attempts_double_the_backoff_before_each_of_five_retries() {
+        assert_eq!(WAKE_ATTEMPTS, 6);
+        let mut delays = Vec::new();
+        for attempt in 1..WAKE_ATTEMPTS {
+            sleep_before_wake_retry(attempt, |delay| delays.push(delay.as_millis()));
+        }
+        assert_eq!(delays, [200, 400, 800, 1600, 3200]);
+    }
+
+    // Catches: inverted length/character guards permit path traversal or reject boundary IDs.
+    #[test]
+    fn marker_path_accepts_safe_boundary_ids_and_refuses_unsafe_names() {
+        for caller in [
+            "a".to_string(),
+            "A0-_".to_string(),
+            "a".repeat(127),
+            "a".repeat(128),
+        ] {
+            let path = marker_path(&caller).expect("safe caller ID");
+            assert_eq!(
+                path.file_name().unwrap().to_str().unwrap(),
+                format!("{caller}.json")
+            );
+        }
+        for caller in [
+            String::new(),
+            "a".repeat(129),
+            "../escape".into(),
+            "a/b".into(),
+            "a\\b".into(),
+            "..".into(),
+            ".".into(),
+            "a.b".into(),
+            "a b".into(),
+            "a\n".into(),
+            "é".into(),
+        ] {
+            assert_eq!(
+                marker_path(&caller).unwrap_err(),
+                "Invalid TUIC_SESSION for background wake marker",
+                "{caller:?}"
+            );
+        }
+    }
 }

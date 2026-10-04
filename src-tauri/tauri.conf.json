@@ -4,6 +4,7 @@
   "version": "1.8.0",
   "identifier": "com.tuic.commander",
   "build": {
+    "features": ["dictation"],
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://127.0.0.1:1421",
     "beforeBuildCommand": "pnpm build && pnpm build:sidecar",

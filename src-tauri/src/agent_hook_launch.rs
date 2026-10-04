@@ -4,6 +4,22 @@ use crate::agent_hook::{SENTINEL, claude_hook_map};
 use serde_json::{Map, Value};
 use std::path::Path;
 
+/// Recorded installed Claude help supplies advertised verbs when a probe is unavailable.
+pub(crate) const RECORDED_CLAUDE_HELP: &str =
+    include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt");
+
+fn claude_command_names(help: &str) -> impl Iterator<Item = &str> {
+    help.lines()
+        .skip_while(|line| line.trim() != "Commands:")
+        .skip(1)
+        .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+        .filter_map(|line| line.split_whitespace().next())
+}
+
+pub(crate) fn claude_help_is_usable(help: &str) -> bool {
+    claude_command_names(help).next().is_some()
+}
+
 pub(crate) fn enabled(agent_type: &str) -> bool {
     crate::config::load_agents_config()
         .agents
@@ -137,7 +153,14 @@ pub(crate) fn augment_args(
     args: &[String],
     config_dir: &Path,
 ) -> Vec<String> {
-    let result = augment_args_when(enabled(agent_type), agent_type, args, config_dir);
+    let enabled = enabled(agent_type);
+    if enabled && agent_type == "claude" && args.first().is_some_and(|arg| !arg.starts_with('-')) {
+        let help = crate::agent::cli_help(binary_path).unwrap_or_default();
+        if claude_is_subcommand(args, &help) {
+            return args.to_vec();
+        }
+    }
+    let result = augment_args_when(enabled, agent_type, args, config_dir);
     if screen_flag_candidate(agent_type, args).is_none() {
         return result;
     }
@@ -207,6 +230,25 @@ fn add_screen_flag(
     result
 }
 
+/// Installed help owns advertised verbs. On probe failure, retain the verbs
+/// verified in the recorded help. The reported remote-control refusal proves
+/// that exact hidden command also rejects root launch settings.
+fn claude_is_subcommand(args: &[String], help: &str) -> bool {
+    let Some(first) = args
+        .first()
+        .filter(|arg| !arg.is_empty() && !arg.starts_with('-'))
+    else {
+        return false;
+    };
+    let help = if !claude_help_is_usable(help) {
+        RECORDED_CLAUDE_HELP
+    } else {
+        help
+    };
+    first == "remote-control"
+        || claude_command_names(help).any(|names| names.split('|').any(|name| name == first))
+}
+
 fn augment_args_when(
     enabled: bool,
     agent_type: &str,
@@ -219,9 +261,10 @@ fn augment_args_when(
     }
     match agent_type {
         "claude"
-            if !args.iter().any(|arg| {
-                arg == "--settings" || arg.starts_with("--settings=") || arg == "--bare"
-            }) =>
+            if !claude_is_subcommand(args, "")
+                && !args.iter().any(|arg| {
+                    arg == "--settings" || arg.starts_with("--settings=") || arg == "--bare"
+                }) =>
         {
             result.push("--settings".into());
             result.push(
@@ -254,6 +297,138 @@ fn augment_args_when(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: a successful probe publishes unusable stdout/stderr as Claude help.
+    #[test]
+    fn successful_probe_without_command_rows_is_unavailable() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            dir.path()
+                .starts_with(crate::test_support::test_temp_root())
+        );
+        let truncated = RECORDED_CLAUDE_HELP.split("Commands:").next().unwrap();
+        for (case, help) in [
+            ("whitespace", " \n\t"),
+            ("truncated", truncated),
+            ("header-only", "Commands:\n  \n"),
+            ("recorded", RECORDED_CLAUDE_HELP),
+        ] {
+            let help_path = dir.path().join(format!("{case}.txt"));
+            std::fs::write(&help_path, help).unwrap();
+            for (stream, redirect) in [("stdout", ""), ("stderr", " >&2")] {
+                let binary = crate::test_support::fake_ssh_script(
+                    &format!("claude-help-{case}-{stream}"),
+                    &format!(
+                        "cat {}{redirect}",
+                        shell_quote(&help_path.to_string_lossy())
+                    ),
+                    &format!("type \"{}\"{redirect}", help_path.display()),
+                );
+                let actual = crate::agent::cli_help(&binary.to_string_lossy());
+                assert_eq!(actual.is_some(), case == "recorded", "{case} on {stream}");
+            }
+        }
+    }
+
+    /// Catches: a hyphen in an ordinary prompt disables native status hooks.
+    #[test]
+    fn prompt_with_hyphen_retains_native_settings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let binary = dir.path().join("missing-claude");
+        for prompt in ["fix-bug", "Explain the remote-control failure"] {
+            let args = vec![prompt.to_string()];
+            let actual = augment_args("claude", &binary.to_string_lossy(), &args, dir.path());
+            assert!(
+                actual.iter().any(|arg| arg == "--settings"),
+                "prompt {prompt:?} lost native status settings: {actual:?}"
+            );
+        }
+    }
+
+    /// Catches: a failed help probe adds launch settings to the mcp subcommand.
+    #[test]
+    fn unavailable_help_does_not_corrupt_subcommand_arguments() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let binary = dir.path().join("missing-claude");
+        let args = vec!["mcp".into(), "list".into()];
+        assert_eq!(
+            augment_args("claude", &binary.to_string_lossy(), &args, dir.path()),
+            args,
+            "a failed help probe must not add settings to a subcommand"
+        );
+    }
+
+    /// Catches: failed help injects root settings into the recorded auth subcommand.
+    #[test]
+    fn unavailable_help_preserves_recorded_auth_subcommand() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            dir.path()
+                .starts_with(crate::test_support::test_temp_root())
+        );
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let binary = dir.path().join("missing-claude");
+        let args = vec!["auth".into(), "status".into()];
+        assert_eq!(
+            augment_args("claude", &binary.to_string_lossy(), &args, dir.path()),
+            args,
+            "recorded auth command must retain argv when help is unavailable"
+        );
+    }
+
+    /// Catches: launch-scoped settings corrupt a verb or its alias, while a
+    /// positional prompt gets misclassified as a command.
+    #[test]
+    fn claude_subcommands_use_captured_help_and_preserve_prompt_launches() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let help = include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt");
+        let help_path = dir.path().join("claude-help.txt");
+        std::fs::write(&help_path, help).unwrap();
+        let script = crate::test_support::fake_ssh_script(
+            "claude-recorded-help-launch",
+            &format!("cat {}", shell_quote(&help_path.to_string_lossy())),
+            &format!("type \"{}\"", help_path.display()),
+        );
+        let binary = script.to_string_lossy();
+        for verb in [
+            "auth",
+            "doctor",
+            "mcp",
+            "plugin",
+            "plugins",
+            "update",
+            "upgrade",
+            "remote-control",
+        ] {
+            let args = vec![verb.into()];
+            assert_eq!(
+                augment_args("claude", &binary, &args, dir.path()),
+                args,
+                "{verb}"
+            );
+        }
+        for args in [
+            vec![],
+            vec!["prompt".into()],
+            vec!["fix-bug".into()],
+            vec!["--resume".into(), "x".into()],
+        ] {
+            let mut expected = args.clone();
+            expected.extend([
+                "--settings".into(),
+                dir.path()
+                    .join("agent-hooks/claude.json")
+                    .to_string_lossy()
+                    .into_owned(),
+            ]);
+            assert_eq!(augment_args("claude", &binary, &args, dir.path()), expected);
+        }
+        let args = vec!["remote-control".into(), "--resume".into(), "x".into()];
+        assert_eq!(augment_args("claude", &binary, &args, dir.path()), args);
+    }
 
     #[cfg(unix)]
     #[test]

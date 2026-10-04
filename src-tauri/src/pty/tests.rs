@@ -11315,9 +11315,9 @@ fn enqueue_parks_command_while_agent_is_busy() {
     agent_session(&state, "busy", SHELL_BUSY);
     let bytes = insert_recording_session(&state, "busy");
 
-    let first = enqueue_user_command(&state, "busy", "run the tests").expect("enqueued");
+    let first = enqueue_user_command(&state, "busy", "run the tests", None).expect("enqueued");
     assert_eq!((first.typed, first.queued), (false, 1));
-    let second = enqueue_user_command(&state, "busy", "then push").expect("enqueued");
+    let second = enqueue_user_command(&state, "busy", "then push", None).expect("enqueued");
     assert_eq!((second.typed, second.queued), (false, 2));
 
     let queue = state.pending_injections.get("busy").expect("queue");
@@ -11374,7 +11374,7 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     let (writes, received) = std::sync::mpsc::channel();
     insert_session_with_writer(&state, sid, Box::new(WriteChannel(writes)), TtyMode::Raw);
 
-    let enqueued = enqueue_user_command(&state, sid, "resume queued work").unwrap();
+    let enqueued = enqueue_user_command(&state, sid, "resume queued work", None).unwrap();
     assert_eq!((enqueued.typed, enqueued.queued), (false, 1));
     assert!(
         received.try_recv().is_err(),
@@ -11450,7 +11450,7 @@ async fn queued_codex_command_waits_when_idle_shell_still_shows_working() {
         .agent_type = Some("codex".into());
     let bytes = insert_recording_session(&state, sid);
     assert_eq!(
-        enqueue_user_command(&state, sid, "wait for completion")
+        enqueue_user_command(&state, sid, "wait for completion", None)
             .unwrap()
             .queued,
         1
@@ -11494,13 +11494,13 @@ fn enqueue_refuses_shells_and_dead_sessions() {
         .insert("shell".to_string(), crate::state::SessionState::default());
     insert_recording_session(&state, "shell");
     assert_eq!(
-        enqueue_user_command(&state, "shell", "ls").unwrap_err(),
+        enqueue_user_command(&state, "shell", "ls", None).unwrap_err(),
         "Session is not running an agent"
     );
 
     agent_session(&state, "gone", SHELL_IDLE);
     assert_eq!(
-        enqueue_user_command(&state, "gone", "hi").unwrap_err(),
+        enqueue_user_command(&state, "gone", "hi", None).unwrap_err(),
         "Session not found",
         "a tombstoned agent still has session_states — the PTY is what decides"
     );
@@ -11508,7 +11508,7 @@ fn enqueue_refuses_shells_and_dead_sessions() {
     agent_session(&state, "blank", SHELL_IDLE);
     insert_recording_session(&state, "blank");
     assert_eq!(
-        enqueue_user_command(&state, "blank", "   \n ").unwrap_err(),
+        enqueue_user_command(&state, "blank", "   \n ", None).unwrap_err(),
         "Command text is empty"
     );
     assert_eq!(queued_command_count(&state, "blank"), 0);
@@ -11534,7 +11534,7 @@ fn queued_wake_without_agent_response_reports_uncertain_delivery() {
         let bytes = insert_recording_session(&state, &sid);
         let mut alerts = state.event_bus.subscribe();
 
-        enqueue_user_command(&state, &sid, "wake the agent").unwrap();
+        enqueue_user_command(&state, &sid, "wake the agent", None).unwrap();
 
         assert!(
             state
@@ -11590,7 +11590,7 @@ fn unverified_agents_keep_legacy_queued_write_result() {
             .agent_type = Some(agent_type.into());
         let bytes = insert_recording_session(&state, &sid);
         let mut alerts = state.event_bus.subscribe();
-        enqueue_user_command(&state, &sid, "wake the agent").unwrap();
+        enqueue_user_command(&state, &sid, "wake the agent", None).unwrap();
         assert!(bytes.lock().unwrap().ends_with(b"\r"));
         assert!(
             !state
@@ -11625,7 +11625,7 @@ fn manual_submit_after_uncertain_delivery_reopens_next_queue_slot() {
         .agent_type = Some("codex".into());
     let bytes = insert_recording_session(&state, sid);
 
-    enqueue_user_command(&state, sid, "first wake").unwrap();
+    enqueue_user_command(&state, sid, "first wake", None).unwrap();
     assert!(
         state
             .session_maps
@@ -11635,7 +11635,7 @@ fn manual_submit_after_uncertain_delivery_reopens_next_queue_slot() {
             .lock()
             .injection_delivery_uncertain
     );
-    enqueue_user_command(&state, sid, "second wake").unwrap();
+    enqueue_user_command(&state, sid, "second wake", None).unwrap();
     assert_eq!(queued_command_count(&state, sid), 1);
     assert!(!String::from_utf8_lossy(&bytes.lock().unwrap()).contains("second wake"));
 
@@ -11784,7 +11784,7 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
     );
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
@@ -11862,7 +11862,7 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
     let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
@@ -11940,7 +11940,7 @@ fn run_codex_queued_delivery(
     let mut seen = Vec::new();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
@@ -12062,7 +12062,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     let mut seen = Vec::new();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, &brief).unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, &brief, None).unwrap());
         for expected in [b"\x15".as_slice(), framed_brief.as_bytes(), b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
@@ -12171,7 +12171,7 @@ fn queued_agent_without_child_response_remains_uncertain() {
         let bytes = insert_recording_session(&state, &sid);
         let mut alerts = state.event_bus.subscribe();
 
-        enqueue_user_command(&state, &sid, "wake the agent").unwrap();
+        enqueue_user_command(&state, &sid, "wake the agent", None).unwrap();
 
         assert!(bytes.lock().unwrap().ends_with(b"\r"));
         assert!(
@@ -12238,7 +12238,7 @@ fn queued_claude_hook_busy_four_seconds_after_enter_confirms_submission() {
     let busy_hook = &capture[start..end];
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
@@ -12310,7 +12310,7 @@ fn queued_codex_accepts_ready_then_working_after_enter() {
     let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
@@ -12388,7 +12388,7 @@ fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
         );
 
         std::thread::scope(|scope| {
-            scope.spawn(|| enqueue_user_command(&state, &sid, "check status").unwrap());
+            scope.spawn(|| enqueue_user_command(&state, &sid, "check status", None).unwrap());
             for expected in [b"\x15".as_slice(), b"check status", b"\r"] {
                 assert_eq!(
                     received
@@ -12427,7 +12427,7 @@ fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
     }
 }
 
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
     state
         .session_maps
@@ -12437,7 +12437,7 @@ fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
         .question_confident = confident;
 }
 
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
     state
         .session_maps
@@ -12452,7 +12452,7 @@ fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
 /// agent queues or takes mid-turn itself. The Compose queue is for something
 /// else (one message, let the agent work, then the next), so the turn never
 /// enters it. Parking it there until idle cost a median 103 s, max 594 s.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12479,7 +12479,7 @@ fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
 
 /// An idle agent takes it too, through the same claim the queue uses, and is
 /// busy afterwards — the write started a turn.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12499,7 +12499,7 @@ fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
 
 /// A confident question owns the composer even mid-turn: speech aimed at the
 /// agent must not answer a permission dialog.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_is_held_by_a_confident_question() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12521,7 +12521,7 @@ fn a_voice_turn_is_held_by_a_confident_question() {
 
 /// A draft in the composer holds the turn: the Ctrl-U that opens every write
 /// would erase what the user is typing.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_is_held_by_partial_input() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12544,13 +12544,14 @@ fn a_voice_turn_is_held_by_partial_input() {
 
 /// The Compose queue is not touched: a typed entry parked for the next idle
 /// stays parked, in place, and a busy agent still receives nothing of it.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_leaves_the_compose_queue_alone() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "voice-compose", SHELL_BUSY);
     let bytes = insert_recording_session(&state, "voice-compose");
-    let parked = enqueue_user_command(&state, "voice-compose", "run the tests").expect("enqueued");
+    let parked =
+        enqueue_user_command(&state, "voice-compose", "run the tests", None).expect("enqueued");
     assert!(!parked.typed);
 
     assert_eq!(
@@ -12573,7 +12574,7 @@ fn a_voice_turn_leaves_the_compose_queue_alone() {
 
 /// A write that never started is held, not lost, and leaves the agent busy:
 /// releasing a claim that never took the idle atom must not invent an idle edge.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_mid_turn_voice_write_that_never_started_is_held_and_the_agent_stays_busy() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12604,7 +12605,7 @@ fn a_mid_turn_voice_write_that_never_started_is_held_and_the_agent_stays_busy() 
 }
 
 /// Refused outright, as before: not an agent, gone, or empty.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_is_refused_for_shells_dead_sessions_and_empty_text() {
     use std::sync::atomic::AtomicU8;
@@ -12632,11 +12633,11 @@ fn clear_queued_commands_preserves_peer_deliveries() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "busy", SHELL_BUSY);
     insert_recording_session(&state, "busy");
-    enqueue_user_command(&state, "busy", "one").expect("enqueued");
+    enqueue_user_command(&state, "busy", "one", None).expect("enqueued");
     state.pending_injections.get_mut("busy").unwrap().push_back(
         crate::state::PendingInjection::notice("[TUIC message from lead] first peer"),
     );
-    enqueue_user_command(&state, "busy", "two").expect("enqueued");
+    enqueue_user_command(&state, "busy", "two", None).expect("enqueued");
     state.pending_injections.get_mut("busy").unwrap().push_back(
         crate::state::PendingInjection::notice("[TUIC message from worker] second peer"),
     );
@@ -12698,13 +12699,13 @@ fn list_and_remove_expose_every_parked_entry() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "busy", SHELL_BUSY);
     insert_recording_session(&state, "busy");
-    enqueue_user_command(&state, "busy", "one").expect("enqueued");
+    enqueue_user_command(&state, "busy", "one", None).expect("enqueued");
     state
         .pending_injections
         .get_mut("busy")
         .unwrap()
         .push_back(crate::state::PendingInjection::notice(PEER_MAIL_WAKE));
-    enqueue_user_command(&state, "busy", "two").expect("enqueued");
+    enqueue_user_command(&state, "busy", "two", None).expect("enqueued");
 
     let listed = list_queued_commands(&state, "busy");
     assert_eq!(
@@ -12743,7 +12744,7 @@ fn enqueue_types_immediately_when_agent_is_idle() {
     agent_session(&state, "idle-now", SHELL_IDLE);
     let bytes = insert_recording_session(&state, "idle-now");
 
-    let outcome = enqueue_user_command(&state, "idle-now", "ship it").expect("enqueued");
+    let outcome = enqueue_user_command(&state, "idle-now", "ship it", None).expect("enqueued");
     assert_eq!((outcome.typed, outcome.queued), (true, 0));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
@@ -12766,7 +12767,7 @@ fn enqueue_never_overtakes_a_command_already_waiting() {
         .or_default()
         .push_back(crate::state::PendingInjection::notice("first"));
 
-    let outcome = enqueue_user_command(&state, "fifo", "second").expect("enqueued");
+    let outcome = enqueue_user_command(&state, "fifo", "second", None).expect("enqueued");
     assert_eq!((outcome.typed, outcome.queued), (false, 1));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
@@ -16312,7 +16313,7 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
         .unwrap()
         .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
     assert_eq!(
-        enqueue_user_command(&state, sid, "resume queued work")
+        enqueue_user_command(&state, sid, "resume queued work", None)
             .unwrap()
             .queued,
         1
@@ -20549,7 +20550,7 @@ async fn queued_command_does_not_drain_when_the_captured_mini_screen_is_not_read
         .get(sid)
         .unwrap()
         .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
-    enqueue_user_command(&state, sid, "resume queued work").unwrap();
+    enqueue_user_command(&state, sid, "resume queued work", None).unwrap();
 
     let mut processor = ChunkProcessor::new(None, None);
     for record in capture.records {
@@ -21757,4 +21758,55 @@ async fn exec_root_agent_exit_clears_identity_and_refuses_submit_and_mail() {
             ..
         }
     ));
+}
+
+/// Catches: concurrent retries both append, or identical text with a new key is discarded.
+#[cfg(unix)]
+#[test]
+fn queue_idempotency_concurrent_retries_preserve_distinct_jobs_and_sessions() {
+    let state = crate::state::tests_support::make_test_app_state();
+    for sid in ["keyed-one", "keyed-two"] {
+        agent_session(&state, sid, SHELL_BUSY);
+        insert_recording_session(&state, sid);
+    }
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let state = &state;
+            scope.spawn(move || {
+                let receipt =
+                    enqueue_user_command(state, "keyed-one", "wake", Some("job-1")).unwrap();
+                assert!(receipt.accepted);
+            });
+        }
+    });
+    enqueue_user_command(&state, "keyed-one", "wake", Some("job-2")).unwrap();
+    enqueue_user_command(&state, "keyed-two", "wake", Some("job-1")).unwrap();
+    enqueue_user_command(&state, "keyed-one", "wake", None).unwrap();
+    enqueue_user_command(&state, "keyed-one", "wake", None).unwrap();
+    assert_eq!(list_queued_commands(&state, "keyed-one").len(), 4);
+    assert_eq!(list_queued_commands(&state, "keyed-two").len(), 1);
+}
+
+/// Catches: invalid keys reserve acceptance, and old keys remain forever rather than bounded.
+#[cfg(unix)]
+#[test]
+fn queue_idempotency_validates_keys_and_bounds_recent_acceptance() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "key-bounds";
+    agent_session(&state, sid, SHELL_BUSY);
+    insert_recording_session(&state, sid);
+    for key in [String::new(), "x".repeat(129)] {
+        assert!(enqueue_user_command(&state, sid, "wake", Some(&key)).is_err());
+    }
+    assert!(list_queued_commands(&state, sid).is_empty());
+    for n in 0..129 {
+        enqueue_user_command(&state, sid, "wake", Some(&format!("job-{n}"))).unwrap();
+        clear_queued_commands(&state, sid);
+    }
+    // Most recent acceptance remains known even after cancellation.
+    enqueue_user_command(&state, sid, "wake", Some("job-128")).unwrap();
+    assert!(list_queued_commands(&state, sid).is_empty());
+    // The oldest falls outside the documented 128-key window.
+    enqueue_user_command(&state, sid, "wake", Some("job-0")).unwrap();
+    assert_eq!(list_queued_commands(&state, sid).len(), 1);
 }
