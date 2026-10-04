@@ -239,7 +239,7 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
                             let status = serde_json::json!({"status": "retrying", "tuic_session": caller, "attempts": attempt, "error": error});
                             write_marker(caller, &status)?;
                             write_wake_status(&wake_file, &status)?;
-                            std::thread::sleep(INITIAL_RETRY_DELAY * (1 << (attempt - 1)));
+                            sleep_before_wake_retry(attempt, std::thread::sleep);
                             continue;
                         }
                         serde_json::json!({"status": "failed", "tuic_session": caller, "attempts": attempt, "error": error})
@@ -255,6 +255,11 @@ pub fn run(log: &str, caller: &str, command: &[String]) -> Result<(), String> {
         break;
     }
     Ok(())
+}
+
+// The retry schedule is private; accepting the sleeper keeps tests off wall-clock time.
+fn sleep_before_wake_retry(attempt: u64, sleep: impl FnOnce(Duration)) {
+    sleep(INITIAL_RETRY_DELAY * (1 << (attempt - 1)));
 }
 
 fn queue_wake(caller: &str, wake: &str) -> Result<(), WakeError> {
@@ -307,6 +312,17 @@ fn queue_wake(caller: &str, wake: &str) -> Result<(), WakeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: division, reversed shifts or an off-by-one exponent collapses the retry backoff.
+    #[test]
+    fn failed_wake_attempts_double_the_backoff_before_each_of_five_retries() {
+        assert_eq!(WAKE_ATTEMPTS, 6);
+        let mut delays = Vec::new();
+        for attempt in 1..WAKE_ATTEMPTS {
+            sleep_before_wake_retry(attempt, |delay| delays.push(delay.as_millis()));
+        }
+        assert_eq!(delays, [200, 400, 800, 1600, 3200]);
+    }
 
     // Catches: inverted length/character guards permit path traversal or reject boundary IDs.
     #[test]
