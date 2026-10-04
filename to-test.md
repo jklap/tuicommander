@@ -4580,7 +4580,7 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
 
-- [ ] After Boss restarts the Rust backend, confirm that remote MCP questions show the saved host name and answer only the owning daemon (#1440-3571).
+- [ ] After Boss restarts the Rust backend, confirm that remote MCP questions show the saved host name, answer only the owning daemon, and disappear when another client answers (#1440-3571).
 
 - [ ] After rebuilding Rust, verify remote GitHub review/proposal/conflict notices update the owning dashboard and leave same-path local repositories unchanged (#1443-e2fd).
 

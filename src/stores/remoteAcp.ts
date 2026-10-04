@@ -88,6 +88,7 @@ function createRemoteAcpStore() {
 			!entry.interactions.some((item) => item.requestId === requestId && item.kind === kind)
 		)
 			return;
+		const revision = revisions.get(key) ?? 0;
 		try {
 			await rpc(
 				kind === "permission" ? "acp_respond_permission" : "acp_respond_elicitation",
@@ -98,8 +99,8 @@ function createRemoteAcpStore() {
 				},
 				entry.daemonId,
 			);
-			// Invalidate an older refresh before it can resurrect the answered request.
-			revisions.set(key, (revisions.get(key) ?? 0) + 1);
+			// Invalidate the answer-start refresh without discarding newer notices.
+			if (revisions.get(key) === revision) revisions.set(key, revision + 1);
 			remove(key, requestId);
 		} catch (error) {
 			appLogger.debug("ai-chat", "Remote interaction response failed", error);
