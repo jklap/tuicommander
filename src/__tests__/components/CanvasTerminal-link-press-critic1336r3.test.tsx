@@ -102,13 +102,15 @@ describe("CanvasTerminal link press, critic 1336 round 3", () => {
 				if (cmd === "terminal_get_row_text") return (args.row === 1 ? screenRow1 : screenRow0).trimEnd();
 				if (cmd === "terminal_get_logical_line")
 					return [0, screenRow1 ? (screenRow0.padEnd(COLS, " ") + screenRow1).trimEnd() : screenRow0.trimEnd()];
-				const resolve = (c: string) =>
-					c.startsWith("followups") ||
-					c.startsWith("other") ||
-					c.startsWith("docs/followups") ||
-					(c.startsWith("later") && lateFileExists)
+				const resolve = (candidate: string) => {
+					const c = candidate.replace(/^\/cwd\//, "");
+					return c.startsWith("followups") ||
+						c.startsWith("other") ||
+						c.startsWith("docs/followups") ||
+						(c.startsWith("later") && lateFileExists)
 						? { absolute_path: `/cwd/${c}`, is_directory: false }
 						: null;
+				};
 				if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
 				if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
 				return null;
@@ -218,7 +220,7 @@ describe("CanvasTerminal link press, critic 1336 round 3", () => {
 		expect(ev.defaultPrevented).toBe(true);
 		await waitFor(() => expect(document.body.textContent ?? "").toContain("Copy link"));
 		clickMenuItem("Open");
-		expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined);
+		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined));
 		expect(onOpen).not.toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined);
 	});
 
@@ -228,7 +230,7 @@ describe("CanvasTerminal link press, critic 1336 round 3", () => {
 		contextMenu(OSC8_COL);
 		await waitFor(() => expect(document.body.textContent ?? "").toContain("Copy link"));
 		clickMenuItem("Open");
-		expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined);
+		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/followups.md", undefined, undefined));
 	});
 
 	// Catches: the hover branch firing for a cell outside the hovered link, so a right press next to

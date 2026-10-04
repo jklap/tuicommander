@@ -266,7 +266,7 @@ File paths appearing in terminal output are automatically detected and become cl
 - Other source files open in the built-in editor
 - A `:line` or `:line:col` suffix opens the built-in editor at that position, including for Markdown files. Clicking another position in an already-open file moves its cursor without replacing unsaved edits
 
-Paths are validated against the filesystem before becoming clickable — only real files show as links.
+Paths are validated against the filesystem before becoming clickable — existing files and directories show as links. Directory links open the File Browser at that directory; file links open the usual viewer or editor. Tilde paths expand to the home directory, and relative paths resolve from the terminal working directory. A path removed before opening shows a short notification instead of an empty tab.
 Absolute paths can point outside a registered repository, including files in hidden directories.
 
 Recognized extensions include: `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.java`, `.css`, `.html`, `.json`, `.yaml`, `.toml`, `.sql`, and many more.
