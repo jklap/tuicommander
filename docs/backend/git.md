@@ -427,3 +427,9 @@ Stale creation recovery deletes only unregistered directories without a Git chec
 The changed-file diff adapter reads raw status and numstat together with NUL
 delimiters. This keeps one Git subprocess per request while returning actual
 line counts and literal rename destinations for working-tree, staged and commit scopes.
+
+Working-tree changed-file listings read untracked names with
+`git ls-files --others --exclude-standard -z`. Nonempty NUL records are
+used literally, including tabs, newlines and boundary spaces, so line counts
+and file-diff consumers open the actual file. Staged and committed scopes
+do not include untracked files.

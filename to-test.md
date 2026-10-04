@@ -4583,3 +4583,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] After Boss restarts the Rust backend, verify MCP `branch_delete` reports the tip-suffixed archive ref when the primary archive holds older work (#1489-1a14). Targeted regression covers the backend; the running desktop still requires restart.
 
 - [ ] After Boss restarts the Rust backend, confirm the Git diff file list displays tracked-file additions/deletions (#1499-3a34); targeted backend regression covers scopes and renamed paths.
+
+- [ ] After Boss restarts the Rust backend, confirm untracked files with tabs/newlines or boundary spaces appear with their literal names and correct line counts (#1502-8a5e). Backend regressions cover listing and file-diff consumers; Rust does not hot-reload.
