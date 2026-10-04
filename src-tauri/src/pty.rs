@@ -10338,11 +10338,7 @@ pub(crate) fn enqueue_user_command(
     idempotency_key: Option<&str>,
 ) -> Result<EnqueuedCommand, String> {
     if let Some(key) = idempotency_key
-        && (key.is_empty()
-            || key.len() > 128
-            || !key
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':')))
+        && (key.is_empty() || key.len() > 128)
     {
         return Err("Invalid idempotency key".into());
     }

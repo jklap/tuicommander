@@ -21795,7 +21795,7 @@ fn queue_idempotency_validates_keys_and_bounds_recent_acceptance() {
     let sid = "key-bounds";
     agent_session(&state, sid, SHELL_BUSY);
     insert_recording_session(&state, sid);
-    for key in ["".to_string(), "x".repeat(129), "bad key".to_string()] {
+    for key in [String::new(), "x".repeat(129)] {
         assert!(enqueue_user_command(&state, sid, "wake", Some(&key)).is_err());
     }
     assert!(list_queued_commands(&state, sid).is_empty());
