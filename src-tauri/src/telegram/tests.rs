@@ -261,3 +261,6 @@ mod round4;
 
 #[path = "registration_tests.rs"]
 mod registration;
+
+#[path = "round5_tests.rs"]
+mod round5;
