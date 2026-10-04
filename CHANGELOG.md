@@ -13,7 +13,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Retire Telegram opt-in on observed agent exit before a replacement in the same terminal can inherit it.
+- Keep CLI and MCP secret requests connected while users enter values or approve commands; add safe native form creation diagnostics.
+- Launch macOS `make dev` from a stable executable copy outside Cargo/mbx targets so target cleanup cannot orphan the running app's firewall identity.
+- Show every registered native MCP tool in Settings, including disabled tools, using backend descriptions and switches that follow the existing MCP access filters.
+
 - Bound nightly release notes and link to the full comparison when the commit list exceeds the release body budget.
+- Expose the Codex approvals/sandbox bypass in its default run configuration with a warning icon; removing the argument stays effective across restart, older-backend saves, and managed launches. Codex wrapper defaults retain positional task delivery; interactive profiles named `review`, `exec`, or `e` retain submitted task delivery.
+- Initialise headless VT screens at the requested terminal width.
+
+- Preserve Claude subcommand arguments without injecting launch-scoped settings.
+- Deliver remote MCP confirmation dialogs and their resolution to the desktop. Keep newer remote ACP questions visible when an earlier answer completes.
+- Preserve AI Chat replies with parentheses and remote permission snapshots when unrelated card notices arrive.
+- Restore additions and deletions in the changed-file diff list, including renamed files.
+
+- Return the exact archive ref holding a deleted branch tip when a reused branch name needs a suffixed archive.
+
 - Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.
 - Open terminal directory links in the File Browser and report missing paths without creating empty editor tabs.
 
