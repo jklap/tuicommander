@@ -127,6 +127,13 @@ impl<P: MailPort> Inbound<P> {
                 next = candidate;
                 continue;
             }
+            // Pairing earlier in this batch may have authorized this chat.
+            let update = Update::parse(
+                value,
+                &self.paths.allowlist_entries()?,
+                &self.config.bot_alias,
+                "",
+            )?;
             self.port.update(value).await?;
             if let Some(mail) = update.mail
                 && self.port.offer(&mail).await?

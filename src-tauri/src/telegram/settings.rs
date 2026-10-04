@@ -139,7 +139,11 @@ fn save_config(paths: &Paths, config: &Config) -> Result<(), Error> {
     )
 }
 fn save_chats(paths: &Paths, ids: &std::collections::BTreeSet<i64>) -> Result<(), Error> {
-    let text: String = ids.iter().map(|id| format!("{id}\n")).collect();
+    let mut text = String::new();
+    for id in ids {
+        use std::fmt::Write as _;
+        writeln!(&mut text, "{id}").map_err(|_| Error::State)?;
+    }
     write(paths, "allowed_chat_ids", text.as_bytes())
 }
 fn chat_id(text: &str) -> Result<i64, Error> {
@@ -161,10 +165,10 @@ pub(super) fn status(connected: bool, error: Option<Error>, message: bool) {
         if !paths.directory.exists() {
             return;
         }
-        if let Ok(bytes) = serde_json::to_vec(&*state) {
-            if let Err(error) = write(&paths, "status.json", &bytes) {
-                tracing::warn!(source="telegram", error=%error, "Telegram status unavailable");
-            }
+        if let Ok(bytes) = serde_json::to_vec(&*state)
+            && let Err(error) = write(&paths, "status.json", &bytes)
+        {
+            tracing::warn!(source="telegram", error=%error, "Telegram status unavailable");
         }
     }
 }
@@ -172,10 +176,10 @@ pub(super) fn registration_status(paths: &Paths, name: Option<String>) {
     let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
     state.registered_agent_name = name;
     state.updated_at = now_ms();
-    if let Ok(bytes) = serde_json::to_vec(&*state) {
-        if let Err(error) = write(paths, "status.json", &bytes) {
-            tracing::warn!(source="telegram", error=%error, "Telegram registration status unavailable");
-        }
+    if let Ok(bytes) = serde_json::to_vec(&*state)
+        && let Err(error) = write(paths, "status.json", &bytes)
+    {
+        tracing::warn!(source="telegram", error=%error, "Telegram registration status unavailable");
     }
 }
 fn snapshot(paths: &Paths, _state: &AppState) -> Result<Snapshot, Error> {
@@ -337,12 +341,14 @@ fn pair(paths: &Paths, text: &str, id: i64, now: u64) -> Result<bool, Error> {
     Ok(true)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn telegram_settings(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Snapshot, String> {
     snapshot(&paths().map_err(|e| e.to_string())?, &state).map_err(|e| e.to_string())
 }
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn telegram_setup(
     state: tauri::State<'_, Arc<AppState>>,

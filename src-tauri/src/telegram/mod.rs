@@ -13,6 +13,7 @@ mod registration;
 mod runtime;
 pub(crate) mod settings;
 mod tool;
+#[cfg(not(feature = "desktop"))]
 pub(crate) use native::start;
 pub(crate) use tool::{definition as tool_definition, handle as handle_tool};
 
