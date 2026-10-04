@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-const PEER: &str = "11111111-1111-4111-8111-111111111111";
+pub(super) const PEER: &str = "11111111-1111-4111-8111-111111111111";
 
 fn scratch() -> tempfile::TempDir {
     tempfile::Builder::new()
@@ -24,7 +24,7 @@ fn write_private(path: &std::path::Path, text: &str) {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
 }
-fn setup() -> (tempfile::TempDir, Paths) {
+pub(super) fn setup() -> (tempfile::TempDir, Paths) {
     let dir = scratch();
     #[cfg(unix)]
     {
@@ -49,13 +49,13 @@ struct ServerState {
     responses: VecDeque<(StatusCode, Value)>,
     requests: Vec<(String, Value)>,
 }
-struct FakeServer {
-    address: std::net::SocketAddr,
+pub(super) struct FakeServer {
+    pub(super) address: std::net::SocketAddr,
     state: Arc<Mutex<ServerState>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl FakeServer {
-    async fn start(responses: Vec<(StatusCode, Value)>) -> Self {
+    pub(super) async fn start(responses: Vec<(StatusCode, Value)>) -> Self {
         let state = Arc::new(Mutex::new(ServerState {
             responses: responses.into(),
             requests: vec![],
@@ -96,7 +96,7 @@ impl FakeServer {
             task,
         }
     }
-    fn requests(&self) -> Vec<(String, Value)> {
+    pub(super) fn requests(&self) -> Vec<(String, Value)> {
         self.state.lock().unwrap().requests.clone()
     }
 }
@@ -254,4 +254,4 @@ mod regression;
 mod offset;
 
 #[path = "outbound_tests.rs"]
-mod outbound_tests;
+pub(super) mod outbound_tests;

@@ -2,13 +2,55 @@ use super::*;
 use crate::telegram::outbound::Outbound;
 
 // Catches: UTF-8 slicing panic, astral overflow or whitespace loss in final replies.
-#[test]
-fn final_chunks_preserve_exact_unicode_and_whitespace() {
+#[tokio::test]
+async fn final_chunks_preserve_exact_unicode_and_whitespace() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(
+        (1..=4)
+            .map(|id| {
+                (
+                    StatusCode::OK,
+                    json!({"ok":true,"result":{"message_id":id}}),
+                )
+            })
+            .collect(),
+    )
+    .await;
+    let mut runtime = runtime(paths, server.address).await;
     let text = format!(" {}\n{}  ", "😀".repeat(2500), "é".repeat(4000));
-    let parts = crate::telegram::outbound::chunks(&text).unwrap();
+    runtime
+        .tool(
+            PEER,
+            crate::telegram::tool::Input::Send {
+                text: text.clone(),
+                buttons: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    let requests = server.requests();
+    let parts: Vec<_> = requests
+        .iter()
+        .map(|(method, body)| {
+            assert!(method.ends_with("sendMessage"));
+            body["text"].as_str().unwrap()
+        })
+        .collect();
     assert_eq!(parts.concat(), text);
     assert!(parts.iter().all(|p| p.encode_utf16().count() <= 4096));
-    assert!(crate::telegram::outbound::chunks("").is_err());
+    assert!(
+        runtime
+            .tool(
+                PEER,
+                crate::telegram::tool::Input::Send {
+                    text: String::new(),
+                    buttons: vec![]
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(server.requests().len(), requests.len());
 }
 
 // Catches: activity replaces the draft id, finalization leaves refresh running,
@@ -149,7 +191,10 @@ async fn stale_epoch_stop_retires_without_writing() {
     assert!(outbound.active.is_none());
 }
 
-async fn runtime(paths: Paths, address: std::net::SocketAddr) -> crate::telegram::runtime::Runtime {
+pub(in crate::telegram) async fn runtime(
+    paths: Paths,
+    address: std::net::SocketAddr,
+) -> crate::telegram::runtime::Runtime {
     use crate::mcp_http::mcp_transport::local_peer_call_with_message_id;
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     state.config.write().disabled_native_tools.clear();
@@ -194,7 +239,6 @@ async fn buttons_route_one_opaque_choice_through_native_mail_and_retire_keyboard
         .tool(
             PEER,
             Input::Send {
-                chat_id: None,
                 text: " exact text ".into(),
                 buttons: vec![vec![
                     Button {
@@ -251,15 +295,71 @@ async fn buttons_route_one_opaque_choice_through_native_mail_and_retire_keyboard
     assert!(requests[1].0.ends_with("answerCallbackQuery"));
     assert!(requests[2].0.ends_with("editMessageReplyMarkup"));
     assert_eq!(
-        requests[2].1["reply_markup"]["inline_keyboard"][0][0]["disabled"],
-        true
+        requests[2].1["reply_markup"]["inline_keyboard"][0][0],
+        json!({"text":"Selected: Yes","disabled":{}})
     );
 }
 
-// Catches: a foreign caller sends to the phone, an unknown request starts a
-// draft, or multiple allowlisted chats are broadcast/chosen implicitly.
+// Catches: replaced callbacks still mail, or an acknowledgement failure leaves
+// a consumed keyboard able to reoffer a choice.
 #[tokio::test]
-async fn tool_requires_bound_caller_pending_request_and_explicit_multiple_chat_selection() {
+async fn callback_replacement_and_ack_failure_do_not_reoffer_old_handles() {
+    use crate::telegram::tool::{Button, Input};
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":7}})),
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":8}})),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"ok":false,"error_code":500}),
+        ),
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+    ])
+    .await;
+    let mut runtime = runtime(paths, server.address).await;
+    for label in ["Old", "New"] {
+        runtime
+            .tool(
+                PEER,
+                Input::Send {
+                    text: label.into(),
+                    buttons: vec![vec![Button {
+                        label: label.into(),
+                        data: label.into(),
+                    }]],
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let requests = server.requests();
+    let query = |index: usize| {
+        json!({"callback_query":{"id":"query","from":{"id":1111111},
+        "message":{"message_id":7 + index,"date":1,"chat":{"id":1111111,"type":"private"}},
+        "data":requests[index].1["reply_markup"]["inline_keyboard"][0][0]["callback_data"]}})
+    };
+    runtime.update(query(0)).await.unwrap();
+    assert_eq!(server.requests().len(), 2);
+    assert!(runtime.update(query(1)).await.is_err());
+    runtime.update(query(1)).await.unwrap();
+    assert_eq!(server.requests().len(), 4);
+    let inbox = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+        &runtime.state,
+        &json!({"action":"inbox","since":0}),
+        Some("target-mcp"),
+        None,
+    )
+    .await;
+    assert_eq!(inbox["count"], 1);
+    let body: Value =
+        serde_json::from_str(inbox["messages"][0]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(body["data"], "New");
+}
+
+// Catches: a foreign caller sends to the phone, an unknown request starts a
+// draft without a matching inbound request.
+#[tokio::test]
+async fn tool_requires_bound_caller_and_pending_request() {
     use crate::telegram::tool::Input;
     let (_dir, paths) = setup();
     let server = FakeServer::start(vec![]).await;
@@ -269,7 +369,6 @@ async fn tool_requires_bound_caller_pending_request_and_explicit_multiple_chat_s
             .tool(
                 "foreign",
                 Input::Send {
-                    chat_id: None,
                     text: "hello".into(),
                     buttons: vec![]
                 }
@@ -283,33 +382,6 @@ async fn tool_requires_bound_caller_pending_request_and_explicit_multiple_chat_s
                 PEER,
                 Input::Begin {
                     request_id: "unknown".into()
-                }
-            )
-            .await
-            .is_err()
-    );
-    write_private(&paths.file("allowed_chat_ids"), "1111111\n2222222\n");
-    assert!(
-        runtime
-            .tool(
-                PEER,
-                Input::Send {
-                    chat_id: None,
-                    text: "hello".into(),
-                    buttons: vec![]
-                }
-            )
-            .await
-            .is_err()
-    );
-    assert!(
-        runtime
-            .tool(
-                PEER,
-                Input::Send {
-                    chat_id: Some("3333333".into()),
-                    text: "hello".into(),
-                    buttons: vec![]
                 }
             )
             .await
