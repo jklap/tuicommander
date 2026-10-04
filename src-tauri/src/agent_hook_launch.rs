@@ -315,6 +315,24 @@ mod tests {
         );
     }
 
+    /// Catches: failed help injects root settings into the recorded auth subcommand.
+    #[test]
+    fn unavailable_help_preserves_recorded_auth_subcommand() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            dir.path()
+                .starts_with(crate::test_support::test_temp_root())
+        );
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let binary = dir.path().join("missing-claude");
+        let args = vec!["auth".into(), "status".into()];
+        assert_eq!(
+            augment_args("claude", &binary.to_string_lossy(), &args, dir.path()),
+            args,
+            "recorded auth command must retain argv when help is unavailable"
+        );
+    }
+
     /// Catches: launch-scoped settings corrupt a verb or its alias, while a
     /// positional prompt gets misclassified as a command.
     #[test]

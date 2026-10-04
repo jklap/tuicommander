@@ -837,6 +837,7 @@ mod tests {
             screen_flags_follow_manual_agent_commands,
             hyphenated_prompts_keep_settings_in_every_shell,
             unavailable_help_keeps_verbs_and_prompts_without_launch_probe,
+            unavailable_help_preserves_recorded_auth_subcommand,
         );
 
         fn screen_flags_follow_manual_agent_commands(shell: &str) {
@@ -944,6 +945,20 @@ mod tests {
                 ],
                 "claude doctor\nclaude mcp list\nclaude plugins\nclaude upgrade\nclaude fix-bug",
                 &["doctor", "mcp list", "plugins", "upgrade", prompt.as_str()],
+            );
+        }
+
+        /// Catches: the shell fallback injects settings into recorded auth when help is absent.
+        fn unavailable_help_preserves_recorded_auth_subcommand(shell: &str) {
+            assert_in_shell(
+                shell,
+                "recorded auth is still a subcommand without cached help",
+                &[
+                    ("TUIC_CLAUDE_SETTINGS", CLAUDE_SETTINGS),
+                    ("TUIC_CLAUDE_HELP", ""),
+                ],
+                "claude auth status",
+                &["auth status"],
             );
         }
 
