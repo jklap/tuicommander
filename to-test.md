@@ -1,3 +1,7 @@
+## Remote update cookie migration (1490-e3ac) — Rust rebuild required
+
+- [ ] After Boss rebuilds/restarts the daemon, confirm a Direct remote update works with the current client. This release accepts both `tui-session` and the legacy query token; the client switches next release. Rust backend changes do not hot-reload. No desktop instance was launched by this lane.
+
 ## Windows Clippy cleanup (1501-e8cb) — rebuild required
 
 - [ ] After the next Windows rebuild, confirm agent executable discovery still prefers `.exe` over `.cmd`, Chrome registry discovery works, and an upload completes. The Rust syntax cleanup does not hot-reload into the running desktop; Boss controls the next restart.

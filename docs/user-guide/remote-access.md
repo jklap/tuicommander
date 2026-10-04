@@ -328,6 +328,9 @@ For a development build, build the headless binary with
 desktop-feature sibling is a stub. The preview names that cause and command.
 
 Direct updates stream the binary over the authenticated connection. The daemon
+accepts the session cookie and the legacy URL token for binary and file uploads.
+This release keeps the URL form for older clients; the next release will migrate
+the update client to the cookie and remove the legacy query form. The daemon
 verifies its target, size (512 MiB maximum), SHA-256 and confirmed session
 count, stages it in its own install directory, then starts the new build. SSH
 updates use the existing SCP deployment path. TUICommander waits for `/health`
