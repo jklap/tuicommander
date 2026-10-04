@@ -2363,7 +2363,7 @@ where
 
     /// Repair a caller's malformed load without overwriting a valid document
     /// another process saved since that load. Both cases are decided under one lock.
-    #[cfg(feature = "dictation")]
+    #[cfg(any(feature = "dictation", test))]
     pub(crate) fn save_delta_recovering(&self, base: &T, desired: &T) -> Result<(), String> {
         let base_json = serde_json::to_value(base).map_err(|e| e.to_string())?;
         let desired_json = serde_json::to_value(desired).map_err(|e| e.to_string())?;
