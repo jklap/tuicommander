@@ -416,16 +416,16 @@ mod tests {
             ),
             Ok(StoryReply::Plan(_))
         ));
-        assert!(matches!(
+        assert!(
             story_action(
                 second_path,
                 StoryAction::GetPlan {
                     plan_id: plan.id.clone()
                 },
                 None
-            ),
-            Err(_)
-        ));
+            )
+            .is_err()
+        );
         assert!(
             matches!(story_action(second_path, StoryAction::ListPlans, None).expect("list"), StoryReply::Plans(plans) if plans.is_empty())
         );
@@ -447,14 +447,14 @@ mod tests {
         .expect("create story") else {
             panic!("expected story");
         };
-        assert!(matches!(
+        assert!(
             story_action(
                 second_path,
                 StoryAction::GetStory { story_id: story.id },
                 None
-            ),
-            Err(_)
-        ));
+            )
+            .is_err()
+        );
     }
 
     fn story_of(reply: StoryReply) -> Story {

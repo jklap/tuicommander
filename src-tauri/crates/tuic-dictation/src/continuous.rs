@@ -2500,7 +2500,8 @@ mod tests {
     /// of them may hand the next arm a window that is already open.
     #[test]
     fn every_disarm_closes_the_activation_window() {
-        let closers: [(&str, fn(&mut HandsFree)); 4] = [
+        type Closer = fn(&mut HandsFree);
+        let closers: [(&str, Closer); 4] = [
             ("a manual abort", |mode| {
                 mode.disarm(DisarmReason::Manual);
             }),

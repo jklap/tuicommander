@@ -4286,10 +4286,10 @@ mod tests {
                     }
                     ws.on_upgrade(move |mut socket| async move {
                         let _ = socket.send(Message::Text("{\"type\":\"log\",\"lines\":[{\"spans\":[{\"text\":\"live remote line\"}]}],\"total_lines\":1}".into())).await;
-                        if let Some(Ok(Message::Text(input))) = socket.recv().await {
-                            if let Some(sender) = input_sender.lock().unwrap().take() {
-                                let _ = sender.send(input.to_string());
-                            }
+                        if let Some(Ok(Message::Text(input))) = socket.recv().await
+                            && let Some(sender) = input_sender.lock().unwrap().take()
+                        {
+                            let _ = sender.send(input.to_string());
                         }
                     }).into_response()
                 }

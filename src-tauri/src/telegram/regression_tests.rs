@@ -1,4 +1,4 @@
-use super::inbound::{text_update, updates};
+use super::inbound::updates;
 use super::*;
 
 pub(super) async fn elapse_backoff() {

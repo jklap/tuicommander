@@ -11036,8 +11036,11 @@ mod tests {
     }
 
     #[cfg(unix)]
+    type TimedWrites = Arc<std::sync::Mutex<Vec<(std::time::Instant, Vec<u8>)>>>;
+
+    #[cfg(unix)]
     struct InputTimedWriter {
-        writes: Arc<std::sync::Mutex<Vec<(std::time::Instant, Vec<u8>)>>>,
+        writes: TimedWrites,
     }
 
     #[cfg(unix)]
@@ -13207,7 +13210,7 @@ mod tests {
             ": > '{0}'; sleep 0.2; printf 'ready' >> '{0}'",
             output.display()
         );
-        std::process::Command::new("/bin/sh")
+        let mut writer = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(&command)
             .spawn()
@@ -13217,6 +13220,7 @@ mod tests {
             content, "ready",
             "must wait past the truncate-then-delayed-write window, not read the empty file"
         );
+        writer.wait().unwrap();
     }
 
     /// The async twin of `wait_for_file_content`, for `#[tokio::test]` sites
@@ -13247,7 +13251,7 @@ mod tests {
             ": > '{0}'; sleep 0.2; printf 'ready' >> '{0}'",
             output.display()
         );
-        std::process::Command::new("/bin/sh")
+        let mut writer = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(&command)
             .spawn()
@@ -13257,6 +13261,7 @@ mod tests {
             content, "ready",
             "must wait past the truncate-then-delayed-write window, not read the empty file"
         );
+        writer.wait().unwrap();
     }
 
     #[cfg(unix)]
@@ -24472,12 +24477,11 @@ mod tests {
             &serde_json::json!({"action":"kill", "session_id":sid}),
             None,
         );
-        if task.is_empty() {
-            panic!(
-                "managed child must pass trust dialog without manual input: armed={armed}; keys={:?}; output={output}",
-                std::fs::read_to_string(&observed_keys)
-            );
-        }
+        assert!(
+            !task.is_empty(),
+            "managed child must pass trust dialog without manual input: armed={armed}; keys={:?}; output={output}",
+            std::fs::read_to_string(&observed_keys)
+        );
         assert!(
             task.contains("say READY"),
             "spawn prompt must remain submitted: {task}"
