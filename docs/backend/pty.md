@@ -708,3 +708,13 @@ Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The
   because session metadata is contended.
 - Reader thread holds `Arc<AtomicBool>` for pause signaling
 - Metrics use `AtomicUsize` for zero-overhead counting
+
+### Epoch-conditioned interrupts
+
+Telegram Stop uses `mcp_http::session::interrupt_turn_if_current`. The native seam
+checks the live peer/PTY binding, exit state, turn epoch and derived working or
+awaiting-input lifecycle, then writes Escape while holding the existing
+`SilenceState` lifecycle mutex and the `SessionState` guard. Submitted epoch
+mutation uses the same `SilenceState` then `SessionState` order, so it cannot
+advance between the comparison and Escape. Native capture and input bookkeeping
+follow the write. The helper adds no recovery state or new synchronization object.

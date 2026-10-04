@@ -2,13 +2,12 @@ use super::{Error, outbound::Outbound};
 use serde_json::Value;
 
 impl Outbound {
-    /// Retire the draft before requesting Esc. No network await separates the
-    /// live-turn check from the write. A write is a request, not proof of stop.
+    /// Retire the draft before a native epoch-conditioned interrupt request.
+    /// A write is a request, not proof of stop.
     pub fn stop(
         &mut self,
         update: &Value,
-        current: impl FnOnce(&str, &str, u64) -> bool,
-        write: impl FnOnce(&str) -> Result<(), Error>,
+        interrupt: impl FnOnce(&str, &str, u64) -> Result<bool, Error>,
     ) -> Result<bool, Error> {
         let Some(stopped) = update.get("stopped_message_generation") else {
             return Ok(false);
@@ -29,13 +28,8 @@ impl Outbound {
             return Ok(false);
         }
         let active = self.active.take().ok_or(Error::State)?;
-        let live = current(&active.peer, &active.pty, active.epoch);
-        if !live {
-            tracing::info!(source="telegram",request_id=%active.request,draft_id=draft,"Stale Telegram Stop ignored");
-            return Ok(false);
-        }
-        let result = write(&active.pty);
-        tracing::info!(source="telegram",request_id=%active.request,peer=%active.peer,draft_id=draft,written=result.is_ok(),"Telegram Stop interrupt requested");
-        result.map(|()| true)
+        let result = interrupt(&active.peer, &active.pty, active.epoch);
+        tracing::info!(source="telegram",request_id=%active.request,peer=%active.peer,draft_id=draft,written=matches!(result,Ok(true)),"Telegram Stop interrupt requested");
+        result
     }
 }

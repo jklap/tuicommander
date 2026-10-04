@@ -695,6 +695,37 @@ pub(crate) enum SpawnRootRole {
 }
 
 impl SessionState {
+    /// Derive the lifecycle from the shell atom and current-turn completion.
+    pub(crate) fn derive_agent_state(&mut self, completion_declared: bool) {
+        let background_work = self.has_pending_background_probe() || self.background_work;
+        // A current-turn completion marker is stronger than a stale BUSY atom
+        // (for example a completed Codex screen that still contains its last
+        // Working row). Keep real background work authoritative, but normalize
+        // the terminal state once the agent has explicitly ended the turn.
+        if completion_declared && !background_work {
+            self.shell_state = Some("idle".to_string());
+        }
+        self.agent_state = if self.agent_type.is_none() {
+            None
+        } else if self.foreground_input_blocked {
+            // A direct program's child owns the terminal even if the retained
+            // ready screen or completion marker still describes the parent.
+            Some("working".to_string())
+        } else if self.awaiting_input || self.choice_prompt.is_some() {
+            Some("awaiting_input".to_string())
+        } else if background_work {
+            Some("working".to_string())
+        } else if completion_declared {
+            Some("completed".to_string())
+        } else if self.shell_state.as_deref() == Some("busy") {
+            Some("working".to_string())
+        } else if self.shell_state.as_deref() == Some("idle") {
+            Some("idle".to_string())
+        } else {
+            Some("starting".to_string())
+        };
+    }
+
     pub(crate) fn has_pending_background_probe(&self) -> bool {
         self.background_probe_turn_epoch == Some(self.turn_epoch)
     }
@@ -4270,33 +4301,7 @@ impl AppState {
                         .lock()
                         .completion_declared_for_epoch(state.turn_epoch)
                 });
-        let background_work = state.has_pending_background_probe() || state.background_work;
-        // A current-turn completion marker is stronger than a stale BUSY atom
-        // (for example a completed Codex screen that still contains its last
-        // Working row). Keep real background work authoritative, but normalize
-        // the terminal state once the agent has explicitly ended the turn.
-        if completion_declared && !background_work {
-            state.shell_state = Some("idle".to_string());
-        }
-        state.agent_state = if state.agent_type.is_none() {
-            None
-        } else if state.foreground_input_blocked {
-            // A direct program's child owns the terminal even if the retained
-            // ready screen or completion marker still describes the parent.
-            Some("working".to_string())
-        } else if state.awaiting_input || state.choice_prompt.is_some() {
-            Some("awaiting_input".to_string())
-        } else if background_work {
-            Some("working".to_string())
-        } else if completion_declared {
-            Some("completed".to_string())
-        } else if state.shell_state.as_deref() == Some("busy") {
-            Some("working".to_string())
-        } else if state.shell_state.as_deref() == Some("idle") {
-            Some("idle".to_string())
-        } else {
-            Some("starting".to_string())
-        };
+        state.derive_agent_state(completion_declared);
         Some(state)
     }
 

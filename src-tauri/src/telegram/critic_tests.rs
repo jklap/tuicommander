@@ -48,21 +48,19 @@ async fn stop_does_not_interrupt_a_replacement_turn_after_epoch_check() {
     });
     let stop =
         json!({"stopped_message_generation":{"chat":{"id":1111111,"type":"private"},"draft_id":7}});
-    let result = outbound.stop(
-        &stop,
-        |_, target, expected| {
-            let matched = state.session_state_with_shell(target).unwrap().turn_epoch == expected;
-            // This is the legal concurrent schedule: a new real submission
-            // completes after the snapshot, before the native writer acquires
-            // its lock. No hand-set epoch and no wall-clock race are needed.
-            crate::pty::note_submitted_input(&state, target);
-            matched
-        },
-        |target| {
-            crate::mcp_http::session::write_pty_input(&state, target, "\u{1b}")
+    let result = outbound.stop(&stop, |peer, target, expected| {
+        let matched = state.session_state_with_shell(target).unwrap().turn_epoch == expected;
+        // This is the legal concurrent schedule: a new real submission
+        // completes after the snapshot, before the native writer acquires
+        // its lock. No hand-set epoch and no wall-clock race are needed.
+        crate::pty::note_submitted_input(&state, target);
+        if matched {
+            crate::mcp_http::session::interrupt_turn_if_current(&state, peer, target, expected)
                 .map_err(|_| super::super::Error::State)
-        },
-    );
+        } else {
+            Ok(false)
+        }
+    });
     // Reap only the fixture child we started, even when the assertion fails.
     {
         let session = state.session_maps.sessions.get(pty).unwrap();

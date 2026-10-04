@@ -225,11 +225,12 @@ partially sent final is returned as an error, never automatically retried.
 There is no outbound journal, durable request state or publish approval authority.
 
 Stop consumes only an allowlisted private-chat update whose draft ID matches the
-active request. It rechecks the peer, live PTY and epoch immediately before bare
-Esc through the native input bookkeeping path, retires refresh before writing,
-and logs only correlation identifiers and write success. Duplicate/stale Stop
-cannot target a replacement turn. The check and native write are synchronous;
-the existing native input API does not expose an atomic epoch-conditioned write.
+active request. The native interrupt seam compares peer, live PTY, epoch and the
+derived lifecycle while holding the same SilenceState lock as submitted epoch
+mutation, then writes bare Esc before releasing it. It follows SilenceState then
+SessionState lock order and reuses native input bookkeeping after the write.
+Refresh retires before writing; logs contain only correlation identifiers and
+write success. Duplicate/stale Stop cannot target a replacement epoch.
 
 Notifications consume only committed `ProgressRecorded` events whose `ptyId`
 is the current live terminal of the configured peer, and only `done`/`blocked`.
