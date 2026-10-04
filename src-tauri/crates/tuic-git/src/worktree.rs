@@ -1297,8 +1297,9 @@ pub fn monitoring_ref_key(repo: &Path) -> Result<String, String> {
 }
 
 type MonitoringMerge = (WorkspaceCommitStatus, Option<&'static str>);
+type MonitoringLocalMerge = (MonitoringMerge, String);
 static MONITORING_MERGES: LazyLock<
-    moka::sync::Cache<(PathBuf, String, String), (MonitoringMerge, String)>,
+    moka::sync::Cache<(PathBuf, String, String), MonitoringLocalMerge>,
 > = LazyLock::new(|| moka::sync::Cache::builder().max_capacity(1024).build());
 
 /// Cache only monitoring reads. Destructive preflights still classify freshly.
