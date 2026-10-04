@@ -73,3 +73,19 @@ it("does not resurrect remote questions from a refresh completed after disconnec
 	handlers.get("acp-notice")?.({ payload: { connectionId: "local", kind: "interaction_pending" } });
 	expect(remoteRpc).toHaveBeenCalledTimes(1);
 });
+
+// Catches: an in-flight permission snapshot resurrects a settled ACP connection.
+it("does not resurrect remote questions from a refresh completed after settlement", async () => {
+	let resolve!: (value: typeof pending) => void;
+	remoteRpc.mockImplementation(
+		() =>
+			new Promise((done) => {
+				resolve = done;
+			}),
+	);
+	notice("one");
+	notice("one", "settled");
+	resolve(pending);
+	await Promise.resolve();
+	expect(Object.keys(store.state.entries)).toHaveLength(0);
+});
