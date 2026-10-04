@@ -65,8 +65,8 @@ fn enters(bytes: &std::sync::Mutex<Vec<u8>>) -> usize {
         .lock()
         .unwrap()
         .iter()
-        .filter(|b| **b == b'\r')
-        .count()
+        .map(|&b| usize::from(b == b'\r'))
+        .sum()
 }
 
 /// Catches: confirmation that reads only the CURRENT screen. Codex accepts the

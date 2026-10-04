@@ -578,11 +578,11 @@ async fn cancelling_handler_during_extraction_preserves_worker_and_releases_slot
     assert!(task.await.unwrap_err().is_cancelled());
     tokio::time::timeout(std::time::Duration::from_secs(120), async {
         loop {
-            if repo.path().join("folder").is_dir() {
-                if let Ok(slots) = UPLOAD_SLOTS.try_acquire_many(2) {
-                    drop(slots);
-                    break;
-                }
+            if repo.path().join("folder").is_dir()
+                && let Ok(slots) = UPLOAD_SLOTS.try_acquire_many(2)
+            {
+                drop(slots);
+                break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }

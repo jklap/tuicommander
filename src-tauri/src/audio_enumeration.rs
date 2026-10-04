@@ -47,9 +47,10 @@ pub(crate) async fn run_bounded<T: Send + 'static>(
 ) -> Result<T, String> {
     #[cfg(test)]
     let f = move || {
-        if FAIL_ENUMERATION.load(std::sync::atomic::Ordering::SeqCst) {
-            panic!("injected enumeration failure");
-        }
+        assert!(
+            !FAIL_ENUMERATION.load(std::sync::atomic::Ordering::SeqCst),
+            "injected enumeration failure"
+        );
         f()
     };
     match tokio::time::timeout(timeout, tokio::task::spawn_blocking(f)).await {

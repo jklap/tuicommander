@@ -92,7 +92,7 @@ fn diverged_branches_with_a_rename_on_main_still_integrate() {
     git(&repo, &["add", "other.txt"]);
     git(&repo, &["commit", "-qm", "main advances"]);
     let main_tip = crate::git_cli::git_cmd(&repo)
-        .args(&["rev-parse", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .run()
         .unwrap()
         .stdout

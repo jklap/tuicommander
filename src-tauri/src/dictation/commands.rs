@@ -2595,8 +2595,8 @@ fn partial_dictation_config_keeps_valid_fields() {
     assert_eq!(loaded.hotkey, "F8");
     assert_eq!(loaded.language, "it");
     assert_eq!(
-        loaded.speech_volume_db,
-        DictationConfig::default().speech_volume_db
+        loaded.speech_volume_db.to_bits(),
+        DictationConfig::default().speech_volume_db.to_bits()
     );
     assert!(loaded.recovered_from_corruption);
 }
@@ -3020,7 +3020,7 @@ mod tests {
             serde_json::to_value(&response).unwrap()["skip_reason"],
             "audio too quiet (RMS 0.0005 < 0.0010)"
         );
-        assert_eq!(response.duration_s, 1.25);
+        assert_eq!(response.duration_s.to_bits(), 1.25_f64.to_bits());
     }
 
     #[test]
@@ -3697,7 +3697,7 @@ mod tests {
 
         let saved = get_dictation_config();
         assert_eq!(saved.model, "small");
-        assert_eq!(saved.speech_volume_db, -24.0);
+        assert_eq!(saved.speech_volume_db.to_bits(), (-24.0_f32).to_bits());
     }
 
     #[test]
@@ -3736,8 +3736,10 @@ mod tests {
         let mut desired = base.clone();
         desired.model = "small".to_string();
 
-        let mut concurrent = DictationConfig::default();
-        concurrent.language = "fr".to_string();
+        let concurrent = DictationConfig {
+            language: "fr".to_string(),
+            ..DictationConfig::default()
+        };
         std::fs::write(&path, serde_json::to_string(&concurrent).unwrap()).unwrap();
         save_dictation_config(base, desired, None).unwrap();
 
@@ -3767,7 +3769,7 @@ mod tests {
 
         let saved = get_dictation_config();
         assert_eq!(saved.model, "small");
-        assert_eq!(saved.speech_volume_db, -24.0);
+        assert_eq!(saved.speech_volume_db.to_bits(), (-24.0_f32).to_bits());
         assert_eq!(saved.hotkey, "F5");
     }
 
@@ -3900,7 +3902,11 @@ mod tests {
                 speech_volume_db: stored,
                 ..DictationConfig::default()
             };
-            assert_eq!(config.loudness().volume_db, expected, "stored {stored}");
+            assert_eq!(
+                config.loudness().volume_db.to_bits(),
+                expected.to_bits(),
+                "stored {stored}"
+            );
         }
     }
 
@@ -3938,7 +3944,9 @@ mod tests {
             })
             .collect();
         let level = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
-        samples.iter_mut().for_each(|s| *s *= rms / level);
+        for s in &mut samples {
+            *s *= rms / level;
+        }
         samples
     }
 
@@ -3998,7 +4006,7 @@ mod tests {
             let mut canceller = WebRtc::new().expect("the bundled APM starts");
             let silence = vec![0.0_f32; FRAME_SAMPLES];
             let mut output = input.clone();
-            for frame in output.chunks_exact_mut(FRAME_SAMPLES) {
+            for frame in output.as_chunks_mut::<FRAME_SAMPLES>().0 {
                 canceller.cancel(&silence, frame);
             }
             // Skip the first second: the filter may still be settling.
@@ -4559,9 +4567,12 @@ mod tests {
     /// A hands-free conversation must not read as a silent microphone.
     #[test]
     fn the_level_falls_back_to_the_hands_free_capture() {
-        assert_eq!(capture_level(None, Some(0.4)), 0.4);
-        assert_eq!(capture_level(Some(0.2), Some(0.4)), 0.2);
-        assert_eq!(capture_level(None, None), 0.0);
+        assert_eq!(capture_level(None, Some(0.4)).to_bits(), 0.4_f32.to_bits());
+        assert_eq!(
+            capture_level(Some(0.2), Some(0.4)).to_bits(),
+            0.2_f32.to_bits()
+        );
+        assert_eq!(capture_level(None, None).to_bits(), 0.0_f32.to_bits());
     }
 
     /// The frontend keys its bar on `asset` and ends it on `done`; a progress
@@ -4949,13 +4960,12 @@ mod tests {
         .expect("config save");
 
         assert!(dictation.speaker.lock().is_some());
-        assert_eq!(
-            speech_status(&dictation, Some(&accepted.utterance_id))
+        assert!(
+            !speech_status(&dictation, Some(&accepted.utterance_id))
                 .utterance
                 .expect("asked")
                 .state
                 .is_empty(),
-            false,
             "the reply in flight still has a fate to report"
         );
     }

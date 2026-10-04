@@ -420,33 +420,6 @@ impl StoryStore {
     }
 }
 
-#[cfg(test)]
-mod connection_tests {
-    use super::*;
-
-    #[test]
-    fn story_store_reuses_its_sqlite_connection() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
-        store
-            .connect()
-            .expect("connection")
-            .execute_batch("CREATE TEMP TABLE story_connection_sentinel(value INTEGER); INSERT INTO story_connection_sentinel VALUES (1);")
-            .expect("create connection-local table");
-
-        let count: i64 = store
-            .connect()
-            .expect("same connection")
-            .query_row(
-                "SELECT count(*) FROM story_connection_sentinel",
-                [],
-                |row| row.get(0),
-            )
-            .expect("connection-local table survives method calls");
-        assert_eq!(count, 1);
-    }
-}
-
 fn validate_new_story(input: &NewStory) -> Result<(), String> {
     validate_text("story title", &input.title, 200)?;
     if let StoryOrigin::PlanStep { step } = &input.origin {
@@ -507,4 +480,31 @@ fn insert_story(conn: &Connection, story: &Story) -> Result<(), String> {
     )
     .map_err(|error| format!("create story: {error}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod connection_tests {
+    use super::*;
+
+    #[test]
+    fn story_store_reuses_its_sqlite_connection() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
+        store
+            .connect()
+            .expect("connection")
+            .execute_batch("CREATE TEMP TABLE story_connection_sentinel(value INTEGER); INSERT INTO story_connection_sentinel VALUES (1);")
+            .expect("create connection-local table");
+
+        let count: i64 = store
+            .connect()
+            .expect("same connection")
+            .query_row(
+                "SELECT count(*) FROM story_connection_sentinel",
+                [],
+                |row| row.get(0),
+            )
+            .expect("connection-local table survives method calls");
+        assert_eq!(count, 1);
+    }
 }

@@ -184,8 +184,11 @@ mod tests {
         std::fs::write(path, bytes).unwrap();
         Sha256::digest(bytes)
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
+            .fold(String::new(), |mut hex, byte| {
+                use std::fmt::Write as _;
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            })
     }
 
     fn remove_log(binary: &Path) {
