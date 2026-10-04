@@ -547,4 +547,8 @@ sequences from plain log text. GitHub CI log sanitization and the test-only
 linefeeds, and discards other executed controls, matching the previous
 `strip-ansi-escapes` policy. The workspace no longer compiles VTE 0.14.
 
+### Stored terminal marker coordinates
+
+A hook-generated `UserInput.line` is an all-time terminal row captured by the OSC 7770 handler. Keystroke-reconstructed events keep `line = -1`. Consumers discard evicted hook rows instead of rebasing stored rows with a newer origin.
+
 AI Chat also preserves reply text that immediately follows a parenthesized intent title on the same line. Untitled intent lines keep their existing status behavior; code examples are left intact.

@@ -2579,6 +2579,10 @@ Workflow safety includes owned check-tree teardown, credential-derived operator 
 
 Workflow and dependency writes probe Git before opening write transactions, then reject concurrent run or story revision changes. Canonical ref changes invalidate integration evidence on the next read.
 
+### Stored terminal marker coordinates
+
+Command boundaries and user prompt ticks retain their physical row after capped scrollback evicts older output. Answers-only history uses the same stable prompt coordinates.
+
 ## Headless Telegram channel
 
 Any MCP-bound TUIC agent opts in with `telegram register`; one volatile

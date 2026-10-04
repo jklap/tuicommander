@@ -9,8 +9,8 @@ async function getCommandText(termId: string, block: CommandBlock): Promise<stri
 	if (block.commandLine == null || block.executionLine == null) return "";
 	const term = terminalsStore.get(termId);
 	const ref = term?.ref;
-	if (!ref) return "";
-	const lines = await ref.getBufferLines(block.commandLine, block.executionLine);
+	if (!ref || !term || block.commandLine < term.historyBase) return "";
+	const lines = await ref.getBufferLines(block.commandLine - term.historyBase, block.executionLine - term.historyBase);
 	return lines.join(" ").trim();
 }
 
