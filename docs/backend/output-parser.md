@@ -254,6 +254,9 @@ AI Chat receives ACP markdown chunks in both desktop and browser mode, without
 terminal rows or wrap metadata. `protocolText.ts` interprets the joined answer
 for that UI: it removes the connection acknowledgement, presents anchored
 `intent:` as status, and exposes bounded bracketed `suggest:` items as replies.
+It takes the title from the consecutive parenthesized marker prefix, preserving
+parenthesized descriptions and same-line reply text, including replies ending in
+parentheses. Ambiguous unbalanced or nested markers remain literal body text.
 It leaves fenced or indented code and prose mentions literal. This is a separate
 logical-line projection of the terminal grammar: reusing the Rust VT parser here would require
 a new backend ACP projection and wire contract, including HTTP/IPC parity.
@@ -332,6 +335,8 @@ Detected as a plain-prefix token at column 0: `suggest: [ A | B | C ]`.
 **Colon-alone rows:** at the narrowest widths the bullet plus `suggest` fills the row on its own, so the continuation row carries only `:` and the bracket body starts a row later (`• suggest` / `  :` / `  [ A`, captured live at 9 columns). The keyword rejoin then produces a `suggest:` with nothing after it, so `dewrap_suggest_content` matches a trailing whitespace run of `[\t ]*`, not `[\t ]+` — the pull to the next row must not require a space that this shape never has. The column-0 anchor, the bracket body and the 2–4 item count remain the guards that keep prose out.
 
 One bounded logical line may soft-wrap across terminal rows and may begin with any parser-supported agent bullet (`●`, `⏺`, `•`, or `◦`), but the bracketed content may not contain a nested `[`/`]`. The closing bracket must be at or before the cursor; cells to the right of the cursor are ignored so stale content left by a carriage-return overwrite cannot complete a partial token. Reconstruction follows at most four soft-wrap transitions and 512 bytes. If those bounds or cursor metadata prevent reconstruction, the cursor-row structural candidate is rejected rather than parsed from rendered cells. Items are pipe-delimited (2–4 per the protocol). Parsing is agent-gated; the raw token is stripped from the log delivered to PWA/REST consumers by `strip_structural_tokens`, and concealed on the desktop canvas by the frontend overlay.
+
+**Mobile wrapped-token masking:** both screen and scrollback log reads run `vt_log::strip_structural_blocks` before delivery. It uses `output_parser::suggest_tail_rows` to remove continuation rows only when a bracketed token closes within the parser's wrap bound; blank rows, nested brackets and new protocol tokens stop the scan. An unclosed token does not consume unrelated output. Suggestion chips share the Rust parser across desktop and mobile; desktop canvas masking remains in `suggestOverlay.ts`, separate from the mobile log filter (#1380-05d8).
 
 ### UsageLimit
 
@@ -541,3 +546,5 @@ sequences from plain log text. GitHub CI log sanitization and the test-only
 `OutputParser::parse` adapter use it. It preserves printable UTF-8 and
 linefeeds, and discards other executed controls, matching the previous
 `strip-ansi-escapes` policy. The workspace no longer compiles VTE 0.14.
+
+AI Chat also preserves reply text that immediately follows a parenthesized intent title on the same line. Untitled intent lines keep their existing status behavior; code examples are left intact.

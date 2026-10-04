@@ -16,6 +16,12 @@ Git data is cached with a 60s TTL in `GitCacheState` (`state.rs`), one `moka::sy
 
 The `repo_watcher` (FSEvents on macOS, inotify on Linux) monitors the working tree with per-category debounce (Git/WorkTree/Config) and calls `invalidate_repo_caches()` on file system changes (which also clears the prompt `var_cache` for the repo), so git data refreshes immediately instead of waiting for TTL expiry. On macOS/Windows it registers a single recursive watch (near-zero cost at the OS level); on Linux it splits into pruned non-recursive watches over the working tree (skipping `ALWAYS_EXCLUDED_DIRS` and gitignored paths, adding watches for newly created dirs from the event callback) plus targeted `.git` watches (root non-recursive for HEAD/index/sentinels, `refs` and `worktrees` recursive — never `objects`/`logs`), because a recursive inotify watch would walk and watch every subtree (`node_modules`, `target`, `.git/objects`) and flood the callback (issue #82). Each **linked worktree gets its own watch**: its working tree usually lives outside the repo root (the `Sibling`/`AppDir` storage strategies), so the root's watch never sees it, and the git-state fingerprint is computed from the main checkout's index + porcelain status, so a worktree-local edit leaves it identical and the emit is suppressed. Without those watches an agent editing a worktree produced no event at all and the branch's sidebar diff badge stayed stale until the user selected the branch. The roots come from `.git/worktrees/*/gitdir` (`linked_worktree_roots`) and are re-synced by `sync_worktree_watches` on every git-state change — worktree add/remove is part of the fingerprint, so it always rides an emit and needs no watcher restart. `classify_path` matches worktree roots *before* the repo root, so a worktree stored inside the repo (`.worktrees/`, `.claude/worktrees/` — usually gitignored) is not dropped as noise. The watcher respects `.gitignore` rules and hot-reloads them when `.gitignore` is modified. The 60s TTL serves as a safety net for missed watcher events. Most IPC calls for git data hit the cache (~0.2ms) instead of spawning a git subprocess (~20-30ms).
 
+**Sidebar monitoring:** `get_repo_diff_stats` uses the same single-flight repository cache for progressive loading and `get_repo_summary`. Working-tree events invalidate it, so dirty badges read current checkout state. Monitoring counts porcelain dirty records through gix (staged plus unstaged modifications to one tracked path count once; untracked records count separately, including a file also staged for deletion); sparse checkouts and submodules retain the existing CLI fallback. It does not compute the removal fingerprint or recursive submodule recovery inventory. Cleanup and removal continue to call the fresh lifecycle preflight.
+
+PR proof is reapplied on each repository stats refresh and is not stored in the ref-keyed local integration cache, so an upstream lookup can recover without local refs moving.
+
+Merged classifications have a separate bounded cache keyed by repository refs, symbolic HEAD, Git configuration and branch reflogs. File saves and the repository cache TTL do not rerun `cherry`, integration history or `merge-tree`; moving a ref recomputes classification. This eliminates the integration-process fan-out across active worktrees. Git subprocess counts for unsupported gix checkouts remain dependent on the fallback reads.
+
 **Watcher-miss observability:** each cache's `moka` eviction listener increments a shared `ttl_fallbacks` counter only on `RemovalCause::Expired` (TTL aged out without the watcher invalidating first) — explicit invalidations do not count. A rising counter means the watcher likely missed events; it is surfaced in the `cpu_watchdog` HEALTH/CPU-SPIKE snapshots as `git_cache_ttl_fallbacks`.
 
 Internal callers that need synchronous access use `_impl` suffixes (e.g. `get_diff_stats_impl`) to avoid double `spawn_blocking` nesting.
@@ -259,6 +265,9 @@ checks every worktree record, and accepts ancestry in the checked-out
 integration branch or patch equivalence against that branch when GitHub PR
 proof is unavailable. The ref is removed with its captured OID as the expected
 old value, so an advanced branch remains intact. Remote refs are untouched.
+For archived deletion, the domain result captures the exact primary or
+tip-suffixed archive ref before deleting the branch; MCP returns that ref so
+restoring it recovers the deleted tip.
 
 `probe_cow_support` performs a real copy against the source/destination pair so
 an unsupported filesystem produces one warning instead of one failure per
@@ -420,3 +429,13 @@ The `run_git_command` IPC command and `/repo/run-git` HTTP route share a subcomm
 Force branch deletion first preserves the exact tip at `refs/archive/<branch>` and uses an expected-old-tip ref deletion. If `refs/archive/<branch>` already holds a different tip, the tip is archived at `refs/archive/<branch>-<sha7>` instead; an archive already at the same tip is reused. A checkout of the branch refuses deletion.
 
 Stale creation recovery deletes only unregistered directories without a Git checkout. A sanitized-name collision with a registered worktree fails, preserving clean, dirty, and detached checkouts. Plain orphan directories can be recreated as worktrees.
+
+The changed-file diff adapter reads raw status and numstat together with NUL
+delimiters. This keeps one Git subprocess per request while returning actual
+line counts and literal rename destinations for working-tree, staged and commit scopes.
+
+Working-tree changed-file listings read untracked names with
+`git ls-files --others --exclude-standard -z`. Nonempty NUL records are
+used literally, including tabs, newlines and boundary spaces, so line counts
+and file-diff consumers open the actual file. Staged and committed scopes
+do not include untracked files.

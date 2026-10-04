@@ -328,6 +328,9 @@ For a development build, build the headless binary with
 desktop-feature sibling is a stub. The preview names that cause and command.
 
 Direct updates stream the binary over the authenticated connection. The daemon
+accepts the session cookie and the legacy URL token for binary and file uploads.
+This release keeps the URL form for older clients; the next release will migrate
+the update client to the cookie and remove the legacy query form. The daemon
 verifies its target, size (512 MiB maximum), SHA-256 and confirmed session
 count, stages it in its own install directory, then starts the new build. SSH
 updates use the existing SCP deployment path. TUICommander waits for `/health`
@@ -736,3 +739,5 @@ For a local protocol fixture, build a test-support headless binary and run
 This launches three actual isolated daemons, exercises the hub MCP, remote-to-remote
 mail and replies, semantic shell rejection, then verifies intrahost mail with the hub
 stopped. It does not claim to test a real agent composer; use `--exercise` for that.
+
+Connected daemon notices carry their host identity. MCP confirmation responses and ACP permission/elicitation answers return to that daemon; disconnected questions disappear without changing local connections. MCP confirmation dialogs appear on the desktop and close when another client answers. AI Chat shows remote questions separately, with their ACP connection identity. Completing an earlier answer preserves questions announced by newer notices. Remote GitHub transitions fetch PR data from the repository owner, notify once, and do not run local repository automation. GitHub polling also works on the headless daemon. MCP upstream health refreshes use a separate host snapshot rather than this machine’s editable configuration.
