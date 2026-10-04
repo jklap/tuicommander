@@ -185,17 +185,47 @@ describe("mdTabsStore MCP reload snapshot — critic 1424", () => {
 			expect(md.getCount()).toBe(2);
 		});
 
-		it("oversized snapshot (5000 entries, many duplicate ids) restores unique tabs without throwing — catches: quadratic blowup or throw", () => {
-			const tabs = Array.from({ length: 5000 }, (_, i) => ({
-				mcpUiId: `id-${i % 500}`,
-				repoPath: "/r",
-				filePath: `f${i}.md`,
-				pinned: true,
-			}));
-			sessionStorage.setItem(KEY, JSON.stringify({ tabs }));
-			expect(() => md.restoreAfterReload()).not.toThrow();
-			expect(md.getCount()).toBe(500);
-		});
+		it("oversized snapshots restore unique tabs with bounded identity enumeration — catches: quadratic growing-tab scans or duplicate resurrection", async () => {
+			const values = Object.values;
+			let enumeratedTabs = 0;
+			const spy = vi.spyOn(Object, "values").mockImplementation((object) => {
+				const result = values(object);
+				if (object === md.state.tabs || object === editor.state.tabs) enumeratedTabs += result.length;
+				return result;
+			});
+			try {
+				for (const size of [5000, 10000]) {
+					vi.resetModules();
+					md = (await import("../../stores/mdTabs")).mdTabsStore;
+					editor = (await import("../../stores/editorTabs")).editorTabsStore;
+					md.addMcpFile("boot", "/r", "boot.md", true, true);
+					const tabs = Array.from({ length: size }, (_, i) => ({
+						mcpUiId: `id-${i % (size / 10)}`,
+						repoPath: "/r",
+						filePath: `f${i}.md`,
+						pinned: true,
+					}));
+					sessionStorage.setItem(KEY, JSON.stringify({ tabs }));
+					enumeratedTabs = 0;
+					const started = performance.now();
+					expect(() => md.restoreAfterReload()).not.toThrow();
+					const elapsed = performance.now() - started;
+					if (process.env.TUIC_RESTORE_TIMING)
+						process.stdout.write(`restore ${size} entries: ${elapsed.toFixed(2)} ms\n`);
+					expect(enumeratedTabs).toBeGreaterThan(0);
+					expect(enumeratedTabs).toBeLessThanOrEqual(size * 2);
+					expect(md.getCount()).toBe(1 + size / 10);
+					expect(
+						md.state._order.map((id) => {
+							const tab = md.get(id);
+							return tab?.type === "file" ? tab.filePath : undefined;
+						}),
+					).toEqual(["boot.md", ...Array.from({ length: size / 10 }, (_, i) => `f${i}.md`)]);
+				}
+			} finally {
+				spy.mockRestore();
+			}
+		}, 30000); // Module setup is outside the complexity assertion.
 	});
 
 	it("saveForReload swallows a quota error — catches: throw in beforeunload skipping terminal snapshot", () => {
