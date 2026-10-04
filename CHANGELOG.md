@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Build bundled WebRTC with Visual Studio for Windows MSVC targets even when MinGW is on `PATH`.
 - Restore the Windows process environment API dependency in `tuic-core` after the workspace split.
 
 ## [1.8.0] - 2026-10-04

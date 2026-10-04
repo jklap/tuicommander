@@ -369,7 +369,7 @@ axum-server-dual-protocol = { path = "patches/axum-server-dual-protocol" }
 # evicted by the memory budget is reloaded instead of re-indexed from scratch.
 bm25 = { path = "patches/bm25" }
 vte = { path = "patches/vte" }
-# 2.1.0 with five changes. Four of them exist because upstream has no Windows CI
+# 2.1.0 with six changes. Five of them exist because upstream has no Windows CI
 # job (`.github/workflows/rust.yml` runs ubuntu-latest and macos-latest only) and
 # its `bundled` build does not work there; the fifth is a macOS link failure.
 # Measured on a Windows 10.0.26200 box with VS 2022 BuildTools 14.44 and meson
@@ -400,6 +400,9 @@ vte = { path = "patches/vte" }
 #      `webrtc::` externals. We link exactly one version, so the mechanism is
 #      deleted rather than taught about `.lib`; that also drops its `nm` and
 #      `rust-objcopy` requirements.
+#   6. Meson auto-detection chose MinGW on the Windows Nightly runner. MSVC
+#      targets force `--vsenv`; compile/install go through Meson so each
+#      subprocess activates the same Visual Studio environment.
 webrtc-audio-processing-sys = { path = "patches/webrtc-audio-processing-sys" }
 # crates.io 0.31.10 pins vulnerable quick-xml 0.39. Keep that release's code
 # compatible with wayland-client/backend 0.31/0.3, while applying upstream's
