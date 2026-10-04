@@ -49,7 +49,10 @@ fn two_pause_windows_inside_the_backlog_are_both_matched_against_silence() {
     expected.extend(std::iter::repeat_n(0.0, frames(2)));
     expected.extend_from_slice(&reply[frames(10)..frames(12)]);
     let seen = seen.lock();
-    let first_diff = seen.iter().zip(&expected).position(|(a, b)| a != b);
+    let first_diff = seen
+        .iter()
+        .zip(&expected)
+        .position(|(a, b)| a.to_bits() != b.to_bits());
     assert_eq!(
         (seen.len(), first_diff),
         (expected.len(), None),

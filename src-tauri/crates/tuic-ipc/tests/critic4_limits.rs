@@ -107,7 +107,7 @@ fn chunked_body_larger_than_cap_is_accepted() {
     let n = CAP * 2;
     let mut w = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
     w.extend_from_slice(format!("{n:x}\r\n").as_bytes());
-    w.extend(std::iter::repeat(b'x').take(n));
+    w.extend(std::iter::repeat_n(b'x', n));
     w.extend_from_slice(b"\r\n0\r\n\r\n");
     let mut d = ResponseDecoder::default();
     for chunk in w.chunks(4096) {
@@ -147,7 +147,7 @@ fn small_final_headers_after_interim_with_huge_trailing_buffer() {
     let mut d = ResponseDecoder::default();
     d.push(interim());
     let mut w = b"HTTP/1.1 200 OK\r\nContent-Length: 200000\r\n\r\n".to_vec();
-    w.extend(std::iter::repeat(b'x').take(200000));
+    w.extend(std::iter::repeat_n(b'x', 200000));
     d.push(&w);
     assert_eq!(d.response(false).unwrap().unwrap().body.len(), 200000);
 }

@@ -34,7 +34,7 @@ mod ws_compression;
 use crate::AppState;
 #[cfg(test)]
 use axum::http::header::CONTENT_TYPE;
-use axum::http::{Method, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{
@@ -2324,7 +2324,7 @@ fn evict_peers_for_reaped_mcp_session_locked(
         .map(|entry| entry.key().clone())
         .partition(|tuic| state.peer_identity_is_reapable(tuic));
     for tuic in &removed {
-        crate::mcp_http::remote_peer::unregister_peer(&state, tuic);
+        crate::mcp_http::remote_peer::unregister_peer(state, tuic);
         state.orchestrator_peers.remove(tuic);
         state.active_agent_waiters.remove(tuic);
         let _ = state
@@ -4286,10 +4286,10 @@ mod tests {
                     }
                     ws.on_upgrade(move |mut socket| async move {
                         let _ = socket.send(Message::Text("{\"type\":\"log\",\"lines\":[{\"spans\":[{\"text\":\"live remote line\"}]}],\"total_lines\":1}".into())).await;
-                        if let Some(Ok(Message::Text(input))) = socket.recv().await {
-                            if let Some(sender) = input_sender.lock().unwrap().take() {
-                                let _ = sender.send(input.to_string());
-                            }
+                        if let Some(Ok(Message::Text(input))) = socket.recv().await
+                            && let Some(sender) = input_sender.lock().unwrap().take()
+                        {
+                            let _ = sender.send(input.to_string());
                         }
                     }).into_response()
                 }

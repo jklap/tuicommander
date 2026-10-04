@@ -158,7 +158,7 @@ mod tests {
         };
         assert!(
             super::store::require_current_checks(
-                &[check.clone()],
+                std::slice::from_ref(&check),
                 &[receipt.clone()],
                 &receipt.ref_name,
                 &receipt.commit,
@@ -169,7 +169,7 @@ mod tests {
         receipt.exit_code = 0;
         assert!(
             super::store::require_current_checks(
-                &[check.clone()],
+                std::slice::from_ref(&check),
                 &[receipt.clone()],
                 &receipt.ref_name,
                 &"c".repeat(40),
@@ -180,7 +180,7 @@ mod tests {
         receipt.argv.push("--ignored".into());
         assert!(
             super::store::require_current_checks(
-                &[check.clone()],
+                std::slice::from_ref(&check),
                 &[receipt.clone()],
                 &receipt.ref_name,
                 &receipt.commit,
@@ -191,7 +191,7 @@ mod tests {
         receipt.argv = check.argv.clone();
         assert!(
             super::store::require_current_checks(
-                &[check.clone()],
+                std::slice::from_ref(&check),
                 &[receipt.clone()],
                 "refs/heads/moved",
                 &receipt.commit,
@@ -658,7 +658,10 @@ mod tests {
 
         let mut verification_snapshot = integrated.snapshot.clone();
         verification_snapshot.planning_fingerprint = Some("closed".into());
-        assert!(super::store::ready_to_verify(&verification_snapshot, &[story.clone()]).is_ok());
+        assert!(
+            super::store::ready_to_verify(&verification_snapshot, std::slice::from_ref(&story))
+                .is_ok()
+        );
         assert_eq!(
             stories.get_story(&dependent.id).unwrap().status,
             crate::stories::StoryStatus::Ready
@@ -683,7 +686,10 @@ mod tests {
             .run()
             .unwrap();
         assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
-        assert!(super::store::ready_to_verify(&verification_snapshot, &[story.clone()]).is_err());
+        assert!(
+            super::store::ready_to_verify(&verification_snapshot, std::slice::from_ref(&story))
+                .is_err()
+        );
         store.reconcile_active_after_restart().unwrap();
         assert_eq!(
             stories.get_story(&dependent.id).unwrap().status,
@@ -782,7 +788,10 @@ mod tests {
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
         let mut recertified_snapshot = store.snapshot(&run.id).unwrap();
         recertified_snapshot.planning_fingerprint = Some("closed".into());
-        assert!(super::store::ready_to_verify(&recertified_snapshot, &[story.clone()]).is_ok());
+        assert!(
+            super::store::ready_to_verify(&recertified_snapshot, std::slice::from_ref(&story))
+                .is_ok()
+        );
         assert_eq!(
             stories.get_story(&dependent.id).unwrap().status,
             crate::stories::StoryStatus::Ready

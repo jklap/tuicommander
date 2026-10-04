@@ -1098,13 +1098,13 @@ async fn deep_link_mcp_call(
     args.insert("action".to_string(), serde_json::Value::String(action));
 
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], 0).into();
-    let result = mcp_http::mcp_transport::handle_mcp_tool_call(
+    let result = Box::pin(mcp_http::mcp_transport::handle_mcp_tool_call(
         &state.inner().clone(),
         addr,
         &tool,
         &serde_json::Value::Object(args),
         None,
-    )
+    ))
     .await;
 
     Ok(result)

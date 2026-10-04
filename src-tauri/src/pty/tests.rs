@@ -10850,7 +10850,13 @@ fn a_human_reply_can_answer_a_confident_question_without_weakening_agent_injecti
         AgentSubmissionWrite::Complete { .. }
     ));
     let written = bytes.lock().unwrap();
-    assert_eq!(written.iter().filter(|byte| **byte == b'y').count(), 1);
+    assert_eq!(
+        written
+            .iter()
+            .map(|&byte| usize::from(byte == b'y'))
+            .sum::<usize>(),
+        1
+    );
     assert_eq!(written.last(), Some(&b'\r'));
 }
 
@@ -13671,8 +13677,11 @@ fn injection_payload_single_line_is_the_text_alone() {
 /// Records every `write` call with the instant it arrived, so a test can tell
 /// two writes apart in time rather than only in order.
 #[cfg(unix)]
+type TimedWrites = Arc<std::sync::Mutex<Vec<(std::time::Instant, Vec<u8>)>>>;
+
+#[cfg(unix)]
 struct TimedWriter {
-    writes: Arc<std::sync::Mutex<Vec<(std::time::Instant, Vec<u8>)>>>,
+    writes: TimedWrites,
 }
 
 #[cfg(unix)]

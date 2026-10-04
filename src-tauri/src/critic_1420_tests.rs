@@ -38,7 +38,8 @@ fn concurrent_refreshes_agree_and_do_not_deadlock() {
                 scope.spawn(|| {
                     (0..50)
                         .map(|_| refresh_session_agent(&state, sid))
-                        .last()
+                        .collect::<Vec<_>>()
+                        .pop()
                         .unwrap()
                 })
             })

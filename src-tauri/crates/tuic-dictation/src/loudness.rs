@@ -528,7 +528,11 @@ mod tests {
                     gain[i]
                 );
                 assert!((a - e).abs() <= 1e-5, "sample {i}: {a}, step by step {e}");
-                assert_eq!(a == 1.0, e == 1.0, "sample {i}: {a}, step by step {e}");
+                assert_eq!(
+                    a.to_bits() == 1.0_f32.to_bits(),
+                    e.to_bits() == 1.0_f32.to_bits(),
+                    "sample {i}: {a}, step by step {e}"
+                );
             }
         }
     }
