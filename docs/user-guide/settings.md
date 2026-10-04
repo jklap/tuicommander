@@ -215,6 +215,14 @@ session tool.
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.
 
+The default Codex run configuration includes
+`--dangerously-bypass-approvals-and-sandbox` in its editable arguments.
+The warning icon on a configuration identifies an active bypass. Remove that
+argument through **Edit** to enable normal approvals and sandboxing for new
+launches. The removal survives restart. Existing direct Codex defaults receive
+the argument once during migration; wrapper configurations keep their own
+arguments and the managed-launch wrapper warning.
+
 | Setting | Description |
 |---------|-------------|
 | **Agent Detection** | Auto-detects running agents from terminal output patterns. Shows "Available" or "Not found" for each agent. |
