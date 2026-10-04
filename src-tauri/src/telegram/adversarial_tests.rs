@@ -18,9 +18,12 @@ struct Fake {
 type Shared = Arc<Mutex<Fake>>;
 
 fn private(path: &std::path::Path, text: &str) {
-    use std::os::unix::fs::PermissionsExt;
     std::fs::write(path, text).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
 }
 
 fn setup() -> (tempfile::TempDir, Paths) {
@@ -28,6 +31,7 @@ fn setup() -> (tempfile::TempDir, Paths) {
         .prefix("tg-adv")
         .tempdir_in(tuic_test_support::test_temp_root())
         .unwrap();
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -248,6 +252,7 @@ async fn second_owner_is_refused_until_the_first_drops() {
 // Catches: opening a FIFO named bot.token blocks the poller forever (missing
 // O_NONBLOCK) or reads from an attacker-fed pipe.
 #[test]
+#[cfg(unix)]
 fn fifo_token_is_refused_without_blocking() {
     use std::os::unix::ffi::OsStrExt;
     let (_dir, paths) = setup();
@@ -267,6 +272,7 @@ fn fifo_token_is_refused_without_blocking() {
 
 // Catches: a symlinked allowlist or token is followed to a file elsewhere.
 #[test]
+#[cfg(unix)]
 fn symlinked_secret_files_are_refused() {
     let (_dir, paths) = setup();
     for name in ["bot.token", "allowed_chat_ids"] {
@@ -295,6 +301,7 @@ fn token_with_url_metacharacters_is_refused() {
 
 // Catches: group/world-readable token or allowlist accepted.
 #[test]
+#[cfg(unix)]
 fn group_readable_token_is_refused() {
     use std::os::unix::fs::PermissionsExt;
     let (_dir, paths) = setup();

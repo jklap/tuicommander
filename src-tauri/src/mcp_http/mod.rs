@@ -6438,6 +6438,7 @@ mod tests {
     }
 
     /// A clean detached checkout with a live session registered in it.
+    #[cfg(unix)]
     fn orphan_with_live_session() -> (tempfile::TempDir, std::path::PathBuf, Arc<AppState>) {
         let repo = create_temp_git_repo();
         let linked = repo.path().join("linked");
@@ -6467,6 +6468,7 @@ mod tests {
     // Catches: a clean detached checkout reported safe (and auto-removed) while
     // an agent session is still working inside it.
     #[tokio::test]
+    #[cfg(unix)]
     async fn orphan_cleanup_assessment_names_live_sessions_and_is_not_safe() {
         let (repo, linked, state) = orphan_with_live_session();
 
@@ -6496,6 +6498,7 @@ mod tests {
     // Catches: the agent/MCP "remove" answer and the safe-only HTTP removal
     // skipping the session registry that the assessment consults.
     #[tokio::test]
+    #[cfg(unix)]
     async fn orphan_cleanup_answer_and_safe_removal_refuse_a_live_session() {
         let (repo, linked, state) = orphan_with_live_session();
         let pending = build_router(state.clone(), false, true)
@@ -6549,6 +6552,7 @@ mod tests {
     // started after the user reviewed the dialog, or refusing the sessions the
     // user did see.
     #[tokio::test]
+    #[cfg(unix)]
     async fn confirmed_orphan_removal_refuses_only_sessions_the_user_did_not_see() {
         let (repo, linked, state) = orphan_with_live_session();
         let remove = |sessions: serde_json::Value| {
@@ -6594,6 +6598,7 @@ mod tests {
     // Catches: a client that predates `confirmedSessions` (field absent) being treated as
     // having reviewed every session, so its removal closes a live checkout.
     #[tokio::test]
+    #[cfg(unix)]
     async fn confirmed_orphan_removal_without_the_session_field_refuses_a_live_checkout() {
         let (repo, linked, state) = orphan_with_live_session();
         let response = build_router(state, false, true)
@@ -6646,6 +6651,7 @@ mod tests {
     // Catches: a path outside the repo's worktree list being refused as a server error (500)
     // instead of 400 on the confirmed (safeOnly=false) path.
     #[tokio::test]
+    #[cfg(unix)]
     async fn confirmed_orphan_removal_of_an_unregistered_path_is_a_400() {
         let (repo, _linked, state) = orphan_with_live_session();
         let stranger = tempfile::tempdir().unwrap();
@@ -6870,6 +6876,7 @@ mod tests {
     // Catches (critic-1367): the path route bypassing the session registry, so an agent
     // working in the checkout loses its directory to another agent's cleanup.
     #[tokio::test]
+    #[cfg(unix)]
     async fn worktree_remove_by_path_refuses_a_checkout_with_a_live_session() {
         let (repo, linked, state) = orphan_with_live_session();
 

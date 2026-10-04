@@ -1739,6 +1739,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn one_click_cleanup_keeps_a_clean_worktree_with_a_live_agent() {
         let (_cfg, _guard) = isolated_config();
         for action in ["archive", "delete"] {
@@ -1972,6 +1973,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn automatic_archive_keeps_a_merged_worktree_with_a_live_session() {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();

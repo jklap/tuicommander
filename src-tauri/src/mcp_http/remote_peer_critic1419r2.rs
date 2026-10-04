@@ -53,6 +53,7 @@ fn same_id_with_shifted_sender_content_boundary_is_a_collision() {
 // through to remote prefix matching, so a submit/read meant for a local session
 // silently lands on the one remote row that shares the prefix.
 #[test]
+#[cfg(unix)]
 fn ambiguous_local_address_never_selects_a_remote_session() {
     let state = test_state();
     for id in [

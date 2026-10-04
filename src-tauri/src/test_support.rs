@@ -1,10 +1,11 @@
 //! App-specific fixtures built on the shared platform-neutral test helpers.
 
 pub(crate) use crate::fs::system32_exe;
+#[cfg(unix)]
+pub(crate) use tuic_test_support::short_socket_test_temp_root;
 pub(crate) use tuic_test_support::{
     dir_outside_home, fail_with_stderr_script, fake_ssh_script, host_shell, normalize_newlines,
-    print_var_script, replay_file_command, short_socket_test_temp_root, slashed, sleep_script,
-    test_temp_root,
+    print_var_script, replay_file_command, slashed, sleep_script, test_temp_root,
 };
 
 /// Scratch dir short enough to bind a Unix socket whatever the checkout path.
