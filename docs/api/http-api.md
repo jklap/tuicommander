@@ -2799,6 +2799,10 @@ not unbounded or restart-persistent exactly-once delivery.
 
 Workflow definition and run APIs are actorless and share the same services across transports. Story transition actors track provenance and never restrict actions. Desktop IPC and valid HTTP credentials record Human; sessionless local requests record LocalApi; managed story requests record their session. Missing ConnectInfo on Unix sockets and in-process services means local/unknown caller metadata, not HTTP 500. Local token exchange is accepted; state, revision, project and integration checks remain enforced.
 
+### Stored terminal marker coordinates
+
+OSC 133 event `line` and hook-generated `UserInput.line` are eviction-stable all-time rows, identical to IPC. Scroll-to, line reads and search results keep retained-grid coordinates. Convert stored marker rows using the current grid frame `historyBase`.
+
 ### Telegram Settings
 
 `GET /config/telegram` mirrors `telegram_settings`. `PUT /config/telegram` accepts `{ "change": { "action": "..." } }` and mirrors `telegram_setup`, including token replacement/check, one-use pairing, typed chat IDs and enable/target updates. Both routes require local access or the existing authenticated remote session. The read response contains only `token_set`, never the token. Chat IDs are decimal strings.
