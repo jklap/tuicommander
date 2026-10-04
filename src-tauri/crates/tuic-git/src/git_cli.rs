@@ -12,6 +12,18 @@ use std::time::{Duration, Instant};
 
 use tuic_core::cli::{enriched_path, resolve_cli};
 
+#[cfg(test)]
+thread_local! {
+    static COMMAND_COUNTS: std::cell::RefCell<std::collections::BTreeMap<String, usize>> =
+        std::cell::RefCell::new(std::collections::BTreeMap::new());
+}
+
+/// Thread-local so parallel fixture tests cannot contaminate spawn measurements.
+#[cfg(test)]
+pub(crate) fn take_command_counts() -> std::collections::BTreeMap<String, usize> {
+    COMMAND_COUNTS.with(|counts| std::mem::take(&mut *counts.borrow_mut()))
+}
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -121,6 +133,20 @@ impl GitCmd {
 
     /// Run the command to completion, honoring [`GitCmd::timeout`] when set.
     fn output(&mut self) -> Result<std::process::Output, GitError> {
+        #[cfg(test)]
+        COMMAND_COUNTS.with(|counts| {
+            let args = self
+                .cmd
+                .get_args()
+                .map(|arg| arg.to_string_lossy())
+                .collect::<Vec<_>>();
+            let family = args
+                .iter()
+                .find(|arg| !arg.starts_with('-'))
+                .map(|arg| arg.to_string())
+                .unwrap_or_default();
+            *counts.borrow_mut().entry(family).or_default() += 1;
+        });
         match self.timeout {
             Some(t) => output_with_deadline(&mut self.cmd, t),
             None => self.cmd.output().map_err(GitError::SpawnFailed),

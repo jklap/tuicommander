@@ -14,7 +14,7 @@ use tauri::State;
 
 pub(crate) use tuic_git::worktree::*;
 
-fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
+pub(crate) fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
     let Some(url) = crate::git::read_remote_url(repo) else {
         return false;
     };
