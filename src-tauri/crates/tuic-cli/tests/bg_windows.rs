@@ -36,6 +36,7 @@ fn remove_when_closed(path: &std::path::Path) {
     }
 }
 
+/// Catches: the launcher waiting for its detached command to finish.
 #[test]
 fn bg_windows_parent_returns_before_detached_command_and_records_its_exit() {
     let root = test_root();
@@ -47,18 +48,37 @@ fn bg_windows_parent_returns_before_detached_command_and_records_its_exit() {
         .arg("--version")
         .output()
         .unwrap();
-    let start = Instant::now();
-    let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
-        .args([
-            "bg",
-            log.to_str().unwrap(),
-            "--",
-            "cmd",
-            "/C",
-            "ping -n 3 127.0.0.1 >NUL & echo body & exit /B 7",
-        ])
-        .env("TUIC_SESSION", "windows-caller")
-        .output()
+    let release = root.join(format!("bg-windows-{}.release", std::process::id()));
+    let script = root.join(format!("bg-windows-{}.cmd", std::process::id()));
+    let _ = std::fs::remove_file(&release);
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+    std::fs::write(
+        &script,
+        format!(
+            "@echo off\r\n:wait\r\nif exist \"{}\" goto released\r\n{}\\System32\\ping.exe -n 2 127.0.0.1 >nul\r\ngoto wait\r\n:released\r\necho body\r\nexit /b 7\r\n",
+            release.display(), system_root,
+        ),
+    )
+    .unwrap();
+    let (sent, received) = std::sync::mpsc::channel();
+    let launch_log = log.clone();
+    let launch_script = script.clone();
+    let launcher = std::thread::spawn(move || {
+        let output = Command::new(env!("CARGO_BIN_EXE_tuic"))
+            .args(["bg", launch_log.to_str().unwrap(), "--", "cmd", "/C"])
+            .arg(launch_script)
+            .env("TUIC_SESSION", "windows-caller")
+            .output();
+        sent.send(output).unwrap();
+    });
+    // This is a harness bound, not a claim about process startup speed.
+    // Release the child on failure too, so the test leaves no hung command.
+    let result = received.recv_timeout(Duration::from_secs(60));
+    let finished_before_release = exit_file.exists();
+    std::fs::write(&release, b"release").unwrap();
+    launcher.join().unwrap();
+    let output = result
+        .expect("launcher waited for the unreleased command")
         .unwrap();
     assert!(
         output.status.success(),
@@ -66,11 +86,7 @@ fn bg_windows_parent_returns_before_detached_command_and_records_its_exit() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        start.elapsed() < Duration::from_secs(1),
-        "launcher waited for the command"
-    );
-    assert!(
-        !exit_file.exists(),
+        !finished_before_release,
         "command had not finished when launcher returned"
     );
     wait_for(&exit_file);
@@ -78,6 +94,8 @@ fn bg_windows_parent_returns_before_detached_command_and_records_its_exit() {
     assert!(std::fs::read_to_string(&log).unwrap().contains("body"));
     remove_when_closed(&exit_file);
     remove_when_closed(&log);
+    remove_when_closed(&script);
+    remove_when_closed(&release);
 }
 
 #[test]

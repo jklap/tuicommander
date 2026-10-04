@@ -232,7 +232,7 @@ echo "Last run: $(date)" > "/tmp/tuic-$TUIC_SESSION.log"
 
 When TUICommander restores saved terminals after a restart, only tabs that had an active agent session (`agentType` set) are restored. Plain shell tabs are discarded and a fresh terminal is spawned instead. For agent tabs, TUICommander checks whether the session file exists on disk before deciding the resume strategy:
 
-1. **Verified session** — If the terminal's saved agent session ID maps to an existing session file (e.g. `~/.claude/projects/…/<uuid>.jsonl`), the agent resumes with that agent's ID-specific command
+1. **Verified session** — If the terminal's saved agent session ID maps to an existing session file (e.g. `~/.claude/projects/…/<uuid>.jsonl`), the agent resumes with that agent's ID-specific command. On Windows, Claude's project slug replaces the drive colon with a dash: `C:\Users\foo\bar` becomes `C--Users-foo-bar`.
 2. **No saved session ID** — Falls back to the agent's default resume behavior (e.g. `claude --continue` for the last session)
 3. **Saved ID no longer verifies** — Refuses automatic resume instead of opening an unrelated last session
 

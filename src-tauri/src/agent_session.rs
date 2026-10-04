@@ -281,7 +281,7 @@ fn claude_projects_dir(config_dir_override: Option<&str>) -> Option<PathBuf> {
 
 /// Encode a filesystem path to the slug Claude Code uses as a directory name.
 ///
-/// Claude encodes a path by replacing `/`, `.`, and `_` with `-`,
+/// Claude encodes path separators, `.`, `_`, and the drive colon with `-`,
 /// prepending a leading `-` to represent the root.
 ///
 /// Example: `/Users/foo.bar/my_project` → `-Users-foo-bar-my-project`
@@ -290,8 +290,9 @@ fn path_to_claude_slug(path: &str) -> String {
     let normalised = path.replace('\\', "/");
     // Strip trailing separator to avoid a trailing dash in the slug
     let trimmed = normalised.trim_end_matches('/');
-    // Replace `/`, `.`, and `_` — Claude treats all three as slug delimiters
-    trimmed.replace(['/', '.', '_'], "-")
+    // Claude 2.1.286 replaces non-alphanumeric characters, including the
+    // Windows drive colon, before joining the slug under projects/.
+    trimmed.replace(['/', '.', '_', ':'], "-")
 }
 
 /// Directory where Claude Code registers one JSON file per *running* process.
@@ -1298,11 +1299,12 @@ mod tests {
         assert_eq!(path_to_claude_slug("/Users/foo/bar/"), "-Users-foo-bar");
     }
 
+    /// Catches: a Windows drive colon leaking into a project directory slug.
     #[test]
     fn test_path_to_claude_slug_windows() {
         assert_eq!(
             path_to_claude_slug("C:\\Users\\foo\\bar"),
-            "C:-Users-foo-bar"
+            "C--Users-foo-bar"
         );
     }
 
