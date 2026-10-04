@@ -8897,7 +8897,7 @@ mod tests {
             let binary = root.path().join("codex");
             std::fs::write(
                 &binary,
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\nread -r release\n",
             )
             .unwrap();
             std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -8936,6 +8936,13 @@ mod tests {
                     .unwrap()
                     .text(),
                 "perform the task"
+            );
+            // Keep the argv recorder alive while inspecting its live input queue.
+            // Close only this test's PTY after the assertions finish.
+            handle_session(
+                &state,
+                &serde_json::json!({"action": "kill", "session_id": session}),
+                None,
             );
         }
     }
