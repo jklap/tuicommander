@@ -3691,7 +3691,16 @@ fn run_shell_script(
 
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(flag).arg(script).current_dir(cwd);
-    cmd.env("PATH", tuic_core::cli::enriched_path());
+    let path = tuic_core::cli::enriched_path();
+    #[cfg(windows)]
+    let path = tuic_core::cli::which_cli("git")
+        .and_then(|git| {
+            Path::new(&git)
+                .parent()
+                .map(|dir| format!("{};{path}", dir.display()))
+        })
+        .unwrap_or(path);
+    cmd.env("PATH", path);
     tuic_core::cli::apply_no_window(&mut cmd);
     crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|e| match e {
         crate::git_cli::GitError::TimedOut { after } => format!(
@@ -7019,8 +7028,9 @@ branch refs/heads/feat
         // hex-of-path scheme doubled a 130-byte dir name past the 255-byte limit.
         let (_temp, repo, _workspaces) = workspace_fixture();
         add_populated_submodule(&repo);
-        let worktree = add_worktree(&repo, &"w".repeat(130));
-        git_cmd(&worktree)
+        let short_worktree = add_worktree(&repo, "long-path-module");
+        let worktree = repo.parent().unwrap().join("w".repeat(130));
+        git_cmd(&short_worktree)
             .args([
                 "-c",
                 "protocol.file.allow=always",
@@ -7030,6 +7040,15 @@ branch refs/heads/feat
             ])
             .run()
             .unwrap();
+        // Initialize before moving: Git for Windows cannot clone a submodule
+        // through its fixed-size $GIT_DIR buffer at this depth.
+        let gitdir = rev_at(&short_worktree.join("modules/local"), "--absolute-git-dir").unwrap();
+        fs::rename(&short_worktree, &worktree).unwrap();
+        git_cmd(&repo)
+            .args(["worktree", "repair", &worktree.to_string_lossy()])
+            .run()
+            .unwrap();
+        repair_archived_submodules(&repo, &worktree, &[("modules/local".into(), gitdir)]).unwrap();
         let head = rev_at(&worktree.join("modules/local"), "HEAD").unwrap();
         preserve_submodule_refs(&repo, &worktree, "modules/local").unwrap();
         let refs = git_cmd(&repo.join("modules/local"))

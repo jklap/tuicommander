@@ -624,7 +624,8 @@ fn publish(source: &Dir, dest: &Dir, name: &str) -> io::Result<()> {
     let file = source.open_with(name, &options)?;
     let wide: Vec<u16> = name.encode_utf16().collect();
     let offset = std::mem::offset_of!(FILE_RENAME_INFORMATION, FileName);
-    let length = offset + wide.len() * 2;
+    // Windows requires at least the fixed structure size, including tail padding.
+    let length = (offset + wide.len() * 2).max(std::mem::size_of::<FILE_RENAME_INFORMATION>());
     // A word-aligned allocation holds the variable-length native structure.
     let mut buffer = vec![0usize; length.div_ceil(std::mem::size_of::<usize>())];
     let info = buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();

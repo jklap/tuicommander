@@ -1,3 +1,7 @@
+## Windows CI remaining regressions (1518-d3a7) — Rust restart required
+
+- [ ] After Boss rebuilds/restarts the backend, confirm Windows archive hooks can run Git and short-name uploads publish or skip an existing destination without replacement. Native Windows CI owns the automated proof. No desktop instance was launched; Rust changes do not hot-reload.
+
 ## Windows Clippy cleanup (1501-e8cb) — rebuild required
 
 - [ ] After the next Windows rebuild, confirm agent executable discovery still prefers `.exe` over `.cmd`, Chrome registry discovery works, and an upload completes. The Rust syntax cleanup does not hot-reload into the running desktop; Boss controls the next restart.

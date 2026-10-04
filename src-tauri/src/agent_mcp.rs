@@ -3824,7 +3824,8 @@ mod tests {
                         .unwrap(),
                 );
                 assert!(
-                    command.starts_with(home.join("tuic-config/mcp-bridge")),
+                    command
+                        .starts_with(home.join("tuic-config/mcp-bridge").canonicalize().unwrap()),
                     "{name}"
                 );
                 assert_eq!(
@@ -3855,6 +3856,9 @@ mod tests {
         std::fs::create_dir_all(&worktree_tmp).unwrap();
         let worktree_sandbox = tempfile::tempdir_in(worktree_tmp).unwrap();
         let worktree_exe = worktree_sandbox.path().join(runner_name);
+        #[cfg(windows)]
+        std::fs::copy(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
+        #[cfg(not(windows))]
         std::fs::hard_link(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
         std::fs::hard_link(&worktree_exe, worktree_sandbox.path().join(bridge_name)).unwrap();
         let home = sandbox.path().join("worktree-binary");

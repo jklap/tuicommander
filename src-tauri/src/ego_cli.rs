@@ -639,10 +639,12 @@ mod tests {
         let answer = dir.path().join("answer.txt");
         std::fs::write(&answer, &long).unwrap();
         // cmd.exe has an 8191-character command-line limit; the output does not.
-        let (program, args) = shell(tuic_test_support::print_file_script(&format!(
-            "\"{}\"",
-            answer.display()
-        )));
+        let (program, args) = shell(if cfg!(windows) {
+            // The repository test temp path has no spaces; avoid cmd quote re-escaping.
+            tuic_test_support::print_file_script(&answer.display().to_string())
+        } else {
+            tuic_test_support::print_file_script(&format!("\"{}\"", answer.display()))
+        });
         let stdout = run(&program, &args).await.expect("the shell must succeed");
         assert_eq!(stdout, long);
     }
