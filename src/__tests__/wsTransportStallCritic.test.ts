@@ -33,9 +33,12 @@ class FakeWs {
 	}
 }
 
+const transports: WsTransport[] = [];
+
 function setup() {
 	const errors: unknown[] = [];
 	const t = new WsTransport("sess");
+	transports.push(t);
 	void t.onEvent("stream-error", (e) => errors.push(e));
 	return { t, errors };
 }
@@ -46,7 +49,11 @@ beforeEach(() => {
 	FakeWs.closeFiresOnclose = true;
 	vi.stubGlobal("WebSocket", FakeWs);
 });
-afterEach(() => {
+afterEach(async () => {
+	// The fixture owns sockets deliberately left connecting by reconnect assertions.
+	for (const ws of FakeWs.all) ws.open();
+	for (const t of transports.splice(0)) t.unsubscribe();
+	await Promise.resolve();
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 });

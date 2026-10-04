@@ -89,12 +89,18 @@ describe("refresh coordinator checkout probe (#1317, critic round 2)", () => {
 		await refresh("/repo");
 		const tid = addWorktreeWithTerminal("hung", "/wt/hung");
 		await ageOut();
-		probe = () => new Promise(() => {});
+		let finishProbe!: (value: Awaited<ReturnType<Probe>>) => void;
+		probe = () =>
+			new Promise((resolve) => {
+				finishProbe = resolve;
+			});
 		const settled = vi.fn();
 		void refresh("/repo").then(settled);
 		await vi.advanceTimersByTimeAsync(120_000);
 		expect(settled).toHaveBeenCalled();
 		expect(closeTerminal).not.toHaveBeenCalledWith(tid, true);
+		finishProbe({ branch: "main", is_git_repo: true });
+		await Promise.resolve();
 	});
 
 	it("probes a burst of omitted worktrees concurrently, not one after the other", async () => {

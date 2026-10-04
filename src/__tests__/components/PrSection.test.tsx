@@ -186,7 +186,13 @@ describe("PrSection row actions", () => {
 					finishFirst = r;
 				}),
 		);
-		mockInvoke.mockImplementationOnce(() => new Promise(() => {}));
+		let finishSecond!: () => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					finishSecond = resolve;
+				}),
+		);
 		const first = pr();
 		const second = pr({ number: 13, branch: "feat/other", head_ref_oid: "headsha2" });
 		const [key, setKey] = createSignal<string | null>(first.branch);
@@ -213,5 +219,7 @@ describe("PrSection row actions", () => {
 		fireEvent.click(button(container, "Update branch"));
 		finishFirst();
 		await vi.waitFor(() => expect(button(container, "Update branch")?.disabled).toBe(true));
+		finishSecond();
+		await vi.waitFor(() => expect(button(container, "Update branch")).toBeUndefined());
 	});
 });
