@@ -218,6 +218,11 @@ jobs:
         run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --profile ci
 
 
+      # This check invokes nextest and compiled Rust tests. Keep it out of the
+      # frontend shell-test discovery, whose job installs neither prerequisite.
+      - name: Nextest fixture setup scope
+        run: bash scripts/with-test-tmp.sh bash scripts/check-nextest-fixture-scope.sh
+
       # nextest does not run doctests — run them separately so doc examples stay
       # covered. Linux-only: doctests are platform-independent logic.
       - name: Doctests
@@ -284,6 +289,8 @@ jobs:
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
         run: cargo check --no-default-features --bin tuic-remote
 
+      # --workspace selects desktop-only members independently of feature gates.
+      # Dictation remains covered by the desktop workspace jobs.
       - name: Headless tests
         working-directory: src-tauri
         env:
@@ -295,7 +302,7 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: bash ../scripts/with-test-tmp.sh cargo nextest run --no-default-features --workspace --profile ci
+        run: bash ../scripts/with-test-tmp.sh cargo nextest run --no-default-features --workspace --exclude tuic-dictation --profile ci
 
   # Push to main only: verify build on macOS and Windows.
   # GPU notes:

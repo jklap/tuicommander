@@ -611,6 +611,22 @@ impl Drop for ForegroundIdentityProbe {
     fn drop(&mut self) {
         if let Some((_, session)) = self.state.session_maps.sessions.remove(&self.session_id) {
             let mut session = session.into_inner();
+            // macOS waits for slave output to drain during process exit. These
+            // identity-only probes have no production reader, so an unread
+            // bash job-control message can keep child.wait() blocked forever.
+            let mut reader = session
+                .master
+                .try_clone_reader()
+                .expect("probe drain reader");
+            let drain = std::thread::spawn(move || {
+                let mut bytes = [0u8; 4096];
+                loop {
+                    match reader.read(&mut bytes) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+            });
             if let Some(pid) = self.foreground_child {
                 // This is the child created by our probe, never an ancestor.
                 // SAFETY: kill takes a numeric PID and a valid signal.
@@ -620,6 +636,8 @@ impl Drop for ForegroundIdentityProbe {
             }
             session._child.kill().expect("kill our identity probe");
             session._child.wait().expect("reap our identity probe");
+            drop(session);
+            drain.join().expect("join probe output drain");
         }
     }
 }
