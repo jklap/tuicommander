@@ -4294,11 +4294,26 @@ fn apply_working_evidence(
 /// A submitted line to a known agent is strong BUSY evidence even before the
 /// first model token or spinner repaint. Adapter-backed agents hold that state
 /// until a ready screen/explicit Stop; unknown agents retain the timing fallback.
+#[cfg(test)]
 pub(crate) fn note_submitted_input(state: &AppState, session_id: &str) {
     note_submitted_input_with_hook(state, session_id, || {});
 }
 
+#[cfg(test)]
 fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &str, after_epoch: F) {
+    note_submitted_input_inner(state, session_id, true, after_epoch);
+}
+
+fn note_delivered_input(state: &AppState, session_id: &str) {
+    note_submitted_input_inner(state, session_id, false, || {});
+}
+
+fn note_submitted_input_inner<F: FnOnce()>(
+    state: &AppState,
+    session_id: &str,
+    advance_epoch: bool,
+    after_epoch: F,
+) {
     let agent_type = state
         .session_maps
         .session_states
@@ -4324,7 +4339,9 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         // atomics. Completion drains and Suggest parsing use the same order.
         let mut silence = silence.lock();
         if let Some(mut session) = state.session_maps.session_states.get_mut(session_id) {
-            session.turn_epoch = session.turn_epoch.wrapping_add(1);
+            if advance_epoch {
+                session.turn_epoch = session.turn_epoch.wrapping_add(1);
+            }
             session.suggested_actions = None;
             // The denominator for marker compliance (#4421): one submitted turn
             // is one chance for the agent to emit its markers.
@@ -9258,66 +9275,72 @@ fn write_agent_command_with_boundary(
     // claim orders managed peers; this mutex also keeps raw/UI writers from
     // splicing bytes into the command while the child is allowed to consume the
     // payload as a separate read.
-    let mut writer = writer.lock();
-    // Ctrl-U first, alone: see `injection_payload`. It types nothing, so a
-    // failure before the first text byte cannot make a retry type the command
-    // twice — hence it reports `NotStarted` and the text write counts from zero.
-    if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\x15", 0) {
-        return (InjectionOutcome::NotStarted(error), 0);
-    }
-    if let Err(error) = writer.flush() {
-        return (
-            InjectionOutcome::NotStarted(format!("Flush failed: {error}")),
-            0,
-        );
-    }
-    std::thread::sleep(INJECT_ENTER_GAP);
-    if let Err((written, error)) = write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0) {
-        return (
-            if written == 0 {
-                InjectionOutcome::NotStarted(error)
-            } else {
-                InjectionOutcome::Uncertain(error)
-            },
-            0,
-        );
-    }
-    if let Err(error) = writer.flush() {
-        return (
-            InjectionOutcome::Uncertain(format!("Flush failed: {error}")),
-            0,
-        );
-    }
+    // Reserve the replacement turn before any bytes reach the child. Stop
+    // takes SilenceState before the writer, so do not reserve under that writer.
+    state.with_input_turns(session_id, 1, || {
+        let mut writer = writer.lock();
+        // Ctrl-U first, alone: see `injection_payload`. It types nothing, so a
+        // failure before the first text byte cannot make a retry type the command
+        // twice — hence it reports `NotStarted` and the text write counts from zero.
+        if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\x15", 0) {
+            return (InjectionOutcome::NotStarted(error), 0);
+        }
+        if let Err(error) = writer.flush() {
+            return (
+                InjectionOutcome::NotStarted(format!("Flush failed: {error}")),
+                0,
+            );
+        }
+        std::thread::sleep(INJECT_ENTER_GAP);
+        if let Err((written, error)) =
+            write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0)
+        {
+            return (
+                if written == 0 {
+                    InjectionOutcome::NotStarted(error)
+                } else {
+                    InjectionOutcome::Uncertain(error)
+                },
+                0,
+            );
+        }
+        if let Err(error) = writer.flush() {
+            return (
+                InjectionOutcome::Uncertain(format!("Flush failed: {error}")),
+                0,
+            );
+        }
 
-    // Blocks the calling thread, under the writer guard, for the whole gap. Both
-    // properties are load-bearing and neither is negotiable here: the child only
-    // reads the CR as a submit when it arrives in a separate `read()`, and
-    // `agent_submission_writer_lock_prevents_raw_input_splicing` pins the byte
-    // sequence this guard protects. A caller that must not block therefore does
-    // not shorten the gap — it stops being the thread that waits, by handing the
-    // whole sequence to `INJECTION_QUEUE`.
-    std::thread::sleep(profile.enter_gap);
+        // Blocks the calling thread, under the writer guard, for the whole gap. Both
+        // properties are load-bearing and neither is negotiable here: the child only
+        // reads the CR as a submit when it arrives in a separate `read()`, and
+        // `agent_submission_writer_lock_prevents_raw_input_splicing` pins the byte
+        // sequence this guard protects. A caller that must not block therefore does
+        // not shorten the gap — it stops being the thread that waits, by handing the
+        // whole sequence to `INJECTION_QUEUE`.
+        std::thread::sleep(profile.enter_gap);
 
-    // Exclude payload echo already observable before Enter. The async handler
-    // checks this boundary only after the complete Enter write returns; movement
-    // beyond it is child PTY output, never TUICommander's own turn bookkeeping.
-    let acknowledgement_offset = state
-        .session_maps
-        .output_buffers
-        .get(session_id)
-        .map(|buffer| buffer.lock().total_written)
-        .unwrap_or(0);
-    if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\r", payload.len()) {
-        return (InjectionOutcome::Uncertain(error), acknowledgement_offset);
-    }
-    if let Err(error) = writer.flush() {
-        return (
-            InjectionOutcome::Uncertain(format!("Flush failed: {error}")),
-            acknowledgement_offset,
-        );
-    }
+        // Exclude payload echo already observable before Enter. The async handler
+        // checks this boundary only after the complete Enter write returns; movement
+        // beyond it is child PTY output, never TUICommander's own turn bookkeeping.
+        let acknowledgement_offset = state
+            .session_maps
+            .output_buffers
+            .get(session_id)
+            .map(|buffer| buffer.lock().total_written)
+            .unwrap_or(0);
+        if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\r", payload.len()) {
+            return (InjectionOutcome::Uncertain(error), acknowledgement_offset);
+        }
+        if let Err(error) = writer.flush() {
+            return (
+                InjectionOutcome::Uncertain(format!("Flush failed: {error}")),
+                acknowledgement_offset,
+            );
+        }
 
-    (InjectionOutcome::Submitted, acknowledgement_offset)
+        (InjectionOutcome::Submitted, acknowledgement_offset)
+    })
 }
 
 /// The submit rule for flush and MCP submit (queued input, brief): write, wait
@@ -9373,7 +9396,7 @@ fn commit_injection_claim(state: &AppState, session_id: &str, claim: InjectionCl
         .map(|silence| silence.lock().commit_injection_claim(claim.token))
         .unwrap_or(false);
     if committed {
-        note_submitted_input(state, session_id);
+        note_delivered_input(state, session_id);
     }
 }
 
@@ -10912,15 +10935,15 @@ pub(crate) fn stamp_input_ms(state: &AppState, session_id: &str) {
 
 /// Apply the semantic effects of a submitted terminal line for every transport.
 /// Empty content is still a submission: bare Enter resolves highlighted choices
-/// and confirmation prompts, so it must clear an active wait and advance the
-/// turn just like a non-empty reply.
+/// and confirmation prompts, so it must clear an active wait just like a
+/// non-empty reply. The write boundary has already advanced the turn.
 pub(crate) fn record_submitted_line(
     state: &Arc<AppState>,
     session_id: &str,
     content: String,
     line: i64,
 ) {
-    note_submitted_input(state, session_id);
+    note_delivered_input(state, session_id);
     if content.split_whitespace().count() >= 10 {
         state
             .session_maps

@@ -2311,21 +2311,79 @@ impl AppState {
             .map(|session| session.lock().writer.clone())
     }
 
+    /// Reserve submitted turns before their Enter can reach the child. A stale
+    /// Stop either completes first or sees the new epoch; failed writes may
+    /// conservatively retire the old draft, never interrupt a replacement.
+    pub(crate) fn with_input_turns<R>(
+        &self,
+        session_id: &str,
+        count: u64,
+        write: impl FnOnce() -> R,
+    ) -> R {
+        if count == 0 {
+            return write();
+        }
+        let silence = self
+            .session_maps
+            .silence_states
+            .entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(parking_lot::Mutex::new(crate::pty::SilenceState::new())))
+            .clone();
+        let _silence = silence.lock();
+        if let Some(mut session) = self.session_maps.session_states.get_mut(session_id)
+            && session.agent_type.is_some()
+        {
+            session.turn_epoch = session.turn_epoch.wrapping_add(count);
+        }
+        write()
+    }
+
+    pub(crate) fn with_input_parts<R>(
+        &self,
+        session_id: &str,
+        parts: &[&[u8]],
+        write: impl FnOnce() -> R,
+    ) -> R {
+        if !parts
+            .iter()
+            .any(|part| part.contains(&b'\r') || part.contains(&b'\n'))
+        {
+            return write();
+        }
+        // Preview the existing FSM without consuming the post-write input.
+        // In particular, Shift+Enter is a composer newline, not a new turn.
+        let mut input = self
+            .session_maps
+            .input_buffers
+            .get(session_id)
+            .map(|input| input.lock().clone())
+            .unwrap_or_default();
+        let count = parts
+            .iter()
+            .filter_map(|part| std::str::from_utf8(part).ok())
+            .flat_map(|part| input.feed(part))
+            .filter(|action| matches!(action, crate::input_line_buffer::InputAction::Line(_)))
+            .count() as u64;
+        self.with_input_turns(session_id, count, write)
+    }
+
     /// Write one atomic sequence of byte slices and flush it before another
     /// user-input or terminal-reply writer can interleave.
     pub(crate) fn write_pty_parts(&self, session_id: &str, parts: &[&[u8]]) -> Result<(), String> {
         let writer = self
             .pty_writer(session_id)
             .ok_or_else(|| "Session not found".to_string())?;
-        let mut writer = writer.lock();
-        for part in parts {
+        self.with_input_parts(session_id, parts, || {
+            let mut writer = writer.lock();
+            for part in parts {
+                writer
+                    .write_all(part)
+                    .map_err(|error| format!("Write failed: {error}"))?;
+            }
             writer
-                .write_all(part)
-                .map_err(|error| format!("Write failed: {error}"))?;
-        }
-        writer
-            .flush()
-            .map_err(|error| format!("Flush failed: {error}"))
+                .flush()
+                .map_err(|error| format!("Flush failed: {error}"))
+        })
     }
 
     /// Emit a PTY-scoped lifecycle event to

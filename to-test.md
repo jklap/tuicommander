@@ -4590,6 +4590,7 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss rebuilds/restarts the headless daemon, verify Telegram Stop on
   a throwaway phone request: one Escape reaches only the draft-bound current
-  epoch, and duplicate/stale Stop never revives a draft. Confirm the selected
+  epoch, including a replacement Enter delivered before input bookkeeping;
+  duplicate/stale Stop never revives a draft. Confirm the selected
   callback label stays disabled. The running Rust backend cannot load these
   changes until rebuilt/restarted; no restart was performed by this peer.
