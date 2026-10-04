@@ -115,21 +115,23 @@ impl<P: MailPort> Inbound<P> {
                     &self.config.bot_alias,
                     &self.config.target_tuic_session,
                 )
+                .map(|update| (update, value))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        updates.sort_by_key(|update| update.id);
+        updates.sort_by_key(|(update, _)| update.id);
         if updates
             .windows(2)
-            .any(|pair| pair[0].id == pair[1].id && pair[0].mail != pair[1].mail)
+            .any(|pair| pair[0].0.id == pair[1].0.id && pair[0].1 != pair[1].1)
         {
             return Err(Error::Protocol);
         }
         let mut accepted = 0;
-        for update in updates {
+        for (update, value) in updates {
             if update.id < next {
                 continue;
             }
             let candidate = update.id.checked_add(1).ok_or(Error::Protocol)?;
+            self.port.update(value).await?;
             if let Some(mail) = update.mail {
                 self.port.offer(&mail).await?;
                 accepted += 1;

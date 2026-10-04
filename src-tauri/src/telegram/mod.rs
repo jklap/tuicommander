@@ -8,6 +8,7 @@ mod inbound;
 mod mail;
 mod offset;
 mod outbound;
+mod stop;
 
 pub(crate) use api::BotApi;
 pub(crate) use config::{Config, Owner, Paths};

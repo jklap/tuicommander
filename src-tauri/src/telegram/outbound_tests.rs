@@ -76,3 +76,75 @@ async fn unchanged_draft_refreshes_at_twenty_seconds() {
         server.requests()[1].1["draft_id"]
     );
 }
+
+// Catches: stale/foreign/duplicate Stop interrupts a newer request, or a
+// successful Stop leaves a refresh able to resurrect the stopped draft.
+#[tokio::test]
+async fn stop_matches_chat_draft_and_live_epoch_only_once() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![(StatusCode::OK, json!({"ok":true,"result":true}))]).await;
+    let mut outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, server.address));
+    let draft = outbound
+        .begin("request".into(), PEER.into(), "pty".into(), 1, 1111111)
+        .await
+        .unwrap();
+    let stopped = |chat, id| json!({"stopped_message_generation":{"chat":{"id":chat,"type":"private"},"draft_id":id}});
+    assert!(
+        !outbound
+            .stop(
+                &stopped(2222222, draft),
+                |_, _, _| panic!("foreign chat"),
+                |_| panic!("foreign chat")
+            )
+            .unwrap()
+    );
+    assert!(
+        !outbound
+            .stop(
+                &stopped(1111111, draft + 1),
+                |_, _, _| panic!("foreign draft"),
+                |_| panic!("foreign draft")
+            )
+            .unwrap()
+    );
+    let mut bytes = Vec::new();
+    assert!(
+        outbound
+            .stop(
+                &stopped(1111111, draft),
+                |peer, pty, epoch| peer == PEER && pty == "pty" && epoch == 1,
+                |pty| {
+                    assert_eq!(pty, "pty");
+                    bytes.push(27);
+                    Ok(())
+                }
+            )
+            .unwrap()
+    );
+    assert!(
+        !outbound
+            .stop(
+                &stopped(1111111, draft),
+                |_, _, _| panic!("duplicate"),
+                |_| panic!("duplicate")
+            )
+            .unwrap()
+    );
+    outbound.refresh().await.unwrap();
+    assert_eq!(bytes, vec![27]);
+    assert_eq!(server.requests().len(), 1);
+}
+
+// Catches: matching Stop writes into a newer turn that reuses the same PTY.
+#[tokio::test]
+async fn stale_epoch_stop_retires_without_writing() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![(StatusCode::OK, json!({"ok":true,"result":true}))]).await;
+    let mut outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, server.address));
+    let draft = outbound
+        .begin("request".into(), PEER.into(), "pty".into(), 1, 1111111)
+        .await
+        .unwrap();
+    assert!(!outbound.stop(&json!({"stopped_message_generation":{"chat":{"id":1111111,"type":"private"},"draft_id":draft}}), |_,_,_| false, |_| panic!("stale write")).unwrap());
+    assert!(outbound.active.is_none());
+}
