@@ -74,6 +74,10 @@
 
 # To Test
 
+## Stable macOS dev executable (1510-03ae) — next Boss launch
+
+- [ ] On Boss's next manual `make dev` restart, confirm the printed executable path is `~/Library/Application Support/com.tuic.commander/dev-bin/tuicommander`, the live process maps that existing file, and LAN/tailnet HTTP requests and the iPhone page work with ALF enabled. Confirm bridge startup and local remote-update fallback still find their adjacent binaries. Script tests cover target deletion without launching the desktop; the live firewall and phone checks remain for Boss. No desktop restart was performed by the peer.
+
 ## Remote file drops (1434-1719) — Rust restart required
 
 - [ ] After Boss restarts the desktop and updates the remote daemon, drop a Mac file and a folder onto a registered remote repository in tree and flat views. Verify remote bytes, unchanged local sources, directory confirmation and conflict skipping. This native Finder-to-Tauri interaction requires the desktop rebuild; no second desktop instance was launched.
