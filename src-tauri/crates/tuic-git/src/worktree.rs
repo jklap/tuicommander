@@ -7445,9 +7445,15 @@ branch refs/heads/feat
             format!("gitdir: {}\n", repo.join(".git").display()),
         )
         .unwrap();
+        let reported = rev_at(&destination, "--absolute-git-dir").unwrap();
+        #[cfg(unix)]
+        let expected = format!("{}/.git", repo.canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!("{}/.git", repo.display().to_string().replace('\\', "/"));
+        assert_eq!(reported, expected);
         assert_eq!(
-            rev_at(&destination, "--absolute-git-dir").unwrap(),
-            tuic_core::path_spelling::portable_spelling(&repo.join(".git").to_string_lossy())
+            Path::new(&reported).canonicalize().unwrap(),
+            repo.join(".git").canonicalize().unwrap()
         );
 
         let error = preserve_submodule_refs(&repo, &path, "modules/local").unwrap_err();
@@ -8408,11 +8414,20 @@ branch refs/heads/feat
         commit_file(&repo, name, "rule B\nrule A\n++literal\nextra\n");
         let query = branch_integration_with_pr(&repo, "literal-1295", |_, _, _| false).unwrap();
         assert_eq!(query.proof, Some("content_superset"));
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/literal-1295",
+            _temp.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/literal-1295",
+            _temp.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(query.worktree_paths, vec![expected]);
         assert_eq!(
-            query.worktree_paths,
-            vec![tuic_core::path_spelling::portable_spelling(
-                &wt.to_string_lossy()
-            )]
+            Path::new(&query.worktree_paths[0]).canonicalize().unwrap(),
+            wt.canonicalize().unwrap()
         );
         git_cmd(&repo)
             .args(["update-ref", &query.archive_ref, &query.tip])
@@ -8474,11 +8489,20 @@ branch refs/heads/feat
         let wt_b = add_worktree(&repo, "beta-1327");
         for (branch, own) in [("alpha-1327", &wt_a), ("beta-1327", &wt_b)] {
             let query = branch_integration_with_pr(&repo, branch, |_, _, _| false).unwrap();
+            #[cfg(unix)]
+            let expected = format!(
+                "{}/{branch}",
+                _temp.path().canonicalize().unwrap().display()
+            );
+            #[cfg(windows)]
+            let expected = format!(
+                "{}/{branch}",
+                _temp.path().display().to_string().replace('\\', "/")
+            );
+            assert_eq!(query.worktree_paths, vec![expected]);
             assert_eq!(
-                query.worktree_paths,
-                vec![tuic_core::path_spelling::portable_spelling(
-                    &own.to_string_lossy()
-                )]
+                Path::new(&query.worktree_paths[0]).canonicalize().unwrap(),
+                own.canonicalize().unwrap()
             );
         }
     }
