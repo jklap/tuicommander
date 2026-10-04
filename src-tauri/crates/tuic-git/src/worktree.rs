@@ -1240,6 +1240,144 @@ fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, S
     Ok(cherry.stdout.lines().all(|line| line.starts_with("- ")))
 }
 
+/// Ref state read without git subprocesses. Include symbolic targets and HEAD:
+/// switching to a different integration branch matters even at the same tip.
+/// Config and reflog bytes also affect the existing classification rules.
+pub fn monitoring_ref_key(repo: &Path) -> Result<String, String> {
+    use gix::bstr::ByteSlice;
+    let grepo = gix::open(repo).map_err(|e| e.to_string())?;
+    let platform = grepo.references().map_err(|e| e.to_string())?;
+    let mut refs = Vec::new();
+    for reference in platform.all().map_err(|e| e.to_string())? {
+        let reference = reference.map_err(|e| e.to_string())?;
+        refs.push(format!(
+            "{}={:?}",
+            reference.name().as_bstr().to_str_lossy(),
+            reference.target()
+        ));
+    }
+    refs.sort();
+    let mut digest = Sha256::new();
+    for entry in refs {
+        digest.update(entry.as_bytes());
+        digest.update([0]);
+    }
+    for file in [
+        grepo.git_dir().join("HEAD"),
+        grepo.common_dir().join("config"),
+    ] {
+        digest.update(std::fs::read(file).map_err(|e| e.to_string())?);
+        digest.update([0]);
+    }
+    // The branch reflog distinguishes own commits from following the default.
+    let log_root = grepo.common_dir().join("logs/refs/heads");
+    fn hash_logs(path: &Path, digest: &mut Sha256) -> Result<(), String> {
+        if !path.exists() {
+            return Ok(());
+        }
+        let mut entries = std::fs::read_dir(path)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                hash_logs(&path, digest)?;
+            } else {
+                digest.update(path.to_string_lossy().as_bytes());
+                digest.update(std::fs::read(path).map_err(|e| e.to_string())?);
+            }
+            digest.update([0]);
+        }
+        Ok(())
+    }
+    hash_logs(&log_root, &mut digest)?;
+    Ok(hex::encode(digest.finalize()))
+}
+
+type MonitoringMerge = (WorkspaceCommitStatus, Option<&'static str>);
+type MonitoringLocalMerge = (MonitoringMerge, String);
+static MONITORING_MERGES: LazyLock<
+    moka::sync::Cache<(PathBuf, String, String), MonitoringLocalMerge>,
+> = LazyLock::new(|| moka::sync::Cache::builder().max_capacity(1024).build());
+
+/// Cache only monitoring reads. Destructive preflights still classify freshly.
+/// A semantic ref key rather than TTL means file saves never run cherry/merge-tree.
+pub(crate) fn monitoring_branch_merge(
+    repo: &Path,
+    branch: &str,
+    ref_key: &str,
+    with_pr: bool,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> Result<MonitoringMerge, String> {
+    let (local, tip) = MONITORING_MERGES
+        .try_get_with((repo.to_path_buf(), branch.into(), ref_key.into()), || {
+            let default = get_remote_default_branch(&repo.to_string_lossy())?;
+            let tip = rev_at(repo, &format!("refs/heads/{branch}"))?;
+            let local = classify_branch_merge(repo, branch, &tip, &default, |_, _, _| false)?;
+            Ok::<_, String>((local, tip))
+        })
+        .map_err(|e: Arc<String>| (*e).clone())?;
+    // PR state changes independently of local refs. Reapply its current proof
+    // on the caller's existing refresh lifecycle, never cache it with local Git.
+    if with_pr
+        && (matches!(
+            local.0,
+            WorkspaceCommitStatus::Unmerged | WorkspaceCommitStatus::PushedUnmerged
+        ) || local.1 == Some("content_superset"))
+        && pr_proves_tip(repo, branch, &tip)
+    {
+        Ok((WorkspaceCommitStatus::Merged, Some("github_pr")))
+    } else {
+        Ok(local)
+    }
+}
+
+/// The sidebar needs dirty/merged badges, not the removal fingerprint and
+/// recursive submodule recovery inventory. These are computed by the fresh
+/// lifecycle preflight only. The repository diff cache coalesces concurrent refreshes.
+pub fn inspect_workspace_monitoring_with_pr(
+    base_repo: &Path,
+    workspace: &WorkspaceWorktree,
+    ref_key: &str,
+    pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
+) -> WorkspaceLifecycleStatus {
+    let result = (|| -> Result<WorkspaceLifecycleStatus, String> {
+        let path = Path::new(&workspace.path);
+        let dirty_files = match crate::git_reads::GixGitReads::dirty_files(path) {
+            Some(count) => count,
+            None => dirty_files_at(path)?,
+        };
+        let (commit_status, merge_proof) =
+            monitoring_branch_merge(base_repo, &workspace.branch, ref_key, true, pr_proves_tip)?;
+        Ok(WorkspaceLifecycleStatus {
+            dirty_files: Some(dirty_files),
+            missing_checkout: false,
+            dirty_fingerprint: None,
+            submodule_unpushed_commits: Vec::new(),
+            commit_status,
+            merge_proof,
+            removal_safety: if dirty_files > 0 {
+                WorkspaceRemovalSafety::RequiresForce
+            } else {
+                WorkspaceRemovalSafety::Safe
+            },
+            error: None,
+        })
+    })();
+    result.unwrap_or_else(|error| WorkspaceLifecycleStatus {
+        dirty_files: None,
+        missing_checkout: false,
+        dirty_fingerprint: None,
+        submodule_unpushed_commits: Vec::new(),
+        commit_status: WorkspaceCommitStatus::Unknown,
+        merge_proof: None,
+        removal_safety: WorkspaceRemovalSafety::Unknown,
+        error: Some(error),
+    })
+}
+
 pub fn inspect_workspace_lifecycle_with_pr(
     base_repo: &Path,
     workspace_id: &str,
@@ -8101,6 +8239,246 @@ branch refs/heads/feat
         assert_eq!(status.commit_status, WorkspaceCommitStatus::InSync);
         assert_eq!(status.dirty_files, Some(0));
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::Safe);
+    }
+
+    // Catches: a transient PR proof-provider failure permanently poisons the merged badge.
+    #[test]
+    fn critic_gitpoll_pr_lookup_recovery_refreshes_merged_badge_without_ref_move() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branch = "critic-pr-recovery";
+        let path = add_worktree(&repo, branch);
+        commit_file(&path, "feature.txt", "own work\n");
+        commit_file(&repo, "default.txt", "unrelated default work\n");
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        let key = monitoring_ref_key(&repo).unwrap();
+        let first = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        assert_eq!(first.commit_status, WorkspaceCommitStatus::Unmerged);
+        // The existing proof-provider boundary uses false for both no proof and lookup failure.
+        // No fake GitHub payload is involved: the provider is now able to prove this tip.
+        let fresh = inspect_workspace_lifecycle_with_pr(&repo, branch, |_, _, _| true);
+        assert_eq!(fresh.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(fresh.merge_proof, Some("github_pr"));
+        let next_key = monitoring_ref_key(&repo).unwrap();
+        assert_eq!(key, next_key);
+        let recovered =
+            inspect_workspace_monitoring_with_pr(&repo, &workspace, &next_key, |_, _, _| true);
+        assert_eq!(recovered.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(recovered.merge_proof, Some("github_pr"));
+    }
+
+    // Catches: deduplicating by pathname collapses separate staged-deletion and untracked rows.
+    #[test]
+    fn critic_gitpoll_cached_removal_keeps_porcelain_dirty_badge_count() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branch = "critic-index-removal";
+        let path = add_worktree(&repo, branch);
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        git_cmd(&path)
+            .args(["rm", "--cached", "README.md"])
+            .run()
+            .unwrap();
+        let porcelain = git_cmd(&path)
+            .args([
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignore-submodules=none",
+            ])
+            .run()
+            .unwrap()
+            .stdout;
+        assert!(porcelain.lines().any(|line| line == "D  README.md"));
+        assert!(porcelain.lines().any(|line| line == "?? README.md"));
+        let key = monitoring_ref_key(&repo).unwrap();
+        let status = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        assert_eq!(status.dirty_files, Some(2));
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::RequiresForce);
+    }
+
+    // Catches: removal trusting a cached clean badge after an initialized submodule is edited.
+    #[test]
+    fn critic_gitpoll_removal_rechecks_submodule_after_clean_monitoring() {
+        let (_temp, repo, _) = workspace_fixture();
+        add_populated_submodule(&repo);
+        let branch = "critic-submodule-dirty";
+        let path = add_worktree(&repo, branch);
+        git_cmd(&path)
+            .args([
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+            ])
+            .run()
+            .unwrap();
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        let key = monitoring_ref_key(&repo).unwrap();
+        let clean = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        assert_eq!(clean.dirty_files, Some(0));
+        fs::write(
+            path.join("modules/local/module.txt"),
+            "unsaved module work\n",
+        )
+        .unwrap();
+        let dirty = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        assert_eq!(dirty.dirty_files, Some(1));
+        let removal =
+            remove_worktree_by_workspace_id(&repo.to_string_lossy(), branch, true, None, false);
+        let error = removal.expect_err("removal must refuse newly dirty submodule state");
+        assert!(
+            error.contains("uncommitted changes"),
+            "unexpected refusal: {error}"
+        );
+        assert_eq!(
+            fs::read_to_string(path.join("modules/local/module.txt")).unwrap(),
+            "unsaved module work\n",
+        );
+    }
+
+    // Catches file-save fan-out re-running destructive preflight and integration
+    // commands. Compare old and monitoring paths with identical real repositories.
+    #[test]
+    fn monitoring_gitpoll_eleven_writers_do_not_spawn_integration_processes() {
+        let (_temp, repo, _) = workspace_fixture();
+        let mut workspaces = Vec::new();
+        for i in 0..11 {
+            let branch = format!("writer-{i}");
+            let path = add_worktree(&repo, &branch);
+            commit_file(&path, &format!("feature-{i}.txt"), "own commit\n");
+            workspaces.push(WorkspaceWorktree {
+                branch,
+                path: path.to_string_lossy().into_owned(),
+                kind: WorkspaceKind::Worktree,
+                warm_artifacts: None,
+                lifecycle_status: None,
+            });
+        }
+        commit_file(&repo, "default.txt", "default advanced\n");
+        let ref_key = monitoring_ref_key(&repo).unwrap();
+        for workspace in &workspaces {
+            inspect_workspace_monitoring_with_pr(&repo, workspace, &ref_key, |_, _, _| false);
+        }
+        crate::git::get_merged_branches_impl(&repo).unwrap();
+        crate::git_cli::take_command_counts();
+        for round in 0..3 {
+            for workspace in &workspaces {
+                std::fs::write(
+                    Path::new(&workspace.path).join("active.txt"),
+                    format!("{round}"),
+                )
+                .unwrap();
+                let status = inspect_workspace_lifecycle(&repo, &workspace.branch);
+                assert_eq!(status.dirty_files, Some(1));
+            }
+        }
+        let before = crate::git_cli::take_command_counts();
+        for round in 0..3 {
+            for workspace in &workspaces {
+                std::fs::write(
+                    Path::new(&workspace.path).join("active.txt"),
+                    format!("after {round}"),
+                )
+                .unwrap();
+                assert_eq!(monitoring_ref_key(&repo).unwrap(), ref_key);
+                let status =
+                    inspect_workspace_monitoring_with_pr(&repo, workspace, &ref_key, |_, _, _| {
+                        false
+                    });
+                assert_eq!(status.dirty_files, Some(1));
+                assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
+                assert!(status.dirty_fingerprint.is_none());
+                crate::git_reads::git_reads().diff_stats(Path::new(&workspace.path), None);
+            }
+            assert!(
+                crate::git::get_merged_branches_impl(&repo)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let after = crate::git_cli::take_command_counts();
+        eprintln!("1491: 11 writers x 3 refreshes; before={before:?}; after={after:?}");
+        assert!(before.get("cherry").copied().unwrap_or_default() > 0);
+        assert_eq!(before.get("status"), Some(&66));
+        assert!(
+            after.is_empty(),
+            "file saves must spawn no Git CLI reads: {after:?}"
+        );
+    }
+
+    // Catches cached unmerged badges surviving a main ref movement.
+    #[test]
+    fn monitoring_gitpoll_merge_refreshes_on_ref_move_and_keeps_dirty_badge() {
+        let (_temp, repo, _) = workspace_fixture();
+        let branch = "monitor-merge";
+        let path = add_worktree(&repo, branch);
+        commit_file(&path, "feature.txt", "own commit\n");
+        commit_file(&repo, "default.txt", "default advanced\n");
+        let workspace = resolve_any_workspace(&repo, branch).unwrap();
+        let key = monitoring_ref_key(&repo).unwrap();
+        assert_eq!(
+            inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false)
+                .commit_status,
+            WorkspaceCommitStatus::Unmerged
+        );
+        git_cmd(&repo)
+            .args(["merge", branch, "--no-edit"])
+            .run()
+            .unwrap();
+        std::fs::write(path.join("dirty.txt"), "keep me").unwrap();
+        let next = monitoring_ref_key(&repo).unwrap();
+        assert_ne!(key, next);
+        let status =
+            inspect_workspace_monitoring_with_pr(&repo, &workspace, &next, |_, _, _| false);
+        assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
+        assert_eq!(status.dirty_files, Some(1));
+        assert_eq!(status.removal_safety, WorkspaceRemovalSafety::RequiresForce);
+        assert!(
+            crate::git::get_merged_branches_impl(&repo)
+                .unwrap()
+                .contains(&branch.to_string())
+        );
+    }
+
+    // Catches double counting MM, stale dirty counts, rename and CLI fallback drift.
+    #[test]
+    fn monitoring_gitpoll_dirty_paths_match_fresh_porcelain() {
+        let (_temp, repo, _) = workspace_fixture();
+        let path = add_worktree(&repo, "monitor-dirty");
+        let workspace = resolve_any_workspace(&repo, "monitor-dirty").unwrap();
+        std::fs::write(path.join("README.md"), "staged\n").unwrap();
+        git_cmd(&path).args(["add", "README.md"]).run().unwrap();
+        std::fs::write(path.join("README.md"), "staged and modified\n").unwrap();
+        std::fs::create_dir_all(path.join("nested")).unwrap();
+        std::fs::write(path.join("nested/a.txt"), "untracked").unwrap();
+        std::fs::write(path.join("nested/b.txt"), "untracked").unwrap();
+        let key = monitoring_ref_key(&repo).unwrap();
+        let read =
+            || inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        assert_eq!(read().dirty_files, Some(dirty_files_at(&path).unwrap()));
+        assert_eq!(read().dirty_files, Some(3));
+        git_cmd(&path)
+            .args(["reset", "--hard", "HEAD"])
+            .run()
+            .unwrap();
+        git_cmd(&path).args(["clean", "-fd"]).run().unwrap();
+        git_cmd(&path)
+            .args(["mv", "README.md", "renamed.md"])
+            .run()
+            .unwrap();
+        assert_eq!(read().dirty_files, Some(dirty_files_at(&path).unwrap()));
+        git_cmd(&path)
+            .args(["reset", "--hard", "HEAD"])
+            .run()
+            .unwrap();
+        assert_eq!(read().dirty_files, Some(0));
+        // Force the established sparse-checkout fallback; no invented Git output.
+        git_cmd(&path)
+            .args(["config", "core.sparseCheckout", "true"])
+            .run()
+            .unwrap();
+        std::fs::write(path.join("fallback.txt"), "dirty").unwrap();
+        assert_eq!(read().dirty_files, Some(dirty_files_at(&path).unwrap()));
     }
 
     /// A branch created at an older main tip has no work of its own even after

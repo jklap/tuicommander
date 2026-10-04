@@ -4606,3 +4606,4 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] After Boss restarts the Rust backend, confirm the Git diff file list displays tracked-file additions/deletions (#1499-3a34); targeted backend regression covers scopes and renamed paths.
 
 - [ ] After Boss restarts the Rust backend, confirm untracked files with tabs/newlines or boundary spaces appear with their literal names and correct line counts (#1502-8a5e). Backend regressions cover listing and file-diff consumers; Rust does not hot-reload.
+- [ ] After rebuilding/restarting TUIC, verify sidebar dirty and merged badges with 11 writing worktrees, including initialized submodules; sample Git child spawns with the same before/after method (1491-2ae4). Rust backend changes require a manual restart. Include recovery after a PR proof lookup failure without moving refs, and `git rm --cached` leaving both a staged deletion and an untracked file (dirty count 2).
