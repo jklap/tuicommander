@@ -259,6 +259,9 @@ checks every worktree record, and accepts ancestry in the checked-out
 integration branch or patch equivalence against that branch when GitHub PR
 proof is unavailable. The ref is removed with its captured OID as the expected
 old value, so an advanced branch remains intact. Remote refs are untouched.
+For archived deletion, the domain result captures the exact primary or
+tip-suffixed archive ref before deleting the branch; MCP returns that ref so
+restoring it recovers the deleted tip.
 
 `probe_cow_support` performs a real copy against the source/destination pair so
 an unsupported filesystem produces one warning instead of one failure per

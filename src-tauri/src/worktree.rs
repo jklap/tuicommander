@@ -243,7 +243,7 @@ pub(crate) fn branch_integrations(repo: &Path) -> Result<Vec<BranchIntegration>,
 pub(crate) fn delete_integrated_local_branch(
     repo_path: &str,
     branch_name: &str,
-) -> Result<&'static str, String> {
+) -> Result<tuic_git::worktree::DeletedBranch, String> {
     tuic_git::worktree::delete_integrated_local_branch_with_pr(
         repo_path,
         branch_name,
@@ -1432,9 +1432,18 @@ mod tests {
     #[test]
     fn cleanup_rejects_empty_and_unknown_paths_1488() {
         let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         let state = crate::state::tests_support::make_test_app_state();
         let path = repo.path().to_string_lossy();
-        for paths in [vec![], vec![repo.path().join("unknown").to_string_lossy().into_owned()]] {
+        for paths in [
+            vec![],
+            vec![repo.path().join("unknown").to_string_lossy().into_owned()],
+        ] {
             assert!(begin_orphan_cleanup_internal(&state, &path, paths).is_err());
             assert!(state.pending_orphan_cleanup.get(path.as_ref()).is_none());
         }
@@ -1547,6 +1556,12 @@ mod tests {
     #[test]
     fn removal_preview_names_live_nested_session_and_counts_untracked_work() {
         let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         let worktree = worktree_with(repo.path(), "active-work", false);
         fs::create_dir_all(worktree.join("nested")).expect("nested cwd");
         fs::write(worktree.join("README.md"), "changed").expect("modified file");
