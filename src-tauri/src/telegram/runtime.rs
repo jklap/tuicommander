@@ -257,7 +257,11 @@ impl Runtime {
             alert(&self.state, error);
         }
     }
-    pub async fn run(mut self, mut commands: mpsc::Receiver<Command>) {
+    #[cfg(test)]
+    pub async fn run(self, mut commands: mpsc::Receiver<Command>) {
+        self.run_ref(&mut commands).await;
+    }
+    pub async fn run_ref(mut self, commands: &mut mpsc::Receiver<Command>) {
         let mut events = self.state.event_bus.subscribe();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
         loop {

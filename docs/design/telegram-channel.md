@@ -148,3 +148,7 @@ allowlist, backoff and polling tests remain.
 Live mint verification and deployment require Boss's authorization. Rust changes
 require an explicit backend rebuild/restart; they do not hot-reload. No desktop
 instance, token store or real Telegram account is used for offline validation.
+
+### Settings setup (1515-cb81)
+
+Settings now writes the same private token/config/allowlist files. Both a one-use six-character ten-minute code and an explicitly typed private-chat ID can authorize a chat. The code lives in private `pairing.json` so desktop and daemon share it; bare `/start` stays ignored. An explicitly empty allowlist supports initial pairing without permitting outbound work. The adapter supervisor responds to local setup changes without taking a second poller lock; desktop remains configuration-only. Status exposes safe categories and timestamps, never token or message text. This section supersedes hand-written setup and multi-destination selection language in §5; 1438 uses one outbound destination and no phone Stop.

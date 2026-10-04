@@ -620,3 +620,5 @@ It imports no App stores, debug globals or logging handlers. Sensitive input
 values stay in input elements until submit, then are cleared and unmounted
 before IPC/HTTP entry. Only requested fields render; approval instead shows
 exact argv/names/directory and optional template consent.
+
+`SettingsPanel/tabs/TelegramTab` renders the shared Telegram setup controls in desktop Settings and, when opened, in mobile `SettingsScreen`. All validation, pairing, private-file writes and polling ownership remain in Rust.

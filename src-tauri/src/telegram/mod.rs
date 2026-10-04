@@ -11,6 +11,7 @@ mod offset;
 mod outbound;
 mod registration;
 mod runtime;
+pub(crate) mod settings;
 mod tool;
 pub(crate) use native::start;
 pub(crate) use tool::{definition as tool_definition, handle as handle_tool};

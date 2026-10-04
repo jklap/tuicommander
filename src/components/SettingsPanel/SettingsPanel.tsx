@@ -34,6 +34,7 @@ import {
 	RepoScriptsTab,
 	RepoWorktreeTab,
 	SmartPromptsTab,
+	TelegramTab,
 	TerminalTab,
 	UpstreamMcpPanel,
 } from "./tabs";
@@ -87,6 +88,7 @@ const GLOBAL_TAB_GROUPS: { key: string; label: string; tabs: SettingsShellTab[] 
 			{ key: "mcp", label: t("settings.mcp", "MCP") },
 			{ key: "remote-access", label: t("settings.remoteAccess", "Remote Access") },
 			{ key: "remote-machines", label: t("settings.remoteMachines", "Remote Machines") },
+			{ key: "telegram", label: "Telegram" },
 			{ key: "plugins", label: t("settings.plugins", "Plugins") },
 		],
 	},
@@ -348,6 +350,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 				</Show>
 				<Show when={activeTab() === "remote-machines"}>
 					<RemoteMachinesTab />
+				</Show>
+				<Show when={activeTab() === "telegram"}>
+					<TelegramTab />
 				</Show>
 				<Show when={activeTab() === "plugins"}>
 					<PluginsTab onClose={props.onClose} />
