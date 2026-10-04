@@ -93,11 +93,6 @@ detection_symbols='awaiting_input|question_confident|question_text|question-clea
 # Only framed captures with provenance satisfy production edits; a handwritten raw
 # fixture or a documentation-only addition is not recorded external evidence.
 hook_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-new_raw="$(git diff --cached --name-only --diff-filter=A -- "$fixtures_dir" | grep -E '\.(raw|txt)$' || true)"
-if [ -n "$new_raw" ]; then
-  printf 'pre-commit blocked: new external fixtures must be recorded TCAP captures, not handwritten text: %s\n' "$new_raw" >&2
-  exit 1
-fi
 if python3 "$hook_dir/fixture-production-diff.py" --capture; then
   exit 0
 fi
@@ -147,6 +142,12 @@ for f in $scoped_files; do
 done
 
 [ "${#offenders[@]}" -eq 0 ] && exit 0
+
+new_raw="$(git diff --cached --name-only --diff-filter=A -- "$fixtures_dir" | grep -E '\.(raw|txt)$' || true)"
+if [ -n "$new_raw" ]; then
+  printf 'pre-commit blocked: new external fixtures must be recorded TCAP captures, not handwritten text: %s\n' "$new_raw" >&2
+  exit 1
+fi
 
 printf '\n\033[1;31m✗ pre-commit blocked:\033[0m agent-state detection changed with no capture\n\n' >&2
 printf '%s\n' "${offenders[@]}" | sed 's/^/  /' >&2

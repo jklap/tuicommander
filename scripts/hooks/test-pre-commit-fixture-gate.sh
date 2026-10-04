@@ -28,6 +28,15 @@ if grep -Fq 'ring holds 8 KB' "$scratch/blocked"; then
   exit 1
 fi
 
+# Catches blanket fixture-format policing: raw/text additions alone are not production edits.
+git -C "$repo" restore --staged src-tauri/src/pty.rs
+mkdir -p "$repo/src-tauri/src/fixtures/agent_prompts"
+printf 'hook-only fixture content\n' > "$repo/src-tauri/src/fixtures/agent_prompts/unrelated.txt"
+git -C "$repo" add src-tauri/src/fixtures/agent_prompts/unrelated.txt
+(cd "$repo" && bash "$project_root/scripts/hooks/pre-commit")
+git -C "$repo" rm -f src-tauri/src/fixtures/agent_prompts/unrelated.txt
+git -C "$repo" add src-tauri/src/pty.rs
+
 # A handwritten external fixture must not unlock a production detection edit.
 mkdir -p "$repo/src-tauri/src/fixtures/agent_prompts"
 printf 'invented agent approval output\n' > "$repo/src-tauri/src/fixtures/agent_prompts/invented.raw"

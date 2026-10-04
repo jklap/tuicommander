@@ -61,21 +61,23 @@ def production(source):
         attrs = match.group()
         if not re.search(r'#\s*\[\s*(?:cfg\s*\(\s*test\s*\)|(?:\w+::)?test(?:\s*\([^]]*\))?)\s*\]', attrs):
             continue
-        brace = code.find("{", match.end())
-        if brace < 0:
+        body = re.search(r"[{;]", code[match.end():])
+        if body is None:
             continue
-        depth, end = 1, brace + 1
-        while depth and end < len(code):
-            depth += (code[end] == "{") - (code[end] == "}")
-            end += 1
-        if depth:
-            raise ValueError("unclosed test item; refusing to classify the staged diff")
+        end = match.end() + body.end()
+        if body.group() == "{":
+            depth = 1
+            while depth and end < len(code):
+                depth += (code[end] == "{") - (code[end] == "}")
+                end += 1
+            if depth:
+                raise ValueError("unclosed test item; refusing to classify the staged diff")
         first = source.count("\n", 0, match.start())
         last = source.count("\n", 0, end)
         # Preserve production sharing the declaration/end line (e.g. one-line test modules).
-        if source[source.rfind("\n", 0, match.start()) + 1:match.start()].strip():
+        if code[code.rfind("\n", 0, match.start()) + 1:match.start()].strip():
             raise ValueError("mixed production/test declaration line")
-        if source[end:source.find("\n", end) if "\n" in source[end:] else len(source)].strip():
+        if code[end:code.find("\n", end) if "\n" in code[end:] else len(code)].strip():
             raise ValueError("mixed production/test closing line")
         excluded.update(range(first, last + 1))
     return [line for n, line in enumerate(source.splitlines(True)) if n not in excluded]
