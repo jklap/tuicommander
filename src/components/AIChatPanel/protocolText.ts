@@ -15,8 +15,9 @@ const BULLET = "(?:[●⏺•◦][\\t ]+)?";
 const INTENT = new RegExp(`^[\\t ]*${BULLET}intent:[\\t ]+(.+)$`);
 const SUGGEST = new RegExp(`^[\\t ]*${BULLET}suggest:[\\t ]*\\[([^\\[\\]\\r\\n]*)\\][\\t ]*$`);
 const TRAILING_SUGGEST = /[\t ]+suggest:[\t ]*\[([^[\]\r\n]*)\][\t ]*$/;
-const TITLE = /^(.*?)\(([^)]+)\)\s*$/;
-const TITLE_WITH_REPLY = /^(.*?)\(([^)]+)\)(.+)$/;
+// Only consecutive parenthesized groups belong to the marker prefix.
+// Prose after its title is reply text, even when that prose ends in parentheses.
+const TITLE = /^([^()]+(?:\([^()]+\)[\t ]+)*)\(([^()]+)\)(.*)$/;
 
 export function projectChatProtocolText(text: string): ChatProtocolText {
 	const body: string[] = [];
@@ -47,7 +48,12 @@ export function projectChatProtocolText(text: string): ChatProtocolText {
 		const intentMatch = INTENT.exec(line);
 		if (intentMatch) {
 			const raw = intentMatch[1].trim();
-			const titleMatch = TITLE.exec(raw) ?? TITLE_WITH_REPLY.exec(raw);
+			const titleMatch = TITLE.exec(raw);
+			// Unbalanced or nested marker parentheses have no reliable title boundary.
+			if (!titleMatch && /[()]/.test(raw)) {
+				body.push(line);
+				continue;
+			}
 			const description = (titleMatch?.[1] ?? raw).trim();
 			if (description.length >= 3 && description !== "...") {
 				intent = { text: description, title: titleMatch?.[2].trim() || null };

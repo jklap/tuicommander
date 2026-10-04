@@ -33,6 +33,13 @@ function createRemoteAcpStore() {
 		const notice = event.payload;
 		const origin = remoteEventOrigin(notice);
 		if (!origin || !getRemoteBaseUrl(origin.connection) || typeof notice.connectionId !== "string") return;
+		if (
+			notice.kind !== "settled" &&
+			notice.kind !== "interaction_pending" &&
+			notice.kind !== "interaction_settled" &&
+			notice.kind !== "ready"
+		)
+			return;
 		const key = JSON.stringify([origin.connection, notice.connectionId]);
 		const revision = (revisions.get(key) ?? 0) + 1;
 		revisions.set(key, revision);
@@ -41,8 +48,6 @@ function createRemoteAcpStore() {
 			return;
 		}
 		if (notice.kind === "interaction_settled") remove(key, notice.requestId);
-		if (notice.kind !== "interaction_pending" && notice.kind !== "interaction_settled" && notice.kind !== "ready")
-			return;
 		rpc<AcpPendingInteraction[]>("acp_pending_interactions", { connectionId: notice.connectionId }, origin.connection)
 			.then((interactions) => {
 				if (!getRemoteBaseUrl(origin.connection) || revisions.get(key) !== revision) return;
