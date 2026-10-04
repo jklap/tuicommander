@@ -163,7 +163,7 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 8] = [
+const WINDOW_MIRRORABLE_EVENTS: [&str; 9] = [
     "session-state-changed",
     "session-closed",
     "progress-recorded",
@@ -172,6 +172,7 @@ const WINDOW_MIRRORABLE_EVENTS: [&str; 8] = [
     "review-progress",
     "proposals-ready",
     "conflict-assist-status",
+    "upstream-status-changed",
 ];
 
 /// Whether a mirrored event may be repeated on the desktop window.
@@ -303,6 +304,7 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
             | "review-progress"
             | "proposals-ready"
             | "conflict-assist-status"
+            | "upstream-status-changed"
     ) && state.remote.base_url(connection_id).is_none()
     {
         return false;
@@ -352,7 +354,10 @@ fn republish(state: &Arc<AppState>, connection_id: &str, event: &str, payload: s
     let mut payload = payload;
     if let Some(body) = payload.as_object_mut() {
         let mut origin = serde_json::json!({ "connection": connection_id });
-        if matches!(event, "mcp-toast" | "mcp-confirm" | "mcp-confirm-resolved") {
+        if matches!(
+            event,
+            "mcp-toast" | "mcp-confirm" | "mcp-confirm-resolved" | "upstream-status-changed"
+        ) {
             // Names come from this machine's saved connection, never the peer.
             let name = match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
             {
@@ -836,6 +841,7 @@ mod tests {
             "review-progress",
             "proposals-ready",
             "conflict-assist-status",
+            "upstream-status-changed",
         ] {
             assert!(window_may_hear(event), "{event} has a safe window consumer");
         }

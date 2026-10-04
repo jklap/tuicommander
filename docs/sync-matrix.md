@@ -630,3 +630,5 @@ When adding, renaming or moving a docs page:
 | `src-tauri/src/mcp_http/plugin_docs.rs` | AI-optimized plugin reference (`PLUGIN_DOCS` const) |
 | `src/actions/actionRegistry.ts` | ACTION_META → auto-populates HelpPanel + Command Palette |
 | `examples/plugins/` | Reference plugin implementations (7 examples) |
+
+Remote upstream health (#1444-95a4): remote_mirror forwards upstream-status-changed with the locally saved host label; mcpPopupStore refreshes the originating daemon through explicit RPC into remoteStatus. Remote events never refresh or save local server configuration. App-lifetime notices remain visible while the popup is closed; disconnect invalidates in-flight snapshots.
