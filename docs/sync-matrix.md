@@ -634,3 +634,5 @@ When adding, renaming or moving a docs page:
 Remote upstream health (#1444-95a4): remote_mirror forwards upstream-status-changed with the locally saved host label; mcpPopupStore refreshes the originating daemon through explicit RPC into remoteStatus. Remote events never refresh or save local server configuration. App-lifetime notices remain visible while the popup is closed; disconnect invalidates in-flight snapshots.
 
 Remote ACP notices wake a separate daemon-scoped interaction queue in AI Chat. Pending questions and responses use the existing ACP HTTP routes with an explicit remote owner; settlement/disconnection remove only that daemon’s questions. Local ACP connections are not attached or changed.
+
+GitHub pollers now cold-start without a desktop AppHandle. Remote PR/issue snapshots and transitions share the notice forwarding path; repository ownership gates desktop consumers, daemon-owned URLs are fetched explicitly, and remote transitions never invoke local automation. Bell identity includes daemon ownership.
