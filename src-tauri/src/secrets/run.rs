@@ -22,6 +22,7 @@ pub(crate) async fn handle_secret(
     state: &Arc<AppState>,
     args: &serde_json::Value,
 ) -> serde_json::Value {
+    tracing::info!(source = "secrets", "Secret tool dispatched");
     let result = match args["action"].as_str() {
         Some("request") => {
             let mut input = args.clone();
@@ -53,6 +54,10 @@ pub(crate) async fn handle_secret(
         },
         _ => Err("Secret actions: request, run, remove".into()),
     };
+    match &result {
+        Ok(_) => tracing::info!(source = "secrets", "Secret tool completed"),
+        Err(error) => tracing::warn!(source = "secrets", %error, "Secret tool failed"),
+    }
     result.unwrap_or_else(|error| serde_json::json!({"error": error}))
 }
 
@@ -190,7 +195,7 @@ pub(super) async fn run_child(
                 .map_err(|_| "Secret command wait failed".to_string())
         })
     };
-    let captured = tokio::time::timeout(std::time::Duration::from_secs(120), capture).await;
+    let captured = tokio::time::timeout(tuic_ipc::SECRET_CHILD_TIMEOUT, capture).await;
     let (stdout, stderr, status) = match captured {
         Ok(Ok(result)) => result,
         Ok(Err(error)) => {
