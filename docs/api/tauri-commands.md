@@ -813,3 +813,8 @@ against the backend-created private window. It is intentionally unmapped: an
 HTTP client must already possess the privately delivered capability.
 `secret_form_submit {submission}` checks the same native identity and uses the
 same schema and consumption logic as `POST /secrets/forms/submit`.
+
+### Telegram Settings
+
+- `telegram_settings`: safe settings snapshot (`enabled`, `token_set`, `bot_alias`, `target_tuic_session`, decimal-string `chats`, live `agents`, `connected`, `last_error`, `last_message_time`). Never returns a token or message text.
+- `telegram_setup { change }`: `change.action` is `token` (password `token`, checks `getMe`), `pair` (returns `code`, `expires_in_seconds`), `add_chat`/`remove_chat` (`chat_id`), or `configure` (`enabled`, `target_tuic_session`). Errors are typed safe Telegram categories.
