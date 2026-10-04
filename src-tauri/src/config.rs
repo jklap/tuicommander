@@ -4230,6 +4230,31 @@ pub(crate) fn get_note_images_dir() -> String {
 
 #[cfg(test)]
 mod tests {
+    // Catches: the durable migration stamp overrides a user's later bypass opt-in.
+    #[test]
+    fn critic_migration_does_not_undo_deliberate_bypass_reenable() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = set_config_dir_override(root.path().to_path_buf());
+        let initial = load_agents_config();
+        let mut removed = initial.clone();
+        removed.agents.get_mut("codex").unwrap().run_configs[0]
+            .args
+            .clear();
+        save_agents_config(initial, removed).unwrap();
+        let disabled = load_agents_config();
+        assert!(disabled.agents["codex"].run_configs[0].args.is_empty());
+        let mut enabled = disabled.clone();
+        enabled.agents.get_mut("codex").unwrap().run_configs[0].args =
+            vec!["--dangerously-bypass-approvals-and-sandbox".into()];
+        save_agents_config(disabled, enabled).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                load_agents_config().agents["codex"].run_configs[0].args,
+                vec!["--dangerously-bypass-approvals-and-sandbox"]
+            );
+        }
+    }
+
     use super::*;
     use std::fs;
     use tempfile::TempDir;
