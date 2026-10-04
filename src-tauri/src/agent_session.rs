@@ -281,8 +281,8 @@ fn claude_projects_dir(config_dir_override: Option<&str>) -> Option<PathBuf> {
 
 /// Encode a filesystem path to the slug Claude Code uses as a directory name.
 ///
-/// Claude encodes path separators, `.`, `_`, and the drive colon with `-`,
-/// prepending a leading `-` to represent the root.
+/// Claude replaces every non-ASCII-alphanumeric character with `-`,
+/// including path separators, spaces, `.`, `_`, and the Windows drive colon.
 ///
 /// Example: `/Users/foo.bar/my_project` → `-Users-foo-bar-my-project`
 fn path_to_claude_slug(path: &str) -> String {
@@ -292,7 +292,12 @@ fn path_to_claude_slug(path: &str) -> String {
     let trimmed = normalised.trim_end_matches('/');
     // Claude 2.1.286 replaces non-alphanumeric characters, including the
     // Windows drive colon, before joining the slug under projects/.
-    trimmed.replace(['/', '.', '_', ':'], "-")
+    // DEFERRED (2026-10-04): Claude hashes slugs longer than 200 characters;
+    // matching that suffix is outside this Windows profile-name correction.
+    trimmed
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// Directory where Claude Code registers one JSON file per *running* process.

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Match Claude transcript and subagent directory names for Windows profiles and checkout paths containing spaces or punctuation.
+
 - Match Windows worktree paths across Git and native APIs, support deep Git paths, and close upload staging handles before cleanup.
 
 - Bound nightly release notes and link to the full comparison when the commit list exceeds the release body budget.
