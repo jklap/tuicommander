@@ -8,9 +8,8 @@ const initial = {
 	enabled: true,
 	token_set: true,
 	bot_alias: "test_bot",
-	target_tuic_session: "peer-id",
+	registered_agent_name: "Writer",
 	chats: ["123"],
-	agents: [{ id: "peer-id", name: "Writer" }],
 	connected: true,
 	last_error: null,
 	last_message_time: null,
@@ -37,7 +36,7 @@ describe("Telegram setup", () => {
 		expect(screen.queryByText("123:fake-token")).toBeNull();
 	});
 	// Catches: setup invents a UUID/chat binding instead of submitting the explicit user choice.
-	it("offers both pairing and explicit chat IDs with removal and live target selection", async () => {
+	it("offers both pairing and explicit chat IDs with removal", async () => {
 		render(() => <TelegramTab />);
 		await screen.findByLabelText("Authorized chats");
 		fireEvent.click(screen.getByText("Link chat"));
@@ -53,9 +52,22 @@ describe("Telegram setup", () => {
 		await waitFor(() =>
 			expect(invoke).toHaveBeenCalledWith("telegram_setup", { change: { action: "remove_chat", chat_id: "123" } }),
 		);
-		expect(screen.getByRole("option", { name: "Writer" }).getAttribute("value")).toBe("peer-id");
-		// Catches: asynchronous options reset the persisted target to the placeholder.
-		expect((screen.getByLabelText("Target agent") as HTMLSelectElement).value).toBe("peer-id");
+	});
+	// Catches: Settings authorizes a selected peer instead of respecting MCP registration.
+	it("shows registration read-only and toggles without writing a target", async () => {
+		render(() => <TelegramTab />);
+		await screen.findByText("registered agent: Writer");
+		expect(screen.queryByRole("combobox")).toBeNull();
+		fireEvent.click(screen.getByRole("checkbox"));
+		await waitFor(() =>
+			expect(invoke).toHaveBeenCalledWith("telegram_setup", { change: { action: "configure", enabled: false } }),
+		);
+	});
+	// Catches: an unregistered adapter silently appears to have an agent.
+	it("shows the explicit unregistered status", async () => {
+		invoke.mockResolvedValue({ ...initial, registered_agent_name: null });
+		render(() => <TelegramTab />);
+		await screen.findByText("nessun agent registrato");
 	});
 	// Catches: a failed getMe appears successful or drops the safe error category.
 	it("shows typed setup errors", async () => {

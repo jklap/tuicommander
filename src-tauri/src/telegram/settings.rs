@@ -12,6 +12,8 @@ use std::{
 #[derive(Default, Serialize, Deserialize)]
 struct SetupState {
     connected: bool,
+    #[serde(default)]
+    registered_agent_name: Option<String>,
     last_error: Option<String>,
     last_message_time: Option<u64>,
     #[serde(default)]
@@ -60,20 +62,11 @@ pub(super) fn now_ms() -> u64 {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Change {
-    Token {
-        token: String,
-    },
+    Token { token: String },
     Pair,
-    AddChat {
-        chat_id: String,
-    },
-    RemoveChat {
-        chat_id: String,
-    },
-    Configure {
-        enabled: bool,
-        target_tuic_session: String,
-    },
+    AddChat { chat_id: String },
+    RemoveChat { chat_id: String },
+    Configure { enabled: bool },
 }
 
 #[derive(Serialize)]
@@ -81,9 +74,8 @@ pub(crate) struct Snapshot {
     enabled: bool,
     token_set: bool,
     bot_alias: String,
-    target_tuic_session: String,
+    registered_agent_name: Option<String>,
     chats: Vec<String>,
-    agents: Vec<Value>,
     connected: bool,
     last_error: Option<String>,
     last_message_time: Option<u64>,
@@ -94,7 +86,6 @@ fn config(paths: &Paths) -> Result<Config, Error> {
         return Ok(Config {
             enabled: false,
             bot_alias: String::new(),
-            target_tuic_session: String::new(),
         });
     }
     serde_json::from_str(&super::config::private_text(&paths.file("config.json"))?)
@@ -177,13 +168,17 @@ pub(super) fn status(connected: bool, error: Option<Error>, message: bool) {
         }
     }
 }
-fn live_agent(state: &AppState, peer: &str) -> bool {
-    state
-        .live_pty_for_peer(peer)
-        .and_then(|pty| state.session_state_with_shell(&pty))
-        .is_some_and(|session| session.agent_type.is_some())
+pub(super) fn registration_status(paths: &Paths, name: Option<String>) {
+    let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    state.registered_agent_name = name;
+    state.updated_at = now_ms();
+    if let Ok(bytes) = serde_json::to_vec(&*state) {
+        if let Err(error) = write(paths, "status.json", &bytes) {
+            tracing::warn!(source="telegram", error=%error, "Telegram registration status unavailable");
+        }
+    }
 }
-fn snapshot(paths: &Paths, state: &AppState) -> Result<Snapshot, Error> {
+fn snapshot(paths: &Paths, _state: &AppState) -> Result<Snapshot, Error> {
     let config = config(paths)?;
     let status: SetupState = if paths.file("status.json").exists() {
         serde_json::from_str(&super::config::private_text(&paths.file("status.json"))?)
@@ -191,19 +186,18 @@ fn snapshot(paths: &Paths, state: &AppState) -> Result<Snapshot, Error> {
     } else {
         SetupState::default()
     };
-    let agents = state
-        .peer_agents
-        .iter()
-        .filter(|peer| live_agent(state, peer.key()))
-        .map(|peer| json!({"id":peer.tuic_session,"name":peer.name}))
-        .collect();
     Ok(Snapshot {
         enabled: config.enabled,
         token_set: super::config::private_open(&paths.file("bot.token"), false).is_ok(),
         bot_alias: config.bot_alias,
-        target_tuic_session: config.target_tuic_session,
+        registered_agent_name: if config.enabled
+            && now_ms().saturating_sub(status.updated_at) <= 60_000
+        {
+            status.registered_agent_name
+        } else {
+            None
+        },
         chats: chats(paths)?.iter().map(ToString::to_string).collect(),
-        agents,
         connected: status.connected && now_ms().saturating_sub(status.updated_at) <= 60_000,
         last_error: status.last_error.clone(),
         last_message_time: status.last_message_time,
@@ -213,7 +207,7 @@ fn snapshot(paths: &Paths, state: &AppState) -> Result<Snapshot, Error> {
 pub(crate) async fn change(state: &Arc<AppState>, change: Change) -> Result<Value, Error> {
     change_at(state, paths()?, change).await
 }
-async fn change_at(state: &Arc<AppState>, paths: Paths, change: Change) -> Result<Value, Error> {
+async fn change_at(_state: &Arc<AppState>, paths: Paths, change: Change) -> Result<Value, Error> {
     // Cross-process serialization prevents a desktop save racing daemon pairing.
     ensure_directory(&paths)?;
     let lock = super::config::private_open(&paths.file("setup.lock"), true)?;
@@ -285,17 +279,8 @@ async fn change_at(state: &Arc<AppState>, paths: Paths, change: Change) -> Resul
             save_chats(&paths, &ids)?;
             return Ok(json!({"ok":true}));
         }
-        Change::Configure {
-            enabled,
-            target_tuic_session,
-        } => {
+        Change::Configure { enabled } => {
             let mut config = config(&paths)?;
-            if (enabled || target_tuic_session != config.target_tuic_session)
-                && (!live_agent(state, &target_tuic_session)
-                    || uuid::Uuid::parse_str(&target_tuic_session).is_err())
-            {
-                return Err(Error::State);
-            }
             if enabled
                 && (config.bot_alias.is_empty()
                     || super::config::private_open(&paths.file("bot.token"), false).is_err())
@@ -303,7 +288,6 @@ async fn change_at(state: &Arc<AppState>, paths: Paths, change: Change) -> Resul
                 return Err(Error::Config);
             }
             config.enabled = enabled;
-            config.target_tuic_session = target_tuic_session;
             save_chats(&paths, &chats(&paths)?)?;
             save_config(&paths, &config)?;
         }

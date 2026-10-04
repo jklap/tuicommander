@@ -56,6 +56,7 @@ impl Runtime {
 
     pub(super) fn clear_registration(&mut self) {
         self.registration = None;
+        super::settings::registration_status(&self.outbound.paths, None);
         self.pending.clear();
         self.outbound.active = None;
         self.callbacks.clear();
@@ -134,6 +135,12 @@ impl Runtime {
             self.clear_registration();
         }
         self.registration = Some(candidate);
+        let name = self
+            .state
+            .peer_agents
+            .get(caller)
+            .map(|peer| peer.name.clone());
+        super::settings::registration_status(&self.outbound.paths, name);
         Ok(())
     }
 }

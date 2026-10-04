@@ -101,30 +101,54 @@ async fn manual_chat_revocation_and_disable_use_persisted_state() {
     .await
     .unwrap();
     assert!(!paths.allowlist().unwrap().contains(&222));
-    let saved = config(&paths).unwrap();
-    change_at(
-        &state,
-        paths.clone(),
-        Change::Configure {
-            enabled: false,
-            target_tuic_session: saved.target_tuic_session,
-        },
-    )
-    .await
-    .unwrap();
-    assert!(!config(&paths).unwrap().enabled);
-    assert!(Config::load(&paths).unwrap().is_none());
-    assert_eq!(
-        change_at(
-            &state,
-            paths.clone(),
-            Change::Configure {
-                enabled: true,
-                target_tuic_session: "missing-peer".into()
-            }
-        )
+    change_at(&state, paths.clone(), Change::Configure { enabled: false })
         .await
-        .unwrap_err(),
-        Error::State
+        .unwrap();
+    assert!(!config(&paths).unwrap().enabled);
+    assert!(
+        !std::fs::read_to_string(paths.file("config.json"))
+            .unwrap()
+            .contains("target_tuic_session")
+    );
+    assert!(Config::load(&paths).unwrap().is_none());
+    change_at(&state, paths.clone(), Change::Configure { enabled: true })
+        .await
+        .unwrap();
+    assert!(config(&paths).unwrap().enabled);
+}
+
+// Catches: desktop reports an old registration after adapter restart or expiry.
+#[test]
+fn registered_agent_snapshot_uses_shared_status_and_retires_stale_names() {
+    let (dir, paths) = crate::telegram::tests::setup();
+    let state = AppState::new(
+        dir.path().into(),
+        dir.path().join("worktrees"),
+        crate::config::AppConfig::default(),
+        Arc::new(parking_lot::Mutex::new(
+            crate::app_logger::LogRingBuffer::new(10),
+        )),
+    );
+    registration_status(&paths, Some("Writer".into()));
+    assert_eq!(
+        snapshot(&paths, &state)
+            .unwrap()
+            .registered_agent_name
+            .as_deref(),
+        Some("Writer")
+    );
+    registration_status(&paths, None);
+    assert!(
+        snapshot(&paths, &state)
+            .unwrap()
+            .registered_agent_name
+            .is_none()
+    );
+    write(&paths, "status.json", br#"{"connected":true,"registered_agent_name":"stale","last_error":null,"last_message_time":null,"updated_at":1}"#).unwrap();
+    assert!(
+        snapshot(&paths, &state)
+            .unwrap()
+            .registered_agent_name
+            .is_none()
     );
 }
