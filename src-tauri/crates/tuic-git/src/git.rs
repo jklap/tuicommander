@@ -2371,6 +2371,46 @@ mod tests {
         assert_eq!((files[0].additions, files[0].deletions), (2, 0));
     }
 
+    // Catches trimming boundary spaces, dropping ordinary untracked files,
+    // or leaking untracked entries into staged/committed scopes.
+    #[cfg(unix)]
+    #[test]
+    fn changed_files_preserve_untracked_boundary_spaces_and_scopes_1502() {
+        let (_temp, repo) = empty_fixture_repo();
+        git_in(&repo, &["commit", "-qm", "empty baseline", "--allow-empty"]);
+        std::fs::write(repo.join("tracked.txt"), "baseline\n").unwrap();
+        git_in(&repo, &["add", "tracked.txt"]);
+        git_in(&repo, &["commit", "-qm", "baseline"]);
+        let head = git_in(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+        let literals = [" leading.txt", "trailing.txt ", "ordinary.txt"];
+        for literal in literals {
+            std::fs::write(repo.join(literal), "first\nsecond\n").unwrap();
+        }
+        let path = repo.to_string_lossy().into_owned();
+        let files = get_changed_files_blocking(path.clone(), None).unwrap();
+        assert_eq!(files.len(), literals.len());
+        for literal in literals {
+            let file = files
+                .iter()
+                .find(|file| file.path == literal)
+                .unwrap_or_else(|| panic!("missing literal untracked path {literal:?}"));
+            assert_eq!(file.status, "?");
+            assert_eq!((file.additions, file.deletions), (2, 0));
+            let diff =
+                get_file_diff_blocking(path.clone(), file.path.clone(), None, Some(true)).unwrap();
+            assert!(diff.contains("+first") && diff.contains("+second"));
+        }
+        assert!(
+            get_changed_files_blocking(path.clone(), Some("staged".into()))
+                .unwrap()
+                .is_empty()
+        );
+        let committed = get_changed_files_blocking(path, Some(head)).unwrap();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].path, "tracked.txt");
+        assert_eq!(committed[0].status, "A");
+    }
+
     // --- Fixture repositories ---
     //
     // No test in this module resolves its subject repository from
@@ -5262,12 +5302,11 @@ pub fn get_changed_files_blocking(
         // For working tree scope, also include untracked files
         if scope.is_none() {
             let untracked_out = git_cmd(&repo_path)
-                .args(["ls-files", "--others", "--exclude-standard"])
+                .args(["ls-files", "--others", "--exclude-standard", "-z"])
                 .run_silent();
 
             if let Some(ref out) = untracked_out {
-                for line in out.stdout.lines() {
-                    let file_path = line.trim();
+                for file_path in out.stdout.split('\0') {
                     if file_path.is_empty() {
                         continue;
                     }
