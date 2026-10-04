@@ -18869,9 +18869,10 @@ mod tests {
 
     #[test]
     fn agent_tool_description_carries_orchestration_crash_course() {
-        // Tool descriptions reach every MCP client (unlike initialize
-        // `instructions`, which clients like Codex ignore). The 5-line
-        // orchestration primer + wait/send delivery semantics must live here.
+        // Tool semantics belong in descriptions, available when discovered.
+        // Initial model visibility of descriptions and initialize instructions
+        // depends on the harness (see docs/backend/mcp-http.md). The primer
+        // and wait/send delivery semantics must live here.
         let defs = native_tool_definitions();
         let agent = defs
             .as_array()

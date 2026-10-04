@@ -619,17 +619,51 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 ### Two instruction surfaces, and which one owns a rule
 
-TUIC teaches a connecting agent through two surfaces, and they do not reach the
-same clients:
+TUIC supplies protocol instructions and tool descriptions on different wire
+surfaces. Client receipt does not prove that the model can read either surface
+on its first turn. Deferred tool discovery can expose them later.
 
-| Surface | Who receives it | Owns |
-|---|---|---|
-| `initialize.instructions` (`render_mcp_instructions`) | clients that surface instructions. **Codex does not** | the wire protocol markers, rules about tools that are *not* ours, live state |
-| tool `description` (`native_tool_definitions`) | **every** client, on every `tools/list` | everything about that tool: its actions, its arguments, its semantics |
+| Surface | Transport receipt | Model visibility | Owns |
+|---|---|---|---|
+| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, cross-tool rules, live state |
+| tool `description` (`native_tool_definitions`) | Returned for advertised tools on `tools/list` | May be deferred by the harness; in Speakeasy mode native descriptions arrive through discovery | That tool's actions, arguments and semantics |
+
+**Pinned canary evidence (2026-10-04).** Claude Code **2.1.286**, with
+`claude-sonnet-5-5`, exposes server instructions even when tool descriptions are
+deferred. Its default instruction cap is **2,048 characters**: the 1,024- and
+2,048-byte ASCII controls cite START/MIDDLE/END; the 4,096–32,768-byte controls
+cite START only (`CLAUDE_DEFAULT_*`). The unused probe description is absent
+until tool loading. Disabling tool search exposes that description but does not
+remove the instruction cap. `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH=65536`
+exposes all three instruction canaries at 32,768 bytes
+(`CLAUDE_MAX_OVERRIDE_32768`).
+
+Codex CLI **0.160.0**, with `gpt-6-luna`, receives the instructions, but its
+initial no-tool turns cite **NONE** at all six tested sizes. After metadata
+discovery, it cites the instruction START/MIDDLE/END and description token at
+1,024, 4,096 and **32,768 bytes** (`CODEX_SEARCH_*`, including
+`CODEX_SEARCH_32768.stdout`). Thus the field is not universally discarded, and
+post-discovery visibility does not establish first-turn visibility.
+
+The harness report at
+`~/Gits/personal/orchestrator/reports/tuicommander/2026-10-04-mcp-instructions-harnesses.md`
+records versions, controls and limits; its raw canary evidence is under
+`~/Gits/.tmp/mcp-canary/` (including `CLAUDE_DEFAULT_2048.stdout`). Speakeasy
+advertises meta-tool descriptions first; native `agent`, `repo` and `session`
+semantics require discovery. A description fallback therefore cannot guarantee
+that startup rules prevent an earlier shell action. Actual within-process
+reconnects and untested harness versions remain unmeasured.
+
+Instruction files are a separate surface. The
+rules-file study at `~/Gits/.tmp/rules-file-study/result.md` measures Claude
+`@file` expansion, literal unexpanded `@file` lines in Codex `AGENTS.md`, and
+explicit ego `--instructions FILE` loading in headless mode. Do not treat a
+file reference, MCP receipt, or parent context as proof of child or lifecycle
+visibility. The studies do not change TUIC's launch behavior.
 
 The rule that follows: a statement a tool description carries is not repeated in
-the instructions. A client reading both paid for it twice, and — worse — the
-client reading only descriptions was the one going without. That is the direction
+the instructions. A client reading both paid for it twice, and — worse — a
+client that loaded only descriptions could otherwise go without that rule. That is the direction
 story `078-8b2e` set, and `instructions_do_not_repeat_what_tool_descriptions_already_say`
 now enforces it in both directions, asserting the removal *and* the surviving
 copy. Three things moved out of the instructions this way: the per-tool
