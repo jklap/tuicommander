@@ -438,3 +438,40 @@ fn concurrent_proposals_with_one_key_create_one_story() {
     assert!(ids.iter().all(|id| *id == ids[0]), "{ids:?}");
     assert_eq!(store.list_stories(&p.id).expect("list").len(), 1);
 }
+
+/// Catches: tracking-only local requests bypassing revision or criterion bounds,
+/// or a refused update leaving persisted state or a transition history row behind.
+#[test]
+fn refused_local_updates_preserve_story_and_transition_history() {
+    let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("dir");
+    let store = open(dir.path());
+    let p = plan(&store, "local refusals");
+    let initial = story(&store, &p.id, "A");
+    let started = store
+        .transition_from_local_api(&initial.id, initial.revision, StoryCommand::StartManual)
+        .expect("trusted local start");
+    let before = store.transition_history(&initial.id).expect("history");
+
+    for (revision, command, cause) in [
+        (
+            started.revision,
+            StoryCommand::CheckCriterion(1),
+            "out of range",
+        ),
+        (initial.revision, StoryCommand::WontFix, "revision"),
+    ] {
+        let error = store
+            .transition_from_local_api(&initial.id, revision, command)
+            .expect_err("invalid local update");
+        assert!(error.contains(cause), "{error}");
+        let persisted = store.get_story(&initial.id).expect("persisted story");
+        assert_eq!(persisted.status, StoryStatus::InProgress);
+        assert_eq!(persisted.revision, started.revision);
+        assert_eq!(persisted.checked, vec![false]);
+        assert_eq!(persisted.claim_session, None);
+        assert_eq!(
+            store.transition_history(&initial.id).expect("history"),
+            before
+        );
+    }
+}
