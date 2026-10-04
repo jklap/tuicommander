@@ -10382,7 +10382,7 @@ fn append_and_flush(
     (id, !still_parked, queued_command_count(state, session_id))
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub use tuic_dictation::continuous::{VoiceHold, VoiceWrite};
 
 /// Type one hands-free turn into an agent's composer now — busy or idle.
@@ -10397,7 +10397,7 @@ pub use tuic_dictation::continuous::{VoiceHold, VoiceWrite};
 /// confident question (speech must never answer a permission dialog) and a
 /// draft in the composer. A held turn stays with the caller. The write itself
 /// is the framed path every injection uses (Ctrl-U, text, a separate Enter).
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) fn write_voice_turn(
     state: &AppState,
     session_id: &str,
@@ -10448,7 +10448,7 @@ pub(crate) fn write_voice_turn(
 /// so an unsupported target is refused where the user can see it rather than
 /// after the first utterance. Deliberately not a "can we reach it somehow"
 /// check: an ACP target has no PTY composer, and there is no fallback for it.
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) fn session_accepts_voice(state: &AppState, session_id: &str) -> bool {
     state.session_maps.sessions.contains_key(session_id) && session_is_agent(state, session_id)
 }

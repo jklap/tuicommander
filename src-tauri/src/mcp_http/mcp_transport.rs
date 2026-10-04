@@ -1147,6 +1147,7 @@ const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
+#[cfg(any(feature = "dictation", test))]
 const VOICE_ACTIONS: &str = "speak, stop, status";
 const REMOTE_ACTIONS: &str = "preview, update";
 
@@ -6457,7 +6458,7 @@ fn resolve_mcp_origin_agent_type(
 /// contributes is the *identity* — an unbound caller has no terminal, so it
 /// can never match a binding and is told speech is unavailable rather than
 /// being allowed to speak into whichever conversation happens to be armed.
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 fn handle_voice(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -6525,7 +6526,7 @@ fn handle_voice(
 /// Voice needs a microphone, a speaker and the dictation stack, none of which
 /// the headless binary builds. Reported as unavailable rather than as an
 /// unknown tool, so a model reads one consistent reason on both builds.
-#[cfg(not(feature = "desktop"))]
+#[cfg(not(feature = "dictation"))]
 fn handle_voice(
     state: &Arc<AppState>,
     _args: &serde_json::Value,
@@ -9633,7 +9634,7 @@ mod tests {
                 !bound_direct.contains("not bound to a terminal"),
                 "a bound caller must pass the identity gate: {bound_direct}"
             );
-            #[cfg(not(feature = "desktop"))]
+            #[cfg(not(feature = "dictation"))]
             assert!(
                 bound_direct.contains("This TUICommander build has no audio support"),
                 "a bound headless caller must receive the no-audio status: {bound_direct}"

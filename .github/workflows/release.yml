@@ -204,6 +204,7 @@ jobs:
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
+          # tauri.conf.json enables the non-default dictation feature for bundles.
           args: ${{ matrix.args }}
 
       - name: Cleanup macOS keychain
