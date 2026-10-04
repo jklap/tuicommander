@@ -5774,6 +5774,39 @@ mod tests {
         assert_eq!(loaded.tab_ordering_mode, TabOrderingMode::Free);
     }
 
+    // Catches: a pre-migration backend save discards the marker and re-enables a removed bypass.
+    #[test]
+    #[serial_test::serial]
+    fn codex_removed_bypass_survives_legacy_backend_save() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _override = set_config_dir_override(dir.path().to_path_buf());
+        let base = load_agents_config();
+        let mut desired = base.clone();
+        desired.agents.get_mut("codex").unwrap().run_configs[0]
+            .args
+            .clear();
+        save_agents_config(base, desired).unwrap();
+
+        // Baseline 33faf1183 AgentSettings has no codex_bypass_migrated field.
+        // Its typed ConfigFile read-modify-write omits that unknown field even
+        // when the user only changes idle-close. Record that on-disk result.
+        let path = dir.path().join(AGENTS_CONFIG_FILE);
+        let mut legacy_saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        legacy_saved["agents"]["codex"]
+            .as_object_mut()
+            .unwrap()
+            .remove("codex_bypass_migrated");
+        legacy_saved["agents"]["codex"]["idle_close_minutes"] = serde_json::json!(30);
+        persist_atomic(&path, &serde_json::to_vec(&legacy_saved).unwrap()).unwrap();
+
+        let reloaded = load_agents_config();
+        assert!(
+            reloaded.agents["codex"].run_configs[0].args.is_empty(),
+            "an unrelated save by an older backend must not reactivate sandbox bypass"
+        );
+    }
+
     #[test]
     #[serial_test::serial]
     fn codex_bypass_migration_does_not_restore_a_removed_flag() {
