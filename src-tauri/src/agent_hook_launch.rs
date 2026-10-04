@@ -127,13 +127,7 @@ pub(crate) fn regenerate_launch_assets(config_dir: &Path) -> Result<(), String> 
     crate::config::persist_atomic(&dir.join("claude.json"), &claude)?;
     let codex = codex_script(&codex_user_notify());
     let codex_path = dir.join("codex-notify.sh");
-    crate::config::persist_atomic(&codex_path, codex.as_bytes())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| format!("chmod {}: {e}", codex_path.display()))?;
-    }
+    crate::config::persist_atomic_with_mode(&codex_path, codex.as_bytes(), 0o700)?;
     Ok(())
 }
 
