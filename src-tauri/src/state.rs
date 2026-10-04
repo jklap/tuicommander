@@ -3957,6 +3957,7 @@ pub(crate) struct SettledReviewThreads {
 pub(crate) struct GitCacheState {
     pub(crate) repo_info: GitCache<crate::git::RepoInfo>,
     pub(crate) merged_branches: GitCache<Vec<String>>,
+    pub(crate) repo_diff_stats: GitCache<crate::git::RepoDiffStats>,
     pub(crate) branches_detail: GitCache<Vec<crate::git::BranchDetail>>,
     pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
@@ -3983,6 +3984,7 @@ impl GitCacheState {
         Self {
             repo_info: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             merged_branches: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            repo_diff_stats: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             branches_detail: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_status: build_git_cache(GITHUB_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
@@ -4002,6 +4004,7 @@ impl GitCacheState {
     pub(crate) fn clear_all(&self) {
         self.repo_info.invalidate_all();
         self.merged_branches.invalidate_all();
+        self.repo_diff_stats.invalidate_all();
         self.branches_detail.invalidate_all();
         self.github_status.invalidate_all();
         self.git_status.invalidate_all();
@@ -4013,6 +4016,7 @@ impl GitCacheState {
     pub(crate) fn invalidate_repo(&self, path: &str) {
         self.repo_info.invalidate(path);
         self.merged_branches.invalidate(path);
+        self.repo_diff_stats.invalidate(path);
         self.branches_detail.invalidate(path);
         // github_status (remote PR/CI data) is NOT invalidated here — local git
         // changes don't affect remote PRs. The poller and head-changed → pollRepo
