@@ -200,6 +200,12 @@ impl StoryStore {
         let tx = immediate(&mut conn)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
+        if actor == StoryTransitionActor::LocalApi && matches!(&command,
+            StoryCommand::WontFix | StoryCommand::Block | StoryCommand::Unblock
+            | StoryCommand::RejectReview)
+        {
+            return Err(format!("{} requires an authenticated user action", command_name(&command)));
+        }
         if let StoryTransitionActor::ManagedSession { session_id: actor } = &actor {
             match command {
                 StoryCommand::CheckCriterion(_)

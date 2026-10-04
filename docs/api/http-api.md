@@ -2784,3 +2784,5 @@ reconnects after pressure evicted its history can deliver one duplicate.
 Disconnect retires that host's existing shadows synchronously, independently
 of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.
+
+Workflow policy mutations and human run decisions require a valid session cookie, URL token, or Basic Auth even on loopback. Local admission alone grants LocalApi authority. Story block/unblock, reject-review and wont-fix transitions also require user authentication; managed sessions retain their existing claim/reviewer rules.

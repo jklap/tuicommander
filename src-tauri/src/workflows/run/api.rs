@@ -1,5 +1,5 @@
 use super::{RunCommand, RunEvent, RunLimits, RunReceipt, RunSnapshot, RunStore};
-use crate::workflows::{AgentRole, NodeKind, WorkflowStore};
+use crate::workflows::{AgentRole, NodeKind, WorkflowStore, WorkflowActor};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
@@ -100,6 +100,23 @@ pub fn active_coordinator_session(run: &RunSnapshot) -> Result<Option<String>, S
 }
 
 pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> {
+    run_action_for_actor(project, action, WorkflowActor::Human)
+}
+
+pub fn run_action_for_actor(
+    project: &str,
+    action: RunAction,
+    actor: WorkflowActor,
+) -> Result<RunReply, String> {
+    if actor != WorkflowActor::Human && matches!(&action,
+        RunAction::Command { command, .. } if matches!(command.as_ref(),
+            RunCommand::AnswerInput { .. } | RunCommand::Resume
+            | RunCommand::ResolveUncertainEffect { .. }
+            | RunCommand::FinalVerificationPassed | RunCommand::Complete))
+    {
+        return Err("workflow human decision requires an authenticated user action".into());
+    }
+
     if !crate::fs::is_absolute_on_any_platform(project) {
         return Err("project must be an absolute path".into());
     }
@@ -225,6 +242,15 @@ pub fn run_action_with_events(
     project: &str,
     action: RunAction,
 ) -> Result<RunReply, String> {
+    run_action_with_events_for_actor(state, project, action, WorkflowActor::Human)
+}
+
+pub fn run_action_with_events_for_actor(
+    state: &crate::state::AppState,
+    project: &str,
+    action: RunAction,
+    actor: WorkflowActor,
+) -> Result<RunReply, String> {
     let mutation = matches!(
         action,
         RunAction::StartPlan { .. }
@@ -233,7 +259,7 @@ pub fn run_action_with_events(
             | RunAction::RecertifyCanonical { .. }
             | RunAction::ExecuteCheck { .. }
     );
-    let reply = run_action(project, action)?;
+    let reply = run_action_for_actor(project, action, actor)?;
     if mutation {
         let (repo_path, run_id, sequence) = match &reply {
             RunReply::Snapshot(snapshot) => (&snapshot.project, &snapshot.id, snapshot.sequence),
@@ -281,4 +307,30 @@ fn scoped_snapshot(store: &RunStore, owner: &str, run_id: &str) -> Result<RunSna
         return Err("workflow run does not belong to project".into());
     }
     Ok(snapshot)
+}
+
+
+#[cfg(test)]
+mod actor_tests {
+    use super::*;
+
+    #[test]
+    fn local_and_managed_calls_cannot_record_human_run_decisions() {
+        // catches: agents answer their own user prompt or self-certify completion.
+        for actor in [WorkflowActor::LocalApi, WorkflowActor::ManagedSession, WorkflowActor::Human] {
+            for command in [
+                RunCommand::AnswerInput { attempt_id: "attempt".into(), answer: "yes".into() },
+                RunCommand::Resume, RunCommand::FinalVerificationPassed, RunCommand::Complete,
+                RunCommand::ResolveUncertainEffect { effect_id: "effect".into(), succeeded: true },
+            ] {
+                let error = run_action_for_actor("relative", RunAction::Command {
+                    run_id: "run".into(), command_id: "decision".into(), expected_sequence: 1,
+                    command: Box::new(command),
+                }, actor).unwrap_err();
+                assert!(error.contains(if actor == WorkflowActor::Human {
+                    "absolute path"
+                } else { "authenticated user" }), "{error}");
+            }
+        }
+    }
 }
