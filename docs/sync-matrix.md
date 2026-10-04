@@ -144,7 +144,18 @@ When changing an awaiting/idle/busy signal — a parser, the hook suppression, o
 | `src-tauri/src/pty/tests.rs` | A case in the `Awaiting-signal fixtures` block replaying that capture |
 | `src-tauri/src/pty.rs` tests | A case in the `Awaiting RETRACTION` block when the failure is a state that never clears — fixtures assert emitted events and cannot express a MISSING one |
 | `scripts/hooks/pre-commit` | The fixture gate's symbol/file lists — a new detection symbol or a new detection-carrying file must be added, or the gate silently stops covering it |
+
 | `AGENTS.md` | "Agent state detection" section (signal table, capture workflow, retraction) |
+
+The fixture gate compares the indexed and committed production scopes, excluding
+`#[cfg(test)]` modules and `#[test]`/`#[tokio::test]` functions. Test-only
+changes may reuse existing captures. Production detection changes require a staged,
+framed TCAP v2 capture with nonzero geometry, complete records and a matching
+provenance Markdown file (capture source and SHA-256). New raw/text external
+fixtures are rejected; legacy captures remain readable. Framing and provenance
+checks do not authenticate where bytes came from: the author must record them
+from the real system.
+
 
 ### MCP Tool Surface (native tools, upstream proxy, meta-tools)
 When changing the tool list, tool handlers, `disabled_native_tools`, upstream allow/deny filters, or the Speakeasy meta-tools:
