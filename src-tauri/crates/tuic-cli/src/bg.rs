@@ -340,7 +340,7 @@ mod tests {
             );
         }
         for caller in [
-            "".to_string(),
+            String::new(),
             "a".repeat(129),
             "../escape".into(),
             "a/b".into(),
