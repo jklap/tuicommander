@@ -2302,10 +2302,10 @@ mod tests {
     /// silent staleness far worse than the redundant fetch being removed.
     ///
     /// Note the commit also rewrites the working tree (git updates the index and
-    /// stat cache), which is exactly why the git-state emit cancels the pending
-    /// working-tree one: one logical change, one event, and it is this one.
+    /// stat cache). Earlier edits may already have emitted WorkingTree before
+    /// the commit finishes; skip those and wait for the commit notification.
     #[tokio::test]
-    async fn a_commit_reports_git_state_not_working_tree() {
+    async fn a_commit_reports_git_state_not_working_tree_even_after_preceding_edits() {
         use std::process::Command;
         let dir = tempfile::tempdir().unwrap();
         // Canonicalize: on macOS the temp dir is `/var/...`, a symlink to
@@ -2350,7 +2350,9 @@ mod tests {
         let kind = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 match rx.recv().await {
-                    Ok(AppEvent::RepoChanged { repo_path: p, kind }) if p == repo_path => {
+                    Ok(AppEvent::RepoChanged { repo_path: p, kind })
+                        if p == repo_path && kind == RepoChangeKind::GitState =>
+                    {
                         return kind;
                     }
                     Ok(_) => continue,
@@ -2359,7 +2361,7 @@ mod tests {
             }
         })
         .await
-        .expect("a commit must emit repo-changed");
+        .expect("a commit must emit GitState after any preceding working-tree notifications");
 
         assert_eq!(kind, RepoChangeKind::GitState);
 

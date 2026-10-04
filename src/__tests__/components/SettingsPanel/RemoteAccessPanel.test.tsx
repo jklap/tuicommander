@@ -146,11 +146,7 @@ describe("RemoteAccessPanel", () => {
 			});
 		}
 
-		const EXPERT_LABELS = [
-			"Port",
-			"Session Token Duration",
-			"Enable IPv6 (dual-stack)",
-		];
+		const EXPERT_LABELS = ["Port", "Session Token Duration", "Enable IPv6 (dual-stack)"];
 		const shown = (view: ReturnType<typeof render>) =>
 			EXPERT_LABELS.filter((label) => view.queryByText(label) !== null);
 
