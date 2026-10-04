@@ -4,6 +4,54 @@ use crate::state::AppState;
 use serde_json::json;
 use std::sync::Arc;
 
+// Catches: a concurrent text write has reached the child but not the input FSM,
+// so Enter previews a stale Escape and lets old Stop interrupt the new turn.
+#[tokio::test]
+async fn stop_does_not_interrupt_enter_after_text_with_pending_bookkeeping() {
+    let dir = tempfile::Builder::new()
+        .prefix("tg-stop-stale-input-critic")
+        .tempdir_in(tuic_test_support::test_temp_root())
+        .unwrap();
+    let state = Arc::new(AppState::new(
+        dir.path().to_path_buf(),
+        dir.path().join("worktrees"),
+        crate::config::AppConfig::default(),
+        Arc::new(parking_lot::Mutex::new(
+            crate::app_logger::LogRingBuffer::new(10),
+        )),
+    ));
+    let pty = "telegram-critic-stale-input-pty";
+    let bytes = crate::test_support::insert_recording_session(&state, pty);
+    crate::test_support::agent_session(&state, pty, crate::pty::SHELL_BUSY);
+    crate::pty::note_submitted_input(&state, pty);
+    let old_epoch = state.session_state_with_shell(pty).unwrap().turn_epoch;
+
+    crate::mcp_http::session::write_pty_input(&state, pty, "\x1b").unwrap();
+    // The native text caller releases its writer before feeding the FSM.
+    // Pause it there; another input caller delivers Enter in that interval.
+    state.write_pty_parts(pty, &[b"replacement"]).unwrap();
+    state.write_pty_parts(pty, &[b"\r"]).unwrap();
+    crate::mcp_http::session::apply_input_bookkeeping(&state, pty, "replacement");
+    crate::mcp_http::session::apply_input_bookkeeping(&state, pty, "\r");
+    let stopped = crate::mcp_http::session::interrupt_turn_if_current(&state, pty, pty, old_epoch);
+    let observed = bytes.lock().unwrap().clone();
+    {
+        let session = state.session_maps.sessions.get(pty).unwrap();
+        let mut session = session.lock();
+        session._child.kill().unwrap();
+        session._child.wait().unwrap();
+    }
+    assert_eq!(
+        observed, b"\x1breplacement\r",
+        "stale FSM preview let old Stop append Escape to the replacement: {stopped:?}",
+    );
+    assert_eq!(
+        state.session_state_with_shell(pty).unwrap().turn_epoch,
+        old_epoch + 1,
+        "the physically delivered Enter must reserve exactly one new turn",
+    );
+}
+
 // Catches: Stop checks epoch N, then writes Esc into newly submitted epoch N+1.
 #[tokio::test]
 async fn stop_does_not_interrupt_a_replacement_turn_after_epoch_check() {
