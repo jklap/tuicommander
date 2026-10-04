@@ -849,6 +849,33 @@ mod tests {
             };
         }
 
+        // Catches: a nonempty cache without command rows prefixes auth with prompt settings.
+        fn corrupt_cached_help_preserves_auth_subcommand(shell: &str) {
+            require_shell(shell);
+            let recorded = crate::agent_hook_launch::RECORDED_CLAUDE_HELP;
+            let truncated = recorded.split("Commands:").next().expect("help prefix");
+            let actual: Vec<String> = [" \n\t", truncated]
+                .into_iter()
+                .flat_map(|help| {
+                    wrapper_command_lines(
+                        shell,
+                        &[
+                            ("TUIC_CLAUDE_SETTINGS", "/tuic/claude.json"),
+                            ("TUIC_CLAUDE_HELP", help),
+                        ],
+                        "claude auth status",
+                    )
+                })
+                .collect();
+            assert_eq!(
+                actual,
+                ["auth status", "auth status"],
+                "{shell}: whitespace and truncated help must retain recorded auth argv"
+            );
+        }
+
+        launch_matrix!(corrupt_cached_help_preserves_auth_subcommand);
+
         launch_matrix!(
             setting_on_prepends_launch_scoped_status_flags,
             an_explicit_user_flag_suppresses_injection,
