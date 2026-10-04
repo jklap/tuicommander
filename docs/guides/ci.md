@@ -87,3 +87,14 @@ Nextest fixture setup scope check is named `scripts/check-nextest-fixture-scope.
 and runs explicitly in the Linux Rust job after workspace tests. That job
 installs Nextest and already has the compiled test binaries. The check retains
 its positive fixture-consumer and negative non-consumer assertions.
+
+## Release notes size
+
+The nightly `update-notes` job groups commits since the latest stable tag.
+Before publication, `scripts/cap-release-notes.py` limits the notes to 120000
+UTF-8 bytes, below GitHub's 125000-character body limit. Oversized notes end at
+a complete line and include a link to the full comparison against `main`.
+Short notes keep their original contents.
+
+The version-tag workflow uses the matching `CHANGELOG.md` section and a download
+legend. It does not use the nightly commit-history notes step.
