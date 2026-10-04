@@ -160,6 +160,11 @@ Each connection stores `auto_update` there. Missing values default to `false`.
 
 ## Core Functions
 
+Launch assets use temporary-file writes, fsync and atomic rename. On Unix,
+`claude.json` is published as `0600` and `codex-notify.sh` as `0700`: the script's
+execute permission is set before rename, so concurrent boots cannot expose a
+non-executable notify script. Other config writes retain the `0600` default.
+
 ```rust
 pub fn config_dir() -> PathBuf
 pub fn load_json_config<T: DeserializeOwned + Default>(filename: &str) -> T
