@@ -9152,6 +9152,38 @@ branch refs/heads/feat
         assert_eq!(rev_at(&worktree, "HEAD").unwrap(), detached_oid);
     }
 
+    // Catches: applying Windows separator rewriting on Unix authorizes a
+    // different checkout when a registered directory contains a literal backslash.
+    #[cfg(unix)]
+    #[test]
+    fn orphan_validation_does_not_alias_literal_backslash_to_a_separator() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let parent = repo.parent().unwrap();
+        let registered = parent.join(r"literal\checkout");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                &registered.to_string_lossy(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let different = parent.join("literal").join("checkout");
+        fs::create_dir_all(&different).unwrap();
+        fs::write(different.join("keep.txt"), "unregistered user work\n").unwrap();
+
+        validate_worktree_path(&repo.to_string_lossy(), &registered.to_string_lossy()).unwrap();
+        let error = validate_worktree_path(&repo.to_string_lossy(), &different.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("not a known worktree"), "{error}");
+        assert_eq!(
+            fs::read_to_string(different.join("keep.txt")).unwrap(),
+            "unregistered user work\n"
+        );
+    }
+
     #[test]
     fn orphan_removal_refuses_a_detached_commit_without_a_durable_ref() {
         let (_temp, repo, _workspaces) = workspace_fixture();
