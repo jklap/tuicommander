@@ -37,3 +37,11 @@ describe("AI Chat protocol text", () => {
 		expect(projectChatProtocolText(text)).toEqual({ intent: null, body: text, suggestions: [] });
 	});
 });
+
+// Catches: malformed marker parentheses silently consume an ambiguous reply.
+it.each(["intent: Reviewing code (Rust (Review)Found a missing check.", "intent: Reviewing code (Review"])(
+	"preserves ambiguous intent text verbatim: %s",
+	(text) => {
+		expect(projectChatProtocolText(text)).toEqual({ intent: null, body: text, suggestions: [] });
+	},
+);

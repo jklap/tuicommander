@@ -254,6 +254,9 @@ AI Chat receives ACP markdown chunks in both desktop and browser mode, without
 terminal rows or wrap metadata. `protocolText.ts` interprets the joined answer
 for that UI: it removes the connection acknowledgement, presents anchored
 `intent:` as status, and exposes bounded bracketed `suggest:` items as replies.
+It takes the title from the consecutive parenthesized marker prefix, preserving
+parenthesized descriptions and same-line reply text, including replies ending in
+parentheses. Ambiguous unbalanced or nested markers remain literal body text.
 It leaves fenced or indented code and prose mentions literal. This is a separate
 logical-line projection of the terminal grammar: reusing the Rust VT parser here would require
 a new backend ACP projection and wire contract, including HTTP/IPC parity.
