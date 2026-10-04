@@ -866,26 +866,37 @@ pub fn get_merged_branches_impl(repo_path: &Path) -> Result<Vec<String>, String>
     let Some(default_branch) = detect_default_branch(&git_dir) else {
         return Ok(vec![]);
     };
-    let main_tip = git_cmd(repo_path)
-        .args([
-            "rev-parse",
-            "--verify",
-            &format!("refs/heads/{default_branch}^{{commit}}"),
-        ])
-        .run()
-        .map_err(|error| format!("Cannot inspect default branch: {error}"))?
-        .stdout;
-    Ok(
-        crate::worktree::branch_integrations_with_pr(repo_path, |_, _, _| false)?
-            .into_iter()
-            .filter(|entry| {
-                entry.branch != default_branch
-                    && entry.tip != main_tip.trim()
-                    && entry.commit_status == crate::worktree::WorkspaceCommitStatus::Merged
-            })
-            .map(|entry| entry.branch)
-            .collect(),
-    )
+    use gix::bstr::ByteSlice;
+    let ref_key = crate::worktree::monitoring_ref_key(repo_path)?;
+    let grepo = gix::open(repo_path).map_err(|e| e.to_string())?;
+    let main_tip = grepo
+        .find_reference(&format!("refs/heads/{default_branch}"))
+        .map_err(|e| e.to_string())?
+        .peel_to_id()
+        .map_err(|e| e.to_string())?
+        .detach();
+    let refs = grepo.references().map_err(|e| e.to_string())?;
+    let mut merged = Vec::new();
+    for reference in refs.prefixed("refs/heads/").map_err(|e| e.to_string())? {
+        let mut reference = reference.map_err(|e| e.to_string())?;
+        let branch = reference.name().shorten().to_str_lossy().into_owned();
+        if branch == default_branch
+            || reference.peel_to_id().map_err(|e| e.to_string())?.detach() == main_tip
+        {
+            continue;
+        }
+        let (status, _) = crate::worktree::monitoring_branch_merge(
+            repo_path,
+            &branch,
+            &ref_key,
+            false,
+            |_, _, _| false,
+        )?;
+        if status == crate::worktree::WorkspaceCommitStatus::Merged {
+            merged.push(branch);
+        }
+    }
+    Ok(merged)
 }
 
 /// Check whether a ref exists in .git/packed-refs (for repos that have been gc'd).
