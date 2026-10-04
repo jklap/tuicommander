@@ -4359,6 +4359,23 @@ impl AppState {
                             ) {
                                 Self::send_mobile_push_url(&state, url, &body);
                             }
+                        } else if notice.kind == crate::acp::AcpNoticeKind::Card {
+                            let repo = state
+                                .acp
+                                .snapshot(notice.connection_id)
+                                .ok()
+                                .filter(|snapshot| snapshot.generation == notice.generation)
+                                .and_then(|snapshot| {
+                                    snapshot.attachments.into_iter().find(|attachment| {
+                                        Some(&attachment.session_id) == notice.session_id.as_ref()
+                                    })
+                                })
+                                .and_then(|attachment| attachment.cwd.to_str().map(str::to_owned));
+                            if let Some((url, body)) = repo.as_deref().and_then(|repo| {
+                                Self::mobile_push_for_acp_session(&state, &notice, repo)
+                            }) {
+                                Self::send_mobile_push_url(&state, url, &body);
+                            }
                         }
                     }
                     // A notice carries nothing that cannot be re-read: a client
@@ -4386,6 +4403,15 @@ impl AppState {
             return None;
         }
         let (_, repo) = pending?;
+        Self::mobile_push_for_acp_session(state, notice, repo)
+    }
+
+    /// Questions and ego cards spend the same conversation budget.
+    fn mobile_push_for_acp_session(
+        state: &Arc<AppState>,
+        notice: &crate::acp::AcpNotice,
+        repo: &str,
+    ) -> Option<(String, String)> {
         let session_id = notice.session_id.as_ref()?;
         let ready = {
             let config = state.config.read();
@@ -4417,7 +4443,12 @@ impl AppState {
             .finish();
         Some((
             format!("/mobile?{query}"),
-            "AI Chat: response needed".to_string(),
+            if notice.kind == crate::acp::AcpNoticeKind::Card {
+                "AI Chat: new notice"
+            } else {
+                "AI Chat: response needed"
+            }
+            .to_string(),
         ))
     }
 
@@ -8761,6 +8792,38 @@ mod tests {
             )),
             "repository paths must stay inside the deep-link query value"
         );
+        let mut card = notice.clone();
+        card.kind = crate::acp::AcpNoticeKind::Card;
+        card.request_id = None;
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            None,
+            "a card must not bypass the question's 30-second conversation budget"
+        );
+        card.session_id = Some(agent_client_protocol::schema::v1::SessionId::new(
+            "card-only",
+        ));
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            Some((
+                "/mobile?repo=%2Frepo&session=card-only".to_string(),
+                "AI Chat: new notice".to_string()
+            ))
+        );
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            None,
+            "repeated cards must not flood the phone"
+        );
+        let first_card = state
+            .acp_push_last_ms
+            .get("card-only")
+            .unwrap()
+            .value()
+            .unwrap();
+        *state.acp_push_last_ms.get_mut("card-only").unwrap() =
+            Some(first_card.saturating_sub(31_000));
+        assert!(AppState::mobile_push_for_acp_session(&state, &card, "/repo").is_some());
         let key = "conversation-1";
         let first = state.acp_push_last_ms.get(key).unwrap().value().unwrap();
         *state.acp_push_last_ms.get_mut(key).unwrap() = Some(first.saturating_sub(31_000));

@@ -711,3 +711,10 @@ import { registerDebugSnapshot } from "./debugRegistry";
 registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 ```
 Each store decides what to expose — no need to modify `debugGlobals.ts`.
+
+### remoteAcp (`remoteAcp.ts`)
+
+Keeps pending ACP permissions and elicitations scoped to their owning daemon.
+Only interaction, ready, and settled notices advance snapshot revisions; unrelated
+card notices leave in-flight permission refreshes valid. Settlement and disconnect
+invalidate obsolete responses before removing their pending requests.
