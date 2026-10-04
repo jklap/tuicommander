@@ -4579,3 +4579,10 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 ## Codex notify publication (1483-7a6e) — Rust restart required
 
 - [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
+
+## Hands-free reply controls audit (#1377-16e1)
+
+- [x] Pause and resume preserve playback ownership without opening a user turn. _(verified: src-tauri/crates/tuic-dictation/src/speaker.rs:590 pause_by_user/resume_by_user only change playback and hold flags; generation changes in hush, not pause. src-tauri/src/dictation/commands.rs:1285 does not change capture state.)_
+- [x] Browser resume continues from the saved sample position without suspending the microphone context. _(verified: src/utils/browserVoice.ts:186 saves the elapsed offset and restarts playback from it; capture remains connected.)_
+- [ ] [VISUAL] Capture the pill while speaking and while user-paused after Boss loads the desktop build. Check Pause/Stop and Play/Stop respectively. No test desktop may be launched by a managed peer.
+- [ ] [HUMAN] On a real phone, tap Pause, Play and Stop during a spoken reply. The reply resumes at its position; Stop drops queued replies; microphone capture stays active. Mouse command dispatch, accessible labels and 44px coarse-pointer targets are present in source; they do not prove real-phone touch/audio behavior.
