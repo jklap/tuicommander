@@ -197,3 +197,49 @@ async fn selected_button_uses_disabled_object_without_callback_data() {
         "disabled and callback_data specify two button types: {button}"
     );
 }
+
+// Catches: Stop appends Esc after a replacement Enter reached the PTY but
+// before its submitting caller advances the epoch in input bookkeeping.
+#[tokio::test]
+async fn stop_does_not_interrupt_replacement_enter_before_input_bookkeeping() {
+    let dir = tempfile::Builder::new()
+        .prefix("tg-stop-enter-critic")
+        .tempdir_in(tuic_test_support::test_temp_root())
+        .unwrap();
+    let state = Arc::new(AppState::new(
+        dir.path().to_path_buf(),
+        dir.path().join("worktrees"),
+        crate::config::AppConfig::default(),
+        Arc::new(parking_lot::Mutex::new(
+            crate::app_logger::LogRingBuffer::new(10),
+        )),
+    ));
+    let pty = "telegram-critic-enter-pty";
+    let bytes = crate::test_support::insert_recording_session(&state, pty);
+    crate::test_support::agent_session(&state, pty, crate::pty::SHELL_BUSY);
+    crate::pty::note_submitted_input(&state, pty);
+    let old_epoch = state.session_state_with_shell(pty).unwrap().turn_epoch;
+
+    // write_pty_input_parts performs exactly these operations in this order.
+    // Pause that caller after the real native write, before its bookkeeping;
+    // another thread can handle the old draft Stop in this legal interval.
+    state.write_pty_parts(pty, &[b"replacement\r"]).unwrap();
+    let stopped = crate::mcp_http::session::interrupt_turn_if_current(&state, pty, pty, old_epoch);
+    crate::mcp_http::session::apply_input_bookkeeping(&state, pty, "replacement\r");
+    let observed = bytes.lock().unwrap().clone();
+    {
+        let session = state.session_maps.sessions.get(pty).unwrap();
+        let mut session = session.lock();
+        session._child.kill().unwrap();
+        session._child.wait().unwrap();
+    }
+    assert_eq!(
+        state.session_state_with_shell(pty).unwrap().turn_epoch,
+        old_epoch + 1,
+        "replacement input must use the production turn transition",
+    );
+    assert_eq!(
+        observed, b"replacement\r",
+        "old draft Stop appended Esc after the replacement Enter: {stopped:?}",
+    );
+}
