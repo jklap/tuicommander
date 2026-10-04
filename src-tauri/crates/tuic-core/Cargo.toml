@@ -5,9 +5,11 @@ edition = "2024"
 
 [features]
 default = []
+audio-output = ["dep:rodio"]
 test-support = ["dep:tempfile", "dep:tuic-test-support"]
 
 [dependencies]
+rodio = { version = "0.22.2", default-features = false, features = ["playback"], optional = true }
 tuic-ipc = { path = "../tuic-ipc" }
 bm25 = { path = "../../patches/bm25" }
 dirs = "6"

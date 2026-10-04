@@ -419,7 +419,8 @@ solitary keystroke keeps the plain `/write` route.
 POST /sessions/:id/queue
 Content-Type: application/json
 
-{ "text": "run the tests" }        -> { "typed": false, "queued": 2 }
+{ "text": "run the tests", "idempotencyKey": "bg-job-1" }
+                                  -> { "accepted": true, "typed": false, "queued": 2 }
 
 GET /sessions/:id/queue            -> [ { "id": 7, "text": "run the tests" } ]
 
@@ -436,6 +437,16 @@ submitted one per idle window in backend acceptance order (a run of hands-free
 voice entries at the head is joined into one submission). `queued`,
 `state.queued_commands`, and `DELETE` count or remove only user commands;
 clearing Compose commands never deletes pending peer/orchestrator delivery.
+
+`idempotencyKey` is optional. Use the same key for retries of one logical
+command; distinct commands need distinct keys even when their text is identical.
+Keys contain 1–128 UTF-8 bytes. The backend
+remembers the last 128 accepted keys per live PTY, including drained or cancelled
+entries. A recognized retry returns `accepted: true`, `typed: false` and the
+current queue depth without appending or flushing again. `accepted` confirms
+queue acceptance, not a model turn. Keys expire on eviction, PTY teardown or
+backend restart; this is an in-memory retry window. Omitted keys preserve the
+usual append behavior. HTTP and Tauri use the same request and response fields.
 
 Agent sessions only — `400` for a plain shell (`"Session is not running an
 agent"`) or empty text, `404` when the PTY is gone. The current depth is also on
@@ -2787,3 +2798,7 @@ of a pending handshake or a later reconnect generation. This is a bounded replay
 not unbounded or restart-persistent exactly-once delivery.
 
 Workflow definition and run APIs are actorless and share the same services across transports. Story transition actors track provenance and never restrict actions. Desktop IPC and valid HTTP credentials record Human; sessionless local requests record LocalApi; managed story requests record their session. Missing ConnectInfo on Unix sockets and in-process services means local/unknown caller metadata, not HTTP 500. Local token exchange is accepted; state, revision, project and integration checks remain enforced.
+
+### Telegram Settings
+
+`GET /config/telegram` mirrors `telegram_settings`. `PUT /config/telegram` accepts `{ "change": { "action": "..." } }` and mirrors `telegram_setup`, including token replacement/check, one-use pairing, typed chat IDs and enable/target updates. Both routes require local access or the existing authenticated remote session. The read response contains only `token_set`, never the token. Chat IDs are decimal strings.

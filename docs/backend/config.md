@@ -887,10 +887,10 @@ an overrideable default.
 `idle_close_minutes` is per agent type. Only orchestrator-spawned children use it;
 user-created terminals are never candidates. The idle window restarts on input,
 output, mail, or agent-state changes. Unread mail, background work, a running
-`tuic bg` job, a failed or retrying background wake, and a per-session keep-open
+`tuic bg` job, a failed, uncertain or retrying background wake, and a per-session keep-open
 mark prevent closure.
 The latest background-wake status for each session is stored atomically at
-`<config_dir>/bg-wakes/<TUIC_SESSION>.json`; a `retrying` or `failed` status
+`<config_dir>/bg-wakes/<TUIC_SESSION>.json`; a `retrying`, `uncertain` or `failed` status
 keeps that managed child open.
 
 **This file belongs to a machine, not to the app.** Every backend reads its own copy, and
@@ -1134,3 +1134,11 @@ Plan runs, their sequenced event history, idempotent command receipts, node atte
 ### Workflow recovery boundaries
 
 Runtime reconciliation refreshes integrated dependency projections without interrupting live attempts or marking their in-flight effects uncertain. The first workflow store open after a process restart uses a separate recovery path that interrupts old attempts and marks intended effects uncertain. A failed run is logged so other runs can recover, and its identifier remains pending for recovery on a later open or runtime reconciliation. Only runs captured at the first open are eligible for restart recovery; new live runs are never swept into retries. Startup dependency refresh still invokes Git; moving those probes outside write transactions requires the freshness contract tracked in story 959-c69c.
+
+### Telegram setup files
+
+Telegram Settings uses `~/.config/tuic-telegram/`: `bot.token`, `allowed_chat_ids` (positive private-chat IDs, one per line), and `config.json` (`enabled`, `bot_alias`). TUIC creates the directory as 0700 and files as 0600 on Unix, refuses secret-file symlinks, and atomically replaces files. A separate `setup.lock` serializes cross-process setup and pairing writes. No token is serialized by the read API.
+
+`pairing.json` holds the one-use six-character code and its absolute ten-minute expiry under the same private permissions, so desktop setup and daemon polling share the authorization credential. A valid private-chat update consumes it; a wrong/expired code or `/start` grants nothing. An explicitly empty allowlist permits polling for pairing, but no outbound sends. A missing or malformed allowlist still fails closed. Enable/target/token changes restart the single daemon adapter; desktop never polls. Status keeps only connectivity, an error category and the last accepted message timestamp.
+
+`status.json` shares safe daemon connectivity/error/timestamps with desktop Settings on the same host. A connection record older than one minute is shown as disconnected. The file contains no token or message text.

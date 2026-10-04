@@ -97,8 +97,13 @@ pub async fn set_global_hotkey(
 ) -> std::result::Result<(), String> {
     let state = app.state::<Arc<AppState>>();
     if combo.is_some() {
+        #[cfg(feature = "dictation")]
         app.state::<crate::dictation::DictationState>()
             .ensure_owner()?;
+        #[cfg(not(feature = "dictation"))]
+        if !app.state::<crate::input_ownership::Ownership>().is_owner() {
+            return Err(crate::input_ownership::OWNED_ELSEWHERE.to_string());
+        }
     }
 
     // Unregister current hotkey (if any)

@@ -1,5 +1,5 @@
 use super::Error;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io::Read;
@@ -21,6 +21,13 @@ impl Paths {
         self.directory.join(name)
     }
     pub(crate) fn allowlist(&self) -> Result<BTreeSet<i64>, Error> {
+        let ids = self.allowlist_entries()?;
+        if ids.is_empty() {
+            return Err(Error::Config);
+        }
+        Ok(ids)
+    }
+    pub(crate) fn allowlist_entries(&self) -> Result<BTreeSet<i64>, Error> {
         let text = private_text(&self.file("allowed_chat_ids"))?;
         let mut ids = BTreeSet::new();
         for line in text.lines() {
@@ -39,9 +46,6 @@ impl Paths {
             }
             ids.insert(id);
         }
-        if ids.is_empty() {
-            return Err(Error::Config);
-        }
         Ok(ids)
     }
     pub(crate) fn token(&self) -> Result<Zeroizing<String>, Error> {
@@ -59,13 +63,12 @@ impl Paths {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     #[serde(default)]
     pub(crate) enabled: bool,
     pub(crate) bot_alias: String,
-    pub(crate) target_tuic_session: String,
 }
 impl Config {
     /// Missing configuration is disabled and never reads allowlist or token.
@@ -86,11 +89,10 @@ impl Config {
                 .bot_alias
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-            || uuid::Uuid::parse_str(&config.target_tuic_session).is_err()
         {
             return Err(Error::Config);
         }
-        paths.allowlist()?;
+        paths.allowlist_entries()?;
         Ok(Some(config))
     }
 }
@@ -167,7 +169,7 @@ pub(super) fn private_open(path: &Path, create: bool) -> Result<File, Error> {
     Ok(file)
 }
 
-fn private_text(path: &Path) -> Result<Zeroizing<String>, Error> {
+pub(super) fn private_text(path: &Path) -> Result<Zeroizing<String>, Error> {
     let file = private_open(path, false)?;
     let mut text = Zeroizing::new(String::new());
     file.take(FILE_LIMIT + 1)
