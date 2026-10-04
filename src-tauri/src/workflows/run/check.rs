@@ -19,7 +19,20 @@ pub struct CheckReceipt {
     pub duration_ms: u64,
 }
 
+#[cfg(test)]
+thread_local! {
+    // Pause the real Git boundary without replacing its output with a fixture.
+    pub(super) static BEFORE_GIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
 pub(super) fn git_output(path: &Path, args: &[&str]) -> Result<String, String> {
+    #[cfg(test)]
+    BEFORE_GIT.with(|slot| {
+        let hook = slot.borrow_mut().take();
+        if let Some(hook) = hook {
+            hook();
+        }
+    });
     let output = Command::new("git")
         .args(args)
         .current_dir(path)

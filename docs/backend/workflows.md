@@ -42,3 +42,5 @@ before exit; cancellation yields no successful receipt.
 Workflow policy writes and human run commands (answer input, resume, resolve uncertain effects, final verification, complete) require desktop IPC or credential-authenticated HTTP. Sessionless loopback HTTP is LocalApi and cannot claim operator authority. The actor is host-selected; request JSON cannot choose it.
 
 Plan aggregation uses the same receipt freshness authority as dependency release and final verification. Workflow-owned plans are Done only while every approved story has current integration evidence at its accepted revision; ref movement returns Active until recertification. Manual plans keep Done/WontFix aggregation. Explicit recertification remains available after cancellation to renew already integrated evidence.
+
+Git receipt and dependency probes run before SQLite write transactions and before the story-store mutex is acquired. The short commit transaction revalidates the persisted run sequence and relevant story revisions; a concurrent change fails with a retry error. No filesystem fingerprint is persisted: ref movement after a probe invalidates receipt freshness on the next read.

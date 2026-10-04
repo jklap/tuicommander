@@ -32,6 +32,11 @@ static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
 static RECONCILED_STORES: LazyLock<Mutex<HashSet<PathBuf>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static BEFORE_COMMIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+}
+
 impl RunStore {
     pub fn open() -> Result<Self, String> {
         let db_path = crate::config::config_dir().join("workflow_runs.sqlite3");
@@ -890,11 +895,8 @@ impl RunStore {
             receipt: receipt.clone(),
         };
         let hash = command_hash(Some(expected_sequence), &command)?;
-        let mut conn = self.connect()?;
-        let tx = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| format!("begin workflow check receipt: {e}"))?;
-        if let Some(prior) = read_command_receipt(&tx, run_id, command_id)? {
+        let conn = self.connect()?;
+        if let Some(prior) = read_command_receipt(&conn, run_id, command_id)? {
             return check_receipt_retry(
                 prior,
                 &execution.story_id,
@@ -902,7 +904,9 @@ impl RunStore {
                 expected_sequence,
             );
         }
-        let snapshot = read_snapshot(&tx, run_id)?;
+        let snapshot = read_snapshot(&conn, run_id)?;
+        drop(conn);
+        let revisions = fingerprint(&plan_stories(&snapshot)?, true)?;
         let current = snapshot
             .stories
             .iter()
@@ -929,6 +933,19 @@ impl RunStore {
         if !matches!(kind, RunEventKind::CheckRecorded { .. }) {
             return Err("workflow no longer accepts the completed check".into());
         }
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| format!("begin workflow check receipt: {e}"))?;
+        if let Some(prior) = read_command_receipt(&tx, run_id, command_id)? {
+            return check_receipt_retry(
+                prior,
+                &execution.story_id,
+                &receipt.check_id,
+                expected_sequence,
+            );
+        }
+        validate_preflight(&tx, &snapshot, &revisions)?;
         let result = persist_event(&tx, snapshot, command_id, Some(hash), at_ms, kind)?;
         tx.commit()
             .map_err(|e| format!("commit workflow check receipt: {e}"))?;
@@ -974,27 +991,69 @@ impl RunStore {
         command: RunCommand,
         at_ms: i64,
     ) -> Result<RunReceipt, String> {
+        self.command_at_checked_with_precommit(
+            run_id,
+            command_id,
+            expected_sequence,
+            command,
+            at_ms,
+            || {
+                #[cfg(test)]
+                BEFORE_COMMIT.with(|slot| {
+                    let hook = slot.borrow_mut().take();
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                });
+            },
+        )
+    }
+
+    fn command_at_checked_with_precommit(
+        &self,
+        run_id: &str,
+        command_id: &str,
+        expected_sequence: Option<i64>,
+        command: RunCommand,
+        at_ms: i64,
+        precommit: impl FnOnce(),
+    ) -> Result<RunReceipt, String> {
         validate_key("command id", command_id)?;
         if command_id.starts_with("start:") || command_id.starts_with("reconcile-") {
             return Err("reserved workflow command id".into());
         }
         let command_hash = command_hash(expected_sequence, &command)?;
+        let conn = self.connect()?;
+        if let Some(receipt) = read_command_receipt(&conn, run_id, command_id)? {
+            return command_retry(receipt, &command_hash);
+        }
+        let snapshot = read_snapshot(&conn, run_id)?;
+        drop(conn);
+        if expected_sequence.is_some_and(|expected| expected != snapshot.sequence) {
+            return Err("stale workflow sequence".into());
+        }
+        let revisions = fingerprint(&plan_stories(&snapshot)?, true)?;
+        let cancelled = matches!(&command, RunCommand::Cancel);
+        // All filesystem/Git probes finish before acquiring the writer lock.
+        let kind = match choose_event(&snapshot, command, at_ms) {
+            Ok(kind) => kind,
+            Err(error) => {
+                let conn = self.connect()?;
+                return match read_command_receipt(&conn, run_id, command_id)? {
+                    Some(receipt) => command_retry(receipt, &command_hash),
+                    None => Err(error),
+                };
+            }
+        };
+        precommit();
         let mut conn = self.connect()?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| format!("begin workflow command: {e}"))?;
         if let Some(receipt) = read_command_receipt(&tx, run_id, command_id)? {
-            if receipt.event.command_hash.as_deref() != Some(command_hash.as_str()) {
-                return Err("workflow command id was reused with a different payload".into());
-            }
-            return Ok(receipt);
+            return command_retry(receipt, &command_hash);
         }
-        let snapshot = read_snapshot(&tx, run_id)?;
-        if expected_sequence.is_some_and(|expected| expected != snapshot.sequence) {
-            return Err("stale workflow sequence".into());
-        }
-        let cancelled = matches!(&command, RunCommand::Cancel);
-        let kind = choose_event(&snapshot, command, at_ms)?;
+        validate_preflight(&tx, &snapshot, &revisions)?;
         let receipt = persist_event(&tx, snapshot, command_id, Some(command_hash), at_ms, kind)?;
         tx.commit()
             .map_err(|e| format!("commit workflow command: {e}"))?;
@@ -1125,6 +1184,39 @@ pub fn story_integrated_at_revision(story_id: &str, revision: i64) -> Result<boo
         story_id,
         revision,
     )
+}
+
+/// Persisted cursors used to reject a receipt preflight invalidated by a run write.
+pub(crate) fn plan_run_sequences_in(
+    db_path: &Path,
+    plan_id: &str,
+) -> Result<Vec<(String, i64)>, String> {
+    if !db_path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| format!("open workflow run cursors: {error}"))?;
+    let has_table: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='workflow_runs')",
+        [], |row| row.get(0),
+    ).map_err(|error| format!("read workflow run schema: {error}"))?;
+    if !has_table {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare("SELECT id,snapshot_json FROM workflow_runs WHERE plan_id=?1 ORDER BY id")
+        .map_err(|error| format!("prepare workflow run cursors: {error}"))?;
+    let rows = stmt
+        .query_map([plan_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| format!("read workflow run cursors: {error}"))?;
+    rows.map(|row| {
+        let (id, json) = row.map_err(|error| format!("read workflow run cursor: {error}"))?;
+        let snapshot: RunSnapshot = decode(&json)?;
+        Ok((id, snapshot.sequence))
+    })
+    .collect()
 }
 
 pub(crate) fn plan_has_workflow_run_in(db_path: &Path, plan_id: &str) -> Result<bool, String> {
@@ -1417,6 +1509,26 @@ fn replace_projections(conn: &Connection, snapshot: &RunSnapshot) -> Result<(), 
     for effect in &snapshot.effects {
         conn.execute("INSERT INTO workflow_effects(run_id,effect_id,effect_key,document_json) VALUES (?1,?2,?3,?4)",
             params![snapshot.id, effect.id, effect.key, encode(effect)?]).map_err(|e| format!("project effect intent: {e}"))?;
+    }
+    Ok(())
+}
+
+fn command_retry(receipt: RunReceipt, hash: &str) -> Result<RunReceipt, String> {
+    if receipt.event.command_hash.as_deref() != Some(hash) {
+        return Err("workflow command id was reused with a different payload".into());
+    }
+    Ok(receipt)
+}
+
+fn validate_preflight(
+    conn: &Connection,
+    snapshot: &RunSnapshot,
+    revisions: &str,
+) -> Result<(), String> {
+    if read_snapshot(conn, &snapshot.id)?.sequence != snapshot.sequence
+        || fingerprint(&plan_stories(snapshot)?, true)? != revisions
+    {
+        return Err("workflow or story revisions changed during command preflight; retry".into());
     }
     Ok(())
 }
@@ -2228,5 +2340,81 @@ mod independent_check_tests {
                 RunEventKind::CheckRecorded { .. }
             ));
         });
+    }
+}
+
+#[cfg(test)]
+mod preflight_tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_story_revision_rejects_a_prepared_run_event() {
+        let (config, project, plan, story, definition, _guard) = super::super::tests::fixture();
+        let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
+        let run = store
+            .start_plan(
+                &project.path().canonicalize().unwrap().to_string_lossy(),
+                &plan,
+                &definition,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let error = store
+            .command_at_checked_with_precommit(
+                &run.id,
+                "pause",
+                Some(run.sequence),
+                RunCommand::Pause,
+                now_ms(),
+                || {
+                    StoryStore::open()
+                        .unwrap()
+                        .transition(&story, 1, crate::stories::StoryCommand::StartManual)
+                        .unwrap();
+                },
+            )
+            .unwrap_err();
+        assert!(error.contains("revisions changed"), "{error}");
+        assert_eq!(store.snapshot(&run.id).unwrap().sequence, run.sequence);
+        assert_eq!(
+            store.replay(&run.id).unwrap(),
+            store.snapshot(&run.id).unwrap()
+        );
+    }
+
+    #[test]
+    fn concurrent_run_revision_rejects_a_prepared_run_event() {
+        let (config, project, plan, _story, definition, _guard) = super::super::tests::fixture();
+        let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
+        let run = store
+            .start_plan(
+                &project.path().canonicalize().unwrap().to_string_lossy(),
+                &plan,
+                &definition,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let error = store
+            .command_at_checked_with_precommit(
+                &run.id,
+                "pause",
+                Some(run.sequence),
+                RunCommand::Pause,
+                now_ms(),
+                || {
+                    store
+                        .command(&run.id, "other-writer", RunCommand::Pause)
+                        .unwrap();
+                },
+            )
+            .unwrap_err();
+        assert!(error.contains("revisions changed"), "{error}");
+        assert_eq!(store.snapshot(&run.id).unwrap().sequence, run.sequence + 1);
+        assert_eq!(
+            store.replay(&run.id).unwrap(),
+            store.snapshot(&run.id).unwrap()
+        );
     }
 }
