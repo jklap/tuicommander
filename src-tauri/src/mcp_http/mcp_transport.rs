@@ -1518,6 +1518,25 @@ fn resolve_allowed_upstreams(
         .and_then(|entry| entry.mcp_upstreams.clone())
 }
 
+/// Settings inventory from the native registry, including disabled tools.
+/// This is app metadata, not an MCP discovery surface. Every native tool can
+/// be disabled; progress additionally requires global progress_tracking.
+pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
+    native_tool_definitions()
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|tool| {
+            let description = tool["description"].as_str().unwrap_or_default();
+            serde_json::json!({
+                "name": tool["name"],
+                "summary": description.lines().next().unwrap_or_default(),
+                "description": description,
+            })
+        })
+        .collect()
+}
+
 /// Apply the two config-driven filters (`disabled_native_tools`,
 /// `progress_tracking`) to the full native tool list. Centralised so
 /// every listing/search path uses the same rules — adding a future config

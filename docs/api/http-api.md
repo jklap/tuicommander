@@ -1543,7 +1543,7 @@ batch authentication with a five-second connect timeout, and caches results for
 GET /mcp/status
 ```
 
-Returns MCP server status (enabled, port, connected clients).
+Returns MCP server status (enabled, running, active sessions, connected MCP clients, maximum sessions). `native_tools` contains the unfiltered native MCP registry as `{name, summary, description}` entries, including disabled tools. `summary` is the first line of the full registry description. This Settings inventory is independent of upstream tools, collapse mode and progress tracking; MCP client discovery still applies all configured filters.
 
 ### MCP Suspend Response
 

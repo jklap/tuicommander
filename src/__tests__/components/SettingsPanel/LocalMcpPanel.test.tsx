@@ -1,4 +1,4 @@
-import { render } from "@solidjs/testing-library";
+import { fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../stores/appLogger", () => ({
@@ -29,6 +29,10 @@ import { uiStore } from "../../../stores/ui";
 import { rpc } from "../../../transport";
 import { mockInvoke } from "../../mocks/tauri";
 
+const nativeTools = ["session", "plugin_dev_guide", "config", "debug", "remote", "secret", "progress", "telegram"].map(
+	(name) => ({ name, summary: `${name} summary`, description: `${name} full description` }),
+);
+
 describe("LocalMcpPanel", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -42,6 +46,7 @@ describe("LocalMcpPanel", () => {
 					mcp_clients: 0,
 					max_sessions: 10,
 					reachable: null,
+					native_tools: nativeTools,
 				});
 			}
 			if (command === "get_relay_status") {
@@ -52,6 +57,54 @@ describe("LocalMcpPanel", () => {
 			}
 			return Promise.resolve(undefined);
 		});
+	});
+
+	// Catches: a static UI inventory silently drops a newly registered backend tool.
+	it("renders every backend native tool, including new tools and full descriptions", async () => {
+		const view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		for (const tool of nativeTools) {
+			expect(view.getByRole("checkbox", { name: tool.name })).toBeDefined();
+			expect(view.getByText(tool.summary)).toBeDefined();
+			expect(view.getByText(tool.description)).toBeDefined();
+		}
+		view.unmount();
+	});
+
+	// Catches: disabled tools disappear from Settings and can never be re-enabled.
+	it("re-enables a disabled backend tool without dropping other disabled names", async () => {
+		const base = vi.mocked(rpc).getMockImplementation();
+		vi.mocked(rpc).mockImplementation((command: string, args?: Record<string, unknown>) =>
+			command === "load_config"
+				? Promise.resolve({ disabled_native_tools: ["telegram", "debug", "unknown_tool"], collapse_tools: false })
+				: (base?.(command, args) as Promise<never>),
+		);
+		mockInvoke.mockImplementation((command: string) =>
+			Promise.resolve(
+				command === "load_config" ? { disabled_native_tools: ["telegram", "debug", "unknown_tool"] } : undefined,
+			),
+		);
+		const view = render(() => <LocalMcpPanel />);
+		await vi.advanceTimersByTimeAsync(0);
+		const toggle = view.getByRole("checkbox", { name: "telegram" }) as HTMLInputElement;
+		expect(toggle.checked).toBe(false);
+		fireEvent.click(toggle);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"save_config",
+			expect.objectContaining({
+				config: { disabled_native_tools: ["debug", "unknown_tool"] },
+			}),
+		);
+		fireEvent.click(toggle);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mockInvoke).toHaveBeenLastCalledWith(
+			"save_config",
+			expect.objectContaining({
+				config: { disabled_native_tools: ["debug", "unknown_tool", "telegram"] },
+			}),
+		);
+		view.unmount();
 	});
 
 	afterEach(() => {
