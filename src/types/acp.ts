@@ -366,7 +366,7 @@ export type AcpStreamFrame =
 	| ({ kind: "gap" } & AcpClientError)
 	| { kind: "end" };
 
-export type AcpNoticeKind = "ready" | "settled" | "interaction_pending" | "interaction_settled";
+export type AcpNoticeKind = "ready" | "settled" | "interaction_pending" | "interaction_settled" | "card";
 
 /**
  * A wake signal, carrying no ordered payload of its own.
