@@ -89,6 +89,10 @@ impl Update {
 /// readiness; no alternative PTY injection or cherry-picked implementation.
 pub(crate) trait MailPort {
     async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error>;
+    /// Validated update id; concrete ports authorize non-text update payloads.
+    async fn update(&mut self, _value: &Value) -> Result<(), Error> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

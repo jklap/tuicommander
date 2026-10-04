@@ -223,3 +223,10 @@ the private allowlist immediately before sending; a 429 delays later operations.
 Finalization retires refresh before the first persistent send. An uncertain or
 partially sent final is returned as an error, never automatically retried.
 There is no outbound journal, durable request state or publish approval authority.
+
+Stop consumes only an allowlisted private-chat update whose draft ID matches the
+active request. It rechecks the peer, live PTY and epoch immediately before bare
+Esc through the native input bookkeeping path, retires refresh before writing,
+and logs only correlation identifiers and write success. Duplicate/stale Stop
+cannot target a replacement turn. The check and native write are synchronous;
+the existing native input API does not expose an atomic epoch-conditioned write.
