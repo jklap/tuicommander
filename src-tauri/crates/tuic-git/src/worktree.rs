@@ -1298,7 +1298,7 @@ pub fn monitoring_ref_key(repo: &Path) -> Result<String, String> {
 
 type MonitoringMerge = (WorkspaceCommitStatus, Option<&'static str>);
 static MONITORING_MERGES: LazyLock<
-    moka::sync::Cache<(PathBuf, String, String, bool), MonitoringMerge>,
+    moka::sync::Cache<(PathBuf, String, String), (MonitoringMerge, String)>,
 > = LazyLock::new(|| moka::sync::Cache::builder().max_capacity(1024).build());
 
 /// Cache only monitoring reads. Destructive preflights still classify freshly.
@@ -1310,20 +1310,28 @@ pub(crate) fn monitoring_branch_merge(
     with_pr: bool,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> Result<MonitoringMerge, String> {
-    MONITORING_MERGES
-        .try_get_with(
-            (repo.to_path_buf(), branch.into(), ref_key.into(), with_pr),
-            || {
-                let default = get_remote_default_branch(&repo.to_string_lossy())?;
-                let tip = rev_at(repo, &format!("refs/heads/{branch}"))?;
-                classify_branch_merge(repo, branch, &tip, &default, pr_proves_tip)
-            },
-        )
-        .map_err(|e: Arc<String>| (*e).clone())
+    let (local, tip) = MONITORING_MERGES
+        .try_get_with((repo.to_path_buf(), branch.into(), ref_key.into()), || {
+            let default = get_remote_default_branch(&repo.to_string_lossy())?;
+            let tip = rev_at(repo, &format!("refs/heads/{branch}"))?;
+            let local = classify_branch_merge(repo, branch, &tip, &default, |_, _, _| false)?;
+            Ok::<_, String>((local, tip))
+        })
+        .map_err(|e: Arc<String>| (*e).clone())?;
+    // PR state changes independently of local refs. Reapply its current proof
+    // on the caller's existing refresh lifecycle, never cache it with local Git.
+    if with_pr
+        && (matches!(
+            local.0,
+            WorkspaceCommitStatus::Unmerged | WorkspaceCommitStatus::PushedUnmerged
+        ) || local.1 == Some("content_superset"))
+        && pr_proves_tip(repo, branch, &tip)
+    {
+        Ok((WorkspaceCommitStatus::Merged, Some("github_pr")))
+    } else {
+        Ok(local)
+    }
 }
-
-static MONITORING_GIX: LazyLock<crate::git_reads::GixGitReads> =
-    LazyLock::new(crate::git_reads::GixGitReads::new);
 
 /// The sidebar needs dirty/merged badges, not the removal fingerprint and
 /// recursive submodule recovery inventory. These are computed by the fresh
@@ -1336,7 +1344,7 @@ pub fn inspect_workspace_monitoring_with_pr(
 ) -> WorkspaceLifecycleStatus {
     let result = (|| -> Result<WorkspaceLifecycleStatus, String> {
         let path = Path::new(&workspace.path);
-        let dirty_files = match MONITORING_GIX.dirty_files(path) {
+        let dirty_files = match crate::git_reads::GixGitReads::dirty_files(path) {
             Some(count) => count,
             None => dirty_files_at(path)?,
         };

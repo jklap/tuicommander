@@ -15,7 +15,7 @@ use tuic_core::cli::{enriched_path, resolve_cli};
 #[cfg(test)]
 thread_local! {
     static COMMAND_COUNTS: std::cell::RefCell<std::collections::BTreeMap<String, usize>> =
-        std::cell::RefCell::new(std::collections::BTreeMap::new());
+        const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
 }
 
 /// Thread-local so parallel fixture tests cannot contaminate spawn measurements.
