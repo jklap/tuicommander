@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Deliver remote MCP confirmation dialogs and their resolution to the desktop. Keep newer remote ACP questions visible when an earlier answer completes.
+
 - Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.
 - Open terminal directory links in the File Browser and report missing paths without creating empty editor tabs.
 

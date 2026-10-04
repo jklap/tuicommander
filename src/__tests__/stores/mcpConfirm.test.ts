@@ -11,7 +11,7 @@ vi.mock("../../transport", () => ({
 }));
 
 import { __resetMcpConfirmQueue, answerMcpConfirm, pendingConfirm, subscribeMcpConfirm } from "../../stores/mcpConfirm";
-import { rpc, subscribeEvents } from "../../transport";
+import { rpc } from "../../transport";
 
 const mockRpc = vi.mocked(rpc);
 
@@ -26,12 +26,16 @@ describe("mcpConfirm store", () => {
 		await subscribeMcpConfirm();
 	});
 
-	it("subscribes to both the request and the resolution", () => {
-		// Without the resolution event a dialog answered on another device would
-		// stay on screen here forever, since nothing else retracts it.
-		const calls = vi.mocked(subscribeEvents).mock.calls;
-		const types = calls[calls.length - 1][0];
-		expect(Object.keys(types).sort()).toEqual(["mcp-confirm", "mcp-confirm-resolved", "remote-connection-status"]);
+	it("advances the visible queue when another client resolves the first request", () => {
+		// Catches: missing request/resolution delivery leaves a stale dialog blocking the next question.
+		emitRequest("r1", "First");
+		emitRequest("r2", "Second");
+		expect(pendingConfirm()?.title).toBe("First");
+		handlers["mcp-confirm-resolved"]({ request_id: "r1", confirmed: true });
+		expect(pendingConfirm()?.title).toBe("Second");
+		handlers["mcp-confirm-resolved"]({ request_id: "r2", confirmed: false });
+		expect(pendingConfirm()).toBeNull();
+		expect(mockRpc).not.toHaveBeenCalled();
 	});
 
 	it("shows a request an agent is blocked on", () => {

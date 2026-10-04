@@ -163,12 +163,14 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 13] = [
+const WINDOW_MIRRORABLE_EVENTS: [&str; 15] = [
     "session-state-changed",
     "session-closed",
     "progress-recorded",
     "workflow-run-changed",
     "mcp-toast",
+    "mcp-confirm",
+    "mcp-confirm-resolved",
     "review-progress",
     "proposals-ready",
     "conflict-assist-status",
