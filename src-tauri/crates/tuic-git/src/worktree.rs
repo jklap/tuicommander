@@ -8450,8 +8450,9 @@ branch refs/heads/feat
         assert_eq!(after.archive_ref, suffixed);
         assert_eq!(
             delete_integrated_local_branch(&repo.to_string_lossy(), "suffixed-1462").unwrap(),
-            "archived"
+            "content_superset"
         );
+        assert!(rev_at(&repo, "refs/heads/suffixed-1462").is_err());
     }
 
     /// Catches a branch filter that lists checkouts of other branches: those
