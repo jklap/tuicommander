@@ -7,7 +7,7 @@
 
 - An allowlisted private chat sends text to the configured mint agent as structured TUIC mail. Busy agents retain it for a safe boundary; Telegram text never becomes a shell command or composer payload.
 - Once the agent accepts that request, the phone shows Thinking, concise activity, then an explicit complete reply. Unrelated turns must not appear in that stream.
-- Stop targets only that request's live turn. Buttons create durable structured decisions before an LLM reads the resulting mail.
+- Phone Stop is removed from 1438 (Boss decision 2026-10-04); follow-up 1521-52cd depends on 1342-c91e. Buttons return ordinary structured mail.
 - The adapter persists only the polling cursor. Existing in-memory inbox delivery owns safe wake; unread mail is lost on TUIC restart. Bot API assumptions come from the request and public documentation; phase 1 does not read the token, call the Bot API, use SSH, or access mint.
 - Success in this phase means a reviewable design commit addressing all eight assigned subjects. Story acceptance criteria remain open until implementation and verification.
 
@@ -49,25 +49,21 @@ Activity uses the current intent as a concise line; explicit `telegram activity`
 
 Lifecycle idle/completed pauses activity but does not invent a reply. If the agent ends a turn without finish, record an incomplete response and stop the draft; keep the request recoverable and alert TUIC. A done progress event still sends its authored notice. Notifications from the bound peer outside a Telegram request are supported, unchanged in language. `finish` and progress are different messages; do not suppress arbitrary outcomes by comparing prose. Journal notification IDs prevent replay duplicates within the adapter.
 
-## 3. Draft, rate and Stop lifecycle
+## 3. Draft and rate lifecycle
 
 Proposed states: `queued -> active -> finalizing -> finished`, with `stopped`, `incomplete` and `delivery_uncertain` terminal/recovery states. Persist transitions before observable side effects.
 
-- Allocate a nonzero draft ID and persist its request mapping. Initial draft has empty text, `can_stop=true`, `keep_on_stop=false`. Update the same ID with a bounded activity tail.
+- Allocate a nonzero draft ID and persist its request mapping. Initial draft has empty text and no Stop controls. Update the same ID with a bounded activity tail.
 - Refresh unchanged activity every 20 seconds while active, measured from the last successful send. Coalesce new activity to at most one update per 2 seconds. These are local scheduling choices, not claimed Telegram draft quotas.
 - Use one per-chat outbound budget of at most one message operation per second, and a conservative bot-wide budget of 25 per second. Prioritize callback acknowledgements, final replies and due refreshes over intermediate activity. Respect `retry_after` on 429; do not let a retry block incoming polling. A prolonged network outage or throttle can expire a draft: report degraded delivery, preserve final text, and never claim the 30-second TTL can be guaranteed without connectivity. [Telegram rate guidance](https://core.telegram.org/bots/faq#my-bot-is-hitting-limits-how-do-i-avoid-this)
 - Serialize draft refresh and finalization per request. Cancel future refreshes before sending the final reply. Store successful message IDs and chunk receipts. With plain text and no parse mode, split without losing bytes or splitting a Unicode scalar, preferably at a newline; use a conservative 4096 UTF-16-unit budget so astral characters cannot overflow. Reassemble chunks exactly; do not trim whitespace. Keyboard attaches only to the final chunk. An approval record covers all preceding exact-text chunks; bind their returned message IDs, and activate buttons only after every chunk succeeds. An uncertain or incomplete chunk delivery leaves approval buttons inactive.
-- `stopped_message_generation` supplies chat and draft ID. Match both against the active persisted mapping and verify the live peer and current turn epoch. A stale Stop must never interrupt a newer turn. Retire the refresh task before interrupting. Duplicate update IDs do not send a second Esc.
-- Stop calls `src-tauri/src/mcp_http/session.rs:235` `write_pty_input(state, pty_id, "\u001b")`, which invokes capture and input bookkeeping (`:245`, `:358`). This is the bare Esc mapping used by terminal input (`src/components/Terminal/terminalInput.ts:97`). Do not kill the process or substitute Ctrl+C. Log request/peer/draft IDs and write result, without token or private text; a successful write is an interrupt request, not proof that an agent has stopped.
-- Keep stopped partial activity ephemeral; send a small persistent stopped notice after the interrupt attempt. If the turn already ended, record stale Stop without writing. Recovery must not replay an uncertain Esc into a later turn.
-
-Draft TTL, empty-text placeholder and final `sendMessage` behavior are confirmed by the public [draft API](https://core.telegram.org/bots/api#sendmessagedraft); Stop fields by [MessageGenerationStopped](https://core.telegram.org/bots/api#messagegenerationstopped). No live Bot API behavior was exercised in phase 1.
+Phone Stop is deferred to 1521-52cd after 1342-c91e. Draft TTL, empty-text placeholder and final `sendMessage` behavior use the public [draft API](https://core.telegram.org/bots/api#sendmessagedraft). No live Bot API behavior was exercised.
 
 ## 4. Inline callbacks and exact-text approvals
 
-Generic tool buttons are rows of `{label, data}`. Preserve `data` as an opaque string. Bot wire payload is `tc1:<random_handle>`; persisted mapping contains payload, issuing peer, chat ID, returned message ID, expiry and selection status. All callbacks use this mapping, including approvals. [Telegram limits callback data to 1–64 bytes](https://core.telegram.org/bots/api#inlinekeyboardbutton): `approve:<id>:<64 hex chars>` cannot fit. Never truncate a hash.
+Generic tool buttons are rows of `{label, data}`. Preserve `data` as an opaque string. Bot wire payload is `tc1:<random_handle>`; in-memory mapping contains only the current message handles, opaque payload, chat ID and returned message ID. All callbacks use this mapping, including approvals. [Telegram limits callback data to 1–64 bytes](https://core.telegram.org/bots/api#inlinekeyboardbutton): `approve:<id>:<64 hex chars>` cannot fit. Never truncate a hash.
 
-Inbound callback validation checks private allowlisted chat, sender identity for that private chat, known handle, matching message ID, expiry and issuing peer. Missing/inaccessible message metadata fails closed. Never route using a callback's supplied peer or raw action. In one transaction record the first choice and enqueue the following mail body; then call `answerCallbackQuery` and edit the message with the selected label and remove its keyboard. Ack/edit failures retry independently without re-recording the decision or re-mailing it. Later presses receive an already-selected response. Unknown/unauthorized callbacks have no mail or decision side effect; unauthorized chats are silently dropped.
+Inbound callback validation checks private allowlisted chat, sender identity for that private chat, known handle, matching current message ID. Missing/inaccessible message metadata fails closed. Never route using a callback's supplied peer or raw action. Deliver the first choice as native mail, then consume every handle and attempt `answerCallbackQuery` and the selected-label keyboard edit once. Ack/edit failures do not retain retry state. Later presses are ignored. Unknown/unauthorized callbacks have no mail or decision side effect; unauthorized chats are silently dropped.
 
 ```json
 {"channel":"telegram","kind":"callback","request_id":"tg:bot-alias:12345","chat_id":"<allowed-id>","message_id":77,"callback_id":"<query-id>","data":"approve:<artifact-id>:<sha256>","decision_id":"<durable-id>"}
@@ -95,7 +91,7 @@ This guarantees separation of preview, transport completion and approval authori
 
 Confirmed by the coordinator via br-3: the sole allowlist source is mint `~/.config/tuic-telegram/allowed_chat_ids`, mode 0600, one decimal chat ID per line, beside `bot.token`. Boss's private chat is already authorized there. Read this file for authorization; never copy its real IDs into the repository, fixtures, tests, logs or memory. Tests use fake IDs. Missing, empty, unreadable or malformed content fails closed; refresh authorization before accepting inbound updates or sending outbound work, so removal also revokes queued sends. Never learn authorization from `/start`, usernames or first contact.
 
-Proposed `config.json` remains opt-in daemon configuration for `enabled`, a non-secret stable `bot_alias` and `target_tuic_session`; it does not duplicate the allowlist. For the initial single target, route authorized chats to that peer and use only allowlisted destinations. Multiple authorized destinations require an explicit outbound chat selector; never broadcast by accident. Represent chat IDs as decimal strings at JSON/MCP boundaries and validate them as signed integers in Rust. No live allowlist or token is read in phase 1.
+Proposed `config.json` remains opt-in daemon configuration for `enabled`, a non-secret stable `bot_alias` and `target_tuic_session`; it does not duplicate the allowlist. For the initial single target, route authorized chats to that peer and use only allowlisted destinations. Deployment uses one allowed chat ID as the outbound destination, without an agent-supplied selector. Represent chat IDs as decimal strings at JSON/MCP boundaries and validate them as signed integers in Rust. No live allowlist or token is read in phase 1.
 
 The existing token path is `~/.config/tuic-telegram/bot.token`. Read it for each API request, keep it only for that request's duration, then discard it. Never put it in `AppState`, config serialization, environment, memory, logs, error strings or persisted retry work. Validate a regular owner-readable file and enforce owner-only access on mint. No token reads occur in this phase. A shared lock and state directory belong to this adapter config, so isolated TUIC instances cannot become duplicate owners of the same file. Test instances explicitly redirect all three paths under the checkout temp root.
 
@@ -162,7 +158,7 @@ Use an in-process fake Bot API HTTP server, injected clock and fault injection a
 | `telegram_draft_survives_quiet_work_and_obeys_429` | No intent changes let the preview expire, or throttling is ignored; fake time proves refresh cadence and retry delay. |
 | `telegram_finish_cancels_refresh_before_persistent_reply` | In-flight refresh revives a finished draft; server records ordered final chunks and no later refresh. |
 | `telegram_split_preserves_unicode_and_whitespace` | Byte slicing corrupts emoji or trims the approved text; boundary cases reassemble exact input within budget. |
-| `telegram_old_stop_cannot_interrupt_a_new_turn` | Reused draft/PTY mapping sends Esc to another task; matching Stop writes one Esc with bookkeeping, stale/replayed Stop writes none. |
+| Follow-up `1521-52cd` | Safe Stop regression coverage belongs after 1342-c91e, outside 1438. |
 | `telegram_callbacks_bind_chat_message_and_issuer` | Forged handle or message moves a choice to another agent; only valid callback produces structured mail, ack and selected-message edit. |
 | `telegram_publish_preview_cannot_create_or_display_approval_state` | Forged agent approval prose or a finished draft masquerades as consent; preview framing remains explicit, draft schema rejects approval fields, no decision exists before a valid digest-bound callback, and the publisher refuses preview-only evidence. |
 | `telegram_approval_records_exact_bytes_before_mail` | LLM or formatting approves different text; immutable digest/decision precedes mail, and one-byte/newline changes invalidate publishing. |
@@ -179,7 +175,7 @@ At the end of each implementation story, run only the relevant `telegram::tests:
 1. **Owner/config/Bot API boundary:** opt-in daemon startup, shared owner lock, strict allowlist, per-request secrets, typed safe failures and fake server. No live enablement.
 2. **Minimal inbound delivery:** atomic cursor file, native in-memory mail handoff and backpressure. Integrate landed 1419/1420; phone text remains mail-only.
 3. **Correlated drafts and final replies:** MCP begin/activity/finish/send/status, epoch binding, refresh scheduler, plain-text splitting and uncertain-send recovery. Wire bound-agent instructions.
-4. **Stop:** draft mapping, Esc/bookkeeping integration, stale-turn rejection and durable safe audit.
+4. **Stop:** removed from 1438; follow-up 1521-52cd after 1342-c91e.
 5. **Progress notices:** bound-peer blocked/done subscription, persisted progress replay cursor and language-preserving notifications.
 6. **Buttons and approvals:** opaque handles, durable decisions, callback acknowledgement/edit retry, exact-text versioning and publisher receipt contract. Publisher integration must be identified before enabling approvals.
 7. **Operator docs and coordinated live verification:** apply sync matrix MCP/remote/progress sections (`docs/sync-matrix.md:112`, `:149`, `:318`, `:409`): API/backend/user guides, FEATURES, SPEC, CHANGELOG and restart checklist as each behavior lands. Use the confirmed allowlist file, obtain the stable peer binding, authentic sanitized fixtures and Boss readiness; coordinator schedules mint deployment while pe-3 is idle.
@@ -224,13 +220,7 @@ Finalization retires refresh before the first persistent send. An uncertain or
 partially sent final is returned as an error, never automatically retried.
 There is no outbound journal, durable request state or publish approval authority.
 
-Stop consumes only an allowlisted private-chat update whose draft ID matches the
-active request. The native interrupt seam compares peer, live PTY, epoch and the
-derived lifecycle while holding the same SilenceState lock as submitted epoch
-mutation, then writes bare Esc before releasing it. It follows SilenceState then
-SessionState lock order and reuses native input bookkeeping after the write.
-Refresh retires before writing; logs contain only correlation identifiers and
-write success. Duplicate/stale Stop cannot target a replacement epoch.
+Phone Stop is absent. The adapter does not write to the PTY; shared input paths remain unchanged from main. Follow-up 1521-52cd must solve bound-turn interruption after 1342-c91e.
 
 Notifications consume only committed `ProgressRecorded` events whose `ptyId`
 is the current live terminal of the configured peer, and only `done`/`blocked`.
@@ -243,17 +233,20 @@ The current L4 tool exposes begin/activity/finish/send. Caller identity comes fr
 TUIC MCP binding, not an agent argument. Only the configured peer is accepted.
 Begin requires a pending phone request and its live working/awaiting-input PTY.
 Idle/completed/replaced turns retire an unfinished draft; no final is inferred.
-With more than one allowlisted chat, send requires a decimal-string selector;
-notifications report ambiguity instead of broadcasting. Generic button data stays
-opaque, with a random short wire handle bound to chat/message and a one-hour
-in-memory lifetime. Only the first button choice on a message becomes native
-mail. Callback acknowledgement/edit can retry without re-mailing. The chosen
-button uses a DisabledButton object with no callback_data, preserving exact delivered message text.
+Send and notifications use the single configured destination from allowed_chat_ids;
+there is no agent-supplied chat selector. Deployment config contains one chat ID.
+Generic button data stays opaque, with a random short wire handle bound to the
+current chat/message. Sending a replacement retires the previous message handles.
+Only the first button choice on that message becomes native mail; successful mail
+consumes every handle before one acknowledgement/edit attempt. There is no expiry,
+eviction quota or acknowledgement retry state. The chosen label uses the Telegram
+DisabledButton object (`{"text":label,"disabled":{}}`), with no callback_data,
+preserving exact delivered message text.
 These buttons do not create publish receipts; receipt lookup and xkit publishing
 remain outside L4. Earlier proposed durable outbound state, idempotency keys and
 approval inputs in sections 3–6 are design follow-ups, not implemented features.
 Only the cursor file persists. A long 429 delay returns immediately to the worker
-rather than holding Stop asleep; callers see rate-limited/degraded delivery.
+rather than holding the worker asleep; callers see rate-limited/degraded delivery.
 
 
 The daemon has one explicit startup call in run_remote; desktop startup never

@@ -10,7 +10,6 @@ mod notifications;
 mod offset;
 mod outbound;
 mod runtime;
-mod stop;
 mod tool;
 pub(crate) use native::start;
 pub(crate) use tool::{definition as tool_definition, handle as handle_tool};

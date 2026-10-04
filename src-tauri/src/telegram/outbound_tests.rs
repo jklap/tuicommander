@@ -22,7 +22,6 @@ async fn final_chunks_preserve_exact_unicode_and_whitespace() {
         .tool(
             PEER,
             crate::telegram::tool::Input::Send {
-                chat_id: None,
                 text: text.clone(),
                 buttons: vec![],
             },
@@ -44,7 +43,6 @@ async fn final_chunks_preserve_exact_unicode_and_whitespace() {
             .tool(
                 PEER,
                 crate::telegram::tool::Input::Send {
-                    chat_id: None,
                     text: String::new(),
                     buttons: vec![]
                 }
@@ -56,7 +54,8 @@ async fn final_chunks_preserve_exact_unicode_and_whitespace() {
 }
 
 // Catches: activity replaces the draft id, finalization leaves refresh running,
-// or a revoked destination is sent after the outbound wait.
+// a revoked destination is sent after the outbound wait, or removed phone Stop
+// is accidentally advertised again.
 #[tokio::test]
 async fn draft_refresh_and_final_retire_one_request_and_recheck_revocation() {
     let (_dir, paths) = setup();
@@ -85,6 +84,9 @@ async fn draft_refresh_and_final_retire_one_request_and_recheck_revocation() {
     let requests = server.requests();
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[0].1["text"], "");
+    for (_, body) in &requests[..2] {
+        assert!(body.get("can_stop").is_none());
+    }
     assert_eq!(requests[1].1["draft_id"], draft);
     assert!(
         requests[1].1["text"]
@@ -119,107 +121,6 @@ async fn unchanged_draft_refreshes_at_twenty_seconds() {
         server.requests()[0].1["draft_id"],
         server.requests()[1].1["draft_id"]
     );
-}
-
-// Catches: stale/foreign/duplicate Stop interrupts a newer request, or a
-// successful Stop leaves a refresh able to resurrect the stopped draft.
-#[cfg(unix)]
-#[tokio::test]
-async fn stop_matches_chat_draft_and_live_epoch_only_once() {
-    let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![
-        (StatusCode::OK, json!({"ok":true,"result":true})),
-        (StatusCode::OK, json!({"ok":true,"result":{"message_id":7}})),
-    ])
-    .await;
-    let mut runtime = runtime(paths, server.address).await;
-    let bytes = crate::test_support::insert_recording_session(&runtime.state, PEER);
-    crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_BUSY);
-    crate::pty::note_submitted_input(&runtime.state, PEER);
-    runtime
-        .track(crate::telegram::mail::PendingMail {
-            id: "request".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
-        .unwrap();
-    let begun = runtime
-        .tool(
-            PEER,
-            crate::telegram::tool::Input::Begin {
-                request_id: "request".into(),
-            },
-        )
-        .await
-        .unwrap();
-    let draft = begun["draft_id"].as_i64().unwrap();
-    let stopped = |chat, id| json!({"stopped_message_generation":{"chat":{"id":chat,"type":"private"},"draft_id":id}});
-    runtime.update(stopped(2222222, draft)).await.unwrap();
-    runtime.update(stopped(1111111, draft ^ 1)).await.unwrap();
-    assert!(bytes.lock().unwrap().is_empty());
-    assert_eq!(server.requests().len(), 1);
-    runtime.update(stopped(1111111, draft)).await.unwrap();
-    runtime.update(stopped(1111111, draft)).await.unwrap();
-    runtime.tick().await;
-    let result = bytes.lock().unwrap().clone();
-    let requests = server.requests();
-    let (_, session) = runtime.state.session_maps.sessions.remove(PEER).unwrap();
-    let mut session = session.lock();
-    session._child.kill().unwrap();
-    session._child.wait().unwrap();
-    assert_eq!(result, vec![27]);
-    assert_eq!(requests.len(), 2);
-    assert!(requests[1].0.ends_with("sendMessage"));
-    assert_eq!(requests[1].1["text"], "Stop requested.");
-}
-
-// Catches: matching Stop writes into a newer turn that reuses the same PTY.
-#[cfg(unix)]
-#[tokio::test]
-async fn stale_epoch_stop_retires_without_writing() {
-    let (_dir, paths) = setup();
-    let server = FakeServer::start(vec![(StatusCode::OK, json!({"ok":true,"result":true}))]).await;
-    let mut runtime = runtime(paths, server.address).await;
-    let bytes = crate::test_support::insert_recording_session(&runtime.state, PEER);
-    crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_BUSY);
-    crate::pty::note_submitted_input(&runtime.state, PEER);
-    runtime
-        .track(crate::telegram::mail::PendingMail {
-            id: "request".into(),
-            recipient: PEER.into(),
-            content: json!({"chat_id":"1111111"}).to_string(),
-        })
-        .unwrap();
-    let begun = runtime
-        .tool(
-            PEER,
-            crate::telegram::tool::Input::Begin {
-                request_id: "request".into(),
-            },
-        )
-        .await
-        .unwrap();
-    crate::pty::note_submitted_input(&runtime.state, PEER);
-    runtime.update(json!({"stopped_message_generation":{"chat":{"id":1111111,"type":"private"},"draft_id":begun["draft_id"]}})).await.unwrap();
-    runtime.tick().await;
-    let result = bytes.lock().unwrap().clone();
-    let requests = server.requests();
-    let late = runtime
-        .tool(
-            PEER,
-            crate::telegram::tool::Input::Finish {
-                request_id: "request".into(),
-                text: "too late".into(),
-            },
-        )
-        .await;
-    let (_, session) = runtime.state.session_maps.sessions.remove(PEER).unwrap();
-    let mut session = session.lock();
-    session._child.kill().unwrap();
-    session._child.wait().unwrap();
-    assert!(result.is_empty());
-    assert_eq!(requests.len(), 1);
-    assert!(late.is_err());
 }
 
 pub(in crate::telegram) async fn runtime(
@@ -270,7 +171,6 @@ async fn buttons_route_one_opaque_choice_through_native_mail_and_retire_keyboard
         .tool(
             PEER,
             Input::Send {
-                chat_id: None,
                 text: " exact text ".into(),
                 buttons: vec![vec![
                     Button {
@@ -332,10 +232,66 @@ async fn buttons_route_one_opaque_choice_through_native_mail_and_retire_keyboard
     );
 }
 
-// Catches: a foreign caller sends to the phone, an unknown request starts a
-// draft, or multiple allowlisted chats are broadcast/chosen implicitly.
+// Catches: replaced callbacks still mail, or an acknowledgement failure leaves
+// a consumed keyboard able to reoffer a choice.
 #[tokio::test]
-async fn tool_requires_bound_caller_pending_request_and_explicit_multiple_chat_selection() {
+async fn callback_replacement_and_ack_failure_do_not_reoffer_old_handles() {
+    use crate::telegram::tool::{Button, Input};
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":7}})),
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":8}})),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"ok":false,"error_code":500}),
+        ),
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+    ])
+    .await;
+    let mut runtime = runtime(paths, server.address).await;
+    for label in ["Old", "New"] {
+        runtime
+            .tool(
+                PEER,
+                Input::Send {
+                    text: label.into(),
+                    buttons: vec![vec![Button {
+                        label: label.into(),
+                        data: label.into(),
+                    }]],
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let requests = server.requests();
+    let query = |index: usize| {
+        json!({"callback_query":{"id":"query","from":{"id":1111111},
+        "message":{"message_id":7 + index,"date":1,"chat":{"id":1111111,"type":"private"}},
+        "data":requests[index].1["reply_markup"]["inline_keyboard"][0][0]["callback_data"]}})
+    };
+    runtime.update(query(0)).await.unwrap();
+    assert_eq!(server.requests().len(), 2);
+    assert!(runtime.update(query(1)).await.is_err());
+    runtime.update(query(1)).await.unwrap();
+    assert_eq!(server.requests().len(), 4);
+    let inbox = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+        &runtime.state,
+        &json!({"action":"inbox","since":0}),
+        Some("target-mcp"),
+        None,
+    )
+    .await;
+    assert_eq!(inbox["count"], 1);
+    let body: Value =
+        serde_json::from_str(inbox["messages"][0]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(body["data"], "New");
+}
+
+// Catches: a foreign caller sends to the phone, an unknown request starts a
+// draft without a matching inbound request.
+#[tokio::test]
+async fn tool_requires_bound_caller_and_pending_request() {
     use crate::telegram::tool::Input;
     let (_dir, paths) = setup();
     let server = FakeServer::start(vec![]).await;
@@ -345,7 +301,6 @@ async fn tool_requires_bound_caller_pending_request_and_explicit_multiple_chat_s
             .tool(
                 "foreign",
                 Input::Send {
-                    chat_id: None,
                     text: "hello".into(),
                     buttons: vec![]
                 }
@@ -359,33 +314,6 @@ async fn tool_requires_bound_caller_pending_request_and_explicit_multiple_chat_s
                 PEER,
                 Input::Begin {
                     request_id: "unknown".into()
-                }
-            )
-            .await
-            .is_err()
-    );
-    write_private(&paths.file("allowed_chat_ids"), "1111111\n2222222\n");
-    assert!(
-        runtime
-            .tool(
-                PEER,
-                Input::Send {
-                    chat_id: None,
-                    text: "hello".into(),
-                    buttons: vec![]
-                }
-            )
-            .await
-            .is_err()
-    );
-    assert!(
-        runtime
-            .tool(
-                PEER,
-                Input::Send {
-                    chat_id: Some("3333333".into()),
-                    text: "hello".into(),
-                    buttons: vec![]
                 }
             )
             .await
@@ -446,7 +374,7 @@ async fn outbound_permanent_errors_latch_and_rate_limits_do_not_retry_early() {
     }
 }
 
-// Catches: begin/Stop read the raw cached agent_state (unset in production)
+// Catches: begin reads the raw cached agent_state (unset in production)
 // instead of the authoritative snapshot derived from foreground/shell state.
 #[cfg(unix)]
 #[tokio::test]

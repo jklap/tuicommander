@@ -484,14 +484,6 @@ Frontend input helpers route through `src/utils/sendCommand.ts`:
 
 Never write `text + "\r"` directly to a PTY — see `AGENTS.md`.
 
-The backend reserves the turn epoch before delivering a submitted Enter. Raw,
-paired and managed submission writers hold the existing `SilenceState` lock
-across epoch reservation and native writing, in `SilenceState` → `SessionState`
-→ writer order. Telegram Stop uses that same order, so an old draft cannot
-append Escape after a replacement Enter. Post-write input bookkeeping does not
-advance the epoch again. The existing input FSM distinguishes Shift+Enter from
-submission. A failed write may conservatively retire the previous draft.
-
 ## OSC 133 Semantic Prompts
 
 When the shell emits OSC 133 markers (modern bash/zsh/fish with the integration enabled), the reader records clean command lifecycles into the per-session knowledge store:
@@ -716,13 +708,3 @@ Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The
   because session metadata is contended.
 - Reader thread holds `Arc<AtomicBool>` for pause signaling
 - Metrics use `AtomicUsize` for zero-overhead counting
-
-### Epoch-conditioned interrupts
-
-Telegram Stop uses `mcp_http::session::interrupt_turn_if_current`. The native seam
-checks the live peer/PTY binding, exit state, turn epoch and derived working or
-awaiting-input lifecycle, then writes Escape while holding the existing
-`SilenceState` lifecycle mutex and the `SessionState` guard. Submitted epoch
-mutation uses the same `SilenceState` then `SessionState` order, so it cannot
-advance between the comparison and Escape. Native capture and input bookkeeping
-follow the write. The helper adds no recovery state or new synchronization object.

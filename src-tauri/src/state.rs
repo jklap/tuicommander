@@ -695,37 +695,6 @@ pub(crate) enum SpawnRootRole {
 }
 
 impl SessionState {
-    /// Derive the lifecycle from the shell atom and current-turn completion.
-    pub(crate) fn derive_agent_state(&mut self, completion_declared: bool) {
-        let background_work = self.has_pending_background_probe() || self.background_work;
-        // A current-turn completion marker is stronger than a stale BUSY atom
-        // (for example a completed Codex screen that still contains its last
-        // Working row). Keep real background work authoritative, but normalize
-        // the terminal state once the agent has explicitly ended the turn.
-        if completion_declared && !background_work {
-            self.shell_state = Some("idle".to_string());
-        }
-        self.agent_state = if self.agent_type.is_none() {
-            None
-        } else if self.foreground_input_blocked {
-            // A direct program's child owns the terminal even if the retained
-            // ready screen or completion marker still describes the parent.
-            Some("working".to_string())
-        } else if self.awaiting_input || self.choice_prompt.is_some() {
-            Some("awaiting_input".to_string())
-        } else if background_work {
-            Some("working".to_string())
-        } else if completion_declared {
-            Some("completed".to_string())
-        } else if self.shell_state.as_deref() == Some("busy") {
-            Some("working".to_string())
-        } else if self.shell_state.as_deref() == Some("idle") {
-            Some("idle".to_string())
-        } else {
-            Some("starting".to_string())
-        };
-    }
-
     pub(crate) fn has_pending_background_probe(&self) -> bool {
         self.background_probe_turn_epoch == Some(self.turn_epoch)
     }
@@ -2311,79 +2280,21 @@ impl AppState {
             .map(|session| session.lock().writer.clone())
     }
 
-    /// Reserve submitted turns before their Enter can reach the child. A stale
-    /// Stop either completes first or sees the new epoch; failed writes may
-    /// conservatively retire the old draft, never interrupt a replacement.
-    pub(crate) fn with_input_turns<R>(
-        &self,
-        session_id: &str,
-        count: u64,
-        write: impl FnOnce() -> R,
-    ) -> R {
-        if count == 0 {
-            return write();
-        }
-        let silence = self
-            .session_maps
-            .silence_states
-            .entry(session_id.to_string())
-            .or_insert_with(|| Arc::new(parking_lot::Mutex::new(crate::pty::SilenceState::new())))
-            .clone();
-        let _silence = silence.lock();
-        if let Some(mut session) = self.session_maps.session_states.get_mut(session_id)
-            && session.agent_type.is_some()
-        {
-            session.turn_epoch = session.turn_epoch.wrapping_add(count);
-        }
-        write()
-    }
-
-    pub(crate) fn with_input_parts<R>(
-        &self,
-        session_id: &str,
-        parts: &[&[u8]],
-        write: impl FnOnce() -> R,
-    ) -> R {
-        if !parts
-            .iter()
-            .any(|part| part.contains(&b'\r') || part.contains(&b'\n'))
-        {
-            return write();
-        }
-        // Preview the existing FSM without consuming the post-write input.
-        // In particular, Shift+Enter is a composer newline, not a new turn.
-        let mut input = self
-            .session_maps
-            .input_buffers
-            .get(session_id)
-            .map(|input| input.lock().clone())
-            .unwrap_or_default();
-        let count = parts
-            .iter()
-            .filter_map(|part| std::str::from_utf8(part).ok())
-            .flat_map(|part| input.feed(part))
-            .filter(|action| matches!(action, crate::input_line_buffer::InputAction::Line(_)))
-            .count() as u64;
-        self.with_input_turns(session_id, count, write)
-    }
-
     /// Write one atomic sequence of byte slices and flush it before another
     /// user-input or terminal-reply writer can interleave.
     pub(crate) fn write_pty_parts(&self, session_id: &str, parts: &[&[u8]]) -> Result<(), String> {
         let writer = self
             .pty_writer(session_id)
             .ok_or_else(|| "Session not found".to_string())?;
-        self.with_input_parts(session_id, parts, || {
-            let mut writer = writer.lock();
-            for part in parts {
-                writer
-                    .write_all(part)
-                    .map_err(|error| format!("Write failed: {error}"))?;
-            }
+        let mut writer = writer.lock();
+        for part in parts {
             writer
-                .flush()
-                .map_err(|error| format!("Flush failed: {error}"))
-        })
+                .write_all(part)
+                .map_err(|error| format!("Write failed: {error}"))?;
+        }
+        writer
+            .flush()
+            .map_err(|error| format!("Flush failed: {error}"))
     }
 
     /// Emit a PTY-scoped lifecycle event to
@@ -4359,7 +4270,33 @@ impl AppState {
                         .lock()
                         .completion_declared_for_epoch(state.turn_epoch)
                 });
-        state.derive_agent_state(completion_declared);
+        let background_work = state.has_pending_background_probe() || state.background_work;
+        // A current-turn completion marker is stronger than a stale BUSY atom
+        // (for example a completed Codex screen that still contains its last
+        // Working row). Keep real background work authoritative, but normalize
+        // the terminal state once the agent has explicitly ended the turn.
+        if completion_declared && !background_work {
+            state.shell_state = Some("idle".to_string());
+        }
+        state.agent_state = if state.agent_type.is_none() {
+            None
+        } else if state.foreground_input_blocked {
+            // A direct program's child owns the terminal even if the retained
+            // ready screen or completion marker still describes the parent.
+            Some("working".to_string())
+        } else if state.awaiting_input || state.choice_prompt.is_some() {
+            Some("awaiting_input".to_string())
+        } else if background_work {
+            Some("working".to_string())
+        } else if completion_declared {
+            Some("completed".to_string())
+        } else if state.shell_state.as_deref() == Some("busy") {
+            Some("working".to_string())
+        } else if state.shell_state.as_deref() == Some("idle") {
+            Some("idle".to_string())
+        } else {
+            Some("starting".to_string())
+        };
         Some(state)
     }
 

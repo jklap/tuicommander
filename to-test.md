@@ -4588,9 +4588,6 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
 
-- [ ] After Boss rebuilds/restarts the headless daemon, verify Telegram Stop on
-  a throwaway phone request: one Escape reaches only the draft-bound current
-  epoch, including a replacement Enter delivered before input bookkeeping;
-  duplicate/stale Stop never revives a draft. Confirm the selected
-  callback label stays disabled. The running Rust backend cannot load these
-  changes until rebuilt/restarted; no restart was performed by this peer.
+## Telegram minimal outbound (#1438-79b4) — Rust rebuild required
+
+- [ ] After Boss rebuilds/restarts the headless daemon, verify drafts have no phone Stop, send/notifications use the single configured chat, and a button press or new message retires previous handles. Live mint verification remains coordinator-owned; no instance was launched here. Rust changes do not hot-reload.
