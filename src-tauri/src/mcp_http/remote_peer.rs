@@ -733,10 +733,8 @@ async fn native_call(
     };
     let sid = binding.sid.as_deref();
     if args["action"] == "register" {
-        let identity = sid
-            .as_deref()
-            .and_then(|sid| state.mcp.to_session.get(sid).map(|p| p.value().clone()));
-        if let Some(sid) = sid.as_deref() {
+        let identity = sid.and_then(|sid| state.mcp.to_session.get(sid).map(|p| p.value().clone()));
+        if let Some(sid) = sid {
             state.mcp.to_session.remove(sid);
         }
         return json!({"tuic_session":identity});
@@ -747,14 +745,9 @@ async fn native_call(
     if let Some(object) = args.as_object_mut() {
         object.remove("connection_id");
     }
-    let result = super::mcp_transport::local_peer_call_with_message_id(
-        state,
-        &args,
-        sid.as_deref(),
-        message_id,
-    )
-    .await;
-    if let Some(sid) = sid.as_deref() {
+    let result =
+        super::mcp_transport::local_peer_call_with_message_id(state, &args, sid, message_id).await;
+    if let Some(sid) = sid {
         state.mcp.to_session.remove(sid);
     }
     result

@@ -646,7 +646,7 @@ fn retire_repaired_phantom_identity(
         // Drop the addressable identity before draining: a send blocked on the
         // guard then finds no recipient instead of refilling the inbox we just
         // emptied.
-        crate::mcp_http::remote_peer::unregister_peer(&state, phantom);
+        crate::mcp_http::remote_peer::unregister_peer(state, phantom);
         let carried = match state.agent_inbox.remove(phantom) {
             Some((_, pending)) => pending
                 .into_iter()
@@ -1935,7 +1935,15 @@ pub(crate) async fn handle_mcp_tool_call(
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     unmark_upstream_tool_result(
-        handle_mcp_tool_call_with_context(state, addr, name, args, mcp_session_id, None).await,
+        Box::pin(handle_mcp_tool_call_with_context(
+            state,
+            addr,
+            name,
+            args,
+            mcp_session_id,
+            None,
+        ))
+        .await,
     )
 }
 
@@ -1981,7 +1989,7 @@ async fn handle_mcp_tool_call_with_context(
     mcp_session_id: Option<&str>,
     managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
-    guard_secret_inspection(
+    Box::pin(guard_secret_inspection(
         state,
         name,
         args,
@@ -1993,7 +2001,7 @@ async fn handle_mcp_tool_call_with_context(
             mcp_session_id,
             managed_parent_cwd,
         ),
-    )
+    ))
     .await
 }
 
@@ -2046,14 +2054,13 @@ async fn dispatch_mcp_tool_call_with_context(
     {
         return serde_json::json!({"error": "repo parameter workspace_id was renamed to branch"});
     }
-    if matches!(name, "session" | "agent") {
-        if let Some(connection) = args.get("connection_id")
-            && !connection
-                .as_str()
-                .is_some_and(|id| !id.is_empty() && id.len() <= 128 && !id.contains('/'))
-        {
-            return serde_json::json!({"error":"connection_id must be a nonempty connection qualifier"});
-        }
+    if matches!(name, "session" | "agent")
+        && let Some(connection) = args.get("connection_id")
+        && !connection
+            .as_str()
+            .is_some_and(|id| !id.is_empty() && id.len() <= 128 && !id.contains('/'))
+    {
+        return serde_json::json!({"error":"connection_id must be a nonempty connection qualifier"});
     }
     // Resolve client identity at dispatch level — tool handlers get a plain bool
     let is_claude_code = mcp_session_id
@@ -7935,14 +7942,14 @@ pub(super) async fn mcp_post(
                 let is_error = result.get("error").is_some();
                 (result, is_error)
             } else {
-                let result = handle_mcp_tool_call_with_context(
+                let result = Box::pin(handle_mcp_tool_call_with_context(
                     &state,
                     addr,
                     &tool_name,
                     &args,
                     session_id_str.as_deref(),
                     managed_parent_cwd.as_deref(),
-                )
+                ))
                 .await;
                 let is_error = result.get("error").is_some();
                 (result, is_error)
@@ -8234,7 +8241,7 @@ pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
         .filter(|tuic| state.peer_identity_is_reapable(tuic))
         .collect();
     for tuic in &removed_tuic {
-        crate::mcp_http::remote_peer::unregister_peer(&state, tuic);
+        crate::mcp_http::remote_peer::unregister_peer(state, tuic);
         state.orchestrator_peers.remove(tuic);
         state.agent_inbox.remove(tuic);
         drop_identity_buffers(state, tuic);

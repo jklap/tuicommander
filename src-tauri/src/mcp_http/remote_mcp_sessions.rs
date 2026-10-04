@@ -92,7 +92,7 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
     let rows = if direct_id {
         json!([{"session_id":id}])
     } else {
-        match request(state, host, state.remote.http_client().get(url.clone())).await {
+        match request(host, state.remote.http_client().get(url.clone())).await {
             Ok(rows) => rows,
             Err(value) => return value,
         }
@@ -160,7 +160,7 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
         }
         state.remote.http_client().get(url)
     };
-    match request(state, host, request_builder).await {
+    match request(host, request_builder).await {
         Ok(mut value) => {
             if action == "output" && value.get("exited").is_none() {
                 return failure(
@@ -186,11 +186,7 @@ fn credential(state: &AppState, host: &str, url: &mut reqwest::Url) {
     }
 }
 
-async fn request(
-    state: &AppState,
-    host: &str,
-    builder: reqwest::RequestBuilder,
-) -> Result<Value, Value> {
+async fn request(host: &str, builder: reqwest::RequestBuilder) -> Result<Value, Value> {
     let response = builder
         .timeout(Duration::from_secs(20))
         .send()

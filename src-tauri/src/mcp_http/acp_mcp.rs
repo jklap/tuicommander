@@ -248,9 +248,14 @@ impl McpOverAcpHost for AcpMcpHost {
                 _ => {}
             }
             let body = json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
-            let response = mcp_post(State(state), ConnectInfo(loopback()), headers, Json(body))
-                .await
-                .into_response();
+            let response = Box::pin(mcp_post(
+                State(state),
+                ConnectInfo(loopback()),
+                headers,
+                Json(body),
+            ))
+            .await
+            .into_response();
             let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .map_err(|error| McpOverAcpError::new(INTERNAL_ERROR, error.to_string()))?;
