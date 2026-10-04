@@ -4625,7 +4625,8 @@ filename test.txt
         assert_eq!(git(&["rev-parse", &suffixed]), unique);
         // Catches: a branch name force-deleted once, recreated, becoming undeletable.
         git(&["branch", "collision", &unique]);
-        delete_branch_impl(&repo, "collision", true).expect("second deletion reuses suffixed archive");
+        delete_branch_impl(&repo, "collision", true)
+            .expect("second deletion reuses suffixed archive");
         assert_eq!(git(&["rev-parse", &suffixed]), unique);
         git(&["branch", "same-archive"]);
         git(&["update-ref", "refs/archive/same-archive", &original]);

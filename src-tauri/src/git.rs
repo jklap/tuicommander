@@ -615,7 +615,13 @@ fn git_invocation_args(args: &[String]) -> Vec<String> {
     let mut argv = Vec::with_capacity(args.len() + 4);
     if args.iter().any(|arg| arg == AUTO_FETCH_MARKER) {
         argv.extend(
-            ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=15"].map(str::to_owned),
+            [
+                "-c",
+                "http.lowSpeedLimit=1000",
+                "-c",
+                "http.lowSpeedTime=15",
+            ]
+            .map(str::to_owned),
         );
     }
     argv.extend(args.iter().filter(|arg| *arg != AUTO_FETCH_MARKER).cloned());
@@ -1100,7 +1106,14 @@ mod tests {
         assert_eq!(validate_git_command_args(&auto), Ok(()));
         assert_eq!(
             git_invocation_args(&auto),
-            vec_of(&["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=15", "fetch", "--all"])
+            vec_of(&[
+                "-c",
+                "http.lowSpeedLimit=1000",
+                "-c",
+                "http.lowSpeedTime=15",
+                "fetch",
+                "--all"
+            ])
         );
         let manual = vec_of(&["fetch", "--all"]);
         assert_eq!(git_invocation_args(&manual), manual);
