@@ -4195,16 +4195,15 @@ async fn handle_worktree(
             };
             match tokio::task::spawn_blocking(move || {
                 crate::worktree::delete_integrated_local_branch(&path, &branch)
-                    .map(|proof| (proof, branch))
             })
             .await
             {
-                Ok(Ok(("archived", branch))) => serde_json::json!({
+                Ok(Ok(deleted)) if deleted.proof == "archived" => serde_json::json!({
                     "ok":true,
-                    "proof":"archived",
-                    "archive_ref":tuic_git::worktree::archive_ref_name(&branch)
+                    "proof":deleted.proof,
+                    "archive_ref":deleted.archive_ref
                 }),
-                Ok(Ok((proof, _))) => serde_json::json!({"ok":true,"proof":proof}),
+                Ok(Ok(deleted)) => serde_json::json!({"ok":true,"proof":deleted.proof}),
                 Ok(Err(error)) => serde_json::json!({"error":error}),
                 Err(error) => {
                     serde_json::json!({"error":format!("branch deletion task failed: {error}")})
@@ -10099,6 +10098,44 @@ mod tests {
         );
         assert!(!branch_exists(&repo, "refs/heads/feat/superseded"));
         assert!(branch_exists(&repo, "refs/archive/feat/superseded"));
+    }
+
+    // Catches reporting the occupied primary archive ref instead of the
+    // tip-suffixed ref: restoring from the response must recover the deleted tip.
+    #[tokio::test]
+    async fn branch_delete_reports_the_suffixed_archive_holding_the_tip_1489() {
+        let (_temp, repo, base) = branch_delete_fixture();
+        assert!(
+            repo.as_path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "reused"]);
+        branch_delete_commit(&repo, "unique.txt", "unmerged work\n");
+        let tip = git(&["rev-parse", "HEAD"]).stdout.trim().to_owned();
+        let primary = "refs/archive/reused";
+        let suffixed = format!("{primary}-{}", &tip[..7]);
+        git(&["update-ref", primary, &base]);
+        git(&["update-ref", &suffixed, &tip]);
+        git(&["checkout", "integration"]);
+        let response = handle_repo(
+            &test_state(),
+            &serde_json::json!({"action":"branch_delete","path":repo.to_string_lossy(),"branch":"reused"}),
+            false,
+        ).await;
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(response["proof"], "archived");
+        assert_eq!(response["archive_ref"], suffixed);
+        assert_eq!(git(&["rev-parse", primary]).stdout.trim(), base);
+        assert_eq!(
+            git(&["rev-parse", response["archive_ref"].as_str().unwrap()])
+                .stdout
+                .trim(),
+            tip
+        );
+        assert!(!branch_exists(&repo, "refs/heads/reused"));
     }
 
     #[tokio::test]

@@ -1256,7 +1256,10 @@ Refresh the query after archiving; deletion performs a fresh safety check.
 ref; it does not remove a worktree or touch a remote ref. The branch must be
 absent from every checkout and must not be the current integration or default
 branch. The shared integration proofs described above apply. Content-based proofs
-require `refs/archive/<branch>` at the current tip. An archived unmerged tip
+require an archive ref at the current tip (the primary `refs/archive/<branch>`
+or its tip-suffixed variant). When the proof is `archived`, the response also
+includes `archive_ref`, captured before deletion and naming the ref that holds
+the deleted tip. An archived unmerged tip
 also remains deletable through the existing `archived` recovery rule; that
 does not change its integration verdict. Merge resolution changes are never
 proved by `git cherry` or a same-subject twin comparison alone. The final

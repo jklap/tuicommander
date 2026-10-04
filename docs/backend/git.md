@@ -259,6 +259,9 @@ checks every worktree record, and accepts ancestry in the checked-out
 integration branch or patch equivalence against that branch when GitHub PR
 proof is unavailable. The ref is removed with its captured OID as the expected
 old value, so an advanced branch remains intact. Remote refs are untouched.
+For archived deletion, the domain result captures the exact primary or
+tip-suffixed archive ref before deleting the branch; MCP returns that ref so
+restoring it recovers the deleted tip.
 
 `probe_cow_support` performs a real copy against the source/destination pair so
 an unsupported filesystem produces one warning instead of one failure per
@@ -420,3 +423,13 @@ The `run_git_command` IPC command and `/repo/run-git` HTTP route share a subcomm
 Force branch deletion first preserves the exact tip at `refs/archive/<branch>` and uses an expected-old-tip ref deletion. If `refs/archive/<branch>` already holds a different tip, the tip is archived at `refs/archive/<branch>-<sha7>` instead; an archive already at the same tip is reused. A checkout of the branch refuses deletion.
 
 Stale creation recovery deletes only unregistered directories without a Git checkout. A sanitized-name collision with a registered worktree fails, preserving clean, dirty, and detached checkouts. Plain orphan directories can be recreated as worktrees.
+
+The changed-file diff adapter reads raw status and numstat together with NUL
+delimiters. This keeps one Git subprocess per request while returning actual
+line counts and literal rename destinations for working-tree, staged and commit scopes.
+
+Working-tree changed-file listings read untracked names with
+`git ls-files --others --exclude-standard -z`. Nonempty NUL records are
+used literally, including tabs, newlines and boundary spaces, so line counts
+and file-diff consumers open the actual file. Staged and committed scopes
+do not include untracked files.

@@ -243,7 +243,7 @@ pub(crate) fn branch_integrations(repo: &Path) -> Result<Vec<BranchIntegration>,
 pub(crate) fn delete_integrated_local_branch(
     repo_path: &str,
     branch_name: &str,
-) -> Result<&'static str, String> {
+) -> Result<tuic_git::worktree::DeletedBranch, String> {
     tuic_git::worktree::delete_integrated_local_branch_with_pr(
         repo_path,
         branch_name,
@@ -1427,6 +1427,39 @@ mod tests {
         base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
     };
 
+    // Catches accepting an empty or unregistered orphan list after weakening
+    // the validation OR: neither request may create an actionable dialog.
+    #[test]
+    fn cleanup_rejects_empty_and_unknown_paths_1488() {
+        let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let state = crate::state::tests_support::make_test_app_state();
+        let path = repo.path().to_string_lossy();
+        for paths in [
+            vec![],
+            vec![repo.path().join("unknown").to_string_lossy().into_owned()],
+        ] {
+            assert!(begin_orphan_cleanup_internal(&state, &path, paths).is_err());
+            assert!(state.pending_orphan_cleanup.get(path.as_ref()).is_none());
+        }
+    }
+
+    // Catches replacing a client's answer because the paths are unchanged:
+    // answer.is_some alone must forbid a second answer.
+    #[test]
+    fn cleanup_cannot_overwrite_an_existing_answer_1488() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+        answer_orphan_cleanup_internal(&state, "/repo", false).unwrap();
+        assert!(answer_orphan_cleanup_internal(&state, "/repo", false).is_err());
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
     fn pending_cleanup(state: &AppState, repo: &str) {
         state.pending_orphan_cleanup.insert(
             repo.to_string(),
@@ -1523,6 +1556,12 @@ mod tests {
     #[test]
     fn removal_preview_names_live_nested_session_and_counts_untracked_work() {
         let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         let worktree = worktree_with(repo.path(), "active-work", false);
         fs::create_dir_all(worktree.join("nested")).expect("nested cwd");
         fs::write(worktree.join("README.md"), "changed").expect("modified file");
