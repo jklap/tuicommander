@@ -1,0 +1,8 @@
+@media (max-width: 600px) {
+  .panel input:not([type="checkbox"]),
+  .panel select,
+  .panel button {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}
