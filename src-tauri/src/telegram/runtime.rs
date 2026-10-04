@@ -58,9 +58,7 @@ impl Runtime {
             .ok_or(Error::State)?;
         let state = self
             .state
-            .session_maps
-            .session_states
-            .get(&pty)
+            .session_state_with_shell(&pty)
             .ok_or(Error::State)?;
         if !matches!(
             state.agent_state.as_deref(),
@@ -268,7 +266,7 @@ impl Runtime {
 fn live(state: &AppState, peer: &str, pty: &str, epoch: u64) -> bool {
     state.live_pty_for_peer(peer).as_deref() == Some(pty)
         && !state.session_maps.exit_codes.contains_key(pty)
-        && state.session_maps.session_states.get(pty).is_some_and(|s| {
+        && state.session_state_with_shell(pty).is_some_and(|s| {
             s.turn_epoch == epoch
                 && matches!(s.agent_state.as_deref(), Some("working" | "awaiting_input"))
         })
