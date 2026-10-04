@@ -86,6 +86,15 @@ pub fn host_shell() -> (&'static str, &'static str) {
     }
 }
 
+/// Wait for stdin without spawning a child process; the parent keeps the pipe open.
+pub fn wait_for_stdin_script() -> String {
+    if cfg!(windows) {
+        "set /p value=".to_owned()
+    } else {
+        "read value".to_owned()
+    }
+}
+
 /// Print a file's contents in the host shell.
 pub fn print_file_script(path: &str) -> String {
     if cfg!(windows) {

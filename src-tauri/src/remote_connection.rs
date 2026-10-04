@@ -307,8 +307,8 @@ fn delete_connection_credentials(id: &str) -> Result<(), String> {
 ///
 /// A WebSocket upgrade cannot carry an `Authorization` header and the daemon
 /// serves `Access-Control-Allow-Origin: *`, which forbids credentialed cookies,
-/// so `?token=` is the only credential the whole client can use uniformly. The
-/// exchange runs here rather than in the WebView so the password never leaves
+/// so browser WebSocket upgrades carry `?token=` while native HTTP uses the
+/// existing session cookie header. The exchange runs here rather than in the WebView so the password never leaves
 /// the backend.
 ///
 /// The token lives in the daemon's memory and changes on every restart, so the
@@ -338,18 +338,20 @@ async fn request_session_token(
         .timeout(TOKEN_FETCH_TIMEOUT)
         .send()
         .await
-        .map_err(|e| format!("Token request to {url} failed: {e}"))?;
+        .map_err(|e| format!("Token request failed: {}", e.without_url()))?;
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err("Authentication rejected by the remote daemon".to_string());
     }
     if !status.is_success() {
-        return Err(format!("Remote daemon answered {status} for {url}"));
+        return Err(format!(
+            "Remote daemon answered {status} for the session-token request"
+        ));
     }
     let body: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Malformed token response: {e}"))?;
+        .map_err(|e| format!("Malformed token response: {}", e.without_url()))?;
     let token = body
         .get("token")
         .and_then(serde_json::Value::as_str)
@@ -588,6 +590,27 @@ mod tests {
         assert_eq!(decoded.deploy, DeployMode::Never);
         assert_eq!(decoded.survive_secs, 1_800);
         assert!(!decoded.auto_update);
+    }
+
+    // Catches: explicitly echoed base URLs or reqwest URLs leaking URL userinfo in token-request errors.
+    #[tokio::test]
+    async fn token_request_error_redacts_url_credentials() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+        let base = format!("http://username:URL_SECRET_1457@{address}");
+        let error = request_session_token(&base, "user", "password")
+            .await
+            .expect_err("closed port");
+        assert!(error.contains("failed"), "{error}");
+        assert!(
+            !error.contains("URL_SECRET_1457"),
+            "URL credential in error: {error}"
+        );
+        assert!(
+            !error.contains("password"),
+            "Basic credential in error: {error}"
+        );
     }
 
     #[tokio::test]
