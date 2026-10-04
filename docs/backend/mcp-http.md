@@ -1977,7 +1977,7 @@ replay horizon, not unbounded or restart-persistent exactly-once delivery.
 
 ## Telegram adapter groundwork
 
-The offline `telegram` module holds owner/config/API and SQLite inbound boundaries (story 1438-79b4). It is not started by desktop or daemon boot and registers no MCP tool yet. `MailPort` requires idempotent stable-ID insertion and safe wake from the future native-mail integration; consumption must be committed at the inbox read boundary. These integrations await 1419/1420. See [the approved design](../design/telegram-channel.md) for the proposed tool, authorization and receipt contract.
+The headless `telegram` tool exposes `register`, `unregister`, `begin`, `activity`, `finish` and `send` through the normal MCP registry and dispatch. Registration uses the caller's MCP-bound TUIC identity, replaces the previous agent with one native mail and is never persisted. MCP session end, PTY close or foreground-agent exit retires it. Other callers must register before outbound actions. Authorized text with no agent gets "Nessun agent registrato" and is dropped; strangers stay silent. Native stable-ID inbox/wake delivery remains authoritative. See [the Telegram design](../design/telegram-channel.md).
 
 Native remote health, authentication, session-list, and SSE clients strip request URLs from reqwest errors before publishing them. Token-authenticated native HTTP requests send the existing `tui-session` cookie header rather than a query token; browser WebSocket query authentication is unchanged.
 

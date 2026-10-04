@@ -164,6 +164,14 @@ on macOS, Linux, and Windows.
 tuic bg "$HOME/Gits/.tmp/build.log" -- make check
 ```
 
+Each background runner generates one completion key and reuses it on queue
+retries. The backend remembers the last 128 accepted keys per live terminal,
+so a lost reply does not enqueue the same completion again within that window.
+A recognized acceptance remains `queued` in the wake file even after the queue
+has drained. If every queue receipt is lost and mail also fails, the wake file
+reports `uncertain`, not a proven delivery failure; inspect backend state before
+retrying manually. `uncertain` also prevents automatic child closure.
+
 `TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
 command. The launcher prints the wake-status path and removes stale `.exit`
 and `.wake` files before detaching. If no `BG DONE` arrives, inspect `.exit`

@@ -125,6 +125,18 @@ pnpm test:coverage     # Coverage report
 
 **Coverage:** ~80%+
 
+### Rust build features
+
+Plain application Cargo builds enable `desktop` but omit native speech. Add
+`--features dictation` for Whisper/WebRTC and the voice adapters. Tauri dev and
+release builds read `build.features = ["dictation"]` from `tauri.conf.json`, so
+`make dev` and `make build` retain voice support. Desktop CI tests that feature;
+headless daemon checks use `--no-default-features`. Workspace tests also select
+the `tuic-dictation` crate explicitly, and therefore compile its native stack.
+
+TLS uses the existing ring provider. Provider-free reqwest/axum-server features
+avoid compiling AWS-LC while retaining HTTPS and WSS.
+
 ### Rust tests in linked worktrees
 
 Run standalone Rust tests through `scripts/with-test-tmp.sh`. In a linked

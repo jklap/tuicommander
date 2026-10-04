@@ -77,6 +77,11 @@ returns `400` and does not enter the session map.
 
 ### Monitoring
 
+Foreground-agent exit or an observed agent-type change also retires the terminal's volatile Telegram registration
+lifetime synchronously. A restarted agent using the same terminal and MCP identity
+must opt in again, even if the Telegram worker was busy during the transition. Unrecognized
+non-shell probes retain the previous identity and do not revoke registration.
+
 | Command | Description |
 |---------|-------------|
 | `get_orchestrator_stats()` | Active/max/available session counts. |
@@ -675,6 +680,13 @@ idle window in global acceptance order. `state.queued_commands`,
 peer/orchestrator entries in their original relative order. Each user command
 carries a process-unique id so the Compose panel can delete a single entry —
 a queue position would shift under the caller as the FIFO drains.
+
+Queue requests may include `idempotencyKey`. A per-PTY bounded recent-key set
+reserves acceptance atomically with FIFO append, before the blocking flush. The
+last 128 keys survive drain and cancellation and are removed with the PTY;
+backend restart also clears them. Duplicate requests do not flush or append.
+Both HTTP and desktop IPC return `accepted`, `typed` and current `queued`;
+a recognized retry can be accepted even with an empty queue and no new typing.
 
 Each nonempty flush attempt emits one `queue delivery attempt` tracing record with
 the session id, agent and shell states at the attempt, queued counts before and

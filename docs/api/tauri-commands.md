@@ -53,7 +53,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `create_pty_with_worktree` | `pty_config, worktree_config` | `WorktreeResult` | Create worktree + PTY |
 | `write_pty` | `session_id, data` | `()` | Write to PTY |
 | `write_pty_parts` | `session_id, parts: Vec<String>` | `()` | Write several inputs under one writer lock. The parts stay separate on purpose: post-write bookkeeping runs once per part, and it is not a function of the joined bytes (a lone `/` opens slash mode, an exact option key answers a choice prompt) |
-| `enqueue_agent_command` | `session_id, text` | `{ typed, queued }` | Queue a command for the agent's next idle window (typed at once when already idle); errors for non-agent sessions |
+| `enqueue_agent_command` | `session_id, text, idempotency_key?` | `{ accepted, typed, queued }` | Queue for the next idle window; optional key (1–128 UTF-8 bytes, wire name `idempotencyKey`) recognizes the last 128 accepted keys per live PTY without resubmitting; acceptance is not a model-turn receipt |
 | `clear_queued_agent_commands` | `session_id` | `usize` | Drop every queued command; returns how many |
 | `list_queued_agent_commands` | `session_id` | `[{ id, text }]` | The queued user commands in delivery order; peer messages excluded |
 | `remove_queued_agent_command` | `session_id, command_id` | `bool` | Drop one queued command by id; false when it already drained |
@@ -815,3 +815,8 @@ HTTP client must already possess the privately delivered capability.
 same schema and consumption logic as `POST /secrets/forms/submit`.
 
 Workflow definition and human-decision IPC commands use host Human authority. HTTP equivalents require verified credentials for that authority; local address admission grants LocalApi only. Native story plan_state and plan_view use current integration receipts for workflow-owned plans.
+
+### Telegram Settings
+
+- `telegram_settings`: safe settings snapshot (`enabled`, `token_set`, `bot_alias`, `registered_agent_name` (nullable), decimal-string `chats`, `connected`, `last_error`, `last_message_time`). Never returns a token or message text.
+- `telegram_setup { change }`: `change.action` is `token` (password `token`, checks `getMe`), `pair` (returns `code`, `expires_in_seconds`), `add_chat`/`remove_chat` (`chat_id`), or `configure` (`enabled`). Errors are typed safe Telegram categories.
