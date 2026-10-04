@@ -227,7 +227,7 @@ fn sweep_with_snapshot(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn sweep_with_commands(
     state: &Arc<AppState>,
     tracker: &mut IdleCloseTracker,
@@ -330,6 +330,7 @@ mod tests {
     }
 
     /// The parent is an MCP peer without a PTY, as an orchestrator usually is.
+    #[cfg(unix)]
     fn live_parent(state: &Arc<AppState>) {
         state
             .mcp
@@ -740,9 +741,11 @@ mod tests {
         sweep_with_commands(state, &mut tracker, 900_000, &[]);
     }
 
+    #[cfg(unix)]
     #[derive(Clone)]
     struct CriticLogSink(Arc<std::sync::Mutex<Vec<u8>>>);
 
+    #[cfg(unix)]
     impl std::io::Write for CriticLogSink {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.0.lock().unwrap().extend_from_slice(bytes);
@@ -753,6 +756,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CriticLogSink {
         type Writer = CriticLogSink;
         fn make_writer(&'a self) -> Self::Writer {
