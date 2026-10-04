@@ -4597,6 +4597,9 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
 
+## Remote transfer cancellation fixture (1528-cee8) — Rust rebuild
+
+- [x] The cancellation regression must retain worker staging and its upload permit after handler abort, publish both fixture files, clean staging, and release both slots. Production still passes the unchanged extractor. _(verified by source inspection: `remote_transfer.rs` receive/worker ownership and channel-gated regression in `remote_transfer_tests.rs`; targeted execution is recorded in the story worklog. Rust changes require Boss to restart `make dev` or rebuild release before loading; this refactor adds no new runtime behavior.)_
 - [ ] After Boss rebuilds/restarts TUIC: Settings > Agents > Codex shows the migrated bypass argument and warning; remove it and confirm terminal and managed launches preserve the removal. The durable migration stamp and wrapper task routing require a rebuilt backend; also confirm a default wrapper receives its positional task. Rust migration requires restart. Visual screenshot attempt could not render the isolated harness while the macOS screen was locked. (#1399-17bd)
 
 - [ ] After Boss rebuilds/restarts the backend, confirm an interactive Codex default with `--profile review` (or `exec`/`e`) receives and submits its managed task. Actual subcommands after root options must retain positional tasks. The public spawn regression covers argv and queued delivery; the running Rust backend requires restart. (#1513-701d)
