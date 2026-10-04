@@ -480,12 +480,14 @@ pub enum AppEvent {
     /// A Whisper model download moved. `payload` is the body the desktop
     /// `dictation-download-progress` emit carries, built once so the two
     /// transports cannot describe the same download differently.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "dictation-download-progress")]
     DictationDownloadProgress { payload: serde_json::Value },
     /// A speech asset download moved — the runtime library or one language
     /// bundle. Keyed by asset inside the payload, because a user can start two
     /// downloads at once and one shared percent would show each of them the
     /// other's.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-download-progress")]
     SpeechDownloadProgress { payload: serde_json::Value },
     /// A spoken reply changed state: queued, rendering, speaking, finished,
@@ -501,6 +503,7 @@ pub enum AppEvent {
     /// interesting ones (`finished`, `interrupted`) happen on the render thread
     /// long after `speak` returned, and a consumer that had to discover them
     /// would be polling.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-utterance")]
     SpeechUtterance { payload: serde_json::Value },
 }
@@ -5098,11 +5101,12 @@ impl AppState {
             // A mirrored event is the far end's accumulator output. Feeding it
             // in here would build a second, local row for a session this
             // machine does not run.
-            | AppEvent::RemoteMirrored { .. }
+            | AppEvent::RemoteMirrored { .. } => {}
             // Dictation is bound to a session but says nothing about it: a
             // download belongs to the installation, and a spoken reply belongs
             // to the conversation rather than to the terminal it will reach.
-            | AppEvent::DictationDownloadProgress { .. }
+            #[cfg(feature = "dictation")]
+            AppEvent::DictationDownloadProgress { .. }
             | AppEvent::SpeechDownloadProgress { .. }
             | AppEvent::SpeechUtterance { .. } => {}
         }
