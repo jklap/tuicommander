@@ -53,6 +53,9 @@ scripts/*
 !scripts/build-docs.sh
 !scripts/dev-install.sh
 !scripts/dev-server.mjs
+!scripts/dev-exe-copy.py
+!scripts/test-dev-exe-copy.sh
+!scripts/test_dev_exe_copy.py
 !scripts/run-remote-fixture.sh
 !scripts/generate-release-notes.sh
 !scripts/third-party-notices.mjs
