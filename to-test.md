@@ -4575,3 +4575,7 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 ## Windows WebRTC compiler (1479-f956) — native Nightly required
 
 - [ ] After landing and pushing, the Windows Nightly must report MSVC for both Meson C/C++ compilers, compile Abseil/WebRTC without MinGW header errors, and finish the Tauri NSIS build. This Rust build-script change requires rebuilding; no desktop instance was started for verification.
+
+## Codex notify publication (1483-7a6e) — Rust restart required
+
+- [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
