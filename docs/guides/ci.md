@@ -72,6 +72,16 @@ CI runs `cargo clippy --workspace --exclude bm25 --all-targets -- -D warnings`.
 It includes test and bench code. The vendored `bm25` patch is excluded from
 Clippy, but remains in workspace tests.
 
+## Windows CMake debug flags
+
+CI, release and nightly set `CMAKE_C_FLAGS` and `CMAKE_CXX_FLAGS` to `-Z7`
+on Windows for sccache-compatible MSVC debug information. MSVC accepts both
+slash and dash prefixes. Use the dash form because Git Bash converts `/Z7`
+in environment variables into a Windows path before launching native Cargo.
+That path reaches the CMake compiler probe as a source filename and fails the
+`whisper-rs-sys` build. The Tests step uses Git Bash through
+`scripts/with-test-tmp.sh`, so these flags must be safe in both shell paths.
+
 ## Headless workspace scope
 
 The remote job checks `tuic-remote` with `--no-default-features`. Dictation is
