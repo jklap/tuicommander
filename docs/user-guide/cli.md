@@ -164,6 +164,8 @@ on macOS, Linux, and Windows.
 tuic bg "$HOME/Gits/.tmp/build.log" -- make check
 ```
 
+On Windows, the detached runner does not inherit the launcher's input or output pipes. Capturing the launcher output therefore returns before the background command completes.
+
 `TUIC_SESSION` is required; without it, `tuic bg` exits 2 before starting a
 command. The launcher prints the wake-status path and removes stale `.exit`
 and `.wake` files before detaching. If no `BG DONE` arrives, inspect `.exit`

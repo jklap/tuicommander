@@ -3786,7 +3786,13 @@ mod tests {
         std::fs::create_dir_all(&linked_worktree).unwrap();
         std::fs::write(linked_worktree.join(".git"), b"gitdir: isolated-fixture").unwrap();
 
-        let original = r#"{"mcpServers":{"tuicommander":{"type":"stdio","command":"/missing/bridge","args":[],"env":{}}}}"#;
+        // Catches secondary ownership changes independently of custom-command
+        // preservation: a leading slash is only rooted, not absolute, on Windows.
+        let original = serde_json::json!({"mcpServers": {"tuicommander": {
+            "type": "stdio", "command": sandbox.path().join("missing/bridge"),
+            "args": [], "env": {}
+        }}})
+        .to_string();
         let cases = [
             ("named", Some("tuic-test"), main_root, false, false),
             ("worktree", None, linked_worktree.as_path(), false, false),
@@ -3805,7 +3811,7 @@ mod tests {
             std::fs::create_dir_all(home.join(".claude")).unwrap();
             std::fs::write(home.join(".claude/installed"), b"present").unwrap();
             let config = home.join(".claude.json");
-            std::fs::write(&config, original).unwrap();
+            std::fs::write(&config, &original).unwrap();
 
             run_sandboxed_mcp_launch(
                 &exe,
@@ -3865,7 +3871,7 @@ mod tests {
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::write(home.join(".claude/installed"), b"present").unwrap();
         let config = home.join(".claude.json");
-        std::fs::write(&config, original).unwrap();
+        std::fs::write(&config, &original).unwrap();
         run_sandboxed_mcp_launch(&worktree_exe, &home, main_root, None, None, false);
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     }

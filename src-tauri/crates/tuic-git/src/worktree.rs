@@ -3694,12 +3694,20 @@ fn run_shell_script(
     let path = tuic_core::cli::enriched_path();
     #[cfg(windows)]
     let path = tuic_core::cli::which_cli("git")
+        .or_else(|| {
+            // Windows shell PATH lookup can miss the inherited Git installation.
+            // The filesystem fallback must include the executable extension.
+            let git = tuic_core::cli::resolve_cli("git.exe");
+            Path::new(&git).is_absolute().then_some(git)
+        })
         .and_then(|git| {
             Path::new(&git)
                 .parent()
                 .map(|dir| format!("{};{path}", dir.display()))
         })
         .unwrap_or(path);
+    #[cfg(windows)]
+    let path = path.replace('/', "\\");
     cmd.env("PATH", path);
     tuic_core::cli::apply_no_window(&mut cmd);
     crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|e| match e {

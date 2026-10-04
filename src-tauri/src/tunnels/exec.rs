@@ -229,7 +229,7 @@ mod tests {
     #[tokio::test]
     async fn one_shot_ssh_and_scp_put_the_destination_after_double_dash() {
         let script = "printf '%s\\n' \"$@\" > \"$0.log\"; exit 0";
-        let batch = "setlocal EnableDelayedExpansion\r\ntype nul > \"%~f0.log\"\r\n:args\r\nif \"%~1\"==\"\" exit /b 0\r\nset \"arg=%~1\"\r\necho(!arg!>>\"%~f0.log\"\r\nshift\r\ngoto args";
+        let batch = "setlocal EnableDelayedExpansion\r\ntype nul > \"%~f0.log\"\r\n:args\r\nif \"%~1\"==\"\" exit /b 0\r\nset \"arg=%~1\"\r\necho(!arg!>>\"%~f0.log\"\r\nshift /1\r\ngoto args";
         let ssh = fake_ssh_script("exec_double_dash_ssh", script, batch);
         let scp = fake_ssh_script("exec_double_dash_scp", script, batch);
         let _ = std::fs::remove_file(format!("{}.log", ssh.display()));

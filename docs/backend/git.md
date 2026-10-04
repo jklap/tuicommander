@@ -8,7 +8,7 @@ Worktree removal verifies checkout and submodule safety before asking Git to unr
 
 Git **writes** are performed by shelling out to the `git` CLI via the unified `git_cli` module. Git **reads** go through the reversible `GitReads` port (see below), which serves some ops from in-process gix and the rest from the same CLI. The `git_cli::git_cmd(path)` builder provides consistent error handling, binary resolution, and credential prompt suppression across all callsites.
 
-Windows checkout comparisons use `tuic-core::path_spelling::portable_spelling`: native and verbatim paths match Git's forward-slash paths. Unix backslashes remain literal filename bytes. Git subprocesses enable `core.longpaths` on Windows, including deep submodule preservation refs. Worktree scripts use the same enriched PATH as Git subprocesses; the Windows search includes the standard Git installation.
+Windows checkout comparisons use `tuic-core::path_spelling::portable_spelling`: native and verbatim paths match Git's forward-slash paths. Unix backslashes remain literal filename bytes. Git subprocesses enable `core.longpaths` on Windows, including deep submodule preservation refs. Worktree scripts use the same enriched PATH as Git subprocesses; the Windows search includes the standard Git installation and its `.exe` filename. Hook PATH entries use native Windows separators so `cmd` can find the same tools.
 
 ## Async Execution & Caching
 

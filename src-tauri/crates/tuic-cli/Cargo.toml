@@ -15,6 +15,9 @@ clap = { version = "4", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
 [dev-dependencies]
 tuic-test-support = { path = "../tuic-test-support" }
 tempfile = "3"

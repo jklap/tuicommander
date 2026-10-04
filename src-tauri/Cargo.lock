@@ -9694,6 +9694,7 @@ dependencies = [
  "tempfile",
  "tuic-ipc",
  "tuic-test-support",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
