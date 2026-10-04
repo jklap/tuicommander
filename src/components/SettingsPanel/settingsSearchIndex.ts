@@ -606,14 +606,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.services.server.ipv6_enabled",
 	},
-	{
-		tab: "remote-access",
-		section: "Remote Access",
-		label: "Allow LAN access without authentication",
-		labelKey: "services.toggle.lanAuthBypass",
-		expert: true,
-		configKey: "app.services.auth.lan_auth_bypass",
-	},
 	{ tab: "remote-access", section: "Tailscale HTTPS", label: "Status", labelKey: "services.label.tailscaleStatus" },
 	{
 		tab: "remote-access",
