@@ -40,7 +40,7 @@ fn setup() -> (tempfile::TempDir, Paths) {
     private(&paths.file("bot.token"), TOKEN);
     private(
         &paths.file("config.json"),
-        &format!(r#"{{"enabled":true,"bot_alias":"mint"}}"#),
+        r#"{"enabled":true,"bot_alias":"mint"}"#,
     );
     (dir, paths)
 }
