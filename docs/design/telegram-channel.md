@@ -242,15 +242,12 @@ The current L4 tool exposes begin/activity/finish/send. Caller identity comes fr
 TUIC MCP binding, not an agent argument. Only the configured peer is accepted.
 Begin requires a pending phone request and its live working/awaiting-input PTY.
 Idle/completed/replaced turns retire an unfinished draft; no final is inferred.
-Send and notifications use the single configured destination from allowed_chat_ids;
-there is no agent-supplied chat selector. Deployment config contains one chat ID.
-Generic button data stays opaque, with a random short wire handle bound to the
-current chat/message. Sending a replacement retires the previous message handles.
-Only the first button choice on that message becomes native mail; successful mail
-consumes every handle before one acknowledgement/edit attempt. There is no expiry,
-eviction quota or acknowledgement retry state. The chosen label uses the Telegram
-DisabledButton object (`{"text":label,"disabled":{}}`), with no callback_data,
-preserving exact delivered message text.
+With more than one allowlisted chat, send requires a decimal-string selector;
+notifications report ambiguity instead of broadcasting. Generic button data stays
+opaque, with a random short wire handle bound to chat/message and a one-hour
+in-memory lifetime. Only the first button choice on a message becomes native
+mail. Callback acknowledgement/edit can retry without re-mailing. The chosen
+button uses a DisabledButton object with no callback_data, preserving exact delivered message text.
 These buttons do not create publish receipts; receipt lookup and xkit publishing
 remain outside L4. Earlier proposed durable outbound state, idempotency keys and
 approval inputs in sections 3–6 are design follow-ups, not implemented features.
