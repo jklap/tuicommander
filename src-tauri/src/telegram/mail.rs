@@ -85,8 +85,6 @@ impl Update {
 
 /// Native integration offers to the in-memory inbox under the identity lock,
 /// then arbitrates safe wake. No adapter persistence or consumption receipts.
-/// DEFERRED (2026-10-03): implement against landed 1419 stable-ID send and 1420
-/// readiness; no alternative PTY injection or cherry-picked implementation.
 pub(crate) trait MailPort {
     async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error>;
     /// Validated update id; concrete ports authorize non-text update payloads.

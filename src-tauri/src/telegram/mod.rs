@@ -1,15 +1,19 @@
-//! Offline Telegram adapter boundaries; native delivery is not wired yet.
-// DEFERRED (2026-10-03): start polling in run_remote only after 1419/1420 land
-// and the native mail/wake port is implemented. Never auto-enable here.
+//! Opt-in headless Telegram adapter with native peer mail and correlated replies.
 mod api;
 mod backoff;
+mod callbacks;
 mod config;
 mod inbound;
 mod mail;
+mod native;
+mod notifications;
 mod offset;
 mod outbound;
+mod runtime;
 mod stop;
-mod notifications;
+mod tool;
+pub(crate) use native::start;
+pub(crate) use tool::{definition as tool_definition, handle as handle_tool};
 
 pub(crate) use api::BotApi;
 pub(crate) use config::{Config, Owner, Paths};
