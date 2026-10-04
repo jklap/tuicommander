@@ -536,18 +536,19 @@ async fn cancelling_upload_releases_slot_and_removes_staging() {
     drop((released, other_slot));
 }
 
-// Catches: cancelling a handler during extraction dropping its staging tree or leaking its slot.
+// Catches: cancelling a handler dropping worker-owned staging, releasing its slot early,
+// or leaking that slot after publication. A large fsync-heavy archive is not a timing gate.
 #[tokio::test]
 async fn cancelling_handler_during_extraction_preserves_worker_and_releases_slot() {
     let repo = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
     let roots = vec![repo.path().to_str().unwrap().to_owned()];
     let mut tar = tar::Builder::new(Vec::new());
-    for index in 0..4096 {
+    for (name, bytes) in [("first", &b"first bytes"[..]), ("last", &b"last bytes"[..])] {
         let mut header = tar::Header::new_gnu();
-        header.set_size(1);
+        header.set_size(bytes.len() as u64);
         header.set_mode(0o644);
         header.set_cksum();
-        tar.append_data(&mut header, format!("folder/{index}"), &b"x"[..])
+        tar.append_data(&mut header, format!("folder/{name}"), bytes)
             .unwrap();
     }
     let body = Body::from(tar.into_inner().unwrap());
@@ -556,52 +557,58 @@ async fn cancelling_handler_during_extraction_preserves_worker_and_releases_slot
         name: "folder".into(),
         directory: true,
     };
-    let task = tokio::spawn(async move { receive_copy(query, &roots, body).await });
-    // This is a setup/hang bound, not a performance assertion. The directory
-    // comes from the actual extraction worker, rather than a hand-set state.
-    tokio::time::timeout(std::time::Duration::from_secs(120), async {
-        loop {
-            if std::fs::read_dir(repo.path())
-                .unwrap()
-                .any(|entry| entry.unwrap().path().join("data").is_dir())
-            {
-                break;
-            }
-            assert!(
-                !task.is_finished(),
-                "upload ended before extraction could be cancelled"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .expect("extraction did not start");
+    let (started, waiting) = tokio::sync::oneshot::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let (finished, completion) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        receive_copy_with_extractor(query, &roots, body, move |stage, query| {
+            // The real receive path has moved staging and its permit into this worker.
+            // Dropping `release` also unblocks it if an assertion fails.
+            let _ = started.send(stage.name.clone());
+            blocked.recv().map_err(io::Error::other)?;
+            let result = extract_and_publish(stage, query);
+            let _ = finished.send(());
+            result
+        })
+        .await
+    });
+    // Channel handshakes define the lifecycle states. Nextest owns the hang bound;
+    // no disk-speed-dependent polling or consecutive internal deadlines are needed.
+    let staging = repo.path().join(waiting.await.unwrap());
+    assert!(staging.join("archive").is_file());
+    let other_slot = UPLOAD_SLOTS.try_acquire().unwrap();
+    assert!(UPLOAD_SLOTS.try_acquire().is_err());
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
-    tokio::time::timeout(std::time::Duration::from_secs(120), async {
-        loop {
-            if repo.path().join("folder").is_dir()
-                && let Ok(slots) = UPLOAD_SLOTS.try_acquire_many(2)
-            {
-                drop(slots);
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("cancelled extraction did not publish and release its permit");
+    assert!(
+        staging.join("archive").is_file(),
+        "handler deleted worker staging"
+    );
+    assert!(!repo.path().join("folder").exists());
+    assert!(
+        UPLOAD_SLOTS.try_acquire().is_err(),
+        "handler released worker slot early"
+    );
+    release.send(()).unwrap();
+    completion.await.unwrap();
+    drop(other_slot);
+    let slots = UPLOAD_SLOTS.acquire_many(2).await.unwrap();
     assert_eq!(
         std::fs::read_dir(repo.path().join("folder"))
             .unwrap()
             .count(),
-        4096
+        2
     );
     assert_eq!(
-        std::fs::read(repo.path().join("folder/4095")).unwrap(),
-        b"x"
+        std::fs::read(repo.path().join("folder/first")).unwrap(),
+        b"first bytes"
+    );
+    assert_eq!(
+        std::fs::read(repo.path().join("folder/last")).unwrap(),
+        b"last bytes"
     );
     assert_eq!(std::fs::read_dir(repo.path()).unwrap().count(), 1);
+    drop(slots);
 }
 
 // Catches: authenticated HTTP callers exfiltrating arbitrary Finder/local source paths.

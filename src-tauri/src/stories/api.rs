@@ -52,7 +52,7 @@ pub enum StoryAction {
         /// The story's current `revision`.
         expected_revision: i64,
     },
-    /// User only: an agent session is refused. Removes a cancelled (wont_fix) dependency.
+    /// Removes a cancelled (wont_fix) dependency.
     RemoveDependency {
         story_id: String,
         dependency_id: String,
@@ -65,9 +65,7 @@ pub enum StoryAction {
         /// The story's current `revision`.
         expected_revision: i64,
     },
-    /// Apply a status command. Agents may only use check_criterion, uncheck_criterion and
-    /// submit_review on their own claimed story, and approve on a story claimed by a different
-    /// session; every other command is user only.
+    /// Apply a status command and record the calling actor without restricting its authority.
     Transition {
         story_id: String,
         /// The story's current `revision`.
@@ -255,15 +253,14 @@ pub fn story_action_for_session(
     story_action_for_session_with_source(state, project, action, session_id, false)
 }
 
-/// Sessionless HTTP transitions record LocalApi provenance. A managed session
-/// may approve only a story claimed by a different session.
-pub fn story_action_for_http(
+pub(crate) fn story_action_for_http_authenticated(
     state: &crate::AppState,
     project: &str,
     action: StoryAction,
     session_id: Option<&str>,
+    authenticated_user: bool,
 ) -> Result<StoryReply, String> {
-    story_action_for_session_with_source(state, project, action, session_id, true)
+    story_action_for_session_with_source(state, project, action, session_id, !authenticated_user)
 }
 
 fn story_action_for_session_with_source(
@@ -537,72 +534,48 @@ mod tests {
         assert!(error.contains("backlog"), "{error}");
     }
 
-    /// Catches: user-only refusals that do not say the action is user-only or which command
-    /// was refused, so an agent retries instead of asking the user.
+    /// Catches: managed callers being blocked from administrative actions or misattributed as Human.
     #[test]
-    fn agent_refusals_for_user_only_actions_name_the_action() {
-        let config = tempfile::tempdir().expect("config");
+    fn managed_administrative_actions_record_the_caller() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("config");
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
-        let repo = tempfile::tempdir().expect("project");
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("project");
         let project = repo.path().to_str().expect("project path");
-        let (first, second) = two_stories(project);
-
-        let removal = story_action(
-            project,
-            StoryAction::RemoveDependency {
-                story_id: second.id,
-                dependency_id: first.id.clone(),
-                expected_revision: 1,
-            },
-            Some("pty-1"),
-        )
-        .expect_err("agent removal is refused");
-        assert!(removal.contains("remove_dependency"), "{removal}");
-        assert!(removal.contains("user-only"), "{removal}");
-
-        for (command, name) in [
-            (StoryCommand::Block, "block"),
-            (StoryCommand::RejectReview, "reject_review"),
-            (StoryCommand::StartManual, "start_manual"),
+        let (mut first, _) = two_stories(project);
+        for command in [
+            StoryCommand::Block,
+            StoryCommand::Unblock,
+            StoryCommand::StartManual,
+            StoryCommand::CheckCriterion(0),
+            StoryCommand::SubmitReview,
+            StoryCommand::RejectReview,
+            StoryCommand::WontFix,
         ] {
-            let refusal = story_action(
-                project,
-                StoryAction::Transition {
-                    story_id: first.id.clone(),
-                    expected_revision: first.revision,
-                    command,
-                },
-                Some("pty-1"),
-            )
-            .expect_err("agent refusal");
-            assert!(refusal.contains(name), "{refusal}");
-            assert!(refusal.contains("user-only"), "{refusal}");
+            first = story_of(
+                story_action(
+                    project,
+                    StoryAction::Transition {
+                        story_id: first.id.clone(),
+                        expected_revision: first.revision,
+                        command,
+                    },
+                    Some("pty-1"),
+                )
+                .expect("managed action"),
+            );
         }
-
-        // Approve is not user-only: a reviewer session may approve a story it did not claim,
-        // but the implementer is refused with the cause named.
-        let claimed = story_of(
-            story_action(
-                project,
-                StoryAction::Claim {
-                    story_id: first.id.clone(),
-                    expected_revision: first.revision,
-                },
-                Some("pty-1"),
-            )
-            .expect("claim"),
+        assert_eq!(first.status, super::super::StoryStatus::WontFix);
+        let store = StoryStore::open().expect("store");
+        assert!(
+            store
+                .transition_history(&first.id)
+                .expect("history")
+                .iter()
+                .all(|entry| entry.actor
+                    == super::super::StoryTransitionActor::ManagedSession {
+                        session_id: "pty-1".into()
+                    })
         );
-        let approval = story_action(
-            project,
-            StoryAction::Transition {
-                story_id: claimed.id,
-                expected_revision: claimed.revision,
-                command: StoryCommand::Approve,
-            },
-            Some("pty-1"),
-        )
-        .expect_err("implementer approval is refused");
-        assert!(approval.contains("implementer"), "{approval}");
     }
 
     /// Catches: a schema that stays `{"type":"object"}` (fields learned one error at a time),

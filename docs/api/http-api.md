@@ -24,11 +24,11 @@ The `command` action also accepts `answer_input {attempt_id,answer}` for a pause
 
 `POST /stories/action?path=<absolute-project>` accepts `{ "action": StoryAction, "sessionId"?: string }` and returns a tagged `StoryReply` (`{type, value}`). `StoryAction` uses a snake-case `action` discriminator: `create_plan`, `list_plans`, `list_plan_sources`, `add_plan_source`, `get_plan`, `plan_state`, `plan_view`, `create_story`, `list_stories`, `get_story`, `transition_history`, `add_dependency`, `remove_dependency`, `claim`, or `transition`. Create-story input uses the shared camel-case `NewStory` fields. `create_plan` takes `title` and `source`; `add_plan_source` takes a local document `source` and derives its title from front matter or the first heading. `list_plan_sources` reads top-level Markdown files in `plans/` and `.claude/plans/`, so a new file appears on the next call. It returns `{type:"plan_sources",value:[{title,source}]}`. `get_plan`, `plan_state`, `plan_view`, and `list_stories` take `plan_id`; `get_story` and `transition_history` take `story_id`; `claim` takes `story_id` and `expected_revision`; `transition` also takes a `command`; both dependency actions take `story_id`, `dependency_id`, and `expected_revision`. `transition_history` returns committed transitions with their resulting revisions, commands, and actor provenance.
 
-HTTP access authentication does not identify a person: a request without `sessionId` records `local_api` provenance, including for approval. A managed session may approve only a story claimed by a different session. The claiming session receives `a story cannot be approved by its implementer`.
+Story transition provenance comes from host-validated credentials: desktop IPC and credential-authenticated HTTP record `human`; sessionless local HTTP records `local_api`. Managed calls record their session identity, including when the claiming session approves its own story. Actor identity never restricts actions; state, revision, project and claim-conflict rules remain enforced.
 
 `plan_view` returns `{type:"plan_view",value:{stories,state,wontFixCount,allCancelled}}`. Each story in `stories` includes a read-only `abandoned` boolean, derived from whether that story or any dependency reachable from it is WontFix. The summary and state are derived from the same read; no abandonment flag is persisted.
 
-The project path is resolved to its canonical owner, so a managed worktree shares its parent project's plans. Unknown action and create-story fields are rejected. Claim requires a live PTY session in that project. `transition` accepts the user-only `start_manual` command to begin a Ready story without a terminal. A session-bound agent may check criteria and submit review only for its own claim; review and administrative transitions require a user action. `remove_dependency` is user-only and accepts only a Backlog dependent with a direct WontFix prerequisite; it returns the revised story, Ready only when all remaining prerequisites are Done. WontFix never satisfies dependencies. A nonempty plan with only Done/WontFix stories has `plan_state: done`, while an empty plan is `draft`. Reads and writes verify the stored plan's project; a story ID alone grants no cross-project access. Revisions are required for mutations to detect stale clients. The same service backs desktop IPC and MCP. There is no import or export endpoint.
+The project path is resolved to its canonical owner, so a managed worktree shares its parent project's plans. Unknown action and create-story fields are rejected. Claim requires a live PTY session in that project. `transition` accepts the `start_manual` command to begin a Ready story without a terminal. Actor identity is tracking only; managed, local API and human callers use the same transition rules. `remove_dependency` accepts only a Backlog dependent with a direct WontFix prerequisite; it returns the revised story, Ready only when all remaining prerequisites are Done. WontFix never satisfies dependencies. A nonempty plan with only Done/WontFix stories has `plan_state: done`, while an empty plan is `draft`. Reads and writes verify the stored plan's project; a story ID alone grants no cross-project access. Revisions are required for mutations to detect stale clients. The same service backs desktop IPC and MCP. There is no import or export endpoint.
 
 ## Project Progress
 
@@ -419,7 +419,8 @@ solitary keystroke keeps the plain `/write` route.
 POST /sessions/:id/queue
 Content-Type: application/json
 
-{ "text": "run the tests" }        -> { "typed": false, "queued": 2 }
+{ "text": "run the tests", "idempotencyKey": "bg-job-1" }
+                                  -> { "accepted": true, "typed": false, "queued": 2 }
 
 GET /sessions/:id/queue            -> [ { "id": 7, "text": "run the tests" } ]
 
@@ -436,6 +437,16 @@ submitted one per idle window in backend acceptance order (a run of hands-free
 voice entries at the head is joined into one submission). `queued`,
 `state.queued_commands`, and `DELETE` count or remove only user commands;
 clearing Compose commands never deletes pending peer/orchestrator delivery.
+
+`idempotencyKey` is optional. Use the same key for retries of one logical
+command; distinct commands need distinct keys even when their text is identical.
+Keys contain 1–128 UTF-8 bytes. The backend
+remembers the last 128 accepted keys per live PTY, including drained or cancelled
+entries. A recognized retry returns `accepted: true`, `typed: false` and the
+current queue depth without appending or flushing again. `accepted` confirms
+queue acceptance, not a model turn. Keys expire on eviction, PTY teardown or
+backend restart; this is an in-memory retry window. Omitted keys preserve the
+usual append behavior. HTTP and Tauri use the same request and response fields.
 
 Agent sessions only — `400` for a plain shell (`"Session is not running an
 agent"`) or empty text, `404` when the PTY is gone. The current depth is also on
@@ -1543,7 +1554,7 @@ batch authentication with a five-second connect timeout, and caches results for
 GET /mcp/status
 ```
 
-Returns MCP server status (enabled, port, connected clients).
+Returns MCP server status (enabled, running, active sessions, connected MCP clients, maximum sessions). `native_tools` contains the unfiltered native MCP registry as `{name, summary, description}` entries, including disabled tools. `summary` is the first line of the full registry description. This Settings inventory is independent of upstream tools, collapse mode and progress tracking; MCP client discovery still applies all configured filters.
 
 ### MCP Suspend Response
 
@@ -1727,7 +1738,8 @@ older than the check and still connects.
 The daemon hashes its running executable once at startup, so `build.sha256`
 identifies the process that answered even after an update stages a new file.
 `POST /remote/update` exists only on the daemon router. It needs the same
-session token as PTY access and the `x-tuic-target`, `x-tuic-sha256`, and
+session token as PTY access, supplied as a `tui-session` cookie or the legacy
+`?token=` query parameter, and the `x-tuic-target`, `x-tuic-sha256`, and
 `x-tuic-confirmed-sessions` headers. It streams at most 512 MiB into the
 daemon executable's own directory, verifies the hash and current session
 count, and atomically promotes the file before restarting. Windows currently
@@ -2676,7 +2688,7 @@ Recovery is a fresh connection and `session/load`.
 This is deliberately not on `/events`: one turn emits more frames per second
 than the 256-entry SSE broadcast can carry without lagging every other
 subscriber. `/events` carries only the low-frequency `acp-notice` wake signal
-(`ready`, `settled`, `interaction_pending`, `interaction_settled`), whose
+(`ready`, `settled`, `interaction_pending`, `interaction_settled`, `card`), whose
 payload names the connection, generation, sequence and — when it has one — the
 session and request it is about.
 
@@ -2784,3 +2796,13 @@ reconnects after pressure evicted its history can deliver one duplicate.
 Disconnect retires that host's existing shadows synchronously, independently
 of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.
+
+Workflow definition and run APIs are actorless and share the same services across transports. Story transition actors track provenance and never restrict actions. Desktop IPC and valid HTTP credentials record Human; sessionless local requests record LocalApi; managed story requests record their session. Missing ConnectInfo on Unix sockets and in-process services means local/unknown caller metadata, not HTTP 500. Local token exchange is accepted; state, revision, project and integration checks remain enforced.
+
+### Stored terminal marker coordinates
+
+OSC 133 event `line` and hook-generated `UserInput.line` are eviction-stable all-time rows, identical to IPC. Scroll-to, line reads and search results keep retained-grid coordinates. Convert stored marker rows using the current grid frame `historyBase`.
+
+### Telegram Settings
+
+`GET /config/telegram` mirrors `telegram_settings`. `PUT /config/telegram` accepts `{ "change": { "action": "..." } }` and mirrors `telegram_setup`, including token replacement/check, one-use pairing, typed chat IDs and enable/target updates. Both routes require local access or the existing authenticated remote session. The read response contains only `token_set`, never the token. Chat IDs are decimal strings.

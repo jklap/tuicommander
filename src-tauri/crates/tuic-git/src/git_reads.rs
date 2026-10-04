@@ -138,6 +138,48 @@ impl GixGitReads {
         Ok(tsr.to_thread_local())
     }
 
+    /// Porcelain dirty record count for sidebar monitoring. Tracked paths staged
+    /// and modified count once; untracked records count separately.
+    /// Unsupported repos use the CLI caller.
+    pub(crate) fn dirty_files(repo: &Path) -> Option<usize> {
+        use gix::status::Item;
+        use gix::status::index_worktree::Item as IwItem;
+        use gix::status::plumbing::index_as_worktree::EntryStatus;
+
+        let grepo = gix::open(repo).ok()?;
+        if Self::gix_repo_unsupported(&grepo) {
+            return None;
+        }
+        let iter = grepo
+            .status(gix::progress::Discard)
+            .ok()?
+            .untracked_files(gix::status::UntrackedFiles::Files)
+            .into_iter(std::iter::empty::<gix::bstr::BString>())
+            .ok()?;
+        let mut paths = std::collections::HashSet::new();
+        let mut untracked = 0;
+        for item in iter {
+            let item = item.ok()?;
+            let changed = match &item {
+                Item::TreeIndex(_) => true,
+                Item::IndexWorktree(IwItem::Modification { status, .. }) => {
+                    !matches!(status, EntryStatus::NeedsUpdate(_))
+                }
+                Item::IndexWorktree(IwItem::DirectoryContents { entry, .. }) => {
+                    if matches!(entry.status, gix::dir::entry::Status::Untracked) {
+                        untracked += 1;
+                    }
+                    false
+                }
+                Item::IndexWorktree(IwItem::Rewrite { .. }) => true,
+            };
+            if changed {
+                paths.insert(item.location().to_owned());
+            }
+        }
+        Some(paths.len() + untracked)
+    }
+
     /// Compute staged / changed counts via gix `status`, mapped onto the same
     /// porcelain-v2 semantics the CLI path uses (a path modified in both index
     /// and worktree counts toward both, matching git's "1 MM"). Returns `None`

@@ -19,6 +19,9 @@ cd src-tauri && cargo build
 make dev
 ```
 
+On macOS, `make dev` also requires Python 3. It launches a stable executable
+copy outside Cargo/mbx targets; see [Development Setup](docs/guides/development-setup.md).
+
 `make check` also needs two cargo subcommands:
 
 ```bash

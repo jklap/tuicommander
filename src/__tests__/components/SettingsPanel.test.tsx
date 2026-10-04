@@ -228,7 +228,7 @@ describe("SettingsPanel", () => {
 			Application: ["General", "Appearance", "Notifications"],
 			Workspace: ["Terminal", "Keyboard Shortcuts", "Git & GitHub"],
 			AI: ["Agents", "Voice", "Smart Prompts"],
-			Integrations: ["MCP", "Remote Access", "Remote Machines", "Plugins"],
+			Integrations: ["MCP", "Remote Access", "Remote Machines", "Telegram", "Plugins"],
 			REPOSITORIES: ["Alpha", "Beta"],
 		});
 	});

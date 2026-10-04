@@ -105,6 +105,7 @@ describe("useTerminalContextMenus", () => {
 	it("copies only the last command block output", async () => {
 		mockTerminals.state.activeId = "term-1";
 		mockTerminals.get.mockReturnValue({
+			historyBase: 0,
 			commandBlocks: [{ executionLine: 10, endLine: 13 }],
 			ref: { getBufferLines: vi.fn().mockResolvedValue(["output", ""]) },
 		});
@@ -113,6 +114,21 @@ describe("useTerminalContextMenus", () => {
 		await items.find((item) => item.label === "Copy Block Output")?.action();
 
 		expect(mockWriteClipboard).toHaveBeenCalledWith("output");
+	});
+
+	// Catches: all-time block coordinates are passed to the retained-grid API after eviction.
+	it("copies the retained part of a block and ignores fully evicted output", async () => {
+		mockTerminals.state.activeId = "term-1";
+		const getBufferLines = vi.fn().mockResolvedValue(["retained"]);
+		const term = { historyBase: 12, commandBlocks: [{ executionLine: 10, endLine: 15 }], ref: { getBufferLines } };
+		mockTerminals.get.mockReturnValue(term);
+		const items = useTerminalContextMenus(createOptions() as never).getContextMenuItems();
+		await items.find((item) => item.label === "Copy Block Output")?.action();
+		expect(getBufferLines).toHaveBeenCalledWith(0, 3);
+		getBufferLines.mockClear();
+		term.historyBase = 15;
+		await items.find((item) => item.label === "Copy Block Output")?.action();
+		expect(getBufferLines).not.toHaveBeenCalled();
 	});
 
 	it("creates and configures a branch terminal from the sidebar agent action", async () => {
