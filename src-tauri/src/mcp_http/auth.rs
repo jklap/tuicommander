@@ -1733,8 +1733,9 @@ mod tests {
 #[path = "auth_login_critic_tests.rs"]
 mod login_critic_tests;
 
-/// Derive workflow actor provenance from credentials. Missing caller metadata
-/// (Unix sockets and in-process services) denotes a local/unknown caller.
+/// Authenticate story and workflow credentials for story transition provenance.
+/// Missing caller metadata (Unix sockets and in-process services) denotes a
+/// local/unknown caller.
 pub(super) async fn workflow_actor_middleware(
     State(state): State<Arc<AppState>>,
     caller: Option<axum::extract::Extension<ConnectInfo<SocketAddr>>>,

@@ -1,5 +1,5 @@
 use super::{RunCommand, RunEvent, RunLimits, RunReceipt, RunSnapshot, RunStore};
-use crate::workflows::{AgentRole, NodeKind, WorkflowActor, WorkflowStore};
+use crate::workflows::{AgentRole, NodeKind, WorkflowStore};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
@@ -100,14 +100,6 @@ pub fn active_coordinator_session(run: &RunSnapshot) -> Result<Option<String>, S
 }
 
 pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> {
-    run_action_for_actor(project, action, WorkflowActor::Human)
-}
-
-pub fn run_action_for_actor(
-    project: &str,
-    action: RunAction,
-    _actor: WorkflowActor,
-) -> Result<RunReply, String> {
     if !crate::fs::is_absolute_on_any_platform(project) {
         return Err("project must be an absolute path".into());
     }
@@ -233,15 +225,6 @@ pub fn run_action_with_events(
     project: &str,
     action: RunAction,
 ) -> Result<RunReply, String> {
-    run_action_with_events_for_actor(state, project, action, WorkflowActor::Human)
-}
-
-pub fn run_action_with_events_for_actor(
-    state: &crate::state::AppState,
-    project: &str,
-    action: RunAction,
-    actor: WorkflowActor,
-) -> Result<RunReply, String> {
     let mutation = matches!(
         action,
         RunAction::StartPlan { .. }
@@ -250,7 +233,7 @@ pub fn run_action_with_events_for_actor(
             | RunAction::RecertifyCanonical { .. }
             | RunAction::ExecuteCheck { .. }
     );
-    let reply = run_action_for_actor(project, action, actor)?;
+    let reply = run_action(project, action)?;
     if mutation {
         let (repo_path, run_id, sequence) = match &reply {
             RunReply::Snapshot(snapshot) => (&snapshot.project, &snapshot.id, snapshot.sequence),
@@ -301,43 +284,36 @@ fn scoped_snapshot(store: &RunStore, owner: &str, run_id: &str) -> Result<RunSna
 }
 
 #[cfg(test)]
-mod actor_tests {
+mod validation_tests {
     use super::*;
 
     #[test]
-    fn run_decisions_validate_the_project_for_every_actor() {
-        // Catches: actor metadata blocking trusted local run decisions before validation.
-        for actor in [
-            WorkflowActor::LocalApi,
-            WorkflowActor::ManagedSession,
-            WorkflowActor::Human,
+    fn run_decisions_reject_relative_projects() {
+        // Catches: run decisions accepting a relative project path.
+        for command in [
+            RunCommand::AnswerInput {
+                attempt_id: "attempt".into(),
+                answer: "yes".into(),
+            },
+            RunCommand::Resume,
+            RunCommand::FinalVerificationPassed,
+            RunCommand::Complete,
+            RunCommand::ResolveUncertainEffect {
+                effect_id: "effect".into(),
+                succeeded: true,
+            },
         ] {
-            for command in [
-                RunCommand::AnswerInput {
-                    attempt_id: "attempt".into(),
-                    answer: "yes".into(),
+            let error = run_action(
+                "relative",
+                RunAction::Command {
+                    run_id: "run".into(),
+                    command_id: "decision".into(),
+                    expected_sequence: 1,
+                    command: Box::new(command),
                 },
-                RunCommand::Resume,
-                RunCommand::FinalVerificationPassed,
-                RunCommand::Complete,
-                RunCommand::ResolveUncertainEffect {
-                    effect_id: "effect".into(),
-                    succeeded: true,
-                },
-            ] {
-                let error = run_action_for_actor(
-                    "relative",
-                    RunAction::Command {
-                        run_id: "run".into(),
-                        command_id: "decision".into(),
-                        expected_sequence: 1,
-                        command: Box::new(command),
-                    },
-                    actor,
-                )
-                .unwrap_err();
-                assert_eq!(error, "project must be an absolute path");
-            }
+            )
+            .unwrap_err();
+            assert_eq!(error, "project must be an absolute path");
         }
     }
 }

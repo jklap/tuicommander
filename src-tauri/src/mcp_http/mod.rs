@@ -515,7 +515,6 @@ async fn get_story_capabilities() -> Json<bool> {
 async fn post_workflow_definition_action(
     caller: Option<Extension<ConnectInfo<SocketAddr>>>,
     auth: Option<Extension<guards::Authenticated>>,
-    user_auth: Option<Extension<guards::UserAuthenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(action): Json<crate::workflows::WorkflowAction>,
 ) -> Response {
@@ -526,24 +525,17 @@ async fn post_workflow_definition_action(
     if let Some(response) = progress_auth(&addr, auth.is_some()) {
         return response;
     }
-    let actor = if user_auth.is_some() {
-        crate::workflows::WorkflowActor::Human
-    } else {
-        crate::workflows::WorkflowActor::LocalApi
-    };
-    let result = tokio::task::spawn_blocking(move || {
-        crate::workflows::definition_action_for_actor(&q.path, action, actor)
-    })
-    .await
-    .map_err(|error| format!("workflow definition task failed: {error}"))
-    .and_then(|result| result);
+    let result =
+        tokio::task::spawn_blocking(move || crate::workflows::definition_action(&q.path, action))
+            .await
+            .map_err(|error| format!("workflow definition task failed: {error}"))
+            .and_then(|result| result);
     json_result(result)
 }
 async fn post_workflow_run_action(
     State(state): State<Arc<AppState>>,
     caller: Option<Extension<ConnectInfo<SocketAddr>>>,
     auth: Option<Extension<guards::Authenticated>>,
-    user_auth: Option<Extension<guards::UserAuthenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(action): Json<crate::workflows::RunAction>,
 ) -> Response {
@@ -554,13 +546,8 @@ async fn post_workflow_run_action(
     if let Some(response) = progress_auth(&addr, auth.is_some()) {
         return response;
     }
-    let actor = if user_auth.is_some() {
-        crate::workflows::WorkflowActor::Human
-    } else {
-        crate::workflows::WorkflowActor::LocalApi
-    };
     let result = tokio::task::spawn_blocking(move || {
-        crate::workflows::run_action_with_events_for_actor(&state, &q.path, action, actor)
+        crate::workflows::run_action_with_events(&state, &q.path, action)
     })
     .await
     .map_err(|error| format!("workflow run task failed: {error}"))
