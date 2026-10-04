@@ -230,3 +230,9 @@ Esc through the native input bookkeeping path, retires refresh before writing,
 and logs only correlation identifiers and write success. Duplicate/stale Stop
 cannot target a replacement turn. The check and native write are synchronous;
 the existing native input API does not expose an atomic epoch-conditioned write.
+
+Notifications consume only committed `ProgressRecorded` events whose `ptyId`
+is the current live terminal of the configured peer, and only `done`/`blocked`.
+The authored text is sent unchanged, independently of an active phone request.
+Intent is activity, never a final reply. Event-bus lag is reported as degraded
+notification delivery; this slice does not add journal replay or dedup state.
