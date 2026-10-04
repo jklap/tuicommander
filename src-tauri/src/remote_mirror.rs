@@ -1472,3 +1472,20 @@ mod tests {
         assert!(error.contains("401"), "{error}");
     }
 }
+
+#[cfg(test)]
+mod critic_confirmation_delivery {
+    // Catches: remote questions/resolutions reach SSE but are suppressed for
+    // the desktop confirmation host, which subscribes to native window events.
+    #[test]
+    fn remote_confirmation_and_resolution_are_deliverable_to_desktop() {
+        assert!(
+            super::window_may_hear("mcp-confirm"),
+            "remote confirmation never reaches desktop"
+        );
+        assert!(
+            super::window_may_hear("mcp-confirm-resolved"),
+            "remote resolution never dismisses desktop confirmation"
+        );
+    }
+}
