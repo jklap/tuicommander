@@ -15,6 +15,22 @@
 pnpm install
 ```
 
+### Temporary dependency audit exception
+
+`pnpm-workspace.yaml` configures `auditConfig.ignoreGhsas` for
+[GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) only.
+Boss approved this exception on 2026-10-04; it expires on **2026-11-04**.
+At approval time, `braces` 3.0.3 had no patched version on npm (`3.0.4`
+returned 404). Its only dependency path is build-only:
+`vite-plugin-purgecss → purgecss → fast-glob → micromatch → braces`.
+The advisory concerns stack exhaustion from deeply nested patterns. This path
+processes repository build inputs, rather than runtime terminal or Markdown
+content. Remove the exception when a patch becomes available, and review it
+by the expiry date; pnpm does not enforce the date automatically.
+No other advisory is ignored. `pnpm-workspace.yaml` pins DOMPurify 3.4.16
+for the application and Mermaid, and the development-only `qs` to 6.16.0.
+pnpm 11 ignores the legacy `pnpm.auditConfig` field in `package.json`.
+
 ## Development
 
 ### Native Tauri App
