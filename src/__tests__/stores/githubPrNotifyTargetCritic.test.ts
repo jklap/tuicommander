@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import type { BranchPrStatus } from "../../types";
@@ -82,4 +82,10 @@ describe("PR transition notification target (critic)", () => {
 			expect(call[0].url).toMatch(/\/pull\/9$/);
 		}
 	});
+});
+
+afterEach(async () => {
+	const { prNotificationsStore } = await import("../../stores/prNotifications");
+	prNotificationsStore.stopFocusTimer();
+	prNotificationsStore.clearAll();
 });
