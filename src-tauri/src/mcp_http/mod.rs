@@ -4,7 +4,7 @@ mod agent_routes;
 pub(crate) mod auth;
 mod claude_routes;
 mod config_routes;
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 mod dictation_routes;
 mod ego_routes;
 mod fs_routes;
@@ -1489,7 +1489,7 @@ fn acp_prompt_body_limit() -> usize {
 /// `only_the_voice_import_route_accepts_a_large_body` pins both halves.
 /// The remote binary upload reads the raw Body as a stream, so its separate
 /// 512 MiB limit is enforced while copying chunks rather than by this layer.
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
     crate::dictation::speech::assets::MAX_USER_VOICE_BYTES.div_ceil(3) * 4 + 64 * 1024;
 
@@ -2024,8 +2024,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         );
 
     // Dictation — desktop-only: `crate::dictation` owns the audio capture and
-    // the whisper model, both gated on the `desktop` feature.
-    #[cfg(feature = "desktop")]
+    // the whisper model, both gated on the opt-in `dictation` feature.
+    #[cfg(feature = "dictation")]
     let routes = routes
         .route(
             "/dictation/status",
@@ -4054,6 +4054,9 @@ mod tests {
         let app = build_router(state, false, true);
         let mut unrouted: Vec<String> = Vec::new();
         for path in paths {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let resp = app
                 .clone()
                 .oneshot(
@@ -7682,6 +7685,9 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         for (method, path) in PROBES {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let req = if *method == "GET" {
                 Request::get(*path).body(Body::empty()).unwrap()
             } else {
@@ -7710,6 +7716,9 @@ mod tests {
         let _failure = crate::audio_enumeration::fail_enumeration_for_test();
         let app = build_router(test_state(), false, true);
         for path in ["/dictation/devices", "/audio/output-devices"] {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let response = app
                 .clone()
                 .oneshot(Request::get(path).body(Body::empty()).unwrap())
@@ -9493,7 +9502,7 @@ mod tests {
 
     /// A voice file is imported whole, as base64 in JSON, so its one route has
     /// to take more than the 2 MB every other route is held to — and only it.
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     #[tokio::test]
     async fn only_the_voice_import_route_accepts_a_large_body() {
         async fn post_json(path: &str, body_bytes: usize) -> StatusCode {

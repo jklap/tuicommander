@@ -1,3 +1,6 @@
+## Optional dictation build graph (1394-ff2c) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, confirm push-to-talk, hands-free speech, notification output-device selection, and the global window hotkey still work. Tauri builds enable dictation explicitly; plain Cargo desktop builds omit it. Rust changes do not hot-reload. This lane does not restart the live app or launch another desktop instance.
 ## Remote update cookie migration (1490-e3ac) — Rust rebuild required
 
 - [ ] After Boss rebuilds/restarts the daemon, confirm a Direct remote update works with the current client. This release accepts both `tui-session` and the legacy query token; the client switches next release. Rust backend changes do not hot-reload. No desktop instance was launched by this lane.
