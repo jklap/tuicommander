@@ -4545,7 +4545,6 @@ fn handle_agent_with_parent_cwd(
                 let agent_type = effective_agent_type.as_deref().unwrap_or_default();
                 let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
                     agent_type,
-                    binary_path: &binary_path,
                     args: &explicit_args,
                     prompt: &effective_prompt,
                     model: effective_model,
@@ -4561,24 +4560,40 @@ fn handle_agent_with_parent_cwd(
             } else if let Some(ref rc) = resolved {
                 if let Some(ref rc_args) = rc.args {
                     // Run config matched: user-authored argv remains authoritative.
-                    // Merge structured MCP params, apply only executable-safe
-                    // defaults, then preserve the established prompt substitution
+                    // Merge structured MCP params, then preserve prompt substitution
                     // or positional append semantics. In particular, wrapper and
                     // subcommand configs must not be rewritten into PTY delivery.
                     let agent_type = effective_agent_type.as_deref().unwrap_or_default();
-                    let final_args = match compose_mcp_run_config_args(
-                        agent_type,
-                        &binary_path,
-                        rc_args,
-                        &effective_prompt,
-                        effective_model,
-                        args["print_mode"].as_bool().unwrap_or(false),
-                        args["output_format"].as_str(),
-                    ) {
-                        Ok(m) => m,
-                        Err(e) => return serde_json::json!({"error": e}),
-                    };
-                    launch_args.extend(final_args);
+                    if rc.default_config {
+                        let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
+                            agent_type,
+                            args: rc_args,
+                            prompt: &effective_prompt,
+                            model: effective_model,
+                            print_mode: args["print_mode"].as_bool().unwrap_or(false),
+                            output_format: args["output_format"].as_str(),
+                            default_template: false,
+                        }) {
+                            Ok(args) => args,
+                            Err(error) => return serde_json::json!({"error": error}),
+                        };
+                        deferred_initial_prompt = deferred;
+                        launch_args.extend(final_args);
+                    } else {
+                        let final_args = match compose_mcp_run_config_args(
+                            agent_type,
+                            &binary_path,
+                            rc_args,
+                            &effective_prompt,
+                            effective_model,
+                            args["print_mode"].as_bool().unwrap_or(false),
+                            args["output_format"].as_str(),
+                        ) {
+                            Ok(m) => m,
+                            Err(e) => return serde_json::json!({"error": e}),
+                        };
+                        launch_args.extend(final_args);
+                    }
                 } else {
                     // No run config args: use the built-in per-agent template
                     // (mirrors the shipped frontend spawnArgs) so cross-agent
@@ -4592,7 +4607,6 @@ fn handle_agent_with_parent_cwd(
                             let (final_args, deferred) =
                                 match compose_mcp_spawn_args(McpSpawnArgs {
                                     agent_type,
-                                    binary_path: &binary_path,
                                     args: &template,
                                     prompt: &effective_prompt,
                                     model: effective_model,
@@ -4620,7 +4634,6 @@ fn handle_agent_with_parent_cwd(
                     let template = crate::agent::default_prompt_args("codex").unwrap_or_default();
                     let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
                         agent_type: "codex",
-                        binary_path: &binary_path,
                         args: &template,
                         prompt: &effective_prompt,
                         model: effective_model,
@@ -8534,6 +8547,8 @@ struct ResolvedRunConfig {
     model: Option<String>,
     /// Env vars from the matched run config, if any.
     env: std::collections::HashMap<String, String>,
+    /// Literal Codex selects its default, preserving interactive task delivery.
+    default_config: bool,
 }
 
 /// Resolve an `agent_type` parameter as either:
@@ -8558,18 +8573,39 @@ fn resolve_run_config(
                     args: Some(cfg.args.clone()),
                     model: cfg.model.clone(),
                     env: cfg.env.clone(),
+                    default_config: false,
                 };
             }
         }
     }
 
-    // Pass 2: treat as a literal agent type (no run config overrides)
+    // Literal Codex consumes the same visible default used by terminal menus.
+    if needle == "codex"
+        && let Some(settings) = agents_cfg.agents.get("codex")
+        && let Some(cfg) = settings
+            .run_configs
+            .iter()
+            .find(|cfg| cfg.is_default)
+            .or_else(|| settings.run_configs.first())
+    {
+        return ResolvedRunConfig {
+            agent_type: "codex".into(),
+            command: Some(cfg.command.clone()),
+            args: Some(cfg.args.clone()),
+            model: cfg.model.clone(),
+            env: cfg.env.clone(),
+            default_config: true,
+        };
+    }
+
+    // Pass 2: treat other literal agent types as before (no run config overrides)
     ResolvedRunConfig {
         agent_type: agent_type.to_string(),
         command: None,
         args: None,
         model: None,
         env: Default::default(),
+        default_config: false,
     }
 }
 
@@ -8649,7 +8685,7 @@ fn finalize_spawn_args(
 /// positional prompt (story 092). Everything else — every other agent AND every
 /// user-authored run config (whose args may start with a wrapper subcommand
 /// flags must not precede) — keeps flags appended, as before.
-const CODEX_BYPASS_ARG: &str = "--dangerously-bypass-approvals-and-sandbox";
+use crate::config::CODEX_BYPASS_ARG;
 
 fn is_direct_codex_executable(binary_path: &str) -> bool {
     let file_name = binary_path
@@ -8660,17 +8696,6 @@ fn is_direct_codex_executable(binary_path: &str) -> bool {
         .file_stem()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.eq_ignore_ascii_case("codex"))
-}
-
-fn apply_direct_codex_defaults(binary_path: &str, mut args: Vec<String>) -> Vec<String> {
-    let has_active_bypass = args
-        .iter()
-        .take_while(|arg| arg.as_str() != "--")
-        .any(|arg| arg == CODEX_BYPASS_ARG);
-    if is_direct_codex_executable(binary_path) && !has_active_bypass {
-        args.insert(0, CODEX_BYPASS_ARG.to_string());
-    }
-    args
 }
 
 fn resolve_spawn_agent_type(binary_path: &str, configured: Option<&str>) -> Option<String> {
@@ -8695,7 +8720,6 @@ fn codex_wrapper_launch_warning(
 
 struct McpSpawnArgs<'a> {
     agent_type: &'a str,
-    binary_path: &'a str,
     args: &'a [String],
     prompt: &'a str,
     model: Option<&'a str>,
@@ -8715,7 +8739,6 @@ fn compose_mcp_spawn_args(
         spawn.output_format,
         spawn.default_template,
     )?;
-    let merged = apply_direct_codex_defaults(spawn.binary_path, merged);
     if spawn.default_template {
         Ok(finalize_spawn_args(spawn.agent_type, &merged, spawn.prompt))
     } else {
@@ -8729,7 +8752,7 @@ fn compose_mcp_spawn_args(
 
 fn compose_mcp_run_config_args(
     agent_type: &str,
-    binary_path: &str,
+    _binary_path: &str,
     args: &[String],
     prompt: &str,
     model: Option<&str>,
@@ -8738,7 +8761,6 @@ fn compose_mcp_run_config_args(
 ) -> Result<Vec<String>, String> {
     let merged =
         merge_mcp_params_into_args(agent_type, args, model, print_mode, output_format, false)?;
-    let merged = apply_direct_codex_defaults(binary_path, merged);
     Ok(substitute_prompt_in_args(&merged, prompt))
 }
 
@@ -24631,6 +24653,36 @@ mod tests {
     }
 
     #[test]
+    fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypass() {
+        // Catches: literal MCP "codex" ignoring the menu default or secretly
+        // restoring bypass; also catches parking its initial task in a prefill.
+        for args in [vec!["--dangerously-bypass-approvals-and-sandbox"], vec![]] {
+            let cfg: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+                "agents": {"codex": {"run_configs": [
+                    {"name": "Custom", "command": "codex", "args": ["--search"]},
+                    {"name": "Default", "command": "codex", "args": args, "is_default": true}
+                ]}}
+            }))
+            .unwrap();
+            let resolved = resolve_run_config("CODEX", &cfg);
+            assert!(resolved.default_config);
+            assert_eq!(resolved.command.as_deref(), Some("codex"));
+            let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
+                agent_type: &resolved.agent_type,
+                args: resolved.args.as_ref().unwrap(),
+                prompt: "perform the task",
+                model: None,
+                print_mode: false,
+                output_format: None,
+                default_template: false,
+            })
+            .unwrap();
+            assert_eq!(argv, args);
+            assert_eq!(deferred.as_deref(), Some("perform the task"));
+        }
+    }
+
+    #[test]
     fn resolve_run_config_falls_back_to_agent_type() {
         let cfg = make_agents_config();
         let resolved = resolve_run_config("gemini", &cfg);
@@ -24731,7 +24783,6 @@ mod tests {
         let explicit = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
         let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
             agent_type: "codex",
-            binary_path: "/usr/local/bin/codex",
             args: &explicit,
             prompt: "perform the task",
             model: Some("gpt-5.6-terra"),
@@ -24758,7 +24809,6 @@ mod tests {
         let agent_type = resolve_spawn_agent_type("/usr/local/bin/codex", None).unwrap();
         let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
             agent_type: &agent_type,
-            binary_path: "/usr/local/bin/codex",
             args: &explicit,
             prompt: "perform the task",
             model: None,
@@ -24768,10 +24818,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(
-            argv,
-            vec!["--dangerously-bypass-approvals-and-sandbox", "--search"]
-        );
+        assert_eq!(argv, vec!["--search"]);
         assert_eq!(deferred.as_deref(), Some("perform the task"));
     }
 
@@ -24781,7 +24828,6 @@ mod tests {
         let template = crate::agent::default_prompt_args("codex").unwrap();
         let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
             agent_type: &agent_type,
-            binary_path: "/usr/local/bin/codex",
             args: &template,
             prompt: "perform the task",
             model: Some("gpt-5.6-luna"),
@@ -24791,14 +24837,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(
-            argv,
-            vec![
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--model",
-                "gpt-5.6-luna"
-            ]
-        );
+        assert_eq!(argv, vec!["--model", "gpt-5.6-luna"]);
         assert_eq!(deferred.as_deref(), Some("perform the task"));
     }
 
@@ -25002,32 +25041,25 @@ mod tests {
     }
 
     #[test]
-    fn direct_codex_defaults_apply_bypass_after_merge() {
+    fn direct_codex_composition_does_not_restore_removed_bypass() {
         let args = vec!["{prompt}".to_string()];
-        let result = merge_mcp_params_into_args("codex", &args, None, false, None, false).unwrap();
-        let result = apply_direct_codex_defaults("codex", result);
-        assert_eq!(
-            result,
-            vec![
-                "--dangerously-bypass-approvals-and-sandbox".to_string(),
-                "{prompt}".to_string()
-            ]
-        );
+        let result =
+            compose_mcp_run_config_args("codex", "codex", &args, "task", None, false, None)
+                .unwrap();
+        assert_eq!(result, vec!["task"]);
     }
 
     #[test]
-    fn direct_codex_bypass_after_option_terminator_does_not_satisfy_default() {
+    fn direct_codex_composition_does_not_promote_positional_bypass() {
         let args = vec![
             "--".to_string(),
             CODEX_BYPASS_ARG.to_string(),
             "task text".to_string(),
         ];
-        let result = apply_direct_codex_defaults("codex", args);
-
-        assert_eq!(
-            result,
-            vec![CODEX_BYPASS_ARG, "--", CODEX_BYPASS_ARG, "task text"]
-        );
+        let result =
+            compose_mcp_run_config_args("codex", "codex", &args, "task", None, false, None)
+                .unwrap();
+        assert_eq!(result, vec!["--", CODEX_BYPASS_ARG, "task text", "task"]);
     }
 
     #[test]
@@ -25067,7 +25099,7 @@ mod tests {
     }
 
     #[test]
-    fn named_codex_run_config_missing_bypass_gets_direct_default() {
+    fn named_codex_run_config_removed_bypass_stays_removed() {
         let args = vec!["--search".to_string()];
         let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
         let result = compose_mcp_run_config_args(
@@ -25081,10 +25113,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            result,
-            vec![CODEX_BYPASS_ARG, "--search", "perform the task"]
-        );
+        assert_eq!(result, vec!["--search", "perform the task"]);
     }
 
     #[test]
@@ -25101,7 +25130,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result, vec![CODEX_BYPASS_ARG, "exec", "perform the task"]);
+        assert_eq!(result, vec!["exec", "perform the task"]);
     }
 
     #[test]
@@ -25118,7 +25147,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result, vec![CODEX_BYPASS_ARG, "exec", "perform the task"]);
+        assert_eq!(result, vec!["exec", "perform the task"]);
     }
 
     #[test]
@@ -25148,7 +25177,6 @@ mod tests {
 
         let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
             agent_type: &agent_type,
-            binary_path: "/usr/local/bin/codex",
             args: &["--search".to_string()],
             prompt: "perform the task",
             model: None,
@@ -25157,7 +25185,7 @@ mod tests {
             default_template: false,
         })
         .unwrap();
-        assert_eq!(argv, vec![CODEX_BYPASS_ARG, "--search"]);
+        assert_eq!(argv, vec!["--search"]);
         assert_eq!(deferred.as_deref(), Some("perform the task"));
     }
 
