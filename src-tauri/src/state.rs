@@ -480,12 +480,14 @@ pub enum AppEvent {
     /// A Whisper model download moved. `payload` is the body the desktop
     /// `dictation-download-progress` emit carries, built once so the two
     /// transports cannot describe the same download differently.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "dictation-download-progress")]
     DictationDownloadProgress { payload: serde_json::Value },
     /// A speech asset download moved — the runtime library or one language
     /// bundle. Keyed by asset inside the payload, because a user can start two
     /// downloads at once and one shared percent would show each of them the
     /// other's.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-download-progress")]
     SpeechDownloadProgress { payload: serde_json::Value },
     /// A spoken reply changed state: queued, rendering, speaking, finished,
@@ -501,6 +503,7 @@ pub enum AppEvent {
     /// interesting ones (`finished`, `interrupted`) happen on the render thread
     /// long after `speak` returned, and a consumer that had to discover them
     /// would be polling.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-utterance")]
     SpeechUtterance { payload: serde_json::Value },
 }
@@ -621,6 +624,9 @@ pub(crate) struct SessionState {
     /// observed, shell foreground means it has exited and cannot receive input.
     #[serde(skip)]
     pub(crate) agent_foreground_observed: bool,
+    /// Telegram opt-in lifetime, retired synchronously on observed agent exit.
+    #[serde(skip)]
+    pub(crate) telegram_registration_lifetime: Option<Arc<()>>,
     /// Accepted OS foreground snapshot order; late completion cannot overwrite
     /// a newer observation from another timer/IPC/HTTP caller.
     #[serde(skip)]
@@ -2179,6 +2185,8 @@ pub struct AppState {
     /// delivery order is global. Peer `send` payloads are never in here — see
     /// `PendingInjection`. The inbox is the authoritative copy of every message.
     pub(crate) pending_injections: DashMap<String, VecDeque<PendingInjection>>,
+    /// Last 128 accepted queue keys per PTY, including entries already drained.
+    pub(crate) recent_queue_keys: DashMap<String, VecDeque<String>>,
     /// Initial prompts awaiting successful PTY submission. Successful delivery
     /// removes the marker; the delivery watchdog notifies the parent once and
     /// leaves the prompt in place so a child that was blocked on a startup
@@ -3440,6 +3448,7 @@ impl AppState {
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
             pending_injections: DashMap::new(),
+            recent_queue_keys: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
@@ -5098,11 +5107,12 @@ impl AppState {
             // A mirrored event is the far end's accumulator output. Feeding it
             // in here would build a second, local row for a session this
             // machine does not run.
-            | AppEvent::RemoteMirrored { .. }
+            | AppEvent::RemoteMirrored { .. } => {}
             // Dictation is bound to a session but says nothing about it: a
             // download belongs to the installation, and a spoken reply belongs
             // to the conversation rather than to the terminal it will reach.
-            | AppEvent::DictationDownloadProgress { .. }
+            #[cfg(feature = "dictation")]
+            AppEvent::DictationDownloadProgress { .. }
             | AppEvent::SpeechDownloadProgress { .. }
             | AppEvent::SpeechUtterance { .. } => {}
         }

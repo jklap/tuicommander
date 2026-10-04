@@ -2579,6 +2579,21 @@ HTTPS for phone entry. TUIC inspection tools are gated while a form is open. See
 
 Command boundaries and user prompt ticks retain their physical row after capped scrollback evicts older output. Answers-only history uses the same stable prompt coordinates.
 
+## Headless Telegram channel
+
+Any MCP-bound TUIC agent opts in with `telegram register`; one volatile
+registration replaces the previous agent with one native notice. It ends on
+MCP session end, PTY close, foreground-agent exit or daemon restart.
+Allowlisted private text arrives as native peer mail. Without an agent the bot
+replies "Nessun agent registrato" and drops the text; strangers stay silent.
+The registered agent can stream concise activity, send exact replies and offer
+opaque buttons. Proactive sends use one allowlisted destination. Only the polling
+cursor persists; live mint deployment remains pending. See
+[Telegram channel](design/telegram-channel.md).
+### Telegram Settings
+
+Desktop Settings → Telegram and Mobile Settings → Telegram setup provide token replacement/getMe check, one-use ten-minute pairing or explicit private-chat IDs, read-only registered-agent status, enable and safe status. Only `tuic-remote` owns polling. Tokens stay in owner-only private files and never return to the UI.
+
 Connected daemon notices carry their host identity. MCP confirmation responses and ACP permission/elicitation answers return to that daemon; disconnected questions disappear without changing local connections. AI Chat shows remote questions separately, with their ACP connection identity. Remote GitHub transitions fetch PR data from the repository owner, notify once, and do not run local repository automation. GitHub polling also works on the headless daemon. MCP upstream health refreshes use a separate host snapshot rather than this machine’s editable configuration.
 
 - AI Chat mobile push: pending questions and ego notice cards share the 30-second per-conversation limit.
