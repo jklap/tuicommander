@@ -16,7 +16,7 @@ command = "powershell -NoProfile -File scripts/nextest-test-tmp.ps1"
 # CARGO_BIN_EXE_*, which cargo itself builds. Every setup entry below is
 # filtered to those consumers, so a run that selects none of them skips the
 # ~5 min build (#1308-50c9). A new lib unit test that spawns a fixture bin must
-# be added to the filter; scripts/test-nextest-fixture-scope.sh guards it.
+# be added to the filter; scripts/check-nextest-fixture-scope.sh guards it.
 [scripts.setup.fixture-bins-unix]
 command = "sh scripts/build-fixture-bins.sh"
 
