@@ -402,7 +402,8 @@ function renderMarkdownSegment(
 		});
 	} catch (err) {
 		appLogger.error("app", "Markdown parsing error", err);
-		return `<pre>${raw}</pre>`;
+		const escaped = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+		return `<pre>${escaped}</pre>`;
 	}
 }
 
