@@ -2312,6 +2312,65 @@ mod tests {
         assert_eq!((committed[0].additions, committed[0].deletions), (1, 0));
     }
 
+    // Catches splitting control-character paths or misaligning binary/deleted
+    // raw records with their numstat records in the public changed-file result.
+    #[cfg(unix)]
+    #[test]
+    fn changed_files_preserve_control_paths_binary_and_deleted_status_critic_1499() {
+        let (_temp, repo) = empty_fixture_repo();
+        let literal = "tracked\tline\nname.txt";
+        std::fs::write(repo.join(literal), "first\nsecond\n").unwrap();
+        std::fs::write(repo.join("deleted.txt"), "removed\n").unwrap();
+        std::fs::write(repo.join("binary.bin"), [0, 1, 2, 3]).unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "critic baseline"]);
+        std::fs::write(repo.join(literal), "first\nreplacement\nthird\n").unwrap();
+        std::fs::remove_file(repo.join("deleted.txt")).unwrap();
+        std::fs::write(repo.join("binary.bin"), [0, 9, 8, 7]).unwrap();
+        let path = repo.to_string_lossy().into_owned();
+        let check = |files: Vec<ChangedFile>| {
+            assert_eq!(files.len(), 3, "unexpected changed-file records: {files:?}");
+            for (name, status, additions, deletions) in [
+                (literal, "M", 2, 1),
+                ("deleted.txt", "D", 0, 1),
+                ("binary.bin", "M", 0, 0),
+            ] {
+                let file = files.iter().find(|file| file.path == name).unwrap();
+                assert_eq!(file.status, status, "status for {name:?}");
+                assert_eq!((file.additions, file.deletions), (additions, deletions));
+            }
+        };
+        check(get_changed_files_blocking(path.clone(), None).unwrap());
+        git_in(&repo, &["add", "-A"]);
+        check(get_changed_files_blocking(path.clone(), Some("staged".into())).unwrap());
+        assert!(
+            get_changed_files_blocking(path.clone(), None)
+                .unwrap()
+                .is_empty()
+        );
+        git_in(&repo, &["commit", "-qm", "critic changes"]);
+        let head = git_in(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+        check(get_changed_files_blocking(path, Some(head)).unwrap());
+    }
+
+    // Catches exposing Git's C-quoted display spelling as an untracked path,
+    // which makes the consumer open a nonexistent file and report zero lines.
+    #[cfg(unix)]
+    #[test]
+    fn changed_files_return_literal_untracked_control_path_critic_1499() {
+        let (_temp, repo) = empty_fixture_repo();
+        let literal = "untracked\tline\nname.txt";
+        std::fs::write(repo.join(literal), "first\nsecond\n").unwrap();
+        let files = get_changed_files_blocking(repo.to_string_lossy().into_owned(), None).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].path, literal,
+            "untracked path must be usable by file-diff consumers"
+        );
+        assert_eq!(files[0].status, "?");
+        assert_eq!((files[0].additions, files[0].deletions), (2, 0));
+    }
+
     // --- Fixture repositories ---
     //
     // No test in this module resolves its subject repository from
