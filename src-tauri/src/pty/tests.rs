@@ -12427,7 +12427,7 @@ fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
     }
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(all(unix, feature = "desktop"))]
 fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
     state
         .session_maps
@@ -12437,7 +12437,7 @@ fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
         .question_confident = confident;
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(all(unix, feature = "desktop"))]
 fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
     state
         .session_maps

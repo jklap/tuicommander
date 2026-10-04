@@ -1,5 +1,6 @@
 //! Adversarial receiver/sender tests for the remote drop transfer (story 1434-1719).
 use super::*;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn scratch() -> tempfile::TempDir {
