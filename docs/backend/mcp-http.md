@@ -782,7 +782,7 @@ instead of nine, keeps a measurable 10.7%.
 
 ### MCP Native Tools
 
-Native tools are organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled. The enabled `progress` tool is additionally kept on the direct collapsed surface.
+Native tools are organized by domain. Two (`config`, `debug`) are disabled by default via `disabled_native_tools`; listing, search, schema lookup and dispatch respect this filter in both full and collapsed mode. The enabled `progress` tool is additionally kept on the direct collapsed surface.
 
 The payload measurements above predate `voice` and are left as recorded: they
 say what was measured, not what the list costs today.
@@ -802,6 +802,8 @@ say what was measured, not what the list costs today.
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+
+Settings reads `native_tools` from `get_mcp_status` / `GET /mcp/status`. Both transports use `native_tool_catalog`, projected from the same unfiltered definitions used by MCP. Entries contain `name`, the first description line as `summary`, and the complete `description`. Disabled tools remain in this app inventory so users can re-enable them. No native tool is always on: even `progress` can be disabled and is also gated by global `progress_tracking`. Upstream tools and meta-tools do not belong to this inventory.
 
 Native MCP inputs use `path` for a repository root in `agent register/list_peers` and `repo`, and `branch` for `repo worktree_lifecycle/worktree_remove`. The old `project` and `workspace_id` input names are rejected. The shared `worktree_create` response still includes `workspace_id` alongside `branch` for HTTP parity. `spawn_session=true` on worktree creation starts a bare shell PTY; spawn an agent separately when one is needed.
 
