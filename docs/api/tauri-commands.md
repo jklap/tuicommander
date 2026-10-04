@@ -813,3 +813,5 @@ against the backend-created private window. It is intentionally unmapped: an
 HTTP client must already possess the privately delivered capability.
 `secret_form_submit {submission}` checks the same native identity and uses the
 same schema and consumption logic as `POST /secrets/forms/submit`.
+
+Workflow definition and human-decision IPC commands use host Human authority. HTTP equivalents require verified credentials for that authority; local address admission grants LocalApi only. Native story plan_state and plan_view use current integration receipts for workflow-owned plans.

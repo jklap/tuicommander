@@ -2573,3 +2573,5 @@ and directory. Values and templates live only until exit. One-time nonce links
 support browser entry on the existing application origin and transport. Use
 HTTPS for phone entry. TUIC inspection tools are gated while a form is open. See
 [Private secret forms](user-guide/secrets.md) for limits and consent.
+
+Workflow safety includes owned check-tree teardown, credential-derived operator authority, and receipt-based plan completion that reopens after canonical ref movement.

@@ -1,5 +1,6 @@
 use super::check::{
-    CheckReceipt, cancel_checks, clean_artifact, execute_run_check, git_output, require_merge_tree_support,
+    CheckReceipt, cancel_checks, clean_artifact, execute_run_check, git_output,
+    require_merge_tree_support,
 };
 use super::model::*;
 use super::reducer::apply_event;
@@ -692,7 +693,7 @@ impl RunStore {
         }
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
-            let receipt = execute_run_check(check, canonical, &self.db_path, run_id)?;
+            let receipt = execute_run_check(check, canonical, &self.db_path, run_id, false)?;
             if receipt.exit_code != 0 {
                 return Err(format!("post-integration check {} failed", check.id));
             }
@@ -790,7 +791,13 @@ impl RunStore {
         require_nonempty_policy(&definition)?;
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
-            let receipt = execute_run_check(check, canonical, &self.db_path, run_id)?;
+            let receipt = execute_run_check(
+                check,
+                canonical,
+                &self.db_path,
+                run_id,
+                snapshot.status == RunStatus::Cancelled,
+            )?;
             if receipt.exit_code != 0 {
                 return Err(format!("post-integration check {} failed", check.id));
             }
@@ -836,6 +843,9 @@ impl RunStore {
             return check_receipt_retry(prior, story_id, check_id, expected_sequence);
         }
         let snapshot = self.snapshot(run_id)?;
+        if matches!(snapshot.status, RunStatus::Completed | RunStatus::Cancelled) {
+            return Err("terminal workflow cannot execute a check".into());
+        }
         if snapshot.sequence != expected_sequence {
             return Err("stale workflow sequence".into());
         }
@@ -857,7 +867,7 @@ impl RunStore {
             .iter()
             .find(|check| check.id == check_id)
             .ok_or("check is not pinned by the story definition")?;
-        let receipt = execute_run_check(check, Path::new(path), &self.db_path, run_id)?;
+        let receipt = execute_run_check(check, Path::new(path), &self.db_path, run_id, false)?;
         self.commit_completed_check(run_id, execution, command_id, expected_sequence, receipt)
     }
 

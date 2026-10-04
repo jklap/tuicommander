@@ -2,8 +2,8 @@ use crate::workflows::CheckDefinition;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -125,7 +125,10 @@ pub(super) fn cancel_checks(db_path: &Path, run_id: &str) {
     registry.cancelled.insert(owner.clone());
     if let Some(checks) = registry.active.remove(&owner) {
         for process in checks.into_iter().filter_map(|process| process.upgrade()) {
-            process.lock().unwrap_or_else(|error| error.into_inner()).stop(true);
+            process
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .stop(true);
         }
     }
 }
@@ -137,7 +140,10 @@ pub(crate) fn shutdown_checks() {
     registry.stopped = true;
     for checks in registry.active.drain().map(|(_, checks)| checks) {
         for process in checks.into_iter().filter_map(|process| process.upgrade()) {
-            process.lock().unwrap_or_else(|error| error.into_inner()).stop(true);
+            process
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .stop(true);
         }
     }
 }
@@ -147,21 +153,28 @@ pub(super) fn execute_run_check(
     path: &Path,
     db_path: &Path,
     run_id: &str,
+    allow_cancelled: bool,
 ) -> Result<CheckReceipt, String> {
-    execute_check_owned(check, path, Some((db_path.to_owned(), run_id.to_owned())))
+    execute_check_owned(
+        check,
+        path,
+        Some((db_path.to_owned(), run_id.to_owned())),
+        allow_cancelled,
+    )
 }
 
 /// Run a published check directly in a clean worktree and bind the result to
 /// the exact commit and tree observed before and after it. A changing tree
 /// yields no usable receipt, even when the command exits successfully.
 pub fn execute_pinned_check(check: &CheckDefinition, path: &Path) -> Result<CheckReceipt, String> {
-    execute_check_owned(check, path, None)
+    execute_check_owned(check, path, None, false)
 }
 
 fn execute_check_owned(
     check: &CheckDefinition,
     path: &Path,
     owner: Option<CheckOwner>,
+    allow_cancelled: bool,
 ) -> Result<CheckReceipt, String> {
     let (commit, tree) = clean_artifact(path)?;
     let ref_name = git_output(path, &["symbolic-ref", "HEAD"])?;
@@ -180,7 +193,12 @@ fn execute_check_owned(
     // Registration and spawn share the cancellation lock: cancellation also
     // fences workers which were reading Git when the run was cancelled.
     let mut registry = CHECKS.lock().unwrap_or_else(|error| error.into_inner());
-    if registry.stopped || owner.as_ref().is_some_and(|owner| registry.cancelled.contains(owner)) {
+    if registry.stopped
+        || (!allow_cancelled
+            && owner
+                .as_ref()
+                .is_some_and(|owner| registry.cancelled.contains(owner)))
+    {
         return Err("workflow check cancelled".into());
     }
     let tree_owner = crate::agent::ScreenProbeTree::prepare(&mut command)
@@ -200,7 +218,11 @@ fn execute_check_owned(
         cancelled: false,
     }));
     let key = owner.unwrap_or_else(|| (path.to_owned(), uuid::Uuid::new_v4().to_string()));
-    registry.active.entry(key.clone()).or_default().push(Arc::downgrade(&process));
+    registry
+        .active
+        .entry(key.clone())
+        .or_default()
+        .push(Arc::downgrade(&process));
     drop(registry);
     let timeout = Duration::from_secs(u64::from(check.timeout_secs));
     let result = (|| {
@@ -210,7 +232,9 @@ fn execute_check_owned(
                 if process.cancelled {
                     return Err("workflow check cancelled".to_string());
                 }
-                if let Some(status) = process.child.try_wait()
+                if let Some(status) = process
+                    .child
+                    .try_wait()
                     .map_err(|error| format!("wait for workflow check: {error}"))?
                 {
                     process.stop(false);
