@@ -9194,4 +9194,91 @@ mod tests {
             "must match what a fresh dictation.json-less install loads"
         );
     }
+    // Catches: arithmetic or sentinel defaults silently change new-install attachment limits.
+    #[test]
+    fn new_install_attachment_defaults_preserve_upload_and_retention_contract() {
+        let defaults = AppConfig::default();
+        assert_eq!(defaults.attachment_max_bytes, 26_214_400);
+        assert_eq!(defaults.attachment_retention_days, 7);
+        let mut old_document = serde_json::to_value(defaults).unwrap();
+        old_document
+            .as_object_mut()
+            .unwrap()
+            .remove("attachment_max_bytes");
+        old_document
+            .as_object_mut()
+            .unwrap()
+            .remove("attachment_retention_days");
+        let migrated: AppConfig = serde_json::from_value(old_document).unwrap();
+        assert_eq!(migrated.attachment_max_bytes, 26_214_400);
+        assert_eq!(migrated.attachment_retention_days, 7);
+    }
+
+    // Catches: missing mobile-theme keys deserialize to an empty or invalid theme.
+    #[test]
+    fn missing_mobile_theme_preserves_the_new_install_commander_theme() {
+        assert_eq!(UIPrefsConfig::default().mobile_theme, "commander");
+        let mut old_document = serde_json::to_value(UIPrefsConfig::default()).unwrap();
+        old_document.as_object_mut().unwrap().remove("mobile_theme");
+        let migrated: UIPrefsConfig = serde_json::from_value(old_document).unwrap();
+        assert_eq!(migrated.mobile_theme, "commander");
+    }
+
+    // Catches: a recovering save reports success while leaving the corrupt document unrepaired.
+    #[test]
+    fn recovering_delta_persists_desired_document_after_a_corrupt_load() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("recovery.json");
+        fs::write(&path, b"{broken").unwrap();
+        let file = ConfigFile::<serde_json::Value>::at_path(path.clone());
+        let desired = serde_json::json!({"setting": "chosen"});
+        file.save_delta_recovering(&serde_json::json!({}), &desired)
+            .unwrap();
+        let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(stored, desired);
+        assert_eq!(corrupt_backups(dir.path()).len(), 1);
+    }
+
+    // Catches: repairing an earlier load discards another writer's valid document.
+    #[test]
+    fn recovering_delta_preserves_a_document_repaired_by_another_writer() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("recovery.json");
+        fs::write(&path, br#"{"other":"new"}"#).unwrap();
+        let file = ConfigFile::<serde_json::Value>::at_path(path.clone());
+        file.save_delta_recovering(
+            &serde_json::json!({}),
+            &serde_json::json!({"setting": "chosen"}),
+        )
+        .unwrap();
+        let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(
+            stored,
+            serde_json::json!({"other": "new", "setting": "chosen"})
+        );
+    }
+
+    // Catches: the activity IPC save reports success without persisting the new entries.
+    #[test]
+    #[serial_test::serial]
+    fn activity_save_persists_entries_for_the_next_load() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let desired = serde_json::json!([{"id": "new", "message": "finished"}]);
+        save_activity(serde_json::Value::Null, desired.clone()).unwrap();
+        assert_eq!(load_activity(), desired);
+        assert!(dir.path().join(ACTIVITY_FILE).is_file());
+    }
+
+    // Catches: the keybindings IPC save drops a changed binding while reporting success.
+    #[test]
+    #[serial_test::serial]
+    fn keybindings_save_persists_custom_bindings_for_the_next_load() {
+        let dir = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let desired = serde_json::json!({"search-files": "Ctrl+Shift+P"});
+        save_keybindings(serde_json::Value::Null, desired.clone()).unwrap();
+        assert_eq!(load_keybindings(), desired);
+        assert!(dir.path().join(KEYBINDINGS_FILE).is_file());
+    }
 }
