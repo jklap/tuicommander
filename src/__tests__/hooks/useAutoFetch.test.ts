@@ -93,7 +93,7 @@ describe("useAutoFetch", () => {
 
 		expect(mockInvoke).toHaveBeenCalledWith("run_git_command", {
 			path: "/repo1",
-			args: ["fetch", "--all"],
+			args: ["fetch", "--all", "--tuic-auto-fetch"],
 		});
 	});
 
@@ -144,7 +144,7 @@ describe("useAutoFetch", () => {
 		await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
 		expect(mockInvoke).toHaveBeenCalledWith("run_git_command", {
 			path: "/repo1",
-			args: ["fetch", "--all"],
+			args: ["fetch", "--all", "--tuic-auto-fetch"],
 		});
 	});
 

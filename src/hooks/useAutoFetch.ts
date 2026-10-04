@@ -23,7 +23,7 @@ async function fetchRepo(repoPath: string): Promise<void> {
 	try {
 		const result = await invoke<{ success: boolean; stdout: string; stderr: string; exit_code: number }>(
 			"run_git_command",
-			{ path: repoPath, args: ["fetch", "--all"] },
+			{ path: repoPath, args: ["fetch", "--all", "--tuic-auto-fetch"] },
 		);
 		if (result.success) {
 			repositoriesStore.bumpGitRevision(repoPath);
