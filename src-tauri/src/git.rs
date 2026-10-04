@@ -1015,6 +1015,11 @@ mod tests {
         let first = get_repo_diff_stats_impl(&state, repo.clone())
             .await
             .unwrap();
+        assert_eq!(
+            first.workspace_statuses.len(),
+            1,
+            "fixture has one workspace"
+        );
         assert!(
             first
                 .workspace_statuses
@@ -1028,6 +1033,11 @@ mod tests {
             get_repo_diff_stats_impl(&state, repo.clone()),
         );
         for stats in [a.unwrap(), b.unwrap()] {
+            assert_eq!(
+                stats.workspace_statuses.keys().collect::<Vec<_>>(),
+                first.workspace_statuses.keys().collect::<Vec<_>>(),
+                "refresh must preserve the fixture workspace"
+            );
             assert!(
                 stats
                     .workspace_statuses
