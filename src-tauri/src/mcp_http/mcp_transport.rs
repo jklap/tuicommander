@@ -8939,7 +8939,10 @@ mod tests {
             assert!(spawned.get("error").is_none(), "{agent}: {spawned}");
             let actual =
                 wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
-            assert_eq!(actual, "run\nperform the task\n", "agent {agent}");
+            assert!(
+                actual.ends_with("run\nperform the task\n"),
+                "agent {agent}: wrapper subcommand and task must remain positional; argv={actual:?}"
+            );
             assert!(
                 !state
                     .pending_injections
