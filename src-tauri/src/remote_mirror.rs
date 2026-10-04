@@ -163,7 +163,7 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 10] = [
+const WINDOW_MIRRORABLE_EVENTS: [&str; 13] = [
     "session-state-changed",
     "session-closed",
     "progress-recorded",
@@ -174,6 +174,9 @@ const WINDOW_MIRRORABLE_EVENTS: [&str; 10] = [
     "conflict-assist-status",
     "upstream-status-changed",
     "acp-notice",
+    "github-transition",
+    "github-pr-update",
+    "github-issues-update",
 ];
 
 /// Whether a mirrored event may be repeated on the desktop window.
@@ -307,6 +310,9 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
             | "conflict-assist-status"
             | "upstream-status-changed"
             | "acp-notice"
+            | "github-transition"
+            | "github-pr-update"
+            | "github-issues-update"
     ) && state.remote.base_url(connection_id).is_none()
     {
         return false;
@@ -358,8 +364,14 @@ fn republish(state: &Arc<AppState>, connection_id: &str, event: &str, payload: s
         let mut origin = serde_json::json!({ "connection": connection_id });
         if matches!(
             event,
-            "mcp-toast" | "mcp-confirm" | "mcp-confirm-resolved" | "upstream-status-changed"
-            | "acp-notice"
+            "mcp-toast"
+                | "mcp-confirm"
+                | "mcp-confirm-resolved"
+                | "upstream-status-changed"
+                | "acp-notice"
+                | "github-transition"
+                | "github-pr-update"
+                | "github-issues-update"
         ) {
             // Names come from this machine's saved connection, never the peer.
             let name = match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
@@ -845,7 +857,10 @@ mod tests {
             "proposals-ready",
             "conflict-assist-status",
             "upstream-status-changed",
-    "acp-notice",
+            "acp-notice",
+            "github-transition",
+            "github-pr-update",
+            "github-issues-update",
         ] {
             assert!(window_may_hear(event), "{event} has a safe window consumer");
         }
