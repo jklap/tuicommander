@@ -609,3 +609,101 @@ fn bg_command_survives_killing_its_launchers_process_group() {
     std::fs::remove_file(log).unwrap();
     std::fs::remove_file(marker).unwrap();
 }
+
+// Catches: a lost accepted reply plus failed mail uses a new key or reports a drained wake as lost.
+#[test]
+fn bg_lost_queue_reply_and_failed_mail_retries_the_same_key_and_records_acceptance() {
+    let log = test_path("lost-reply.log");
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    let socket = socket_path("lost-reply.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(read_request(&mut stream).0, "GET /sessions HTTP/1.1");
+        reply(
+            &mut stream,
+            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
+        );
+        let (mut stream, _) = listener.accept().unwrap();
+        let first = read_request(&mut stream);
+        assert_eq!(first.0, "POST /sessions/pty-1/queue HTTP/1.1");
+        // The backend response is lost after the full POST was read.
+        drop(stream);
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(read_request(&mut stream).0, "POST /mcp HTTP/1.1");
+        drop(stream); // failed mail fallback
+        let (mut stream, _) = listener.accept().unwrap();
+        assert_eq!(read_request(&mut stream).0, "GET /sessions HTTP/1.1");
+        reply(
+            &mut stream,
+            r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
+        );
+        let (mut stream, _) = listener.accept().unwrap();
+        let retry = read_request(&mut stream);
+        assert_eq!(retry.0, "POST /sessions/pty-1/queue HTTP/1.1");
+        reply(&mut stream, r#"{"accepted":true,"typed":false,"queued":0}"#);
+        (first.1, retry.1)
+    });
+    let output = bg_command(&log)
+        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 0"])
+        .env("TUIC_SESSION", "caller-1")
+        .env("TUIC_SOCKET", &socket)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let status = wait_for_terminal_wake(&wake_file);
+    let (first, retry) = server.join().unwrap();
+    let key = first["idempotencyKey"].as_str().expect("stable job key");
+    assert!(!key.is_empty());
+    assert_eq!(first, retry);
+    assert_eq!(status["status"], "queued");
+    assert_eq!(status["attempts"], 2);
+    let marker: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(format!("{}.markers/caller-1.json", log.display())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(marker["status"], "queued");
+    std::fs::remove_file(socket).unwrap();
+}
+
+// Catches: exhausted ambiguous replies plus failed mail claim a possibly accepted wake was lost.
+#[test]
+fn bg_exhausted_lost_queue_replies_remain_uncertain_instead_of_failed() {
+    let log = test_path("all-lost.log");
+    let wake_file = std::path::PathBuf::from(format!("{}.wake", log.display()));
+    let socket = socket_path("all-lost.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut bodies = Vec::new();
+        for _ in 0..6 {
+            let (mut stream, _) = listener.accept().unwrap();
+            assert_eq!(read_request(&mut stream).0, "GET /sessions HTTP/1.1");
+            reply(
+                &mut stream,
+                r#"[{"session_id":"pty-1","tuic_session":"caller-1"}]"#,
+            );
+            let (mut stream, _) = listener.accept().unwrap();
+            let request = read_request(&mut stream);
+            assert_eq!(request.0, "POST /sessions/pty-1/queue HTTP/1.1");
+            bodies.push(request.1);
+            drop(stream);
+            let (mut stream, _) = listener.accept().unwrap();
+            assert_eq!(read_request(&mut stream).0, "POST /mcp HTTP/1.1");
+            drop(stream);
+        }
+        bodies
+    });
+    let output = bg_command(&log)
+        .args(["bg", log.to_str().unwrap(), "--", "sh", "-c", "exit 0"])
+        .env("TUIC_SESSION", "caller-1")
+        .env("TUIC_SOCKET", &socket)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let status = wait_for_terminal_wake(&wake_file);
+    let bodies = server.join().unwrap();
+    assert_eq!(status["status"], "uncertain");
+    assert_eq!(status["attempts"], 6);
+    assert!(bodies.iter().all(|body| body == &bodies[0]));
+    std::fs::remove_file(socket).unwrap();
+}

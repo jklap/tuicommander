@@ -876,10 +876,10 @@ an overrideable default.
 `idle_close_minutes` is per agent type. Only orchestrator-spawned children use it;
 user-created terminals are never candidates. The idle window restarts on input,
 output, mail, or agent-state changes. Unread mail, background work, a running
-`tuic bg` job, a failed or retrying background wake, and a per-session keep-open
+`tuic bg` job, a failed, uncertain or retrying background wake, and a per-session keep-open
 mark prevent closure.
 The latest background-wake status for each session is stored atomically at
-`<config_dir>/bg-wakes/<TUIC_SESSION>.json`; a `retrying` or `failed` status
+`<config_dir>/bg-wakes/<TUIC_SESSION>.json`; a `retrying`, `uncertain` or `failed` status
 keeps that managed child open.
 
 **This file belongs to a machine, not to the app.** Every backend reads its own copy, and

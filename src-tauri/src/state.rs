@@ -2179,6 +2179,8 @@ pub struct AppState {
     /// delivery order is global. Peer `send` payloads are never in here — see
     /// `PendingInjection`. The inbox is the authoritative copy of every message.
     pub(crate) pending_injections: DashMap<String, VecDeque<PendingInjection>>,
+    /// Last 128 accepted queue keys per PTY, including entries already drained.
+    pub(crate) recent_queue_keys: DashMap<String, VecDeque<String>>,
     /// Initial prompts awaiting successful PTY submission. Successful delivery
     /// removes the marker; the delivery watchdog notifies the parent once and
     /// leaves the prompt in place so a child that was blocked on a startup
@@ -3440,6 +3442,7 @@ impl AppState {
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
             pending_injections: DashMap::new(),
+            recent_queue_keys: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
