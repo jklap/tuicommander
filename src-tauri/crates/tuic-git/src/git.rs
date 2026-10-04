@@ -4593,6 +4593,15 @@ filename test.txt
                 .trim()
                 .to_owned()
         };
+        let branch_exists = |name: &str| {
+            std::process::Command::new("git")
+                .current_dir(&path)
+                .args(["show-ref", "--verify", &format!("refs/heads/{name}")])
+                .output()
+                .expect("git")
+                .status
+                .success()
+        };
         git(&["branch", "-M", "main"]);
         let original = git(&["rev-parse", "HEAD"]);
         git(&["checkout", "-b", "unique"]);
@@ -4603,23 +4612,21 @@ filename test.txt
         git(&["checkout", "main"]);
         delete_branch_impl(&repo, "unique", true).expect("force delete unique");
         assert_eq!(git(&["rev-parse", "refs/archive/unique"]), unique);
-        assert!(
-            !std::process::Command::new("git")
-                .current_dir(&path)
-                .args(["show-ref", "--verify", "refs/heads/unique"])
-                .output()
-                .expect("git")
-                .status
-                .success()
-        );
+        assert!(!branch_exists("unique"));
         git(&["branch", "integrated"]);
         delete_branch_impl(&repo, "integrated", true).expect("force delete integrated");
         assert_eq!(git(&["rev-parse", "refs/archive/integrated"]), original);
         git(&["branch", "collision", &unique]);
         git(&["update-ref", "refs/archive/collision", &original]);
-        assert!(delete_branch_impl(&repo, "collision", true).is_err());
-        assert_eq!(git(&["rev-parse", "refs/heads/collision"]), unique);
+        delete_branch_impl(&repo, "collision", true).expect("archive collision uses a suffix");
+        assert!(!branch_exists("collision"));
         assert_eq!(git(&["rev-parse", "refs/archive/collision"]), original);
+        let suffixed = format!("refs/archive/collision-{}", &unique[..7]);
+        assert_eq!(git(&["rev-parse", &suffixed]), unique);
+        // Catches: a branch name force-deleted once, recreated, becoming undeletable.
+        git(&["branch", "collision", &unique]);
+        delete_branch_impl(&repo, "collision", true).expect("second deletion reuses suffixed archive");
+        assert_eq!(git(&["rev-parse", &suffixed]), unique);
         git(&["branch", "same-archive"]);
         git(&["update-ref", "refs/archive/same-archive", &original]);
         delete_branch_impl(&repo, "same-archive", true).expect("reuse exact archive");

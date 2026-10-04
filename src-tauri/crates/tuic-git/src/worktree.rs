@@ -2625,14 +2625,33 @@ pub(crate) fn delete_local_branch_with_archive(repo: &Path, branch: &str) -> Res
     }
     let branch_ref = format!("refs/heads/{branch}");
     let tip = rev_at(repo, &branch_ref)?;
-    let archive = archive_ref_name(branch);
-    if !archived_at_tip(repo, branch, &tip) {
-        // An empty old value means the archive must not exist. Never overwrite
-        // earlier unmerged work when a branch name is reused.
-        git_cmd(repo)
-            .args(["update-ref", &archive, &tip, ""])
-            .run()
-            .map_err(|error| format!("Cannot preserve '{branch}' at {archive}: {error}"))?;
+    let primary = archive_ref_name(branch);
+    // A reused branch name collides with the earlier archive. The tip's short
+    // SHA names a second archive, so earlier work is never replaced and the new
+    // tip is still preserved.
+    let suffixed = format!("{primary}-{}", tip.get(..7).unwrap_or(&tip));
+    let archives = [primary, suffixed];
+    let preserved = archives
+        .iter()
+        .any(|archive| rev_at(repo, archive).is_ok_and(|archived| archived == tip));
+    if !preserved {
+        let mut failure = String::new();
+        let created = archives.iter().any(|archive| {
+            // An empty old value means the archive must not exist.
+            match git_cmd(repo).args(["update-ref", archive, &tip, ""]).run() {
+                Ok(_) => true,
+                Err(error) => {
+                    failure = error.to_string();
+                    false
+                }
+            }
+        });
+        if !created {
+            return Err(format!(
+                "Cannot preserve '{branch}' at {} or {}: {failure}",
+                archives[0], archives[1]
+            ));
+        }
     }
     git_cmd(repo)
         .args(["update-ref", "-d", &branch_ref, &tip])
