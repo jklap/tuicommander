@@ -253,3 +253,13 @@ remain outside L4. Earlier proposed durable outbound state, idempotency keys and
 approval inputs in sections 3–6 are design follow-ups, not implemented features.
 Only the cursor file persists. A long 429 delay returns immediately to the worker
 rather than holding Stop asleep; callers see rate-limited/degraded delivery.
+
+
+The daemon has one explicit startup call in run_remote; desktop startup never
+calls it. Missing/disabled config returns before opening token or owner files.
+Native inbound mail registers a daemon-local adapter peer and uses the existing
+stable-ID native send service with normal urgency and its inbox/wake arbitration.
+Authorization and the target are rechecked after waiting for the outbound worker.
+Permanent inbound polling faults stop the worker too. Errors raise the existing
+McpToast event and safe daemon logs. The feature needs a backend rebuild/restart;
+this work does not launch, restart or deploy a desktop/daemon instance.

@@ -2757,6 +2757,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     crate::github_auth::spawn_deferred_token_resolution(state.clone());
 
     spawn_daemon_background_tasks(&state);
+    telegram::start(&state);
 
     // The bridge reaches this process over the local IPC socket, and an agent on
     // this machine can only find the socket if it is listening. Awaited: the
