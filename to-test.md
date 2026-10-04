@@ -4583,3 +4583,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] After Boss restarts the Rust backend, confirm that remote MCP questions show the saved host name and answer only the owning daemon (#1440-3571).
 
 - [ ] After rebuilding Rust, verify remote GitHub review/proposal/conflict notices update the owning dashboard and leave same-path local repositories unchanged (#1443-e2fd).
+
+- [ ] After rebuilding Rust, verify remote upstream MCP failures show their host with the popup closed and leave local upstream settings unchanged (#1444-95a4).
