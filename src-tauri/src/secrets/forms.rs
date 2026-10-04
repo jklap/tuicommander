@@ -206,10 +206,10 @@ fn close_window(state: &Arc<AppState>, id: &str) {
     #[cfg(feature = "desktop")]
     {
         use tauri::Manager;
-        if let Some(handle) = state.app_handle.read().clone() {
-            if let Some(window) = handle.get_webview_window(&format!("secret-{id}")) {
-                let _ = window.destroy();
-            }
+        if let Some(handle) = state.app_handle.read().clone()
+            && let Some(window) = handle.get_webview_window(&format!("secret-{id}"))
+        {
+            let _ = window.destroy();
         }
     }
     #[cfg(not(feature = "desktop"))]

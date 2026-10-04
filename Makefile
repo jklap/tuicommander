@@ -129,7 +129,8 @@ check: test-shell
 	@scripts/with-test-tmp.sh bash scripts/check-make-instance-scope.sh && echo "  make-instance-scope ✓"
 	@scripts/with-test-tmp.sh bash scripts/check-make-dev-builds-sibling.sh && echo "  make-dev-builds-sibling ✓"
 	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo fmt --check && echo "  rustfmt ✓"
-	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --release -- -D warnings && echo "  clippy ✓"
+# bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
+	@cd src-tauri && ../scripts/with-test-tmp.sh $(RTK) cargo clippy --workspace --exclude bm25 --release -- -D warnings && echo "  clippy ✓"
 	@cd src-tauri && ulimit -n 10240 && ../scripts/with-test-tmp.sh $(RTK) cargo nextest run --workspace && ../scripts/with-test-tmp.sh $(RTK) cargo test --doc --workspace -q && echo "  rust tests ✓"
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
 	@bash -o pipefail -c 'scripts/with-test-tmp.sh $(RTK) pnpm test:plugins 2>&1 | tail -3' && echo "  plugin tests ✓"

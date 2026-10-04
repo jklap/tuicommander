@@ -35,6 +35,7 @@ async fn daemon_router_upload_requires_existing_auth_and_registered_destination(
         ("&token=existing-token", axum::http::StatusCode::OK),
     ] {
         let mut request = axum::http::Request::post(format!("{query}{suffix}"))
+            .header("host", "localhost")
             .body(Body::from(archive("file", b"remote bytes")))
             .unwrap();
         request
@@ -462,6 +463,7 @@ async fn upload_route_uses_idle_budget_instead_of_global_response_deadline() {
             "/fs/upload-copy?destDir={}&name=file&directory=false",
             repo.path().display()
         ))
+        .header("host", "localhost")
         .header("content-length", size)
         .body(body)
         .unwrap();
@@ -578,11 +580,11 @@ async fn cancelling_handler_during_extraction_preserves_worker_and_releases_slot
     assert!(task.await.unwrap_err().is_cancelled());
     tokio::time::timeout(std::time::Duration::from_secs(120), async {
         loop {
-            if repo.path().join("folder").is_dir() {
-                if let Ok(slots) = UPLOAD_SLOTS.try_acquire_many(2) {
-                    drop(slots);
-                    break;
-                }
+            if repo.path().join("folder").is_dir()
+                && let Ok(slots) = UPLOAD_SLOTS.try_acquire_many(2)
+            {
+                drop(slots);
+                break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
@@ -617,6 +619,7 @@ async fn remote_transfer_coordinator_has_no_http_route_even_with_valid_token() {
         crate::mcp_http::build_router(state.clone(), true, false),
     ] {
         let mut request = axum::http::Request::post("/fs/transfer-remote?token=existing-token")
+            .header("host", "localhost")
             .header("content-type", "application/json")
             .body(Body::from(r#"{"connectionId":"mint","destDir":"/repo","paths":["/private/source"],"allowRecursive":true}"#)).unwrap();
         request

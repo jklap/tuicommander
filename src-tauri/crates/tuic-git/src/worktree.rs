@@ -7813,7 +7813,7 @@ branch refs/heads/feat
         let status = inspect_workspace_lifecycle(&repo, "completed-feature");
 
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
-        assert_eq!(status.merge_proof.as_deref(), Some("ancestry"));
+        assert_eq!(status.merge_proof, Some("ancestry"));
         assert!(worktree.exists());
     }
 

@@ -28,10 +28,10 @@ fn ed1_on_every_cursor_row_erases_everything_above_and_nothing_below() {
                 );
             }
             let below = ["❯ literal", "l1", "l2", "l3"];
-            for r in row..4 {
+            for (r, expected) in below.iter().enumerate().skip(row) {
                 assert_eq!(
                     g.get_selection_text(r, 0, r, 79),
-                    below[r],
+                    *expected,
                     "bce={bce:?} row={row} kept r={r}"
                 );
             }

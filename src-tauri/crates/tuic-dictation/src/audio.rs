@@ -414,7 +414,11 @@ mod tests {
 
         let captured = fx.captured();
         assert_eq!(captured.len(), 31 * 16_000 + 1);
-        assert_eq!(captured[0], 0.25, "the beginning of the dictation was lost");
+        assert_eq!(
+            captured[0].to_bits(),
+            0.25_f32.to_bits(),
+            "the beginning of the dictation was lost"
+        );
         assert_eq!(captured.last(), Some(&0.5));
     }
 

@@ -100,7 +100,7 @@ pub fn config_dir() -> PathBuf {
     // callers opt into these seams explicitly from their dev-dependencies.
     #[cfg(feature = "test-support")]
     {
-        return test_support::resolve();
+        test_support::resolve()
     }
     #[cfg(not(feature = "test-support"))]
     {

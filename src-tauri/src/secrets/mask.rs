@@ -37,12 +37,10 @@ pub(crate) fn representations(value: &str) -> Vec<Zeroizing<String>> {
     ] {
         result.push(Zeroizing::new(engine.encode(value)));
     }
-    let hex = Zeroizing::new(
-        value
-            .bytes()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>(),
-    );
+    let mut hex = Zeroizing::new(String::with_capacity(value.len() * 2));
+    for b in value.bytes() {
+        let _ = write!(hex, "{b:02x}");
+    }
     result.push(Zeroizing::new(hex.to_uppercase()));
     result.push(hex);
     for lower in [false, true] {

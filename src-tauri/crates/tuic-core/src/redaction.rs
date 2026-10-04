@@ -706,7 +706,10 @@ mod tests {
     #[test]
     fn scrub_fragments_sees_through_a_cursor_move_after_every_character() {
         let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
-        let raw: String = secret.chars().map(|c| format!("{c}\x1b[C\x1b[D")).collect();
+        let raw: String = secret
+            .chars()
+            .flat_map(|c| [c, '\x1b', '[', 'C', '\x1b', '[', 'D'])
+            .collect();
         assert_eq!(
             scrub_fragments(&format!("echo {raw}\r\n"), &secrets_in(&raw)),
             "echo [REDACTED]\x1b[C\x1b[D\r\n"
