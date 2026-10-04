@@ -4508,6 +4508,8 @@ or credential is touched.
 
 ## Private secret forms (#1435-6e1d) — Rust restart required
 
+- [ ] (#1520-46b1) After Boss restarts the rebuilt desktop and updates the CLI/bridge, request a throwaway form. Confirm a separate native window opens, wait over 10 seconds, then decline; caller must receive names and `declined`. Repeat with harmless entry and verify only names/`stored` return. If absent, read source `secrets` logs: no `Secret tool dispatched` means the request did not reach this handler; `Opening` without `Creating` means host/store setup failed (see `Secret tool failed`); `Creating` without success/error means native construction did not return; a creation failure reports its native error; `created` means investigate visibility/frontend bootstrap. No desktop was launched by the peer.
+
 - [ ] After restart, with a private form open, verify direct upstream MCP
   `tools/call` rejects inspection, matching native and `call_tool` entry points.
 
