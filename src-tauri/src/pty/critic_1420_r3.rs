@@ -1,6 +1,7 @@
 //! Round-3 critic tests for story 1420-f3de: provenance of `agent_type`.
 
 use super::*;
+#[cfg(unix)]
 use crate::test_support::ForegroundIdentityProbe;
 
 #[cfg(unix)]

@@ -237,8 +237,8 @@ pub(crate) struct RepoStructure {
 }
 
 /// Per-worktree diff stats + last-commit timestamps.
-/// Expensive: runs N×`git diff --stat` + 1×`git for-each-ref`.
-#[derive(Serialize)]
+/// Working-tree monitoring plus one batched last-commit read.
+#[derive(Clone, Serialize)]
 pub(crate) struct RepoDiffStats {
     diff_stats: HashMap<String, DiffStats>,
     last_commit_ts: HashMap<String, Option<i64>>,
@@ -289,77 +289,19 @@ async fn cached_worktree_paths(
 }
 
 /// Core implementation of get_repo_summary, callable from both Tauri command and HTTP route.
-/// Runs worktree_paths + merged_branches concurrently, then diff stats for each path concurrently.
+/// Shares the progressive loading caches, including their single-flight loaders.
 pub(crate) async fn get_repo_summary_impl(
     state: &AppState,
     repo_path: String,
 ) -> Result<RepoSummary, String> {
-    // Hold one monitoring-git slot for this whole refresh so a repo-changed
-    // burst across many repos can't fan out hundreds of concurrent git
-    // subprocesses (FD spike / CPU-IPC storm). Operational git is never gated.
-    let _permit = state.monitoring_git_permit().await;
-    // worktree_paths and merged_branches run concurrently — both are cached, so
-    // a hit on either costs nothing.
-    let mb_path = repo_path.clone();
-    let (worktree_paths, merged_branches) = tokio::join!(
-        cached_worktree_paths(state, repo_path.clone()),
-        cached_try(
-            state.git_cache.merged_branches.clone(),
-            repo_path.clone(),
-            move || get_merged_branches_impl(Path::new(&mb_path)),
-        ),
-    );
-    let worktree_paths = worktree_paths?;
-    let merged_branches = merged_branches?;
-
-    // Run diff stats and last-commit timestamps concurrently. The whole
-    // function holds a monitoring_git_sem permit (acquired above), so this
-    // per-worktree fan-out — multiplied across repos on repo-changed bursts —
-    // is bounded to MONITORING_GIT_CONCURRENCY concurrent refreshes instead of
-    // spiking git pipes past the FD limit (EMFILE) and storming CPU/IPC.
-    let entries: Vec<_> = worktree_paths
-        .iter()
-        .map(|(id, workspace)| (id.clone(), workspace.clone()))
-        .collect();
-    let mut diff_handles = Vec::with_capacity(entries.len());
-    for (workspace_id, workspace) in entries {
-        let base_repo = repo_path.clone();
-        diff_handles.push(tokio::task::spawn_blocking(move || {
-            let stats = git_reads().diff_stats(Path::new(&workspace.path), None);
-            let lifecycle =
-                crate::worktree::inspect_workspace_lifecycle(Path::new(&base_repo), &workspace_id);
-            (workspace_id, workspace.path, stats, lifecycle)
-        }));
-    }
-
-    // Branch names come off the records, never the keys: the key is a workspace
-    // id and only equals the branch under the identity migration.
-    let branch_names: Vec<String> = worktree_paths.values().map(|w| w.branch.clone()).collect();
-    let ts_repo_path = repo_path.clone();
-    let ts_handle = tokio::task::spawn_blocking(move || {
-        get_last_commit_timestamps(Path::new(&ts_repo_path), &branch_names)
-    });
-
-    let mut diff_stats = HashMap::new();
-    let mut workspace_statuses = HashMap::new();
-    for handle in diff_handles {
-        let (workspace_id, path, stats, lifecycle) = handle
-            .await
-            .map_err(|e| format!("spawn_blocking error: {e}"))?;
-        diff_stats.insert(path, stats);
-        workspace_statuses.insert(workspace_id, lifecycle);
-    }
-
-    let last_commit_ts = ts_handle
-        .await
-        .map_err(|e| format!("spawn_blocking error: {e}"))?;
-
+    let structure = get_repo_structure_impl(state, repo_path.clone()).await?;
+    let stats = get_repo_diff_stats_impl(state, repo_path).await?;
     Ok(RepoSummary {
-        worktree_paths,
-        merged_branches,
-        diff_stats,
-        last_commit_ts,
-        workspace_statuses,
+        worktree_paths: structure.worktree_paths,
+        merged_branches: structure.merged_branches,
+        diff_stats: stats.diff_stats,
+        last_commit_ts: stats.last_commit_ts,
+        workspace_statuses: stats.workspace_statuses,
     })
 }
 
@@ -379,7 +321,7 @@ pub(crate) async fn get_repo_structure_impl(
     state: &AppState,
     repo_path: String,
 ) -> Result<RepoStructure, String> {
-    // Monitoring slot — see get_repo_summary_impl.
+    // Bound monitoring across repositories; the cache coalesces concurrent reads.
     let _permit = state.monitoring_git_permit().await;
     let mb_path = repo_path.clone();
     let (worktree_paths, merged_branches) = tokio::join!(
@@ -412,53 +354,43 @@ pub(crate) async fn get_repo_diff_stats_impl(
     state: &AppState,
     repo_path: String,
 ) -> Result<RepoDiffStats, String> {
-    // Monitoring slot — see get_repo_summary_impl.
+    // Bound monitoring across repositories; the cache coalesces concurrent reads.
     let _permit = state.monitoring_git_permit().await;
     // Need worktree paths to know which directories to diff. Phase 1
     // (`get_repo_structure`) of this same refresh already read them.
     let worktree_paths = cached_worktree_paths(state, repo_path.clone()).await?;
-    let entries: Vec<_> = worktree_paths
-        .iter()
-        .map(|(id, workspace)| (id.clone(), workspace.clone()))
-        .collect();
-    let mut diff_handles = Vec::with_capacity(entries.len());
-    for (workspace_id, workspace) in entries {
-        let base_repo = repo_path.clone();
-        diff_handles.push(tokio::task::spawn_blocking(move || {
-            let stats = git_reads().diff_stats(Path::new(&workspace.path), None);
-            let lifecycle =
-                crate::worktree::inspect_workspace_lifecycle(Path::new(&base_repo), &workspace_id);
-            (workspace_id, workspace.path, stats, lifecycle)
-        }));
-    }
-
-    // Branch names come off the records, never the keys: the key is a workspace
-    // id and only equals the branch under the identity migration.
-    let branch_names: Vec<String> = worktree_paths.values().map(|w| w.branch.clone()).collect();
-    let ts_repo_path = repo_path.clone();
-    let ts_handle = tokio::task::spawn_blocking(move || {
-        get_last_commit_timestamps(Path::new(&ts_repo_path), &branch_names)
-    });
-
-    let mut diff_stats = HashMap::new();
-    let mut workspace_statuses = HashMap::new();
-    for handle in diff_handles {
-        let (workspace_id, path, stats, lifecycle) = handle
-            .await
-            .map_err(|e| format!("spawn_blocking error: {e}"))?;
-        diff_stats.insert(path, stats);
-        workspace_statuses.insert(workspace_id, lifecycle);
-    }
-
-    let last_commit_ts = ts_handle
-        .await
-        .map_err(|e| format!("spawn_blocking error: {e}"))?;
-
-    Ok(RepoDiffStats {
-        diff_stats,
-        last_commit_ts,
-        workspace_statuses,
-    })
+    let path = repo_path.clone();
+    cached_try(
+        state.git_cache.repo_diff_stats.clone(),
+        repo_path,
+        move || {
+            let ref_key = tuic_git::worktree::monitoring_ref_key(Path::new(&path))?;
+            let mut diff_stats = HashMap::new();
+            let mut workspace_statuses = HashMap::new();
+            for (id, workspace) in &worktree_paths {
+                diff_stats.insert(
+                    workspace.path.clone(),
+                    git_reads().diff_stats(Path::new(&workspace.path), None),
+                );
+                workspace_statuses.insert(
+                    id.clone(),
+                    tuic_git::worktree::inspect_workspace_monitoring_with_pr(
+                        Path::new(&path),
+                        workspace,
+                        &ref_key,
+                        crate::worktree::merged_github_pr_proves_tip,
+                    ),
+                );
+            }
+            let branches: Vec<_> = worktree_paths.values().map(|w| w.branch.clone()).collect();
+            Ok(RepoDiffStats {
+                diff_stats,
+                last_commit_ts: get_last_commit_timestamps(Path::new(&path), &branches),
+                workspace_statuses,
+            })
+        },
+    )
+    .await
 }
 
 #[cfg(feature = "desktop")]
@@ -1074,6 +1006,47 @@ mod tests {
             stats.last_commit_ts.keys().collect::<Vec<_>>()
         );
     }
+    // Catches a cached sidebar dirty badge surviving watcher invalidation.
+    #[tokio::test]
+    async fn monitoring_gitpoll_diff_cache_refreshes_dirty_badges_after_invalidation() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let repo = path.to_string_lossy().to_string();
+        let state = crate::state::tests_support::make_test_app_state();
+        let first = get_repo_diff_stats_impl(&state, repo.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            first.workspace_statuses.len(),
+            1,
+            "fixture has one workspace"
+        );
+        assert!(
+            first
+                .workspace_statuses
+                .values()
+                .all(|status| status.dirty_files == Some(0))
+        );
+        std::fs::write(path.join("new-untracked.txt"), "dirty").unwrap();
+        state.invalidate_repo_caches(&repo);
+        let (a, b) = tokio::join!(
+            get_repo_diff_stats_impl(&state, repo.clone()),
+            get_repo_diff_stats_impl(&state, repo.clone()),
+        );
+        for stats in [a.unwrap(), b.unwrap()] {
+            assert_eq!(
+                stats.workspace_statuses.keys().collect::<Vec<_>>(),
+                first.workspace_statuses.keys().collect::<Vec<_>>(),
+                "refresh must preserve the fixture workspace"
+            );
+            assert!(
+                stats
+                    .workspace_statuses
+                    .values()
+                    .all(|status| status.dirty_files == Some(1))
+            );
+        }
+    }
+
     // Catches: the retired private auto-fetch marker being accepted again and reaching git as an
     // unknown option.
     #[test]

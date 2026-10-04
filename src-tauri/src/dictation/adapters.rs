@@ -1,6 +1,6 @@
 use crate::state::AppState;
 use std::sync::Arc;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use tuic_dictation::continuous::VoiceHold;
 use tuic_dictation::continuous::{TargetProbe, VoiceSink, VoiceWrite};
 
@@ -14,10 +14,10 @@ impl VoiceSink for PtyVoiceSink<'_> {
 }
 
 /// Production probe: the same predicate `arm` checked, re-asked every tick.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub struct PtyTargetProbe<'a>(pub &'a AppState);
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl TargetProbe for PtyTargetProbe<'_> {
     fn accepts(&self, session_id: &str) -> bool {
         crate::pty::session_accepts_voice(self.0, session_id)

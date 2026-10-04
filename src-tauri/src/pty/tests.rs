@@ -4,9 +4,11 @@ use super::*;
 use crate::state::VtLogBuffer;
 // Session builders live in `test_support` so modules other than this one can
 // build a session an agent is deliverable to.
+use crate::test_support::agent_session;
+#[cfg(unix)]
+use crate::test_support::insert_recording_session;
 #[cfg(unix)]
 use crate::test_support::{RecordingWriter, TtyMode, insert_session_with_writer};
-use crate::test_support::{agent_session, insert_recording_session};
 
 #[test]
 fn agent_alternate_screen_warning_is_once_per_session() {
@@ -12425,7 +12427,7 @@ fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
     }
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(all(unix, feature = "desktop"))]
 fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
     state
         .session_maps
@@ -12435,7 +12437,7 @@ fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
         .question_confident = confident;
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(all(unix, feature = "desktop"))]
 fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
     state
         .session_maps
@@ -14420,6 +14422,7 @@ fn agent_prompt_fixture(name: &str) -> Vec<u8> {
 /// the production chunk processor rather than the row parser alone: an open
 /// intent must absorb every growing prefix before Progress sees it.
 #[test]
+#[cfg(unix)]
 fn captured_codex_streaming_intent_emits_one_complete_marker() {
     #[cfg(not(feature = "desktop"))]
     let runtime = tokio::runtime::Builder::new_current_thread()

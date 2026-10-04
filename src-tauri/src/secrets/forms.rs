@@ -106,6 +106,7 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
     }
     #[cfg(feature = "desktop")]
     {
+        tracing::info!(source = "secrets", "Opening private secret form");
         let handle = state
             .app_handle
             .read()
@@ -124,6 +125,7 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
         }
         let label = format!("secret-{}", form.id);
         *state.secrets.window.lock() = Some(label.clone());
+        tracing::info!(source = "secrets", "Creating private secret window");
         let built = tauri::WebviewWindowBuilder::new(
             &handle,
             &label,
@@ -146,12 +148,14 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
         .build();
         let window = match built {
             Ok(window) => window,
-            Err(_) => {
+            Err(error) => {
+                tracing::error!(source = "secrets", %error, "Private secret window creation failed");
                 state.secrets.release_window(&label);
                 cancel(state, &form.id);
                 return Err("Could not open private secret form".into());
             }
         };
+        tracing::info!(source = "secrets", "Private secret window created");
         let callback_state = Arc::downgrade(state);
         let callback_label = label.clone();
         let id = form.id.clone();
@@ -179,7 +183,7 @@ pub(super) async fn ask(state: &Arc<AppState>, form: Form) -> Result<Status, Str
             id: form.id,
         };
         let _ = window.set_focus();
-        match tokio::time::timeout(std::time::Duration::from_secs(300), rx).await {
+        match tokio::time::timeout(tuic_ipc::SECRET_FORM_TIMEOUT, rx).await {
             Ok(Ok(status)) => Ok(status),
             _ => Err("Secret form expired or was closed".into()),
         }

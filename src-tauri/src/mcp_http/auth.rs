@@ -166,8 +166,11 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 /// Check whether the request carries a valid session cookie.
 /// This is the fast path — avoids bcrypt on every API call after the first auth.
 fn has_valid_session_cookie(req: &Request<axum::body::Body>, session_token: &str) -> bool {
-    let cookie_header = req
-        .headers()
+    has_valid_session_cookie_header(req.headers(), session_token)
+}
+
+fn has_valid_session_cookie_header(headers: &HeaderMap, session_token: &str) -> bool {
+    let cookie_header = headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
@@ -183,6 +186,17 @@ fn has_valid_session_cookie(req: &Request<axum::body::Body>, session_token: &str
 /// and scanning it authenticates the device (a session cookie is then set for subsequent calls).
 fn has_valid_url_token(req: &Request<axum::body::Body>, session_token: &str) -> bool {
     has_valid_token_query(req.uri(), session_token)
+}
+
+/// Accept cookie and legacy query credentials during the remote-update migration.
+pub(crate) fn has_valid_session_token(
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+    session_token: &str,
+) -> bool {
+    !session_token.is_empty()
+        && (has_valid_session_cookie_header(headers, session_token)
+            || has_valid_token_query(uri, session_token))
 }
 
 pub(crate) fn has_valid_token_query(uri: &axum::http::Uri, session_token: &str) -> bool {

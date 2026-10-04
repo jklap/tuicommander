@@ -542,14 +542,24 @@ async fn cancelling_handler_during_extraction_preserves_worker_and_releases_slot
     let repo = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
     let roots = vec![repo.path().to_str().unwrap().to_owned()];
     let mut tar = tar::Builder::new(Vec::new());
-    for index in 0..4096 {
+    // Keep the same number of real extraction operations, but only one
+    // payload fsync. Thousands of fsyncs turn this lifecycle test into a
+    // storage-throughput test under concurrent suite load.
+    for index in 0..4095 {
         let mut header = tar::Header::new_gnu();
-        header.set_size(1);
-        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(0o755);
         header.set_cksum();
-        tar.append_data(&mut header, format!("folder/{index}"), &b"x"[..])
+        tar.append_data(&mut header, format!("folder/{index}"), io::empty())
             .unwrap();
     }
+    let mut header = tar::Header::new_gnu();
+    header.set_size(1);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, "folder/4095", &b"x"[..])
+        .unwrap();
     let body = Body::from(tar.into_inner().unwrap());
     let query = UploadQuery {
         dest_dir: roots[0].clone(),
@@ -601,6 +611,9 @@ async fn cancelling_handler_during_extraction_preserves_worker_and_releases_slot
         std::fs::read(repo.path().join("folder/4095")).unwrap(),
         b"x"
     );
+    for index in 0..4095 {
+        assert!(repo.path().join(format!("folder/{index}")).is_dir());
+    }
     assert_eq!(std::fs::read_dir(repo.path()).unwrap().count(), 1);
 }
 
