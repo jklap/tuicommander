@@ -709,6 +709,6 @@ Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The
 - Reader thread holds `Arc<AtomicBool>` for pause signaling
 - Metrics use `AtomicUsize` for zero-overhead counting
 
-Claude launch settings apply to prompt and option-first launches. Shell wrappers use the installed CLI help to recognise subcommands and aliases; bare hyphenated names pass through for hidden commands. For a single hyphenated prompt, use an option-first launch (for example, `claude --print fix-bug`). Explicit settings and bare mode remain authoritative.
+Claude launch settings apply to prompt and option-first launches. Shell wrappers use backend-captured installed CLI help to recognise subcommands and aliases, without probing again at launch. If help is unavailable, the recorded `doctor`, `mcp`, `plugin|plugins`, and `update|upgrade` verbs still bypass settings. The exact hidden `remote-control` command also bypasses settings because its reported CLI refusal confirms that requirement. Hyphenated prompts retain settings. Explicit settings and bare mode remain authoritative.
 
 Headless PTY registration uses the requested terminal geometry without a minimum VT width. A same-size resize preserves that width.

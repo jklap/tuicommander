@@ -214,8 +214,9 @@ fn add_screen_flag(
     result
 }
 
-/// Help owns the advertised verbs and aliases. Hidden hyphenated commands pass
-/// through conservatively; a single hyphenated prompt can use --print explicitly.
+/// Installed help owns advertised verbs. On probe failure, retain the verbs
+/// verified in the recorded help. The reported remote-control refusal proves
+/// that exact hidden command also rejects root launch settings.
 fn claude_is_subcommand(args: &[String], help: &str) -> bool {
     let Some(first) = args
         .first()
@@ -223,14 +224,16 @@ fn claude_is_subcommand(args: &[String], help: &str) -> bool {
     else {
         return false;
     };
-    first.contains('-')
-        || help
-            .lines()
-            .skip_while(|line| line.trim() != "Commands:")
-            .skip(1)
-            .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
-            .filter_map(|line| line.split_whitespace().next())
-            .any(|names| names.split('|').any(|name| name == first))
+    matches!(
+        first.as_str(),
+        "doctor" | "mcp" | "plugin" | "plugins" | "update" | "upgrade" | "remote-control"
+    ) || help
+        .lines()
+        .skip_while(|line| line.trim() != "Commands:")
+        .skip(1)
+        .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+        .filter_map(|line| line.split_whitespace().next())
+        .any(|names| names.split('|').any(|name| name == first))
 }
 
 fn augment_args_when(
@@ -316,26 +319,52 @@ mod tests {
     /// positional prompt gets misclassified as a command.
     #[test]
     fn claude_subcommands_use_captured_help_and_preserve_prompt_launches() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
         let help = include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt");
-        for verb in ["doctor", "plugins", "upgrade", "remote-control"] {
-            assert!(claude_is_subcommand(&[verb.into()], help), "{verb}");
+        let help_path = dir.path().join("claude-help.txt");
+        std::fs::write(&help_path, help).unwrap();
+        let script = crate::test_support::fake_ssh_script(
+            "claude-recorded-help-launch",
+            &format!("cat {}", shell_quote(&help_path.to_string_lossy())),
+            &format!("type \"{}\"", help_path.display()),
+        );
+        let binary = script.to_string_lossy();
+        for verb in [
+            "auth",
+            "doctor",
+            "mcp",
+            "plugin",
+            "plugins",
+            "update",
+            "upgrade",
+            "remote-control",
+        ] {
+            let args = vec![verb.into()];
+            assert_eq!(
+                augment_args("claude", &binary, &args, dir.path()),
+                args,
+                "{verb}"
+            );
         }
         for args in [
             vec![],
             vec!["prompt".into()],
+            vec!["fix-bug".into()],
             vec!["--resume".into(), "x".into()],
         ] {
-            assert!(!claude_is_subcommand(&args, help), "{args:?}");
-            assert!(
-                augment_args_when(true, "claude", &args, Path::new("config"))
-                    .contains(&"--settings".into())
-            );
+            let mut expected = args.clone();
+            expected.extend([
+                "--settings".into(),
+                dir.path()
+                    .join("agent-hooks/claude.json")
+                    .to_string_lossy()
+                    .into_owned(),
+            ]);
+            assert_eq!(augment_args("claude", &binary, &args, dir.path()), expected);
         }
         let args = vec!["remote-control".into(), "--resume".into(), "x".into()];
-        assert_eq!(
-            augment_args_when(true, "claude", &args, Path::new("config")),
-            args
-        );
+        assert_eq!(augment_args("claude", &binary, &args, dir.path()), args);
     }
 
     #[cfg(unix)]
