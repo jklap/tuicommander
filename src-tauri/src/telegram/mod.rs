@@ -66,3 +66,6 @@ impl std::error::Error for Error {}
 mod adversarial_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod critic_setup_tests;
