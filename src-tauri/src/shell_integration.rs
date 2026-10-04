@@ -40,12 +40,11 @@ if [[ -n "$TUIC_SESSION" ]]; then
     for a in "$@"; do [[ "$a" == "$flag" ]] && return 0; done
     printf '%s' "$flag"
   }
-  __tuic_claude_help() { if [[ -n "$TUIC_CLAUDE_HELP" ]]; then printf '%s\n' "$TUIC_CLAUDE_HELP"; else command claude --help 2>/dev/null; fi; }
   claude() {
     case "$1" in
       ""|-*) ;;
-      *-*) command claude "$@"; return;;
-      *) if __tuic_claude_help | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
+      doctor|mcp|plugin|plugins|update|upgrade|remote-control) command claude "$@"; return;;
+      *) if printf '%s\n' "$TUIC_CLAUDE_HELP" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
     esac
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
@@ -115,12 +114,11 @@ if [[ -n "$TUIC_SESSION" ]]; then
     for a in "$@"; do [[ "$a" == "$flag" ]] && return 0; done
     printf '%s' "$flag"
   }
-  __tuic_claude_help() { if [[ -n "$TUIC_CLAUDE_HELP" ]]; then printf '%s\n' "$TUIC_CLAUDE_HELP"; else command claude --help 2>/dev/null; fi; }
   claude() {
     case "$1" in
       ""|-*) ;;
-      *-*) command claude "$@"; return;;
-      *) if __tuic_claude_help | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
+      doctor|mcp|plugin|plugins|update|upgrade|remote-control) command claude "$@"; return;;
+      *) if printf '%s\n' "$TUIC_CLAUDE_HELP" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
     esac
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
@@ -193,21 +191,14 @@ if set -q TUIC_SESSION
     end
     printf '%s' "$flag"
   end
-  function __tuic_claude_help
-    if set -q TUIC_CLAUDE_HELP
-      printf '%s\n' $TUIC_CLAUDE_HELP
-    else
-      command claude --help 2>/dev/null
-    end
-  end
   function claude --wraps claude
     if test (count $argv) -gt 0
       switch $argv[1]
         case '-*'
-        case '*-*'
+        case doctor mcp plugin plugins update upgrade remote-control
           command claude $argv; return
         case '*'
-          if __tuic_claude_help | awk -v verb="$argv[1]" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'
+          if printf '%s\n' "$TUIC_CLAUDE_HELP" | awk -v verb="$argv[1]" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'
             command claude $argv; return
           end
       end
@@ -844,6 +835,8 @@ mod tests {
             an_explicit_user_flag_suppresses_injection,
             setting_off_leaves_the_command_line_untouched,
             screen_flags_follow_manual_agent_commands,
+            hyphenated_prompts_keep_settings_in_every_shell,
+            unavailable_help_keeps_verbs_and_prompts_without_launch_probe,
         );
 
         fn screen_flags_follow_manual_agent_commands(shell: &str) {
@@ -926,20 +919,32 @@ mod tests {
         }
 
         /// Catches: hyphenated prompt text is mistaken for a hidden command.
-        #[test]
-        fn hyphenated_prompts_keep_settings_in_every_shell() {
-            for shell in LAUNCH_SHELLS {
-                let short = format!("--settings {CLAUDE_SETTINGS} fix-bug");
-                let sentence =
-                    format!("--settings {CLAUDE_SETTINGS} Explain the remote-control failure");
-                assert_in_shell(
-                    shell,
-                    "ordinary prompts keep status hooks",
-                    &signals_on(),
-                    "claude fix-bug\nclaude 'Explain the remote-control failure'",
-                    &[short.as_str(), sentence.as_str()],
-                );
-            }
+        fn hyphenated_prompts_keep_settings_in_every_shell(shell: &str) {
+            let short = format!("--settings {CLAUDE_SETTINGS} fix-bug");
+            let sentence =
+                format!("--settings {CLAUDE_SETTINGS} Explain the remote-control failure");
+            assert_in_shell(
+                shell,
+                "ordinary prompts keep status hooks",
+                &signals_on(),
+                "claude fix-bug\nclaude 'Explain the remote-control failure'",
+                &[short.as_str(), sentence.as_str()],
+            );
+        }
+
+        /// Catches: missing cached help runs an extra CLI or injects settings into a known verb.
+        fn unavailable_help_keeps_verbs_and_prompts_without_launch_probe(shell: &str) {
+            let prompt = format!("--settings {CLAUDE_SETTINGS} fix-bug");
+            assert_in_shell(
+                shell,
+                "unavailable help uses recorded verbs without a shell probe",
+                &[
+                    ("TUIC_CLAUDE_SETTINGS", CLAUDE_SETTINGS),
+                    ("TUIC_CLAUDE_HELP", ""),
+                ],
+                "claude doctor\nclaude mcp list\nclaude plugins\nclaude upgrade\nclaude fix-bug",
+                &["doctor", "mcp list", "plugins", "upgrade", prompt.as_str()],
+            );
         }
 
         fn an_explicit_user_flag_suppresses_injection(shell: &str) {
