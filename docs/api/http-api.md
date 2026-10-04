@@ -2780,3 +2780,5 @@ reconnects after pressure evicted its history can deliver one duplicate.
 Disconnect retires that host's existing shadows synchronously, independently
 of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.
+
+`POST /repo/run-git` accepts `{path, args}` for GitPanel and sidebar operations. Unsupported subcommands or options return HTTP 400 before execution. The flag policy is shared with IPC; see [Git backend](../backend/git.md).

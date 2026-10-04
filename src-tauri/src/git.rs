@@ -586,6 +586,50 @@ pub(crate) fn is_network_git_subcommand(args: &[String]) -> bool {
         .is_some_and(|sub| NETWORK_GIT_SUBCOMMANDS.contains(&sub.as_str()))
 }
 
+/// Allowed git subcommands for the HTTP endpoint.
+/// GitPanel and sidebar operations supported by both transports.
+pub(crate) const ALLOWED_GIT_SUBCOMMANDS: &[&str] = &[
+    "fetch",
+    "pull",
+    "push",
+    "stash",
+    "log",
+    "diff",
+    "show",
+    "branch",
+    "tag",
+    "merge",
+    "rebase",
+    "cherry-pick",
+    "remote",
+    "status",
+    "rev-parse",
+];
+
+/// Reject caller-controlled Git options outside the flags used by the UI.
+pub(crate) fn validate_git_command_args(args: &[String]) -> Result<(), String> {
+    let subcommand = args.first().map(String::as_str).unwrap_or("");
+    if !ALLOWED_GIT_SUBCOMMANDS.contains(&subcommand) {
+        return Err(format!("Git subcommand \"{subcommand}\" is not allowed"));
+    }
+    let flags: &[&str] = match subcommand {
+        "fetch" => &["--all"],
+        "pull" => &["--ff-only"],
+        "push" => &["-u", "--delete"],
+        "diff" => &["--name-status"],
+        "status" => &["--porcelain"],
+        _ => &[],
+    };
+    for arg in &args[1..] {
+        if arg.starts_with('-') && arg != "--" && !flags.contains(&arg.as_str()) {
+            return Err(format!(
+                "Git option \"{arg}\" is not allowed for {subcommand}"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Run an arbitrary git command to completion, blocking the calling thread.
 ///
 /// Shared by the Tauri command below and the `/repo/run-git` HTTP handler so the
@@ -598,9 +642,26 @@ pub(crate) fn run_git_command_blocking(
     path: &str,
     args: &[String],
 ) -> GitCommandResult {
+    if let Err(stderr) = validate_git_command_args(args) {
+        return GitCommandResult {
+            success: false,
+            stdout: String::new(),
+            stderr,
+            exit_code: -1,
+        };
+    }
     let repo_path = PathBuf::from(path);
     let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let mut builder = git_cmd(&repo_path).args(&args_str);
+    let mut builder = git_cmd(&repo_path);
+    if args.first().is_some_and(|arg| arg == "fetch") {
+        builder = builder.args([
+            "-c",
+            "http.lowSpeedLimit=1000",
+            "-c",
+            "http.lowSpeedTime=15",
+        ]);
+    }
+    let mut builder = builder.args(&args_str);
 
     // A network subcommand is the only one that can park this thread forever —
     // a credential helper on a prompt, a half-open connection, a wedged mount.
