@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Restore additions and deletions in the changed-file diff list, including renamed files.
+
 - Return the exact archive ref holding a deleted branch tip when a reused branch name needs a suffixed archive.
 
 - Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.

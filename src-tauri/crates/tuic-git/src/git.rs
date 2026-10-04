@@ -2268,6 +2268,50 @@ mod tests {
         assert!(file_diff.contains("-before") && file_diff.contains("+extra"));
     }
 
+    // Catches the raw/numstat reader confusing rename source and destination,
+    // splitting literal paths, or accidentally reading unstaged work in staged scope.
+    #[test]
+    fn changed_file_counts_preserve_scope_and_rename_paths_1499() {
+        let (_temp, repo) = empty_fixture_repo();
+        assert!(
+            repo.canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let original = "old name.txt";
+        let renamed = "new name.txt";
+        std::fs::write(repo.join(original), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "baseline"]);
+        let path = repo.to_string_lossy().into_owned();
+        git_in(&repo, &["mv", original, renamed]);
+        std::fs::write(repo.join(renamed), "one\ntwo\nthree\nfour\nfive\nadded\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        let staged = get_changed_files_blocking(path.clone(), Some("staged".into())).unwrap();
+        assert_eq!(staged.len(), 1);
+        assert_eq!(staged[0].path, renamed);
+        assert!(staged[0].status.starts_with('R'), "{}", staged[0].status);
+        assert_eq!((staged[0].additions, staged[0].deletions), (1, 0));
+        std::fs::write(
+            repo.join(renamed),
+            "one\ntwo\nthree\nfour\nfive\nadded\nunstaged\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("untracked name.txt"), "new\n").unwrap();
+        let working = get_changed_files_blocking(path.clone(), None).unwrap();
+        let changed = working.iter().find(|file| file.path == renamed).unwrap();
+        assert_eq!((changed.additions, changed.deletions), (1, 0));
+        assert!(working.iter().any(|file| file.path == "untracked name.txt"
+            && file.status == "?"
+            && file.additions == 1));
+        git_in(&repo, &["commit", "-qm", "rename"]);
+        let head = git_in(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+        let committed = get_changed_files_blocking(path, Some(head)).unwrap();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].path, renamed);
+        assert_eq!((committed[0].additions, committed[0].deletions), (1, 0));
+    }
+
     // --- Fixture repositories ---
     //
     // No test in this module resolves its subject repository from
@@ -5081,45 +5125,54 @@ pub fn get_changed_files_blocking(
             return Ok(vec![]);
         }
 
-        // Get file status and per-file stats in a single git diff call
+        // --name-status suppresses --numstat. Raw status records coexist with
+        // numstat; NUL delimiters preserve literal paths and rename destinations.
         let mut args = diff_base_args(&scope)?;
-        args.push("--name-status".into());
-        args.push("--numstat".into());
-
-        // Note: git outputs numstat block first, then name-status block
-        // when both flags are combined. We parse both sections.
+        args.extend(["--raw".into(), "--numstat".into(), "-z".into()]);
         let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let combined_out = git_cmd(&repo_path)
             .args(&args_str)
             .run()
             .map_err(|e| format!("git diff failed: {e}"))?;
 
-        // Parse: numstat lines have 3+ tab/space-separated fields (digits digits path),
-        // name-status lines have a letter followed by path.
         let mut stats_map: HashMap<String, (u32, u32)> = HashMap::new();
         let mut status_map: HashMap<String, String> = HashMap::new();
-
-        for line in combined_out.stdout.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 {
-                // Try parsing as numstat (first two fields are numbers or '-')
-                if let (Ok(add), Ok(del)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-                    let file_path = parts[2..].join(" ");
-                    stats_map.insert(file_path, (add, del));
+        let mut records = combined_out.stdout.split('\0');
+        while let Some(record) = records.next() {
+            if record.starts_with(':') {
+                let Some(status) = record.split_whitespace().last() else {
                     continue;
-                }
-                // Binary files show "-\t-\tpath" in numstat
-                if parts[0] == "-" && parts[1] == "-" {
-                    let file_path = parts[2..].join(" ");
-                    stats_map.insert(file_path, (0, 0));
+                };
+                let Some(path) = records.next() else { continue };
+                let path = if status.starts_with(['R', 'C']) {
+                    let Some(destination) = records.next() else {
+                        continue;
+                    };
+                    destination
+                } else {
+                    path
+                };
+                status_map.insert(path.to_owned(), status.to_owned());
+            } else if let Some((add, rest)) = record.split_once('\t') {
+                let Some((del, path)) = rest.split_once('\t') else {
                     continue;
-                }
-            }
-            // Otherwise treat as name-status line
-            if parts.len() >= 2 {
-                let status = parts[0].to_string();
-                let file_path = parts[1..].join(" ");
-                status_map.insert(file_path, status);
+                };
+                let path = if path.is_empty() {
+                    // A rename numstat record carries old and new paths separately.
+                    let Some(_source) = records.next() else {
+                        continue;
+                    };
+                    let Some(destination) = records.next() else {
+                        continue;
+                    };
+                    destination
+                } else {
+                    path
+                };
+                stats_map.insert(
+                    path.to_owned(),
+                    (add.parse().unwrap_or(0), del.parse().unwrap_or(0)),
+                );
             }
         }
 
