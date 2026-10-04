@@ -267,3 +267,6 @@ mod round5;
 
 #[path = "round6_tests.rs"]
 mod round6;
+
+#[path = "round7_tests.rs"]
+mod round7;
