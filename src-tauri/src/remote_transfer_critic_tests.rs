@@ -161,6 +161,7 @@ async fn hostile_archives_publish_nothing_and_leave_no_staging() {
 // registered root (open_dir without cap-std confinement), or an upload target that
 // is a dangling symlink being written through.
 #[tokio::test]
+#[cfg(unix)]
 async fn symlinked_destination_and_target_do_not_escape_the_root() {
     let tmp = scratch();
     let root = tmp.path().join("repo");
@@ -543,6 +544,7 @@ async fn transfer_remote_route_requires_the_session_token() {
     }
 }
 
+#[cfg(unix)]
 fn running_as_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
