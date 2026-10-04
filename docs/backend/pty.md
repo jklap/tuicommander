@@ -484,6 +484,14 @@ Frontend input helpers route through `src/utils/sendCommand.ts`:
 
 Never write `text + "\r"` directly to a PTY — see `AGENTS.md`.
 
+The backend reserves the turn epoch before delivering a submitted Enter. Raw,
+paired and managed submission writers hold the existing `SilenceState` lock
+across epoch reservation and native writing, in `SilenceState` → `SessionState`
+→ writer order. Telegram Stop uses that same order, so an old draft cannot
+append Escape after a replacement Enter. Post-write input bookkeeping does not
+advance the epoch again. The existing input FSM distinguishes Shift+Enter from
+submission. A failed write may conservatively retire the previous draft.
+
 ## OSC 133 Semantic Prompts
 
 When the shell emits OSC 133 markers (modern bash/zsh/fish with the integration enabled), the reader records clean command lifecycles into the per-session knowledge store:

@@ -25,7 +25,7 @@ const MAX_LINE_CHARS: usize = 65_536;
 const MAX_CSI_PARAM_BYTES: usize = 32;
 
 /// A line-editing buffer that tracks cursor position and content.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InputLineBuffer {
     /// The character content of the current line.
     chars: Vec<char>,
@@ -38,7 +38,7 @@ pub struct InputLineBuffer {
 }
 
 /// Escape sequence parser state.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum EscState {
     /// Normal character input.
     Normal,
