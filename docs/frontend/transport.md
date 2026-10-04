@@ -128,3 +128,8 @@ The transport abstraction enables:
 4. **MCP integration:** External tools use the same HTTP API
 
 The abstraction is resolved once at module load — no per-call overhead in production Tauri mode.
+
+The `enqueue_agent_command` mapper forwards optional `idempotencyKey` unchanged
+to `POST /sessions/:id/queue`. Both transports return `{ accepted, typed, queued }`.
+A recognized retry has `accepted: true` even after the queue drained; `typed`
+reports no new typing on that retry.

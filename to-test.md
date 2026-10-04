@@ -4583,3 +4583,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 ## Codex notify publication (1483-7a6e) — Rust restart required
 
 - [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
+
+- [ ] Queue retry idempotency (1106): after Boss rebuilds/restarts the backend, send the same `idempotencyKey` twice to an isolated agent queue, then retry after it drains; verify one wake and `accepted: true` without requeue. Automated HTTP/PTY tests cover bytes and queue state; this check loads the Rust change into the running app. Live per-CLI turn acceptance and composer/reconnect convergence remain separate open criteria.

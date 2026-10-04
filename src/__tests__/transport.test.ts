@@ -452,6 +452,16 @@ describe("transport", () => {
 			expect(result.body).toEqual({ text: "run tests" });
 		});
 
+		// Catches: HTTP drops the idempotency key supplied to the desktop command.
+		it("preserves queue idempotency keys across HTTP and Tauri arguments", () => {
+			const result = mapCommandToHttp("enqueue_agent_command", {
+				sessionId: "abc",
+				text: "run tests",
+				idempotencyKey: "bg-job-1",
+			});
+			expect(result.body).toEqual({ text: "run tests", idempotencyKey: "bg-job-1" });
+		});
+
 		it("maps clear_queued_agent_commands to DELETE /sessions/{id}/queue", () => {
 			const result = mapCommandToHttp("clear_queued_agent_commands", { sessionId: "abc" });
 			expect(result.method).toBe("DELETE");
