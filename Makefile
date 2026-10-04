@@ -266,6 +266,7 @@ nightly:
 
 # Bump version across all manifests (no commit, no tag).
 # Usage: make bump V=0.6.2
+# Do not report a complete bump if release-note generation fails after version edits.
 bump:
 	@if [ -z "$(V)" ]; then echo "ERROR: specify version with V=x.y.z" && exit 1; fi; \
 	CUR=$$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
@@ -284,7 +285,7 @@ bump:
 	sed -i '' 's/^## \[Unreleased\]/## [Unreleased]\n\n## [$(V)] - '"$$TODAY"'/' CHANGELOG.md; \
 	echo "  CHANGELOG.md          → $(V) ($$TODAY)"; \
 	echo "  release-notes.json   → generating..."; \
-	./scripts/generate-release-notes.sh $(V); \
+	./scripts/generate-release-notes.sh $(V) || { echo "ERROR: Release-note generation failed; version files are already updated. Release preparation is incomplete." >&2; exit 1; }; \
 	echo "==> Done. Run 'cargo check' or 'make github-release' to continue."
 
 # Generate AI-written release notes for a specific version.
