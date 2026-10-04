@@ -10,11 +10,11 @@ mod offset;
 
 pub(crate) use api::BotApi;
 pub(crate) use config::{Config, Owner, Paths};
-#[cfg(not(test))]
-pub(crate) use inbound::Inbound;
+#[cfg(test)]
 pub(crate) use inbound::Poll;
 #[cfg(test)]
 type Inbound = inbound::Inbound<mail::TestInbox>;
+#[cfg(test)]
 pub(crate) use mail::{MailPort, PendingMail};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

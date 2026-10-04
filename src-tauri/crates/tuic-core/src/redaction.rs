@@ -706,7 +706,10 @@ mod tests {
     #[test]
     fn scrub_fragments_sees_through_a_cursor_move_after_every_character() {
         let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
-        let raw: String = secret.chars().map(|c| format!("{c}\x1b[C\x1b[D")).collect();
+        let raw: String = secret
+            .chars()
+            .flat_map(|c| [c, '\x1b', '[', 'C', '\x1b', '[', 'D'])
+            .collect();
         assert_eq!(
             scrub_fragments(&format!("echo {raw}\r\n"), &secrets_in(&raw)),
             "echo [REDACTED]\x1b[C\x1b[D\r\n"
@@ -716,5 +719,43 @@ mod tests {
     #[test]
     fn secret_matches_returns_the_value_not_the_key() {
         assert_eq!(secret_matches("MY_TOKEN=abc123xyz"), vec!["abc123xyz"]);
+    }
+
+    /// Catches the `starts_with(KEEP_PREFIX)` guard in `secret_matches` forced to
+    /// `true`: the DB-URL pattern has a capture group 1 but a plain
+    /// `[REDACTED]` replacement, so the whole match is the secret, not the part
+    /// after the group.
+    #[test]
+    fn secret_matches_returns_the_whole_match_when_the_replacement_keeps_no_key() {
+        assert_eq!(
+            secret_matches("postgres://user:pw@host/db"),
+            vec!["postgres://user:pw@host/db"]
+        );
+    }
+
+    /// Catches deleting the `\n | \t` arm of `strip_controls` and the
+    /// `is_control()` guard forced to `false`.
+    #[test]
+    fn strip_controls_keeps_newline_and_tab_and_drops_other_controls() {
+        assert_eq!(strip_controls("a\nb\tc\rd\x08e\x07f").text, "a\nb\tcdef");
+    }
+
+    /// Catches the `skip_escape` mutants: CSI, OSC ended by BEL, OSC ended by ST
+    /// (`ESC \`), an unterminated OSC, and the two-byte forms (an intermediate
+    /// byte in 0x20..=0x2f plus a final byte, or a lone final byte).
+    #[test]
+    fn strip_controls_removes_each_escape_sequence_form_exactly() {
+        let cases = [
+            ("a\x1b[31mb", "ab"),
+            ("a\x1b]0;title\x07b", "ab"),
+            ("a\x1b]0;title\x1b\\b", "ab"),
+            ("a\x1b]0;title", "a"),
+            ("a\x1b(Bc", "ac"),
+            ("a\x1b /Bc", "ac"),
+            ("a\x1bMb", "ab"),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(strip_controls(raw).text, expected, "raw: {raw:?}");
+        }
     }
 }

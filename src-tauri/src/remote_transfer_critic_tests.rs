@@ -239,7 +239,7 @@ async fn invalid_destinations_and_names_are_rejected() {
                 name: name.into(),
                 directory: false,
             },
-            &[r.clone()],
+            std::slice::from_ref(&r),
             Body::from(finish(file("f", b"p"))),
         )
         .await;

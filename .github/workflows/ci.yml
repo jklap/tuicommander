@@ -201,7 +201,8 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
+        run: cargo clippy --workspace --exclude bm25 --all-targets -- -D warnings
 
       - name: Tests
         working-directory: src-tauri
@@ -430,7 +431,8 @@ jobs:
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
           CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
           CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
+        run: cargo clippy --workspace --exclude bm25 --all-targets -- -D warnings
 
       # Windows runs the suite too. It used to be skipped, which is why Windows
       # regressions only ever surfaced in a user's build.

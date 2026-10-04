@@ -1292,9 +1292,9 @@ mod tests {
             },
         ];
         let joined = join_spawns(&spawns, &lanes);
-        assert!(joined.get("orphan").is_none());
+        assert!(!joined.contains_key("orphan"));
         assert!(
-            joined.get("ghost").is_none(),
+            !joined.contains_key("ghost"),
             "a toolUseId naming no spawn must not fall through to content matching"
         );
     }

@@ -8432,7 +8432,7 @@ mod tests {
         save_notification_config(base, second).unwrap();
         let saved = load_notification_config();
         assert!(!saved.enabled);
-        assert_eq!(saved.volume, 0.2);
+        assert_eq!(saved.volume.to_bits(), 0.2_f64.to_bits());
     }
 
     #[test]

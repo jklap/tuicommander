@@ -18,17 +18,17 @@ struct Probe {
     fail_id: Option<String>,
 }
 impl MailPort for Probe {
-    async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error> {
+    fn offer(&mut self, mail: &PendingMail) -> impl Future<Output = Result<(), Error>> {
         if self.full.load(Ordering::Relaxed)
             && self.fail_id.as_ref().is_none_or(|id| id == &mail.id)
         {
-            return Err(Error::Capacity);
+            return std::future::ready(Err(Error::Capacity));
         }
         self.delivered
             .lock()
             .unwrap()
             .push((offset(&self.paths), mail.id.clone()));
-        Ok(())
+        std::future::ready(Ok(()))
     }
 }
 
