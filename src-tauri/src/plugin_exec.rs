@@ -440,6 +440,8 @@ mod tests {
     #[tokio::test]
     async fn cli_capture_timeout_kills_and_reaps_child() {
         let mut child = output_child(&tuic_test_support::wait_for_stdin_script());
+        // Child::wait closes its stdin; retain the writer so the fixture stays blocked.
+        let _stdin = child.stdin.take().expect("piped stdin");
         let error = capture_cli_output(&mut child, "shell", Duration::from_millis(100))
             .await
             .expect_err("timeout");
