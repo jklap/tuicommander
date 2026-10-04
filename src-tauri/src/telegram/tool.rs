@@ -22,7 +22,6 @@ pub(super) enum Input {
         text: String,
     },
     Send {
-        chat_id: Option<String>,
         text: String,
         #[serde(default)]
         buttons: Vec<Vec<Button>>,
@@ -36,9 +35,9 @@ pub(super) struct Button {
 }
 
 pub(crate) fn definition() -> Value {
-    json!({"name":"telegram","description":"Send to the daemon's allowlisted Telegram chat. Only the configured peer can call this tool. begin accepts a request_id from Telegram mail and binds the current live turn; activity sends concise safe activity; finish persists the complete exact reply. send accepts text, an optional decimal-string chat_id (required with multiple allowed chats), and optional rows of {label,data} opaque buttons. Buttons return structured peer mail and confer no publish approval. No raw terminal output or hidden reasoning is streamed.","inputSchema":{"type":"object","properties":{
+    json!({"name":"telegram","description":"Send to the daemon's allowlisted Telegram chat. Only the configured peer can call this tool. begin accepts a request_id from Telegram mail and binds the current live turn; activity sends concise safe activity; finish persists the complete exact reply. send accepts text and optional rows of {label,data} opaque buttons. Buttons return structured peer mail and confer no publish approval. No raw terminal output or hidden reasoning is streamed.","inputSchema":{"type":"object","properties":{
         "action":{"type":"string","enum":["begin","activity","finish","send"]},
-        "request_id":{"type":"string"},"text":{"type":"string"},"chat_id":{"type":"string"},
+        "request_id":{"type":"string"},"text":{"type":"string"},
         "buttons":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string"},"data":{"type":"string"}},"required":["label","data"],"additionalProperties":false}}}
     },"required":["action"],"additionalProperties":false}})
 }
@@ -76,14 +75,56 @@ mod tests {
     use super::*;
     // Catches: an agent parameter creates approval authority or smuggles an
     // arbitrary callback schema into a send operation.
-    #[test]
-    fn tool_rejects_forged_authority_and_malformed_button_fields() {
+    #[tokio::test]
+    async fn tool_rejects_forged_authority_and_malformed_button_fields() {
+        use crate::telegram::tests::{FakeServer, setup};
+        use axum::http::StatusCode;
+        let (_dir, paths) = setup();
+        let server = FakeServer::start(vec![(
+            StatusCode::OK,
+            json!({"ok":true,"result":{"message_id":7}}),
+        )])
+        .await;
+        let runtime = crate::telegram::tests::outbound_tests::runtime(paths, server.address).await;
+        let state = runtime.state.clone();
+        let (commands, receive) = tokio::sync::mpsc::channel(10);
+        HANDLE.set(commands).expect("one native Telegram adapter");
+        let worker = tokio::spawn(runtime.run(receive));
+        let invoke = |value: Value| {
+            let state = state.clone();
+            async move {
+                crate::mcp_http::mcp_transport::handle_mcp_tool_call(
+                    &state,
+                    "127.0.0.1:0".parse().unwrap(),
+                    "telegram",
+                    &value,
+                    Some("target-mcp"),
+                )
+                .await
+            }
+        };
+        // The same authenticated dispatch reaches real outbound delivery.
+        assert_eq!(
+            invoke(json!({"action":"send","text":"hello"})).await["message_ids"],
+            json!([7])
+        );
         for value in [
             json!({"action":"send","text":"hello","approved":true}),
             json!({"action":"begin","request_id":"r","peer":"other"}),
             json!({"action":"send","text":"hello","buttons":[[{"label":"ok","data":"x","approved":true}]]}),
+            json!({"action":"send","text":"hello","chat_id":"1111111"}),
         ] {
-            assert!(serde_json::from_value::<Input>(value).is_err());
+            assert_eq!(invoke(value).await["error"], "telegram_invalid_config");
         }
+        assert_eq!(server.requests().len(), 1);
+        let inbox = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+            &state,
+            &json!({"action":"inbox","since":0}),
+            Some("target-mcp"),
+            None,
+        )
+        .await;
+        assert_eq!(inbox["count"], 0);
+        worker.abort();
     }
 }

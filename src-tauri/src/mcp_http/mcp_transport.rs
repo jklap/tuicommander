@@ -18197,10 +18197,21 @@ mod tests {
     ///
     /// These names are a public contract: they appear in users' ego rule files,
     /// so renaming one silently stops a user's policy from matching.
-    #[test]
-    fn native_tool_definitions_are_the_one_surviving_family() {
-        let defs = native_tool_definitions();
-        let names = tool_names(&defs);
+    #[tokio::test]
+    async fn native_tool_definitions_are_the_one_surviving_family() {
+        let state = test_state();
+        {
+            let mut config = state.config.write();
+            config.disabled_native_tools.clear();
+            config.collapse_tools = false;
+        }
+        let listed = tools_list_result(
+            &state,
+            HeaderMap::new(),
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        )
+        .await;
+        let names = tool_names(&listed["result"]["tools"]);
         assert_eq!(
             names,
             vec![
@@ -18223,6 +18234,18 @@ mod tests {
                 "voice",
             ],
             "native_tool_definitions must return exactly the one family, in order"
+        );
+        let called = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "telegram",
+            &serde_json::json!({"action":"send","text":"hello"}),
+            None,
+        )
+        .await;
+        assert_eq!(
+            called["error"], "telegram_invalid_state",
+            "unbound Telegram invocation must reach its native authority check"
         );
     }
 

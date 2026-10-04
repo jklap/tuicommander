@@ -68,19 +68,13 @@ impl Runtime {
         }
         Ok((pty.clone(), state.turn_epoch))
     }
-    pub fn destination(&self, selected: Option<String>) -> Result<i64, Error> {
-        let ids = self.outbound.paths.allowlist()?;
-        if let Some(selected) = selected {
-            let id = selected.parse::<i64>().map_err(|_| Error::Config)?;
-            if selected != id.to_string() || !ids.contains(&id) {
-                return Err(Error::Config);
-            }
-            Ok(id)
-        } else if ids.len() == 1 {
-            ids.into_iter().next().ok_or(Error::Config)
-        } else {
-            Err(Error::Config)
-        }
+    pub fn destination(&self) -> Result<i64, Error> {
+        self.outbound
+            .paths
+            .allowlist()?
+            .into_iter()
+            .next()
+            .ok_or(Error::Config)
     }
     pub async fn tool(&mut self, caller: &str, input: Input) -> Result<Value, Error> {
         // Check opt-in and target at use, including after a queued command.
@@ -123,12 +117,8 @@ impl Runtime {
                 let ids = self.outbound.finish(&request_id, &text).await?;
                 Ok(json!({"message_ids":ids}))
             }
-            Input::Send {
-                chat_id,
-                text,
-                buttons,
-            } => {
-                let chat = self.destination(chat_id)?;
+            Input::Send { text, buttons } => {
+                let chat = self.destination()?;
                 self.send_buttons(chat, &text, buttons).await
             }
         }
@@ -195,7 +185,7 @@ impl Runtime {
             return;
         };
         if let Some(text) = super::notifications::notice(&event, &pty) {
-            match self.destination(None) {
+            match self.destination() {
                 Ok(chat) => {
                     if let Err(error) = self.outbound.send(chat, &text, None).await {
                         alert(&self.state, error);

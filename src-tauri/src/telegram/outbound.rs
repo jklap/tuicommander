@@ -182,7 +182,7 @@ impl Outbound {
 
     pub async fn finish(&mut self, request: &str, text: &str) -> Result<Vec<i64>, Error> {
         chunks(text)?;
-        if !self.active.as_ref().is_some_and(|a| a.request == request) {
+        if self.active.as_ref().is_none_or(|a| a.request != request) {
             return Err(Error::State);
         }
         // Retire before any network side effect: a partial/uncertain final cannot
