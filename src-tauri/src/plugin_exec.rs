@@ -271,6 +271,7 @@ async fn plugin_exec_cli_inner(
 
     // Convert to tokio::process::Command for async timeout + kill
     let mut cmd: tokio::process::Command = std_cmd.into();
+    cmd.kill_on_drop(true);
 
     // Audit log: record invocation before execution
     let start = Instant::now();
@@ -281,38 +282,12 @@ async fn plugin_exec_cli_inner(
         .spawn()
         .map_err(|e| format!("Failed to execute \"{binary}\": {e}"))?;
 
-    // Take stdout/stderr handles before waiting so we can read them after wait()
-    let mut stdout_pipe = child
-        .stdout
-        .take()
-        .ok_or_else(|| "Failed to capture stdout".to_string())?;
-    let mut stderr_pipe = child
-        .stderr
-        .take()
-        .ok_or_else(|| "Failed to capture stderr".to_string())?;
-
-    let status = match tokio::time::timeout(
+    let (status, stdout, stderr) = capture_cli_output(
+        &mut child,
+        &binary,
         Duration::from_secs(MAX_EXEC_TIMEOUT_SECS),
-        child.wait(),
     )
-    .await
-    {
-        Ok(s) => s.map_err(|e| format!("Failed to execute \"{binary}\": {e}"))?,
-        Err(_) => {
-            // Timeout: kill the child process to prevent zombies
-            let _ = child.kill().await;
-            return Err(format!(
-                "Command \"{binary}\" timed out after {MAX_EXEC_TIMEOUT_SECS}s"
-            ));
-        }
-    };
-
-    // Read captured output after process has exited
-    use tokio::io::AsyncReadExt;
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let _ = stdout_pipe.read_to_end(&mut stdout).await;
-    let _ = stderr_pipe.read_to_end(&mut stderr).await;
+    .await?;
 
     let duration_ms = start.elapsed().as_millis();
     let exit_ok = status.success();
@@ -336,15 +311,61 @@ async fn plugin_exec_cli_inner(
             stderr_str.trim()
         ));
     }
-    if stdout.len() > MAX_STDOUT_BYTES {
+    String::from_utf8(stdout).map_err(|e| format!("Command output is not valid UTF-8: {e}"))
+}
+
+async fn read_bounded_pipe(
+    pipe: impl tokio::io::AsyncRead + Unpin,
+    stream: &str,
+) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = Vec::new();
+    pipe.take((MAX_STDOUT_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|error| format!("Failed to read {stream}: {error}"))?;
+    if bytes.len() > MAX_STDOUT_BYTES {
         return Err(format!(
-            "Command output exceeds maximum size ({} bytes > {} bytes)",
-            stdout.len(),
-            MAX_STDOUT_BYTES
+            "Command {stream} exceeds maximum size ({MAX_STDOUT_BYTES} bytes)"
         ));
     }
+    Ok(bytes)
+}
 
-    String::from_utf8(stdout).map_err(|e| format!("Command output is not valid UTF-8: {e}"))
+async fn capture_cli_output(
+    child: &mut tokio::process::Child,
+    binary: &str,
+    timeout: Duration,
+) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>), String> {
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
+    let capture = async {
+        tokio::try_join!(
+            async {
+                child
+                    .wait()
+                    .await
+                    .map_err(|error| format!("Failed to execute {binary}: {error}"))
+            },
+            read_bounded_pipe(stdout, "stdout"),
+            read_bounded_pipe(stderr, "stderr"),
+        )
+    };
+    let result = match tokio::time::timeout(timeout, capture).await {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "Command \"{binary}\" timed out after {}s",
+            timeout.as_secs_f64()
+        )),
+    };
+    if let Err(error) = result {
+        child
+            .kill()
+            .await
+            .map_err(|kill_error| format!("{error}; failed to stop child: {kill_error}"))?;
+        return Err(error);
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -354,6 +375,99 @@ async fn plugin_exec_cli_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn output_child(script: &str) -> tokio::process::Child {
+        let (shell, flag) = crate::test_support::host_shell();
+        tokio::process::Command::new(shell)
+            .args([flag, script])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("shell")
+    }
+
+    // Catches: waiting before draining a full stdout/stderr pipe, or rejecting the exact output cap.
+    #[tokio::test]
+    async fn cli_capture_drains_large_pipes_and_accepts_exact_limit() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
+        for (size, stderr_only) in [(200_000, false), (200_000, true), (5 * 1024 * 1024, false)] {
+            let file = dir.path().join("output");
+            let expected = vec![b'x'; size];
+            std::fs::write(&file, &expected).expect("write output");
+            let mut script = tuic_test_support::print_file_script(file.to_str().expect("path"));
+            if stderr_only {
+                script.push_str(" >&2");
+            }
+            let mut child = output_child(&script);
+            let (status, stdout, stderr) =
+                capture_cli_output(&mut child, "shell", Duration::from_secs(30))
+                    .await
+                    .expect("capture");
+            assert!(status.success());
+            if stderr_only {
+                assert!(stdout.is_empty());
+                assert_eq!(stderr, expected);
+            } else {
+                assert_eq!(stdout, expected);
+                assert!(stderr.is_empty());
+            }
+        }
+    }
+
+    // Catches: unbounded buffering or silently truncating overflowing output instead of stopping the child.
+    #[tokio::test]
+    async fn cli_capture_kills_child_when_either_pipe_overflows() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
+        let file = dir.path().join("overflow");
+        std::fs::write(&file, vec![b'x'; 5 * 1024 * 1024 + 1]).expect("write output");
+        for stderr_only in [false, true] {
+            let mut script = tuic_test_support::print_file_script(file.to_str().expect("path"));
+            if stderr_only {
+                script.push_str(" >&2");
+            }
+            let mut child = output_child(&script);
+            let error = capture_cli_output(&mut child, "shell", Duration::from_secs(30))
+                .await
+                .expect_err("overflow");
+            assert!(error.contains("exceeds maximum size"), "{error}");
+            assert!(child.id().is_none(), "overflowing child not reaped");
+        }
+    }
+
+    // Catches: timing out the wait while leaving a child alive.
+    #[tokio::test]
+    async fn cli_capture_timeout_kills_and_reaps_child() {
+        let mut child = output_child(&tuic_test_support::wait_for_stdin_script());
+        let error = capture_cli_output(&mut child, "shell", Duration::from_millis(100))
+            .await
+            .expect_err("timeout");
+        assert!(error.contains("timed out"), "{error}");
+        assert!(child.id().is_none(), "timed-out child not reaped");
+    }
+
+    // Catches: ignored pipe read failures returning successful empty output.
+    #[tokio::test]
+    async fn cli_capture_propagates_pipe_read_errors() {
+        struct BrokenPipe;
+        impl tokio::io::AsyncRead for BrokenPipe {
+            fn poll_read(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+                _buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Err(std::io::Error::other("broken pipe fixture")))
+            }
+        }
+        let error = read_bounded_pipe(BrokenPipe, "stdout")
+            .await
+            .expect_err("read failure");
+        assert!(
+            error.contains("Failed to read stdout") && error.contains("broken pipe fixture"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn resolve_binary_finds_mdkb_in_trusted_dir() {
