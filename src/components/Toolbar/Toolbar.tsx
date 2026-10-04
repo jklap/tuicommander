@@ -17,6 +17,7 @@ import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
 import { updaterStore } from "../../stores/updater";
 import { isTauri } from "../../transport";
+import { getRepoConnection } from "../../transportRuntime";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
 import { getRepoTextColor } from "../../utils/repoColor";
@@ -768,6 +769,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 													e.stopPropagation();
 													setShowNotifPopover(false);
 													requestAnimationFrame(() => {
+														if (getRepoConnection(notif.repoPath) !== notif.connectionId) return;
 														setPrDetailTarget({ repoPath: notif.repoPath, branch: notif.branch });
 													});
 												}}
