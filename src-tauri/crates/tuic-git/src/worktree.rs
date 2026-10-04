@@ -2605,6 +2605,14 @@ pub fn archive_ref_name(branch_name: &str) -> String {
     format!("refs/archive/{branch_name}")
 }
 
+/// Archive refs that may hold `tip` of `branch`: the primary ref, then the one
+/// a reused branch name falls back to, named by the tip's short SHA.
+fn archive_refs_for_tip(branch: &str, tip: &str) -> [String; 2] {
+    let primary = archive_ref_name(branch);
+    let suffixed = format!("{primary}-{}", tip.get(..7).unwrap_or(tip));
+    [primary, suffixed]
+}
+
 /// Preserve a force-deleted branch tip without replacing an earlier archive.
 pub(crate) fn delete_local_branch_with_archive(repo: &Path, branch: &str) -> Result<(), String> {
     git_cmd(repo)
@@ -2625,16 +2633,11 @@ pub(crate) fn delete_local_branch_with_archive(repo: &Path, branch: &str) -> Res
     }
     let branch_ref = format!("refs/heads/{branch}");
     let tip = rev_at(repo, &branch_ref)?;
-    let primary = archive_ref_name(branch);
     // A reused branch name collides with the earlier archive. The tip's short
     // SHA names a second archive, so earlier work is never replaced and the new
     // tip is still preserved.
-    let suffixed = format!("{primary}-{}", tip.get(..7).unwrap_or(&tip));
-    let archives = [primary, suffixed];
-    let preserved = archives
-        .iter()
-        .any(|archive| rev_at(repo, archive).is_ok_and(|archived| archived == tip));
-    if !preserved {
+    let archives = archive_refs_for_tip(branch, &tip);
+    if archive_ref_at_tip(repo, branch, &tip).is_none() {
         let mut failure = String::new();
         let created = archives.iter().any(|archive| {
             // An empty old value means the archive must not exist.
@@ -2662,10 +2665,16 @@ pub(crate) fn delete_local_branch_with_archive(repo: &Path, branch: &str) -> Res
     Ok(())
 }
 
-/// True when `refs/archive/<branch>` points at exactly `tip`: the branch's work
-/// is preserved. An archive taken before later commits does not qualify.
+/// The archive ref that points at exactly `tip`: the branch's work is
+/// preserved. An archive taken before later commits does not qualify.
+fn archive_ref_at_tip(repo: &Path, branch_name: &str, tip: &str) -> Option<String> {
+    archive_refs_for_tip(branch_name, tip)
+        .into_iter()
+        .find(|archive| rev_at(repo, archive).is_ok_and(|archived| archived == tip))
+}
+
 fn archived_at_tip(repo: &Path, branch_name: &str, tip: &str) -> bool {
-    rev_at(repo, &archive_ref_name(branch_name)).is_ok_and(|archived| archived == tip)
+    archive_ref_at_tip(repo, branch_name, tip).is_some()
 }
 
 fn require_integration_archive(
@@ -2724,10 +2733,11 @@ pub fn branch_integration_with_pr(
         .args(["worktree", "list", "--porcelain"])
         .run()
         .map_err(|error| format!("Cannot list branch checkouts: {error}"))?;
+    let archive_ref = archive_ref_at_tip(repo, branch, &tip);
     Ok(BranchIntegration {
         branch: branch.into(),
-        archived: archived_at_tip(repo, branch, &tip),
-        archive_ref: archive_ref_name(branch),
+        archived: archive_ref.is_some(),
+        archive_ref: archive_ref.unwrap_or_else(|| archive_ref_name(branch)),
         tip,
         default_branch,
         integrated: matches!(
@@ -8411,6 +8421,37 @@ branch refs/heads/feat
         assert!(!wt.exists());
         assert!(rev_at(&repo, "refs/heads/literal-1295").is_err());
         assert_eq!(rev_at(&repo, &query.archive_ref).unwrap(), query.tip);
+    }
+
+    /// Catches: a tip archived at the tip-suffixed ref (reused branch name) reading
+    /// "not archived", which blocks the content-proof deletion of preserved work.
+    #[test]
+    fn tip_archived_at_the_suffixed_ref_counts_as_archived_1462() {
+        let (_temp, repo, _) = workspace_fixture();
+        git_cmd(&repo).args(["branch", "-M", "main"]).run().unwrap();
+        let wt = add_worktree(&repo, "suffixed-1462");
+        let name = "[literal].txt";
+        commit_file(&wt, name, "rule A\n++literal\nrule B\n");
+        commit_file(&repo, name, "rule B\nrule A\n++literal\nextra\n");
+        let query = branch_integration_with_pr(&repo, "suffixed-1462", |_, _, _| false).unwrap();
+        assert_eq!(query.proof, Some("content_superset"));
+        assert!(!query.archived);
+        let suffixed = format!("{}-{}", query.archive_ref, &query.tip[..7]);
+        git_cmd(&repo)
+            .args(["update-ref", &suffixed, &query.tip])
+            .run()
+            .unwrap();
+        git_cmd(&repo)
+            .args(["worktree", "remove", "--force", &wt.to_string_lossy()])
+            .run()
+            .unwrap();
+        let after = branch_integration_with_pr(&repo, "suffixed-1462", |_, _, _| false).unwrap();
+        assert!(after.archived);
+        assert_eq!(after.archive_ref, suffixed);
+        assert_eq!(
+            delete_integrated_local_branch(&repo.to_string_lossy(), "suffixed-1462").unwrap(),
+            "archived"
+        );
     }
 
     /// Catches a branch filter that lists checkouts of other branches: those

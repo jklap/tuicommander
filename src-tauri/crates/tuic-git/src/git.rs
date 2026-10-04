@@ -4574,7 +4574,7 @@ filename test.txt
 
     // Catches: force deletion losing unique commits, clobbering archives, or deleting checked-out branches.
     #[test]
-    fn force_delete_preserves_unique_tip_and_refuses_archive_collisions_or_checkouts() {
+    fn force_delete_preserves_unique_tip_archives_collisions_at_a_suffix_and_refuses_checkouts() {
         let (dir, path) = setup_test_repo_with_commit();
         let repo = path.to_string_lossy();
         let git = |args: &[&str]| {
