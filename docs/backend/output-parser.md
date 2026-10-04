@@ -541,3 +541,5 @@ sequences from plain log text. GitHub CI log sanitization and the test-only
 `OutputParser::parse` adapter use it. It preserves printable UTF-8 and
 linefeeds, and discards other executed controls, matching the previous
 `strip-ansi-escapes` policy. The workspace no longer compiles VTE 0.14.
+
+AI Chat also preserves reply text that immediately follows a parenthesized intent title on the same line. Untitled intent lines keep their existing status behavior; code examples are left intact.
