@@ -1083,4 +1083,52 @@ mod tests {
             stats.last_commit_ts.keys().collect::<Vec<_>>()
         );
     }
+    // Catches: a flag-table edit that rejects an argument vector the frontend still sends
+    // (every `run_git_command` caller in src/, inventoried in story 1460-9ed8), or that
+    // admits an option-shaped argument in a position the first-arg check never saw.
+    #[test]
+    fn git_option_policy_accepts_every_frontend_argument_vector_and_rejects_option_injection() {
+        let vec_of = |args: &[&str]| args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        for accepted in [
+            vec!["pull"],
+            vec!["pull", "--ff-only"],
+            vec!["push"],
+            vec!["push", "-u", "origin", "feature/x"],
+            vec!["push", "origin", "--delete", "feature/x"],
+            vec!["fetch", "--all"],
+            vec!["fetch", "origin", "feature/x"],
+            vec!["stash"],
+            vec!["stash", "push"],
+            vec!["stash", "pop"],
+            vec!["merge", "origin/feature"],
+            vec!["rebase", "origin/feature"],
+            vec!["status", "--porcelain"],
+            vec!["diff", "--name-status", "main...feature"],
+        ] {
+            assert_eq!(
+                validate_git_command_args(&vec_of(&accepted)),
+                Ok(()),
+                "{accepted:?}"
+            );
+        }
+        for rejected in [
+            vec!["push", "--force"],
+            vec!["pull", "--rebase"],
+            vec!["fetch", "--all", "--upload-pack=x"],
+            vec!["merge", "-s", "ours"],
+            vec!["status", "--porcelain", "--ignore-submodules"],
+            vec!["diff", "--name-status", "--ext-diff"],
+            vec!["stash", "push", "-m", "x"],
+            vec!["show", "--output=x", "HEAD"],
+            vec!["branch", "-D", "main"],
+            vec!["-c", "core.pager=x", "status"],
+            vec!["--exec-path=x", "status"],
+            vec![],
+        ] {
+            assert!(
+                validate_git_command_args(&vec_of(&rejected)).is_err(),
+                "{rejected:?}"
+            );
+        }
+    }
 }
