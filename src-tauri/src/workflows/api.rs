@@ -93,10 +93,15 @@ pub fn definition_action_for_actor(
     action: WorkflowAction,
     actor: WorkflowActor,
 ) -> Result<WorkflowReply, String> {
-    if actor != WorkflowActor::Human && matches!(&action,
-        WorkflowAction::CreateDraft { .. } | WorkflowAction::UpdateDraft { .. }
-        | WorkflowAction::UpdateClosure { .. } | WorkflowAction::UpdateChecks { .. }
-        | WorkflowAction::Publish { .. })
+    if actor != WorkflowActor::Human
+        && matches!(
+            &action,
+            WorkflowAction::CreateDraft { .. }
+                | WorkflowAction::UpdateDraft { .. }
+                | WorkflowAction::UpdateClosure { .. }
+                | WorkflowAction::UpdateChecks { .. }
+                | WorkflowAction::Publish { .. }
+        )
     {
         return Err("workflow policy mutation requires an authenticated user action".into());
     }
@@ -221,7 +226,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod actor_tests {
     use super::*;
@@ -231,16 +235,35 @@ mod actor_tests {
         // catches: loopback agents publish arbitrary argv under implicit Human authority.
         for actor in [WorkflowActor::LocalApi, WorkflowActor::ManagedSession] {
             for action in [
-                WorkflowAction::UpdateChecks { id: "draft".into(), expected_revision: 1, checks: vec![] },
-                WorkflowAction::Publish { id: "draft".into(), expected_revision: 1 },
+                WorkflowAction::UpdateChecks {
+                    id: "draft".into(),
+                    expected_revision: 1,
+                    checks: vec![],
+                },
+                WorkflowAction::Publish {
+                    id: "draft".into(),
+                    expected_revision: 1,
+                },
             ] {
-                assert!(definition_action_for_actor("relative", action, actor)
-                    .unwrap_err().contains("authenticated user"));
+                assert!(
+                    definition_action_for_actor("relative", action, actor)
+                        .unwrap_err()
+                        .contains("authenticated user")
+                );
             }
         }
         // Human routing passes the authority gate and reaches project validation.
-        assert!(definition_action_for_actor("relative",
-            WorkflowAction::Publish { id: "draft".into(), expected_revision: 1 },
-            WorkflowActor::Human).unwrap_err().contains("absolute path"));
+        assert!(
+            definition_action_for_actor(
+                "relative",
+                WorkflowAction::Publish {
+                    id: "draft".into(),
+                    expected_revision: 1
+                },
+                WorkflowActor::Human
+            )
+            .unwrap_err()
+            .contains("absolute path")
+        );
     }
 }

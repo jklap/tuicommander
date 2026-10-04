@@ -40,3 +40,5 @@ active checks and fences late starts. Host shutdown tears down every active chec
 before exit; cancellation yields no successful receipt.
 
 Workflow policy writes and human run commands (answer input, resume, resolve uncertain effects, final verification, complete) require desktop IPC or credential-authenticated HTTP. Sessionless loopback HTTP is LocalApi and cannot claim operator authority. The actor is host-selected; request JSON cannot choose it.
+
+Plan aggregation uses the same receipt freshness authority as dependency release and final verification. Workflow-owned plans are Done only while every approved story has current integration evidence at its accepted revision; ref movement returns Active until recertification. Manual plans keep Done/WontFix aggregation. Explicit recertification remains available after cancellation to renew already integrated evidence.

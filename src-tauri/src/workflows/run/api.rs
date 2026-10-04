@@ -1,5 +1,5 @@
 use super::{RunCommand, RunEvent, RunLimits, RunReceipt, RunSnapshot, RunStore};
-use crate::workflows::{AgentRole, NodeKind, WorkflowStore, WorkflowActor};
+use crate::workflows::{AgentRole, NodeKind, WorkflowActor, WorkflowStore};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
@@ -108,7 +108,8 @@ pub fn run_action_for_actor(
     action: RunAction,
     actor: WorkflowActor,
 ) -> Result<RunReply, String> {
-    if actor != WorkflowActor::Human && matches!(&action,
+    if actor != WorkflowActor::Human
+        && matches!(&action,
         RunAction::Command { command, .. } if matches!(command.as_ref(),
             RunCommand::AnswerInput { .. } | RunCommand::Resume
             | RunCommand::ResolveUncertainEffect { .. }
@@ -309,7 +310,6 @@ fn scoped_snapshot(store: &RunStore, owner: &str, run_id: &str) -> Result<RunSna
     Ok(snapshot)
 }
 
-
 #[cfg(test)]
 mod actor_tests {
     use super::*;
@@ -317,19 +317,43 @@ mod actor_tests {
     #[test]
     fn local_and_managed_calls_cannot_record_human_run_decisions() {
         // catches: agents answer their own user prompt or self-certify completion.
-        for actor in [WorkflowActor::LocalApi, WorkflowActor::ManagedSession, WorkflowActor::Human] {
+        for actor in [
+            WorkflowActor::LocalApi,
+            WorkflowActor::ManagedSession,
+            WorkflowActor::Human,
+        ] {
             for command in [
-                RunCommand::AnswerInput { attempt_id: "attempt".into(), answer: "yes".into() },
-                RunCommand::Resume, RunCommand::FinalVerificationPassed, RunCommand::Complete,
-                RunCommand::ResolveUncertainEffect { effect_id: "effect".into(), succeeded: true },
+                RunCommand::AnswerInput {
+                    attempt_id: "attempt".into(),
+                    answer: "yes".into(),
+                },
+                RunCommand::Resume,
+                RunCommand::FinalVerificationPassed,
+                RunCommand::Complete,
+                RunCommand::ResolveUncertainEffect {
+                    effect_id: "effect".into(),
+                    succeeded: true,
+                },
             ] {
-                let error = run_action_for_actor("relative", RunAction::Command {
-                    run_id: "run".into(), command_id: "decision".into(), expected_sequence: 1,
-                    command: Box::new(command),
-                }, actor).unwrap_err();
-                assert!(error.contains(if actor == WorkflowActor::Human {
-                    "absolute path"
-                } else { "authenticated user" }), "{error}");
+                let error = run_action_for_actor(
+                    "relative",
+                    RunAction::Command {
+                        run_id: "run".into(),
+                        command_id: "decision".into(),
+                        expected_sequence: 1,
+                        command: Box::new(command),
+                    },
+                    actor,
+                )
+                .unwrap_err();
+                assert!(
+                    error.contains(if actor == WorkflowActor::Human {
+                        "absolute path"
+                    } else {
+                        "authenticated user"
+                    }),
+                    "{error}"
+                );
             }
         }
     }

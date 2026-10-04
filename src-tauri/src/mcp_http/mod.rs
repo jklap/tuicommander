@@ -523,11 +523,12 @@ async fn post_workflow_definition_action(
     } else {
         crate::workflows::WorkflowActor::LocalApi
     };
-    let result =
-        tokio::task::spawn_blocking(move || crate::workflows::definition_action_for_actor(&q.path, action, actor))
-            .await
-            .map_err(|error| format!("workflow definition task failed: {error}"))
-            .and_then(|result| result);
+    let result = tokio::task::spawn_blocking(move || {
+        crate::workflows::definition_action_for_actor(&q.path, action, actor)
+    })
+    .await
+    .map_err(|error| format!("workflow definition task failed: {error}"))
+    .and_then(|result| result);
     json_result(result)
 }
 async fn post_workflow_run_action(
@@ -2191,7 +2192,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     let routes = routes
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
-            state.clone(), auth::workflow_actor_middleware,
+            state.clone(),
+            auth::workflow_actor_middleware,
         ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -3698,20 +3700,42 @@ mod tests {
                 .actor,
             StoryTransitionActor::LocalApi
         );
-        let other = store.create_story(NewStory {
-            plan_id: plan.id, title: "Operator decision".into(), criteria: vec!["Done".into()],
-            priority: 1, origin: StoryOrigin::Native, file_scope: vec![],
-        }).unwrap();
+        let other = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Operator decision".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
         let body = serde_json::json!({"action": {
             "action": "transition", "story_id": other.id,
             "expected_revision": other.revision, "command": "block"
         }});
-        let response = app.clone().oneshot(mcp_post_from(&path, &body, local)).await.unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response = app
+            .clone()
+            .oneshot(mcp_post_from(&path, &body, local))
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         assert!(String::from_utf8_lossy(&bytes).contains("authenticated user"));
-        let response = app.oneshot(mcp_post_from(&format!("{path}&token={token}"), &body, local)).await.unwrap();
+        let response = app
+            .oneshot(mcp_post_from(
+                &format!("{path}&token={token}"),
+                &body,
+                local,
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(store.transition_history(&other.id).unwrap()[0].actor, StoryTransitionActor::Human);
+        assert_eq!(
+            store.transition_history(&other.id).unwrap()[0].actor,
+            StoryTransitionActor::Human
+        );
     }
 
     #[tokio::test]
@@ -3725,21 +3749,39 @@ mod tests {
         let app = build_router(state, false, true);
         let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
         for (route, body) in [
-            ("/workflows/definition/action", serde_json::json!({
-                "action": "publish", "id": "missing", "expected_revision": 1
-            })),
-            ("/workflows/run/action", serde_json::json!({
-                "action": "command", "run_id": "missing", "command_id": "decision",
-                "expected_sequence": 1, "command": {"action": "resume"}
-            })),
+            (
+                "/workflows/definition/action",
+                serde_json::json!({
+                    "action": "publish", "id": "missing", "expected_revision": 1
+                }),
+            ),
+            (
+                "/workflows/run/action",
+                serde_json::json!({
+                    "action": "command", "run_id": "missing", "command_id": "decision",
+                    "expected_sequence": 1, "command": {"action": "resume"}
+                }),
+            ),
         ] {
             let path = format!("{route}?path={}", project.path().display());
-            let response = app.clone().oneshot(mcp_post_from(&path, &body, local)).await.unwrap();
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let response = app
+                .clone()
+                .oneshot(mcp_post_from(&path, &body, local))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
             assert!(String::from_utf8_lossy(&bytes).contains("authenticated user"));
             let path = format!("{path}&token={token}");
-            let response = app.clone().oneshot(mcp_post_from(&path, &body, local)).await.unwrap();
-            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let response = app
+                .clone()
+                .oneshot(mcp_post_from(&path, &body, local))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
             assert!(!String::from_utf8_lossy(&bytes).contains("authenticated user"));
         }
     }
