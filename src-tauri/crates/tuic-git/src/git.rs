@@ -402,7 +402,7 @@ pub struct DeleteBranchResult {
 /// Core logic for deleting a git branch.
 ///
 /// Refuses to delete protected main branches or the currently checked-out branch.
-/// Use `force=true` to delete branches with unmerged commits (`git branch -D`).
+/// Use `force=true` to archive and delete branches with unmerged commits.
 pub fn delete_branch_impl(
     path: &str,
     name: &str,
@@ -436,18 +436,12 @@ pub fn delete_branch_impl(
             was_force: false,
         });
     }
-    let flag = "-D";
-    match git_cmd(&repo_path).args(["branch", flag, "--", name]).run() {
-        Ok(_) => Ok(DeleteBranchResult {
-            deleted: true,
-            branch: name.to_string(),
-            was_force: force,
-        }),
-        Err(crate::git_cli::GitError::NonZeroExit { stderr, .. }) => {
-            Err(format!("git branch delete failed: {stderr}"))
-        }
-        Err(e) => Err(e.to_string()),
-    }
+    crate::worktree::delete_local_branch_with_archive(&repo_path, name)?;
+    Ok(DeleteBranchResult {
+        deleted: true,
+        branch: name.to_owned(),
+        was_force: true,
+    })
 }
 
 /// A recent commit entry for the dropdown
@@ -4576,6 +4570,78 @@ filename test.txt
         assert_eq!(r.branch, "unmerged-branch");
         assert!(r.was_force);
         assert!(r.deleted);
+    }
+
+    // Catches: force deletion losing unique commits, clobbering archives, or deleting checked-out branches.
+    #[test]
+    fn force_delete_preserves_unique_tip_archives_collisions_at_a_suffix_and_refuses_checkouts() {
+        let (dir, path) = setup_test_repo_with_commit();
+        let repo = path.to_string_lossy();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(&path)
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                output.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout)
+                .expect("utf8")
+                .trim()
+                .to_owned()
+        };
+        let branch_exists = |name: &str| {
+            std::process::Command::new("git")
+                .current_dir(&path)
+                .args(["show-ref", "--verify", &format!("refs/heads/{name}")])
+                .output()
+                .expect("git")
+                .status
+                .success()
+        };
+        git(&["branch", "-M", "main"]);
+        let original = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-b", "unique"]);
+        git(&["commit", "--allow-empty", "-m", "unique commit"]);
+        let unique = git(&["rev-parse", "HEAD"]);
+        assert_ne!(original, unique);
+        assert!(delete_branch_impl(&repo, "unique", true).is_err());
+        git(&["checkout", "main"]);
+        delete_branch_impl(&repo, "unique", true).expect("force delete unique");
+        assert_eq!(git(&["rev-parse", "refs/archive/unique"]), unique);
+        assert!(!branch_exists("unique"));
+        git(&["branch", "integrated"]);
+        delete_branch_impl(&repo, "integrated", true).expect("force delete integrated");
+        assert_eq!(git(&["rev-parse", "refs/archive/integrated"]), original);
+        git(&["branch", "collision", &unique]);
+        git(&["update-ref", "refs/archive/collision", &original]);
+        delete_branch_impl(&repo, "collision", true).expect("archive collision uses a suffix");
+        assert!(!branch_exists("collision"));
+        assert_eq!(git(&["rev-parse", "refs/archive/collision"]), original);
+        let suffixed = format!("refs/archive/collision-{}", &unique[..7]);
+        assert_eq!(git(&["rev-parse", &suffixed]), unique);
+        // Catches: a branch name force-deleted once, recreated, becoming undeletable.
+        git(&["branch", "collision", &unique]);
+        delete_branch_impl(&repo, "collision", true)
+            .expect("second deletion reuses suffixed archive");
+        assert_eq!(git(&["rev-parse", &suffixed]), unique);
+        git(&["branch", "same-archive"]);
+        git(&["update-ref", "refs/archive/same-archive", &original]);
+        delete_branch_impl(&repo, "same-archive", true).expect("reuse exact archive");
+        assert_eq!(git(&["rev-parse", "refs/archive/same-archive"]), original);
+        let checkout = dir.path().join("linked-checkout");
+        git(&[
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            checkout.to_str().expect("path"),
+        ]);
+        assert!(delete_branch_impl(&repo, "linked", true).is_err());
+        assert_eq!(git(&["rev-parse", "refs/heads/linked"]), original);
     }
 
     #[test]

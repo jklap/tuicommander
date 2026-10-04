@@ -568,8 +568,7 @@ exit /b 1
 /// Git subcommands that can block on something off this machine, so every one
 /// of them runs under [`crate::git_cli::FETCH_TIMEOUT`].
 ///
-/// Audit of the HTTP allowlist (`ALLOWED_GIT_SUBCOMMANDS` in
-/// `mcp_http/git_routes.rs`), which is what a browser or remote client can
+/// Audit of the shared allowlist (`ALLOWED_GIT_SUBCOMMANDS` in this module), which is what a browser or remote client can
 /// reach: `fetch`, `pull` and `push` always contact a remote. `remote` does for
 /// `update` and `prune`, and is bounded whole because its local forms
 /// (`remote -v`, `remote add`) return in milliseconds, so a deadline can only
@@ -586,7 +585,51 @@ pub(crate) fn is_network_git_subcommand(args: &[String]) -> bool {
         .is_some_and(|sub| NETWORK_GIT_SUBCOMMANDS.contains(&sub.as_str()))
 }
 
-/// Run an arbitrary git command to completion, blocking the calling thread.
+/// Allowed git subcommands for the HTTP endpoint.
+/// GitPanel and sidebar operations supported by both transports.
+pub(crate) const ALLOWED_GIT_SUBCOMMANDS: &[&str] = &[
+    "fetch",
+    "pull",
+    "push",
+    "stash",
+    "log",
+    "diff",
+    "show",
+    "branch",
+    "tag",
+    "merge",
+    "rebase",
+    "cherry-pick",
+    "remote",
+    "status",
+    "rev-parse",
+];
+
+/// Reject caller-controlled Git options outside the flags used by the UI.
+pub(crate) fn validate_git_command_args(args: &[String]) -> Result<(), String> {
+    let subcommand = args.first().map(String::as_str).unwrap_or("");
+    if !ALLOWED_GIT_SUBCOMMANDS.contains(&subcommand) {
+        return Err(format!("Git subcommand \"{subcommand}\" is not allowed"));
+    }
+    let flags: &[&str] = match subcommand {
+        "fetch" => &["--all"],
+        "pull" => &["--ff-only"],
+        "push" => &["-u", "--delete"],
+        "diff" => &["--name-status"],
+        "status" => &["--porcelain"],
+        _ => &[],
+    };
+    for arg in &args[1..] {
+        if arg.starts_with('-') && arg != "--" && !flags.contains(&arg.as_str()) {
+            return Err(format!(
+                "Git option \"{arg}\" is not allowed for {subcommand}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Run an allowlisted UI git command to completion, blocking the calling thread.
 ///
 /// Shared by the Tauri command below and the `/repo/run-git` HTTP handler so the
 /// two transports cannot drift: same deadline, same askpass wiring, same result
@@ -598,6 +641,14 @@ pub(crate) fn run_git_command_blocking(
     path: &str,
     args: &[String],
 ) -> GitCommandResult {
+    if let Err(stderr) = validate_git_command_args(args) {
+        return GitCommandResult {
+            success: false,
+            stdout: String::new(),
+            stderr,
+            exit_code: -1,
+        };
+    }
     let repo_path = PathBuf::from(path);
     let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
     let mut builder = git_cmd(&repo_path).args(&args_str);
@@ -641,7 +692,7 @@ pub(crate) fn run_git_command_blocking(
     }
 }
 
-/// Run an arbitrary git command in the background (no PTY, no terminal).
+/// Run an allowlisted UI git command in the background (no PTY, no terminal).
 /// Used by the sidebar Git Quick Actions (pull, push, fetch, stash).
 /// Async so network operations (pull/push/fetch) don't block the IPC thread.
 /// Sets SSH_ASKPASS so passphrase prompts show a native GUI dialog.
@@ -1022,5 +1073,63 @@ mod tests {
             "phase 2 must reuse phase 1's worktree paths, got {:?}",
             stats.last_commit_ts.keys().collect::<Vec<_>>()
         );
+    }
+    // Catches: the retired private auto-fetch marker being accepted again and reaching git as an
+    // unknown option.
+    #[test]
+    fn the_retired_auto_fetch_marker_is_rejected() {
+        let args = ["fetch", "--all", "--tuic-auto-fetch"]
+            .map(str::to_owned)
+            .to_vec();
+        assert!(validate_git_command_args(&args).is_err());
+    }
+
+    // Catches: a flag-table edit that rejects an argument vector the frontend still sends
+    // (every `run_git_command` caller in src/, inventoried in story 1460-9ed8), or that
+    // admits an option-shaped argument in a position the first-arg check never saw.
+    #[test]
+    fn git_option_policy_accepts_every_frontend_argument_vector_and_rejects_option_injection() {
+        let vec_of = |args: &[&str]| args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        for accepted in [
+            vec!["pull"],
+            vec!["pull", "--ff-only"],
+            vec!["push"],
+            vec!["push", "-u", "origin", "feature/x"],
+            vec!["push", "origin", "--delete", "feature/x"],
+            vec!["fetch", "--all"],
+            vec!["fetch", "origin", "feature/x"],
+            vec!["stash"],
+            vec!["stash", "push"],
+            vec!["stash", "pop"],
+            vec!["merge", "origin/feature"],
+            vec!["rebase", "origin/feature"],
+            vec!["status", "--porcelain"],
+            vec!["diff", "--name-status", "main...feature"],
+        ] {
+            assert_eq!(
+                validate_git_command_args(&vec_of(&accepted)),
+                Ok(()),
+                "{accepted:?}"
+            );
+        }
+        for rejected in [
+            vec!["push", "--force"],
+            vec!["pull", "--rebase"],
+            vec!["fetch", "--all", "--upload-pack=x"],
+            vec!["merge", "-s", "ours"],
+            vec!["status", "--porcelain", "--ignore-submodules"],
+            vec!["diff", "--name-status", "--ext-diff"],
+            vec!["stash", "push", "-m", "x"],
+            vec!["show", "--output=x", "HEAD"],
+            vec!["branch", "-D", "main"],
+            vec!["-c", "core.pager=x", "status"],
+            vec!["--exec-path=x", "status"],
+            vec![],
+        ] {
+            assert!(
+                validate_git_command_args(&vec_of(&rejected)).is_err(),
+                "{rejected:?}"
+            );
+        }
     }
 }

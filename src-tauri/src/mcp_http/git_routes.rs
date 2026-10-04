@@ -246,26 +246,6 @@ pub(super) async fn git_panel_context(
     }
 }
 
-/// Allowed git subcommands for the HTTP endpoint.
-/// Only safe, non-destructive operations that the GitPanel needs.
-const ALLOWED_GIT_SUBCOMMANDS: &[&str] = &[
-    "fetch",
-    "pull",
-    "push",
-    "stash",
-    "log",
-    "diff",
-    "show",
-    "branch",
-    "tag",
-    "merge",
-    "rebase",
-    "cherry-pick",
-    "remote",
-    "status",
-    "rev-parse",
-];
-
 pub(super) async fn run_git_command_http(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
     Json(body): Json<RunGitCommandRequest>,
@@ -274,14 +254,10 @@ pub(super) async fn run_git_command_http(
         return e.into_response();
     }
 
-    // Validate subcommand against allowlist
-    let subcommand = body.args.first().map(|s| s.as_str()).unwrap_or("");
-    if !ALLOWED_GIT_SUBCOMMANDS.contains(&subcommand) {
+    if let Err(error) = crate::git::validate_git_command_args(&body.args) {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": format!("Git subcommand \"{subcommand}\" is not allowed via HTTP")
-            })),
+            Json(serde_json::json!({"error": error})),
         )
             .into_response();
     }
@@ -659,6 +635,7 @@ pub(super) async fn update_from_base_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::ALLOWED_GIT_SUBCOMMANDS;
     use std::time::{Duration, Instant};
 
     /// A remote that completes the TCP handshake and then answers nothing, so a
@@ -749,6 +726,86 @@ mod tests {
             .filter(|sub| crate::git::is_network_git_subcommand(&[(*sub).to_string()]))
             .collect();
         assert_eq!(bounded, vec!["fetch", "pull", "push", "remote"]);
+    }
+
+    // Catches: validating only args[0] lets executable/config/output options reach Git.
+    #[tokio::test]
+    async fn run_git_http_rejects_option_injection_in_every_position() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        for args in [
+            vec!["rebase", "--exec", "touch x"],
+            vec!["rebase", "main", "--exec=touch x"],
+            vec!["fetch", "--upload-pack=x"],
+            vec!["fetch", "origin", "--upload-pack", "x"],
+            vec!["log", "-c", "core.pager=x"],
+            vec!["diff", "--output=x"],
+            vec!["push", "--receive-pack=x"],
+            vec!["log", "--", "--exec=x"],
+            vec!["-c", "alias.x=!touch x", "status"],
+        ] {
+            let response = run_git_command_http(
+                axum::extract::State(state.clone()),
+                Json(RunGitCommandRequest {
+                    path: dir.path().to_string_lossy().into_owned(),
+                    args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{args:?}");
+        }
+    }
+
+    // Catches: a restrictive flag policy breaking GitPanel's local operations.
+    #[tokio::test]
+    async fn run_git_http_preserves_git_panel_operations() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
+        for args in [
+            vec!["init", "-b", "main"],
+            vec![
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+            vec!["branch", "feature"],
+        ] {
+            let output = std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        for args in [
+            vec!["status", "--porcelain"],
+            vec!["diff", "--name-status", "main...feature"],
+            vec!["merge", "feature"],
+            vec!["rebase", "feature"],
+            vec!["stash", "push"],
+            vec!["fetch", "--all"],
+        ] {
+            let response = run_git_command_http(
+                axum::extract::State(state.clone()),
+                Json(RunGitCommandRequest {
+                    path: dir.path().to_string_lossy().into_owned(),
+                    args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK, "{args:?}");
+            let body = json_body(response).await;
+            assert_eq!(body["success"], true, "{args:?}: {body}");
+        }
     }
 
     #[tokio::test]

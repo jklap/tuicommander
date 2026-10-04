@@ -1210,7 +1210,7 @@ console.log(status.index.documents); // 1486
 - Only binaries declared in the plugin's `binaries` manifest field can be executed
 - Working directory must be absolute and within `$HOME`
 - 30-second timeout
-- 5 MB stdout limit
+- 5 MiB limit per stdout/stderr stream; both streams drain concurrently. Overflow or read failure stops the process with an error.
 - Binary is resolved via PATH lookup and known install locations (`~/.cargo/bin/`, `/usr/local/bin/`, etc.)
 
 ### Tier 4: Scoped Tauri Invoke (whitelisted commands only)
