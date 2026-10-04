@@ -708,3 +708,5 @@ Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The
   because session metadata is contended.
 - Reader thread holds `Arc<AtomicBool>` for pause signaling
 - Metrics use `AtomicUsize` for zero-overhead counting
+
+Claude launch settings apply to prompt and option-first launches. Shell wrappers use the installed CLI help to recognise subcommands and aliases; bare hyphenated names pass through for hidden commands. For a single hyphenated prompt, use an option-first launch (for example, `claude --print fix-bug`). Explicit settings and bare mode remain authoritative.

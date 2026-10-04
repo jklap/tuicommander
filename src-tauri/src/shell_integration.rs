@@ -40,7 +40,13 @@ if [[ -n "$TUIC_SESSION" ]]; then
     for a in "$@"; do [[ "$a" == "$flag" ]] && return 0; done
     printf '%s' "$flag"
   }
+  __tuic_claude_help() { if [[ -n "$TUIC_CLAUDE_HELP" ]]; then printf '%s\n' "$TUIC_CLAUDE_HELP"; else command claude --help 2>/dev/null; fi; }
   claude() {
+    case "$1" in
+      ""|-*) ;;
+      *-*) command claude "$@"; return;;
+      *) if __tuic_claude_help | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
+    esac
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
     done
@@ -109,7 +115,13 @@ if [[ -n "$TUIC_SESSION" ]]; then
     for a in "$@"; do [[ "$a" == "$flag" ]] && return 0; done
     printf '%s' "$flag"
   }
+  __tuic_claude_help() { if [[ -n "$TUIC_CLAUDE_HELP" ]]; then printf '%s\n' "$TUIC_CLAUDE_HELP"; else command claude --help 2>/dev/null; fi; }
   claude() {
+    case "$1" in
+      ""|-*) ;;
+      *-*) command claude "$@"; return;;
+      *) if __tuic_claude_help | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
+    esac
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
     done
@@ -181,7 +193,25 @@ if set -q TUIC_SESSION
     end
     printf '%s' "$flag"
   end
+  function __tuic_claude_help
+    if set -q TUIC_CLAUDE_HELP
+      printf '%s\n' $TUIC_CLAUDE_HELP
+    else
+      command claude --help 2>/dev/null
+    end
+  end
   function claude --wraps claude
+    if test (count $argv) -gt 0
+      switch $argv[1]
+        case '-*'
+        case '*-*'
+          command claude $argv; return
+        case '*'
+          if __tuic_claude_help | awk -v verb="$argv[1]" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'
+            command claude $argv; return
+          end
+      end
+    end
     for a in $argv
       switch $a
         case --settings '--settings=*' --bare
@@ -271,6 +301,10 @@ pub(crate) fn inject(app_data_dir: &Path, shell: &str, cmd: &mut portable_pty::C
         return;
     }
     if crate::agent_hook_launch::enabled("claude") {
+        // Cache the installed CLI's advertised verbs for this shell session.
+        if let Some(help) = crate::agent::cli_help("claude") {
+            cmd.env("TUIC_CLAUDE_HELP", help);
+        }
         cmd.env(
             "TUIC_CLAUDE_SETTINGS",
             app_data_dir.join("agent-hooks/claude.json"),
@@ -737,6 +771,10 @@ mod tests {
                 .env("PATH", path)
                 // The wrappers are defined only inside a TUIC session.
                 .env("TUIC_SESSION", "wrapper-launch-test")
+                .env(
+                    "TUIC_CLAUDE_HELP",
+                    include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt"),
+                )
                 // Start from setting-off, so a case that wants injection has to
                 // ask for it and the off case cannot pass on an inherited value.
                 .env_remove("TUIC_CLAUDE_SETTINGS")
@@ -854,18 +892,28 @@ mod tests {
         }
 
         fn setting_on_prepends_launch_scoped_status_flags(shell: &str) {
-            // Before the user's arguments, not after: `--settings` belongs to
-            // the root command, and subcommands such as `doctor`, `update`,
-            // `mcp` and `auth` reject it as an unknown option when it trails.
+            // Catches: root settings injected into a subcommand instead of a prompt.
             let claude = format!("--settings {CLAUDE_SETTINGS} --model opus");
-            let doctor = format!("--settings {CLAUDE_SETTINGS} doctor");
+            let prompt = format!("--settings {CLAUDE_SETTINGS} prompt");
+            let resume = format!("--settings {CLAUDE_SETTINGS} --resume x");
             assert_in_shell(
                 shell,
                 "Claude gets the TUIC settings file before its own arguments",
                 &signals_on(),
                 "claude --model opus\n\
-                 claude doctor",
-                &[claude.as_str(), doctor.as_str()],
+                 claude doctor\n\
+                 claude remote-control --resume x\n\
+                 claude prompt\n\
+                 claude --resume x\n\
+                 claude plugins",
+                &[
+                    claude.as_str(),
+                    "doctor",
+                    "remote-control --resume x",
+                    prompt.as_str(),
+                    resume.as_str(),
+                    "plugins",
+                ],
             );
             let codex = format!("exec --full-auto -c notify=[\"{CODEX_NOTIFY}\"]");
             assert_in_shell(
