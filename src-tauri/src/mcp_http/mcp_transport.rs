@@ -13181,6 +13181,7 @@ mod tests {
     /// Poll until `path` holds non-empty content, or the deadline passes.
     /// A shell `> file` redirect creates (truncates) the file before writing
     /// any bytes, so polling on existence alone can observe a 0-byte window.
+    #[cfg(unix)]
     fn wait_for_file_content(path: &std::path::Path, timeout: std::time::Duration) -> String {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -13225,6 +13226,7 @@ mod tests {
 
     /// The async twin of `wait_for_file_content`, for `#[tokio::test]` sites
     /// that poll a spawned agent's output file (story 1283-cbce).
+    #[cfg(unix)]
     async fn wait_for_file_content_async(
         path: &std::path::Path,
         timeout: std::time::Duration,
