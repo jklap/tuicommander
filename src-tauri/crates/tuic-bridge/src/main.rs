@@ -109,6 +109,24 @@ fn response_timeout(body: &str) -> std::time::Duration {
     let Ok(request) = serde_json::from_str::<Value>(body) else {
         return MCP_RESPONSE_TIMEOUT;
     };
+    let name = request.pointer("/params/name").and_then(Value::as_str);
+    let arguments = request.pointer("/params/arguments");
+    let secret_arguments = match (name, arguments) {
+        (Some("secret"), arguments) => arguments,
+        (Some("call_tool"), Some(arguments))
+            if arguments.get("tool_name").and_then(Value::as_str) == Some("secret") =>
+        {
+            arguments.get("arguments")
+        }
+        _ => None,
+    };
+    if let Some(timeout) = secret_arguments
+        .and_then(|arguments| arguments.get("action"))
+        .and_then(Value::as_str)
+        .and_then(tuic_ipc::secret_response_timeout)
+    {
+        return timeout;
+    }
     if is_long_workspace_operation(&request) {
         return WORKSPACE_OPERATION_RESPONSE_TIMEOUT;
     }
@@ -1437,6 +1455,20 @@ mod tests {
 
         let bad = r#"{"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"latest"},"protocolVersion":"also-not-a-date"}}"#;
         assert_eq!(request_protocol_version(bad), "2025-11-25");
+    }
+
+    #[test]
+    fn secret_calls_do_not_expire_before_form_and_child_deadlines() {
+        // Catches direct and collapsed secret calls using the ordinary 10 s deadline.
+        for (action, seconds) in [("request", 305), ("run", 425), ("remove", 10)] {
+            let direct = serde_json::json!({"method": "tools/call", "params": {
+                "name": "secret", "arguments": {"action": action}}});
+            let collapsed = serde_json::json!({"method": "tools/call", "params": {
+                "name": "call_tool", "arguments": {"tool_name": "secret",
+                    "arguments": {"action": action}}}});
+            assert_eq!(response_timeout(&direct.to_string()).as_secs(), seconds);
+            assert_eq!(response_timeout(&collapsed.to_string()).as_secs(), seconds);
+        }
     }
 
     #[test]
