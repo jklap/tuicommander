@@ -925,6 +925,23 @@ mod tests {
             );
         }
 
+        /// Catches: hyphenated prompt text is mistaken for a hidden command.
+        #[test]
+        fn hyphenated_prompts_keep_settings_in_every_shell() {
+            for shell in LAUNCH_SHELLS {
+                let short = format!("--settings {CLAUDE_SETTINGS} fix-bug");
+                let sentence =
+                    format!("--settings {CLAUDE_SETTINGS} Explain the remote-control failure");
+                assert_in_shell(
+                    shell,
+                    "ordinary prompts keep status hooks",
+                    &signals_on(),
+                    "claude fix-bug\nclaude 'Explain the remote-control failure'",
+                    &[short.as_str(), sentence.as_str()],
+                );
+            }
+        }
+
         fn an_explicit_user_flag_suppresses_injection(shell: &str) {
             assert_in_shell(
                 shell,
