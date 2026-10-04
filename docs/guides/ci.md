@@ -103,3 +103,14 @@ workspace test harnesses. Non-workspace dependencies retain the inherited
 optimization level 1. Test selection, retries, hang detection and the job
 budget stay the same. This does not change release builds. The next CI run
 must measure the compile-time benefit and check for runtime regressions.
+
+## Release notes size
+
+The nightly `update-notes` job groups commits since the latest stable tag.
+Before publication, `scripts/cap-release-notes.py` limits the notes to 120000
+UTF-8 bytes, below GitHub's 125000-character body limit. Oversized notes end at
+a complete line and include a link to the full comparison against `main`.
+Short notes keep their original contents.
+
+The version-tag workflow uses the matching `CHANGELOG.md` section and a download
+legend. It does not use the nightly commit-history notes step.

@@ -319,6 +319,8 @@ jobs:
             printf '### Other\n%s\n\n' "$OTHER" >> "$NOTES"
           fi
 
+          python3 scripts/cap-release-notes.py "$NOTES" \
+            "https://github.com/$GITHUB_REPOSITORY/compare/$LAST_STABLE...main"
           gh release edit nightly --repo "$GITHUB_REPOSITORY" --notes-file "$NOTES"
 
       - name: Create versioned nightly release
