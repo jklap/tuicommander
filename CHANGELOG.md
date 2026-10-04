@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore the Windows process environment API dependency in `tuic-core` after the workspace split.
+
 ## [1.8.0] - 2026-10-04
 
 - **Private secret forms** — Agents request only named sensitive fields and run user-approved argv commands with values in the child environment. Values remain in memory, output is masked, and a one-time capability supports browser or phone entry on the existing server. TUIC inspection tools are suspended while entry is open.
