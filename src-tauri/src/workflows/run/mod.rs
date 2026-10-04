@@ -66,7 +66,14 @@ mod tests {
             argv: vec!["git".into(), "rev-parse".into(), "HEAD".into()],
             timeout_secs: 10,
         };
-        let receipt = execute_pinned_check(&check, repo.path()).expect("check");
+        let receipt = super::check::execute_run_check(
+            &check,
+            repo.path(),
+            repo.path(),
+            "receipt-test",
+            false,
+        )
+        .expect("check");
         assert_eq!(receipt.exit_code, 0);
         assert_eq!(receipt.argv, check.argv);
         assert_eq!(receipt.commit.len(), 40);
@@ -77,16 +84,28 @@ mod tests {
             timeout_secs: 10,
         };
         assert_ne!(
-            execute_pinned_check(&failed, repo.path())
-                .expect("failed check receipt")
-                .exit_code,
+            super::check::execute_run_check(
+                &failed,
+                repo.path(),
+                repo.path(),
+                "receipt-test",
+                false
+            )
+            .expect("failed check receipt")
+            .exit_code,
             0
         );
         std::fs::write(repo.path().join("file.txt"), "changed\n").expect("edit");
         assert!(
-            execute_pinned_check(&check, repo.path())
-                .expect_err("dirty worktree")
-                .contains("clean")
+            super::check::execute_run_check(
+                &check,
+                repo.path(),
+                repo.path(),
+                "receipt-test",
+                false
+            )
+            .expect_err("dirty worktree")
+            .contains("clean")
         );
     }
 
@@ -174,7 +193,14 @@ mod tests {
                 .contains("cancelled")
             );
         } else {
-            let receipt = execute_pinned_check(&check, repo.path()).expect("timed out receipt");
+            let receipt = super::check::execute_run_check(
+                &check,
+                repo.path(),
+                repo.path(),
+                "receipt-test",
+                false,
+            )
+            .expect("timed out receipt");
             assert_eq!(receipt.exit_code, -1);
         }
         let worker: libc::pid_t = std::fs::read_to_string(&pid_file)
