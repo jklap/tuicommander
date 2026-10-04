@@ -402,7 +402,7 @@ socket. A `gap` frame is terminal — recovery is a fresh connection and
 
 Turn frames never ride `/events`. What does is one low-frequency
 **`acp-notice`** per connection — `ready`, `settled`, `interaction_pending`,
-`interaction_settled` — naming the connection, generation and sequence, plus
+`interaction_settled`, `card` — naming the connection, generation and sequence, plus
 the session and request id when it has them. It is a wake signal: react to it
 by reading the snapshot, the interactions list, or the stream from the sequence
 it names.

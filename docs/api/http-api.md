@@ -2676,7 +2676,7 @@ Recovery is a fresh connection and `session/load`.
 This is deliberately not on `/events`: one turn emits more frames per second
 than the 256-entry SSE broadcast can carry without lagging every other
 subscriber. `/events` carries only the low-frequency `acp-notice` wake signal
-(`ready`, `settled`, `interaction_pending`, `interaction_settled`), whose
+(`ready`, `settled`, `interaction_pending`, `interaction_settled`, `card`), whose
 payload names the connection, generation, sequence and — when it has one — the
 session and request it is about.
 
