@@ -166,7 +166,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
-    use crate::test_support::{fail_with_stderr_script, fake_ssh_script};
+    use crate::test_support::{fail_with_stderr_script, fake_ssh_script, system32_exe};
     use crate::tunnels::classifier::ExitReason;
     use crate::tunnels::profile::TunnelProfile;
 
@@ -194,6 +194,7 @@ mod tests {
     fn remove_log(binary: &Path) {
         let _ = std::fs::remove_file(format!("{}.log", binary.display()));
         let _ = std::fs::remove_file(format!("{}.stdin", binary.display()));
+        let _ = std::fs::remove_file(format!("{}.args", binary.display()));
     }
 
     fn scripted_ssh(name: &str, remote_hash: &str, launch_ok: bool) -> PathBuf {
@@ -206,12 +207,13 @@ mod tests {
             "printf '%s\\n' \"$*\" >> \"$0.log\"\ncase \"$*\" in\n  *\"uname -sm\"*) printf 'Linux x86_64\\n'; exit 0;;\n  *\"sha256sum\"*) printf '{remote_hash}  tuic-remote\\n'; exit 0;;\n  *\"read -r T\"*) {launch};;\n  *\"tail -n 5\"*) printf 'line1\\nline2\\nline3\\nline4\\nAddress already in use\\n'; exit 0;;\nesac\nexit 0"
         );
         let windows_launch = if launch_ok {
-            "set /p token=\r\necho(!token!>\"%~f0.stdin\"\r\nexit /b 0"
+            "set /p token=\r\n<nul set /p \"=!token!\">\"%~f0.stdin\"\r\nexit /b 0"
         } else {
             "exit /b 1"
         };
+        let findstr = system32_exe("findstr.exe");
         let windows = format!(
-            "setlocal EnableDelayedExpansion\r\nset \"last=\"\r\n:args\r\nif \"%~1\"==\"\" goto args_done\r\nset \"last=%~1\"\r\nshift\r\ngoto args\r\n:args_done\r\necho(!last!>>\"%~f0.log\"\r\necho(!last!| findstr /C:\"uname -sm\" >nul\r\nif not errorlevel 1 (echo Linux x86_64& exit /b 0)\r\necho(!last!| findstr /C:\"sha256sum\" >nul\r\nif not errorlevel 1 (echo {remote_hash}  tuic-remote& exit /b 0)\r\necho(!last!| findstr /C:\"read -r T\" >nul\r\nif not errorlevel 1 ({windows_launch})\r\necho(!last!| findstr /C:\"tail -n 5\" >nul\r\nif not errorlevel 1 (echo line1& echo line2& echo line3& echo line4& echo Address already in use& exit /b 0)\r\nexit /b 0"
+            "setlocal EnableDelayedExpansion\r\nset \"last=\"\r\n:args\r\nif \"%~1\"==\"\" goto args_done\r\nset \"last=%~1\"\r\nshift\r\ngoto args\r\n:args_done\r\necho(!last!>>\"%~f0.log\"\r\necho(!last!>\"%~f0.args\"\r\n{findstr} /C:\"uname -sm\" \"%~f0.args\" >nul\r\nif not errorlevel 1 (echo Linux x86_64& exit /b 0)\r\n{findstr} /C:\"sha256sum\" \"%~f0.args\" >nul\r\nif not errorlevel 1 (echo {remote_hash}  tuic-remote& exit /b 0)\r\n{findstr} /C:\"read -r T\" \"%~f0.args\" >nul\r\nif not errorlevel 1 ({windows_launch})\r\n{findstr} /C:\"tail -n 5\" \"%~f0.args\" >nul\r\nif not errorlevel 1 (echo line1& echo line2& echo line3& echo line4& echo Address already in use& exit /b 0)\r\nexit /b 0"
         );
         fake_ssh_script(name, &posix, &windows)
     }
