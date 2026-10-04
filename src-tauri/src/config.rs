@@ -3986,7 +3986,17 @@ pub(crate) fn save_keybindings(
 pub(crate) fn load_agents_config() -> AgentsConfig {
     let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
     match file.update_with_strict(|config| {
+        // Older typed agents.json writers discard unknown fields. Keep the
+        // durable migration bit outside their document, under the existing lock.
+        let stamp = config_dir().join("codex-bypass-migrated");
+        if stamp.try_exists().map_err(|error| error.to_string())? {
+            let settings = config.agents.entry("codex".into()).or_default();
+            let changed = !settings.codex_bypass_migrated;
+            settings.codex_bypass_migrated = true;
+            return Ok((config.clone(), changed));
+        }
         let changed = migrate_codex_bypass(config);
+        persist_atomic(&stamp, b"1")?;
         Ok((config.clone(), changed))
     }) {
         Ok(config) => config,
@@ -9058,11 +9068,19 @@ mod tests {
             serde_json::to_value(&defaults.repo_defaults).unwrap(),
             serde_json::to_value(RepoDefaultsConfig::default()).unwrap()
         );
-        let mut agents = AgentsConfig::default();
-        migrate_codex_bypass(&mut agents);
+        let mut expected = serde_json::to_value(AgentsConfig::default()).unwrap();
+        expected["agents"]["codex"] = serde_json::to_value(AgentSettings::default()).unwrap();
+        expected["agents"]["codex"]["codex_bypass_migrated"] = serde_json::json!(true);
+        expected["agents"]["codex"]["run_configs"] = serde_json::json!([{
+            "name": "Codex Default",
+            "command": "codex",
+            "args": ["--dangerously-bypass-approvals-and-sandbox"],
+            "env": {},
+            "is_default": true
+        }]);
         assert_eq!(
             serde_json::to_value(&defaults.agents).unwrap(),
-            serde_json::to_value(agents).unwrap(),
+            expected,
             "the settings baseline includes the same persisted Codex launch migration"
         );
         assert_eq!(

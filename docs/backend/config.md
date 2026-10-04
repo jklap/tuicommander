@@ -847,8 +847,10 @@ Loading `agents.json` performs a locked, one-time Codex migration. A missing
 Codex configuration gains an explicit default; an existing direct Codex default
 (or the first configuration if none is marked default) gains
 `--dangerously-bypass-approvals-and-sandbox`. Other configurations and wrapper
-arguments are preserved. The persisted `codex_bypass_migrated` marker prevents
-later loads from restoring a flag the user removed. MCP launch composition
+arguments are preserved. The `codex-bypass-migrated` stamp in the same config
+directory prevents later loads from restoring a flag the user removed, even
+after an older backend rewrites `agents.json` and drops unknown fields. The
+`codex_bypass_migrated` field remains a serialization-compatible mirror. MCP launch composition
 does not add that argument; the configuration owns the choice.
 
 ```rust

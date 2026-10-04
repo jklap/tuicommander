@@ -4564,7 +4564,7 @@ fn handle_agent_with_parent_cwd(
                     // or positional append semantics. In particular, wrapper and
                     // subcommand configs must not be rewritten into PTY delivery.
                     let agent_type = effective_agent_type.as_deref().unwrap_or_default();
-                    if rc.default_config {
+                    if rc.default_config && is_direct_codex_executable(&binary_path) {
                         let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
                             agent_type,
                             args: rc_args,
@@ -4582,7 +4582,6 @@ fn handle_agent_with_parent_cwd(
                     } else {
                         let final_args = match compose_mcp_run_config_args(
                             agent_type,
-                            &binary_path,
                             rc_args,
                             &effective_prompt,
                             effective_model,
@@ -8634,7 +8633,14 @@ fn finalize_explicit_spawn_args(
     if explicit.iter().any(|arg| arg.contains("{prompt}")) {
         return (substitute_prompt_in_args(explicit, prompt), None);
     }
-    if crate::agent::prompt_prefill_only(agent_type) {
+    if crate::agent::prompt_prefill_only(agent_type)
+        && !(agent_type == "codex"
+            && (explicit.first().is_some_and(|arg| !arg.starts_with('-'))
+                || explicit
+                    .iter()
+                    .take_while(|arg| arg.as_str() != "--")
+                    .any(|arg| matches!(arg.as_str(), "exec" | "e" | "review"))))
+    {
         return (explicit.to_vec(), Some(prompt.to_string()));
     }
     (substitute_prompt_in_args(explicit, prompt), None)
@@ -8752,7 +8758,6 @@ fn compose_mcp_spawn_args(
 
 fn compose_mcp_run_config_args(
     agent_type: &str,
-    _binary_path: &str,
     args: &[String],
     prompt: &str,
     model: Option<&str>,
@@ -24683,33 +24688,61 @@ mod tests {
         );
     }
 
-    #[test]
-    fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypass() {
-        // Catches: literal MCP "codex" ignoring the menu default or secretly
-        // restoring bypass; also catches parking its initial task in a prefill.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypass() {
+        // Catches: public spawn discards Settings args, restores bypass, or loses the task.
+        use std::os::unix::fs::PermissionsExt;
         for args in [vec!["--dangerously-bypass-approvals-and-sandbox"], vec![]] {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let output = root.path().join("argv");
+            let binary = root.path().join("codex");
+            std::fs::write(
+                &binary,
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let _config = crate::config::set_config_dir_override(root.path().join("config"));
             let cfg: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
-                "agents": {"codex": {"run_configs": [
-                    {"name": "Custom", "command": "codex", "args": ["--search"]},
-                    {"name": "Default", "command": "codex", "args": args, "is_default": true}
-                ]}}
+                "agents": {"codex": {
+                    "codex_bypass_migrated": true,
+                    "prevent_alt_screen": false, "skip_trust_dialog": false,
+                    "native_status_signals": false,
+                    "run_configs": [
+                        {"name": "Custom", "command": binary, "args": ["--search"]},
+                        {"name": "Default", "command": binary, "args": args, "is_default": true,
+                         "env": {"ARGV_OUTPUT": output}}
+                    ]
+                }}
             }))
             .unwrap();
-            let resolved = resolve_run_config("CODEX", &cfg);
-            assert!(resolved.default_config);
-            assert_eq!(resolved.command.as_deref(), Some("codex"));
-            let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
-                agent_type: &resolved.agent_type,
-                args: resolved.args.as_ref().unwrap(),
-                prompt: "perform the task",
-                model: None,
-                print_mode: false,
-                output_format: None,
-                default_template: false,
-            })
-            .unwrap();
-            assert_eq!(argv, args);
-            assert_eq!(deferred.as_deref(), Some("perform the task"));
+            crate::config::save_agents_config(crate::config::AgentsConfig::default(), cfg).unwrap();
+            let state = test_state();
+            let spawned = handle_agent(
+                &state,
+                "127.0.0.1:1".parse().unwrap(),
+                &serde_json::json!({"action": "spawn", "agent_type": "CODEX",
+                                   "prompt": "perform the task", "cwd": root.path()}),
+                None,
+            );
+            assert!(spawned.get("error").is_none(), "{spawned}");
+            let session = spawned["session_id"].as_str().unwrap();
+            assert_eq!(
+                state
+                    .pending_injections
+                    .get(session)
+                    .unwrap()
+                    .front()
+                    .unwrap()
+                    .text(),
+                "perform the task"
+            );
+            let actual =
+                wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+            let mut expected = vec!["-c", "check_for_update_on_startup=false"];
+            expected.extend(args);
+            assert_eq!(actual, expected.join("\n") + "\n");
         }
     }
 
@@ -25075,8 +25108,7 @@ mod tests {
     fn direct_codex_composition_does_not_restore_removed_bypass() {
         let args = vec!["{prompt}".to_string()];
         let result =
-            compose_mcp_run_config_args("codex", "codex", &args, "task", None, false, None)
-                .unwrap();
+            compose_mcp_run_config_args("codex", &args, "task", None, false, None).unwrap();
         assert_eq!(result, vec!["task"]);
     }
 
@@ -25088,8 +25120,7 @@ mod tests {
             "task text".to_string(),
         ];
         let result =
-            compose_mcp_run_config_args("codex", "codex", &args, "task", None, false, None)
-                .unwrap();
+            compose_mcp_run_config_args("codex", &args, "task", None, false, None).unwrap();
         assert_eq!(result, vec!["--", CODEX_BYPASS_ARG, "task text", "task"]);
     }
 
@@ -25111,16 +25142,9 @@ mod tests {
             "--search".to_string(),
         ];
         let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
-            "codex",
-            &args,
-            "perform the task",
-            None,
-            false,
-            None,
-        )
-        .unwrap();
+        let result =
+            compose_mcp_run_config_args(&agent_type, &args, "perform the task", None, false, None)
+                .unwrap();
 
         assert_eq!(
             result,
@@ -25133,16 +25157,9 @@ mod tests {
     fn named_codex_run_config_removed_bypass_stays_removed() {
         let args = vec!["--search".to_string()];
         let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
-            "codex",
-            &args,
-            "perform the task",
-            None,
-            false,
-            None,
-        )
-        .unwrap();
+        let result =
+            compose_mcp_run_config_args(&agent_type, &args, "perform the task", None, false, None)
+                .unwrap();
 
         assert_eq!(result, vec!["--search", "perform the task"]);
     }
@@ -25152,7 +25169,6 @@ mod tests {
         let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
         let result = compose_mcp_run_config_args(
             &agent_type,
-            "codex",
             &["exec".to_string()],
             "perform the task",
             None,
@@ -25169,7 +25185,6 @@ mod tests {
         let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
         let result = compose_mcp_run_config_args(
             &agent_type,
-            "codex",
             &["exec".to_string(), "{prompt}".to_string()],
             "perform the task",
             None,
@@ -25186,16 +25201,9 @@ mod tests {
         let args = vec!["launch-codex".to_string()];
         let command = "/opt/company/bin/agent-wrapper";
         let agent_type = resolve_spawn_agent_type(command, Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
-            command,
-            &args,
-            "perform the task",
-            None,
-            false,
-            None,
-        )
-        .unwrap();
+        let result =
+            compose_mcp_run_config_args(&agent_type, &args, "perform the task", None, false, None)
+                .unwrap();
 
         assert_eq!(result, vec!["launch-codex", "perform the task"]);
         assert!(codex_wrapper_launch_warning(Some(agent_type.as_str()), command).is_some());
