@@ -369,3 +369,67 @@ async fn outbound_permanent_errors_latch_and_rate_limits_do_not_retry_early() {
         assert_eq!(server.requests().len(), 1);
     }
 }
+
+// Catches: begin/Stop read the raw cached agent_state (unset in production)
+// instead of the authoritative snapshot derived from foreground/shell state.
+#[cfg(unix)]
+#[tokio::test]
+async fn begin_uses_derived_agent_lifecycle_and_retires_when_turn_completes() {
+    use crate::telegram::tool::Input;
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![(StatusCode::OK, json!({"ok":true,"result":true}))]).await;
+    let mut runtime = runtime(paths, server.address).await;
+    crate::state::tests_support::insert_dummy_session(&runtime.state, PEER);
+    crate::test_support::agent_session(&runtime.state, PEER, crate::pty::SHELL_BUSY);
+    runtime
+        .track(crate::telegram::mail::PendingMail {
+            id: "request".into(),
+            recipient: PEER.into(),
+            content: json!({"chat_id":"1111111"}).to_string(),
+        })
+        .unwrap();
+    let begun = runtime
+        .tool(
+            PEER,
+            Input::Begin {
+                request_id: "request".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(begun["draft_id"].as_i64().unwrap() > 0);
+    runtime
+        .tool(
+            PEER,
+            Input::Activity {
+                request_id: "request".into(),
+                text: "checking".into(),
+            },
+        )
+        .await
+        .unwrap();
+    // A completed turn is derived from the real completion marker seam.
+    runtime
+        .state
+        .session_maps
+        .session_states
+        .get_mut(PEER)
+        .unwrap()
+        .suggested_actions = Some(vec![]);
+    runtime.tick().await;
+    assert!(
+        runtime
+            .tool(
+                PEER,
+                Input::Finish {
+                    request_id: "request".into(),
+                    text: "too late".into()
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(server.requests().len(), 1);
+    let (_, session) = runtime.state.session_maps.sessions.remove(PEER).unwrap();
+    let _ = session.lock()._child.kill();
+}
