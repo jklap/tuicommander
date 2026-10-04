@@ -84,6 +84,33 @@ pub(crate) async fn update_and_restart(
     perform_update_and_restart(state, id, confirmed_sessions, expected_sha256).await
 }
 
+/// POST the binary to the daemon. The token stays in the query because the
+/// daemon being updated may predate cookie auth on this route; the error is
+/// stripped of the URL so the token never reaches the UI.
+async fn send_binary_upload(
+    client: &reqwest::Client,
+    base_url: &str,
+    token: &str,
+    build: &BuildIdentity,
+    confirmed_sessions: usize,
+    body: reqwest::Body,
+) -> Result<reqwest::Response, String> {
+    tokio::time::timeout(
+        UPLOAD_TIMEOUT,
+        client
+            .post(format!("{}/remote/update", base_url.trim_end_matches('/')))
+            .query(&[("token", token)])
+            .header("x-tuic-target", &build.target)
+            .header("x-tuic-sha256", &build.sha256)
+            .header("x-tuic-confirmed-sessions", confirmed_sessions)
+            .body(body)
+            .send(),
+    )
+    .await
+    .map_err(|_| "Remote binary upload timed out".to_string())?
+    .map_err(|e| format!("Remote binary upload failed: {}", e.without_url()))
+}
+
 pub(crate) async fn perform_update_and_restart(
     state: &Arc<crate::AppState>,
     id: &str,
@@ -132,20 +159,15 @@ pub(crate) async fn perform_update_and_restart(
                     )))
                 }
             });
-            let response = tokio::time::timeout(
-                UPLOAD_TIMEOUT,
-                client
-                    .post(format!("{}/remote/update", base_url.trim_end_matches('/')))
-                    .query(&[("token", token.as_str())])
-                    .header("x-tuic-target", &preview.desktop_build.target)
-                    .header("x-tuic-sha256", &preview.desktop_build.sha256)
-                    .header("x-tuic-confirmed-sessions", confirmed_sessions)
-                    .body(reqwest::Body::wrap_stream(stream))
-                    .send(),
+            let response = send_binary_upload(
+                &client,
+                &base_url,
+                &token,
+                &preview.desktop_build,
+                confirmed_sessions,
+                reqwest::Body::wrap_stream(stream),
             )
-            .await
-            .map_err(|_| "Remote binary upload timed out".to_string())?
-            .map_err(|e| format!("Remote binary upload failed: {e}"))?;
+            .await?;
             if !response.status().is_success() {
                 let status = response.status();
                 let detail = tokio::time::timeout(UPLOAD_TIMEOUT, response.text())
@@ -481,6 +503,33 @@ fn header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, (StatusCode
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: the upload connect error carrying the request URL, and with it the
+    // session token, into the message the UI shows.
+    #[tokio::test]
+    async fn upload_connect_failure_never_reports_the_session_token() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let build = BuildIdentity {
+            version: "1.7.7".to_string(),
+            target: "t".to_string(),
+            sha256: "a".repeat(64),
+        };
+        let error = send_binary_upload(
+            &reqwest::Client::new(),
+            &format!("http://127.0.0.1:{port}"),
+            "super-secret-token",
+            &build,
+            0,
+            reqwest::Body::from("x"),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.starts_with("Remote binary upload failed"), "{error}");
+        assert!(!error.contains("super-secret-token"), "{error}");
+    }
 
     #[tokio::test]
     async fn direct_update_waits_until_the_new_build_answers_health() {
