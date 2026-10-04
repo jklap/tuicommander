@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Background completion queue retries reuse a stable key, preventing duplicate wakes after a lost reply; exhausted ambiguous replies remain uncertain even when mail fallback fails.
 - Retire Telegram opt-in on observed agent exit before a replacement in the same terminal can inherit it.
 - Keep CLI and MCP secret requests connected while users enter values or approve commands; add safe native form creation diagnostics.
 - Launch macOS `make dev` from a stable executable copy outside Cargo/mbx targets so target cleanup cannot orphan the running app's firewall identity.

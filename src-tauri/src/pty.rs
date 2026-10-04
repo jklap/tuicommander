@@ -8040,6 +8040,7 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
         retire_peer_identity(state, &orphaned);
     }
     state.pending_injections.remove(session_id);
+    state.recent_queue_keys.remove(session_id);
     state.pending_initial_prompts.remove(session_id);
     state.managed_trust_dialogs.remove(session_id);
     state.active_agent_waiters.remove(session_id);
@@ -10309,6 +10310,8 @@ pub(crate) fn remove_queued_command(state: &AppState, session_id: &str, id: u64)
 /// What the idle gate did with a user-composed command.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct EnqueuedCommand {
+    /// Accepted now or recognized as an earlier keyed acceptance; not a PTY receipt.
+    pub accepted: bool,
     /// The agent was already idle, so the text was typed and submitted at once.
     pub typed: bool,
     /// Commands still waiting, this one included when `typed` is false.
@@ -10326,12 +10329,19 @@ pub(crate) struct EnqueuedCommand {
 /// typed entry and leaves the session BUSY, so the shared queue drains one item
 /// per idle transition and stays FIFO across both producers.
 ///
-/// Agent sessions only (see `session_is_agent`).
+/// Agent sessions only (see `session_is_agent`). Keyed retries are recognized
+/// atomically with append; keys remain recent after the FIFO drains.
 pub(crate) fn enqueue_user_command(
     state: &AppState,
     session_id: &str,
     text: &str,
+    idempotency_key: Option<&str>,
 ) -> Result<EnqueuedCommand, String> {
+    if let Some(key) = idempotency_key
+        && (key.is_empty() || key.len() > 128)
+    {
+        return Err("Invalid idempotency key".into());
+    }
     if text.trim().is_empty() {
         return Err("Command text is empty".to_string());
     }
@@ -10341,14 +10351,45 @@ pub(crate) fn enqueue_user_command(
     if !session_is_agent(state, session_id) {
         return Err("Session is not running an agent".to_string());
     }
-    let (_, _typed, queued) = append_and_flush(
-        state,
-        session_id,
-        crate::state::PendingInjection::user_command(text),
-    );
+    let queued = if let Some(key) = idempotency_key {
+        // Hold this per-session entry only through append, never through the
+        // blocking flush. Concurrent retries cannot both reserve the same key.
+        let mut keys = state
+            .recent_queue_keys
+            .entry(session_id.to_string())
+            .or_default();
+        if keys.iter().any(|recent| recent == key) {
+            return Ok(EnqueuedCommand {
+                accepted: true,
+                typed: false,
+                queued: queued_command_count(state, session_id),
+            });
+        }
+        state
+            .pending_injections
+            .entry(session_id.to_string())
+            .or_default()
+            .push_back(crate::state::PendingInjection::user_command(text));
+        // Bounded in-memory retry window: 128 completions per live PTY.
+        if keys.len() == 128 {
+            keys.pop_front();
+        }
+        keys.push_back(key.to_string());
+        drop(keys);
+        flush_pending_injections_blocking(state, session_id);
+        queued_command_count(state, session_id)
+    } else {
+        let (_, _, queued) = append_and_flush(
+            state,
+            session_id,
+            crate::state::PendingInjection::user_command(text),
+        );
+        queued
+    };
     // An empty queue after the flush means our command was the only one waiting
     // and reached the composer; any remaining entry means it is still parked.
     Ok(EnqueuedCommand {
+        accepted: true,
         typed: queued == 0,
         queued,
     })
@@ -10357,9 +10398,9 @@ pub(crate) fn enqueue_user_command(
 /// Append one entry and run the idle gate over the queue.
 ///
 /// Returns the entry's id, whether that entry is the one the flush typed, and
-/// how many entries remain. Shared by every enqueue path so the append-then-flush
-/// order — which is what keeps the FIFO honest across producers — has one
-/// spelling. `typed` is read back per entry rather than from an emptied queue:
+/// how many entries remain. Unkeyed enqueue uses this path; keyed enqueue
+/// reserves acceptance with append before invoking the same flush.
+/// `typed` is read back per entry rather than from an emptied queue:
 /// a command behind a peer notice is still parked even though the flush
 /// delivered something.
 fn append_and_flush(

@@ -495,7 +495,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: `/sessions/${args.sessionId}/queue`,
-			body: { text: args.text },
+			body: { text: args.text, ...(args.idempotencyKey != null ? { idempotencyKey: args.idempotencyKey } : {}) },
 		}),
 	},
 	clear_queued_agent_commands: {
