@@ -71,3 +71,19 @@ compiler that `release.yml` does not use.
 CI runs `cargo clippy -- -D warnings`, which lints the default targets. The
 `--all-targets` form in the bump checklist above is stricter — it also lints test
 and bench code — so a clean local `--all-targets` run implies CI's narrower one.
+
+## Headless workspace scope
+
+The remote job checks `tuic-remote` with `--no-default-features`. Dictation is
+already an optional dependency behind `desktop`; the headless daemon does not
+use WebRTC. Its workspace test command also excludes `tuic-dictation`, because
+`--workspace` selects that desktop-only member independently of feature flags.
+The desktop workspace jobs still compile and test dictation with Meson and Ninja.
+
+## Nextest setup scope check
+
+`make test-shell` runs the frontend job's tool-independent shell tests. The
+Nextest fixture setup scope check is named `scripts/check-nextest-fixture-scope.sh`
+and runs explicitly in the Linux Rust job after workspace tests. That job
+installs Nextest and already has the compiled test binaries. The check retains
+its positive fixture-consumer and negative non-consumer assertions.
