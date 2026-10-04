@@ -176,13 +176,6 @@ pub(super) fn execute_run_check(
     )
 }
 
-/// Run a published check directly in a clean worktree and bind the result to
-/// the exact commit and tree observed before and after it. A changing tree
-/// yields no usable receipt, even when the command exits successfully.
-pub fn execute_pinned_check(check: &CheckDefinition, path: &Path) -> Result<CheckReceipt, String> {
-    execute_check_owned(check, path, None, false)
-}
-
 fn execute_check_owned(
     check: &CheckDefinition,
     path: &Path,
