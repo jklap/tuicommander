@@ -2484,6 +2484,34 @@ mod tests {
         }
     }
 
+    /// Catches: retrying an earlier job after a later acceptance duplicates the
+    /// first job, or text-based deduplication silently drops the second job.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn interleaved_bg_job_retries_preserve_two_identical_commands() {
+        let state = super::super::tests::test_state();
+        let sid = "interleaved-bg-retries";
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_BUSY);
+        let bytes = crate::test_support::insert_recording_session(&state, sid);
+        for key in ["job-a", "job-b", "job-a", "job-b"] {
+            let request = serde_json::from_value(serde_json::json!({
+                "text": "BG DONE", "idempotencyKey": key
+            }))
+            .unwrap();
+            let response = enqueue_command(State(state.clone()), Path(sid.into()), Json(request))
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let queue = crate::pty::list_queued_commands(&state, sid);
+        assert_eq!(queue.len(), 2, "two jobs survive; neither retry appends");
+        assert!(queue.iter().all(|command| command.text == "BG DONE"));
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "busy composer is untouched"
+        );
+    }
+
     /// Catches: a lost queue reply lets a retry append and submit the same wake again.
     #[cfg(unix)]
     #[tokio::test]
