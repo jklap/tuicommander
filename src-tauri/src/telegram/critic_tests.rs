@@ -131,14 +131,23 @@ async fn selected_button_uses_disabled_object_without_callback_data() {
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     state.config.write().disabled_native_tools.clear();
-    let registered = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
-        &state,
-        &json!({"action":"register","tuic_session":peer,"name":"critic-target"}),
-        Some("critic-target-mcp"),
-        None,
-    )
-    .await;
-    assert!(registered.get("error").is_none(), "{registered}");
+    for (sid, identity, name) in [
+        ("critic-target-mcp", peer, "critic-target"),
+        (
+            "critic-adapter",
+            "22222222-2222-4222-8222-222222222222",
+            "critic-adapter",
+        ),
+    ] {
+        let registered = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+            &state,
+            &json!({"action":"register","tuic_session":identity,"name":name}),
+            Some(sid),
+            None,
+        )
+        .await;
+        assert!(registered.get("error").is_none(), "{registered}");
+    }
     let mut runtime = super::super::runtime::Runtime::new(
         state,
         super::super::Config::load(&paths).unwrap().unwrap(),
