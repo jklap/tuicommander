@@ -731,7 +731,7 @@ mod tests {
     // Catches: validating only args[0] lets executable/config/output options reach Git.
     #[tokio::test]
     async fn run_git_http_rejects_option_injection_in_every_position() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
         for args in [
             vec!["rebase", "--exec", "touch x"],
@@ -759,7 +759,7 @@ mod tests {
     // Catches: a restrictive flag policy breaking GitPanel's local operations.
     #[tokio::test]
     async fn run_git_http_preserves_git_panel_operations() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
         for args in [
             vec!["init", "-b", "main"],
             vec![

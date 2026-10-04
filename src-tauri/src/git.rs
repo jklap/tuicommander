@@ -568,8 +568,7 @@ exit /b 1
 /// Git subcommands that can block on something off this machine, so every one
 /// of them runs under [`crate::git_cli::FETCH_TIMEOUT`].
 ///
-/// Audit of the HTTP allowlist (`ALLOWED_GIT_SUBCOMMANDS` in
-/// `mcp_http/git_routes.rs`), which is what a browser or remote client can
+/// Audit of the shared allowlist (`ALLOWED_GIT_SUBCOMMANDS` in this module), which is what a browser or remote client can
 /// reach: `fetch`, `pull` and `push` always contact a remote. `remote` does for
 /// `update` and `prune`, and is bounded whole because its local forms
 /// (`remote -v`, `remote add`) return in milliseconds, so a deadline can only
@@ -630,7 +629,7 @@ pub(crate) fn validate_git_command_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Run an arbitrary git command to completion, blocking the calling thread.
+/// Run an allowlisted UI git command to completion, blocking the calling thread.
 ///
 /// Shared by the Tauri command below and the `/repo/run-git` HTTP handler so the
 /// two transports cannot drift: same deadline, same askpass wiring, same result
@@ -702,7 +701,7 @@ pub(crate) fn run_git_command_blocking(
     }
 }
 
-/// Run an arbitrary git command in the background (no PTY, no terminal).
+/// Run an allowlisted UI git command in the background (no PTY, no terminal).
 /// Used by the sidebar Git Quick Actions (pull, push, fetch, stash).
 /// Async so network operations (pull/push/fetch) don't block the IPC thread.
 /// Sets SSH_ASKPASS so passphrase prompts show a native GUI dialog.

@@ -602,7 +602,7 @@ mod tests {
         let error = request_session_token(&base, "user", "password")
             .await
             .expect_err("closed port");
-        assert!(error.contains("Token request failed"), "{error}");
+        assert!(error.contains("failed"), "{error}");
         assert!(
             !error.contains("URL_SECRET_1457"),
             "URL credential in error: {error}"

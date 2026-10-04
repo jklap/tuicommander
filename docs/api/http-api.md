@@ -944,6 +944,10 @@ GET /repo/diff-stats/batch?path=/path/to/repo
 
 Returns `{ "diff_stats": { "/path": { "additions": N, "deletions": N }, ... }, "last_commit_ts": { "branch": N, ... }, "workspace_statuses": { "workspace-id": { "dirty_files": 24, "commit_status": "unmerged", "removal_safety": "requires_force" } } }`. Slow path — computes per-worktree diff stats, timestamps, and lifecycle verdicts. Lifecycle entries are keyed by workspace id, never branch name.
 
+### Background Git Actions
+
+`POST /repo/run-git` accepts `{path, args}` for GitPanel and sidebar operations. Unsupported subcommands or options return HTTP 400 before execution. The flag policy is shared with IPC; see [Git backend](../backend/git.md).
+
 ### Local Branches
 
 ```
@@ -2780,5 +2784,3 @@ reconnects after pressure evicted its history can deliver one duplicate.
 Disconnect retires that host's existing shadows synchronously, independently
 of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
 not unbounded or restart-persistent exactly-once delivery.
-
-`POST /repo/run-git` accepts `{path, args}` for GitPanel and sidebar operations. Unsupported subcommands or options return HTTP 400 before execution. The flag policy is shared with IPC; see [Git backend](../backend/git.md).
