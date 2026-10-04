@@ -41,6 +41,7 @@ pub(super) struct Outbound {
     pub api: BotApi,
     pub active: Option<Active>,
     next_send: Instant,
+    stopped: Option<Error>,
 }
 impl Outbound {
     pub fn new(paths: Paths, api: BotApi) -> Self {
@@ -49,10 +50,20 @@ impl Outbound {
             api,
             active: None,
             next_send: Instant::now(),
+            stopped: None,
         }
     }
 
     pub async fn call(&mut self, chat: i64, method: &str, body: Value) -> Result<Value, Error> {
+        if let Some(error) = self.stopped {
+            return Err(error);
+        }
+        // A long Telegram throttle must not hold the worker (and Stop) asleep.
+        if let Some(wait) = self.next_send.checked_duration_since(Instant::now())
+            && wait > Duration::from_secs(1)
+        {
+            return Err(Error::RateLimited(wait.as_secs().saturating_add(1)));
+        }
         tokio::time::sleep_until(self.next_send).await;
         // Revocation is checked immediately before every operation, after waiting.
         if !self.paths.allowlist()?.contains(&chat) {
@@ -62,6 +73,12 @@ impl Outbound {
         let result = self.api.request(method, body).await;
         if let Err(Error::RateLimited(seconds)) = result {
             self.next_send = Instant::now() + Duration::from_secs(seconds.clamp(1, 3600));
+        }
+        if let Err(error @ (Error::Unauthorized | Error::Conflict | Error::Rejected(403 | 404))) =
+            result
+        {
+            self.stopped = Some(error);
+            self.active = None;
         }
         result
     }
@@ -81,12 +98,15 @@ impl Outbound {
         let draft = (i64::from_be_bytes(bytes[..8].try_into().map_err(|_| Error::State)?)
             & i64::MAX)
             .max(1);
-        self.call(
+        let accepted = self.call(
             chat,
             "sendMessageDraft",
             json!({"chat_id":chat,"draft_id":draft,"text":"","can_stop":true,"keep_on_stop":false}),
         )
         .await?;
+        if accepted != Value::Bool(true) {
+            return Err(Error::Protocol);
+        }
         self.active = Some(Active {
             request,
             peer,
@@ -125,7 +145,9 @@ impl Outbound {
         }
         let chat = active.chat;
         let body = json!({"chat_id":chat,"draft_id":active.draft,"text":active.text,"can_stop":true,"keep_on_stop":false});
-        self.call(chat, "sendMessageDraft", body).await?;
+        if self.call(chat, "sendMessageDraft", body).await? != Value::Bool(true) {
+            return Err(Error::Protocol);
+        }
         if let Some(active) = &mut self.active {
             active.sent = Instant::now();
             active.dirty = false;

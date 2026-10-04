@@ -1,6 +1,6 @@
 # Telegram channel for TUICommander
 
-**Story:** 1438-79b4. **Date:** 2026-10-03. **Phase:** approved design; implementation authorized for offline slices 1–2 only, no deployment.
+**Story:** 1438-79b4. **Date:** 2026-10-03. **Phase:** offline L4 implementation authorized on 2026-10-04, no deployment.
 **Branch:** feat/1438-telegram-adapter. **Source baseline:** 140e8950deae7e4bb7a2f4498c7a23c95eacca21.
 
 ## Consumer contract
@@ -236,3 +236,20 @@ is the current live terminal of the configured peer, and only `done`/`blocked`.
 The authored text is sent unchanged, independently of an active phone request.
 Intent is activity, never a final reply. Event-bus lag is reported as degraded
 notification delivery; this slice does not add journal replay or dedup state.
+
+
+The current L4 tool exposes begin/activity/finish/send. Caller identity comes from
+TUIC MCP binding, not an agent argument. Only the configured peer is accepted.
+Begin requires a pending phone request and its live working/awaiting-input PTY.
+Idle/completed/replaced turns retire an unfinished draft; no final is inferred.
+With more than one allowlisted chat, send requires a decimal-string selector;
+notifications report ambiguity instead of broadcasting. Generic button data stays
+opaque, with a random short wire handle bound to chat/message and a one-hour
+in-memory lifetime. Only the first button choice on a message becomes native
+mail. Callback acknowledgement/edit can retry without re-mailing. The chosen
+button remains as a disabled label, preserving exact delivered message text.
+These buttons do not create publish receipts; receipt lookup and xkit publishing
+remain outside L4. Earlier proposed durable outbound state, idempotency keys and
+approval inputs in sections 3–6 are design follow-ups, not implemented features.
+Only the cursor file persists. A long 429 delay returns immediately to the worker
+rather than holding Stop asleep; callers see rate-limited/degraded delivery.

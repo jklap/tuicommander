@@ -148,3 +148,224 @@ async fn stale_epoch_stop_retires_without_writing() {
     assert!(!outbound.stop(&json!({"stopped_message_generation":{"chat":{"id":1111111,"type":"private"},"draft_id":draft}}), |_,_,_| false, |_| panic!("stale write")).unwrap());
     assert!(outbound.active.is_none());
 }
+
+async fn runtime(paths: Paths, address: std::net::SocketAddr) -> crate::telegram::runtime::Runtime {
+    use crate::mcp_http::mcp_transport::local_peer_call_with_message_id;
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    state.config.write().disabled_native_tools.clear();
+    for (sid, peer) in [
+        ("adapter-mcp", "22222222-2222-4222-8222-222222222222"),
+        ("target-mcp", PEER),
+    ] {
+        let result = local_peer_call_with_message_id(
+            &state,
+            &json!({"action":"register","tuic_session":peer,"name":sid}),
+            Some(sid),
+            None,
+        )
+        .await;
+        assert!(result.get("error").is_none(), "{result}");
+    }
+    let config = Config::load(&paths).unwrap().unwrap();
+    let mut runtime =
+        crate::telegram::runtime::Runtime::new(state, config, paths.clone(), "adapter-mcp".into())
+            .unwrap();
+    runtime.outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, address));
+    runtime
+}
+
+// Catches: opaque payload is used as wire callback data, a stranger or wrong
+// message selects it, or a second button mails a second decision.
+#[tokio::test]
+async fn buttons_route_one_opaque_choice_through_native_mail_and_retire_keyboard() {
+    use crate::telegram::tool::{Button, Input};
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![
+        (StatusCode::OK, json!({"ok":true,"result":{"message_id":7}})),
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+    ])
+    .await;
+    let mut runtime = runtime(paths, server.address).await;
+    let opaque = "opaque:".to_string() + &"x".repeat(100);
+    runtime
+        .tool(
+            PEER,
+            Input::Send {
+                chat_id: None,
+                text: " exact text ".into(),
+                buttons: vec![vec![
+                    Button {
+                        label: "Yes".into(),
+                        data: opaque.clone(),
+                    },
+                    Button {
+                        label: "No".into(),
+                        data: "no".into(),
+                    },
+                ]],
+            },
+        )
+        .await
+        .unwrap();
+    let requests = server.requests();
+    let wire = requests[0].1["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+        .as_str()
+        .unwrap();
+    let other = requests[0].1["reply_markup"]["inline_keyboard"][0][1]["callback_data"]
+        .as_str()
+        .unwrap();
+    assert!(wire.len() <= 64 && wire != opaque);
+    let query = |handle: &str, chat, msg, from| json!({"callback_query":{"id":"query","from":{"id":from},"message":{"message_id":msg,"date":1,"chat":{"id":chat,"type":"private"}},"data":handle}});
+    for value in [
+        query(wire, 2222222, 7, 2222222),
+        query(wire, 1111111, 8, 1111111),
+        query(wire, 1111111, 7, 2222222),
+    ] {
+        runtime.callback(&value).await.unwrap();
+    }
+    assert_eq!(server.requests().len(), 1);
+    runtime
+        .callback(&query(wire, 1111111, 7, 1111111))
+        .await
+        .unwrap();
+    runtime
+        .callback(&query(other, 1111111, 7, 1111111))
+        .await
+        .unwrap();
+    let inbox = crate::mcp_http::mcp_transport::local_peer_call_with_message_id(
+        &runtime.state,
+        &json!({"action":"inbox","since":0}),
+        Some("target-mcp"),
+        None,
+    )
+    .await;
+    assert_eq!(inbox["count"], 1, "{inbox}");
+    let body: Value =
+        serde_json::from_str(inbox["messages"][0]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(body["kind"], "callback");
+    assert_eq!(body["data"], opaque);
+    let requests = server.requests();
+    assert!(requests[1].0.ends_with("answerCallbackQuery"));
+    assert!(requests[2].0.ends_with("editMessageReplyMarkup"));
+    assert_eq!(
+        requests[2].1["reply_markup"]["inline_keyboard"][0][0]["disabled"],
+        true
+    );
+}
+
+// Catches: a foreign caller sends to the phone, an unknown request starts a
+// draft, or multiple allowlisted chats are broadcast/chosen implicitly.
+#[tokio::test]
+async fn tool_requires_bound_caller_pending_request_and_explicit_multiple_chat_selection() {
+    use crate::telegram::tool::Input;
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![]).await;
+    let mut runtime = runtime(paths.clone(), server.address).await;
+    assert!(
+        runtime
+            .tool(
+                "foreign",
+                Input::Send {
+                    chat_id: None,
+                    text: "hello".into(),
+                    buttons: vec![]
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        runtime
+            .tool(
+                PEER,
+                Input::Begin {
+                    request_id: "unknown".into()
+                }
+            )
+            .await
+            .is_err()
+    );
+    write_private(&paths.file("allowed_chat_ids"), "1111111\n2222222\n");
+    assert!(
+        runtime
+            .tool(
+                PEER,
+                Input::Send {
+                    chat_id: None,
+                    text: "hello".into(),
+                    buttons: vec![]
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        runtime
+            .tool(
+                PEER,
+                Input::Send {
+                    chat_id: Some("3333333".into()),
+                    text: "hello".into(),
+                    buttons: vec![]
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(server.requests().is_empty());
+}
+
+// Catches: partial or failed final delivery starts streaming again or permits
+// a blind resend that could duplicate a message accepted upstream.
+#[tokio::test]
+async fn failed_final_retires_draft_and_refuses_a_blind_retry() {
+    let (_dir, paths) = setup();
+    let server = FakeServer::start(vec![
+        (StatusCode::OK, json!({"ok":true,"result":true})),
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"ok":false,"error_code":500}),
+        ),
+    ])
+    .await;
+    let mut outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, server.address));
+    outbound
+        .begin("request".into(), PEER.into(), "pty".into(), 1, 1111111)
+        .await
+        .unwrap();
+    assert!(outbound.finish("request", "reply").await.is_err());
+    assert!(outbound.finish("request", "reply").await.is_err());
+    outbound.refresh().await.unwrap();
+    assert_eq!(server.requests().len(), 2);
+}
+
+// Catches: permanent credentials errors loop on later sends, or a 429 is
+// ignored and the next notification immediately retries upstream.
+#[tokio::test]
+async fn outbound_permanent_errors_latch_and_rate_limits_do_not_retry_early() {
+    for (status, envelope, expected) in [
+        (
+            StatusCode::UNAUTHORIZED,
+            json!({"ok":false,"error_code":401}),
+            Error::Unauthorized,
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({"ok":false,"error_code":429,"parameters":{"retry_after":60}}),
+            Error::RateLimited(60),
+        ),
+    ] {
+        let (_dir, paths) = setup();
+        let server = FakeServer::start(vec![(status, envelope)]).await;
+        let mut outbound = Outbound::new(paths.clone(), BotApi::loopback(paths, server.address));
+        assert_eq!(
+            outbound.send(1111111, "first", None).await.unwrap_err(),
+            expected
+        );
+        assert!(outbound.send(1111111, "second", None).await.is_err());
+        assert_eq!(server.requests().len(), 1);
+    }
+}
