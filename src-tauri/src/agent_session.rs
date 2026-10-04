@@ -1348,6 +1348,22 @@ mod tests {
         );
     }
 
+    /// Catches: Windows profile spaces surviving the slug and hiding Claude transcripts.
+    #[test]
+    fn claude_project_dir_windows_profile_spaces_match_claude_transcript_directory() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = claude_project_dir(
+            r"C:\Users\Boss Name\work".into(),
+            Some(dir.path().to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        // Recorded from Claude 2.1.286's project-path encoder, independently of TUIC.
+        assert_eq!(
+            PathBuf::from(path),
+            dir.path().join("projects/C--Users-Boss-Name-work")
+        );
+    }
+
     #[test]
     fn test_discover_claude_session_with_config_dir() {
         let dir = TempDir::new().unwrap();
