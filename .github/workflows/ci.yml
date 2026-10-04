@@ -218,6 +218,11 @@ jobs:
         run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --profile ci
 
 
+      # This check invokes nextest and compiled Rust tests. Keep it out of the
+      # frontend shell-test discovery, whose job installs neither prerequisite.
+      - name: Nextest fixture setup scope
+        run: bash scripts/with-test-tmp.sh bash scripts/check-nextest-fixture-scope.sh
+
       # nextest does not run doctests — run them separately so doc examples stay
       # covered. Linux-only: doctests are platform-independent logic.
       - name: Doctests
