@@ -106,6 +106,12 @@ decode chunked bodies before converting UTF-8.
 
 The `mcp_server_enabled` config flag controls whether the `/mcp` protocol route is active (MCP tool discovery and invocation), not whether the server itself starts. The HTTP API endpoints (sessions, git, config, etc.) are always available on the IPC listener.
 
+The daemon's `POST /remote/update` handler requires the current session token
+in a `tui-session` cookie or the legacy `?token=` query parameter. Basic Auth alone
+does not authorize executable replacement. `/fs/upload-copy` accepts both token
+forms through the shared middleware. This release retains the query form for
+older clients; client migration and query removal are scheduled for the next release.
+
 The local IPC listener is independent from the **Remote Access** TCP toggle. Turning remote access on or off only starts or stops the authenticated TCP listener; it does not disable the MCP socket or the local MCP route. Lifecycle logs state whether a transition affects TCP or the always-on IPC listener.
 
 For isolated desktop verification, `TUIC_PORT=<port>` overrides the configured TCP
