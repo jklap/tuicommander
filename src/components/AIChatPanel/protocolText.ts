@@ -16,6 +16,7 @@ const INTENT = new RegExp(`^[\\t ]*${BULLET}intent:[\\t ]+(.+)$`);
 const SUGGEST = new RegExp(`^[\\t ]*${BULLET}suggest:[\\t ]*\\[([^\\[\\]\\r\\n]*)\\][\\t ]*$`);
 const TRAILING_SUGGEST = /[\t ]+suggest:[\t ]*\[([^[\]\r\n]*)\][\t ]*$/;
 const TITLE = /^(.*?)\(([^)]+)\)\s*$/;
+const TITLE_WITH_REPLY = /^(.*?)\(([^)]+)\)(.+)$/;
 
 export function projectChatProtocolText(text: string): ChatProtocolText {
 	const body: string[] = [];
@@ -46,10 +47,11 @@ export function projectChatProtocolText(text: string): ChatProtocolText {
 		const intentMatch = INTENT.exec(line);
 		if (intentMatch) {
 			const raw = intentMatch[1].trim();
-			const titleMatch = TITLE.exec(raw);
+			const titleMatch = TITLE.exec(raw) ?? TITLE_WITH_REPLY.exec(raw);
 			const description = (titleMatch?.[1] ?? raw).trim();
 			if (description.length >= 3 && description !== "...") {
 				intent = { text: description, title: titleMatch?.[2].trim() || null };
+				if (titleMatch?.[3]?.trim()) body.push(titleMatch[3].trimStart());
 				continue;
 			}
 		}
