@@ -481,20 +481,26 @@ struct StoryActionRequest {
 
 async fn post_story_action(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    caller: Option<Extension<ConnectInfo<SocketAddr>>>,
     auth: Option<Extension<guards::Authenticated>>,
+    user_auth: Option<Extension<guards::UserAuthenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(input): Json<StoryActionRequest>,
 ) -> Response {
+    let addr = caller.map_or(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        |Extension(ConnectInfo(addr))| addr,
+    );
     if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     let result = tokio::task::spawn_blocking(move || {
-        crate::stories::story_action_for_http(
+        crate::stories::story_action_for_http_authenticated(
             &state,
             &q.path,
             input.action,
             input.session_id.as_deref(),
+            user_auth.is_some(),
         )
     })
     .await
@@ -508,11 +514,15 @@ async fn get_story_capabilities() -> Json<bool> {
 }
 
 async fn post_workflow_definition_action(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    caller: Option<Extension<ConnectInfo<SocketAddr>>>,
     auth: Option<Extension<guards::Authenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(action): Json<crate::workflows::WorkflowAction>,
 ) -> Response {
+    let addr = caller.map_or(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        |Extension(ConnectInfo(addr))| addr,
+    );
     if let Some(response) = progress_auth(&addr, auth.is_some()) {
         return response;
     }
@@ -525,11 +535,15 @@ async fn post_workflow_definition_action(
 }
 async fn post_workflow_run_action(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    caller: Option<Extension<ConnectInfo<SocketAddr>>>,
     auth: Option<Extension<guards::Authenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(action): Json<crate::workflows::RunAction>,
 ) -> Response {
+    let addr = caller.map_or(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        |Extension(ConnectInfo(addr))| addr,
+    );
     if let Some(response) = progress_auth(&addr, auth.is_some()) {
         return response;
     }
@@ -2183,6 +2197,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            auth::workflow_actor_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             remote_session_proxy::proxy_http,
         ))
         .layer(cors)
@@ -3641,7 +3659,7 @@ mod tests {
             .unwrap();
         let story = store
             .create_story(NewStory {
-                plan_id: plan.id,
+                plan_id: plan.id.clone(),
                 title: "Story".into(),
                 criteria: vec!["Done".into()],
                 priority: 1,
@@ -3651,7 +3669,9 @@ mod tests {
             .unwrap();
         let path = format!("/stories/action?path={}", project.path().display());
         let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-        let app = build_router(test_state(), false, true);
+        let state = test_state();
+        let token = state.session_token.read().clone();
+        let app = build_router(state, false, true);
         let response = app.clone().oneshot(mcp_post_from(&path, &serde_json::json!({
             "action": { "action": "transition", "story_id": story.id, "expected_revision": story.revision, "command": "start_manual" }
         }), local)).await.unwrap();
@@ -3667,7 +3687,7 @@ mod tests {
         let review = store
             .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
             .unwrap();
-        let response = app.oneshot(mcp_post_from(&path, &serde_json::json!({
+        let response = app.clone().oneshot(mcp_post_from(&path, &serde_json::json!({
             "action": { "action": "transition", "story_id": story.id, "expected_revision": review.revision, "command": "approve" }
         }), local)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -3684,6 +3704,101 @@ mod tests {
                 .actor,
             StoryTransitionActor::LocalApi
         );
+        let other = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Operator decision".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let body = serde_json::json!({"action": {
+            "action": "transition", "story_id": other.id,
+            "expected_revision": other.revision, "command": "block"
+        }});
+        let response = app
+            .clone()
+            .oneshot(mcp_post_from(&path, &body, local))
+            .await
+            .unwrap();
+        // Catches: administrative local actions being refused or attributed to Human.
+        assert_eq!(response.status(), StatusCode::OK);
+        let blocked = store.get_story(&other.id).unwrap();
+        assert_eq!(blocked.status, StoryStatus::Blocked);
+        assert_eq!(
+            store.transition_history(&other.id).unwrap()[0].actor,
+            StoryTransitionActor::LocalApi
+        );
+        let body = serde_json::json!({"action": {
+            "action": "transition", "story_id": other.id,
+            "expected_revision": blocked.revision, "command": "unblock"
+        }});
+        let response = app
+            .oneshot(mcp_post_from(
+                &format!("{path}&token={token}"),
+                &body,
+                local,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            store.get_story(&other.id).unwrap().status,
+            StoryStatus::Ready
+        );
+        let history = store.transition_history(&other.id).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].actor, StoryTransitionActor::Human);
+    }
+
+    #[tokio::test]
+    async fn workflow_actor_metadata_does_not_block_local_actions() {
+        // Catches: local requests failing actor authorization instead of normal missing-record validation.
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project");
+        let state = test_state();
+        let token = state.session_token.read().clone();
+        let app = build_router(state, false, true);
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        for (route, body) in [
+            (
+                "/workflows/definition/action",
+                serde_json::json!({
+                    "action": "publish", "id": "missing", "expected_revision": 1
+                }),
+            ),
+            (
+                "/workflows/run/action",
+                serde_json::json!({
+                    "action": "command", "run_id": "missing", "command_id": "decision",
+                    "expected_sequence": 1, "command": {"action": "resume"}
+                }),
+            ),
+        ] {
+            let path = format!("{route}?path={}", project.path().display());
+            let response = app
+                .clone()
+                .oneshot(mcp_post_from(&path, &body, local))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains("not found"));
+            let path = format!("{path}&token={token}");
+            let response = app
+                .clone()
+                .oneshot(mcp_post_from(&path, &body, local))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains("not found"));
+        }
     }
 
     /// `edd69ea7` moved the Progress routes into `shared_routes()` so a
@@ -9930,5 +10045,100 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(rx.await.unwrap(), Err("refused".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod workflow_authority_critic_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    /// Catches: accepted loopback token actions being refused or recorded as LocalApi instead of Human.
+    #[tokio::test]
+    async fn loopback_token_exchange_records_human_provenance_for_successful_action() {
+        let config =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("isolated config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("isolated project");
+        let store = crate::stories::StoryStore::open().unwrap();
+        let plan = store
+            .create_plan(crate::stories::NewPlan {
+                project: project.path().to_string_lossy().into_owned(),
+                title: "Operator plan".into(),
+                source: "operator.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(crate::stories::NewStory {
+                plan_id: plan.id,
+                title: "Operator decision".into(),
+                criteria: vec!["Approved by the operator".into()],
+                priority: 1,
+                origin: crate::stories::StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let app = build_router(super::tests::test_state(), false, true);
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let mut request = Request::get("/api/auth/session-token")
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(local));
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let token = value["token"].as_str().expect("returned token");
+        for (index, (with_address, with_token, command)) in [
+            (true, true, "block"),
+            (false, false, "unblock"),
+            (true, false, "block"),
+            (false, true, "unblock"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let current = store.get_story(&story.id).unwrap();
+            let body = serde_json::json!({"action": {
+                "action": "transition", "story_id": story.id,
+                "expected_revision": current.revision, "command": command
+            }});
+            let mut path = format!("/stories/action?path={}", project.path().display());
+            if with_token {
+                path.push_str(&format!("&token={token}"));
+            }
+            let mut request = Request::post(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            if with_address {
+                request.extensions_mut().insert(ConnectInfo(local));
+            }
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let expected_status = if command == "block" {
+                crate::stories::StoryStatus::Blocked
+            } else {
+                crate::stories::StoryStatus::Ready
+            };
+            assert_eq!(store.get_story(&story.id).unwrap().status, expected_status);
+            let history = store.transition_history(&story.id).unwrap();
+            assert_eq!(history.len(), index + 1);
+            assert_eq!(
+                history[index].actor,
+                if with_token {
+                    crate::stories::StoryTransitionActor::Human
+                } else {
+                    crate::stories::StoryTransitionActor::LocalApi
+                }
+            );
+        }
     }
 }

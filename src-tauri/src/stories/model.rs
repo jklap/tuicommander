@@ -129,23 +129,23 @@ pub struct PlanView {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StoryCommand {
-    /// User only. Ready -> in_progress without a session claim.
+    /// Ready -> in_progress without a session claim.
     StartManual,
-    /// Agent: only on a story it claimed, while in_progress.
+    /// Only while in_progress.
     CheckCriterion(usize),
-    /// Agent: only on a story it claimed, while in_progress.
+    /// Only while in_progress.
     UncheckCriterion(usize),
-    /// Agent: only on a story it claimed, with every criterion checked. Moves it to review.
+    /// Requires every criterion checked. Moves it to review.
     SubmitReview,
-    /// User only. Review -> done; dependants whose dependencies are all done become ready.
+    /// Review -> done; dependants whose dependencies are all done become ready.
     Approve,
-    /// User only. Review -> in_progress (claimed) or ready.
+    /// Review -> in_progress (claimed) or ready.
     RejectReview,
-    /// User only.
+    /// Moves an active story to blocked.
     Block,
-    /// User only. Blocked -> ready, or backlog while a dependency is unfinished.
+    /// Blocked -> ready, or backlog while a dependency is unfinished.
     Unblock,
-    /// User only. Cancels the story.
+    /// Cancels the story.
     WontFix,
 }
 

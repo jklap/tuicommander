@@ -2482,6 +2482,7 @@ pub fn run() {
                 // streaming thread (which holds an Arc<WhisperContext>), then drops
                 // the transcriber while the process is still alive.
                 tauri::RunEvent::Exit => {
+                    workflows::shutdown_checks();
                     #[cfg(feature = "dictation")]
                     if let Some(dictation) = app_handle.try_state::<dictation::DictationState>() {
                         dictation.shutdown();
@@ -2932,25 +2933,28 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     tokio::pin!(lifetime);
 
     let mut updated = false;
-    tokio::select! {
+    let shutdown_result: anyhow::Result<()> = tokio::select! {
         result = axum::serve(listener, svc) => {
-            if let Err(e) = result {
-                anyhow::bail!("TCP server error: {e}");
-            }
+            result.map_err(|e| anyhow::anyhow!("TCP server error: {e}"))
         }
         signal = remote_shutdown_signal() => {
-            signal?;
-            tracing::info!(source = "remote", "Received shutdown signal");
+            signal.map_err(anyhow::Error::from).map(|()| {
+                tracing::info!(source = "remote", "Received shutdown signal");
+            })
         }
         () = &mut lifetime => {
             tracing::info!(source = "remote", "Remote daemon survive time expired");
+            Ok(())
         }
         () = restart.notified() => {
             updated = true;
             tracing::info!(source = "remote", "Restarting after remote binary update");
+            Ok(())
         }
-    }
+    };
 
+    workflows::shutdown_checks();
+    shutdown_result?;
     // Flush the last buffered log lines to disk before the process exits
     // (story #672-c1a3) — the lines a shutdown bug needs most.
     app_logger::flush_logs_on_exit();

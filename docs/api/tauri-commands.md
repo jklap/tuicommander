@@ -814,6 +814,8 @@ HTTP client must already possess the privately delivered capability.
 `secret_form_submit {submission}` checks the same native identity and uses the
 same schema and consumption logic as `POST /secrets/forms/submit`.
 
+Workflow definition and human-decision IPC commands use host Human authority. HTTP equivalents require verified credentials for that authority; local address admission grants LocalApi only. Native story plan_state and plan_view use current integration receipts for workflow-owned plans.
+
 ### Stored terminal marker coordinates
 
 OSC 133 event `line` and hook-generated `UserInput.line` use all-time rows. `terminal_scroll_to`, `terminal_get_lines` and search results keep their retained-grid coordinates; callers subtract the current frame `historyBase` when using stored markers.
