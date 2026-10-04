@@ -9715,6 +9715,7 @@ dependencies = [
  "tuic-ipc",
  "tuic-test-support",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -4557,3 +4557,6 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 ## Workflow recovery boundaries (story 960-8670) — Rust restart required
 
 - [ ] After Boss restarts the backend, verify restart recovery marks old attempts interrupted. On disposable active runs, a runtime reconciliation must preserve healthy attempts and intended effects; one corrupt run must not prevent a healthy run from recovering. After a dependency-refresh failure during recovery, resume the run and start a worker; reopening must preserve that live worker. Failed recovery is not retried by later opens or runtime reconciliation. Startup Git-probe latency remains pending story 959-c69c.
+## Windows core dependency (1478-ead1) — rebuild required
+
+- [ ] Load this manifest fix in the next Windows build. The `tuic-core` MSVC cross-check passes; a separate WebRTC/Abseil C++ build failure is tracked in 1479-f956. Existing desktop processes do not hot-reload Rust; restart only when Boss is ready.
