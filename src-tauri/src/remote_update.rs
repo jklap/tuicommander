@@ -85,7 +85,7 @@ pub(crate) async fn update_and_restart(
 }
 
 /// POST the binary to the daemon. The token stays in the query because the
-/// daemon being updated may predate cookie auth on this route; the error is
+/// daemon's `/remote/update` route accepts only the query token; the error is
 /// stripped of the URL so the token never reaches the UI.
 async fn send_binary_upload(
     client: &reqwest::Client,
