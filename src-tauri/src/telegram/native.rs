@@ -30,6 +30,7 @@ struct NativeMail {
     state: Arc<AppState>,
     sid: String,
     commands: mpsc::Sender<Command>,
+    paths: super::Paths,
 }
 impl MailPort for NativeMail {
     async fn offer(&mut self, mail: &PendingMail) -> Result<(), Error> {
@@ -45,6 +46,16 @@ impl MailPort for NativeMail {
             .await
             .map_err(|_| Error::State)?;
         receive.await.map_err(|_| Error::State)??;
+        let config = super::Config::load(&self.paths)?.ok_or(Error::Config)?;
+        let envelope: Value = serde_json::from_str(&mail.content).map_err(|_| Error::Protocol)?;
+        let chat = envelope["chat_id"]
+            .as_str()
+            .and_then(|s| s.parse::<i64>().ok())
+            .ok_or(Error::Protocol)?;
+        if config.target_tuic_session != mail.recipient || !self.paths.allowlist()?.contains(&chat)
+        {
+            return Err(Error::Config);
+        }
         offer(&self.state, &self.sid, mail).await
     }
     async fn update(&mut self, value: &Value) -> Result<(), Error> {
@@ -86,6 +97,7 @@ pub(crate) fn start(state: &Arc<AppState>) {
         state: state.clone(),
         sid: sid.clone(),
         commands: commands.clone(),
+        paths: paths.clone(),
     };
     let inbound = match super::inbound::Inbound::with_port(paths.clone(), port) {
         Ok(Some(inbound)) => inbound,
