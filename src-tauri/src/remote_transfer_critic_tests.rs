@@ -7,6 +7,45 @@ fn scratch() -> tempfile::TempDir {
     tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap()
 }
 
+// Catches: a detached extraction worker leaking staging or its upload slot when
+// a corrupt archive fails after the HTTP handler has already been cancelled.
+#[tokio::test]
+async fn cancelled_handler_with_corrupt_archive_cleans_staging_and_releases_slot() {
+    let tmp = scratch();
+    let root = tmp.path().to_path_buf();
+    let roots = vec![root.to_str().unwrap().to_owned()];
+    let request = query(&root, "file", false);
+    let mut tar = tar::Builder::new(Vec::new());
+    let mut header = tar::Header::new_gnu();
+    header.set_size(5);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append_data(&mut header, "file", &b"bytes"[..]).unwrap();
+    let mut archive = tar.into_inner().unwrap();
+    archive.truncate(128); // An interrupted copy of a real tar header.
+    let (started, waiting) = tokio::sync::oneshot::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let (finished, completion) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        receive_copy_with_extractor(request, &roots, Body::from(archive), move |stage, query| {
+            let _ = started.send(());
+            blocked.recv().map_err(io::Error::other)?;
+            let result = extract_and_publish(stage, query);
+            let _ = finished.send(result.is_err());
+            result
+        })
+        .await
+    });
+    waiting.await.unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    release.send(()).unwrap();
+    assert!(completion.await.unwrap(), "corrupt archive was accepted");
+    let slots = UPLOAD_SLOTS.acquire_many(2).await.unwrap();
+    assert!(names(&root).is_empty(), "failed worker left files behind");
+    drop(slots);
+}
+
 /// One raw tar member. The `tar` builder refuses `..`/absolute names, so the
 /// header bytes are written by hand, exactly as a hostile client would.
 fn raw_member(name: &[u8], kind: u8, link: &[u8], declared_size: u64, body: &[u8]) -> Vec<u8> {
