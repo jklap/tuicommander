@@ -358,29 +358,7 @@ pub(super) async fn poller_start(
         issue_filter,
         pr_hide_drafts,
     } = body;
-    // Desktop: cold-start the poller (or reconfigure a running one) via the same
-    // helper the Tauri `github_start_polling` command uses — this is the parity
-    // fix: the old route no-op'd when no poller was running, so a browser/PWA
-    // client could never start polling.
-    #[cfg(feature = "desktop")]
-    if let Some(app) = state.app_handle.read().clone() {
-        crate::github_poller::ensure_polling(&state, app, paths, issue_filter, pr_hide_drafts);
-        return Json(serde_json::json!({"ok": true})).into_response();
-    }
-    // No AppHandle (or non-desktop build): can't spawn a poller, but still push
-    // config + resync to one that is already running.
-    #[cfg(not(feature = "desktop"))]
-    {
-        if let Some(poller) = state.github.poller.lock().as_ref() {
-            crate::github_poller::send_poller_config(
-                poller,
-                paths,
-                issue_filter,
-                pr_hide_drafts,
-                true,
-            );
-        }
-    }
+    crate::github_poller::ensure_polling(&state, paths, issue_filter, pr_hide_drafts);
     Json(serde_json::json!({"ok": true})).into_response()
 }
 
