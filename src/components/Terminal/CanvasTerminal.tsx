@@ -88,6 +88,7 @@ import {
 	shouldReportMouseUp,
 } from "./terminalInput";
 import { cssColorToRgb, publishTerminalPalette } from "./terminalPalette";
+import { openTerminalPathLink } from "./terminalPathLink";
 import { latestIntersectionVisibility, retryUntilMeasured, SIZE_RETRY_MAX_FRAMES } from "./visibilityLifecycle";
 
 // Re-export for external consumers
@@ -275,7 +276,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			handleOpenUrl(link.path);
 		} else {
 			const path = link.path.startsWith("file://") ? link.path.slice(7) : link.path;
-			props.onOpenFilePath?.(path, link.line, link.col);
+			if (!invokeRef) return;
+			const termId = terminalsStore.getTerminalForSession(props.sessionId);
+			const cwd = (termId ? terminalsStore.get(termId)?.cwd : undefined) || "";
+			void openTerminalPathLink(path, cwd, invokeRef, props.onOpenFilePath, link.line, link.col);
 		}
 	};
 

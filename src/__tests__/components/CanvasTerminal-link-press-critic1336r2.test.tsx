@@ -135,13 +135,15 @@ describe("CanvasTerminal link press, critic 1336 round 2", () => {
 				if (cmd === "terminal_get_row_text") return (args.row === 1 ? screenRow1 : screenRow0).trimEnd();
 				if (cmd === "terminal_get_logical_line")
 					return [0, screenRow1 ? (screenRow0.padEnd(COLS, " ") + screenRow1).trimEnd() : screenRow0.trimEnd()];
-				const resolve = (c: string) =>
-					c.startsWith("followups") ||
-					c.startsWith("other") ||
-					c.startsWith("docs/followups") ||
-					(c.startsWith("later") && lateFileExists)
+				const resolve = (candidate: string) => {
+					const c = candidate.replace(/^\/cwd\//, "");
+					return c.startsWith("followups") ||
+						c.startsWith("other") ||
+						c.startsWith("docs/followups") ||
+						(c.startsWith("later") && lateFileExists)
 						? { absolute_path: `/cwd/${c}`, is_directory: false }
 						: null;
+				};
 				if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
 				if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
 				return null;

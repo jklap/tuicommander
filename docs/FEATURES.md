@@ -129,6 +129,7 @@ per cell and the configured history limit still apply.
 
 ### 1.7 Clickable File Paths
 - File paths in terminal output are auto-detected and become clickable links
+- Terminal directory links open the File Browser at the resolved directory; missing paths show a notification without opening a tab
 - Existing absolute paths outside registered repositories, including files under hidden directories, open in the native Markdown viewer or editor from terminal links
 - Paths validated against filesystem before activation (Rust `resolve_terminal_path`)
 - `.md`/`.mdx` → opens in Markdown panel; preview-capable files (HTML, PDF, images, video, audio, plain text/data) → open in the Preview tab (section 3.15); all other code files → open in the built-in code editor
