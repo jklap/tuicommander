@@ -6591,6 +6591,172 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert_eq!(payload.amend_key.as_deref(), Some("amend"));
     }
 
+    fn recorded_claude_question_rows() -> Vec<String> {
+        let bytes = std::fs::read(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src/fixtures/agent_prompts/claude-askuser-esc-20260929.tcap"),
+        )
+        .unwrap();
+        let capture = crate::pty_capture::decode_capture(&bytes).unwrap();
+        let (rows, cols) = capture.geometry.unwrap();
+        let mut grid = crate::terminal_grid::TerminalGrid::new(rows, cols, 2000);
+        // Record 185 is Esc; the preceding frame is the complete recorded dialog.
+        for record in capture.records.into_iter().take(185) {
+            if record.direction == crate::pty_capture::CaptureDirection::Output {
+                grid.process(&record.data);
+            }
+        }
+        grid.screen_text_rows()
+    }
+
+    // Catches: lost title/option offsets, skipped AskUserQuestion parsing, or inverted highlight fallback.
+    #[test]
+    fn recorded_claude_question_preserves_title_options_and_selection_contract() {
+        let rows = recorded_claude_question_rows();
+        let ParsedEvent::ChoicePrompt {
+            title,
+            options,
+            selection_mode,
+            dismiss_key,
+            amend_key,
+        } = parse_claude_ask_user_question(&rows).expect("recorded dialog must parse")
+        else {
+            panic!("expected choice prompt")
+        };
+        assert_eq!(title, "Which color do you prefer?");
+        assert_eq!(
+            options
+                .iter()
+                .map(|o| (o.key.as_str(), o.label.as_str(), o.highlighted))
+                .collect::<Vec<_>>(),
+            vec![
+                ("1", "Red", true),
+                ("2", "Green", false),
+                ("3", "Blue", false),
+                ("4", "Type something.", false),
+                ("5", "Chat about this", false)
+            ]
+        );
+        assert_eq!(selection_mode, Some(ChoiceSelectionMode::NavigateEnter));
+        assert_eq!(dismiss_key.as_deref(), Some("cancel"));
+        assert_eq!(amend_key, None);
+    }
+
+    // Catches: off-by-one minimum option counts, nonsequential numbering, and overwritten selection.
+    #[test]
+    fn claude_question_derived_screen_boundaries_reject_incomplete_numbering() {
+        let recorded = recorded_claude_question_rows();
+        let title = recorded
+            .iter()
+            .position(|row| row.trim() == "Which color do you prefer?")
+            .unwrap();
+        let footer = recorded
+            .iter()
+            .position(|row| is_ink_dialog_footer_row(row))
+            .unwrap();
+        let options: Vec<String> = recorded[title + 1..footer]
+            .iter()
+            .filter(|row| {
+                row.trim_start().starts_with("❯ 1.")
+                    || (2..=5).any(|n| row.trim_start().starts_with(&format!("{n}.")))
+            })
+            .cloned()
+            .collect();
+        assert_eq!(options.len(), 5);
+        for count in 0..=3 {
+            let mut rows = vec![recorded[title].clone()];
+            rows.extend(options[..count].iter().cloned());
+            rows.push(recorded[footer].clone());
+            let parsed = parse_claude_ask_user_question(&rows);
+            if count < 2 {
+                assert!(parsed.is_none(), "{count} choices are incomplete");
+            } else {
+                let Some(ParsedEvent::ChoicePrompt { options, .. }) = parsed else {
+                    panic!("{count} choices must parse")
+                };
+                assert_eq!(options.len(), count);
+            }
+        }
+        let rows = vec![
+            recorded[title].clone(),
+            options[0].clone(),
+            options[2].clone(),
+            recorded[footer].clone(),
+        ];
+        assert!(
+            parse_claude_ask_user_question(&rows).is_none(),
+            "a gap in numbering must be refused"
+        );
+        for marked in [false, true] {
+            let first = options[0].replace('❯', " ");
+            let second = if marked {
+                format!("❯ {}", options[1].trim())
+            } else {
+                options[1].clone()
+            };
+            let rows = vec![
+                recorded[title].clone(),
+                first,
+                second,
+                recorded[footer].clone(),
+            ];
+            let Some(ParsedEvent::ChoicePrompt { options, .. }) =
+                parse_claude_ask_user_question(&rows)
+            else {
+                panic!("two choices must parse")
+            };
+            assert_eq!(options[0].highlighted, !marked);
+            assert_eq!(options[1].highlighted, marked);
+        }
+    }
+
+    // Catches: combining destructive-label alternatives with AND hides cancellation choices.
+    #[test]
+    fn claude_question_derived_labels_keep_each_cancellation_choice_destructive() {
+        let recorded = recorded_claude_question_rows();
+        let footer = recorded
+            .iter()
+            .find(|row| is_ink_dialog_footer_row(row))
+            .unwrap();
+        for label in ["No", "Cancel", "Reject", "No thanks", "Continue"] {
+            // Only labels change; retain the captured dialog's numbering and footer grammar.
+            let rows = vec![
+                "Which color do you prefer?".to_string(),
+                "❯ 1. Red".to_string(),
+                format!("  2. {label}"),
+                footer.clone(),
+            ];
+            let Some(ParsedEvent::ChoicePrompt { options, .. }) =
+                parse_claude_ask_user_question(&rows)
+            else {
+                panic!("derived labels must parse")
+            };
+            assert!(!options[0].destructive);
+            assert_eq!(options[1].destructive, label != "Continue", "{label}");
+        }
+    }
+
+    // Catches: blank-row decrement or title indexing mutations lose a shifted dialog and its selected row.
+    #[test]
+    fn choice_prompt_derived_recording_preserves_second_selection_after_padding() {
+        let mut rows = load_rows(&fixtures_dir().join("claude-code_edit-confirm.txt"));
+        rows[1] = rows[1].replace('❯', " ");
+        rows[2] = format!("❯ {}", rows[2].trim());
+        rows.insert(0, "earlier output".into());
+        rows.insert(2, String::new());
+        rows.extend([String::new(), String::new()]);
+        let Some(ParsedEvent::ChoicePrompt { title, options, .. }) = parse_choice_prompt(&rows)
+        else {
+            panic!("padded dialog must parse")
+        };
+        assert_eq!(title, "Do you want to make this edit to CLAUDE.md?");
+        assert_eq!(options.len(), 3);
+        assert!(!options[0].highlighted);
+        assert!(options[1].highlighted);
+        assert!(!options[2].highlighted);
+        assert_eq!(options[1].hint.as_deref(), Some("shift+tab"));
+    }
+
     #[test]
     fn quoted_ink_dialog_footer_does_not_create_mobile_choices() {
         let rows = [

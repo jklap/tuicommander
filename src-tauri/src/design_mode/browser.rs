@@ -65,13 +65,12 @@ pub(crate) fn chrome_candidates() -> Vec<PathBuf> {
             if let Ok(output) = std::process::Command::new("reg")
                 .args(["query", &key, "/ve"])
                 .output()
+                && output.status.success()
             {
-                if output.status.success() {
-                    let listing = String::from_utf8_lossy(&output.stdout);
-                    for line in listing.lines() {
-                        if let Some((_, path)) = line.split_once("REG_SZ") {
-                            paths.push(PathBuf::from(path.trim()));
-                        }
+                let listing = String::from_utf8_lossy(&output.stdout);
+                for line in listing.lines() {
+                    if let Some((_, path)) = line.split_once("REG_SZ") {
+                        paths.push(PathBuf::from(path.trim()));
                     }
                 }
             }
