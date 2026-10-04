@@ -211,3 +211,15 @@ For Mac Keyboard, Boss approves the queue once as a process. Store a queue propo
 Slice 1 adds strict opt-in file configuration, a process-held OS owner lock, per-request zeroized credentials and a safe typed HTTP boundary. The module is deliberately not started by the daemon until native integration lands; synthetic-secret loopback tests exercise it. The recorded public text-update fixture documents its source; no live API equivalence is claimed.
 
 Slice 2 now persists only the cursor file and hands mail directly to `MailPort`. Retry scheduling is independent of persistence; 401/403/404/409 stops are in memory with alerts; polling uses ten-update batches and the 1 MiB cap. The authorized simplification removes SQLite, durable pending mail, rehydration, consumption receipts, tombstones and bootstrap uncertainty. Native inbox/wake and daemon startup remain DEFERRED until integration. Offline tests verify only cursor/API/port behavior, not idle/busy daemon wake. No restart loss detection is added.
+
+## L4 implementation slices (2026-10-04)
+
+Outbound uses one sequential worker independent of inbound long polling. It sends
+an empty Thinking draft, coalesces activity at two seconds and refreshes unchanged
+drafts at twenty seconds. Nonempty drafts carry an adapter-owned unapproved preview
+label. Plain-text final chunks preserve exact UTF-8 bytes under a conservative
+4096 UTF-16-unit ceiling. Each operation waits at least one second and rechecks
+the private allowlist immediately before sending; a 429 delays later operations.
+Finalization retires refresh before the first persistent send. An uncertain or
+partially sent final is returned as an error, never automatically retried.
+There is no outbound journal, durable request state or publish approval authority.
