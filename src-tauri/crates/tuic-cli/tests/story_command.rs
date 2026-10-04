@@ -4,16 +4,16 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixListener;
 use std::process::{Command, Output};
 
-fn assert_repository_socket(socket: &std::path::Path) {
-    let requested = tuic_test_support::test_temp_root();
-    let gits_scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .find(|path| path.file_name().is_some_and(|name| name == "Gits"))
-        .map(|gits| gits.join(".tmp"));
+fn assert_checkout_socket(socket: &std::path::Path) {
+    let socket_root = tuic_test_support::short_socket_test_temp_root();
     assert!(
-        socket.starts_with(&requested) || gits_scratch.is_some_and(|root| socket.starts_with(root)),
-        "socket escaped repository test scratch: {}",
+        socket.starts_with(&socket_root),
+        "socket escaped this checkout's socket scratch: {}",
         socket.display()
+    );
+    assert!(
+        socket.as_os_str().len() < 104,
+        "socket exceeds Unix path budget"
     );
 }
 
@@ -77,7 +77,7 @@ fn run_against_stub(
 fn story_command_sends_encoded_project_and_prints_reply() {
     let (output, request_line, body, socket) =
         run_against_stub(200, r#"{"type":"plans","value":[]}"#);
-    assert_repository_socket(&socket);
+    assert_checkout_socket(&socket);
     assert!(
         output.status.success(),
         "{}",
@@ -99,7 +99,7 @@ fn story_command_sends_encoded_project_and_prints_reply() {
 #[test]
 fn story_command_reports_http_failure_with_nonzero_exit() {
     let (output, _, _, socket) = run_against_stub(403, r#"{"error":"denied"}"#);
-    assert_repository_socket(&socket);
+    assert_checkout_socket(&socket);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert_eq!(
