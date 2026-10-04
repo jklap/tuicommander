@@ -5,7 +5,6 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const PEER: &str = "11111111-2222-4333-8444-555555555555";
 const TOKEN: &str = "123456:FAKE_token-abc";
 const OWNER_CHAT: i64 = 1111111;
 
@@ -41,7 +40,7 @@ fn setup() -> (tempfile::TempDir, Paths) {
     private(&paths.file("bot.token"), TOKEN);
     private(
         &paths.file("config.json"),
-        &format!(r#"{{"enabled":true,"bot_alias":"mint","target_tuic_session":"{PEER}"}}"#),
+        r#"{"enabled":true,"bot_alias":"mint"}"#,
     );
     (dir, paths)
 }

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-const PEER: &str = "11111111-1111-4111-8111-111111111111";
+pub(super) const PEER: &str = "11111111-1111-4111-8111-111111111111";
 
 fn scratch() -> tempfile::TempDir {
     tempfile::Builder::new()
@@ -24,7 +24,7 @@ fn write_private(path: &std::path::Path, text: &str) {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
 }
-fn setup() -> (tempfile::TempDir, Paths) {
+pub(super) fn setup() -> (tempfile::TempDir, Paths) {
     let dir = scratch();
     #[cfg(unix)]
     {
@@ -34,7 +34,7 @@ fn setup() -> (tempfile::TempDir, Paths) {
     let paths = Paths::new(dir.path().into());
     write_private(
         &paths.file("config.json"),
-        &json!({"enabled":true,"bot_alias":"test-bot","target_tuic_session":PEER}).to_string(),
+        &json!({"enabled":true,"bot_alias":"test-bot"}).to_string(),
     );
     write_private(&paths.file("allowed_chat_ids"), "1111111\n");
     write_private(&paths.file("bot.token"), "111:fake-one\n");
@@ -49,13 +49,13 @@ struct ServerState {
     responses: VecDeque<(StatusCode, Value)>,
     requests: Vec<(String, Value)>,
 }
-struct FakeServer {
-    address: std::net::SocketAddr,
+pub(super) struct FakeServer {
+    pub(super) address: std::net::SocketAddr,
     state: Arc<Mutex<ServerState>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl FakeServer {
-    async fn start(responses: Vec<(StatusCode, Value)>) -> Self {
+    pub(super) async fn start(responses: Vec<(StatusCode, Value)>) -> Self {
         let state = Arc::new(Mutex::new(ServerState {
             responses: responses.into(),
             requests: vec![],
@@ -96,7 +96,7 @@ impl FakeServer {
             task,
         }
     }
-    fn requests(&self) -> Vec<(String, Value)> {
+    pub(super) fn requests(&self) -> Vec<(String, Value)> {
         self.state.lock().unwrap().requests.clone()
     }
 }
@@ -114,13 +114,13 @@ fn missing_disabled_and_invalid_config_never_enable_the_adapter() {
     assert!(Config::load(&paths).unwrap().is_none());
     write_private(
         &paths.file("config.json"),
-        &json!({"enabled":false,"bot_alias":"","target_tuic_session":""}).to_string(),
+        &json!({"enabled":false,"bot_alias":""}).to_string(),
     );
     assert!(Config::load(&paths).unwrap().is_none());
     assert!(!paths.file("owner.lock").exists());
     write_private(
         &paths.file("config.json"),
-        &json!({"enabled":true,"bot_alias":"x","target_tuic_session":"pe-3"}).to_string(),
+        &json!({"enabled":true,"bot_alias":"invalid alias"}).to_string(),
     );
     assert!(matches!(Config::load(&paths), Err(Error::Config)));
 }
@@ -252,3 +252,21 @@ mod regression;
 
 #[path = "offset_tests.rs"]
 mod offset;
+
+#[path = "outbound_tests.rs"]
+pub(super) mod outbound_tests;
+
+#[path = "round4_tests.rs"]
+mod round4;
+
+#[path = "registration_tests.rs"]
+mod registration;
+
+#[path = "round5_tests.rs"]
+mod round5;
+
+#[path = "round6_tests.rs"]
+mod round6;
+
+#[path = "round7_tests.rs"]
+mod round7;
