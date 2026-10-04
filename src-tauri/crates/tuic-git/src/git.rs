@@ -2329,7 +2329,7 @@ mod tests {
         std::fs::write(repo.join("binary.bin"), [0, 9, 8, 7]).unwrap();
         let path = repo.to_string_lossy().into_owned();
         let check = |files: Vec<ChangedFile>| {
-            assert_eq!(files.len(), 3, "unexpected changed-file records: {files:?}");
+            assert_eq!(files.len(), 3, "unexpected number of changed-file records");
             for (name, status, additions, deletions) in [
                 (literal, "M", 2, 1),
                 ("deleted.txt", "D", 0, 1),
