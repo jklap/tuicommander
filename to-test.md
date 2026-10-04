@@ -4587,3 +4587,6 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] After Boss rebuilds/restarts TUIC: Settings > Agents > Codex shows the migrated bypass argument and warning; remove it and confirm terminal and managed launches preserve the removal. The durable migration stamp and wrapper task routing require a rebuilt backend; also confirm a default wrapper receives its positional task. Rust migration requires restart. Visual screenshot attempt could not render the isolated harness while the macOS screen was locked. (#1399-17bd)
 
 - [ ] After Boss rebuilds/restarts the backend, confirm an interactive Codex default with `--profile review` (or `exec`/`e`) receives and submits its managed task. Actual subcommands after root options must retain positional tasks. The public spawn regression covers argv and queued delivery; the running Rust backend requires restart. (#1513-701d)
+- [ ] After Boss restarts `make dev`, verify `claude remote-control --resume main` and `claude auth status` pass through without TUIC settings and normal Claude launches retain status hooks, including when cached help is empty or lacks usable command rows (#1405-a5e4).
+
+- [ ] After Boss restarts the Rust backend, verify a new headless terminal at 148 columns retains that width after a same-size resize (#1413-7dcc).
