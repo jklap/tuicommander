@@ -77,6 +77,10 @@ returns `400` and does not enter the session map.
 
 ### Monitoring
 
+Foreground-agent exit also retires the terminal's volatile Telegram registration
+lifetime synchronously. A restarted agent using the same terminal and MCP identity
+must opt in again, even if the Telegram worker was busy during the exit.
+
 | Command | Description |
 |---------|-------------|
 | `get_orchestrator_stats()` | Active/max/available session counts. |

@@ -16,8 +16,10 @@ old requests and choices do not migrate to the new agent.
 `telegram {"action":"unregister"}` releases the caller's own registration.
 Another agent cannot unregister the current owner. Registration ends when its MCP
 session ends, its PTY closes, or foreground detection observes that the agent exited,
-even if its shell remains open. Agents without a PTY are supported through their
-MCP session identity. Registration lives only in memory; daemon restart requires
+even if its shell remains open. The foreground detector retires the volatile
+registration lifetime immediately; reusing the same terminal and MCP identity
+does not transfer opt-in to a replacement agent. Agents without a PTY are
+supported through their MCP session identity. Registration lives only in memory; daemon restart requires
 another register call. No agent dropdown or target UUID belongs in configuration.
 
 An allowlisted private chat delivers text as JSON in native TUIC mail to the
