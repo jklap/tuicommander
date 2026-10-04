@@ -329,6 +329,9 @@ pub(super) fn pair_update(paths: &Paths, value: &Value, now: u64) -> Result<bool
     if message["chat"]["type"] != "private" {
         return Ok(false);
     }
+    if !paths.file("pairing.json").exists() {
+        return Ok(false);
+    }
     let lock = super::config::private_open(&paths.file("setup.lock"), true)?;
     lock.try_lock().map_err(|_| Error::AlreadyOwned)?;
     pair(paths, text, id, now)

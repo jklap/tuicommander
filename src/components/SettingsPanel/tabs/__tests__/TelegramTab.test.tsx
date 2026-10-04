@@ -54,6 +54,8 @@ describe("Telegram setup", () => {
 			expect(invoke).toHaveBeenCalledWith("telegram_setup", { change: { action: "remove_chat", chat_id: "123" } }),
 		);
 		expect(screen.getByRole("option", { name: "Writer" }).getAttribute("value")).toBe("peer-id");
+		// Catches: asynchronous options reset the persisted target to the placeholder.
+		expect((screen.getByLabelText("Target agent") as HTMLSelectElement).value).toBe("peer-id");
 	});
 	// Catches: a failed getMe appears successful or drops the safe error category.
 	it("shows typed setup errors", async () => {

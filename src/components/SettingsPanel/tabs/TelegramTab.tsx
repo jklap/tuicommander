@@ -4,6 +4,7 @@ import { invoke } from "../../../invoke";
 import { HttpRpcError } from "../../../transport";
 import { SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import telegram from "./TelegramTab.module.css";
 
 interface TelegramSettings {
 	enabled: boolean;
@@ -62,7 +63,7 @@ export const TelegramTab: Component = () => {
 		clearInterval(timer);
 	});
 	return (
-		<div class={s.section}>
+		<div class={`${s.section} ${telegram.panel}`}>
 			<h3>Telegram</h3>
 			<p class={s.hint}>
 				Configure this machine. Polling runs only in tuic-remote; desktop Settings never starts another bot owner.
@@ -153,8 +154,16 @@ export const TelegramTab: Component = () => {
 									})
 								}
 							>
-								<option value="">Choose a live agent</option>
-								<For each={data().agents}>{(agent) => <option value={agent.id}>{agent.name}</option>}</For>
+								<option value="" selected={!data().target_tuic_session}>
+									Choose a live agent
+								</option>
+								<For each={data().agents}>
+									{(agent) => (
+										<option value={agent.id} selected={agent.id === data().target_tuic_session}>
+											{agent.name}
+										</option>
+									)}
+								</For>
 							</select>
 						</div>
 						<SettingToggle
