@@ -21729,21 +21729,27 @@ async fn exec_root_agent_exit_clears_identity_and_refuses_submit_and_mail() {
     // writer remains untouched; use its native master solely to end our process.
     {
         let entry = state.session_maps.sessions.get(sid).unwrap();
-        let mut session = entry.lock();
+        let session = entry.lock();
         session
             .master
             .take_writer()
             .unwrap()
             .write_all(b"\x04")
             .unwrap();
-        assert!(session._child.wait().unwrap().success());
     }
+    // Do not wait for the child while holding the session mutex: the native
+    // reader needs that lock before it can drain macOS PTY output and see EOF.
     // Native reader EOF now owns lifecycle publication and process cleanup.
     while state.session_maps.session_states.contains_key(sid)
         || state.session_maps.sessions.contains_key(sid)
     {
         tokio::task::yield_now().await;
     }
+    assert_eq!(
+        state.session_maps.exit_codes.get(sid).map(|code| *code),
+        Some(0),
+        "the production reader must record the probe's normal EOF exit"
+    );
     assert_eq!(refresh_session_agent(&state, sid), None);
     assert!(!should_inject_now(&state, sid));
     assert!(matches!(
