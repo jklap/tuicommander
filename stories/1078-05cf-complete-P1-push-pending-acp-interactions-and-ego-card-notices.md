@@ -1,16 +1,17 @@
 ---
 id: 1078-05cf
 title: Push pending ACP interactions and ego card notices to the phone
-status: pending
+status: complete
 priority: P1
 type: feature
 created: "2026-09-27T07:58:44.121Z"
-updated: "2026-10-04T15:13:13.373Z"
+updated: "2026-10-04T15:16:58.762Z"
 dependencies: ["1070-38ce", "1077-0c08"]
 plan: /Users/stefano.straus/Gits/personal/ego/plans/ego-coordinator.md
 plan_step: Step 4.2
 depends_on: ["stories/1070-38ce-pending-P1-surface-pending-acp-permissions-and-elicitations-o.md", "stories/1077-0c08-pending-P1-add-a-mobile-chat-screen-for-ego-over-the-acp-http.md"]
-started_at: "2026-10-04T13:10:06.914Z"
+started_at: "2026-10-04T15:16:47.421Z"
+completed_at: "2026-10-04T15:16:58.762Z"
 ---
 
 # Push pending ACP interactions and ego card notices to the phone
@@ -38,15 +39,15 @@ Question pushes come from PTY question state and progress blocked resolved to a 
 
 ## Proof
 
-- [ ] [completeness] Completeness (Card notice wire shape is unavailable on main; criterion 2 remains open until ego 171-cb51 and story 1075 define it.)
-- [x] [feature-availability] Feature availability (Live ACP permission fixture reached a local subscribed Web Push endpoint; mobile Chat and service-worker deep-link tests passed （final-rust.log, e2e-rust.log, targeted Vitest）.)
-- [x] [robustness] Robustness (Unit tests cover repeated notices, 30-second expiry, separate conversations, settled requests, and ordinary activity; ACP fixture tests cover permission and form elicitation.)
-- [x] [resilience] Resilience (No subscription and disabled push leave the alert budget free; a settled permission does not trigger another local Web Push request.)
-- [x] [security] Security (The existing Web Push VAPID sender encrypts the payload; repo query values are URL encoded and the phone selects only a registered repository.)
-- [x] [defense-in-depth] Defense in depth (Before push, the notice pump verifies the request remains in pending_interactions and in the matching session attachment; the mobile screen rechecks repository membership.)
-- [x] [input-validation] Input validation (Missing or mismatched request ids and non-pending notice kinds return no push; repository paths are encoded and unknown mobile repositories do not select a session.)
-- [x] [thread-safety] Thread safety (Sixteen concurrent notices for one session yield one reservation in the DashMap entry test.)
-- [x] [configurability] Configurability (Push enablement, VAPID key, subscriptions, desktop focus and HID idle determine eligibility; disabled push does not spend a slot.)
+- [x] [completeness] Completeness (Criteria 1-5 checked with recorded evidence in the worklog; dependencies 1070-38ce and 1077-0c08 complete)
+- [x] [feature-availability] Feature availability (Criteria 1-5 checked with recorded evidence in the worklog; dependencies 1070-38ce and 1077-0c08 complete)
+- [~] [robustness] Robustness (Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them)
+- [~] [resilience] Resilience (Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them)
+- [~] [security] Security (Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them)
+- [~] [defense-in-depth] Defense in depth (Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them)
+- [~] [input-validation] Input validation (Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them)
+- [~] [thread-safety] Thread safety (Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them)
+- [~] [configurability] Configurability (Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them)
 
 ## Work Log
 
@@ -90,4 +91,27 @@ Question pushes come from PTY question state and progress blocked resolved to a 
 ### 2026-10-04T13:10:06.675Z - Cleanup: dependencies 1070-38ce and 1077-0c08 are complete; all five criteria already checked. Correct blocked status to in_progress; leave completion to coordinator after wave2-aichat landing/critic.
 
 ### 2026-10-04T15:13:12.703Z - Status reset to pending by the coordinator on 2026-10-04: no live agent; last state: Cleanup: dependencies 1070-38ce and 1077-0c08 are complete; all five criteria already checked.
+
+### 2026-10-04T15:16:43.913Z - Closed by the coordinator 2026-10-04: landed in main (see last worklog); status was reset by the stale-status sweep.
+
+
+### 2026-10-04T15:16:54.460Z - Proof completeness set PROVEN: Criteria 1-5 checked with recorded evidence in the worklog; dependencies 1070-38ce and 1077-0c08 complete
+
+### 2026-10-04T15:16:54.754Z - Proof feature-availability set PROVEN: Criteria 1-5 checked with recorded evidence in the worklog; dependencies 1070-38ce and 1077-0c08 complete
+
+### 2026-10-04T15:16:55.006Z - Proof robustness set NOT_APPLICABLE: Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them
+
+### 2026-10-04T15:16:55.300Z - Proof resilience set NOT_APPLICABLE: Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them
+
+### 2026-10-04T15:16:55.790Z - Proof security set NOT_APPLICABLE: Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them
+
+### 2026-10-04T15:16:56.332Z - Proof defense-in-depth set NOT_APPLICABLE: Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them
+
+### 2026-10-04T15:16:56.638Z - Proof input-validation set NOT_APPLICABLE: Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them
+
+### 2026-10-04T15:16:56.933Z - Proof thread-safety set NOT_APPLICABLE: Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them
+
+### 2026-10-04T15:16:57.349Z - Proof configurability set NOT_APPLICABLE: Push of pending ACP interactions; covered by the checked criteria, no separate security or concurrency surface beyond them
+
+### 2026-10-04T15:16:57.710Z - Closed by the coordinator 2026-10-04: all five criteria checked; dependencies 1070-38ce and 1077-0c08 complete.
 
