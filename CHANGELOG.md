@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Fix command boundaries, prompt ticks and answers-only prompt association drifting after scrollback eviction.
+
 ### Fixed
 
 - Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.
