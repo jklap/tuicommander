@@ -630,21 +630,21 @@ impl std::fmt::Display for ScreenProbeError {
 }
 
 #[cfg(unix)]
-struct ScreenProbeTree;
+pub(crate) struct ScreenProbeTree;
 
 #[cfg(unix)]
 impl ScreenProbeTree {
-    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+    pub(crate) fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
         Ok(Self)
     }
 
-    fn assign(&self, _child: &std::process::Child) -> std::io::Result<()> {
+    pub(crate) fn assign(&self, _child: &std::process::Child) -> std::io::Result<()> {
         Ok(())
     }
 
-    fn terminate(self, pid: u32) {
+    pub(crate) fn terminate(self, pid: u32) {
         // The probe owns this group: signal its grandchildren as well as the
         // direct child. The child is reaped separately below.
         unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
@@ -652,11 +652,11 @@ impl ScreenProbeTree {
 }
 
 #[cfg(windows)]
-struct ScreenProbeTree(windows_sys::Win32::Foundation::HANDLE);
+pub(crate) struct ScreenProbeTree(windows_sys::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 impl ScreenProbeTree {
-    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+    pub(crate) fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
         use std::os::windows::process::CommandExt;
         use windows_sys::Win32::System::JobObjects::{
             CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -690,7 +690,7 @@ impl ScreenProbeTree {
         Ok(job)
     }
 
-    fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
+    pub(crate) fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 
@@ -754,7 +754,7 @@ impl ScreenProbeTree {
         Ok(())
     }
 
-    fn terminate(self, _pid: u32) {
+    pub(crate) fn terminate(self, _pid: u32) {
         // Closing the last handle kills the whole job, including cmd.exe's
         // node.exe child when a Windows npm shim hangs on --help.
         drop(self);
@@ -767,6 +767,11 @@ impl Drop for ScreenProbeTree {
         unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
     }
 }
+
+// SAFETY: the job handle is owned, never borrowed, and all access by workflow
+// checks is serialized by their process mutex.
+#[cfg(windows)]
+unsafe impl Send for ScreenProbeTree {}
 
 /// A help probe owns and tears down its process tree, including descendants
 /// that inherited stdout or stderr. The shared git deadline helper deliberately

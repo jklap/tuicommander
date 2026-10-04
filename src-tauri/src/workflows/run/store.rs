@@ -1,5 +1,5 @@
 use super::check::{
-    CheckReceipt, clean_artifact, execute_pinned_check, git_output, require_merge_tree_support,
+    CheckReceipt, cancel_checks, clean_artifact, execute_run_check, git_output, require_merge_tree_support,
 };
 use super::model::*;
 use super::reducer::apply_event;
@@ -692,7 +692,7 @@ impl RunStore {
         }
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
-            let receipt = execute_pinned_check(check, canonical)?;
+            let receipt = execute_run_check(check, canonical, &self.db_path, run_id)?;
             if receipt.exit_code != 0 {
                 return Err(format!("post-integration check {} failed", check.id));
             }
@@ -790,7 +790,7 @@ impl RunStore {
         require_nonempty_policy(&definition)?;
         let mut post_checks = Vec::with_capacity(definition.required_checks.len());
         for check in &definition.required_checks {
-            let receipt = execute_pinned_check(check, canonical)?;
+            let receipt = execute_run_check(check, canonical, &self.db_path, run_id)?;
             if receipt.exit_code != 0 {
                 return Err(format!("post-integration check {} failed", check.id));
             }
@@ -857,7 +857,7 @@ impl RunStore {
             .iter()
             .find(|check| check.id == check_id)
             .ok_or("check is not pinned by the story definition")?;
-        let receipt = execute_pinned_check(check, Path::new(path))?;
+        let receipt = execute_run_check(check, Path::new(path), &self.db_path, run_id)?;
         self.commit_completed_check(run_id, execution, command_id, expected_sequence, receipt)
     }
 
@@ -983,10 +983,14 @@ impl RunStore {
         if expected_sequence.is_some_and(|expected| expected != snapshot.sequence) {
             return Err("stale workflow sequence".into());
         }
+        let cancelled = matches!(&command, RunCommand::Cancel);
         let kind = choose_event(&snapshot, command, at_ms)?;
         let receipt = persist_event(&tx, snapshot, command_id, Some(command_hash), at_ms, kind)?;
         tx.commit()
             .map_err(|e| format!("commit workflow command: {e}"))?;
+        if cancelled {
+            cancel_checks(&self.db_path, run_id);
+        }
         Ok(receipt)
     }
 

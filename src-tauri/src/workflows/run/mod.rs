@@ -5,6 +5,7 @@ mod reducer;
 mod store;
 
 pub use api::*;
+pub(crate) use check::shutdown_checks;
 #[cfg(test)]
 pub use check::*;
 pub use model::*;
@@ -92,6 +93,19 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn timed_out_pinned_check_stops_its_descendants() {
+        assert_check_tree_stops(false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_pinned_check_stops_descendants_and_fences_late_workers() {
+        // catches: cancellation stops the run projection but leaves checks alive,
+        // or a worker finishes its Git setup and spawns after cancellation.
+        assert_check_tree_stops(true);
+    }
+
+    #[cfg(unix)]
+    fn assert_check_tree_stops(cancel: bool) {
         use std::process::Command;
         let repo = tempfile::tempdir().expect("repo");
         let pid_dir = tempfile::tempdir().expect("pid dir");
@@ -120,10 +134,28 @@ mod tests {
                 "-c".into(),
                 format!("sleep 60 & echo $! > {}; wait", pid_file.display()),
             ],
-            timeout_secs: 1,
+            timeout_secs: if cancel { 60 } else { 1 },
         };
-        let receipt = execute_pinned_check(&check, repo.path()).expect("timed out receipt");
-        assert_eq!(receipt.exit_code, -1);
+        if cancel {
+            let repo_path = repo.path().to_owned();
+            let db_path = pid_dir.path().join("runs.sqlite3");
+            let worker_check = check.clone();
+            let worker_db = db_path.clone();
+            let worker = std::thread::spawn(move || {
+                super::check::execute_run_check(&worker_check, &repo_path, &worker_db, "cancelled-run")
+            });
+            // Setup is not the behavior deadline; nextest bounds a stuck setup.
+            while !pid_file.exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            super::check::cancel_checks(&db_path, "cancelled-run");
+            assert!(worker.join().expect("check worker").unwrap_err().contains("cancelled"));
+            assert!(super::check::execute_run_check(&check, repo.path(), &db_path, "cancelled-run")
+                .unwrap_err().contains("cancelled"));
+        } else {
+            let receipt = execute_pinned_check(&check, repo.path()).expect("timed out receipt");
+            assert_eq!(receipt.exit_code, -1);
+        }
         let worker: libc::pid_t = std::fs::read_to_string(&pid_file)
             .expect("worker pid")
             .trim()
