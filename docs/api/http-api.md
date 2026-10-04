@@ -1554,7 +1554,7 @@ batch authentication with a five-second connect timeout, and caches results for
 GET /mcp/status
 ```
 
-Returns MCP server status (enabled, port, connected clients).
+Returns MCP server status (enabled, running, active sessions, connected MCP clients, maximum sessions). `native_tools` contains the unfiltered native MCP registry as `{name, summary, description}` entries, including disabled tools. `summary` is the first line of the full registry description. This Settings inventory is independent of upstream tools, collapse mode and progress tracking; MCP client discovery still applies all configured filters.
 
 ### MCP Suspend Response
 
@@ -1738,7 +1738,8 @@ older than the check and still connects.
 The daemon hashes its running executable once at startup, so `build.sha256`
 identifies the process that answered even after an update stages a new file.
 `POST /remote/update` exists only on the daemon router. It needs the same
-session token as PTY access and the `x-tuic-target`, `x-tuic-sha256`, and
+session token as PTY access, supplied as a `tui-session` cookie or the legacy
+`?token=` query parameter, and the `x-tuic-target`, `x-tuic-sha256`, and
 `x-tuic-confirmed-sessions` headers. It streams at most 512 MiB into the
 daemon executable's own directory, verifies the hash and current session
 count, and atomically promotes the file before restarting. Windows currently
@@ -2687,7 +2688,7 @@ Recovery is a fresh connection and `session/load`.
 This is deliberately not on `/events`: one turn emits more frames per second
 than the 256-entry SSE broadcast can carry without lagging every other
 subscriber. `/events` carries only the low-frequency `acp-notice` wake signal
-(`ready`, `settled`, `interaction_pending`, `interaction_settled`), whose
+(`ready`, `settled`, `interaction_pending`, `interaction_settled`, `card`), whose
 payload names the connection, generation, sequence and — when it has one — the
 session and request it is about.
 

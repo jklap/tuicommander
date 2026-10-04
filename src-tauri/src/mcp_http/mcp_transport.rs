@@ -1147,6 +1147,7 @@ const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const TASK_ACTIONS: &str = "get, cancel";
 const CONFIG_ACTIONS: &str = "get, save, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
+#[cfg(any(feature = "dictation", test))]
 const VOICE_ACTIONS: &str = "speak, stop, status";
 const REMOTE_ACTIONS: &str = "preview, update";
 
@@ -1209,6 +1210,7 @@ async fn handle_remote_update(
 fn native_tool_definitions() -> serde_json::Value {
     let defs = serde_json::json!([
         crate::secrets::tool_definition(),
+        crate::telegram::tool_definition(),
         {
             "name": "session",
             "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call, including local and connected remote sessions. Remote rows carry connection_id and address=connection/session_id. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
@@ -1516,6 +1518,25 @@ fn resolve_allowed_upstreams(
         .repos
         .get(&repo_path)
         .and_then(|entry| entry.mcp_upstreams.clone())
+}
+
+/// Settings inventory from the native registry, including disabled tools.
+/// This is app metadata, not an MCP discovery surface. Every native tool can
+/// be disabled; progress additionally requires global progress_tracking.
+pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
+    native_tool_definitions()
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|tool| {
+            let description = tool["description"].as_str().unwrap_or_default();
+            serde_json::json!({
+                "name": tool["name"],
+                "summary": description.lines().next().unwrap_or_default(),
+                "description": description,
+            })
+        })
+        .collect()
 }
 
 /// Apply the two config-driven filters (`disabled_native_tools`,
@@ -2069,6 +2090,7 @@ async fn dispatch_mcp_tool_call_with_context(
         .unwrap_or(false);
     match name {
         "secret" => crate::secrets::handle_secret(state, args).await,
+        "telegram" => crate::telegram::handle_tool(state, args, mcp_session_id).await,
         "session" => {
             let action = args["action"].as_str().unwrap_or("");
             if let Some(remote) = super::remote_mcp_sessions::resolve(state, args) {
@@ -4195,16 +4217,15 @@ async fn handle_worktree(
             };
             match tokio::task::spawn_blocking(move || {
                 crate::worktree::delete_integrated_local_branch(&path, &branch)
-                    .map(|proof| (proof, branch))
             })
             .await
             {
-                Ok(Ok(("archived", branch))) => serde_json::json!({
+                Ok(Ok(deleted)) if deleted.proof == "archived" => serde_json::json!({
                     "ok":true,
-                    "proof":"archived",
-                    "archive_ref":tuic_git::worktree::archive_ref_name(&branch)
+                    "proof":deleted.proof,
+                    "archive_ref":deleted.archive_ref
                 }),
-                Ok(Ok((proof, _))) => serde_json::json!({"ok":true,"proof":proof}),
+                Ok(Ok(deleted)) => serde_json::json!({"ok":true,"proof":deleted.proof}),
                 Ok(Err(error)) => serde_json::json!({"error":error}),
                 Err(error) => {
                     serde_json::json!({"error":format!("branch deletion task failed: {error}")})
@@ -4545,7 +4566,6 @@ fn handle_agent_with_parent_cwd(
                 let agent_type = effective_agent_type.as_deref().unwrap_or_default();
                 let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
                     agent_type,
-                    binary_path: &binary_path,
                     args: &explicit_args,
                     prompt: &effective_prompt,
                     model: effective_model,
@@ -4561,24 +4581,39 @@ fn handle_agent_with_parent_cwd(
             } else if let Some(ref rc) = resolved {
                 if let Some(ref rc_args) = rc.args {
                     // Run config matched: user-authored argv remains authoritative.
-                    // Merge structured MCP params, apply only executable-safe
-                    // defaults, then preserve the established prompt substitution
+                    // Merge structured MCP params, then preserve prompt substitution
                     // or positional append semantics. In particular, wrapper and
                     // subcommand configs must not be rewritten into PTY delivery.
                     let agent_type = effective_agent_type.as_deref().unwrap_or_default();
-                    let final_args = match compose_mcp_run_config_args(
-                        agent_type,
-                        &binary_path,
-                        rc_args,
-                        &effective_prompt,
-                        effective_model,
-                        args["print_mode"].as_bool().unwrap_or(false),
-                        args["output_format"].as_str(),
-                    ) {
-                        Ok(m) => m,
-                        Err(e) => return serde_json::json!({"error": e}),
-                    };
-                    launch_args.extend(final_args);
+                    if rc.default_config && is_direct_codex_executable(&binary_path) {
+                        let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
+                            agent_type,
+                            args: rc_args,
+                            prompt: &effective_prompt,
+                            model: effective_model,
+                            print_mode: args["print_mode"].as_bool().unwrap_or(false),
+                            output_format: args["output_format"].as_str(),
+                            default_template: false,
+                        }) {
+                            Ok(args) => args,
+                            Err(error) => return serde_json::json!({"error": error}),
+                        };
+                        deferred_initial_prompt = deferred;
+                        launch_args.extend(final_args);
+                    } else {
+                        let final_args = match compose_mcp_run_config_args(
+                            agent_type,
+                            rc_args,
+                            &effective_prompt,
+                            effective_model,
+                            args["print_mode"].as_bool().unwrap_or(false),
+                            args["output_format"].as_str(),
+                        ) {
+                            Ok(m) => m,
+                            Err(e) => return serde_json::json!({"error": e}),
+                        };
+                        launch_args.extend(final_args);
+                    }
                 } else {
                     // No run config args: use the built-in per-agent template
                     // (mirrors the shipped frontend spawnArgs) so cross-agent
@@ -4592,7 +4627,6 @@ fn handle_agent_with_parent_cwd(
                             let (final_args, deferred) =
                                 match compose_mcp_spawn_args(McpSpawnArgs {
                                     agent_type,
-                                    binary_path: &binary_path,
                                     args: &template,
                                     prompt: &effective_prompt,
                                     model: effective_model,
@@ -4620,7 +4654,6 @@ fn handle_agent_with_parent_cwd(
                     let template = crate::agent::default_prompt_args("codex").unwrap_or_default();
                     let (final_args, deferred) = match compose_mcp_spawn_args(McpSpawnArgs {
                         agent_type: "codex",
-                        binary_path: &binary_path,
                         args: &template,
                         prompt: &effective_prompt,
                         model: effective_model,
@@ -5108,7 +5141,7 @@ pub(super) async fn local_peer_call(
     local_peer_call_with_message_id(state, args, sid, None).await
 }
 
-pub(super) async fn local_peer_call_with_message_id(
+pub(crate) async fn local_peer_call_with_message_id(
     state: &Arc<AppState>,
     args: &serde_json::Value,
     sid: Option<&str>,
@@ -6457,7 +6490,7 @@ fn resolve_mcp_origin_agent_type(
 /// contributes is the *identity* — an unbound caller has no terminal, so it
 /// can never match a binding and is told speech is unavailable rather than
 /// being allowed to speak into whichever conversation happens to be armed.
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 fn handle_voice(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -6525,7 +6558,7 @@ fn handle_voice(
 /// Voice needs a microphone, a speaker and the dictation stack, none of which
 /// the headless binary builds. Reported as unavailable rather than as an
 /// unknown tool, so a model reads one consistent reason on both builds.
-#[cfg(not(feature = "desktop"))]
+#[cfg(not(feature = "dictation"))]
 fn handle_voice(
     state: &Arc<AppState>,
     _args: &serde_json::Value,
@@ -8534,6 +8567,8 @@ struct ResolvedRunConfig {
     model: Option<String>,
     /// Env vars from the matched run config, if any.
     env: std::collections::HashMap<String, String>,
+    /// Literal Codex selects its default, preserving interactive task delivery.
+    default_config: bool,
 }
 
 /// Resolve an `agent_type` parameter as either:
@@ -8558,18 +8593,39 @@ fn resolve_run_config(
                     args: Some(cfg.args.clone()),
                     model: cfg.model.clone(),
                     env: cfg.env.clone(),
+                    default_config: false,
                 };
             }
         }
     }
 
-    // Pass 2: treat as a literal agent type (no run config overrides)
+    // Literal Codex consumes the same visible default used by terminal menus.
+    if needle == "codex"
+        && let Some(settings) = agents_cfg.agents.get("codex")
+        && let Some(cfg) = settings
+            .run_configs
+            .iter()
+            .find(|cfg| cfg.is_default)
+            .or_else(|| settings.run_configs.first())
+    {
+        return ResolvedRunConfig {
+            agent_type: "codex".into(),
+            command: Some(cfg.command.clone()),
+            args: Some(cfg.args.clone()),
+            model: cfg.model.clone(),
+            env: cfg.env.clone(),
+            default_config: true,
+        };
+    }
+
+    // Pass 2: treat other literal agent types as before (no run config overrides)
     ResolvedRunConfig {
         agent_type: agent_type.to_string(),
         command: None,
         args: None,
         model: None,
         env: Default::default(),
+        default_config: false,
     }
 }
 
@@ -8598,7 +8654,49 @@ fn finalize_explicit_spawn_args(
     if explicit.iter().any(|arg| arg.contains("{prompt}")) {
         return (substitute_prompt_in_args(explicit, prompt), None);
     }
-    if crate::agent::prompt_prefill_only(agent_type) {
+    // Value-taking root options from installed `codex --help` (2026-10-04).
+    // Attached values (`--profile=review`, `-preview`) stay in the option token.
+    const CODEX_VALUE_OPTIONS: &[&str] = &[
+        "-c",
+        "--config",
+        "--enable",
+        "--disable",
+        "--remote",
+        "--remote-auth-token-env",
+        "-i",
+        "--image",
+        "-m",
+        "--model",
+        "--local-provider",
+        "-p",
+        "--profile",
+        "-s",
+        "--sandbox",
+        "-C",
+        "--cd",
+        "--add-dir",
+        "-a",
+        "--ask-for-approval",
+    ];
+    let mut codex_subcommand = false;
+    if agent_type == "codex" {
+        let mut args = explicit.iter();
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                break;
+            }
+            if CODEX_VALUE_OPTIONS.contains(&arg.as_str()) {
+                args.next();
+            } else if !arg.starts_with('-') {
+                codex_subcommand = matches!(arg.as_str(), "exec" | "e" | "review");
+                break;
+            }
+        }
+    }
+    if crate::agent::prompt_prefill_only(agent_type)
+        && !(agent_type == "codex"
+            && (explicit.first().is_some_and(|arg| !arg.starts_with('-')) || codex_subcommand))
+    {
         return (explicit.to_vec(), Some(prompt.to_string()));
     }
     (substitute_prompt_in_args(explicit, prompt), None)
@@ -8649,7 +8747,7 @@ fn finalize_spawn_args(
 /// positional prompt (story 092). Everything else — every other agent AND every
 /// user-authored run config (whose args may start with a wrapper subcommand
 /// flags must not precede) — keeps flags appended, as before.
-const CODEX_BYPASS_ARG: &str = "--dangerously-bypass-approvals-and-sandbox";
+use crate::config::CODEX_BYPASS_ARG;
 
 fn is_direct_codex_executable(binary_path: &str) -> bool {
     let file_name = binary_path
@@ -8660,17 +8758,6 @@ fn is_direct_codex_executable(binary_path: &str) -> bool {
         .file_stem()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.eq_ignore_ascii_case("codex"))
-}
-
-fn apply_direct_codex_defaults(binary_path: &str, mut args: Vec<String>) -> Vec<String> {
-    let has_active_bypass = args
-        .iter()
-        .take_while(|arg| arg.as_str() != "--")
-        .any(|arg| arg == CODEX_BYPASS_ARG);
-    if is_direct_codex_executable(binary_path) && !has_active_bypass {
-        args.insert(0, CODEX_BYPASS_ARG.to_string());
-    }
-    args
 }
 
 fn resolve_spawn_agent_type(binary_path: &str, configured: Option<&str>) -> Option<String> {
@@ -8695,7 +8782,6 @@ fn codex_wrapper_launch_warning(
 
 struct McpSpawnArgs<'a> {
     agent_type: &'a str,
-    binary_path: &'a str,
     args: &'a [String],
     prompt: &'a str,
     model: Option<&'a str>,
@@ -8715,7 +8801,6 @@ fn compose_mcp_spawn_args(
         spawn.output_format,
         spawn.default_template,
     )?;
-    let merged = apply_direct_codex_defaults(spawn.binary_path, merged);
     if spawn.default_template {
         Ok(finalize_spawn_args(spawn.agent_type, &merged, spawn.prompt))
     } else {
@@ -8729,7 +8814,6 @@ fn compose_mcp_spawn_args(
 
 fn compose_mcp_run_config_args(
     agent_type: &str,
-    binary_path: &str,
     args: &[String],
     prompt: &str,
     model: Option<&str>,
@@ -8738,7 +8822,6 @@ fn compose_mcp_run_config_args(
 ) -> Result<Vec<String>, String> {
     let merged =
         merge_mcp_params_into_args(agent_type, args, model, print_mode, output_format, false)?;
-    let merged = apply_direct_codex_defaults(binary_path, merged);
     Ok(substitute_prompt_in_args(&merged, prompt))
 }
 
@@ -8823,6 +8906,113 @@ pub(crate) fn test_validate_mcp_repo_path(path: &str) -> Result<(), serde_json::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: Codex option values named like subcommands turn submitted tasks into unsent prefill.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn critic_codex_profile_named_review_keeps_task_submission() {
+        use std::os::unix::fs::PermissionsExt;
+        for profile in ["review", "exec", "e"] {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let output = root.path().join("argv");
+            let binary = root.path().join("codex");
+            std::fs::write(
+                &binary,
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\nread -r release\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let _config = crate::config::set_config_dir_override(root.path().join("config"));
+            let cfg = serde_json::from_value(serde_json::json!({"agents": {"codex": {
+                "codex_bypass_migrated": true, "prevent_alt_screen": false,
+                "skip_trust_dialog": false, "native_status_signals": false,
+                "run_configs": [{"name": "Default", "command": binary,
+                    "args": ["--profile", profile], "is_default": true,
+                    "env": {"ARGV_OUTPUT": output}}]
+            }}}))
+            .unwrap();
+            crate::config::save_agents_config(crate::config::AgentsConfig::default(), cfg).unwrap();
+            let state = test_state();
+            let spawned = handle_agent(
+                &state,
+                "127.0.0.1:1".parse().unwrap(),
+                &serde_json::json!({"action": "spawn", "agent_type": "codex",
+                    "prompt": "perform the task", "cwd": root.path()}),
+                None,
+            );
+            assert!(spawned.get("error").is_none(), "{spawned}");
+            let actual =
+                wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+            assert!(
+                !actual.lines().any(|arg| arg == "perform the task"),
+                "profile {profile} is an option value, not a subcommand; argv={actual:?}"
+            );
+            let session = spawned["session_id"].as_str().unwrap();
+            assert_eq!(
+                state
+                    .pending_injections
+                    .get(session)
+                    .unwrap()
+                    .front()
+                    .unwrap()
+                    .text(),
+                "perform the task"
+            );
+            // Keep the argv recorder alive while inspecting its live input queue.
+            // Close only this test's PTY after the assertions finish.
+            handle_session(
+                &state,
+                &serde_json::json!({"action": "kill", "session_id": session}),
+                None,
+            );
+        }
+    }
+
+    // Catches: prefill-only agent identity steals a named wrapper's positional task.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn critic_named_wrappers_deliver_positional_task_for_every_agent() {
+        use std::os::unix::fs::PermissionsExt;
+        for agent in [
+            "claude", "codex", "gemini", "grok", "opencode", "aider", "amp", "cursor", "goose",
+            "droid", "pi", "ego",
+        ] {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let output = root.path().join("argv");
+            let binary = root.path().join("wrapper");
+            std::fs::write(&binary, "#!/bin/sh\nif [ \"${1-}\" = --version ]; then exit 0; fi\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let _config = crate::config::set_config_dir_override(root.path().join("config"));
+            let cfg = serde_json::from_value(serde_json::json!({"agents": {(agent): {
+                "codex_bypass_migrated": true, "prevent_alt_screen": false,
+                "skip_trust_dialog": false, "native_status_signals": false,
+                "run_configs": [{"name": "My wrapper", "command": binary,
+                    "args": ["run"], "is_default": true, "env": {"ARGV_OUTPUT": output}}]
+            }}}))
+            .unwrap();
+            crate::config::save_agents_config(crate::config::AgentsConfig::default(), cfg).unwrap();
+            let state = test_state();
+            let spawned = handle_agent(
+                &state,
+                "127.0.0.1:1".parse().unwrap(),
+                &serde_json::json!({"action": "spawn", "agent_type": "My wrapper",
+                    "prompt": "perform the task", "cwd": root.path()}),
+                None,
+            );
+            assert!(spawned.get("error").is_none(), "{agent}: {spawned}");
+            let actual =
+                wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+            assert!(
+                actual.ends_with("run\nperform the task\n"),
+                "agent {agent}: wrapper subcommand and task must remain positional; argv={actual:?}"
+            );
+            assert!(
+                !state
+                    .pending_injections
+                    .contains_key(spawned["session_id"].as_str().unwrap())
+            );
+        }
+    }
 
     // Needs this module's private helpers, so it is textually included.
     include!("submit_confirmation_critic_tests.rs");
@@ -9633,7 +9823,7 @@ mod tests {
                 !bound_direct.contains("not bound to a terminal"),
                 "a bound caller must pass the identity gate: {bound_direct}"
             );
-            #[cfg(not(feature = "desktop"))]
+            #[cfg(not(feature = "dictation"))]
             assert!(
                 bound_direct.contains("This TUICommander build has no audio support"),
                 "a bound headless caller must receive the no-audio status: {bound_direct}"
@@ -9930,6 +10120,44 @@ mod tests {
         );
         assert!(!branch_exists(&repo, "refs/heads/feat/superseded"));
         assert!(branch_exists(&repo, "refs/archive/feat/superseded"));
+    }
+
+    // Catches reporting the occupied primary archive ref instead of the
+    // tip-suffixed ref: restoring from the response must recover the deleted tip.
+    #[tokio::test]
+    async fn branch_delete_reports_the_suffixed_archive_holding_the_tip_1489() {
+        let (_temp, repo, base) = branch_delete_fixture();
+        assert!(
+            repo.as_path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let git = |args: &[&str]| crate::git_cli::git_cmd(&repo).args(args).run().unwrap();
+        git(&["checkout", "-b", "reused"]);
+        branch_delete_commit(&repo, "unique.txt", "unmerged work\n");
+        let tip = git(&["rev-parse", "HEAD"]).stdout.trim().to_owned();
+        let primary = "refs/archive/reused";
+        let suffixed = format!("{primary}-{}", &tip[..7]);
+        git(&["update-ref", primary, &base]);
+        git(&["update-ref", &suffixed, &tip]);
+        git(&["checkout", "integration"]);
+        let response = handle_repo(
+            &test_state(),
+            &serde_json::json!({"action":"branch_delete","path":repo.to_string_lossy(),"branch":"reused"}),
+            false,
+        ).await;
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(response["proof"], "archived");
+        assert_eq!(response["archive_ref"], suffixed);
+        assert_eq!(git(&["rev-parse", primary]).stdout.trim(), base);
+        assert_eq!(
+            git(&["rev-parse", response["archive_ref"].as_str().unwrap()])
+                .stdout
+                .trim(),
+            tip
+        );
+        assert!(!branch_exists(&repo, "refs/heads/reused"));
     }
 
     #[tokio::test]
@@ -18195,14 +18423,26 @@ mod tests {
     ///
     /// These names are a public contract: they appear in users' ego rule files,
     /// so renaming one silently stops a user's policy from matching.
-    #[test]
-    fn native_tool_definitions_are_the_one_surviving_family() {
-        let defs = native_tool_definitions();
-        let names = tool_names(&defs);
+    #[tokio::test]
+    async fn native_tool_definitions_are_the_one_surviving_family() {
+        let state = test_state();
+        {
+            let mut config = state.config.write();
+            config.disabled_native_tools.clear();
+            config.collapse_tools = false;
+        }
+        let listed = tools_list_result(
+            &state,
+            HeaderMap::new(),
+            serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        )
+        .await;
+        let names = tool_names(&listed["result"]["tools"]);
         assert_eq!(
             names,
             vec![
                 "secret",
+                "telegram",
                 "session",
                 "agent",
                 "task",
@@ -18220,6 +18460,18 @@ mod tests {
                 "voice",
             ],
             "native_tool_definitions must return exactly the one family, in order"
+        );
+        let called = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "telegram",
+            &serde_json::json!({"action":"send","text":"hello"}),
+            None,
+        )
+        .await;
+        assert_eq!(
+            called["error"], "telegram_invalid_state",
+            "unbound Telegram invocation must reach its native authority check"
         );
     }
 
@@ -18871,9 +19123,10 @@ mod tests {
 
     #[test]
     fn agent_tool_description_carries_orchestration_crash_course() {
-        // Tool descriptions reach every MCP client (unlike initialize
-        // `instructions`, which clients like Codex ignore). The 5-line
-        // orchestration primer + wait/send delivery semantics must live here.
+        // Tool semantics belong in descriptions, available when discovered.
+        // Initial model visibility of descriptions and initialize instructions
+        // depends on the harness (see docs/backend/mcp-http.md). The primer
+        // and wait/send delivery semantics must live here.
         let defs = native_tool_definitions();
         let agent = defs
             .as_array()
@@ -24502,7 +24755,13 @@ mod tests {
         std::fs::create_dir(&cwd).unwrap();
         let script = root.path().join("claude");
         let observed_keys = root.path().join("keys");
-        std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nstty -echo -icanon -icrnl min 0 time 10\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nexec cat >/dev/null\n", observed_keys.display())).unwrap();
+        let help = root.path().join("claude-help.txt");
+        std::fs::write(
+            &help,
+            include_str!("../../tests/fixtures/agent-help/claude-2026-10-04.txt"),
+        )
+        .unwrap();
+        std::fs::write(&script, format!("#!/bin/sh\nif [ \"$1\" = --version ]; then exit 0; fi\nif [ \"$1\" = --help ]; then cat '{}'; exit 0; fi\nstty -echo -icanon -icrnl min 0 time 10\nprintf 'Quick safety check: Is this a project you created or one you trust?\\n  Yes, I trust this folder\\n❯ No, exit\\n'\nkeys=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\nprintf '%s' \"$keys\" > '{}'\nexec cat >/dev/null\n", help.display(), observed_keys.display())).unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(
             std::process::Command::new(&script)
@@ -24632,6 +24891,95 @@ mod tests {
         );
     }
 
+    // Catches: literal Codex rewrites a configured wrapper task into an undeliverable PTY injection.
+    #[test]
+    fn literal_codex_wrapper_default_keeps_positional_task_delivery() {
+        let cfg: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+            "agents": {"codex": {"run_configs": [
+                {"name": "Wrapper", "command": "codex-wrapper", "args": ["run"], "is_default": true}
+            ]}}
+        }))
+        .unwrap();
+        let resolved = resolve_run_config("codex", &cfg);
+        let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
+            agent_type: &resolved.agent_type,
+            args: resolved.args.as_ref().unwrap(),
+            prompt: "perform the task",
+            model: None,
+            print_mode: false,
+            output_format: None,
+            default_template: false,
+        })
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec!["run", "perform the task"],
+            "default wrapper argv must keep the run-config positional prompt contract"
+        );
+        assert!(
+            deferred.is_none(),
+            "wrapper commands must not receive a deferred PTY task"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn literal_codex_default_does_not_ignore_settings_or_restore_removed_bypass() {
+        // Catches: public spawn discards Settings args, restores bypass, or loses the task.
+        use std::os::unix::fs::PermissionsExt;
+        for args in [vec!["--dangerously-bypass-approvals-and-sandbox"], vec![]] {
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let output = root.path().join("argv");
+            let binary = root.path().join("codex");
+            std::fs::write(
+                &binary,
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let _config = crate::config::set_config_dir_override(root.path().join("config"));
+            let cfg: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+                "agents": {"codex": {
+                    "codex_bypass_migrated": true,
+                    "prevent_alt_screen": false, "skip_trust_dialog": false,
+                    "native_status_signals": false,
+                    "run_configs": [
+                        {"name": "Custom", "command": binary, "args": ["--search"]},
+                        {"name": "Default", "command": binary, "args": args, "is_default": true,
+                         "env": {"ARGV_OUTPUT": output}}
+                    ]
+                }}
+            }))
+            .unwrap();
+            crate::config::save_agents_config(crate::config::AgentsConfig::default(), cfg).unwrap();
+            let state = test_state();
+            let spawned = handle_agent(
+                &state,
+                "127.0.0.1:1".parse().unwrap(),
+                &serde_json::json!({"action": "spawn", "agent_type": "CODEX",
+                                   "prompt": "perform the task", "cwd": root.path()}),
+                None,
+            );
+            assert!(spawned.get("error").is_none(), "{spawned}");
+            let session = spawned["session_id"].as_str().unwrap();
+            assert_eq!(
+                state
+                    .pending_injections
+                    .get(session)
+                    .unwrap()
+                    .front()
+                    .unwrap()
+                    .text(),
+                "perform the task"
+            );
+            let actual =
+                wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+            let mut expected = vec!["-c", "check_for_update_on_startup=false"];
+            expected.extend(args);
+            assert_eq!(actual, expected.join("\n") + "\n");
+        }
+    }
+
     #[test]
     fn resolve_run_config_falls_back_to_agent_type() {
         let cfg = make_agents_config();
@@ -24733,7 +25081,6 @@ mod tests {
         let explicit = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
         let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
             agent_type: "codex",
-            binary_path: "/usr/local/bin/codex",
             args: &explicit,
             prompt: "perform the task",
             model: Some("gpt-5.6-terra"),
@@ -24760,7 +25107,6 @@ mod tests {
         let agent_type = resolve_spawn_agent_type("/usr/local/bin/codex", None).unwrap();
         let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
             agent_type: &agent_type,
-            binary_path: "/usr/local/bin/codex",
             args: &explicit,
             prompt: "perform the task",
             model: None,
@@ -24770,10 +25116,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(
-            argv,
-            vec!["--dangerously-bypass-approvals-and-sandbox", "--search"]
-        );
+        assert_eq!(argv, vec!["--search"]);
         assert_eq!(deferred.as_deref(), Some("perform the task"));
     }
 
@@ -24783,7 +25126,6 @@ mod tests {
         let template = crate::agent::default_prompt_args("codex").unwrap();
         let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
             agent_type: &agent_type,
-            binary_path: "/usr/local/bin/codex",
             args: &template,
             prompt: "perform the task",
             model: Some("gpt-5.6-luna"),
@@ -24793,14 +25135,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(
-            argv,
-            vec![
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--model",
-                "gpt-5.6-luna"
-            ]
-        );
+        assert_eq!(argv, vec!["--model", "gpt-5.6-luna"]);
         assert_eq!(deferred.as_deref(), Some("perform the task"));
     }
 
@@ -25003,33 +25338,131 @@ mod tests {
         assert_eq!(result, vec!["{prompt}".to_string()]);
     }
 
-    #[test]
-    fn direct_codex_defaults_apply_bypass_after_merge() {
-        let args = vec!["{prompt}".to_string()];
-        let result = merge_mcp_params_into_args("codex", &args, None, false, None, false).unwrap();
-        let result = apply_direct_codex_defaults("codex", result);
-        assert_eq!(
-            result,
-            vec![
-                "--dangerously-bypass-approvals-and-sandbox".to_string(),
-                "{prompt}".to_string()
-            ]
-        );
+    #[cfg(unix)]
+    async fn capture_codex_spawn(
+        args: &[&str],
+        prompt: &str,
+        command_name: &str,
+        requested_agent: &str,
+    ) -> (Vec<String>, serde_json::Value, Option<String>) {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let output = root.path().join("argv");
+        let binary = root.path().join(command_name);
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUTPUT\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        let cfg = serde_json::from_value(serde_json::json!({"agents": {"codex": {
+            "codex_bypass_migrated": true, "prevent_alt_screen": false,
+            "skip_trust_dialog": false, "native_status_signals": false,
+            "run_configs": [{"name": "Recorded Codex", "command": binary,
+                "args": args, "is_default": true, "env": {"ARGV_OUTPUT": output}}]
+        }}}))
+        .unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), cfg).unwrap();
+        let state = test_state();
+        let spawned = handle_mcp_tool_call(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            "agent",
+            &serde_json::json!({"action": "spawn", "agent_type": requested_agent,
+                "prompt": prompt, "cwd": root.path()}),
+            None,
+        )
+        .await;
+        assert!(spawned.get("error").is_none(), "{spawned}");
+        let deferred = state
+            .pending_injections
+            .get(spawned["session_id"].as_str().unwrap())
+            .and_then(|queue| queue.front().map(|injection| injection.text().to_string()));
+        let actual = wait_for_file_content_async(&output, std::time::Duration::from_secs(60)).await;
+        (
+            actual.lines().map(str::to_string).collect(),
+            spawned,
+            deferred,
+        )
     }
 
-    #[test]
-    fn direct_codex_bypass_after_option_terminator_does_not_satisfy_default() {
-        let args = vec![
-            "--".to_string(),
-            CODEX_BYPASS_ARG.to_string(),
-            "task text".to_string(),
+    // Catches: option values or later positional tokens select a Codex subcommand,
+    // or a real subcommand following root options loses its positional task.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_subcommand_position_controls_public_task_delivery() {
+        let cases: &[(&[&str], bool)] = &[
+            (&["--profile=review"], false),
+            (&["-preview"], false),
+            (&["--model", "exec"], false),
+            (&["--profile", "review", "resume", "exec"], false),
+            (&["--", "review"], false),
+            (&["--search", "exec"], true),
+            (&["--profile", "review", "e"], true),
+            (&["--model", "exec", "review"], true),
         ];
-        let result = apply_direct_codex_defaults("codex", args);
+        for (args, positional_task) in cases {
+            let (argv, spawned, deferred) =
+                capture_codex_spawn(args, "perform the task", "codex", "codex").await;
+            let mut expected = vec!["-c", "check_for_update_on_startup=false"];
+            expected.extend_from_slice(args);
+            if *positional_task {
+                expected.push("perform the task");
+                assert!(deferred.is_none(), "{args:?}");
+            } else {
+                assert_eq!(deferred.as_deref(), Some("perform the task"), "{args:?}");
+            }
+            assert_eq!(argv, expected, "{args:?}");
+            assert!(spawned.get("launch_warning").is_none(), "{spawned}");
+        }
+    }
 
-        assert_eq!(
-            result,
-            vec![CODEX_BYPASS_ARG, "--", CODEX_BYPASS_ARG, "task text"]
+    // Catches: Public spawn silently restores a removed approval bypass.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_codex_composition_does_not_restore_removed_bypass() {
+        let (argv, spawned, deferred) =
+            capture_codex_spawn(&["{prompt}"], "task", "codex", "Recorded Codex").await;
+        assert_eq!(argv, ["-c", "check_for_update_on_startup=false", "task"]);
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
         );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
+    }
+
+    // Catches: Public spawn promotes a positional bypass token into an option.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_codex_composition_does_not_promote_positional_bypass() {
+        let (argv, spawned, deferred) = capture_codex_spawn(
+            &[
+                "--",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "task text",
+            ],
+            "task",
+            "codex",
+            "Recorded Codex",
+        )
+        .await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "--",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "task text",
+                "task"
+            ]
+        );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
     }
 
     #[test]
@@ -25043,104 +25476,153 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn named_codex_run_config_preserves_existing_bypass() {
-        let args = vec![
-            "--dangerously-bypass-approvals-and-sandbox".to_string(),
-            "--search".to_string(),
-        ];
-        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
-            "codex",
-            &args,
+    // Catches: Named spawn strips the configured approval bypass.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_run_config_preserves_existing_bypass() {
+        let (argv, spawned, deferred) = capture_codex_spawn(
+            &["--dangerously-bypass-approvals-and-sandbox", "--search"],
             "perform the task",
-            None,
-            false,
-            None,
+            "codex",
+            "Recorded Codex",
         )
-        .unwrap();
-
+        .await;
         assert_eq!(
-            result,
-            vec![CODEX_BYPASS_ARG, "--search", "perform the task"],
-            "authored run-config argv must remain the prefix of the legacy positional prompt"
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--search",
+                "perform the task"
+            ]
         );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
     }
 
-    #[test]
-    fn named_codex_run_config_missing_bypass_gets_direct_default() {
-        let args = vec!["--search".to_string()];
-        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
-            "codex",
-            &args,
-            "perform the task",
-            None,
-            false,
-            None,
-        )
-        .unwrap();
-
+    // Catches: Named spawn restores a removed approval bypass.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_run_config_removed_bypass_stays_removed() {
+        let (argv, spawned, deferred) =
+            capture_codex_spawn(&["--search"], "perform the task", "codex", "Recorded Codex").await;
         assert_eq!(
-            result,
-            vec![CODEX_BYPASS_ARG, "--search", "perform the task"]
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "--search",
+                "perform the task"
+            ]
         );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
     }
 
-    #[test]
-    fn named_codex_exec_run_config_preserves_positional_prompt() {
-        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
+    // Catches: Named exec spawn loses its positional task to deferred PTY delivery.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_exec_run_config_preserves_positional_prompt() {
+        let (argv, spawned, deferred) =
+            capture_codex_spawn(&["exec"], "perform the task", "codex", "Recorded Codex").await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "exec",
+                "perform the task"
+            ]
+        );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
+    }
+
+    // Catches: Named spawn appends the task instead of substituting its authored placeholder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_placeholder_run_config_remains_authoritative() {
+        let (argv, spawned, deferred) = capture_codex_spawn(
+            &["exec", "{prompt}"],
+            "perform the task",
             "codex",
-            &["exec".to_string()],
-            "perform the task",
-            None,
-            false,
-            None,
+            "Recorded Codex",
         )
-        .unwrap();
-
-        assert_eq!(result, vec![CODEX_BYPASS_ARG, "exec", "perform the task"]);
-    }
-
-    #[test]
-    fn named_codex_placeholder_run_config_remains_authoritative() {
-        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
+        .await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "exec",
+                "perform the task"
+            ]
+        );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        assert!(spawned.get("launch_warning").is_none(), "{spawned}");
+        // A non-final placeholder distinguishes substitution from positional append.
+        let (argv, _, deferred) = capture_codex_spawn(
+            &["exec", "{prompt}", "--json"],
+            "perform the task",
             "codex",
-            &["exec".to_string(), "{prompt}".to_string()],
-            "perform the task",
-            None,
-            false,
-            None,
+            "Recorded Codex",
         )
-        .unwrap();
-
-        assert_eq!(result, vec![CODEX_BYPASS_ARG, "exec", "perform the task"]);
+        .await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "exec",
+                "perform the task",
+                "--json"
+            ]
+        );
+        assert!(deferred.is_none());
     }
 
-    #[test]
-    fn named_codex_wrapper_preserves_positional_prompt_and_is_warned() {
-        let args = vec!["launch-codex".to_string()];
-        let command = "/opt/company/bin/agent-wrapper";
-        let agent_type = resolve_spawn_agent_type(command, Some("codex")).unwrap();
-        let result = compose_mcp_run_config_args(
-            &agent_type,
-            command,
-            &args,
+    // Catches: Wrapper spawn loses its positional task or omits the public launch warning.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_codex_wrapper_preserves_positional_prompt_and_is_warned() {
+        let (argv, spawned, deferred) = capture_codex_spawn(
+            &["launch-codex"],
             "perform the task",
-            None,
-            false,
-            None,
+            "agent-wrapper",
+            "Recorded Codex",
         )
-        .unwrap();
-
-        assert_eq!(result, vec!["launch-codex", "perform the task"]);
-        assert!(codex_wrapper_launch_warning(Some(agent_type.as_str()), command).is_some());
+        .await;
+        assert_eq!(
+            argv,
+            [
+                "-c",
+                "check_for_update_on_startup=false",
+                "launch-codex",
+                "perform the task"
+            ]
+        );
+        assert!(
+            deferred.is_none(),
+            "named run configs must retain positional task delivery"
+        );
+        let warning = spawned["launch_warning"].as_str().expect("wrapper warning");
+        assert!(
+            warning.contains("agent-wrapper") && warning.contains("cannot validate"),
+            "{warning}"
+        );
     }
 
     #[test]
@@ -25150,7 +25632,6 @@ mod tests {
 
         let (argv, deferred) = compose_mcp_spawn_args(McpSpawnArgs {
             agent_type: &agent_type,
-            binary_path: "/usr/local/bin/codex",
             args: &["--search".to_string()],
             prompt: "perform the task",
             model: None,
@@ -25159,7 +25640,7 @@ mod tests {
             default_template: false,
         })
         .unwrap();
-        assert_eq!(argv, vec![CODEX_BYPASS_ARG, "--search"]);
+        assert_eq!(argv, vec!["--search"]);
         assert_eq!(deferred.as_deref(), Some("perform the task"));
     }
 

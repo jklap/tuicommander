@@ -843,6 +843,16 @@ Claude and Codex entries may contain `skip_trust_dialog: boolean`. An absent val
 
 Per-agent run configurations (custom commands, arguments, model, environment variables).
 
+Loading `agents.json` performs a locked, one-time Codex migration. A missing
+Codex configuration gains an explicit default; an existing direct Codex default
+(or the first configuration if none is marked default) gains
+`--dangerously-bypass-approvals-and-sandbox`. Other configurations and wrapper
+arguments are preserved. The `codex-bypass-migrated` stamp in the same config
+directory prevents later loads from restoring a flag the user removed, even
+after an older backend rewrites `agents.json` and drops unknown fields. The
+`codex_bypass_migrated` field remains a serialization-compatible mirror. MCP launch composition
+does not add that argument; the configuration owns the choice.
+
 ```rust
 struct AgentRunConfig {
     name: String,
@@ -855,6 +865,7 @@ struct AgentRunConfig {
 
 struct AgentSettings {
     run_configs: Vec<AgentRunConfig>,
+    codex_bypass_migrated: bool, // one-time launch-argument migration
     idle_close_minutes: u32, // default 15; 0 disables managed-child cleanup
     prevent_alt_screen: Option<bool>, // absent = true
     skip_trust_dialog: Option<bool>, // absent = true; MCP spawns only

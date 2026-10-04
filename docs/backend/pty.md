@@ -77,6 +77,11 @@ returns `400` and does not enter the session map.
 
 ### Monitoring
 
+Foreground-agent exit or an observed agent-type change also retires the terminal's volatile Telegram registration
+lifetime synchronously. A restarted agent using the same terminal and MCP identity
+must opt in again, even if the Telegram worker was busy during the transition. Unrecognized
+non-shell probes retain the previous identity and do not revoke registration.
+
 | Command | Description |
 |---------|-------------|
 | `get_orchestrator_stats()` | Active/max/available session counts. |
@@ -715,3 +720,7 @@ Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The
   because session metadata is contended.
 - Reader thread holds `Arc<AtomicBool>` for pause signaling
 - Metrics use `AtomicUsize` for zero-overhead counting
+
+Claude launch settings apply to prompt and option-first launches. Shell wrappers use backend-captured installed CLI help to recognise subcommands and aliases, without probing again at launch. Help is unavailable unless its `Commands:` section has parseable command rows; empty, whitespace-only or truncated help therefore uses the complete recorded Claude help, including `auth` and advertised aliases. Rust publishes this fallback to the shell environment; generated wrappers also embed it for an unusable cached value. No separate fallback verb list is maintained. The exact hidden `remote-control` command also bypasses settings because its reported CLI refusal confirms that requirement. Hyphenated prompts retain settings. Explicit settings and bare mode remain authoritative.
+
+Headless PTY registration uses the requested terminal geometry without a minimum VT width. A same-size resize preserves that width.

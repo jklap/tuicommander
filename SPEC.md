@@ -708,7 +708,7 @@ Some frontend-only stores persist to localStorage:
 - [ ] Error handling strategy config
 
 ### Agent Configuration (Done)
-- [x] Settings > Agents tab with per-agent run configurations
+- [x] Settings > Agents tab with per-agent run configurations and an explicit, removable Codex bypass argument with warning icon
 - [x] MCP spawn accepts caller environment overrides and an overrideable run-config model while preserving legacy model arguments
 - [x] MCP bridge install/remove for every MCP-capable agent in the canonical registry
 - [x] Terminal context menu > Agents submenu with run configs
@@ -751,4 +751,4 @@ excluded from this protocol and local mail survives hub loss.
 
 ## Telegram channel implementation status (#1438-79b4)
 
-Approved design: [Telegram channel](docs/design/telegram-channel.md). Offline slices 1–2 provide owner/config/API boundaries and offset-only inbound persistence, with fixed ten-update polling under a 1 MiB response cap, one cursor write after each successful batch, shared error backoff and in-memory 401/403/404/409 stops. Unread inbox mail may be lost on restart; there is no journal or loss detection. Native inbox/wake integration awaits 1419/1420; daemon polling, streaming, approval receipts and live deployment are not yet available. The target is a new coordinator-spawned managed marketeer peer on mint, not pe-3.
+The headless daemon provides native Telegram mail, correlated drafts, exact final replies, done/blocked notices and opaque callbacks. Any MCP-bound TUIC agent opts in with `telegram register`; one volatile registration replaces the previous agent with one mail notice. Registration ends on MCP session end, PTY close or agent exit while its shell remains. No configured agent UUID is required. Allowed inbound without an agent replies "Nessun agent registrato" and drops; strangers stay silent. Only the cursor persists, so restart may lose unread mail and requires registration again. Single-destination sends and private token/allowlist authorization remain. See [Telegram channel](docs/design/telegram-channel.md). Live mint deployment remains pending.

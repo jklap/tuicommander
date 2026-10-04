@@ -80,9 +80,7 @@ impl<P: MailPort> Inbound<P> {
 
     async fn poll_once(&mut self) -> Result<Poll, Error> {
         let current = Config::load(&self.paths)?.ok_or(Error::Config)?;
-        if current.bot_alias != self.config.bot_alias
-            || current.target_tuic_session != self.config.target_tuic_session
-        {
+        if current.bot_alias != self.config.bot_alias {
             return Err(Error::State);
         }
         let saved = offset::read(&self.paths);
@@ -109,29 +107,26 @@ impl<P: MailPort> Inbound<P> {
         let mut updates = values
             .iter()
             .map(|value| {
-                Update::parse(
-                    value,
-                    &ids,
-                    &self.config.bot_alias,
-                    &self.config.target_tuic_session,
-                )
+                Update::parse(value, &ids, &self.config.bot_alias, "").map(|update| (update, value))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        updates.sort_by_key(|update| update.id);
+        updates.sort_by_key(|(update, _)| update.id);
         if updates
             .windows(2)
-            .any(|pair| pair[0].id == pair[1].id && pair[0].mail != pair[1].mail)
+            .any(|pair| pair[0].0.id == pair[1].0.id && pair[0].1 != pair[1].1)
         {
             return Err(Error::Protocol);
         }
         let mut accepted = 0;
-        for update in updates {
+        for (update, value) in updates {
             if update.id < next {
                 continue;
             }
             let candidate = update.id.checked_add(1).ok_or(Error::Protocol)?;
-            if let Some(mail) = update.mail {
-                self.port.offer(&mail).await?;
+            self.port.update(value).await?;
+            if let Some(mail) = update.mail
+                && self.port.offer(&mail).await?
+            {
                 accepted += 1;
             }
             next = candidate;
