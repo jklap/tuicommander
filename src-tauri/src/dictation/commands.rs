@@ -3904,7 +3904,7 @@ mod tests {
             };
             assert_eq!(
                 config.loudness().volume_db.to_bits(),
-                expected.to_bits(),
+                f32::to_bits(expected),
                 "stored {stored}"
             );
         }
