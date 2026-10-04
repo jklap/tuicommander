@@ -1,3 +1,7 @@
+## Telegram channel adapter (1438-79b4) — headless rebuild required
+
+- [ ] After Boss authorizes mint deployment and the bound agent is idle, rebuild/restart tuic-remote and verify the allowlisted phone conversation: Thinking/activity refresh, exact final reply, Stop/Esc, authored done/blocked notices and opaque-button callback mail. The Rust changes do not hot-reload. No live token/chat-ID reads, mint deployment or desktop restart were performed by this lane. Offline targeted tests use fake credentials and chats; deterministic publish receipts remain outside this slice.
+
 ## Windows Clippy cleanup (1501-e8cb) — rebuild required
 
 - [ ] After the next Windows rebuild, confirm agent executable discovery still prefers `.exe` over `.cmd`, Chrome registry discovery works, and an upload completes. The Rust syntax cleanup does not hot-reload into the running desktop; Boss controls the next restart.
