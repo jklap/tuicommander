@@ -482,6 +482,7 @@ async fn post_story_action(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<guards::Authenticated>>,
+    user_auth: Option<Extension<guards::UserAuthenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(input): Json<StoryActionRequest>,
 ) -> Response {
@@ -489,11 +490,12 @@ async fn post_story_action(
         return r;
     }
     let result = tokio::task::spawn_blocking(move || {
-        crate::stories::story_action_for_http(
+        crate::stories::story_action_for_http_authenticated(
             &state,
             &q.path,
             input.action,
             input.session_id.as_deref(),
+            user_auth.is_some(),
         )
     })
     .await
@@ -509,14 +511,20 @@ async fn get_story_capabilities() -> Json<bool> {
 async fn post_workflow_definition_action(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<guards::Authenticated>>,
+    user_auth: Option<Extension<guards::UserAuthenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(action): Json<crate::workflows::WorkflowAction>,
 ) -> Response {
     if let Some(response) = progress_auth(&addr, auth.is_some()) {
         return response;
     }
+    let actor = if user_auth.is_some() {
+        crate::workflows::WorkflowActor::Human
+    } else {
+        crate::workflows::WorkflowActor::LocalApi
+    };
     let result =
-        tokio::task::spawn_blocking(move || crate::workflows::definition_action(&q.path, action))
+        tokio::task::spawn_blocking(move || crate::workflows::definition_action_for_actor(&q.path, action, actor))
             .await
             .map_err(|error| format!("workflow definition task failed: {error}"))
             .and_then(|result| result);
@@ -526,14 +534,20 @@ async fn post_workflow_run_action(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<guards::Authenticated>>,
+    user_auth: Option<Extension<guards::UserAuthenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(action): Json<crate::workflows::RunAction>,
 ) -> Response {
     if let Some(response) = progress_auth(&addr, auth.is_some()) {
         return response;
     }
+    let actor = if user_auth.is_some() {
+        crate::workflows::WorkflowActor::Human
+    } else {
+        crate::workflows::WorkflowActor::LocalApi
+    };
     let result = tokio::task::spawn_blocking(move || {
-        crate::workflows::run_action_with_events(&state, &q.path, action)
+        crate::workflows::run_action_with_events_for_actor(&state, &q.path, action, actor)
     })
     .await
     .map_err(|error| format!("workflow run task failed: {error}"))
@@ -2177,6 +2191,9 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     let routes = routes
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
+            state.clone(), auth::workflow_actor_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             remote_session_proxy::proxy_http,
         ))
@@ -3636,7 +3653,7 @@ mod tests {
             .unwrap();
         let story = store
             .create_story(NewStory {
-                plan_id: plan.id,
+                plan_id: plan.id.clone(),
                 title: "Story".into(),
                 criteria: vec!["Done".into()],
                 priority: 1,
@@ -3646,7 +3663,9 @@ mod tests {
             .unwrap();
         let path = format!("/stories/action?path={}", project.path().display());
         let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-        let app = build_router(test_state(), false, true);
+        let state = test_state();
+        let token = state.session_token.read().clone();
+        let app = build_router(state, false, true);
         let response = app.clone().oneshot(mcp_post_from(&path, &serde_json::json!({
             "action": { "action": "transition", "story_id": story.id, "expected_revision": story.revision, "command": "start_manual" }
         }), local)).await.unwrap();
@@ -3662,7 +3681,7 @@ mod tests {
         let review = store
             .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
             .unwrap();
-        let response = app.oneshot(mcp_post_from(&path, &serde_json::json!({
+        let response = app.clone().oneshot(mcp_post_from(&path, &serde_json::json!({
             "action": { "action": "transition", "story_id": story.id, "expected_revision": review.revision, "command": "approve" }
         }), local)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -3679,6 +3698,50 @@ mod tests {
                 .actor,
             StoryTransitionActor::LocalApi
         );
+        let other = store.create_story(NewStory {
+            plan_id: plan.id, title: "Operator decision".into(), criteria: vec!["Done".into()],
+            priority: 1, origin: StoryOrigin::Native, file_scope: vec![],
+        }).unwrap();
+        let body = serde_json::json!({"action": {
+            "action": "transition", "story_id": other.id,
+            "expected_revision": other.revision, "command": "block"
+        }});
+        let response = app.clone().oneshot(mcp_post_from(&path, &body, local)).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("authenticated user"));
+        let response = app.oneshot(mcp_post_from(&format!("{path}&token={token}"), &body, local)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(store.transition_history(&other.id).unwrap()[0].actor, StoryTransitionActor::Human);
+    }
+
+    #[tokio::test]
+    async fn workflow_actor_routes_require_credentials_not_loopback_admission() {
+        // catches: local automation publishes a check policy or answers a user prompt.
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project");
+        let state = test_state();
+        let token = state.session_token.read().clone();
+        let app = build_router(state, false, true);
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        for (route, body) in [
+            ("/workflows/definition/action", serde_json::json!({
+                "action": "publish", "id": "missing", "expected_revision": 1
+            })),
+            ("/workflows/run/action", serde_json::json!({
+                "action": "command", "run_id": "missing", "command_id": "decision",
+                "expected_sequence": 1, "command": {"action": "resume"}
+            })),
+        ] {
+            let path = format!("{route}?path={}", project.path().display());
+            let response = app.clone().oneshot(mcp_post_from(&path, &body, local)).await.unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains("authenticated user"));
+            let path = format!("{path}&token={token}");
+            let response = app.clone().oneshot(mcp_post_from(&path, &body, local)).await.unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert!(!String::from_utf8_lossy(&bytes).contains("authenticated user"));
+        }
     }
 
     /// `edd69ea7` moved the Progress routes into `shared_routes()` so a

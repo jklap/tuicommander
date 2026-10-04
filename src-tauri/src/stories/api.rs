@@ -263,7 +263,17 @@ pub fn story_action_for_http(
     action: StoryAction,
     session_id: Option<&str>,
 ) -> Result<StoryReply, String> {
-    story_action_for_session_with_source(state, project, action, session_id, true)
+    story_action_for_http_authenticated(state, project, action, session_id, false)
+}
+
+pub(crate) fn story_action_for_http_authenticated(
+    state: &crate::AppState,
+    project: &str,
+    action: StoryAction,
+    session_id: Option<&str>,
+    authenticated_user: bool,
+) -> Result<StoryReply, String> {
+    story_action_for_session_with_source(state, project, action, session_id, !authenticated_user)
 }
 
 fn story_action_for_session_with_source(

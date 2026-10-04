@@ -333,6 +333,7 @@ pub async fn basic_auth_middleware(
     // by default) after scanning the QR, even while in constant use, and fell back
     // to the Basic Auth prompt because the SPA stores the token nowhere.
     if has_valid_session_cookie(&req, &session_token) {
+        req.extensions_mut().insert(super::guards::UserAuthenticated);
         let mut response = next.run(req).await;
         if let Ok(val) = session_cookie_value(&session_token, token_duration_secs, is_tls).parse() {
             response.headers_mut().insert(header::SET_COOKIE, val);
@@ -344,6 +345,7 @@ pub async fn basic_auth_middleware(
     // The QR code embeds this token, so scanning it authenticates the device.
     // We set a session cookie so the SPA's subsequent fetch() calls are also authenticated.
     if has_valid_url_token(&req, &session_token) {
+        req.extensions_mut().insert(super::guards::UserAuthenticated);
         state.auth_rate_limits.remove(&addr.ip());
         let mut response = next.run(req).await;
         if let Ok(val) = session_cookie_value(&session_token, token_duration_secs, is_tls).parse() {
@@ -405,6 +407,7 @@ pub async fn basic_auth_middleware(
 
     match result {
         AuthResult::Ok => {
+            req.extensions_mut().insert(super::guards::UserAuthenticated);
             // A success supersedes every stale failure for this IP.
             state.auth_rate_limits.remove(&client_ip);
             let mut response = next.run(req).await;
@@ -1726,3 +1729,28 @@ mod tests {
 #[cfg(test)]
 #[path = "auth_login_critic_tests.rs"]
 mod login_critic_tests;
+
+
+/// Desktop HTTP admits local automation but grants user workflow authority only
+/// after credentials. Remote routers already verified credentials before here.
+pub(super) async fn workflow_actor_middleware(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if !matches!(req.uri().path(), "/stories/action" | "/workflows/definition/action" | "/workflows/run/action")
+        || req.extensions().get::<super::guards::UserAuthenticated>().is_some()
+    {
+        return next.run(req).await;
+    }
+    let token = state.session_token.read().clone();
+    let credentials = has_valid_session_cookie(&req, &token)
+        || has_valid_url_token(&req, &token)
+        || req.headers().contains_key(header::AUTHORIZATION);
+    if credentials {
+        basic_auth_middleware(State(state), ConnectInfo(addr), req, next).await
+    } else {
+        next.run(req).await
+    }
+}

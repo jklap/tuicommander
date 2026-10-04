@@ -748,6 +748,12 @@ mod tests {
                 file_scope: vec![],
             })
             .unwrap();
+        // catches: LocalApi masquerades as the operator for administrative transitions.
+        for command in [StoryCommand::Block, StoryCommand::Unblock,
+            StoryCommand::WontFix, StoryCommand::RejectReview] {
+            assert!(store.transition_from_local_api(&story.id, story.revision, command)
+                .unwrap_err().contains("authenticated user"));
+        }
         let started = store
             .transition_from_local_api(&story.id, story.revision, StoryCommand::StartManual)
             .expect("local action");

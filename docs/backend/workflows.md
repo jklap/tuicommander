@@ -38,3 +38,5 @@ Published checks own their process trees (Unix process groups; Windows suspended
 job assignment with kill-on-close). Cancelling a run synchronously stops its
 active checks and fences late starts. Host shutdown tears down every active check
 before exit; cancellation yields no successful receipt.
+
+Workflow policy writes and human run commands (answer input, resume, resolve uncertain effects, final verification, complete) require desktop IPC or credential-authenticated HTTP. Sessionless loopback HTTP is LocalApi and cannot claim operator authority. The actor is host-selected; request JSON cannot choose it.

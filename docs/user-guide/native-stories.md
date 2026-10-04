@@ -48,3 +48,5 @@ An orchestrating session in another project cannot read or approve this repo's p
 ## MCP tool schema
 
 The `story` tool publishes the full `StoryAction` JSON Schema (actions, fields, types, enums, the `origin` tag shape, priority range 1 to 3) in its `inputSchema`. It is generated from the Rust types, so it follows the code. Inside `input` the story fields are camelCase (`planId`, `fileScope`) while the action fields are snake_case (`story_id`, `expected_revision`).
+
+Administrative story decisions (block, unblock, reject review, and wont-fix) require the desktop user path or an authenticated browser session. Local automation can still record its own LocalApi approval provenance but cannot perform those operator decisions.

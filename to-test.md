@@ -4581,3 +4581,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
 
 - [ ] After the next backend restart, cancel a workflow while a published check is running and confirm its workers stop (#954-4f33). Automated regression covers process-tree teardown; the running backend must be restarted to load this change.
+
+- [ ] After backend restart, verify authenticated browser workflow policy editing and operator decisions, with unauthenticated local calls refused (#956-9745). Actor routing is covered by targeted API tests.

@@ -4,6 +4,14 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Authority selected by the host transport, never deserialized from a request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkflowActor {
+    Human,
+    LocalApi,
+    ManagedSession,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowAction {
@@ -77,6 +85,22 @@ fn check_draft_size(graph: &WorkflowGraph) -> Result<(), String> {
 
 /// Project-scoped definition operations shared by desktop and HTTP transports.
 pub fn definition_action(project: &str, action: WorkflowAction) -> Result<WorkflowReply, String> {
+    definition_action_for_actor(project, action, WorkflowActor::Human)
+}
+
+pub fn definition_action_for_actor(
+    project: &str,
+    action: WorkflowAction,
+    actor: WorkflowActor,
+) -> Result<WorkflowReply, String> {
+    if actor != WorkflowActor::Human && matches!(&action,
+        WorkflowAction::CreateDraft { .. } | WorkflowAction::UpdateDraft { .. }
+        | WorkflowAction::UpdateClosure { .. } | WorkflowAction::UpdateChecks { .. }
+        | WorkflowAction::Publish { .. })
+    {
+        return Err("workflow policy mutation requires an authenticated user action".into());
+    }
+
     if !crate::fs::is_absolute_on_any_platform(project) {
         return Err("project must be an absolute path".into());
     }
@@ -194,5 +218,29 @@ mod tests {
             ),
             Ok(WorkflowReply::Draft(_))
         ));
+    }
+}
+
+
+#[cfg(test)]
+mod actor_tests {
+    use super::*;
+
+    #[test]
+    fn local_and_managed_calls_cannot_publish_check_policy_as_a_user() {
+        // catches: loopback agents publish arbitrary argv under implicit Human authority.
+        for actor in [WorkflowActor::LocalApi, WorkflowActor::ManagedSession] {
+            for action in [
+                WorkflowAction::UpdateChecks { id: "draft".into(), expected_revision: 1, checks: vec![] },
+                WorkflowAction::Publish { id: "draft".into(), expected_revision: 1 },
+            ] {
+                assert!(definition_action_for_actor("relative", action, actor)
+                    .unwrap_err().contains("authenticated user"));
+            }
+        }
+        // Human routing passes the authority gate and reaches project validation.
+        assert!(definition_action_for_actor("relative",
+            WorkflowAction::Publish { id: "draft".into(), expected_revision: 1 },
+            WorkflowActor::Human).unwrap_err().contains("absolute path"));
     }
 }
