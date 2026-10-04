@@ -96,7 +96,15 @@ impl BotApi {
     pub(super) async fn request(&self, method: &str, payload: Value) -> Result<Value, Error> {
         // Reading the allowlist here also revokes pending network work when its
         // source is missing/invalid. The caller checks each incoming chat again.
-        self.paths.allowlist()?;
+        match method {
+            "getMe" => {}
+            "getUpdates" => {
+                self.paths.allowlist_entries()?;
+            }
+            _ => {
+                self.paths.allowlist()?;
+            }
+        }
         let token = self.paths.token()?;
         let url = Zeroizing::new(format!("{}/bot{}/{method}", self.base, token.as_str()));
         // Never trace the URL or retain reqwest errors (their Display includes it).

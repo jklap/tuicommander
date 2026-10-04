@@ -103,7 +103,7 @@ impl<P: MailPort> Inbound<P> {
         }
         let mut next = saved.ok_or(Error::State)?;
         // Revalidate after the long poll; never deliver from a stale allowlist snapshot.
-        let ids = self.paths.allowlist()?;
+        let ids = self.paths.allowlist_entries()?;
         let mut updates = values
             .iter()
             .map(|value| {
@@ -123,6 +123,17 @@ impl<P: MailPort> Inbound<P> {
                 continue;
             }
             let candidate = update.id.checked_add(1).ok_or(Error::Protocol)?;
+            if super::settings::pair_update(&self.paths, value, super::settings::now_ms())? {
+                next = candidate;
+                continue;
+            }
+            // Pairing earlier in this batch may have authorized this chat.
+            let update = Update::parse(
+                value,
+                &self.paths.allowlist_entries()?,
+                &self.config.bot_alias,
+                "",
+            )?;
             self.port.update(value).await?;
             if let Some(mail) = update.mail
                 && self.port.offer(&mail).await?

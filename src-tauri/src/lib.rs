@@ -1936,6 +1936,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            telegram::settings::telegram_settings,
+            telegram::settings::telegram_setup,
             generators::generate_value,
             native_dialog::pick_path,
             native_drag::start_native_drag,

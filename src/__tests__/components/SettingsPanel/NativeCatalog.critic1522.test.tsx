@@ -44,7 +44,8 @@ it("refreshes native switches when a later backend poll registers a tool", async
 		expect(view.queryByText("telegram")).toBeNull();
 		registered = true;
 		await vi.advanceTimersByTimeAsync(3000);
-		expect(view.getByRole("checkbox", { name: "telegram" })).not.toBeChecked();
+		const toggle = view.getByRole("checkbox", { name: "telegram" }) as HTMLInputElement;
+		expect(toggle.checked).toBe(false);
 		expect(view.getByText("Telegram backend summary")).toBeDefined();
 		expect(view.getByText("Telegram backend description")).toBeDefined();
 	} finally {
