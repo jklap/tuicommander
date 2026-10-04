@@ -38,6 +38,8 @@ export interface ScrollbarMarksInput {
 	matchRows: readonly number[];
 	/** Total rows in the scrollback, i.e. the denominator for every ratio. */
 	totalRows: number;
+	/** Evicted rows; block and prompt rows are all-time, search rows are grid-relative. */
+	historyBase?: number;
 	/** Pixel height of the scrollbar track. */
 	trackH: number;
 	/**
@@ -51,17 +53,19 @@ const tick = (top: number, color: string) =>
 	`<div style="position:absolute;right:0;width:100%;height:2px;top:${top}px;background:${color}"></div>`;
 
 export function buildScrollbarMarksHtml(input: ScrollbarMarksInput): string {
-	const { blocks, promptLines, matchRows, totalRows, trackH, showBlocks } = input;
+	const { blocks, promptLines, matchRows, totalRows, trackH, showBlocks, historyBase = 0 } = input;
 	let html = "";
 	if (showBlocks) {
 		for (const block of blocks) {
 			const color = block.exitCode !== null && block.exitCode !== 0 ? FAILED_BLOCK : OK_BLOCK;
-			html += tick((block.promptLine / totalRows) * trackH, color);
+			const row = block.promptLine - historyBase;
+			if (row >= 0 && row < totalRows) html += tick((row / totalRows) * trackH, color);
 		}
 		// Drawn after the block ticks so a user prompt sits on top of the block
 		// boundary it shares a row with. There are few of these — one per turn.
 		for (const line of promptLines) {
-			html += tick((line / totalRows) * trackH, USER_PROMPT);
+			const row = line - historyBase;
+			if (row >= 0 && row < totalRows) html += tick((row / totalRows) * trackH, USER_PROMPT);
 		}
 	}
 	// Rounded to whole pixels and de-duplicated: a search with hundreds of hits in

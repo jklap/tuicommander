@@ -82,8 +82,8 @@ describe("readAnswersHistory prompt-less prefix (critic 1417)", () => {
 		// catches: prefix cached across a base move, resurrecting an evicted answer
 		const cache = newTurnCache();
 		await readAnswersHistory(serve(), [2, 5], 0, SESSION.length, cache);
-		// rows 0..1 evicted: backend serves abs 2.. only; prompts now grid-relative 0 and 3, base 2
-		const turns = await readAnswersHistory(serve(SESSION, 0), [0, 3], 2, SESSION.length, cache);
+		// Rows 0..1 evicted: retained reads start at base 2; stored prompts remain absolute rows 2 and 5.
+		const turns = await readAnswersHistory(serve(SESSION, 0), [2, 5], 2, SESSION.length, cache);
 		expect(turns?.map((t) => t.prompt)).toEqual(["❯ first question", "❯ second question"]);
 		expect(turns?.flatMap((t) => t.answers)).toEqual(["💬 Answer one.", "💬 Answer two."]);
 	});
