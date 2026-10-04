@@ -384,12 +384,14 @@ pub(crate) async fn receive_copy(
         Err(e) => return Err(e.to_string()),
     }
     let name = format!(".tuic-upload-{}", uuid::Uuid::new_v4());
-    let mut staging_options = cap_std::fs::DirBuilder::new();
+    let staging_options = cap_std::fs::DirBuilder::new();
     #[cfg(unix)]
-    {
+    let staging_options = {
         use cap_std::fs::DirBuilderExt;
-        staging_options.mode(0o700);
-    }
+        let mut options = staging_options;
+        options.mode(0o700);
+        options
+    };
     dest.create_dir_with(&name, &staging_options)
         .map_err(|e| e.to_string())?;
     let staging_dir = dest.open_dir(&name).map_err(|e| e.to_string())?;

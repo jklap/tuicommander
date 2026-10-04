@@ -3036,11 +3036,13 @@ mod tests {
     /// After its one phrase it keeps handing back room silence, exactly as a
     /// live capture device does — a device that stops delivering samples is a
     /// failure, and this fake must not fake one.
+    #[cfg(unix)]
     struct ScriptedEndpoint {
         phrase: parking_lot::Mutex<Option<Vec<f32>>>,
         transcript: String,
     }
 
+    #[cfg(unix)]
     impl continuous::VoiceEndpoint for ScriptedEndpoint {
         fn drain(&mut self) -> Result<Vec<f32>, String> {
             Ok(self
@@ -3067,6 +3069,7 @@ mod tests {
     ///
     /// The notices are about the *mode*, so a test for them must not have to
     /// stage a spoken turn to see one.
+    #[cfg(unix)]
     fn silent_endpoint()
     -> impl Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
         |_dictation, _owner| {
@@ -3081,6 +3084,7 @@ mod tests {
     ///
     /// The composer flushes on its own schedule, so the alternative is a fixed
     /// sleep — a guess about scheduling rather than a deadline.
+    #[cfg(unix)]
     fn wait_for_typed(bytes: &Arc<std::sync::Mutex<Vec<u8>>>, needle: &str) -> String {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
@@ -3097,6 +3101,7 @@ mod tests {
     /// Whether `needle` is typed into the recorded terminal inside `window`.
     /// Used for the assertion that it is not; the caller measures the window
     /// rather than guessing it.
+    #[cfg(unix)]
     fn typed_within(
         bytes: &Arc<std::sync::Mutex<Vec<u8>>>,
         needle: &str,
@@ -3113,6 +3118,7 @@ mod tests {
     }
 
     /// A spoken phrase: 600ms of tone, then long enough a pause to close it.
+    #[cfg(unix)]
     fn spoken_phrase() -> Vec<f32> {
         let sample_rate = continuous::SAMPLE_RATE as f32;
         let speech = (0..(sample_rate as usize * 600 / 1000))
@@ -3122,6 +3128,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(unix)]
     fn scripted_endpoint(
         transcript: &'static str,
     ) -> impl Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {

@@ -680,7 +680,7 @@ impl ScreenProbeTree {
             SetInformationJobObject(
                 job.0,
                 JobObjectExtendedLimitInformation,
-                &limits as *const _ as *const _,
+                std::ptr::from_ref(&limits).cast(),
                 std::mem::size_of_val(&limits) as u32,
             )
         };
@@ -771,6 +771,25 @@ impl Drop for ScreenProbeTree {
 /// A help probe owns and tears down its process tree, including descendants
 /// that inherited stdout or stderr. The shared git deadline helper deliberately
 /// has different child-only semantics, so screen probes keep this local.
+pub(crate) fn cli_help(path: &str) -> Option<String> {
+    let executable = resolve_probe_executable(path);
+    let mut cmd = agent_probe_command(executable.to_str().unwrap_or(path));
+    cmd.arg("--help");
+    crate::cli::apply_no_window(&mut cmd);
+    let output = screen_probe_output(&mut cmd, std::time::Duration::from_secs(2)).ok()?;
+    output
+        .status
+        .success()
+        .then(|| {
+            format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+        .filter(|help| crate::agent_hook_launch::claude_help_is_usable(help))
+}
+
 fn screen_probe_output(
     cmd: &mut Command,
     timeout: std::time::Duration,
@@ -836,14 +855,14 @@ fn screen_probe_output(
 }
 
 fn preferred_agent_path(output: &str) -> Option<&str> {
-    let mut paths = output
+    let paths = output
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty());
     #[cfg(windows)]
     {
         let choices: Vec<&str> = paths.collect();
-        return choices
+        choices
             .iter()
             .copied()
             .find(|path| {
@@ -858,10 +877,11 @@ fn preferred_agent_path(output: &str) -> Option<&str> {
                         .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("cmd"))
                 })
             })
-            .or_else(|| choices.first().copied());
+            .or_else(|| choices.first().copied())
     }
     #[cfg(not(windows))]
     {
+        let mut paths = paths;
         paths.next()
     }
 }
