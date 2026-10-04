@@ -160,7 +160,7 @@ receive it on `/events`.
 | `get_file_history` | `path, file, count?, after?` | `Vec<CommitLogEntry>` | Per-file commit log following renames (default 50, max 500) |
 | `get_file_blame` | `path, file` | `Vec<BlameLine>` | Per-line blame: hash, author, author_time (unix), line_number, content |
 | `get_branches_detail` | `path` | `Vec<BranchDetail>` | Rich branch listing: name, ahead/behind, last commit date, tracking upstream, merged status |
-| `delete_branch` | `path, name, force` | `()` | Delete a local branch. `force=false` uses the shared integration proof and compares the ref with its proved tip; content-based proof requires an exact-tip archive. `force=true` preserves the exact tip at `refs/archive/<branch>` before deleting, refuses archive collisions, and cannot delete a checked-out branch. Refuses to delete the current branch or default branch |
+| `delete_branch` | `path, name, force` | `()` | Delete a local branch. `force=false` uses the shared integration proof and compares the ref with its proved tip; content-based proof requires an exact-tip archive. `force=true` preserves the exact tip at `refs/archive/<branch>` before deleting, archives at `refs/archive/<branch>-<sha7>` when that name holds a different tip, and cannot delete a checked-out branch. Refuses to delete the current branch or default branch |
 | `create_branch` | `path, name, start_point, checkout` | `()` | Create a new branch from `start_point` (defaults to HEAD). `checkout=true` switches to it immediately |
 | `get_recent_branches` | `path, limit` | `Vec<String>` | Recently checked-out branches from reflog, ordered by recency |
 
