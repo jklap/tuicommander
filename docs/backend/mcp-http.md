@@ -1420,7 +1420,10 @@ run-config `args` stays authoritative and conflicts with an explicit model
 parameter. Literal `codex` selects the persisted default run configuration,
 including its editable approval-bypass argument. Only direct interactive Codex
 defaults defer the task through PTY injection; wrappers and subcommands retain
-run-config positional or placeholder task delivery. Direct executable identity
+run-config positional or placeholder task delivery. A Codex `exec`, `e`, or
+`review` subcommand is recognized only as the first positional argument before
+`--`, after skipping root options and their values. Profiles or models named
+`review`, `exec`, or `e` keep interactive task submission. Direct executable identity
 also selects Codex parser state when `agent_type` is omitted or disagrees.
 Composition never restores a removed bypass. Wrapper configs receive
 `launch_warning` because TUIC cannot validate their internal Codex flags.
