@@ -668,14 +668,14 @@ pub(crate) async fn read_health(
         .timeout(PROBE_TIMEOUT)
         .send()
         .await
-        .map_err(|e| format!("Unreachable: {e}"))?;
+        .map_err(|e| format!("Unreachable: {}", e.without_url()))?;
     if !response.status().is_success() {
         return Err(format!("Health check failed: {}", response.status()));
     }
     let body: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Malformed health response: {e}"))?;
+        .map_err(|e| format!("Malformed health response: {}", e.without_url()))?;
     Ok(Health {
         protocol_version: body
             .get("protocol_version")
@@ -711,13 +711,16 @@ async fn probe_authenticated(
     let url = format!("{}/api/version", base_url.trim_end_matches('/'));
     let mut request = client.get(&url).timeout(PROBE_TIMEOUT);
     if let Some(token) = token {
-        request = request.query(&[("token", token)]);
+        request = request.header(
+            reqwest::header::COOKIE,
+            format!("{}={token}", crate::mcp_http::auth::SESSION_COOKIE),
+        );
     }
     match request.send().await {
         Ok(response) if response.status().is_success() => Probe::Ok,
         Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => Probe::Rejected,
         Ok(response) => Probe::Failed(format!("Status check failed: {}", response.status())),
-        Err(e) => Probe::Failed(format!("Unreachable: {e}")),
+        Err(e) => Probe::Failed(format!("Unreachable: {}", e.without_url())),
     }
 }
 
@@ -2690,15 +2693,66 @@ mod tests {
         assert!(error.contains("503"), "{error}");
     }
 
+    // Catches: reqwest query-token URLs leaking into logs, UI errors, and SSE status pushes.
     #[tokio::test]
-    async fn the_probe_carries_the_token_in_the_query_string() {
-        // Not a header: the same credential has to work for a WebSocket upgrade,
-        // which cannot set one. If this ever moves to a header, the terminal
-        // stream breaks and nothing else does — a split that is hard to see.
+    async fn closed_port_probe_redacts_token_before_logs_and_status_publication() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        drop(listener);
+        let secret = "PAIRING_SECRET_1457";
+        let Probe::Failed(error) = probe_authenticated(&test_client(), &base, Some(secret)).await
+        else {
+            panic!("closed port must fail");
+        };
+        assert!(error.contains("Unreachable"), "{error}");
+        assert!(!error.contains(secret), "credential in error: {error}");
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut bus = state.event_bus.subscribe();
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("log dir");
+        let file = std::fs::File::create(dir.path().join("log")).expect("log file");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(std::sync::Mutex::new(file))
+            .finish();
+        {
+            let _guard = tracing::subscriber::set_default(subscriber);
+            set_error(&state, "closed-port", RemoteStatus::Error, error);
+        }
+        let log = std::fs::read_to_string(dir.path().join("log")).expect("read log");
+        assert!(
+            log.contains("Remote connection failed"),
+            "missing log: {log}"
+        );
+        assert!(!log.contains(secret), "credential in log: {log}");
+        let snapshot = serde_json::to_string(&state.remote.snapshot()).expect("snapshot");
+        assert!(snapshot.contains("Unreachable"));
+        assert!(
+            !snapshot.contains(secret),
+            "credential in UI status: {snapshot}"
+        );
+        let crate::state::AppEvent::RemoteConnectionStatusChanged { payload } =
+            bus.try_recv().expect("status event")
+        else {
+            panic!("expected status event");
+        };
+        let published = payload.to_string();
+        assert!(published.contains("Unreachable"));
+        assert!(
+            !published.contains(secret),
+            "credential in event: {published}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_probe_carries_the_token_in_a_cookie_header() {
+        // Native HTTP uses the daemon's existing session cookie; only browser
+        // WebSocket upgrades need query-token authentication.
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("GET", "/api/version")
-            .match_query(mockito::Matcher::UrlEncoded("token".into(), "t ok".into()))
+            .match_header("cookie", "tui-session=t ok")
+            .match_query(mockito::Matcher::Missing)
             .with_status(200)
             .with_body("{}")
             .create_async()
@@ -3136,7 +3190,8 @@ mod tests {
             .await;
         let probe = server
             .mock("GET", "/api/version")
-            .match_query(mockito::Matcher::UrlEncoded("token".into(), "tok-1".into()))
+            .match_header("cookie", "tui-session=tok-1")
+            .match_query(mockito::Matcher::Missing)
             .with_body("{}")
             .create_async()
             .await;
@@ -3651,13 +3706,15 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let stale = server
             .mock("GET", "/api/version")
-            .match_query(mockito::Matcher::UrlEncoded("token".into(), "tok-1".into()))
+            .match_header("cookie", "tui-session=tok-1")
+            .match_query(mockito::Matcher::Missing)
             .with_status(401)
             .create_async()
             .await;
         let fresh = server
             .mock("GET", "/api/version")
-            .match_query(mockito::Matcher::UrlEncoded("token".into(), "tok-2".into()))
+            .match_header("cookie", "tui-session=tok-2")
+            .match_query(mockito::Matcher::Missing)
             .with_body("{}")
             .create_async()
             .await;
