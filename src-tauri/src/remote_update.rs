@@ -979,3 +979,68 @@ mod tests {
         assert!(!build_is_out_of_date(&selected, &selected));
     }
 }
+
+#[cfg(test)]
+mod cookie_critic_tests {
+    use super::*;
+    use axum::extract::ConnectInfo;
+    use axum::http::{Request, header};
+    use tower::ServiceExt;
+
+    fn request(uri: &str, cookie: &str, body: Body) -> Request<Body> {
+        Request::post(uri)
+            .header(header::HOST, "127.0.0.1:9876")
+            .header(header::COOKIE, cookie)
+            .extension(ConnectInfo(std::net::SocketAddr::from((
+                [203, 0, 113, 5],
+                5555,
+            ))))
+            .body(body)
+            .unwrap()
+    }
+
+    /// Catches ambient cookie auth letting a foreign browser origin replace the daemon.
+    #[tokio::test]
+    async fn foreign_origin_cookie_update_cannot_replace_the_executable() {
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let executable = scratch.path().join("tuic-remote");
+        std::fs::write(&executable, b"original executable").unwrap();
+        let mut state = crate::state::tests_support::make_test_app_state();
+        *state.session_token.write() = "current-secret".into();
+        state.remote_update = Some(RemoteUpdateState {
+            executable: executable.clone(),
+            restart: Arc::new(tokio::sync::Notify::new()),
+            in_progress: tokio::sync::Mutex::new(()),
+            installed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let app = crate::mcp_http::build_remote_router(Arc::new(state));
+        let binary = b"unwanted replacement";
+        let digest = format!("{:x}", Sha256::digest(binary));
+        for (origin, site) in [
+            ("https://foreign.example", "cross-site"),
+            ("http://127.0.0.1:9999", "same-site"),
+        ] {
+            let mut req = request(
+                "/remote/update",
+                "tui-session=current-secret",
+                Body::from(binary.to_vec()),
+            );
+            for (name, value) in [
+                ("origin", origin),
+                ("sec-fetch-site", site),
+                ("x-tuic-target", env!("TUIC_TARGET_TRIPLE")),
+                ("x-tuic-sha256", digest.as_str()),
+                ("x-tuic-confirmed-sessions", "0"),
+            ] {
+                req.headers_mut().insert(
+                    axum::http::HeaderName::from_static(name),
+                    value.parse().unwrap(),
+                );
+            }
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{origin}");
+            assert_eq!(std::fs::read(&executable).unwrap(), b"original executable");
+            assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 1);
+        }
+    }
+}
