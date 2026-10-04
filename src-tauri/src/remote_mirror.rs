@@ -119,13 +119,22 @@ async fn seed(
     let url = format!("{}/sessions", base_url.trim_end_matches('/'));
     let mut request = client.get(&url).timeout(SEED_TIMEOUT);
     if let Some(token) = token {
-        request = request.query(&[("token", token)]);
+        request = request.header(
+            reqwest::header::COOKIE,
+            format!("{}={token}", crate::mcp_http::auth::SESSION_COOKIE),
+        );
     }
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| e.without_url().to_string())?;
     if !response.status().is_success() {
         return Err(format!("GET /sessions answered {}", response.status()));
     }
-    response.json().await.map_err(|e| e.to_string())
+    response
+        .json()
+        .await
+        .map_err(|e| e.without_url().to_string())
 }
 
 /// Stamped into every mirrored payload, and the reason a mirrored event cannot
@@ -396,9 +405,15 @@ async fn consume_stream(
     let url = format!("{}/events", base_url.trim_end_matches('/'));
     let mut request = client.get(&url);
     if let Some(token) = token {
-        request = request.query(&[("token", token)]);
+        request = request.header(
+            reqwest::header::COOKIE,
+            format!("{}={token}", crate::mcp_http::auth::SESSION_COOKIE),
+        );
     }
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| e.without_url().to_string())?;
     if !response.status().is_success() {
         return Err(format!("GET /events answered {}", response.status()));
     }
@@ -412,7 +427,7 @@ async fn consume_stream(
             )
         })?;
         let Some(chunk) = next else { break };
-        let chunk = chunk.map_err(|e| e.to_string())?;
+        let chunk = chunk.map_err(|e| e.without_url().to_string())?;
         for frame in decoder.push(&chunk) {
             if apply_frame(state, connection_id, &frame) {
                 match seed(client, base_url, token).await {
@@ -970,7 +985,8 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let route = server
             .mock("GET", "/sessions")
-            .match_query(mockito::Matcher::Regex("^token=tok$".into()))
+            .match_header("cookie", "tui-session=tok")
+            .match_query(mockito::Matcher::Missing)
             .with_header("content-type", "application/json")
             .with_body(
                 r#"[{"session_id":"s1","display_name":"vps claude",
@@ -996,11 +1012,12 @@ mod tests {
     #[tokio::test]
     async fn the_event_stream_is_read_unfiltered_and_every_frame_is_repeated_locally() {
         let mut server = mockito::Server::new_async().await;
-        // `^token=tok$` is the assertion that matters: a `types=` allowlist here
+        // No query is the assertion that matters: a `types=` allowlist here
         // would silently drop every event type nobody thought to name.
         let route = server
             .mock("GET", "/events")
-            .match_query(mockito::Matcher::Regex("^token=tok$".into()))
+            .match_header("cookie", "tui-session=tok")
+            .match_query(mockito::Matcher::Missing)
             .with_header("content-type", "text/event-stream")
             .with_body(concat!(
                 ":ping\n\n",
@@ -1318,6 +1335,40 @@ mod tests {
             crate::mcp_http::session::session_rows_including_remote(&state).is_empty(),
             "a list call on a machine with no remote connection is the local list"
         );
+    }
+
+    // Catches: reqwest URL credentials reaching mirror errors from seed or SSE requests.
+    #[tokio::test]
+    async fn closed_port_mirror_errors_never_contain_query_credentials() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        drop(listener);
+        let client = reqwest::Client::new();
+        let state = Arc::new(make_test_app_state());
+        let secret = "MIRROR_SECRET_1457";
+        let seed_error = seed(&client, &base, Some(secret))
+            .await
+            .expect_err("seed closed port");
+        let stream_error = consume_stream(
+            &state,
+            &client,
+            "closed",
+            &base,
+            Some(secret),
+            STREAM_IDLE_TIMEOUT,
+        )
+        .await
+        .expect_err("stream closed port");
+        for error in [seed_error, stream_error] {
+            assert!(
+                !error.contains(secret),
+                "credential in mirror error: {error}"
+            );
+            assert!(
+                !error.contains(&base),
+                "request URL in mirror error: {error}"
+            );
+        }
     }
 
     #[tokio::test]
