@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, guarded Stop, authored progress notices and opaque-button choices. Offline verification is complete; live mint deployment and end-to-end approval remain pending.
+
 ### Fixed
 
 - Bound nightly release notes and link to the full comparison when the commit list exceeds the release body budget.
