@@ -71,7 +71,7 @@ never all expert: in basic mode it would show an empty page.
 | Agents | Collect project progress (global); per agent: Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
 | MCP | Collapse tools |
-| Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack), Allow LAN access without authentication |
+| Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack) |
 
 ## Application
 
