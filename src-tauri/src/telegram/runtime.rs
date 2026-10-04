@@ -68,19 +68,13 @@ impl Runtime {
         }
         Ok((pty.clone(), state.turn_epoch))
     }
-    pub fn destination(&self, selected: Option<String>) -> Result<i64, Error> {
-        let ids = self.outbound.paths.allowlist()?;
-        if let Some(selected) = selected {
-            let id = selected.parse::<i64>().map_err(|_| Error::Config)?;
-            if selected != id.to_string() || !ids.contains(&id) {
-                return Err(Error::Config);
-            }
-            Ok(id)
-        } else if ids.len() == 1 {
-            ids.into_iter().next().ok_or(Error::Config)
-        } else {
-            Err(Error::Config)
-        }
+    pub fn destination(&self) -> Result<i64, Error> {
+        self.outbound
+            .paths
+            .allowlist()?
+            .into_iter()
+            .next()
+            .ok_or(Error::Config)
     }
     pub async fn tool(&mut self, caller: &str, input: Input) -> Result<Value, Error> {
         // Check opt-in and target at use, including after a queued command.
@@ -120,15 +114,12 @@ impl Runtime {
                 if !self.live(&a.peer, &a.pty, a.epoch) {
                     return Err(Error::State);
                 }
+                self.callbacks.clear();
                 let ids = self.outbound.finish(&request_id, &text).await?;
                 Ok(json!({"message_ids":ids}))
             }
-            Input::Send {
-                chat_id,
-                text,
-                buttons,
-            } => {
-                let chat = self.destination(chat_id)?;
+            Input::Send { text, buttons } => {
+                let chat = self.destination()?;
                 self.send_buttons(chat, &text, buttons).await
             }
         }
@@ -151,20 +142,6 @@ impl Runtime {
     pub async fn update(&mut self, value: Value) -> Result<Value, Error> {
         if !self.enabled() {
             return Err(Error::Config);
-        }
-        let state = self.state.clone();
-        let stopped = self.outbound.stop(&value, |peer, pty, epoch| {
-            crate::mcp_http::session::interrupt_turn_if_current(&state, peer, pty, epoch)
-                .map_err(|_| Error::State)
-        })?;
-        if stopped {
-            let chat = value["stopped_message_generation"]["chat"]["id"]
-                .as_i64()
-                .ok_or(Error::Protocol)?;
-            // Notification failure must not replay the Esc into another turn.
-            if let Err(error) = self.outbound.send(chat, "Stop requested.", None).await {
-                alert(&self.state, error);
-            }
         }
         self.callback(&value).await?;
         Ok(json!({"accepted":true}))
@@ -191,8 +168,9 @@ impl Runtime {
             return;
         };
         if let Some(text) = super::notifications::notice(&event, &pty) {
-            match self.destination(None) {
+            match self.destination() {
                 Ok(chat) => {
+                    self.callbacks.clear();
                     if let Err(error) = self.outbound.send(chat, &text, None).await {
                         alert(&self.state, error);
                     }

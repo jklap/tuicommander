@@ -22,7 +22,6 @@ pub(super) enum Input {
         text: String,
     },
     Send {
-        chat_id: Option<String>,
         text: String,
         #[serde(default)]
         buttons: Vec<Vec<Button>>,
@@ -36,9 +35,9 @@ pub(super) struct Button {
 }
 
 pub(crate) fn definition() -> Value {
-    json!({"name":"telegram","description":"Send to the daemon's allowlisted Telegram chat. Only the configured peer can call this tool. begin accepts a request_id from Telegram mail and binds the current live turn; activity sends concise safe activity; finish persists the complete exact reply. send accepts text, an optional decimal-string chat_id (required with multiple allowed chats), and optional rows of {label,data} opaque buttons. Buttons return structured peer mail and confer no publish approval. No raw terminal output or hidden reasoning is streamed.","inputSchema":{"type":"object","properties":{
+    json!({"name":"telegram","description":"Send to the daemon's allowlisted Telegram chat. Only the configured peer can call this tool. begin accepts a request_id from Telegram mail and binds the current live turn; activity sends concise safe activity; finish persists the complete exact reply. send accepts text and optional rows of {label,data} opaque buttons. Buttons return structured peer mail and confer no publish approval. No raw terminal output or hidden reasoning is streamed.","inputSchema":{"type":"object","properties":{
         "action":{"type":"string","enum":["begin","activity","finish","send"]},
-        "request_id":{"type":"string"},"text":{"type":"string"},"chat_id":{"type":"string"},
+        "request_id":{"type":"string"},"text":{"type":"string"},
         "buttons":{"type":"array","items":{"type":"array","items":{"type":"object","properties":{"label":{"type":"string"},"data":{"type":"string"}},"required":["label","data"],"additionalProperties":false}}}
     },"required":["action"],"additionalProperties":false}})
 }
@@ -113,6 +112,7 @@ mod tests {
             json!({"action":"send","text":"hello","approved":true}),
             json!({"action":"begin","request_id":"r","peer":"other"}),
             json!({"action":"send","text":"hello","buttons":[[{"label":"ok","data":"x","approved":true}]]}),
+            json!({"action":"send","text":"hello","chat_id":"1111111"}),
         ] {
             assert_eq!(invoke(value).await["error"], "telegram_invalid_config");
         }

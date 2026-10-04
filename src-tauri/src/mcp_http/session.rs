@@ -240,67 +240,6 @@ pub(crate) fn write_pty_input(
     write_pty_input_parts(state, session_id, &[data])
 }
 
-/// Compare the live turn and write Escape while submission cannot advance it.
-/// Uses the same SilenceState -> SessionState order as note_submitted_input.
-pub(crate) fn interrupt_turn_if_current(
-    state: &Arc<AppState>,
-    peer: &str,
-    session_id: &str,
-    epoch: u64,
-) -> Result<bool, String> {
-    let Some(writer) = state.pty_writer(session_id) else {
-        return Ok(false);
-    };
-    let Some(silence) = state
-        .session_maps
-        .silence_states
-        .get(session_id)
-        .map(|s| s.clone())
-    else {
-        return Ok(false);
-    };
-    {
-        let mut silence_guard = silence.lock();
-        let Some(session) = state.session_maps.session_states.get(session_id) else {
-            return Ok(false);
-        };
-        if session.turn_epoch != epoch
-            || state.live_pty_for_peer(peer).as_deref() != Some(session_id)
-            || state.session_maps.exit_codes.contains_key(session_id)
-        {
-            return Ok(false);
-        }
-        let mut snapshot = session.clone();
-        snapshot.shell_state = state
-            .session_maps
-            .shell_states
-            .get(session_id)
-            .and_then(|atom| {
-                crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Acquire))
-            })
-            .map(str::to_string);
-        snapshot.derive_agent_state(
-            snapshot.suggested_actions.is_some()
-                || silence_guard.completion_declared_for_epoch(epoch),
-        );
-        if !matches!(
-            snapshot.agent_state.as_deref(),
-            Some("working" | "awaiting_input")
-        ) {
-            return Ok(false);
-        }
-        let mut writer = writer.lock();
-        writer
-            .write_all(b"\x1b")
-            .map_err(|e| format!("Write failed: {e}"))?;
-        writer.flush().map_err(|e| format!("Flush failed: {e}"))?;
-        silence_guard.note_interrupt_requested();
-    }
-    crate::pty_capture::record_input(session_id, b"\x1b");
-    apply_input_bookkeeping_inner(state, session_id, "\x1b", false);
-    Ok(true)
-}
-
 /// Write all input parts to the PTY under one writer lock, then apply capture
 /// and input bookkeeping once per original request, in order.
 pub(crate) fn write_pty_input_parts(
@@ -342,23 +281,21 @@ pub(crate) fn write_pty_input_pair(
     let writer = state
         .pty_writer(session_id)
         .ok_or_else(|| "Session not found".to_string())?;
-    state.with_input_parts(session_id, &[text.as_bytes(), key.as_bytes()], || {
-        let mut writer = writer.lock();
-        writer
-            .write_all(text.as_bytes())
-            .map_err(|error| format!("Write failed: {error}"))?;
-        writer
-            .flush()
-            .map_err(|error| format!("Flush failed: {error}"))?;
-        crate::pty::sleep_agent_enter_gap(agent_type);
-        writer
-            .write_all(key.as_bytes())
-            .map_err(|error| format!("Write failed: {error}"))?;
-        writer
-            .flush()
-            .map_err(|error| format!("Flush failed: {error}"))?;
-        Ok::<(), String>(())
-    })?;
+    let mut writer = writer.lock();
+    writer
+        .write_all(text.as_bytes())
+        .map_err(|error| format!("Write failed: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("Flush failed: {error}"))?;
+    crate::pty::sleep_agent_enter_gap(agent_type);
+    writer
+        .write_all(key.as_bytes())
+        .map_err(|error| format!("Write failed: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("Flush failed: {error}"))?;
+    drop(writer);
     crate::pty_capture::record_input(session_id, text.as_bytes());
     crate::pty_capture::record_input(session_id, key.as_bytes());
     apply_input_bookkeeping(state, session_id, text);
@@ -384,15 +321,6 @@ fn write_pty_input_bytes(
 /// InputLineBuffer FSM to track slash_mode accurately. Runs once per input
 /// part, after the single PTY lock for the complete write has been released.
 pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) {
-    apply_input_bookkeeping_inner(state, session_id, data, true);
-}
-
-fn apply_input_bookkeeping_inner(
-    state: &Arc<AppState>,
-    session_id: &str,
-    data: &str,
-    note_interrupt: bool,
-) {
     // Stamp last-input time (same as desktop write_pty) so the grid ticker
     // throttles frames for remote/PWA typing under CPU saturation too.
     crate::pty::stamp_input_ms(state, session_id);
@@ -428,7 +356,7 @@ fn apply_input_bookkeeping_inner(
         )
     });
     if interrupted || data == "\x1b" {
-        if note_interrupt && let Some(sl) = state.session_maps.silence_states.get(session_id) {
+        if let Some(sl) = state.session_maps.silence_states.get(session_id) {
             sl.lock().note_interrupt_requested();
         }
     } else {
@@ -3132,7 +3060,6 @@ mod tests {
         );
         let mut events = state.event_bus.subscribe();
 
-        state.with_input_parts(session_id, &[b"\r"], || ());
         apply_input_bookkeeping(&state, session_id, "\r");
 
         assert_eq!(
@@ -3150,74 +3077,6 @@ mod tests {
         };
         assert_eq!(parsed["type"], "user-input");
         assert_eq!(parsed["content"], "");
-    }
-
-    // Catches: paired or managed Enter bypasses the turn reservation, or
-    // post-write bookkeeping increments a reserved turn twice.
-    #[cfg(unix)]
-    #[test]
-    fn write_pty_input_reserves_raw_paired_and_managed_turns_once() {
-        for mode in ["raw", "paired", "managed"] {
-            let state = super::super::tests::test_state();
-            let sid = format!("reserved-{mode}");
-            let bytes = crate::test_support::insert_recording_session(&state, &sid);
-            crate::test_support::agent_session(&state, &sid, crate::pty::SHELL_BUSY);
-            crate::pty::note_submitted_input(&state, &sid);
-            let epoch = state.session_state_with_shell(&sid).unwrap().turn_epoch;
-            match mode {
-                "raw" => write_pty_input_parts(&state, &sid, &["replacement", "\r"]).unwrap(),
-                "paired" => {
-                    write_pty_input_pair(&state, &sid, "replacement", "\r", Some("codex")).unwrap()
-                }
-                _ => crate::pty::write_agent_command_to_pty(&state, &sid, "replacement").unwrap(),
-            }
-            assert_eq!(
-                state.session_state_with_shell(&sid).unwrap().turn_epoch,
-                epoch + 1,
-                "{mode}"
-            );
-            let before_stop = bytes.lock().unwrap().clone();
-            assert!(before_stop.ends_with(b"\r"), "{mode} must deliver Enter");
-            assert!(
-                !interrupt_turn_if_current(&state, &sid, &sid, epoch).unwrap(),
-                "{mode}"
-            );
-            assert_eq!(
-                *bytes.lock().unwrap(),
-                before_stop,
-                "{mode}: stale Stop wrote input"
-            );
-            let session = state.session_maps.sessions.get(&sid).unwrap();
-            let mut session = session.lock();
-            session._child.kill().unwrap();
-            session._child.wait().unwrap();
-        }
-    }
-
-    // Catches: Shift+Enter is mistaken for submission, or multiple real Enter
-    // keys in one request reserve fewer turns than the input FSM emits.
-    #[cfg(unix)]
-    #[test]
-    fn write_pty_input_reserves_only_real_enter_actions() {
-        for (parts, turns, expected) in [
-            (vec!["line", "\x1b", "\r"], 0, "line\x1b\r"),
-            (vec!["one\rtwo\n"], 2, "one\rtwo\n"),
-        ] {
-            let state = super::super::tests::test_state();
-            let sid = "reserved-enter-actions";
-            let bytes = crate::test_support::insert_recording_session(&state, sid);
-            crate::test_support::agent_session(&state, sid, crate::pty::SHELL_BUSY);
-            write_pty_input_parts(&state, sid, &parts).unwrap();
-            assert_eq!(
-                state.session_state_with_shell(sid).unwrap().turn_epoch,
-                turns
-            );
-            assert_eq!(*bytes.lock().unwrap(), expected.as_bytes());
-            let session = state.session_maps.sessions.get(sid).unwrap();
-            let mut session = session.lock();
-            session._child.kill().unwrap();
-            session._child.wait().unwrap();
-        }
     }
 
     // is_separator_line tests live in chrome.rs (canonical location)

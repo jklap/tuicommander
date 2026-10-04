@@ -81,7 +81,7 @@ impl BotApi {
                 "getUpdates",
                 serde_json::json!({
                     "offset":offset,"timeout":timeout,"limit":limit,
-                    "allowed_updates":["message","callback_query","stopped_message_generation"]
+                    "allowed_updates":["message","callback_query"]
                 }),
             )
             .await?;

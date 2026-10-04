@@ -59,9 +59,7 @@ impl MailPort for NativeMail {
         offer(&self.state, &self.sid, mail).await
     }
     async fn update(&mut self, value: &Value) -> Result<(), Error> {
-        if value.get("callback_query").is_none()
-            && value.get("stopped_message_generation").is_none()
-        {
+        if value.get("callback_query").is_none() {
             return Ok(());
         }
         let (reply, receive) = oneshot::channel();

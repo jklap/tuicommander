@@ -5,7 +5,7 @@ use tokio::time::Instant;
 
 /// Deliberately conservative UTF-16 budget, including astral characters.
 pub(super) fn chunks(text: &str) -> Result<Vec<&str>, Error> {
-    if text.is_empty() || text.len() > 64 * 1024 {
+    if text.is_empty() {
         return Err(Error::Config);
     }
     let mut result = Vec::new();
@@ -58,7 +58,7 @@ impl Outbound {
         if let Some(error) = self.stopped {
             return Err(error);
         }
-        // A long Telegram throttle must not hold the worker (and Stop) asleep.
+        // A long Telegram throttle must not hold the worker asleep.
         if let Some(wait) = self.next_send.checked_duration_since(Instant::now())
             && wait > Duration::from_secs(1)
         {
@@ -98,12 +98,15 @@ impl Outbound {
         let draft = (i64::from_be_bytes(bytes[..8].try_into().map_err(|_| Error::State)?)
             & i64::MAX)
             .max(1);
-        let accepted = self.call(
-            chat,
-            "sendMessageDraft",
-            json!({"chat_id":chat,"draft_id":draft,"text":"","can_stop":true,"keep_on_stop":false}),
-        )
-        .await?;
+        // DEFERRED (2026-10-04): phone Stop awaits safe bound-turn input
+        // ordering after 1342; follow-up story 1521-52cd.
+        let accepted = self
+            .call(
+                chat,
+                "sendMessageDraft",
+                json!({"chat_id":chat,"draft_id":draft,"text":""}),
+            )
+            .await?;
         if accepted != Value::Bool(true) {
             return Err(Error::Protocol);
         }
@@ -144,7 +147,7 @@ impl Outbound {
             return Ok(());
         }
         let chat = active.chat;
-        let body = json!({"chat_id":chat,"draft_id":active.draft,"text":active.text,"can_stop":true,"keep_on_stop":false});
+        let body = json!({"chat_id":chat,"draft_id":active.draft,"text":active.text});
         if self.call(chat, "sendMessageDraft", body).await? != Value::Bool(true) {
             return Err(Error::Protocol);
         }
