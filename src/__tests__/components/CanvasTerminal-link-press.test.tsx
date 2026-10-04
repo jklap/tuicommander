@@ -109,10 +109,14 @@ describe("CanvasTerminal link press under mouse reporting", () => {
 				}
 				if (cmd === "terminal_get_row_text") return screenRow0.trimEnd();
 				if (cmd === "terminal_get_logical_line") return [0, screenRow0.trimEnd()];
-				const resolve = (c: string) =>
-					c.startsWith("followups") || (c.startsWith("later") && lateFileExists)
-						? { absolute_path: `/cwd/${c}`, is_directory: false }
+				// Open revalidates the absolute path returned by the initial lookup.
+				// The backend accepts both forms; rejecting the second hides valid clicks.
+				const resolve = (candidate: string) => {
+					const name = candidate.startsWith("/cwd/") ? candidate.slice(5) : candidate;
+					return name === "followups.md" || (name === "later.txt" && lateFileExists)
+						? { absolute_path: `/cwd/${name}`, is_directory: false }
 						: null;
+				};
 				if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
 				if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
 				return null;
