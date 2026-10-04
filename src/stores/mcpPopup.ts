@@ -1,6 +1,8 @@
-import { createStore } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import { invoke, listen } from "../invoke";
-import type { UpstreamMcpConfig, UpstreamMcpServer } from "../transport";
+import { rpc, type UpstreamMcpConfig, type UpstreamMcpServer } from "../transport";
+import { getRemoteBaseUrl } from "../transportRuntime";
+import { type RemoteEventPayload, remoteEventOrigin } from "../utils/remoteEventOrigin";
 import { appLogger } from "./appLogger";
 import { repoSettingsStore } from "./repoSettings";
 import { toastsStore } from "./toasts";
@@ -19,6 +21,8 @@ interface McpPopupState {
 	servers: UpstreamMcpServer[];
 	/** Live status snapshot — refreshed via events + fallback poll */
 	status: UpstreamStatusEntry[];
+	/** Daemon health is isolated from this machine's editable configuration. */
+	remoteStatus: Record<string, { name: string; upstreams: UpstreamStatusEntry[] }>;
 	/** True while a toggle save is in flight */
 	saving: boolean;
 	/** Per-project MCP upstream allowlist (null = no restriction / no active repo) */
@@ -30,9 +34,39 @@ function createMcpPopupStore() {
 		isOpen: false,
 		servers: [],
 		status: [],
+		remoteStatus: {},
 		saving: false,
 		projectAllowlist: null,
 	});
+	const remoteRefreshes = new Map<string, number>();
+
+	// App-lifetime listener: remote failures must be visible with the popup closed.
+	listen<RemoteEventPayload & { name: string; status: string }>("upstream-status-changed", (event) => {
+		const payload = event.payload;
+		const origin = remoteEventOrigin(payload);
+		if (!origin || !getRemoteBaseUrl(origin.connection)) return;
+		if (typeof payload.name !== "string" || typeof payload.status !== "string") return;
+		toastsStore.add(`[${origin.name}] MCP upstream`, `${payload.name}: ${payload.status}`, "info");
+		const revision = (remoteRefreshes.get(origin.connection) ?? 0) + 1;
+		remoteRefreshes.set(origin.connection, revision);
+		rpc<{ upstreams: UpstreamStatusEntry[] }>("get_mcp_upstream_status", undefined, origin.connection)
+			.then((snapshot) => {
+				if (!getRemoteBaseUrl(origin.connection) || remoteRefreshes.get(origin.connection) !== revision) return;
+				setState("remoteStatus", origin.connection, { name: origin.name, upstreams: snapshot.upstreams });
+			})
+			.catch((error) => appLogger.debug("mcp", "Remote upstream status refresh failed", error));
+	}).catch((error) => appLogger.debug("mcp", "Remote upstream status listener failed", error));
+	listen<RemoteEventPayload & { id: string; status: string }>("remote-connection-status", (event) => {
+		const payload = event.payload;
+		if (payload.__tuic_origin !== undefined || payload.status === "connected") return;
+		remoteRefreshes.set(payload.id, (remoteRefreshes.get(payload.id) ?? 0) + 1);
+		setState(
+			"remoteStatus",
+			produce((snapshots) => {
+				delete snapshots[payload.id];
+			}),
+		);
+	}).catch((error) => appLogger.debug("mcp", "Remote upstream disconnect listener failed", error));
 
 	/** Resolve the project allowlist from repoSettingsStore */
 	function resolveProjectAllowlist(): string[] | null {
@@ -189,7 +223,8 @@ function createMcpPopupStore() {
 
 		/** Subscribe to upstream-status-changed events. Returns cleanup fn. */
 		listenForStatusChanges(): Promise<() => void> {
-			return listen<{ name: string; status: string }>("upstream-status-changed", () => {
+			return listen<RemoteEventPayload & { name: string; status: string }>("upstream-status-changed", (event) => {
+				if (event.payload.__tuic_origin !== undefined) return;
 				// Event carries only {name, status} — trigger full refresh
 				refreshStatus();
 			});

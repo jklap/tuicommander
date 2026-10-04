@@ -1062,6 +1062,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
     };
 
     Ok(serde_json::json!({
+        "native_tools": mcp_http::mcp_transport::native_tool_catalog(),
         "enabled": true,
         "running": running,
         "remote_port": if remote_enabled { Some(remote_port) } else { None },
