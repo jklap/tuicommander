@@ -9792,3 +9792,79 @@ mod tests {
         assert_eq!(rx.await.unwrap(), Err("refused".to_string()));
     }
 }
+
+#[cfg(test)]
+mod workflow_authority_critic_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    /// Catches: an unauthenticated loopback agent reads the session token and
+    /// uses it to turn a refused administrative story transition into Human.
+    #[tokio::test]
+    async fn loopback_token_exchange_cannot_elevate_a_local_actor_to_human() {
+        let config =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("isolated config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("isolated project");
+        let store = crate::stories::StoryStore::open().unwrap();
+        let plan = store
+            .create_plan(crate::stories::NewPlan {
+                project: project.path().to_string_lossy().into_owned(),
+                title: "Operator plan".into(),
+                source: "operator.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(crate::stories::NewStory {
+                plan_id: plan.id,
+                title: "Operator decision".into(),
+                criteria: vec!["Approved by the operator".into()],
+                priority: 1,
+                origin: crate::stories::StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let app = build_router(super::tests::test_state(), false, true);
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let mut request = Request::get("/api/auth/session-token")
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(local));
+        let response = app.clone().oneshot(request).await.unwrap();
+        if response.status() == StatusCode::UNAUTHORIZED
+            || response.status() == StatusCode::FORBIDDEN
+        {
+            return;
+        }
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let token = value["token"].as_str().expect("returned token");
+        let body = serde_json::json!({"action": {
+            "action": "transition", "story_id": story.id,
+            "expected_revision": story.revision, "command": "block"
+        }});
+        let mut request = Request::post(format!(
+            "/stories/action?path={}&token={token}",
+            project.path().display()
+        ))
+        .header(header::HOST, "127.0.0.1:9876")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+        request.extensions_mut().insert(ConnectInfo(local));
+        let _response = app.oneshot(request).await.unwrap();
+        assert_eq!(
+            store.get_story(&story.id).unwrap().status,
+            crate::stories::StoryStatus::Ready,
+            "unauthenticated loopback token exchange granted Human authority"
+        );
+        assert!(store.transition_history(&story.id).unwrap().is_empty());
+    }
+}
