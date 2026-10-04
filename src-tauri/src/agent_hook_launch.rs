@@ -282,6 +282,36 @@ fn augment_args_when(
 mod tests {
     use super::*;
 
+    /// Catches: a hyphen in an ordinary prompt disables native status hooks.
+    #[test]
+    fn prompt_with_hyphen_retains_native_settings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let binary = dir.path().join("missing-claude");
+        for prompt in ["fix-bug", "Explain the remote-control failure"] {
+            let args = vec![prompt.to_string()];
+            let actual = augment_args("claude", &binary.to_string_lossy(), &args, dir.path());
+            assert!(
+                actual.iter().any(|arg| arg == "--settings"),
+                "prompt {prompt:?} lost native status settings: {actual:?}"
+            );
+        }
+    }
+
+    /// Catches: a failed help probe adds launch settings to the mcp subcommand.
+    #[test]
+    fn unavailable_help_does_not_corrupt_subcommand_arguments() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let binary = dir.path().join("missing-claude");
+        let args = vec!["mcp".into(), "list".into()];
+        assert_eq!(
+            augment_args("claude", &binary.to_string_lossy(), &args, dir.path()),
+            args,
+            "a failed help probe must not add settings to a subcommand"
+        );
+    }
+
     /// Catches: launch-scoped settings corrupt a verb or its alias, while a
     /// positional prompt gets misclassified as a command.
     #[test]
