@@ -34,6 +34,7 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
+  printf '%s\n' "$TUIC_CLAUDE_HELP" | awk '__TUIC_CLAUDE_HELP_USABLE__' || TUIC_CLAUDE_HELP=__TUIC_RECORDED_CLAUDE_HELP__
   __tuic_screen_arg() {
     local flag="$1" skip="$2" a; shift 2
     [[ -n "$flag" && ( -z "$skip" || "$1" != "$skip" ) ]] || return 0
@@ -41,6 +42,11 @@ if [[ -n "$TUIC_SESSION" ]]; then
     printf '%s' "$flag"
   }
   claude() {
+    case "$1" in
+      ""|-*) ;;
+      remote-control) command claude "$@"; return;;
+      *) if printf '%s\n' "$TUIC_CLAUDE_HELP" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
+    esac
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
     done
@@ -103,6 +109,7 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
+  printf '%s\n' "$TUIC_CLAUDE_HELP" | awk '__TUIC_CLAUDE_HELP_USABLE__' || TUIC_CLAUDE_HELP=__TUIC_RECORDED_CLAUDE_HELP__
   __tuic_screen_arg() {
     local flag="$1" skip="$2" a; shift 2
     [[ -n "$flag" && ( -z "$skip" || "$1" != "$skip" ) ]] || return 0
@@ -110,6 +117,11 @@ if [[ -n "$TUIC_SESSION" ]]; then
     printf '%s' "$flag"
   }
   claude() {
+    case "$1" in
+      ""|-*) ;;
+      remote-control) command claude "$@"; return;;
+      *) if printf '%s\n' "$TUIC_CLAUDE_HELP" | awk -v verb="$1" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'; then command claude "$@"; return; fi;;
+    esac
     local a; for a in "$@"; do
       case "$a" in --settings|--settings=*|--bare) command claude "$@"; return;; esac
     done
@@ -164,6 +176,9 @@ function tuic_suggest; printf '\e]7770;suggest=%s\a' (string join " " $argv); en
 function tuic_intent;  printf '\e]7770;intent=%s\a' (string join " " $argv); end
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if set -q TUIC_SESSION
+  if not printf '%s\n' "$TUIC_CLAUDE_HELP" | awk '__TUIC_CLAUDE_HELP_USABLE__'
+    set -gx TUIC_CLAUDE_HELP __TUIC_RECORDED_CLAUDE_HELP__
+  end
   function __tuic_screen_arg
     set -l flag $argv[1]
     set -l skip $argv[2]
@@ -182,6 +197,17 @@ if set -q TUIC_SESSION
     printf '%s' "$flag"
   end
   function claude --wraps claude
+    if test (count $argv) -gt 0
+      switch $argv[1]
+        case '-*'
+        case remote-control
+          command claude $argv; return
+        case '*'
+          if printf '%s\n' "$TUIC_CLAUDE_HELP" | awk -v verb="$argv[1]" '/^Commands:/ {commands=1; next} commands && /^  [^ ]/ {split($1, names, "|"); for (i in names) if (names[i] == verb) found=1} END {exit !found}'
+            command claude $argv; return
+          end
+      end
+    end
     for a in $argv
       switch $a
         case --settings '--settings=*' --bare
@@ -271,6 +297,13 @@ pub(crate) fn inject(app_data_dir: &Path, shell: &str, cmd: &mut portable_pty::C
         return;
     }
     if crate::agent_hook_launch::enabled("claude") {
+        // Publish installed help, or the same recorded fallback used by managed launches.
+        let help = crate::agent::cli_help("claude");
+        cmd.env(
+            "TUIC_CLAUDE_HELP",
+            help.as_deref()
+                .unwrap_or(crate::agent_hook_launch::RECORDED_CLAUDE_HELP),
+        );
         cmd.env(
             "TUIC_CLAUDE_SETTINGS",
             app_data_dir.join("agent-hooks/claude.json"),
@@ -340,10 +373,21 @@ fn write_if_changed(path: &Path, content: &str) -> bool {
     }
 }
 
+/// Embed the recorded help as one shell-quoted value, shared by all wrappers.
+fn render_integration(template: &str) -> String {
+    let help = crate::agent_hook_launch::RECORDED_CLAUDE_HELP.replace('\'', "'\\''");
+    template
+        .replace("__TUIC_RECORDED_CLAUDE_HELP__", &format!("'{help}'"))
+        .replace(
+            "__TUIC_CLAUDE_HELP_USABLE__",
+            "/^Commands:/ {commands=1; next} commands && /^  [^ ]/ && NF {found=1} END {exit !found}",
+        )
+}
+
 fn inject_zsh(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
     // Write the integration script
     let script_path = base.join("tuic-integration.zsh");
-    if !write_if_changed(&script_path, ZSH_INTEGRATION) {
+    if !write_if_changed(&script_path, &render_integration(ZSH_INTEGRATION)) {
         return;
     }
 
@@ -386,7 +430,7 @@ fn inject_zsh(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
 
 fn inject_bash(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
     let script_path = base.join("tuic-integration.bash");
-    if write_if_changed(&script_path, BASH_INTEGRATION) {
+    if write_if_changed(&script_path, &render_integration(BASH_INTEGRATION)) {
         // BASH_ENV is sourced for non-interactive bash; for interactive login
         // shells we rely on the user sourcing it or a future --init-file approach.
         cmd.env("TUIC_SHELL_INTEGRATION", script_path_str(&script_path));
@@ -397,7 +441,7 @@ fn inject_fish(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
     // Fish auto-sources scripts in conf.d/ directories under XDG_CONFIG_HOME.
     // For now, just point to the script via env var.
     let script_path = base.join("tuic-integration.fish");
-    if write_if_changed(&script_path, FISH_INTEGRATION) {
+    if write_if_changed(&script_path, &render_integration(FISH_INTEGRATION)) {
         cmd.env("TUIC_SHELL_INTEGRATION", script_path_str(&script_path));
     }
 }
@@ -407,7 +451,7 @@ fn inject_fish(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
 /// they're accessible inside the WSL Linux environment.
 fn inject_bash_wsl(base: &Path, cmd: &mut portable_pty::CommandBuilder) {
     let script_path = base.join("tuic-integration.bash");
-    if write_if_changed(&script_path, BASH_INTEGRATION) {
+    if write_if_changed(&script_path, &render_integration(BASH_INTEGRATION)) {
         let wsl_path = crate::pty::windows_to_wsl_path(&script_path_str(&script_path));
         cmd.env("TUIC_SHELL_INTEGRATION", wsl_path);
     }
@@ -574,7 +618,9 @@ mod tests {
     mod launch {
         // Named, not a glob: these constants live two modules up, and a glob of
         // the parent's own glob is easy to break by accident.
-        use super::super::{BASH_INTEGRATION, FISH_INTEGRATION, ZSH_INTEGRATION};
+        use super::super::{
+            BASH_INTEGRATION, FISH_INTEGRATION, ZSH_INTEGRATION, render_integration,
+        };
         use std::path::{Path, PathBuf};
         use std::process::Command;
 
@@ -660,7 +706,7 @@ mod tests {
             std::fs::create_dir_all(&dir).expect("create integration script dir");
             let path = dir.join(name);
             let staging = staging_path(&dir, name);
-            std::fs::write(&staging, body).expect("write integration script");
+            std::fs::write(&staging, render_integration(body)).expect("write integration script");
             std::fs::rename(&staging, &path).expect("install integration script");
             path
         }
@@ -737,6 +783,10 @@ mod tests {
                 .env("PATH", path)
                 // The wrappers are defined only inside a TUIC session.
                 .env("TUIC_SESSION", "wrapper-launch-test")
+                .env(
+                    "TUIC_CLAUDE_HELP",
+                    include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt"),
+                )
                 // Start from setting-off, so a case that wants injection has to
                 // ask for it and the off case cannot pass on an inherited value.
                 .env_remove("TUIC_CLAUDE_SETTINGS")
@@ -801,11 +851,41 @@ mod tests {
             };
         }
 
+        // Catches: a nonempty cache without command rows prefixes auth with prompt settings.
+        fn corrupt_cached_help_preserves_auth_subcommand(shell: &str) {
+            require_shell(shell);
+            let recorded = crate::agent_hook_launch::RECORDED_CLAUDE_HELP;
+            let truncated = recorded.split("Commands:").next().expect("help prefix");
+            let actual: Vec<String> = [" \n\t", truncated]
+                .into_iter()
+                .flat_map(|help| {
+                    wrapper_command_lines(
+                        shell,
+                        &[
+                            ("TUIC_CLAUDE_SETTINGS", "/tuic/claude.json"),
+                            ("TUIC_CLAUDE_HELP", help),
+                        ],
+                        "claude auth status",
+                    )
+                })
+                .collect();
+            assert_eq!(
+                actual,
+                ["auth status", "auth status"],
+                "{shell}: whitespace and truncated help must retain recorded auth argv"
+            );
+        }
+
+        launch_matrix!(corrupt_cached_help_preserves_auth_subcommand);
+
         launch_matrix!(
             setting_on_prepends_launch_scoped_status_flags,
             an_explicit_user_flag_suppresses_injection,
             setting_off_leaves_the_command_line_untouched,
             screen_flags_follow_manual_agent_commands,
+            hyphenated_prompts_keep_settings_in_every_shell,
+            unavailable_help_keeps_verbs_and_prompts_without_launch_probe,
+            unavailable_help_preserves_recorded_auth_subcommand,
         );
 
         fn screen_flags_follow_manual_agent_commands(shell: &str) {
@@ -854,18 +934,28 @@ mod tests {
         }
 
         fn setting_on_prepends_launch_scoped_status_flags(shell: &str) {
-            // Before the user's arguments, not after: `--settings` belongs to
-            // the root command, and subcommands such as `doctor`, `update`,
-            // `mcp` and `auth` reject it as an unknown option when it trails.
+            // Catches: root settings injected into a subcommand instead of a prompt.
             let claude = format!("--settings {CLAUDE_SETTINGS} --model opus");
-            let doctor = format!("--settings {CLAUDE_SETTINGS} doctor");
+            let prompt = format!("--settings {CLAUDE_SETTINGS} prompt");
+            let resume = format!("--settings {CLAUDE_SETTINGS} --resume x");
             assert_in_shell(
                 shell,
                 "Claude gets the TUIC settings file before its own arguments",
                 &signals_on(),
                 "claude --model opus\n\
-                 claude doctor",
-                &[claude.as_str(), doctor.as_str()],
+                 claude doctor\n\
+                 claude remote-control --resume x\n\
+                 claude prompt\n\
+                 claude --resume x\n\
+                 claude plugins",
+                &[
+                    claude.as_str(),
+                    "doctor",
+                    "remote-control --resume x",
+                    prompt.as_str(),
+                    resume.as_str(),
+                    "plugins",
+                ],
             );
             let codex = format!("exec --full-auto -c notify=[\"{CODEX_NOTIFY}\"]");
             assert_in_shell(
@@ -874,6 +964,49 @@ mod tests {
                 &signals_on(),
                 "codex exec --full-auto",
                 &[codex.as_str()],
+            );
+        }
+
+        /// Catches: hyphenated prompt text is mistaken for a hidden command.
+        fn hyphenated_prompts_keep_settings_in_every_shell(shell: &str) {
+            let short = format!("--settings {CLAUDE_SETTINGS} fix-bug");
+            let sentence =
+                format!("--settings {CLAUDE_SETTINGS} Explain the remote-control failure");
+            assert_in_shell(
+                shell,
+                "ordinary prompts keep status hooks",
+                &signals_on(),
+                "claude fix-bug\nclaude 'Explain the remote-control failure'",
+                &[short.as_str(), sentence.as_str()],
+            );
+        }
+
+        /// Catches: missing cached help runs an extra CLI or injects settings into a known verb.
+        fn unavailable_help_keeps_verbs_and_prompts_without_launch_probe(shell: &str) {
+            let prompt = format!("--settings {CLAUDE_SETTINGS} fix-bug");
+            assert_in_shell(
+                shell,
+                "unavailable help uses recorded verbs without a shell probe",
+                &[
+                    ("TUIC_CLAUDE_SETTINGS", CLAUDE_SETTINGS),
+                    ("TUIC_CLAUDE_HELP", ""),
+                ],
+                "claude doctor\nclaude mcp list\nclaude plugins\nclaude upgrade\nclaude fix-bug",
+                &["doctor", "mcp list", "plugins", "upgrade", prompt.as_str()],
+            );
+        }
+
+        /// Catches: the shell fallback injects settings into recorded auth when help is absent.
+        fn unavailable_help_preserves_recorded_auth_subcommand(shell: &str) {
+            assert_in_shell(
+                shell,
+                "recorded auth is still a subcommand without cached help",
+                &[
+                    ("TUIC_CLAUDE_SETTINGS", CLAUDE_SETTINGS),
+                    ("TUIC_CLAUDE_HELP", ""),
+                ],
+                "claude auth status",
+                &["auth status"],
             );
         }
 

@@ -58,6 +58,12 @@ fn post(
 }
 
 fn mcp_read_timeout(tool: &str, arguments: &Value) -> Option<std::time::Duration> {
+    if tool == "secret" {
+        return arguments
+            .get("action")
+            .and_then(Value::as_str)
+            .and_then(tuic_ipc::secret_response_timeout);
+    }
     if tool == "repo"
         && matches!(
             arguments.get("action").and_then(Value::as_str),
@@ -288,6 +294,25 @@ pub fn agent_send(client: &McpClient, to: &str, message: &str) -> Result<Value, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches ordinary IPC expiry before human entry or consent plus execution.
+    #[test]
+    fn secret_calls_do_not_expire_before_form_and_child_deadlines() {
+        for (action, seconds) in [("request", 305), ("run", 425)] {
+            assert_eq!(
+                mcp_read_timeout("secret", &json!({"action": action})),
+                Some(std::time::Duration::from_secs(seconds))
+            );
+        }
+        assert_eq!(
+            mcp_read_timeout("secret", &json!({"action": "remove"})),
+            None
+        );
+        assert_eq!(
+            mcp_read_timeout("session", &json!({"action": "list"})),
+            None
+        );
+    }
 
     #[test]
     fn managed_cli_identity_is_sent_as_the_bridge_header() {

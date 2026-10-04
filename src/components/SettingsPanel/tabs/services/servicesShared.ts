@@ -53,7 +53,15 @@ export async function saveConfigField(updater: (config: AppConfig) => void): Pro
 	}
 }
 
+export interface NativeMcpTool {
+	name: string;
+	summary: string;
+	description: string;
+}
+
 export interface McpStatus {
+	/** Unfiltered native registry, including tools disabled in config. */
+	native_tools: NativeMcpTool[];
 	enabled: boolean;
 	running: boolean;
 	remote_port: number | null;

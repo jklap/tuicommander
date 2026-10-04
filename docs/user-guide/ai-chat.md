@@ -223,3 +223,5 @@ model and re-deriving the history later is impossible.
   drives TUICommander terminals, which is the path ego uses.
 - [`docs/backend/pty.md`](../backend/pty.md) — PTY lifecycle, OSC 133, TUI
   detection, silence-based idle.
+
+Pending permissions and ego notice cards can alert your phone when the desktop is away. Both share a 30-second limit per conversation; ordinary activity does not send a push.
