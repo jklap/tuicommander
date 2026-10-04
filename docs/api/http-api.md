@@ -440,7 +440,7 @@ clearing Compose commands never deletes pending peer/orchestrator delivery.
 
 `idempotencyKey` is optional. Use the same key for retries of one logical
 command; distinct commands need distinct keys even when their text is identical.
-Keys contain 1–128 ASCII letters, digits, `.`, `:`, `_` or `-`. The backend
+Keys contain 1–128 UTF-8 bytes. The backend
 remembers the last 128 accepted keys per live PTY, including drained or cancelled
 entries. A recognized retry returns `accepted: true`, `typed: false` and the
 current queue depth without appending or flushing again. `accepted` confirms
