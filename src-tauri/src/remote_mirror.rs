@@ -292,7 +292,11 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
     }
     // Teardown removes the runtime entry before aborting this task. Do not
     // deliver a toast from a chunk already buffered when that happens.
-    if frame.event == "mcp-toast" && state.remote.base_url(connection_id).is_none() {
+    if matches!(
+        frame.event.as_str(),
+        "mcp-toast" | "mcp-confirm" | "mcp-confirm-resolved"
+    ) && state.remote.base_url(connection_id).is_none()
+    {
         return false;
     }
     let reseed = match frame.event.as_str() {
@@ -340,7 +344,7 @@ fn republish(state: &Arc<AppState>, connection_id: &str, event: &str, payload: s
     let mut payload = payload;
     if let Some(body) = payload.as_object_mut() {
         let mut origin = serde_json::json!({ "connection": connection_id });
-        if event == "mcp-toast" {
+        if matches!(event, "mcp-toast" | "mcp-confirm" | "mcp-confirm-resolved") {
             // Names come from this machine's saved connection, never the peer.
             let name = match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
             {
@@ -350,11 +354,13 @@ fn republish(state: &Arc<AppState>, connection_id: &str, event: &str, payload: s
                     .map(|connection| connection.name),
                 Err(error) => {
                     tracing::warn!(source = "remote", connection = connection_id, %error,
-                        "Could not read the connection name for a remote toast");
+                        "Could not read the connection name for a remote notice");
                     None
                 }
             };
             origin["name"] = serde_json::json!(name.as_deref().unwrap_or(connection_id));
+        }
+        if event == "mcp-toast" {
             // MCP identifies the speaking peer; terminal navigation needs its
             // PTY UUID. The daemon's session rows bind the two identities.
             if let Some(session) = body.get("origin_session_id").and_then(|id| id.as_str())
@@ -836,6 +842,50 @@ mod tests {
                 "{event} mutates local state and must not arrive from a remote daemon"
             );
         }
+    }
+
+    // Catches: confirmations lose their locally trusted host label or a buffered
+    // question resurfaces after disconnect and can be answered on the wrong host.
+    #[test]
+    fn remote_confirmations_keep_host_identity_and_drop_after_disconnect() {
+        use crate::remote_connection::{RemoteConnection, RemoteConnectionStore};
+        let state = Arc::new(make_test_app_state());
+        let mut connection = RemoteConnection::new_direct("mint", "http://daemon:9876", "boss");
+        connection.id = "vps".into();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        state
+            .remote
+            .force_connected_for_test("vps", "http://daemon:9876", None);
+        let mut rx = state.event_bus.subscribe();
+        for event in ["mcp-confirm", "mcp-confirm-resolved"] {
+            let frame = Frame {
+                event: event.into(),
+                data: r#"{"request_id":"same"}"#.into(),
+            };
+            apply_frame(&state, "vps", &frame);
+            let AppEvent::RemoteMirrored { payload, .. } = rx.try_recv().unwrap() else {
+                panic!("missing remote confirmation");
+            };
+            assert_eq!(
+                payload[ORIGIN_MARKER],
+                serde_json::json!({"connection":"vps","name":"mint"})
+            );
+        }
+        crate::remote_runtime::teardown(&state, "vps");
+        // Teardown itself publishes lifecycle events; drain those before the probe.
+        while rx.try_recv().is_ok() {}
+        apply_frame(
+            &state,
+            "vps",
+            &Frame {
+                event: "mcp-confirm".into(),
+                data: r#"{"request_id":"late"}"#.into(),
+            },
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a disconnected question must not reappear"
+        );
     }
 
     // Catches: mcp-toast is excluded from the window, loses its sound/level,
