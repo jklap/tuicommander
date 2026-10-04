@@ -1733,11 +1733,11 @@ mod tests {
 #[path = "auth_login_critic_tests.rs"]
 mod login_critic_tests;
 
-/// Desktop HTTP admits local automation but grants user workflow authority only
-/// after credentials. Remote routers already verified credentials before here.
+/// Derive workflow actor provenance from credentials. Missing caller metadata
+/// (Unix sockets and in-process services) denotes a local/unknown caller.
 pub(super) async fn workflow_actor_middleware(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    caller: Option<axum::extract::Extension<ConnectInfo<SocketAddr>>>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
@@ -1756,6 +1756,10 @@ pub(super) async fn workflow_actor_middleware(
         || has_valid_url_token(&req, &token)
         || req.headers().contains_key(header::AUTHORIZATION);
     if credentials {
+        let addr = caller.map_or(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            |axum::extract::Extension(ConnectInfo(addr))| addr,
+        );
         basic_auth_middleware(State(state), ConnectInfo(addr), req, next).await
     } else {
         next.run(req).await

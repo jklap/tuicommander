@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Stop workflow check process trees on cancellation and shutdown; require authenticated operator authority for policy and human decisions.
+- Stop workflow check process trees on cancellation and shutdown; track actor provenance without restricting trusted local workflow actions.
 - Run Git freshness probes outside workflow and story write transactions, rejecting concurrent persisted revision changes.
 - Keep workflow plans Active until approved stories have current integration receipts, and reopen them after canonical ref movement.
 
