@@ -34,7 +34,7 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
-  [[ -n "$TUIC_CLAUDE_HELP" ]] || TUIC_CLAUDE_HELP=__TUIC_RECORDED_CLAUDE_HELP__
+  printf '%s\n' "$TUIC_CLAUDE_HELP" | awk '__TUIC_CLAUDE_HELP_USABLE__' || TUIC_CLAUDE_HELP=__TUIC_RECORDED_CLAUDE_HELP__
   __tuic_screen_arg() {
     local flag="$1" skip="$2" a; shift 2
     [[ -n "$flag" && ( -z "$skip" || "$1" != "$skip" ) ]] || return 0
@@ -109,7 +109,7 @@ tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
 tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
-  [[ -n "$TUIC_CLAUDE_HELP" ]] || TUIC_CLAUDE_HELP=__TUIC_RECORDED_CLAUDE_HELP__
+  printf '%s\n' "$TUIC_CLAUDE_HELP" | awk '__TUIC_CLAUDE_HELP_USABLE__' || TUIC_CLAUDE_HELP=__TUIC_RECORDED_CLAUDE_HELP__
   __tuic_screen_arg() {
     local flag="$1" skip="$2" a; shift 2
     [[ -n "$flag" && ( -z "$skip" || "$1" != "$skip" ) ]] || return 0
@@ -176,7 +176,7 @@ function tuic_suggest; printf '\e]7770;suggest=%s\a' (string join " " $argv); en
 function tuic_intent;  printf '\e]7770;intent=%s\a' (string join " " $argv); end
 # Auto-inject --name for Goose so tab↔session mapping is deterministic
 if set -q TUIC_SESSION
-  if not set -q TUIC_CLAUDE_HELP; or test -z "$TUIC_CLAUDE_HELP"
+  if not printf '%s\n' "$TUIC_CLAUDE_HELP" | awk '__TUIC_CLAUDE_HELP_USABLE__'
     set -gx TUIC_CLAUDE_HELP __TUIC_RECORDED_CLAUDE_HELP__
   end
   function __tuic_screen_arg
@@ -298,14 +298,11 @@ pub(crate) fn inject(app_data_dir: &Path, shell: &str, cmd: &mut portable_pty::C
     }
     if crate::agent_hook_launch::enabled("claude") {
         // Publish installed help, or the same recorded fallback used by managed launches.
-        let help = crate::agent::cli_help("claude").unwrap_or_default();
+        let help = crate::agent::cli_help("claude");
         cmd.env(
             "TUIC_CLAUDE_HELP",
-            if help.trim().is_empty() {
-                crate::agent_hook_launch::RECORDED_CLAUDE_HELP
-            } else {
-                &help
-            },
+            help.as_deref()
+                .unwrap_or(crate::agent_hook_launch::RECORDED_CLAUDE_HELP),
         );
         cmd.env(
             "TUIC_CLAUDE_SETTINGS",
@@ -379,7 +376,12 @@ fn write_if_changed(path: &Path, content: &str) -> bool {
 /// Embed the recorded help as one shell-quoted value, shared by all wrappers.
 fn render_integration(template: &str) -> String {
     let help = crate::agent_hook_launch::RECORDED_CLAUDE_HELP.replace('\'', "'\\''");
-    template.replace("__TUIC_RECORDED_CLAUDE_HELP__", &format!("'{help}'"))
+    template
+        .replace("__TUIC_RECORDED_CLAUDE_HELP__", &format!("'{help}'"))
+        .replace(
+            "__TUIC_CLAUDE_HELP_USABLE__",
+            "/^Commands:/ {commands=1; next} commands && /^  [^ ]/ && NF {found=1} END {exit !found}",
+        )
 }
 
 fn inject_zsh(base: &Path, cmd: &mut portable_pty::CommandBuilder) {

@@ -8,6 +8,18 @@ use std::path::Path;
 pub(crate) const RECORDED_CLAUDE_HELP: &str =
     include_str!("../tests/fixtures/agent-help/claude-2026-10-04.txt");
 
+fn claude_command_names(help: &str) -> impl Iterator<Item = &str> {
+    help.lines()
+        .skip_while(|line| line.trim() != "Commands:")
+        .skip(1)
+        .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
+        .filter_map(|line| line.split_whitespace().next())
+}
+
+pub(crate) fn claude_help_is_usable(help: &str) -> bool {
+    claude_command_names(help).next().is_some()
+}
+
 pub(crate) fn enabled(agent_type: &str) -> bool {
     crate::config::load_agents_config()
         .agents
@@ -228,19 +240,13 @@ fn claude_is_subcommand(args: &[String], help: &str) -> bool {
     else {
         return false;
     };
-    let help = if help.trim().is_empty() {
+    let help = if !claude_help_is_usable(help) {
         RECORDED_CLAUDE_HELP
     } else {
         help
     };
     first == "remote-control"
-        || help
-            .lines()
-            .skip_while(|line| line.trim() != "Commands:")
-            .skip(1)
-            .filter(|line| line.starts_with("  ") && !line.starts_with("   "))
-            .filter_map(|line| line.split_whitespace().next())
-            .any(|names| names.split('|').any(|name| name == first))
+        || claude_command_names(help).any(|names| names.split('|').any(|name| name == first))
 }
 
 fn augment_args_when(
@@ -291,6 +297,38 @@ fn augment_args_when(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Catches: a successful probe publishes unusable stdout/stderr as Claude help.
+    #[test]
+    fn successful_probe_without_command_rows_is_unavailable() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            dir.path()
+                .starts_with(crate::test_support::test_temp_root())
+        );
+        let truncated = RECORDED_CLAUDE_HELP.split("Commands:").next().unwrap();
+        for (case, help) in [
+            ("whitespace", " \n\t"),
+            ("truncated", truncated),
+            ("header-only", "Commands:\n  \n"),
+            ("recorded", RECORDED_CLAUDE_HELP),
+        ] {
+            let help_path = dir.path().join(format!("{case}.txt"));
+            std::fs::write(&help_path, help).unwrap();
+            for (stream, redirect) in [("stdout", ""), ("stderr", " >&2")] {
+                let binary = crate::test_support::fake_ssh_script(
+                    &format!("claude-help-{case}-{stream}"),
+                    &format!(
+                        "cat {}{redirect}",
+                        shell_quote(&help_path.to_string_lossy())
+                    ),
+                    &format!("type \"{}\"{redirect}", help_path.display()),
+                );
+                let actual = crate::agent::cli_help(&binary.to_string_lossy());
+                assert_eq!(actual.is_some(), case == "recorded", "{case} on {stream}");
+            }
+        }
+    }
 
     /// Catches: a hyphen in an ordinary prompt disables native status hooks.
     #[test]

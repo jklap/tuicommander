@@ -777,13 +777,17 @@ pub(crate) fn cli_help(path: &str) -> Option<String> {
     cmd.arg("--help");
     crate::cli::apply_no_window(&mut cmd);
     let output = screen_probe_output(&mut cmd, std::time::Duration::from_secs(2)).ok()?;
-    output.status.success().then(|| {
-        format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-    })
+    output
+        .status
+        .success()
+        .then(|| {
+            format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+        .filter(|help| crate::agent_hook_launch::claude_help_is_usable(help))
 }
 
 fn screen_probe_output(
