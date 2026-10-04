@@ -8,38 +8,6 @@ import { ExpertSetting } from "../../ExpertSetting";
 import s from "../../Settings.module.css";
 import { type AppConfig, saveConfigField, useMcpStatusPoll } from "./servicesShared";
 
-/** Static definition of native TUIC tools exposed via MCP */
-const NATIVE_TOOLS: { name: string; description: string; actions: string }[] = [
-	{
-		name: "session",
-		description: "PTY terminal panes (tmux replacement)",
-		actions: "list, create, input, output, resize, close, kill, pause, resume",
-	},
-	{
-		name: "agent",
-		description: "AI agents + inter-agent messaging",
-		actions: "spawn, detect, stats, metrics, register, list_peers, send, inbox",
-	},
-	{
-		name: "repo",
-		description: "Repos, GitHub PRs, worktrees",
-		actions: "list, active, prs, status, worktree_list, worktree_create, worktree_remove",
-	},
-	{ name: "ui", description: "Panel tabs + notifications", actions: "tab, toast, confirm" },
-	{
-		name: "plugin_dev_guide",
-		description: "Plugin authoring reference",
-		actions: "Returns full plugin authoring guide",
-	},
-	{ name: "config", description: "Read and write app config", actions: "get, save" },
-	{ name: "knowledge", description: "Cross-repo knowledge base (mdkb)", actions: "search, code_graph, status, setup" },
-	{
-		name: "debug",
-		description: "Diagnostics + plugin guide",
-		actions: "agent_detection, logs, invoke_js, plugin_guide",
-	},
-];
-
 /**
  * Local MCP page: HTTP/MCP server status, the manual bridge configuration
  * snippet, and native-tool visibility controls. Upstream (remote) MCP
@@ -195,7 +163,7 @@ export const LocalMcpPanel: Component = () => {
 				<div class={s.group}>
 					<label>Native tools</label>
 				</div>
-				<For each={NATIVE_TOOLS}>
+				<For each={status()?.native_tools}>
 					{(tool) => {
 						const disabled = () => disabledNativeTools().includes(tool.name);
 						return (
@@ -203,6 +171,7 @@ export const LocalMcpPanel: Component = () => {
 								<div class={s.toggle} style={{ "margin-right": "4px" }}>
 									<input
 										type="checkbox"
+										aria-label={tool.name}
 										checked={!disabled()}
 										onChange={(e) => {
 											const enabled = e.currentTarget.checked;
@@ -221,10 +190,10 @@ export const LocalMcpPanel: Component = () => {
 										{tool.name}
 									</span>
 									<span class={s.hint} style={{ margin: 0 }}>
-										{tool.description}
+										{tool.summary}
 									</span>
 									<span class={s.infoBadge}>
-										?<span class={s.infoBadgeTip}>{tool.actions}</span>
+										?<span class={s.infoBadgeTip}>{tool.description}</span>
 									</span>
 								</div>
 							</div>

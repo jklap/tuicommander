@@ -2092,6 +2092,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Grok sessions (`clientInfo.name` matching `grok-shell-*`) receive the same 3 meta-tools automatically because Grok rejects nested qualified names such as `tuicommander__upstream__tool`; this per-session compatibility mode leaves the global setting and other clients unchanged, and the bridge restores it after TUIC reconnects
 - Cuts MCP context from ~35k tokens to ~500 tokens per agent turn; agent fetches schemas on demand via BM25-ranked search
 - BM25 index backed by `AppState::tool_search_index` (rebuilds automatically when the tool set changes)
+- Settings native-tool switches and descriptions come from the backend MCP registry, including disabled tools; newly registered tools appear automatically. Every native tool can be disabled.
 - Safety filters (`disabled_native_tools`, upstream allow/deny) enforced at both discovery and dispatch time — agents cannot bypass filters by calling `call_tool` directly
 - Toggling fires `notifications/tools/list_changed`; compatible connected clients refresh automatically, while clients that ignore the notification may require a reconnect
 

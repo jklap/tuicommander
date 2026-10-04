@@ -5648,6 +5648,130 @@ mod tests {
         );
     }
 
+    /// Catches: Settings inventories only enabled tools, loses newly registered
+    /// tools, or offers switches which MCP discovery ignores.
+    #[tokio::test]
+    async fn native_settings_catalog_keeps_disabled_tools_and_disables_every_registry_tool() {
+        let state = test_state();
+        let definitions = mcp_transport::test_mcp_tool_definitions();
+        let app = build_router(state.clone(), false, true);
+        for tool in definitions.as_array().unwrap() {
+            let name = tool["name"].as_str().unwrap();
+            {
+                let mut cfg = state.config.write();
+                cfg.disabled_native_tools = vec![name.to_owned()];
+                cfg.collapse_tools = true;
+                cfg.progress_tracking = false;
+            }
+            let response = app
+                .clone()
+                .oneshot(get_localhost("/mcp/status"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let catalog = status["native_tools"].as_array().unwrap();
+            assert_eq!(catalog.len(), definitions.as_array().unwrap().len());
+            for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
+                assert_eq!(entry["name"], definition["name"]);
+                assert_eq!(entry["description"], definition["description"]);
+                assert_eq!(
+                    entry["summary"],
+                    definition["description"]
+                        .as_str()
+                        .unwrap()
+                        .lines()
+                        .next()
+                        .unwrap()
+                );
+            }
+            // Collapse/progress gates must not shrink the Settings inventory.
+            {
+                let mut cfg = state.config.write();
+                cfg.collapse_tools = false;
+                cfg.progress_tracking = true;
+            }
+            let response = app
+                .clone()
+                .oneshot(mcp_post(
+                    "/mcp",
+                    &serde_json::json!({
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
+                    }),
+                ))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let listed = listing["result"]["tools"].as_array().unwrap();
+            assert_eq!(listed.len(), catalog.len() - 1, "disabled {name}");
+            assert!(
+                listed.iter().all(|entry| entry["name"] != name),
+                "disabled {name} remains discoverable"
+            );
+        }
+    }
+
+    /// Catches: a Settings switch hides critical tools but direct or collapsed
+    /// calls still execute them (the stdio bridge forwards to this same route).
+    #[tokio::test]
+    async fn disabled_critical_native_tools_cannot_bypass_settings_through_dispatch() {
+        let state = test_state();
+        state.config.write().disabled_native_tools =
+            vec!["session".into(), "agent".into(), "progress".into()];
+        let app = build_router(state.clone(), false, true);
+        for collapse in [false, true] {
+            state.config.write().collapse_tools = collapse;
+            for (name, arguments) in [
+                ("session", serde_json::json!({"action": "list"})),
+                ("agent", serde_json::json!({"action": "list_peers"})),
+                (
+                    "progress",
+                    serde_json::json!({"type": "done", "message": "must not run"}),
+                ),
+            ] {
+                for meta in [false, true] {
+                    let params = if meta {
+                        serde_json::json!({"name": "call_tool", "arguments": {
+                            "tool_name": name, "arguments": arguments
+                        }})
+                    } else {
+                        serde_json::json!({"name": name, "arguments": arguments})
+                    };
+                    let response = app
+                        .clone()
+                        .oneshot(mcp_post(
+                            "/mcp",
+                            &serde_json::json!({
+                                "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params
+                            }),
+                        ))
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(
+                        reply["result"]["isError"], true,
+                        "{name} collapse={collapse} meta={meta}: {reply}"
+                    );
+                    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+                    assert!(
+                        text.contains(&format!("Tool '{name}' is disabled by configuration")),
+                        "{reply}"
+                    );
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_mcp_tools_list_respects_disabled_native_tools() {
         let state = test_state();

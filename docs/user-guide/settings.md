@@ -349,14 +349,7 @@ Native tools exposed to AI agents via MCP. Each tool can be individually enabled
 
 **Collapse tools** (checkbox) — when enabled, replaces the full tool list sent to AI agents with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Cuts the baseline MCP context cost the agent carries every turn. Measured 2026-09-13 against the running desktop instance with 190 tools connected: the full list is 154,117 bytes / 35,104 tokens, the collapsed list 2,810 bytes / 615 tokens — and the collapsed figure does not move with the number of upstream tools, because they are no longer in the list. The agent fetches schemas on demand via BM25-ranked search. (Tokenizer: tiktoken 0.14.0 `o200k_base`, a GPT tokenizer used as a proxy; Anthropic publishes no offline tokenizer. Method and full table: [`mcp-http.md`](../backend/mcp-http.md#measuring-the-surfaces).) Native semantics do not change: a managed command is still one `call_tool` request for `session action=submit`, and its bounded receipt comes back in that response. Default: off. Grok sessions receive this compact surface automatically for compatibility with Grok's tool-name parser, without changing the checkbox or other clients. Toggling emits `notifications/tools/list_changed`; compatible clients refresh automatically, while clients that ignore the notification may require a reconnect.
 
-Tools:
-- **session** — PTY terminal session management
-- **git** — Repository state queries
-- **agent** — AI agent detection and spawning
-- **config** — App configuration read/write
-- **workspace** — Repo and worktree queries
-- **notify** — User notifications (toast, confirm)
-- **plugin_dev_guide** — Plugin authoring reference
+**Native tools** — the list and descriptions come from the backend MCP registry, including disabled tools. Newly registered tools appear automatically, without a separate Settings list. Each row shows the description's first line; hover over its information badge for the full description and actions. All native tools can be disabled, including `progress`. The progress tool also requires the global **Progress tracking** setting. The list does not include upstream tools or the collapse-mode meta-tools.
 
 #### Upstream MCP Servers
 
