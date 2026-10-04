@@ -4478,6 +4478,106 @@ mod tests {
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
     }
 
+    // Catches: omitting the maintenance task leaves expired protocol sessions and orphan inboxes live.
+    #[tokio::test(start_paused = true)]
+    async fn maintenance_task_reaps_expired_sessions_and_orphan_inboxes() {
+        let state = test_state();
+        let now = std::time::Instant::now();
+        for (sid, last_activity) in [
+            ("expired", now - std::time::Duration::from_secs(7200)),
+            ("fresh", now),
+        ] {
+            state.mcp.sessions.insert(
+                sid.into(),
+                crate::state::McpSessionMeta {
+                    last_activity,
+                    is_claude_code: false,
+                    requires_meta_tools: false,
+                    has_sse_stream: false,
+                    sse_generation: 0,
+                    repo_path: None,
+                },
+            );
+        }
+        state
+            .agent_inbox
+            .insert("orphan".into(), std::collections::VecDeque::new());
+        spawn_maintenance_sweep(&state);
+        // Yield first so the sweep arms its own timer; no wall-clock startup deadline.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+        assert!(!state.mcp.sessions.contains_key("expired"));
+        assert!(state.mcp.sessions.contains_key("fresh"));
+        assert!(!state.agent_inbox.contains_key("orphan"));
+    }
+
+    // Catches: workflow route handlers return an empty default response instead of backend errors.
+    #[tokio::test]
+    async fn workflow_action_routes_preserve_project_validation_errors() {
+        let app = build_router(test_state(), false, true);
+        for (path, body) in [
+            (
+                "/workflows/definition/action?path=relative",
+                r#"{"action":"list_drafts"}"#,
+            ),
+            (
+                "/workflows/run/action?path=relative",
+                r#"{"action":"get","run_id":"missing"}"#,
+            ),
+        ] {
+            let mut req = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            req.extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{path}"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["error"], "project must be an absolute path");
+        }
+    }
+
+    // Catches: removing the tunnel subrouter turns an implemented route into HTTP 404.
+    #[tokio::test]
+    async fn tunnel_subrouter_keeps_session_listing_available() {
+        let mut req = Request::builder()
+            .uri("/tunnels/active")
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+        let response = build_router(test_state(), false, true)
+            .oneshot(req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!([])
+        );
+    }
+
+    // Catches: arithmetic mutations under-size the documented 10 MiB base64 image plus JSON allowance.
+    #[test]
+    fn acp_prompt_cap_preserves_the_documented_image_and_framing_allowance() {
+        assert_eq!(acp_prompt_body_limit(), 14_046_552);
+    }
+
     /// The SSH host and agent-key listings disclose machine names and key
     /// fingerprints. Catches: `tunnel_routes()` being merged outside the
     /// Basic Auth layer so a public address reads them without credentials.
