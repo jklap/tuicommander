@@ -2203,6 +2203,42 @@ mod tests {
     use super::*;
     use crate::test_fixtures::setup_test_repo_with_commit;
 
+    // Catches blocking adapters returning empty/default data and losing numstat
+    // counts, even though the lower-level parsers still pass their unit tests.
+    #[test]
+    fn blocking_reads_expose_real_commits_branches_and_diff_counts_1451() {
+        let (_temp, repo) = empty_fixture_repo();
+        std::fs::write(repo.join("tracked.txt"), "before\n").unwrap();
+        git_in(&repo, &["add", "tracked.txt"]);
+        git_in(&repo, &["commit", "-qm", "adapter baseline"]);
+        git_in(&repo, &["remote", "add", "origin", "https://example.invalid/fixture.git"]);
+        crate::worktree::set_branch_base(&repo.to_string_lossy(), "main", "develop").unwrap();
+        std::fs::write(repo.join("tracked.txt"), "after\nextra\n").unwrap();
+        let path = repo.to_string_lossy().into_owned();
+        assert_eq!(get_remote_url_blocking(path.clone()).unwrap().as_deref(), Some("https://example.invalid/fixture.git"));
+        assert_eq!(get_branch_base_blocking(path.clone(), "main".into()).unwrap().as_deref(), Some("develop"));
+        let commits = get_recent_commits_blocking(path.clone(), Some(1)).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].subject, "adapter baseline");
+        assert_eq!(commits[0].hash, git_in(&repo, &["rev-parse", "HEAD"]).trim());
+        let branches = get_git_branches_blocking(path.clone()).unwrap();
+        let main = branches.iter().find(|branch| branch["name"] == "main").unwrap();
+        assert_eq!(main["is_current"], true);
+        assert_eq!(main["is_main"], true);
+        assert_eq!(main["is_remote"], false);
+        let diff = get_git_diff_blocking(path.clone(), None).unwrap();
+        assert!(diff.contains("-before") && diff.contains("+after"));
+        let files = get_changed_files_blocking(path.clone(), None).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "tracked.txt");
+        assert_eq!(files[0].status, "M");
+        assert_eq!((files[0].additions, files[0].deletions), (2, 1));
+        let stats = get_diff_stats_blocking(path.clone(), None).unwrap();
+        assert_eq!((stats.additions, stats.deletions), (2, 1));
+        let file_diff = get_file_diff_blocking(path, "tracked.txt".into(), None, Some(false)).unwrap();
+        assert!(file_diff.contains("-before") && file_diff.contains("+extra"));
+    }
+
     // --- Fixture repositories ---
     //
     // No test in this module resolves its subject repository from
