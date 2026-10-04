@@ -4,14 +4,6 @@ use super::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Provenance selected by the host transport, never deserialized from a request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WorkflowActor {
-    Human,
-    LocalApi,
-    ManagedSession,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkflowAction {
@@ -85,14 +77,6 @@ fn check_draft_size(graph: &WorkflowGraph) -> Result<(), String> {
 
 /// Project-scoped definition operations shared by desktop and HTTP transports.
 pub fn definition_action(project: &str, action: WorkflowAction) -> Result<WorkflowReply, String> {
-    definition_action_for_actor(project, action, WorkflowActor::Human)
-}
-
-pub fn definition_action_for_actor(
-    project: &str,
-    action: WorkflowAction,
-    _actor: WorkflowActor,
-) -> Result<WorkflowReply, String> {
     if !crate::fs::is_absolute_on_any_platform(project) {
         return Err("project must be an absolute path".into());
     }
@@ -214,41 +198,35 @@ mod tests {
 }
 
 #[cfg(test)]
-mod actor_tests {
+mod validation_tests {
     use super::*;
 
-    /// Catches: actor metadata preventing local or managed policy writes before validation.
+    /// Catches: policy mutations accepting a relative project path.
     #[test]
-    fn policy_actions_validate_the_project_for_every_actor() {
-        for actor in [
-            WorkflowActor::LocalApi,
-            WorkflowActor::ManagedSession,
-            WorkflowActor::Human,
+    fn policy_actions_reject_relative_projects() {
+        for action in [
+            WorkflowAction::CreateDraft {
+                name: "draft".into(),
+                kind: WorkflowKind::Plan,
+                graph: WorkflowGraph {
+                    nodes: vec![],
+                    edges: vec![],
+                },
+            },
+            WorkflowAction::UpdateChecks {
+                id: "draft".into(),
+                expected_revision: 1,
+                checks: vec![],
+            },
+            WorkflowAction::Publish {
+                id: "draft".into(),
+                expected_revision: 1,
+            },
         ] {
-            for action in [
-                WorkflowAction::CreateDraft {
-                    name: "draft".into(),
-                    kind: WorkflowKind::Plan,
-                    graph: WorkflowGraph {
-                        nodes: vec![],
-                        edges: vec![],
-                    },
-                },
-                WorkflowAction::UpdateChecks {
-                    id: "draft".into(),
-                    expected_revision: 1,
-                    checks: vec![],
-                },
-                WorkflowAction::Publish {
-                    id: "draft".into(),
-                    expected_revision: 1,
-                },
-            ] {
-                assert_eq!(
-                    definition_action_for_actor("relative", action, actor).unwrap_err(),
-                    "project must be an absolute path"
-                );
-            }
+            assert_eq!(
+                definition_action("relative", action).unwrap_err(),
+                "project must be an absolute path"
+            );
         }
     }
 }
