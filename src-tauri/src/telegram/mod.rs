@@ -11,7 +11,9 @@ mod offset;
 mod outbound;
 mod registration;
 mod runtime;
+pub(crate) mod settings;
 mod tool;
+#[cfg(not(feature = "desktop"))]
 pub(crate) use native::start;
 pub(crate) use tool::{definition as tool_definition, handle as handle_tool};
 
@@ -65,3 +67,6 @@ impl std::error::Error for Error {}
 mod adversarial_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod critic_setup_tests;

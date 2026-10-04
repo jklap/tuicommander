@@ -3781,3 +3781,16 @@ describe("private secret transport boundary", () => {
 		});
 	});
 });
+
+// Catches: phone setup drops the action or reaches a different config surface than IPC.
+describe("Telegram Settings transport", () => {
+	it("maps reads and writes to the same guarded settings route", () => {
+		expect(mapCommandToHttp("telegram_settings", {})).toEqual({ method: "GET", path: "/config/telegram" });
+		const change = { action: "add_chat", chat_id: "123" };
+		expect(mapCommandToHttp("telegram_setup", { change })).toEqual({
+			method: "PUT",
+			path: "/config/telegram",
+			body: { change },
+		});
+	});
+});

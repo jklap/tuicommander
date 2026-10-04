@@ -26,6 +26,7 @@ pub(crate) mod sse_routes;
 pub(crate) mod static_files;
 #[cfg(feature = "desktop")]
 mod system_routes;
+mod telegram_routes;
 pub(crate) mod types;
 mod watcher_routes;
 mod worktree_routes;
@@ -1663,6 +1664,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/api/auth/rotate-token",
             post(config_routes::rotate_session_token),
+        )
+        .route(
+            "/config/telegram",
+            get(telegram_routes::get).put(telegram_routes::put),
         )
         .route(
             "/config/notifications",

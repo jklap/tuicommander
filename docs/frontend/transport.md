@@ -128,3 +128,5 @@ The transport abstraction enables:
 4. **MCP integration:** External tools use the same HTTP API
 
 The abstraction is resolved once at module load — no per-call overhead in production Tauri mode.
+
+Telegram setup maps `telegram_settings`/`telegram_setup` to authenticated GET/PUT `/config/telegram`, with identical action payloads across IPC and HTTP. Mobile Settings mounts the same Telegram component.
