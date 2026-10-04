@@ -2573,3 +2573,5 @@ and directory. Values and templates live only until exit. One-time nonce links
 support browser entry on the existing application origin and transport. Use
 HTTPS for phone entry. TUIC inspection tools are gated while a form is open. See
 [Private secret forms](user-guide/secrets.md) for limits and consent.
+
+Connected daemon notices carry their host identity. MCP confirmation responses and ACP permission/elicitation answers return to that daemon; disconnected questions disappear without changing local connections. AI Chat shows remote questions separately, with their ACP connection identity. Remote GitHub transitions fetch PR data from the repository owner, notify once, and do not run local repository automation. GitHub polling also works on the headless daemon. MCP upstream health refreshes use a separate host snapshot rather than this machine’s editable configuration.

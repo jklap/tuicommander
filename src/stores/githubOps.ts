@@ -24,7 +24,9 @@
 
 import { createStore } from "solid-js/store";
 import { invoke, listen } from "../invoke";
+import { getRepoConnection } from "../transportRuntime";
 import type { CreatedIssue, ImprovementFocus, ImprovementProposal, ImprovementScanResult } from "../types";
+import { type RemoteEventPayload, remoteEventOrigin } from "../utils/remoteEventOrigin";
 import { appLogger } from "./appLogger";
 
 // ---------------------------------------------------------------------------
@@ -64,7 +66,7 @@ export const OPS_EVENTS = ["review-progress", "conflict-assist-status", "autofix
 export type OpsEvent = (typeof OPS_EVENTS)[number];
 
 /** Envelope shape delivered by both desktop window events and browser SSE. */
-export interface OpsEventEnvelope {
+export interface OpsEventEnvelope extends RemoteEventPayload {
 	repo_path: string;
 	payload: Record<string, unknown>;
 }
@@ -134,6 +136,11 @@ export function createGithubOpsStore() {
 		if (!data || typeof data !== "object") return;
 		const repoPath = data.repo_path;
 		if (!repoPath) return;
+		// Paths may coincide across machines: only the registered owner may
+		// update this repository's dashboard, on either transport.
+		const origin = remoteEventOrigin(data);
+		if (data.__tuic_origin !== undefined && !origin) return;
+		if (getRepoConnection(repoPath) !== origin?.connection) return;
 		const payload = (data.payload ?? {}) as Record<string, unknown>;
 		ensureRepo(repoPath);
 
