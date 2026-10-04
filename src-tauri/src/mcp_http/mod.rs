@@ -4,7 +4,7 @@ mod agent_routes;
 pub(crate) mod auth;
 mod claude_routes;
 mod config_routes;
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 mod dictation_routes;
 mod ego_routes;
 mod fs_routes;
@@ -1489,7 +1489,7 @@ fn acp_prompt_body_limit() -> usize {
 /// `only_the_voice_import_route_accepts_a_large_body` pins both halves.
 /// The remote binary upload reads the raw Body as a stream, so its separate
 /// 512 MiB limit is enforced while copying chunks rather than by this layer.
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
     crate::dictation::speech::assets::MAX_USER_VOICE_BYTES.div_ceil(3) * 4 + 64 * 1024;
 
@@ -2024,8 +2024,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         );
 
     // Dictation — desktop-only: `crate::dictation` owns the audio capture and
-    // the whisper model, both gated on the `desktop` feature.
-    #[cfg(feature = "desktop")]
+    // the whisper model, both gated on the opt-in `dictation` feature.
+    #[cfg(feature = "dictation")]
     let routes = routes
         .route(
             "/dictation/status",
@@ -4054,6 +4054,9 @@ mod tests {
         let app = build_router(state, false, true);
         let mut unrouted: Vec<String> = Vec::new();
         for path in paths {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let resp = app
                 .clone()
                 .oneshot(
@@ -4476,6 +4479,106 @@ mod tests {
                 .is_some_and(|message| message.contains("was added concurrently"))
         );
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
+    }
+
+    // Catches: omitting the maintenance task leaves expired protocol sessions and orphan inboxes live.
+    #[tokio::test(start_paused = true)]
+    async fn maintenance_task_reaps_expired_sessions_and_orphan_inboxes() {
+        let state = test_state();
+        let now = std::time::Instant::now();
+        for (sid, last_activity) in [
+            ("expired", now - std::time::Duration::from_secs(7200)),
+            ("fresh", now),
+        ] {
+            state.mcp.sessions.insert(
+                sid.into(),
+                crate::state::McpSessionMeta {
+                    last_activity,
+                    is_claude_code: false,
+                    requires_meta_tools: false,
+                    has_sse_stream: false,
+                    sse_generation: 0,
+                    repo_path: None,
+                },
+            );
+        }
+        state
+            .agent_inbox
+            .insert("orphan".into(), std::collections::VecDeque::new());
+        spawn_maintenance_sweep(&state);
+        // Yield first so the sweep arms its own timer; no wall-clock startup deadline.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+        assert!(!state.mcp.sessions.contains_key("expired"));
+        assert!(state.mcp.sessions.contains_key("fresh"));
+        assert!(!state.agent_inbox.contains_key("orphan"));
+    }
+
+    // Catches: workflow route handlers return an empty default response instead of backend errors.
+    #[tokio::test]
+    async fn workflow_action_routes_preserve_project_validation_errors() {
+        let app = build_router(test_state(), false, true);
+        for (path, body) in [
+            (
+                "/workflows/definition/action?path=relative",
+                r#"{"action":"list_drafts"}"#,
+            ),
+            (
+                "/workflows/run/action?path=relative",
+                r#"{"action":"get","run_id":"missing"}"#,
+            ),
+        ] {
+            let mut req = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            req.extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{path}"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["error"], "project must be an absolute path");
+        }
+    }
+
+    // Catches: removing the tunnel subrouter turns an implemented route into HTTP 404.
+    #[tokio::test]
+    async fn tunnel_subrouter_keeps_session_listing_available() {
+        let mut req = Request::builder()
+            .uri("/tunnels/active")
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+        let response = build_router(test_state(), false, true)
+            .oneshot(req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!([])
+        );
+    }
+
+    // Catches: arithmetic mutations under-size the documented 10 MiB base64 image plus JSON allowance.
+    #[test]
+    fn acp_prompt_cap_preserves_the_documented_image_and_framing_allowance() {
+        assert_eq!(acp_prompt_body_limit(), 14_046_552);
     }
 
     /// The SSH host and agent-key listings disclose machine names and key
@@ -5546,6 +5649,130 @@ mod tests {
                 .elapsed()
                 < std::time::Duration::from_secs(1)
         );
+    }
+
+    /// Catches: Settings inventories only enabled tools, loses newly registered
+    /// tools, or offers switches which MCP discovery ignores.
+    #[tokio::test]
+    async fn native_settings_catalog_keeps_disabled_tools_and_disables_every_registry_tool() {
+        let state = test_state();
+        let definitions = mcp_transport::test_mcp_tool_definitions();
+        let app = build_router(state.clone(), false, true);
+        for tool in definitions.as_array().unwrap() {
+            let name = tool["name"].as_str().unwrap();
+            {
+                let mut cfg = state.config.write();
+                cfg.disabled_native_tools = vec![name.to_owned()];
+                cfg.collapse_tools = true;
+                cfg.progress_tracking = false;
+            }
+            let response = app
+                .clone()
+                .oneshot(get_localhost("/mcp/status"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let catalog = status["native_tools"].as_array().unwrap();
+            assert_eq!(catalog.len(), definitions.as_array().unwrap().len());
+            for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
+                assert_eq!(entry["name"], definition["name"]);
+                assert_eq!(entry["description"], definition["description"]);
+                assert_eq!(
+                    entry["summary"],
+                    definition["description"]
+                        .as_str()
+                        .unwrap()
+                        .lines()
+                        .next()
+                        .unwrap()
+                );
+            }
+            // Collapse/progress gates must not shrink the Settings inventory.
+            {
+                let mut cfg = state.config.write();
+                cfg.collapse_tools = false;
+                cfg.progress_tracking = true;
+            }
+            let response = app
+                .clone()
+                .oneshot(mcp_post(
+                    "/mcp",
+                    &serde_json::json!({
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
+                    }),
+                ))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let listed = listing["result"]["tools"].as_array().unwrap();
+            assert_eq!(listed.len(), catalog.len() - 1, "disabled {name}");
+            assert!(
+                listed.iter().all(|entry| entry["name"] != name),
+                "disabled {name} remains discoverable"
+            );
+        }
+    }
+
+    /// Catches: a Settings switch hides critical tools but direct or collapsed
+    /// calls still execute them (the stdio bridge forwards to this same route).
+    #[tokio::test]
+    async fn disabled_critical_native_tools_cannot_bypass_settings_through_dispatch() {
+        let state = test_state();
+        state.config.write().disabled_native_tools =
+            vec!["session".into(), "agent".into(), "progress".into()];
+        let app = build_router(state.clone(), false, true);
+        for collapse in [false, true] {
+            state.config.write().collapse_tools = collapse;
+            for (name, arguments) in [
+                ("session", serde_json::json!({"action": "list"})),
+                ("agent", serde_json::json!({"action": "list_peers"})),
+                (
+                    "progress",
+                    serde_json::json!({"type": "done", "message": "must not run"}),
+                ),
+            ] {
+                for meta in [false, true] {
+                    let params = if meta {
+                        serde_json::json!({"name": "call_tool", "arguments": {
+                            "tool_name": name, "arguments": arguments
+                        }})
+                    } else {
+                        serde_json::json!({"name": name, "arguments": arguments})
+                    };
+                    let response = app
+                        .clone()
+                        .oneshot(mcp_post(
+                            "/mcp",
+                            &serde_json::json!({
+                                "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params
+                            }),
+                        ))
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(
+                        reply["result"]["isError"], true,
+                        "{name} collapse={collapse} meta={meta}: {reply}"
+                    );
+                    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+                    assert!(
+                        text.contains(&format!("Tool '{name}' is disabled by configuration")),
+                        "{reply}"
+                    );
+                }
+            }
+        }
     }
 
     #[tokio::test]
@@ -7458,6 +7685,9 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         for (method, path) in PROBES {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let req = if *method == "GET" {
                 Request::get(*path).body(Body::empty()).unwrap()
             } else {
@@ -7486,6 +7716,9 @@ mod tests {
         let _failure = crate::audio_enumeration::fail_enumeration_for_test();
         let app = build_router(test_state(), false, true);
         for path in ["/dictation/devices", "/audio/output-devices"] {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let response = app
                 .clone()
                 .oneshot(Request::get(path).body(Body::empty()).unwrap())
@@ -9269,7 +9502,7 @@ mod tests {
 
     /// A voice file is imported whole, as base64 in JSON, so its one route has
     /// to take more than the 2 MB every other route is held to — and only it.
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     #[tokio::test]
     async fn only_the_voice_import_route_accepts_a_large_body() {
         async fn post_json(path: &str, body_bytes: usize) -> StatusCode {

@@ -92,7 +92,7 @@ async function setup(agents: Record<string, unknown> = {}) {
 }
 
 /** Render the tab and expand one agent's row, where the per-agent controls live. */
-function renderExpanded(agent: "claude" | "gemini" = "claude") {
+function renderExpanded(agent: "claude" | "gemini" | "codex" = "claude") {
 	const result = render(() => <AgentsTab />);
 	const header = [...result.container.querySelectorAll("[role='button']")].find((el) =>
 		el.textContent?.includes(AGENTS[agent].name),
@@ -121,6 +121,18 @@ describe("AgentsTab expert controls", () => {
 	afterEach(() => {
 		settingsExpertStore._resetForTests();
 		uiStore.setSettingsExpertMode(false);
+	});
+
+	it.each([
+		[["--dangerously-bypass-approvals-and-sandbox", "--search"], true],
+		[["--search"], false],
+		[["--", "--dangerously-bypass-approvals-and-sandbox"], false],
+	] as const)("does not hide active bypass or mistake positional text for bypass: %s", async (args, visible) => {
+		await setup({
+			codex: { run_configs: [{ name: "Default", command: "codex", args: [...args], env: {}, is_default: true }] },
+		});
+		const { container } = renderExpanded("codex");
+		expect(container.querySelector('[aria-label="Approvals and sandbox bypassed"]') !== null).toBe(visible);
 	});
 
 	it("hides the expert controls at their defaults in basic mode and keeps the basic ones", async () => {

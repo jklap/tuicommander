@@ -1,7 +1,10 @@
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke, listen } from "../invoke";
 import { notifyPrTransition } from "../services/prNativeNotifications";
+import { rpc } from "../transport";
+import { getRemoteBaseUrl, getRepoConnection } from "../transportRuntime";
 import type { BranchPrStatus, CheckDetail, CheckSummary, GitHubIssue, GitHubStatus } from "../types";
+import { type RemoteEventPayload, remoteEventOrigin } from "../utils/remoteEventOrigin";
 import { appLogger } from "./appLogger";
 import { isNotificationType, prNotificationsStore } from "./prNotifications";
 import { repositoriesStore } from "./repositories";
@@ -278,21 +281,65 @@ function createGitHubStore() {
 	/** Handle transition events from Rust poller. `type` is the raw poller tag — a
 	 *  superset of the renderable notification types (it also carries watcher-only
 	 *  `pushed`/`opened`), so gate the notification add behind `isNotificationType`. */
-	function handleTransition(t: {
-		type: string;
-		repo_path: string;
-		branch: string;
-		pr_number: number;
-		title: string;
-	}): void {
+	function ownsNotice(payload: RemoteEventPayload & { repo_path: string }): boolean {
+		const origin = remoteEventOrigin(payload);
+		if (payload.__tuic_origin !== undefined && !origin) return false;
+		return (
+			getRepoConnection(payload.repo_path) === origin?.connection && (!origin || !!getRemoteBaseUrl(origin.connection))
+		);
+	}
+
+	async function handleTransition(
+		t: RemoteEventPayload & {
+			type: string;
+			repo_path: string;
+			branch: string;
+			pr_number: number;
+			title: string;
+		},
+	): Promise<void> {
+		if (!ownsNotice(t)) return;
+		const origin = remoteEventOrigin(t);
 		// Watcher-only transitions (pushed/opened) have no popover label — skip them.
 		if (!isNotificationType(t.type)) return;
 
+		if (origin) {
+			const duplicate = prNotificationsStore.state.notifications.some(
+				(n) =>
+					!n.dismissed &&
+					n.connectionId === origin.connection &&
+					n.repoPath === t.repo_path &&
+					n.prNumber === t.pr_number &&
+					n.type === t.type,
+			);
+			if (duplicate) return;
+			// The event precedes the snapshot; fetch from its owner rather than local cached URLs.
+			try {
+				const statuses = await rpc<BranchPrStatus[]>("get_repo_pr_statuses", { path: t.repo_path }, origin.connection);
+				if (!ownsNotice(t)) return;
+				updateRepoData(t.repo_path, statuses);
+			} catch (error) {
+				appLogger.debug("github", "Remote PR snapshot refresh failed", error);
+				return;
+			}
+			if (
+				prNotificationsStore.state.notifications.some(
+					(n) =>
+						!n.dismissed &&
+						n.connectionId === origin.connection &&
+						n.repoPath === t.repo_path &&
+						n.prNumber === t.pr_number &&
+						n.type === t.type,
+				)
+			)
+				return;
+		}
 		prNotificationsStore.add({
 			repoPath: t.repo_path,
 			branch: t.branch,
 			prNumber: t.pr_number,
-			title: t.title,
+			title: origin ? `[${origin.name}] ${t.title}` : t.title,
+			...(origin ? { connectionId: origin.connection } : {}),
 			type: t.type,
 		});
 
@@ -301,7 +348,7 @@ function createGitHubStore() {
 		const pr = getPrStatus(t.repo_path, t.branch);
 		if (pr?.url) {
 			notifyPrTransition({
-				repoName: repositoriesStore.get(t.repo_path)?.displayName ?? t.repo_path,
+				repoName: `${origin ? `[${origin.name}] ` : ""}${repositoriesStore.get(t.repo_path)?.displayName ?? t.repo_path}`,
 				prNumber: t.pr_number,
 				title: t.title,
 				type: t.type,
@@ -309,6 +356,8 @@ function createGitHubStore() {
 			});
 		}
 
+		// Remote transitions may notify but must never trigger local repository automation.
+		if (origin) return;
 		if ((t.type === "merged" || t.type === "closed") && prTerminalCallback) {
 			prTerminalCallback(t.repo_path, t.branch, t.pr_number, t.type);
 		}
@@ -335,24 +384,51 @@ function createGitHubStore() {
 		const issueFilter = settingsStore.state.issueFilter ?? "disabled";
 
 		const prHideDrafts = settingsStore.state.prHideDrafts;
-		invoke("github_start_polling", { paths, issueFilter, prHideDrafts }).catch((err) =>
-			appLogger.warn("github", "Failed to start GitHub poller", err),
-		);
+		const grouped = new Map<string | undefined, string[]>();
+		for (const path of paths) {
+			const owner = getRepoConnection(path);
+			grouped.set(owner, [...(grouped.get(owner) ?? []), path]);
+		}
+		if (!grouped.has(undefined)) grouped.set(undefined, []);
+		for (const [owner, ownedPaths] of grouped) {
+			if (owner && !getRemoteBaseUrl(owner)) continue;
+			const args = { paths: ownedPaths, issueFilter, prHideDrafts };
+			const start = owner ? rpc("github_start_polling", args, owner) : invoke("github_start_polling", args);
+			start.catch((err) => appLogger.warn("github", "Failed to start GitHub poller", err));
+		}
 		fetchViewerLogin();
 
-		listen<{ repo_path: string; statuses: BranchPrStatus[] }>("github-pr-update", (event) => {
+		listen<RemoteEventPayload & { repo_path: string; statuses: BranchPrStatus[] }>("github-pr-update", (event) => {
+			if (!ownsNotice(event.payload)) return;
 			updateRepoData(event.payload.repo_path, event.payload.statuses);
 			pollRemoteStatus(event.payload.repo_path);
 			for (const checkout of Object.keys(state.checkoutStatus)) pollRemoteStatus(checkout);
 		}).then((unsub) => unlisteners.push(unsub));
 
-		listen<{ type: string; repo_path: string; branch: string; pr_number: number; title: string }>(
+		listen<RemoteEventPayload & { type: string; repo_path: string; branch: string; pr_number: number; title: string }>(
 			"github-transition",
-			(event) => handleTransition(event.payload),
+			(event) => void handleTransition(event.payload),
 		).then((unsub) => unlisteners.push(unsub));
 
-		listen<{ repo_path: string; issues: GitHubIssue[] }>("github-issues-update", (event) => {
+		listen<RemoteEventPayload & { repo_path: string; issues: GitHubIssue[] }>("github-issues-update", (event) => {
+			if (!ownsNotice(event.payload)) return;
 			updateRepoIssues(event.payload.repo_path, event.payload.issues);
+		}).then((unsub) => unlisteners.push(unsub));
+
+		listen<RemoteEventPayload & { id: string; status: string }>("remote-connection-status", (event) => {
+			const notice = event.payload;
+			if (notice.__tuic_origin !== undefined || notice.status !== "connected" || !getRemoteBaseUrl(notice.id)) return;
+			const ownedPaths = repositoriesStore.getActivePaths().filter((path) => getRepoConnection(path) === notice.id);
+			if (!ownedPaths.length) return;
+			rpc(
+				"github_start_polling",
+				{
+					paths: ownedPaths,
+					issueFilter: settingsStore.state.issueFilter ?? "disabled",
+					prHideDrafts: settingsStore.state.prHideDrafts,
+				},
+				notice.id,
+			).catch((error) => appLogger.debug("github", "Remote GitHub poller restart failed", error));
 		}).then((unsub) => unlisteners.push(unsub));
 
 		document.addEventListener("visibilitychange", onVisibilityChange);
