@@ -10,9 +10,8 @@ interface TelegramSettings {
 	enabled: boolean;
 	token_set: boolean;
 	bot_alias: string;
-	target_tuic_session: string;
+	registered_agent_name: string | null;
 	chats: string[];
-	agents: { id: string; name: string }[];
 	connected: boolean;
 	last_error: string | null;
 	last_message_time: number | null;
@@ -43,11 +42,7 @@ export const TelegramTab: Component = () => {
 			await refresh();
 		} catch (error) {
 			const detail = error instanceof HttpRpcError ? error.detail : typeof error === "string" ? error : "";
-			setError(
-				detail.startsWith("telegram_")
-					? detail
-					: "Telegram setup failed. Check the token, chat ID and live target agent.",
-			);
+			setError(detail.startsWith("telegram_") ? detail : "Telegram setup failed. Check the token and chat ID.");
 		} finally {
 			setBusy(false);
 		}
@@ -139,39 +134,16 @@ export const TelegramTab: Component = () => {
 								</p>
 							</Show>
 						</div>
-						<div class={s.group}>
-							<label for="telegram-agent">{t("telegram.agent", "Target agent")}</label>
-							<select
-								id="telegram-agent"
-								class={s.input}
-								value={data().target_tuic_session}
-								disabled={busy()}
-								onChange={(e) =>
-									void change({
-										action: "configure",
-										enabled: data().enabled,
-										target_tuic_session: e.currentTarget.value,
-									})
-								}
-							>
-								<option value="" selected={!data().target_tuic_session}>
-									Choose a live agent
-								</option>
-								<For each={data().agents}>
-									{(agent) => (
-										<option value={agent.id} selected={agent.id === data().target_tuic_session}>
-											{agent.name}
-										</option>
-									)}
-								</For>
-							</select>
-						</div>
+						<p aria-live="polite">
+							{data().registered_agent_name
+								? `registered agent: ${data().registered_agent_name}`
+								: "nessun agent registrato"}
+						</p>
 						<SettingToggle
 							label={t("telegram.enabled", "Enable Telegram")}
 							checked={data().enabled}
 							onChange={(enabled) => {
-								if (!busy())
-									void change({ action: "configure", enabled, target_tuic_session: data().target_tuic_session });
+								if (!busy()) void change({ action: "configure", enabled });
 							}}
 						/>
 						<p role="status">

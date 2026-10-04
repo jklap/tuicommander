@@ -78,6 +78,7 @@ pub(crate) fn start(state: &Arc<AppState>) {
     tokio::spawn(async move {
         let sid = format!("telegram:{}", uuid::Uuid::new_v4());
         loop {
+            super::settings::registration_status(&paths, None);
             let revision = super::settings::revision(&paths);
             let config = match super::Config::load(&paths) {
                 Ok(Some(config)) => config,
@@ -144,6 +145,7 @@ pub(crate) fn start(state: &Arc<AppState>) {
                     }
                 } => {},
             }
+            super::settings::registration_status(&paths, None);
             super::settings::status(false, None, false);
         }
     });
