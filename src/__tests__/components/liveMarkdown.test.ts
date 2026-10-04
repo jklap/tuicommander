@@ -10,7 +10,7 @@ import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { openSearchPanel, search, searchPanelOpen } from "@codemirror/search";
 import { EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	addTweakCommentAtSelection,
 	liveDecorations,
@@ -32,9 +32,14 @@ const inline = (id: string, text: string, body: string) =>
 	`<!--tweak:begin:${id}-->${text}<!--tweak:end:${id} @${TS}\n${body}-->`;
 
 const views: EditorView[] = [];
+beforeEach(() => {
+	vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+});
 afterEach(() => {
 	for (const v of views.splice(0)) v.destroy();
 	document.body.innerHTML = "";
+	vi.clearAllTimers();
+	vi.useRealTimers();
 });
 
 function stateOf(doc: string, anchor = 0, head = anchor, extra: Extension[] = []): EditorState {

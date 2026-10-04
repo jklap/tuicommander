@@ -10,6 +10,7 @@ describe("restoring suspended tabs", () => {
 	let terminalsStore: typeof import("../../stores/terminals").terminalsStore;
 
 	beforeEach(async () => {
+		vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
 		vi.resetModules();
 		mockInvoke.mockReset().mockResolvedValue(undefined);
 		mockVerifyResume.mockReset().mockResolvedValue("claude --resume agent-uuid");
@@ -24,7 +25,9 @@ describe("restoring suspended tabs", () => {
 		repositoriesStore._testSetHydrated(true);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		await vi.runAllTimersAsync();
+		vi.useRealTimers();
 		repositoriesStore._testCancelPendingSave();
 	});
 

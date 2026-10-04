@@ -4,11 +4,15 @@ import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LiveMarkdownEditor } from "../../components/MarkdownTab/LiveMarkdownEditor";
+import { cleanupToasts } from "../helpers/toasts";
 
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect ??= () => new DOMRect();
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	cleanupToasts();
+});
 
 const PLACEHOLDER = "Comment on the selection";
 
