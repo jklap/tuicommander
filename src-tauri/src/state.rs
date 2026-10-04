@@ -8478,6 +8478,61 @@ mod tests {
         );
     }
 
+    // Catches: admitting a current non-question as awaiting evidence when && becomes ||.
+    #[test]
+    fn current_non_question_does_not_record_awaiting_evidence() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "intent",
+                serde_json::json!({"text": "Working", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(!state.session_state_with_shell("s1").unwrap().awaiting_input);
+        assert_eq!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank(),
+            None
+        );
+    }
+
+    // Catches: a same-epoch clear for another question retracts the current approval.
+    #[test]
+    fn protocol_clear_for_another_question_preserves_the_current_approval() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({"prompt_text": "Approve deploy?", "confident": true, "_turn_epoch": 0}),
+            ),
+        );
+        let row = apply(
+            &state,
+            &make_parsed(
+                "protocol-question-cleared",
+                serde_json::json!({"expected_question_text": "Approve delete?", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(row.awaiting_input);
+        assert_eq!(row.question_text.as_deref(), Some("Approve deploy?"));
+        let row = apply(
+            &state,
+            &make_parsed(
+                "protocol-question-cleared",
+                serde_json::json!({"expected_question_text": "Approve deploy?", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(!row.awaiting_input);
+        assert_eq!(row.question_text, None);
+    }
+
     /// Catches: deleting a parsed-state arm silently drops usage, errors, menu
     /// entries or subtask counts from the snapshot consumed by clients.
     #[test]
