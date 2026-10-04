@@ -314,7 +314,7 @@ pub(crate) fn list_output_devices() -> Vec<AudioOutputDevice> {
 // Playback
 // ---------------------------------------------------------------------------
 
-pub(crate) use tuic_dictation::audio_output::resolve_output_stream;
+pub(crate) use tuic_core::audio_output::resolve_output_stream;
 
 /// Play a notification sound on a background thread.
 ///

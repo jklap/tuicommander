@@ -394,7 +394,7 @@ pub(crate) fn maps(state: &Arc<AppState>) -> Vec<MapReport> {
 /// heap, so neither `maps` nor `malloc_bytes_in_use` can show them. Reported
 /// apart from `accounted_bytes`: adding them there would break the comparison
 /// with the heap.
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) fn model_holders(dictation: &crate::dictation::DictationState) -> Vec<MapReport> {
     use crate::dictation::model;
     if dictation.transcriber_arc.lock().is_none() {
@@ -414,7 +414,7 @@ pub(crate) fn model_holders(dictation: &crate::dictation::DictationState) -> Vec
 
 /// [`model_holders`] for the running app; empty where there is no dictation.
 fn holders(state: &Arc<AppState>) -> Vec<MapReport> {
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     {
         use tauri::Manager;
         if let Some(app) = state.app_handle.read().as_ref()
@@ -478,7 +478,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     #[test]
     fn a_loaded_whisper_model_is_named_with_its_size_and_an_unloaded_one_is_absent() {
         // 2026-09-29: a 1.5 GiB model was resident and no report row named it;
@@ -505,10 +505,10 @@ mod tests {
         assert_eq!(holders[0].bytes, Some(4096), "the size of the loaded file");
     }
 
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     struct NoopTranscriber;
 
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     impl crate::dictation::transcribe::Transcriber for NoopTranscriber {
         fn transcribe(
             &self,

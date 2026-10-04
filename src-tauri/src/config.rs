@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 mod dictation_config {
     use super::*;
 
@@ -221,9 +221,9 @@ mod dictation_config {
     }
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub use dictation_config::DictationConfig;
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) use dictation_config::default_hold_back_ms;
 
 use std::collections::HashMap;
@@ -2359,6 +2359,7 @@ where
 
     /// Repair a caller's malformed load without overwriting a valid document
     /// another process saved since that load. Both cases are decided under one lock.
+    #[cfg(any(feature = "dictation", test))]
     pub(crate) fn save_delta_recovering(&self, base: &T, desired: &T) -> Result<(), String> {
         let base_json = serde_json::to_value(base).map_err(|e| e.to_string())?;
         let desired_json = serde_json::to_value(desired).map_err(|e| e.to_string())?;
@@ -4017,7 +4018,7 @@ pub(crate) struct ConfigDefaults {
     /// Absent (not merely empty) outside desktop builds: `mod dictation` does
     /// not exist under `--no-default-features` (e.g. `tuic-remote`), and this
     /// route is never registered there either (see `build_remote_router`).
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     pub(crate) dictation: DictationConfig,
 }
 
@@ -4033,7 +4034,7 @@ pub(crate) fn get_config_defaults() -> ConfigDefaults {
         // `speech_engine` is empty in the struct so a file without it can be
         // told apart from a choice (`dictation::commands`); a brand-new install
         // loads it as "edge", and the settings panel compares against that.
-        #[cfg(feature = "desktop")]
+        #[cfg(feature = "dictation")]
         dictation: DictationConfig {
             speech_engine: "edge".to_string(),
             ..DictationConfig::default()
@@ -8869,7 +8870,7 @@ mod tests {
         assert_no_field_default_drift(&AgentsConfig::default());
     }
 
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     #[test]
     fn dictation_config_field_defaults_match_default_impl() {
         assert_no_field_default_drift(&crate::dictation::commands::DictationConfig::default());
@@ -8905,7 +8906,7 @@ mod tests {
             serde_json::to_value(&defaults.github_accounts).unwrap(),
             serde_json::to_value(crate::github_account::GitHubAccountRegistry::default()).unwrap()
         );
-        #[cfg(feature = "desktop")]
+        #[cfg(feature = "dictation")]
         assert_eq!(
             serde_json::to_value(&defaults.dictation).unwrap(),
             // The one deliberate difference: a fresh install resolves the engine
@@ -8980,7 +8981,7 @@ mod tests {
             serde_json::to_value(crate::github_account::GitHubAccountRegistry::load()).unwrap(),
             "must match what a fresh github_accounts.json-less install loads"
         );
-        #[cfg(feature = "desktop")]
+        #[cfg(feature = "dictation")]
         assert_eq!(
             serde_json::to_value(&defaults.dictation).unwrap(),
             serde_json::to_value(crate::dictation::commands::get_dictation_config()).unwrap(),
