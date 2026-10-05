@@ -166,8 +166,11 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 /// Check whether the request carries a valid session cookie.
 /// This is the fast path — avoids bcrypt on every API call after the first auth.
 fn has_valid_session_cookie(req: &Request<axum::body::Body>, session_token: &str) -> bool {
-    let cookie_header = req
-        .headers()
+    has_valid_session_cookie_header(req.headers(), session_token)
+}
+
+fn has_valid_session_cookie_header(headers: &HeaderMap, session_token: &str) -> bool {
+    let cookie_header = headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
@@ -183,6 +186,17 @@ fn has_valid_session_cookie(req: &Request<axum::body::Body>, session_token: &str
 /// and scanning it authenticates the device (a session cookie is then set for subsequent calls).
 fn has_valid_url_token(req: &Request<axum::body::Body>, session_token: &str) -> bool {
     has_valid_token_query(req.uri(), session_token)
+}
+
+/// Accept cookie and legacy query credentials during the remote-update migration.
+pub(crate) fn has_valid_session_token(
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+    session_token: &str,
+) -> bool {
+    !session_token.is_empty()
+        && (has_valid_session_cookie_header(headers, session_token)
+            || has_valid_token_query(uri, session_token))
 }
 
 pub(crate) fn has_valid_token_query(uri: &axum::http::Uri, session_token: &str) -> bool {
@@ -333,6 +347,8 @@ pub async fn basic_auth_middleware(
     // by default) after scanning the QR, even while in constant use, and fell back
     // to the Basic Auth prompt because the SPA stores the token nowhere.
     if has_valid_session_cookie(&req, &session_token) {
+        req.extensions_mut()
+            .insert(super::guards::UserAuthenticated);
         let mut response = next.run(req).await;
         if let Ok(val) = session_cookie_value(&session_token, token_duration_secs, is_tls).parse() {
             response.headers_mut().insert(header::SET_COOKIE, val);
@@ -344,6 +360,8 @@ pub async fn basic_auth_middleware(
     // The QR code embeds this token, so scanning it authenticates the device.
     // We set a session cookie so the SPA's subsequent fetch() calls are also authenticated.
     if has_valid_url_token(&req, &session_token) {
+        req.extensions_mut()
+            .insert(super::guards::UserAuthenticated);
         state.auth_rate_limits.remove(&addr.ip());
         let mut response = next.run(req).await;
         if let Ok(val) = session_cookie_value(&session_token, token_duration_secs, is_tls).parse() {
@@ -405,6 +423,8 @@ pub async fn basic_auth_middleware(
 
     match result {
         AuthResult::Ok => {
+            req.extensions_mut()
+                .insert(super::guards::UserAuthenticated);
             // A success supersedes every stale failure for this IP.
             state.auth_rate_limits.remove(&client_ip);
             let mut response = next.run(req).await;
@@ -1726,3 +1746,37 @@ mod tests {
 #[cfg(test)]
 #[path = "auth_login_critic_tests.rs"]
 mod login_critic_tests;
+
+/// Authenticate story and workflow credentials for story transition provenance.
+/// Missing caller metadata (Unix sockets and in-process services) denotes a
+/// local/unknown caller.
+pub(super) async fn workflow_actor_middleware(
+    State(state): State<Arc<AppState>>,
+    caller: Option<axum::extract::Extension<ConnectInfo<SocketAddr>>>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if !matches!(
+        req.uri().path(),
+        "/stories/action" | "/workflows/definition/action" | "/workflows/run/action"
+    ) || req
+        .extensions()
+        .get::<super::guards::UserAuthenticated>()
+        .is_some()
+    {
+        return next.run(req).await;
+    }
+    let token = state.session_token.read().clone();
+    let credentials = has_valid_session_cookie(&req, &token)
+        || has_valid_url_token(&req, &token)
+        || req.headers().contains_key(header::AUTHORIZATION);
+    if credentials {
+        let addr = caller.map_or(
+            SocketAddr::from(([127, 0, 0, 1], 0)),
+            |axum::extract::Extension(ConnectInfo(addr))| addr,
+        );
+        basic_auth_middleware(State(state), ConnectInfo(addr), req, next).await
+    } else {
+        next.run(req).await
+    }
+}

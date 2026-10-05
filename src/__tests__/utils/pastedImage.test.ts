@@ -84,11 +84,20 @@ describe("savePastedImage (critic 1350)", () => {
 		expect(e.defaultPrevented).toBe(false);
 	});
 
-	it("cancels the default synchronously, before the save settles — catches moving preventDefault after the first await", () => {
-		vi.mocked(invoke).mockReturnValue(new Promise(() => {}) as never);
+	it("cancels the default synchronously, before the save settles — catches moving preventDefault after the first await", async () => {
+		let finishSave!: (path: string) => void;
+		vi.mocked(invoke).mockReturnValue(
+			new Promise<string>((resolve) => {
+				finishSave = resolve;
+			}) as never,
+		);
 		const e = pasteEvent([imageItem("image/png")]);
-		void savePastedImage(e, () => "n1");
+		const saving = savePastedImage(e, () => "n1");
 		expect(e.defaultPrevented).toBe(true);
+		// Let encoding reach the controlled IPC request, then release it.
+		await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+		finishSave("/saved/a.png");
+		await saving;
 	});
 
 	it("returns null when clipboardData is missing — catches a throw on synthetic paste events", async () => {

@@ -71,7 +71,7 @@ never all expert: in basic mode it would show an empty page.
 | Agents | Collect project progress (global); per agent: Close idle managed child after, Auto-retry on server errors, Prevent alternate screen, Accept workspace trust for managed spawns (Claude and Codex), Native status signals, Install hooks globally, Track agent intent, Collect progress, Show suggested follow-ups, Headless Command Template; Claude only: Environment Flags |
 | Voice | Long-press threshold, Auto-send, Input device, Level gate, Speech confidence gate, Hold-back before sending, Notify model when hands-free changes, Start notice |
 | MCP | Collapse tools |
-| Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack), Allow LAN access without authentication |
+| Remote Access | Port, Session Token Duration, Enable IPv6 (dual-stack) |
 
 ## Application
 
@@ -215,6 +215,14 @@ session tool.
 
 Each supported agent has an expandable row showing detection status, version, and MCP badge.
 
+The default Codex run configuration includes
+`--dangerously-bypass-approvals-and-sandbox` in its editable arguments.
+The warning icon on a configuration identifies an active bypass. Remove that
+argument through **Edit** to enable normal approvals and sandboxing for new
+launches. The removal survives restart. Existing direct Codex defaults receive
+the argument once during migration; wrapper configurations keep their own
+arguments and the managed-launch wrapper warning.
+
 | Setting | Description |
 |---------|-------------|
 | **Agent Detection** | Auto-detects running agents from terminal output patterns. Shows "Available" or "Not found" for each agent. |
@@ -341,14 +349,7 @@ Native tools exposed to AI agents via MCP. Each tool can be individually enabled
 
 **Collapse tools** (checkbox) — when enabled, replaces the full tool list sent to AI agents with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Cuts the baseline MCP context cost the agent carries every turn. Measured 2026-09-13 against the running desktop instance with 190 tools connected: the full list is 154,117 bytes / 35,104 tokens, the collapsed list 2,810 bytes / 615 tokens — and the collapsed figure does not move with the number of upstream tools, because they are no longer in the list. The agent fetches schemas on demand via BM25-ranked search. (Tokenizer: tiktoken 0.14.0 `o200k_base`, a GPT tokenizer used as a proxy; Anthropic publishes no offline tokenizer. Method and full table: [`mcp-http.md`](../backend/mcp-http.md#measuring-the-surfaces).) Native semantics do not change: a managed command is still one `call_tool` request for `session action=submit`, and its bounded receipt comes back in that response. Default: off. Grok sessions receive this compact surface automatically for compatibility with Grok's tool-name parser, without changing the checkbox or other clients. Toggling emits `notifications/tools/list_changed`; compatible clients refresh automatically, while clients that ignore the notification may require a reconnect.
 
-Tools:
-- **session** — PTY terminal session management
-- **git** — Repository state queries
-- **agent** — AI agent detection and spawning
-- **config** — App configuration read/write
-- **workspace** — Repo and worktree queries
-- **notify** — User notifications (toast, confirm)
-- **plugin_dev_guide** — Plugin authoring reference
+**Native tools** — the list and descriptions come from the backend MCP registry, including disabled tools. Newly registered tools appear automatically, without a separate Settings list. Each row shows the description's first line; hover over its information badge for the full description and actions. All native tools can be disabled, including `progress`. The progress tool also requires the global **Progress tracking** setting. The list does not include upstream tools or the collapse-mode meta-tools.
 
 #### Upstream MCP Servers
 
@@ -415,3 +416,11 @@ A `.tuic.json` file in the repository root provides team-shareable settings that
 Supported fields: `base_branch`, `copy_ignored_files`, `copy_untracked_files`, `setup_script`, `run_script`, `archive_script`, `worktree_storage`, `delete_branch_on_remove`, `auto_archive_merged`, `orphan_cleanup`, `pr_merge_strategy`, `after_merge`, `auto_delete_on_pr_close`.
 
 User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`, and the Dev Server URL) are intentionally excluded from `.tuic.json`.
+
+### Telegram
+
+Settings → Telegram configures the current machine. Mobile Settings has a **Telegram setup** button with the same controls. Use it on the host running `tuic-remote`.
+
+1. Paste the BotFather token into the password field and select **Save and check bot**. TUIC writes `bot.token` with owner-only permissions and checks `getMe`. Settings shows the bot username and whether a token is set; it never reads the token back.
+2. Enable Telegram. Agents opt in with the Telegram MCP tool (`register`/`unregister`); Settings shows the registered agent read-only, or `nessun agent registrato`. Select **Link chat**, then send the displayed six-character code to the bot within ten minutes. The code works once. Alternatively, type a positive private chat ID and select **Add chat ID**. Remove revokes authorization. A bare `/start` does not authorize a chat. An ordinary message after pairing in the same poll uses the new authorization; the pairing code never reaches the agent.
+3. Check connection status, safe error category and last accepted message time. Only the headless daemon polls; opening desktop Settings does not start another owner. Config changes restart the daemon adapter and retire its current transient draft state.

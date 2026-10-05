@@ -17,7 +17,10 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn().mockResolvedValue
 import { Toolbar } from "../../components/Toolbar/Toolbar";
 import { uiStore } from "../../stores/ui";
 
-afterEach(cleanup);
+afterEach(() => {
+	cleanup();
+	uiStore.flushSave();
+});
 
 describe("Toolbar density marker after removing the auto outline (critic 1351)", () => {
 	it("still tells auto from manual: only manual modes carry the active class, and data-mode tracks the letter — catches auto and manual rendering identically", () => {

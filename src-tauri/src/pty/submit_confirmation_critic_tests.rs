@@ -82,7 +82,7 @@ fn queued_codex_turn_that_already_finished_when_polled_is_confirmed() {
     let mut alerts = state.event_bus.subscribe();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         wait_for_enter(&bytes);
         let mut reader = ChunkProcessor::new(None, None);
         reader.process_chunk(
@@ -135,7 +135,7 @@ fn queued_claude_turn_whose_hook_busy_already_ended_is_confirmed() {
     let both = format!("{busy_hook}{idle_hook}");
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         wait_for_enter(&bytes);
         let mut reader = ChunkProcessor::new(None, None);
         reader.process_chunk(&both, &silence, sid, &state);
@@ -183,7 +183,7 @@ fn codex_transcript_echo_above_empty_composer_gets_no_second_enter() {
     let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         wait_for_enter(&bytes);
         let mut reader = ChunkProcessor::new(None, None);
         reader.process_chunk(

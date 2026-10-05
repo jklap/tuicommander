@@ -107,6 +107,8 @@ pub(super) struct SetNameRequest {
 #[derive(Deserialize)]
 pub(super) struct EnqueueCommandRequest {
     pub text: String,
+    #[serde(default, rename = "idempotencyKey")]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize)]

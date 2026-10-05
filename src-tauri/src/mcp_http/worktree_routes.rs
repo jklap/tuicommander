@@ -743,7 +743,7 @@ mod warm_tests {
     use super::*;
 
     #[cfg(unix)]
-    fn setup_repo(root: &std::path::Path) -> std::path::PathBuf {
+    pub(super) fn setup_repo(root: &std::path::Path) -> std::path::PathBuf {
         let repo = root.join("repo");
         std::fs::create_dir(&repo).unwrap();
         let git = crate::git_cli::git_cmd(&repo);
@@ -991,5 +991,157 @@ mod warm_tests {
         assert!(setup.is_some(), "{error:?}");
         task.await.unwrap();
         crate::worktree::clear_warm(&destination);
+    }
+}
+
+#[cfg(test)]
+mod survivor_tests {
+    use super::*;
+
+    async fn json(response: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// Catches: force confirmation predicates rejecting non-force/confirmed requests or allowing unconfirmed force.
+    #[tokio::test]
+    async fn removal_confirmation_accepts_only_the_required_force_combinations() {
+        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        for (force, fingerprint, missing, expected) in [
+            (false, None, false, StatusCode::INTERNAL_SERVER_ERROR),
+            (
+                true,
+                Some("confirmed"),
+                false,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+            (true, None, true, StatusCode::INTERNAL_SERVER_ERROR),
+            (true, None, false, StatusCode::BAD_REQUEST),
+        ] {
+            let response = remove_worktree_http(
+                State(state.clone()),
+                Path("unknown-workspace".into()),
+                Query(RemoveWorktreeQuery {
+                    repo_path: temp.path().to_string_lossy().into_owned(),
+                    force: Some(force),
+                    delete_branch: Some(false),
+                    override_lock: None,
+                    expected_fingerprint: fingerprint.map(str::to_owned),
+                    confirm_missing_checkout: Some(missing),
+                }),
+            )
+            .await;
+            assert_eq!(
+                response.status(),
+                expected,
+                "{force} {fingerprint:?} {missing}"
+            );
+            assert!(json(response).await["error"].is_string());
+        }
+    }
+
+    /// Catches: empty repoPath falling through to generic path validation instead of the required-field error.
+    #[tokio::test]
+    async fn orphan_assessment_empty_repo_reports_required_field() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = assess_orphan_cleanup_http(
+            State(state),
+            Query(OptionalRepoQuery {
+                repo_path: Some(String::new()),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json(response).await,
+            serde_json::json!({"error": "repoPath required"})
+        );
+    }
+
+    /// Catches: lifecycle handler returning an empty success instead of a removal preflight document.
+    #[tokio::test]
+    async fn lifecycle_unknown_workspace_returns_a_preflight_document() {
+        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = workspace_lifecycle_http(
+            State(state),
+            Query(WorkspaceIdQuery {
+                repo_path: temp.path().to_string_lossy().into_owned(),
+                workspace_id: "unknown".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json(response).await;
+        assert!(body.is_object(), "{body}");
+        assert!(!body.as_object().unwrap().is_empty());
+    }
+
+    /// Catches: dropped keep/remove decisions and no-op clear handlers leaving a dialog unanswered.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn orphan_decisions_and_clear_are_visible_to_other_clients() {
+        let temp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = super::warm_tests::setup_repo(temp.path());
+        let orphan = temp.path().join("orphan");
+        crate::git_cli::git_cmd(&repo)
+            .args(["worktree", "add", "--detach", orphan.to_str().unwrap()])
+            .run()
+            .unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.to_string_lossy().into_owned();
+        for (decision, expected) in [("keep", false), ("remove", true)] {
+            crate::worktree::begin_orphan_cleanup_internal(
+                &state,
+                &repo_path,
+                vec![orphan.to_string_lossy().into_owned()],
+            )
+            .unwrap();
+            let response = answer_orphan_cleanup_http(
+                State(state.clone()),
+                Json(AnswerOrphanCleanupRequest {
+                    repo_path: repo_path.clone(),
+                    decision: decision.into(),
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(json(response).await, serde_json::json!({"ok": true}));
+            let pending = pending_orphan_cleanup_http(
+                State(state.clone()),
+                Query(OptionalRepoQuery {
+                    repo_path: Some(repo_path.clone()),
+                }),
+            )
+            .await;
+            assert_eq!(json(pending).await, serde_json::json!(expected));
+            let response = clear_orphan_cleanup_http(
+                State(state.clone()),
+                Json(ClearOrphanCleanupRequest {
+                    repo_path: repo_path.clone(),
+                    kept: false,
+                }),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(json(response).await, serde_json::Value::Null);
+            let pending = pending_orphan_cleanup_http(
+                State(state.clone()),
+                Query(OptionalRepoQuery {
+                    repo_path: Some(repo_path.clone()),
+                }),
+            )
+            .await;
+            assert_eq!(json(pending).await, serde_json::Value::Null);
+        }
     }
 }

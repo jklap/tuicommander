@@ -2720,8 +2720,8 @@ impl<T: EventListener> Handler for Term<T> {
             _ => return,
         };
         self.grid.cursor.template.cell_type = cell_type;
-        let line =
-            self.grid.history_size() + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
+        let line = self.grid.total_scrolled()
+            + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
         self.event_proxy.send_event(Event::Osc133 {
             command,
             params: params.to_owned(),
@@ -2736,8 +2736,8 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn osc7770(&mut self, verb: &str, payload: &str) {
-        let line =
-            self.grid.history_size() + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
+        let line = self.grid.total_scrolled()
+            + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
         self.event_proxy.send_event(Event::Tuic {
             verb: verb.to_owned(),
             payload: payload.to_owned(),

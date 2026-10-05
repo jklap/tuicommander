@@ -244,3 +244,7 @@ Driven by the `alacritty-upstream` entry in `.claude/scheduled-checks.json` (eve
 | — | P2 | OSC 7770 TUIC protocol (state/suggest/intent) | **Done** — full pipeline from VTE→Event→PTY→ParsedEvent |
 | — | P3 | Use cell_type for idle detection (OSC 133 shells) | Pending — next step after TUIC protocol |
 | 1553-5e8c | P3 | Port Zed child-exit raw waitpid status | Pending |
+
+### Stored terminal marker coordinates
+
+OSC 133 and OSC 7770 event rows use `grid.total_scrolled() + cursor row`. Capture this origin inside the OSC handler, before later bytes in the same chunk can evict history. Retained history size is not an absolute origin.

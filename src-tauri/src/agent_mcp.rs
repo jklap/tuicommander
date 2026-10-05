@@ -3032,6 +3032,10 @@ mod tests {
         }
     }
 
+    mod bridge_fixture {
+        include!("agent_mcp_test_fixtures.rs");
+    }
+
     fn command_at_spec(spec: &McpConfigSpec) -> String {
         let path = &spec.config_path;
         match spec.format {
@@ -3069,7 +3073,7 @@ mod tests {
         let source = bridge_path_in(&target);
         // A real native executable, not a shell fake: the OS must be able to
         // spawn the installed bytes after their original directory disappears.
-        std::fs::copy(std::env::current_exe().unwrap(), &source).unwrap();
+        bridge_fixture::copy_native_executable(&source);
         let spec = spec_at(dir.path().join("claude.json"));
         assert!(ensure_spec_entry(&spec, source.to_str().unwrap(), "claude"));
         ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
@@ -3078,19 +3082,7 @@ mod tests {
         assert!(installed.starts_with(config_dir.path()));
         assert!(!installed.starts_with(dir.path()));
         std::fs::remove_dir_all(dir.path().join("target")).unwrap();
-        let output = std::process::Command::new(installed)
-            .arg("--list")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout)
-                .contains("configured_bridge_survives_target_cleanup")
-        );
+        bridge_fixture::assert_runs(installed);
     }
 
     /// Catches: overwriting or deleting an old installed executable on upgrade,
@@ -3100,7 +3092,7 @@ mod tests {
         let _config = with_temp_config_dir();
         let dir = TempDir::new().unwrap();
         let source = bridge_path_in(dir.path());
-        std::fs::copy(std::env::current_exe().unwrap(), &source).unwrap();
+        bridge_fixture::copy_native_executable(&source);
         let old = install_bridge_binary(&source).unwrap();
         let modified = old.metadata().unwrap().modified().unwrap();
         assert_eq!(install_bridge_binary(&source).unwrap(), old);
@@ -3111,11 +3103,7 @@ mod tests {
         let new = install_bridge_binary(&source).unwrap();
         assert_ne!(new, old);
         assert_eq!(std::fs::read(new).unwrap(), b"a different bridge revision");
-        let output = std::process::Command::new(old)
-            .arg("--list")
-            .output()
-            .unwrap();
-        assert!(output.status.success());
+        bridge_fixture::assert_runs(&old);
     }
 
     /// Catches: publishing a new command before its executable is installed,
@@ -3126,7 +3114,7 @@ mod tests {
         let (_guard, config_dir) = with_temp_config_dir();
         let dir = TempDir::new().unwrap();
         let source = bridge_path_in(dir.path());
-        std::fs::copy(std::env::current_exe().unwrap(), &source).unwrap();
+        bridge_fixture::copy_native_executable(&source);
         let spec = spec_at(dir.path().join("claude.json"));
         assert!(ensure_spec_entry(&spec, BRIDGE_NAME, "claude"));
         ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
@@ -3518,7 +3506,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let stale_bridge = dir.path().join("moved-bridge");
         let real_bridge = dir.path().join("tuic-bridge");
-        std::fs::copy(std::env::current_exe().unwrap(), &real_bridge).unwrap();
+        bridge_fixture::copy_native_executable(&real_bridge);
         let unrelated_exe_dir = dir.path().join("test-target");
         std::fs::create_dir(&unrelated_exe_dir).unwrap();
 
@@ -3770,18 +3758,16 @@ mod tests {
         } else {
             "tuic-test-runner"
         };
-        let bridge_name = if cfg!(windows) {
-            "tuic-bridge.exe"
-        } else {
-            "tuic-bridge"
-        };
         let exe = sandbox.path().join(runner_name);
         // The CI target and checkout can live on different Windows drives.
         #[cfg(windows)]
         std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
         #[cfg(not(windows))]
         std::fs::hard_link(std::env::current_exe().unwrap(), &exe).unwrap();
-        std::fs::hard_link(&exe, sandbox.path().join(bridge_name)).unwrap();
+        // The bridge is copied and hashed, never launched. Hardlinking the
+        // entire test runner here made owning launches copy hundreds of MB and
+        // block on Linux writeback under the parallel suite's 120s bound.
+        let bridge = fake_bridge(sandbox.path(), b"bridge bytes");
         let linked_worktree = sandbox.path().join("linked");
         std::fs::create_dir_all(&linked_worktree).unwrap();
         std::fs::write(linked_worktree.join(".git"), b"gitdir: isolated-fixture").unwrap();
@@ -3839,7 +3825,7 @@ mod tests {
                 );
                 assert_eq!(
                     std::fs::read(command).unwrap(),
-                    std::fs::read(sandbox.path().join(bridge_name)).unwrap(),
+                    std::fs::read(&bridge).unwrap(),
                     "{name}"
                 );
             } else {
@@ -3869,7 +3855,7 @@ mod tests {
         std::fs::copy(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
         #[cfg(not(windows))]
         std::fs::hard_link(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
-        std::fs::hard_link(&worktree_exe, worktree_sandbox.path().join(bridge_name)).unwrap();
+        fake_bridge(worktree_sandbox.path(), b"bridge bytes");
         let home = sandbox.path().join("worktree-binary");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::write(home.join(".claude/installed"), b"present").unwrap();

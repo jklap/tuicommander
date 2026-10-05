@@ -106,6 +106,12 @@ decode chunked bodies before converting UTF-8.
 
 The `mcp_server_enabled` config flag controls whether the `/mcp` protocol route is active (MCP tool discovery and invocation), not whether the server itself starts. The HTTP API endpoints (sessions, git, config, etc.) are always available on the IPC listener.
 
+The daemon's `POST /remote/update` handler requires the current session token
+in a `tui-session` cookie or the legacy `?token=` query parameter. Basic Auth alone
+does not authorize executable replacement. `/fs/upload-copy` accepts both token
+forms through the shared middleware. This release retains the query form for
+older clients; client migration and query removal are scheduled for the next release.
+
 The local IPC listener is independent from the **Remote Access** TCP toggle. Turning remote access on or off only starts or stops the authenticated TCP listener; it does not disable the MCP socket or the local MCP route. Lifecycle logs state whether a transition affects TCP or the always-on IPC listener.
 
 For isolated desktop verification, `TUIC_PORT=<port>` overrides the configured TCP
@@ -402,7 +408,7 @@ socket. A `gap` frame is terminal — recovery is a fresh connection and
 
 Turn frames never ride `/events`. What does is one low-frequency
 **`acp-notice`** per connection — `ready`, `settled`, `interaction_pending`,
-`interaction_settled` — naming the connection, generation and sequence, plus
+`interaction_settled`, `card` — naming the connection, generation and sequence, plus
 the session and request id when it has them. It is a wake signal: react to it
 by reading the snapshot, the interactions list, or the stream from the sequence
 it names.
@@ -619,17 +625,51 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 ### Two instruction surfaces, and which one owns a rule
 
-TUIC teaches a connecting agent through two surfaces, and they do not reach the
-same clients:
+TUIC supplies protocol instructions and tool descriptions on different wire
+surfaces. Client receipt does not prove that the model can read either surface
+on its first turn. Deferred tool discovery can expose them later.
 
-| Surface | Who receives it | Owns |
-|---|---|---|
-| `initialize.instructions` (`render_mcp_instructions`) | clients that surface instructions. **Codex does not** | the wire protocol markers, rules about tools that are *not* ours, live state |
-| tool `description` (`native_tool_definitions`) | **every** client, on every `tools/list` | everything about that tool: its actions, its arguments, its semantics |
+| Surface | Transport receipt | Model visibility | Owns |
+|---|---|---|---|
+| `initialize.instructions` (`render_mcp_instructions`) | Returned in the initialize response | Harness-dependent: Claude exposes a bounded system block; Codex exposes namespace metadata after discovery in the measured mode | Wire protocol markers, cross-tool rules, live state |
+| tool `description` (`native_tool_definitions`) | Returned for advertised tools on `tools/list` | May be deferred by the harness; in Speakeasy mode native descriptions arrive through discovery | That tool's actions, arguments and semantics |
+
+**Pinned canary evidence (2026-10-04).** Claude Code **2.1.286**, with
+`claude-sonnet-5-5`, exposes server instructions even when tool descriptions are
+deferred. Its default instruction cap is **2,048 characters**: the 1,024- and
+2,048-byte ASCII controls cite START/MIDDLE/END; the 4,096–32,768-byte controls
+cite START only (`CLAUDE_DEFAULT_*`). The unused probe description is absent
+until tool loading. Disabling tool search exposes that description but does not
+remove the instruction cap. `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH=65536`
+exposes all three instruction canaries at 32,768 bytes
+(`CLAUDE_MAX_OVERRIDE_32768`).
+
+Codex CLI **0.160.0**, with `gpt-6-luna`, receives the instructions, but its
+initial no-tool turns cite **NONE** at all six tested sizes. After metadata
+discovery, it cites the instruction START/MIDDLE/END and description token at
+1,024, 4,096 and **32,768 bytes** (`CODEX_SEARCH_*`, including
+`CODEX_SEARCH_32768.stdout`). Thus the field is not universally discarded, and
+post-discovery visibility does not establish first-turn visibility.
+
+The harness report at
+`~/Gits/personal/orchestrator/reports/tuicommander/2026-10-04-mcp-instructions-harnesses.md`
+records versions, controls and limits; its raw canary evidence is under
+`~/Gits/.tmp/mcp-canary/` (including `CLAUDE_DEFAULT_2048.stdout`). Speakeasy
+advertises meta-tool descriptions first; native `agent`, `repo` and `session`
+semantics require discovery. A description fallback therefore cannot guarantee
+that startup rules prevent an earlier shell action. Actual within-process
+reconnects and untested harness versions remain unmeasured.
+
+Instruction files are a separate surface. The
+rules-file study at `~/Gits/.tmp/rules-file-study/result.md` measures Claude
+`@file` expansion, literal unexpanded `@file` lines in Codex `AGENTS.md`, and
+explicit ego `--instructions FILE` loading in headless mode. Do not treat a
+file reference, MCP receipt, or parent context as proof of child or lifecycle
+visibility. The studies do not change TUIC's launch behavior.
 
 The rule that follows: a statement a tool description carries is not repeated in
-the instructions. A client reading both paid for it twice, and — worse — the
-client reading only descriptions was the one going without. That is the direction
+the instructions. A client reading both paid for it twice, and — worse — a
+client that loaded only descriptions could otherwise go without that rule. That is the direction
 story `078-8b2e` set, and `instructions_do_not_repeat_what_tool_descriptions_already_say`
 now enforces it in both directions, asserting the removal *and* the surviving
 copy. Three things moved out of the instructions this way: the per-tool
@@ -742,7 +782,7 @@ instead of nine, keeps a measurable 10.7%.
 
 ### MCP Native Tools
 
-Native tools are organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled. The enabled `progress` tool is additionally kept on the direct collapsed surface.
+Native tools are organized by domain. Two (`config`, `debug`) are disabled by default via `disabled_native_tools`; listing, search, schema lookup and dispatch respect this filter in both full and collapsed mode. The enabled `progress` tool is additionally kept on the direct collapsed surface.
 
 The payload measurements above predate `voice` and are left as recorded: they
 say what was measured, not what the list costs today.
@@ -762,6 +802,8 @@ say what was measured, not what the list costs today.
 | `debug` | agent_detection, logs, sessions, invoke_js, help | Disabled |
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+
+Settings reads `native_tools` from `get_mcp_status` / `GET /mcp/status`. Both transports use `native_tool_catalog`, projected from the same unfiltered definitions used by MCP. Entries contain `name`, the first description line as `summary`, and the complete `description`. Disabled tools remain in this app inventory so users can re-enable them. No native tool is always on: even `progress` can be disabled and is also gated by global `progress_tracking`. Upstream tools and meta-tools do not belong to this inventory.
 
 Native MCP inputs use `path` for a repository root in `agent register/list_peers` and `repo`, and `branch` for `repo worktree_lifecycle/worktree_remove`. The old `project` and `workspace_id` input names are rejected. The shared `worktree_create` response still includes `workspace_id` alongside `branch` for HTTP parity. `spawn_session=true` on worktree creation starts a bare shell PTY; spawn an agent separately when one is needed.
 
@@ -1256,7 +1298,10 @@ Refresh the query after archiving; deletion performs a fresh safety check.
 ref; it does not remove a worktree or touch a remote ref. The branch must be
 absent from every checkout and must not be the current integration or default
 branch. The shared integration proofs described above apply. Content-based proofs
-require `refs/archive/<branch>` at the current tip. An archived unmerged tip
+require an archive ref at the current tip (the primary `refs/archive/<branch>`
+or its tip-suffixed variant). When the proof is `archived`, the response also
+includes `archive_ref`, captured before deletion and naming the ref that holds
+the deleted tip. An archived unmerged tip
 also remains deletable through the existing `archived` recovery rule; that
 does not change its integration verdict. Merge resolution changes are never
 proved by `git cherry` or a same-subject twin comparison alone. The final
@@ -1417,12 +1462,16 @@ the final positional argument rather than converted to deferred PTY delivery.
 Structured `model` is composed with `args`; a matching run config can supply a
 default `model`, overridden by the spawn parameter. Existing `--model` in
 run-config `args` stays authoritative and conflicts with an explicit model
-parameter. Direct Codex commands include the approval-bypass default. Outside
-authoritative run-config argv, direct executable identity also selects Codex
-prompt deferral and parser state, even when `agent_type` is omitted or
-disagrees. That bypass-default step leaves canonical Codex wrapper run-config
-argv untouched and adds `launch_warning` because TUIC cannot validate the
-wrapper's internal Codex flags.
+parameter. Literal `codex` selects the persisted default run configuration,
+including its editable approval-bypass argument. Only direct interactive Codex
+defaults defer the task through PTY injection; wrappers and subcommands retain
+run-config positional or placeholder task delivery. A Codex `exec`, `e`, or
+`review` subcommand is recognized only as the first positional argument before
+`--`, after skipping root options and their values. Profiles or models named
+`review`, `exec`, or `e` keep interactive task submission. Direct executable identity
+also selects Codex parser state when `agent_type` is omitted or disagrees.
+Composition never restores a removed bypass. Wrapper configs receive
+`launch_warning` because TUIC cannot validate their internal Codex flags.
 
 The optional `env` map uses the same field name and string values as HTTP
 `POST /sessions/agent` and desktop IPC spawn. Its values override run-config
@@ -1928,6 +1977,8 @@ replay horizon, not unbounded or restart-persistent exactly-once delivery.
 
 ## Telegram adapter groundwork
 
-The offline `telegram` module holds owner/config/API and SQLite inbound boundaries (story 1438-79b4). It is not started by desktop or daemon boot and registers no MCP tool yet. `MailPort` requires idempotent stable-ID insertion and safe wake from the future native-mail integration; consumption must be committed at the inbox read boundary. These integrations await 1419/1420. See [the approved design](../design/telegram-channel.md) for the proposed tool, authorization and receipt contract.
+The headless `telegram` tool exposes `register`, `unregister`, `begin`, `activity`, `finish` and `send` through the normal MCP registry and dispatch. Registration uses the caller's MCP-bound TUIC identity, replaces the previous agent with one native mail and is never persisted. MCP session end, PTY close or foreground-agent exit retires it. Other callers must register before outbound actions. Authorized text with no agent gets "Nessun agent registrato" and is dropped; strangers stay silent. Native stable-ID inbox/wake delivery remains authoritative. See [the Telegram design](../design/telegram-channel.md).
 
 Native remote health, authentication, session-list, and SSE clients strip request URLs from reqwest errors before publishing them. Token-authenticated native HTTP requests send the existing `tui-session` cookie header rather than a query token; browser WebSocket query authentication is unchanged.
+
+Workflow operator authority is selected by the host: verified HTTP credentials grant Human, unauthenticated loopback grants LocalApi. Request JSON cannot select the actor. Workflow policy writes and human decisions, plus administrative story transitions, require Human authority.

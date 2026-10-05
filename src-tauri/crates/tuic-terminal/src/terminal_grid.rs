@@ -5459,6 +5459,35 @@ mod tests {
         assert_eq!(text, "");
     }
 
+    // Catches: OSC rows recorded at the history cap drifting after eviction, or
+    // being rebased with the end-of-chunk base instead of the event-time origin.
+    #[test]
+    fn osc_marker_rows_stay_absolute_across_eviction() {
+        for prefix_rows in [0, 4, 8] {
+            let mut grid = TerminalGrid::new(2, 40, 3);
+            for _ in 0..prefix_rows {
+                grid.process(b"old\r\n");
+            }
+            grid.drain_events();
+            let anchor = grid.screen_origin() + 1;
+            grid.process(b"\x1b[2;1Hanchor\x1b]133;A\x07\x1b]7770;state=prompt\x07\r\nnext\r\n");
+            let events = grid.drain_events();
+            let marker_rows: Vec<usize> = events
+                .iter()
+                .filter_map(|event| match event {
+                    TermEvent::Osc133 { line, .. } | TermEvent::Tuic { line, .. } => Some(*line),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(marker_rows, vec![anchor, anchor]);
+            let base = grid.screen_origin() - grid.scrollback_count();
+            assert_eq!(
+                grid.read_rows_in_range(anchor - base, anchor - base)[0].trim_end(),
+                "anchor"
+            );
+        }
+    }
+
     #[test]
     fn osc133_a_emits_event_via_drain() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
