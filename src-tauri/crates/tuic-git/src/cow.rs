@@ -22,7 +22,7 @@ pub enum CowSupport {
 /// Probe the actual source/destination pair instead of inferring reflink
 /// support from a filesystem name.
 pub fn probe_cow_support(src: &Path, dest_parent: &Path) -> CowSupport {
-    let probe_source = src.join(".git").join("HEAD");
+    let probe_source = head_file(src);
     if !probe_source.is_file() {
         return CowSupport::Unsupported(format!(
             "no HEAD to probe with at '{}'",
@@ -66,6 +66,19 @@ pub fn probe_cow_support(src: &Path, dest_parent: &Path) -> CowSupport {
             anchor.display()
         ))
     }
+}
+
+/// The HEAD file of `src`'s repository. In a linked worktree `.git` is a
+/// `gitdir: <path>` pointer file, not a directory.
+fn head_file(src: &Path) -> PathBuf {
+    let dot_git = src.join(".git");
+    if dot_git.is_file()
+        && let Ok(pointer) = std::fs::read_to_string(&dot_git)
+        && let Some(git_dir) = pointer.trim().strip_prefix("gitdir:")
+    {
+        return src.join(git_dir.trim()).join("HEAD");
+    }
+    dot_git.join("HEAD")
 }
 
 fn clone_file_with(flags: &[&str], from: &Path, to: &Path) -> bool {
@@ -343,9 +356,11 @@ pub(crate) fn restore_owner_write(path: &Path) -> Result<(), String> {
             std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         if permissions.readonly() {
+            // Windows readonly is a file attribute; clearing it does not grant Unix world-write.
+            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
         }
@@ -641,6 +656,227 @@ mod tests {
         assert_eq!(human_size(10 * 1024), "10K");
         assert_eq!(human_size(11 * 1024 * 1024), "11M");
         assert_eq!(human_size(3 * 1024 * 1024 * 1024 / 2), "1.5G");
+    }
+
+    /// Kills 484:39 `<` to `<=` and 484:35 `+` to `*` in human_size: either
+    /// lets the unit index reach 5 and panics past a pebibyte.
+    #[test]
+    fn a_size_beyond_the_largest_unit_stays_in_terabytes() {
+        assert_eq!(human_size(1 << 50), "1024T");
+    }
+
+    /// Kills 465:8 delete `!` in walk_size: a file would be walked as a
+    /// directory (size lost) and a directory would report its own inode size.
+    /// 5000 is no directory's inode size, unlike 4096.
+    #[test]
+    fn walk_size_sums_file_lengths_not_directory_entries() {
+        let temp = TempDir::new().unwrap();
+        let tree = temp.path().join("cache/deep");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("blob"), vec![0u8; 3000]).unwrap();
+        std::fs::write(temp.path().join("cache/small"), vec![0u8; 2000]).unwrap();
+
+        assert_eq!(walk_size(&temp.path().join("cache")), Some(5000));
+        assert_eq!(walk_size(&temp.path().join("cache/small")), Some(2000));
+    }
+
+    /// Kills 410:5 `vec![]` in warm_artifacts, and shows that absent
+    /// directories are left out.
+    #[test]
+    fn warm_artifacts_lists_present_directories_with_their_size() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("node_modules")).unwrap();
+        std::fs::write(temp.path().join("node_modules/pkg"), vec![0u8; 2048]).unwrap();
+        std::fs::create_dir_all(temp.path().join("dist")).unwrap();
+        std::fs::write(temp.path().join("dist/out"), vec![0u8; 10]).unwrap();
+
+        assert_eq!(
+            warm_artifacts(temp.path()),
+            vec![
+                WarmArtifact {
+                    path: "node_modules".into(),
+                    size: "2.0K".into()
+                },
+                WarmArtifact {
+                    path: "dist".into(),
+                    size: "10B".into()
+                },
+            ]
+        );
+    }
+
+    /// Kills 26:8 delete `!` in probe_cow_support: a repo with a HEAD would be
+    /// refused for having none, and a bare directory would be probed.
+    #[test]
+    fn probe_refuses_only_a_source_without_head() {
+        let temp = TempDir::new().unwrap();
+        let bare = temp.path().join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        let repo = temp.path().join("repo");
+        init_repo(&repo);
+
+        assert!(matches!(
+            probe_cow_support(&bare, temp.path()),
+            CowSupport::Unsupported(reason) if reason.contains("no HEAD to probe")
+        ));
+        assert!(!matches!(
+            probe_cow_support(&repo, temp.path()),
+            CowSupport::Unsupported(reason) if reason.contains("no HEAD to probe")
+        ));
+    }
+
+    /// Story 1398-42b4: a source that is itself a linked worktree has a `.git`
+    /// pointer file, and the probe refused it for having no HEAD.
+    #[test]
+    fn probe_finds_head_of_a_linked_worktree_source() {
+        let (_temp, _repo, worktree) = warming_fixture();
+
+        assert!(!matches!(
+            probe_cow_support(&worktree, worktree.parent().unwrap()),
+            CowSupport::Unsupported(reason) if reason.contains("no HEAD to probe")
+        ));
+    }
+
+    /// Kills 38:34 `==` to `!=` in probe_cow_support, and 83:5 / 95:5 constant
+    /// returns: a same-volume pair must never be reported as crossing volumes,
+    /// and an existing anchor must be found.
+    #[test]
+    fn probe_on_one_volume_is_never_refused_for_volumes_or_anchor() {
+        let temp = TempDir::new().unwrap();
+        let repo = temp.path().join("repo");
+        init_repo(&repo);
+
+        match probe_cow_support(&repo, &temp.path().join("missing/dest")) {
+            CowSupport::Supported => {}
+            CowSupport::Unsupported(reason) => {
+                assert!(!reason.contains("different volumes"), "{reason}");
+                assert!(!reason.contains("no existing directory"), "{reason}");
+            }
+        }
+    }
+
+    /// Kills 83:5 `None` and `Some(Default::default())`.
+    #[test]
+    fn existing_ancestor_is_the_nearest_directory_that_exists() {
+        let temp = TempDir::new().unwrap();
+        assert_eq!(
+            existing_ancestor(&temp.path().join("missing/deeper")),
+            Some(temp.path().to_path_buf())
+        );
+        assert_eq!(
+            existing_ancestor(temp.path()),
+            Some(temp.path().to_path_buf())
+        );
+    }
+
+    /// Kills 95:5 `None` / `Some(true)` / `Some(false)` and 96:46 `==` to `!=`.
+    /// The crossing-volumes case needs a second filesystem and is not covered.
+    #[cfg(unix)]
+    #[test]
+    fn same_volume_compares_devices_and_gives_up_on_a_missing_path() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("a")).unwrap();
+        std::fs::create_dir_all(temp.path().join("b")).unwrap();
+
+        assert_eq!(
+            same_volume(&temp.path().join("a"), &temp.path().join("b")),
+            Some(true)
+        );
+        assert_eq!(
+            same_volume(&temp.path().join("a"), &temp.path().join("missing")),
+            None
+        );
+    }
+
+    /// Kills 72:5 `true` / `false` and 79:9 `&&` to `||` in clone_file_with: a
+    /// failed copy must not count as success because a file already sits at the
+    /// destination.
+    #[cfg(unix)]
+    #[test]
+    fn clone_file_with_reports_whether_the_copy_happened() {
+        let temp = TempDir::new().unwrap();
+        let from = temp.path().join("from");
+        let to = temp.path().join("to");
+        let stale = temp.path().join("stale");
+        std::fs::write(&from, "x").unwrap();
+        std::fs::write(&stale, "old").unwrap();
+
+        assert!(clone_file_with(&[], &from, &to));
+        assert!(!clone_file_with(
+            &[],
+            &temp.path().join("missing"),
+            &temp.path().join("none")
+        ));
+        assert!(!clone_file_with(&[], &temp.path().join("missing"), &stale));
+    }
+
+    /// Kills 107:5 `Ok(())` in clone_tree: a copy of a source that does not
+    /// exist fails with every flag, on any filesystem.
+    #[test]
+    fn clone_tree_reports_a_copy_that_could_not_happen() {
+        let temp = TempDir::new().unwrap();
+        let error =
+            clone_tree(&temp.path().join("missing"), &temp.path().join("dest")).unwrap_err();
+        assert!(error.contains("copy-on-write copy of"), "{error}");
+    }
+
+    /// Kills 238:5 `Default::default()` in warm_worktree. Whether the host
+    /// clones is the filesystem's call, so either outcome is accepted, but an
+    /// empty report is neither.
+    #[test]
+    fn warm_worktree_reports_either_the_warm_copy_or_why_not() {
+        let (_temp, repo, worktree) = warming_fixture();
+
+        let report = warm_worktree(&repo, &worktree);
+
+        if report.warmed == 1 {
+            assert!(report.warnings.is_empty(), "{report:?}");
+        } else {
+            assert_eq!(report.warmed, 0, "{report:?}");
+            assert_eq!(report.warnings.len(), 1, "{report:?}");
+            assert!(report.warnings[0].contains("could not warm"), "{report:?}");
+        }
+    }
+
+    /// Kills 226:25 `&&` to `||` in external_bin_candidates: a file without the
+    /// sidecar prefix, or a directory that has it, is not a sidecar.
+    #[test]
+    fn only_files_carrying_the_sidecar_prefix_are_candidates() {
+        let temp = TempDir::new().unwrap();
+        let binaries = temp.path().join("src-tauri/binaries");
+        std::fs::create_dir_all(binaries.join("bridge-dir")).unwrap();
+        std::fs::write(binaries.join("bridge-x86"), "sidecar").unwrap();
+        std::fs::write(binaries.join("other-x86"), "unrelated").unwrap();
+        std::fs::write(
+            temp.path().join("src-tauri/tauri.conf.json"),
+            r#"{"bundle":{"externalBin":["binaries/bridge"]}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            external_bin_candidates(temp.path()),
+            vec![PathBuf::from("src-tauri/binaries/bridge-x86")]
+        );
+    }
+
+    /// Kills 293:29 guard `true` in warm_candidates: a symlink candidate (a
+    /// sidecar that is a link) is neither file nor directory and is not copied.
+    #[cfg(unix)]
+    #[test]
+    fn warming_does_not_copy_a_symlink() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        let dest = temp.path().join("dest");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(src.join("real"), "x").unwrap();
+        std::os::unix::fs::symlink(src.join("real"), src.join("link")).unwrap();
+
+        let report = warm_candidates(&src, &dest, vec![PathBuf::from("link")], |_, _| {
+            panic!("a symlink must not be copied")
+        });
+
+        assert_eq!(report, WarmingReport::default());
     }
 
     fn warming_fixture() -> (TempDir, PathBuf, PathBuf) {
@@ -982,5 +1218,51 @@ mod tests {
         let report = warm_worktree_with(&repo, &worktree, |_, _| panic!("must not copy"));
         assert_eq!(report.warmed, 0);
         assert!(report.warnings.is_empty());
+    }
+
+    /// Story 1398-42b4 criterion 2: a child created from a linked-worktree
+    /// source receives the source's ignored build inputs, not only a passing
+    /// probe. Catches a fix that unblocks the probe while candidate discovery
+    /// still reads the source through `.git/` as a directory.
+    #[test]
+    fn a_linked_worktree_source_warms_a_sibling_worktree() {
+        let (temp, _repo, worktree) = warming_fixture();
+        std::fs::write(worktree.join(".gitignore"), "build/\n").unwrap();
+        std::fs::create_dir_all(worktree.join("build/cache")).unwrap();
+        std::fs::write(worktree.join("build/cache/data"), "from-worktree").unwrap();
+        let child = temp.path().join("child");
+        git_cmd(&worktree)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "grandchild",
+                child.to_str().unwrap(),
+            ])
+            .run()
+            .unwrap();
+
+        let report = warm_worktree_with(&worktree, &child, plain_copy);
+
+        assert_eq!(report.warmed, 1, "{report:?}");
+        assert_eq!(
+            std::fs::read_to_string(child.join("build/cache/data")).unwrap(),
+            "from-worktree"
+        );
+    }
+
+    /// A relative `gitdir:` pointer (git `worktree.useRelativePaths`, and
+    /// submodules) resolves against the source directory. Catches resolving it
+    /// against the process working directory.
+    #[test]
+    fn head_file_resolves_a_relative_gitdir_pointer() {
+        let temp = TempDir::new().unwrap();
+        let src = temp.path().join("src");
+        std::fs::create_dir_all(temp.path().join("store/wt")).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(temp.path().join("store/wt/HEAD"), "ref: refs/heads/x\n").unwrap();
+        std::fs::write(src.join(".git"), "gitdir: ../store/wt\n").unwrap();
+
+        assert!(head_file(&src).is_file(), "{:?}", head_file(&src));
     }
 }

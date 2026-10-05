@@ -258,3 +258,11 @@ Both systems work simultaneously. Claude Code agents spawned by TUICommander can
 ## Deprecated: it2 Shim
 
 Earlier versions of TUICommander used an `it2` shell script shim that emulated iTerm2's CLI to intercept teammate creation. This approach is deprecated — teammate spawning now uses direct MCP tool calls (`agent spawn`). The shim at `~/.tuicommander/bin/it2` is no longer needed.
+
+### Teams across configured remote connections
+
+Desktop MCP peer discovery returns a connection-qualified `address` for every
+remote peer. Use this address for mail instead of assuming a terminal alias is
+globally unique. Mail reaches the owning daemon's native inbox and wake path;
+remote replies and remote-to-remote messages pass through the desktop hub.
+The mail link grants no remote spawn capability.

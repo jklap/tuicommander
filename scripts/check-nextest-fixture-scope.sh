@@ -16,9 +16,10 @@ sed "s|sh scripts/build-fixture-bins.sh|touch $marker|" "$tauri/.config/nextest.
 grep -q "touch $marker" "$config" || { echo "nextest.toml no longer names build-fixture-bins.sh" >&2; exit 1; }
 
 # A filter that selects nothing leaves no marker either, so a run must have
-# executed tests for its "marker absent" verdict to mean anything.
+# executed tests for its "marker absent" verdict to mean anything. CI colors
+# nextest's output, which puts SGR codes around the count the grep matches.
 run() {
-  (cd "$tauri" && cargo nextest run --config-file "$config" --no-fail-fast "$@" >"$work/run.log" 2>&1) || true
+  (cd "$tauri" && cargo nextest run --color never --config-file "$config" --no-fail-fast "$@" >"$work/run.log" 2>&1) || true
   grep -qE 'Summary .* [1-9][0-9]* tests? run' "$work/run.log" || { echo "run executed no tests: $*" >&2; cat "$work/run.log" >&2; exit 1; }
 }
 

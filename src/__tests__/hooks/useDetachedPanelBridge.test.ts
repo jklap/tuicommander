@@ -38,10 +38,10 @@ describe("useDetachedPanelBridge", () => {
 	let restoreDetachedPanels: (() => void) | undefined;
 	const unlisteners: Array<ReturnType<typeof vi.fn>> = [];
 
-	const startBridge = async () => {
+	const startBridge = async (onConfigureEgo?: () => void) => {
 		createRoot((rootDispose) => {
 			dispose = rootDispose;
-			({ restoreDetachedPanels } = useDetachedPanelBridge());
+			({ restoreDetachedPanels } = useDetachedPanelBridge(onConfigureEgo));
 		});
 		await Promise.resolve();
 	};
@@ -63,6 +63,18 @@ describe("useDetachedPanelBridge", () => {
 		mockProviderStart.mockClear();
 		mockProviderStop.mockClear();
 		mockCreateProvider.mockReset().mockReturnValue({ start: mockProviderStart, stop: mockProviderStop });
+	});
+
+	// Catches: detached AI Chat setup mail is discarded instead of opening the main Settings.
+	it("opens ego settings only for the AI Chat configure action", async () => {
+		let opened = 0;
+		await startBridge(() => {
+			opened += 1;
+		});
+		handlers.get("panel-action")?.({ payload: { panelId: "notes", action: "configure-ego", data: {} } });
+		expect(opened).toBe(0);
+		handlers.get("panel-action")?.({ payload: { panelId: "ai-chat", action: "configure-ego", data: {} } });
+		expect(opened).toBe(1);
 	});
 
 	it("returns a detached Markdown document to its existing tab when its window closes", async () => {

@@ -3,7 +3,6 @@
     not(feature = "desktop"),
     allow(dead_code, unused_imports, unused_variables)
 )]
-#![recursion_limit = "256"]
 
 pub mod acp;
 pub(crate) mod acp_commands;
@@ -37,25 +36,31 @@ pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
-// Tests of the pure sidecar predicate that build.rs also compiles; a build
+// Tests of the sidecar config override that build.rs also compiles; a build
 // script has no test harness.
 #[cfg(test)]
 #[path = "../build_sidecars.rs"]
 mod build_sidecars;
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 mod dictation;
 pub(crate) mod dir_watcher;
 pub(crate) mod ego_cli;
+#[cfg(all(feature = "desktop", not(feature = "dictation")))]
+#[path = "dictation/ownership.rs"]
+mod input_ownership;
 pub(crate) use tuic_core::error_classification;
 pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
 pub(crate) mod generators;
 pub(crate) mod git;
+pub(crate) mod remote_transfer;
 pub(crate) use tuic_git::git_cli;
 pub(crate) mod git_graph;
 pub(crate) mod idle_close;
 pub(crate) use tuic_git::git_locks;
 pub(crate) use tuic_git::git_reads;
+#[cfg(test)]
+mod critic_1420_tests;
 pub(crate) mod github;
 pub(crate) mod github_account;
 pub(crate) mod github_auth;
@@ -95,6 +100,7 @@ mod native_keys;
 mod native_notification;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
+pub(crate) mod secrets;
 pub(crate) use tuic_terminal::output_parser;
 pub(crate) use tuic_terminal::output_watchers;
 #[cfg(feature = "desktop")]
@@ -135,7 +141,14 @@ pub(crate) mod stories;
 pub(crate) mod subagent_map;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
+#[expect(
+    dead_code,
+    reason = "Telegram offline ports await native integration after 1419/1420"
+)]
+pub(crate) mod telegram;
 pub(crate) use tuic_terminal::terminal_grid;
+#[cfg(test)]
+mod build_graph_tests;
 #[cfg(feature = "desktop")]
 pub(crate) mod terminal_grid_commands;
 #[cfg(test)]
@@ -1049,6 +1062,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
     };
 
     Ok(serde_json::json!({
+        "native_tools": mcp_http::mcp_transport::native_tool_catalog(),
         "enabled": true,
         "running": running,
         "remote_port": if remote_enabled { Some(remote_port) } else { None },
@@ -1090,13 +1104,13 @@ async fn deep_link_mcp_call(
     args.insert("action".to_string(), serde_json::Value::String(action));
 
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], 0).into();
-    let result = mcp_http::mcp_transport::handle_mcp_tool_call(
+    let result = Box::pin(mcp_http::mcp_transport::handle_mcp_tool_call(
         &state.inner().clone(),
         addr,
         &tool,
         &serde_json::Value::Object(args),
         None,
-    )
+    ))
     .await;
 
     Ok(result)
@@ -1724,9 +1738,10 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init());
 
     #[cfg(feature = "desktop")]
-    let builder = builder
-        .manage(dictation::DictationState::new())
-        .manage(sleep_prevention::SleepBlocker::new());
+    let builder = builder.manage(sleep_prevention::SleepBlocker::new());
+
+    #[cfg(feature = "dictation")]
+    let builder = builder.manage(dictation::DictationState::new());
 
     // Single-instance lock only in release builds — allows tauri dev to run
     // alongside the installed TUIC-preview.app (they share the same identifier).
@@ -1784,14 +1799,14 @@ pub fn run() {
             // suppressed while the user is at their machine.
             if let Some(window) = app.get_webview_window("main") {
                 let push_flag = Arc::clone(app_state);
-                #[cfg(target_os = "macos")]
+                #[cfg(all(target_os = "macos", feature = "dictation"))]
                 let focus_app = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Focused(focused) = event {
                         push_flag
                             .desktop_window_focused
                             .store(*focused, std::sync::atomic::Ordering::Relaxed);
-                        #[cfg(target_os = "macos")]
+                        #[cfg(all(target_os = "macos", feature = "dictation"))]
                         if !focused {
                             dictation::fn_key_monitor::release_on_focus_loss(&focus_app);
                         }
@@ -1801,30 +1816,45 @@ pub fn run() {
 
             #[cfg(feature = "desktop")]
             {
-                // One instance per config directory owns dictation and the
-                // global hotkey; a second one must not register or open either.
-                let dictation_state = app.state::<dictation::DictationState>();
-                dictation_state.claim_ownership(&config::config_dir());
-                let input_plan = dictation::ownership::GlobalInputPlan::for_ownership(
-                    dictation_state.is_owner(),
-                );
+                #[cfg(feature = "dictation")]
+                let input_plan = {
+                    let dictation_state = app.state::<dictation::DictationState>();
+                    dictation_state.claim_ownership(&config::config_dir());
+                    dictation::ownership::GlobalInputPlan::for_ownership(dictation_state.is_owner())
+                };
+                #[cfg(feature = "dictation")]
+                let restore_hotkey = input_plan.restore_hotkey;
+                #[cfg(not(feature = "dictation"))]
+                let restore_hotkey = {
+                    let ownership = input_ownership::Ownership::acquire(&config::config_dir());
+                    let is_owner = ownership.is_owner();
+                    tracing::info!(source = "dictation", path = %ownership.path().display(), owner = is_owner, "Global input ownership");
+                    app.manage(ownership);
+                    is_owner
+                };
 
-                // Install global hotkey plugin (registers handler, no shortcuts yet)
+                // The same config-directory lock guards global shortcuts with or without voice.
                 if let Err(e) = global_hotkey::init(app.handle()) {
                     tracing::warn!(source = "global-hotkey", "Failed to init plugin: {e}");
-                } else if input_plan.restore_hotkey {
+                } else if restore_hotkey {
                     global_hotkey::restore_from_config(app.handle());
                 }
 
-                // Install Fn/Globe key monitor for push-to-talk dictation
-                if input_plan.install_fn_monitor {
-                    dictation::fn_key_monitor::install(app.handle().clone());
+                #[cfg(feature = "dictation")]
+                {
+                    // Install Fn/Globe key monitor for push-to-talk dictation
+                    if input_plan.install_fn_monitor {
+                        dictation::fn_key_monitor::install(app.handle().clone());
+                    }
+                    dictation::spawn_idle_unload_sweeper(app.handle().clone());
+                    // Before any conversation can be armed: a speaker built without
+                    // this one reports its replies to nobody but a poller.
+                    dictation::commands::install_utterance_observer(app.handle());
                 }
-                dictation::spawn_idle_unload_sweeper(app.handle().clone());
-                // Before any conversation can be armed: a speaker built without
-                // this one reports its replies to nobody but a poller.
-                dictation::commands::install_utterance_observer(app.handle());
+            }
 
+            #[cfg(feature = "desktop")]
+            {
                 // Install the native key monitor (macOS swallows Ctrl+Tab and F13-F20
                 // before JS/WKWebView ever sees them)
                 native_keys::install(app.handle().clone());
@@ -1906,6 +1936,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            telegram::settings::telegram_settings,
+            telegram::settings::telegram_setup,
             generators::generate_value,
             native_dialog::pick_path,
             native_drag::start_native_drag,
@@ -2144,37 +2176,69 @@ pub fn run() {
             get_tailscale_status,
             recheck_tailscale_status,
             get_relay_status,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_dictation_status,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_model_info,
+            #[cfg(feature = "dictation")]
             dictation::commands::download_whisper_model,
+            #[cfg(feature = "dictation")]
             dictation::commands::delete_whisper_model,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_speech_assets,
+            #[cfg(feature = "dictation")]
             dictation::commands::download_speech_asset,
+            #[cfg(feature = "dictation")]
             dictation::commands::cancel_speech_download,
+            #[cfg(feature = "dictation")]
             dictation::commands::delete_speech_asset,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_speech_voices,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_edge_voices,
+            #[cfg(feature = "dictation")]
             dictation::commands::import_speech_voice,
+            #[cfg(feature = "dictation")]
             dictation::commands::delete_speech_voice,
+            #[cfg(feature = "dictation")]
             dictation::commands::preview_speech_voice,
+            #[cfg(feature = "dictation")]
             dictation::commands::speak_reply,
+            #[cfg(feature = "dictation")]
             dictation::commands::stop_speech,
+            #[cfg(feature = "dictation")]
             dictation::commands::pause_speech,
+            #[cfg(feature = "dictation")]
             dictation::commands::resume_speech,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_speech_status,
+            #[cfg(feature = "dictation")]
             dictation::commands::start_dictation,
+            #[cfg(feature = "dictation")]
             dictation::commands::stop_dictation_and_transcribe,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_correction_map,
+            #[cfg(feature = "dictation")]
             dictation::commands::set_correction_map,
+            #[cfg(feature = "dictation")]
             dictation::commands::list_audio_devices,
+            #[cfg(feature = "dictation")]
             dictation::commands::inject_text,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_dictation_config,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_hands_free_default_notice,
+            #[cfg(feature = "dictation")]
             dictation::commands::set_dictation_config,
+            #[cfg(feature = "dictation")]
             dictation::commands::check_microphone_permission,
+            #[cfg(feature = "dictation")]
             dictation::commands::open_microphone_settings,
+            #[cfg(feature = "dictation")]
             dictation::commands::arm_hands_free_dictation,
+            #[cfg(feature = "dictation")]
             dictation::commands::disarm_hands_free_dictation,
+            #[cfg(feature = "dictation")]
             dictation::commands::get_hands_free_status,
             global_hotkey::set_global_hotkey,
             config::load_app_config,
@@ -2266,6 +2330,7 @@ pub fn run() {
             fs::copy_path_abs,
             fs::move_path_abs,
             fs::fs_transfer_paths,
+            remote_transfer::fs_transfer_remote_paths,
             fs::add_to_gitignore,
             plugins::list_user_plugins,
             plugins::get_plugin_readme_path,
@@ -2306,6 +2371,8 @@ pub fn run() {
             grok_usage::get_grok_usage_api,
             terminal_grid_commands::set_terminal_theme_colors,
             screenshot_response,
+            secrets::forms::secret_form_bootstrap,
+            secrets::forms::secret_form_submit,
             mcp_confirm_response,
             session_suspend_response,
             app_logger::push_log,
@@ -2415,11 +2482,14 @@ pub fn run() {
                 // streaming thread (which holds an Arc<WhisperContext>), then drops
                 // the transcriber while the process is still alive.
                 tauri::RunEvent::Exit => {
+                    workflows::shutdown_checks();
+                    #[cfg(feature = "dictation")]
                     if let Some(dictation) = app_handle.try_state::<dictation::DictationState>() {
                         dictation.shutdown();
                     }
                     // Kill all SSH tunnel processes so ports are freed for restart
                     if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
+                        state.secrets.clear();
                         state.tunnel_manager.shutdown_all();
                         if let Some(manager) = state.design_mode.get() {
                             tauri::async_runtime::block_on(manager.stop_all());
@@ -2745,6 +2815,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     crate::github_auth::spawn_deferred_token_resolution(state.clone());
 
     spawn_daemon_background_tasks(&state);
+    telegram::start(&state);
 
     // The bridge reaches this process over the local IPC socket, and an agent on
     // this machine can only find the socket if it is listening. Awaited: the
@@ -2862,25 +2933,28 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     tokio::pin!(lifetime);
 
     let mut updated = false;
-    tokio::select! {
+    let shutdown_result: anyhow::Result<()> = tokio::select! {
         result = axum::serve(listener, svc) => {
-            if let Err(e) = result {
-                anyhow::bail!("TCP server error: {e}");
-            }
+            result.map_err(|e| anyhow::anyhow!("TCP server error: {e}"))
         }
         signal = remote_shutdown_signal() => {
-            signal?;
-            tracing::info!(source = "remote", "Received shutdown signal");
+            signal.map_err(anyhow::Error::from).map(|()| {
+                tracing::info!(source = "remote", "Received shutdown signal");
+            })
         }
         () = &mut lifetime => {
             tracing::info!(source = "remote", "Remote daemon survive time expired");
+            Ok(())
         }
         () = restart.notified() => {
             updated = true;
             tracing::info!(source = "remote", "Restarting after remote binary update");
+            Ok(())
         }
-    }
+    };
 
+    workflows::shutdown_checks();
+    shutdown_result?;
     // Flush the last buffered log lines to disk before the process exits
     // (story #672-c1a3) — the lines a shutdown bug needs most.
     app_logger::flush_logs_on_exit();

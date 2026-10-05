@@ -150,6 +150,7 @@ quick inconclusive exits remain retryable after a short cooldown.
 
 | Command | Why it is still where it is |
 |---|---|
+| `fs_transfer_remote_paths` (`remote_transfer.rs`) | Async IPC/HTTP coordinator. Source enumeration, tar production and receiver extraction run on the blocking pool; HTTP and archive spooling are streamed asynchronously. |
 | `fs_transfer_paths` (`fs.rs`) | Still sync, so its recursive directory copy runs on the main thread. It is the backend of a drag-drop, and the D&D surface needs Boss's approval before it is touched. Conversion is mechanical when that comes — see the `DEFERRED` note at the site. |
 | `resolve_terminal_path` (`fs.rs`) | A single `canonicalize` + `is_dir`. Microseconds on a local disk; a stale network mount could stall it, which is a real but unobserved risk. Its batched sibling `resolve_terminal_paths` — the one a terminal screen actually calls, with tens of candidates — **is** on the blocking pool, so the risk that scaled with candidate count is gone. |
 | `resolve_markdown_link` (`fs.rs`) | `async fn` using `spawn_blocking_fs` for canonicalization of the source, target and root. UNC paths are rejected before any filesystem probe. |
@@ -226,3 +227,7 @@ worse than no comment — each one had already talked a reader out of checking:
   the executor)". Its grep phase opens up to 50 files.
 - `fs.rs` — "BM25 phase: get top-ranked files (~1ms)". Nothing bounds it; the
   cost is proportional to the index.
+
+Private secret entry: `secret_form_bootstrap` is a short synchronous identity
+check; `secret_form_submit` is async. MCP request/consent waits on a oneshot
+without holding the blocking pool. Run uses Tokio child pipes; no PTY or shell.

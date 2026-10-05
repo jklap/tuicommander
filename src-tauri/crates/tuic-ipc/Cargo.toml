@@ -6,8 +6,5 @@ edition = "2024"
 [dependencies]
 sha2 = "0.11"
 
-[dev-dependencies]
-tuic-test-support = { path = "../tuic-test-support" }
-
 [lints]
 workspace = true

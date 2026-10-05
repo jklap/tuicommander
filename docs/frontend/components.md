@@ -222,6 +222,7 @@ Native terminal renderer with full PTY integration.
 - Applies font, theme, and zoom settings
 - Link detection for clickable URLs
 - Selection management for copy operations
+- Terminal search retains match highlights across unchanged or colour-only grid frames; changed text invalidates affected rows before the backend refresh completes.
 
 `CanvasTerminal` keeps frame decode, reconciliation, scheduling, and paint in
 one imperative hot path. Sibling controllers own selection/search state, link
@@ -570,7 +571,7 @@ system and never turns an absent provider value into zero.
 | `CiRing` | SVG circular CI status indicator with proportional segments |
 | `DiffViewer` | Syntax-highlighted unified diff renderer |
 | `Dropdown` | Reusable dropdown select component |
-| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization (including raw form and image-map removal), interactive checkboxes, tweak highlights, and click interception for every rendered link; `MarkdownTab` sends local href resolution to Rust |
+| `ContentRenderer` | Safe markdown-to-HTML rendering with DOMPurify sanitization (including raw form and image-map removal), with escaped preformatted text on parser failure, interactive checkboxes, tweak highlights, and click interception for every rendered link; `MarkdownTab` sends local href resolution to Rust |
 | `PanelResizeHandle` | Draggable resize handle for panel boundaries |
 | `PromptOption` | Agent prompt multiple-choice option |
 | `StatusBadge` | Git status badges (clean/dirty/conflict) |
@@ -610,3 +611,14 @@ remain in effect. `SubAgentIcon` supplies the shared 11px robot marker
 for both the dashboard and sidebar; only its tooltip/accessible name contains
 the parent name. The session list supplies each parent's live `tuic_session`
 when its PTY ID differs from that identity.
+
+## Private secret form
+
+`SecretForm` is a standalone entry (`secret-form.html`, `src/secretForm.tsx`),
+mounted in a separate backend-created WebView or a capability-gated browser.
+It imports no App stores, debug globals or logging handlers. Sensitive input
+values stay in input elements until submit, then are cleared and unmounted
+before IPC/HTTP entry. Only requested fields render; approval instead shows
+exact argv/names/directory and optional template consent.
+
+`SettingsPanel/tabs/TelegramTab` renders the shared Telegram setup controls in desktop Settings and, when opened, in mobile `SettingsScreen`. All validation, pairing, private-file writes and polling ownership remain in Rust. The registered agent is read-only; agents opt in through MCP rather than a destination selector.

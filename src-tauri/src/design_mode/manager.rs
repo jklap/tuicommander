@@ -300,10 +300,10 @@ impl DesignModeManager {
         let status = mode.status.clone();
         drop(modes);
         (self.notify)(&status);
-        if let Some(browser) = browser {
-            if let Err(error) = browser.close().await {
-                tracing::warn!(repo_path, %error, "Design Mode browser could not close");
-            }
+        if let Some(browser) = browser
+            && let Err(error) = browser.close().await
+        {
+            tracing::warn!(repo_path, %error, "Design Mode browser could not close");
         }
     }
 
@@ -472,10 +472,8 @@ impl CdpInspectBrowser {
             .await
             .map_err(|error| error.to_string())?;
         enable_domains(&page).await?;
-        if new_page {
-            if let Some(url) = dev_server_url {
-                page.goto(url).await.map_err(|error| error.to_string())?;
-            }
+        if new_page && let Some(url) = dev_server_url {
+            page.goto(url).await.map_err(|error| error.to_string())?;
         }
         let scripts = scripts.filter_map(|event| {
             std::future::ready(

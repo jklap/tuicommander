@@ -29,7 +29,7 @@ pub enum RunAction {
         run_id: String,
         command_id: String,
         expected_sequence: i64,
-        command: RunCommand,
+        command: Box<RunCommand>,
     },
     RecordIntegration {
         run_id: String,
@@ -54,10 +54,10 @@ pub enum RunAction {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum RunReply {
-    Snapshot(RunSnapshot),
+    Snapshot(Box<RunSnapshot>),
     Runs(Vec<RunSnapshot>),
     Events(Vec<RunEvent>),
-    Receipt(RunReceipt),
+    Receipt(Box<RunReceipt>),
 }
 
 /// The live coordinator is the only inbox recipient for story-worker results.
@@ -113,16 +113,16 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             definition_id,
             definition_revision,
             limits,
-        } => Ok(RunReply::Snapshot(store.start_plan(
+        } => Ok(RunReply::Snapshot(Box::new(store.start_plan(
             &owner,
             &plan_id,
             &definition_id,
             definition_revision,
             limits,
-        )?)),
-        RunAction::Get { run_id } => Ok(RunReply::Snapshot(scoped_snapshot(
+        )?))),
+        RunAction::Get { run_id } => Ok(RunReply::Snapshot(Box::new(scoped_snapshot(
             &store, &owner, &run_id,
-        )?)),
+        )?))),
         RunAction::ListPlanRuns { plan_id, limit } => {
             let plan = crate::stories::StoryStore::open()?.get_plan(&plan_id)?;
             if plan.project != owner {
@@ -150,6 +150,7 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             expected_sequence,
             command,
         } => {
+            let command = *command;
             scoped_snapshot(&store, &owner, &run_id)?;
             if matches!(
                 command,
@@ -166,12 +167,12 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
                         .into(),
                 );
             }
-            Ok(RunReply::Receipt(store.command_expected(
+            Ok(RunReply::Receipt(Box::new(store.command_expected(
                 &run_id,
                 &command_id,
                 expected_sequence,
                 command,
-            )?))
+            )?)))
         }
         RunAction::RecordIntegration {
             run_id,
@@ -180,12 +181,12 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             expected_sequence,
         } => {
             scoped_snapshot(&store, &owner, &run_id)?;
-            Ok(RunReply::Receipt(store.record_integrated_story(
+            Ok(RunReply::Receipt(Box::new(store.record_integrated_story(
                 &run_id,
                 &story_id,
                 &command_id,
                 expected_sequence,
-            )?))
+            )?)))
         }
         RunAction::RecertifyCanonical {
             run_id,
@@ -193,11 +194,11 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             expected_sequence,
         } => {
             scoped_snapshot(&store, &owner, &run_id)?;
-            Ok(RunReply::Receipt(store.recertify_canonical(
+            Ok(RunReply::Receipt(Box::new(store.recertify_canonical(
                 &run_id,
                 &command_id,
                 expected_sequence,
-            )?))
+            )?)))
         }
         RunAction::ExecuteCheck {
             run_id,
@@ -207,13 +208,13 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             expected_sequence,
         } => {
             scoped_snapshot(&store, &owner, &run_id)?;
-            Ok(RunReply::Receipt(store.execute_check(
+            Ok(RunReply::Receipt(Box::new(store.execute_check(
                 &run_id,
                 &story_id,
                 &check_id,
                 &command_id,
                 expected_sequence,
-            )?))
+            )?)))
         }
     }
 }
@@ -281,4 +282,39 @@ fn scoped_snapshot(store: &RunStore, owner: &str, run_id: &str) -> Result<RunSna
         return Err("workflow run does not belong to project".into());
     }
     Ok(snapshot)
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn run_decisions_reject_relative_projects() {
+        // Catches: run decisions accepting a relative project path.
+        for command in [
+            RunCommand::AnswerInput {
+                attempt_id: "attempt".into(),
+                answer: "yes".into(),
+            },
+            RunCommand::Resume,
+            RunCommand::FinalVerificationPassed,
+            RunCommand::Complete,
+            RunCommand::ResolveUncertainEffect {
+                effect_id: "effect".into(),
+                succeeded: true,
+            },
+        ] {
+            let error = run_action(
+                "relative",
+                RunAction::Command {
+                    run_id: "run".into(),
+                    command_id: "decision".into(),
+                    expected_sequence: 1,
+                    command: Box::new(command),
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error, "project must be an absolute path");
+        }
+    }
 }

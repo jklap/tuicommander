@@ -1,6 +1,6 @@
 import type { DecodedRow, StyledRange } from "./canvasTerminalUtils";
 import { cellText } from "./canvasTerminalUtils";
-import { ANSWER_MARKER_RE, type RowSnapshot } from "./suggestOverlay";
+import { ANSWER_MARKER_RE, answerExtent, type RowSnapshot } from "./suggestOverlay";
 
 /** One turn of the answers-only view: what the user asked, then only the 💬 answers. */
 export interface AnswersTurn {
@@ -38,6 +38,15 @@ const OUTPUT_START_RE = /^\s*[●⏺]/;
 /** Rows a prompt may span, so a turn whose output never starts with a bullet is not swallowed whole. */
 export const PROMPT_MAX_ROWS = 50;
 
+/** Text of rows `[from, to]`: soft-wrapped rows concatenated, hard lines joined with a newline, indent under the bullet removed. */
+function joinAnswerRows(rows: readonly RowSnapshot[], from: number, to: number): string {
+	let text = rows[from].text.trimStart().replace(/^[●⏺]\s*/, "");
+	for (let i = from + 1; i <= to; i++) {
+		text += rows[i].isWrapped ? rows[i].text : `\n${rows[i].text.replace(/^ {1,2}/, "").trimEnd()}`;
+	}
+	return text.replace(/[ \t]+$/gm, "").trimEnd();
+}
+
 /** Join the soft-wrapped rows starting at `from` into one logical line; returns it and the next row. */
 function joinLogicalLine(rows: readonly RowSnapshot[], from: number): { text: string; next: number } {
 	let text = rows[from].text;
@@ -70,7 +79,8 @@ function readPrompt(rows: readonly RowSnapshot[]): { text: string; next: number 
 /**
  * Build one turn of the answers-only view from its rows. With `hasPrompt` the
  * first row starts the user's prompt (see `readPrompt`); every logical line after
- * it that starts with the 💬 marker is an answer, in order, wrapped rows joined.
+ * it that starts with the 💬 marker begins an answer, in order, spanning the same rows the
+ * terminal highlights (`answerExtent`).
  */
 export function buildAnswersTurn(rows: readonly RowSnapshot[], hasPrompt: boolean): AnswersTurn {
 	let i = 0;
@@ -82,10 +92,13 @@ export function buildAnswersTurn(rows: readonly RowSnapshot[], hasPrompt: boolea
 	}
 	const answers: string[] = [];
 	while (i < rows.length) {
-		const line = joinLogicalLine(rows, i);
-		if (!rows[i].isWrapped && ANSWER_MARKER_RE.test(line.text))
-			answers.push(line.text.trimStart().replace(/^[●⏺]\s*/, ""));
-		i = line.next;
+		if (!rows[i].isWrapped && ANSWER_MARKER_RE.test(rows[i].text)) {
+			const last = answerExtent(i, rows.length, (r) => rows[r] ?? null);
+			answers.push(joinAnswerRows(rows, i, last));
+			i = last + 1;
+		} else {
+			i = joinLogicalLine(rows, i).next;
+		}
 	}
 	return { prompt, answers };
 }
@@ -101,29 +114,33 @@ export async function readTurnRows(
 	startAbs: number,
 	endAbs: number,
 ): Promise<RowSnapshot[] | null> {
-	const byAbs = new Map<number, RowSnapshot>();
+	const byAbs = new Map<number, { text: string; wrapped: boolean }>();
 	for (let start = startAbs; start < endAbs; start += TURN_FETCH_CHUNK) {
 		const range = await fetchRange(start, Math.min(TURN_FETCH_CHUNK, endAbs - start));
 		if (!range) return null;
-		for (const { abs, row } of range.rows) byAbs.set(abs, { text: rowCopyText(row), isWrapped: row.wrapped });
+		for (const { abs, row } of range.rows) byAbs.set(abs, { text: rowCopyText(row), wrapped: row.wrapped });
 	}
 	const rows: RowSnapshot[] = [];
-	for (let abs = startAbs; abs < endAbs; abs++) rows.push(byAbs.get(abs) ?? { text: "", isWrapped: false });
+	// A row's wire flag says it continues onto the NEXT row; a snapshot says it continues the previous one.
+	// DEFERRED (2026-10-04) — a buffer that starts mid-wrapped-answer (eviction cut the head off) has no
+	// row startAbs-1 to read, so its first row looks like a head and can show a ghost answer in the
+	// answers-only view. Cosmetic and rare; avoiding it needs a look-back mechanism (Boss: not worth it).
+	for (let abs = startAbs; abs < endAbs; abs++)
+		rows.push({ text: byAbs.get(abs)?.text ?? "", isWrapped: byAbs.get(abs - 1)?.wrapped ?? false });
 	return rows;
 }
 
 /**
  * All-time row indexes of the user prompts still in the scrollback, ascending and
- * unique. `promptLines` are grid-relative; `historyBase` shifts them to all-time.
+ * unique. Stored `promptLines` already use all-time coordinates.
  */
 export function promptStarts(promptLines: readonly number[], historyBase: number, endAbs: number): number[] {
-	const total = endAbs - historyBase;
 	const starts = new Set<number>();
-	for (const line of promptLines) if (line >= 0 && line < total) starts.add(historyBase + line);
+	for (const line of promptLines) if (line >= historyBase && line < endAbs) starts.add(line);
 	return [...starts].sort((a, b) => a - b);
 }
 
-/** Finished turns by start row, valid for one `historyBase` (eviction moves every row index). */
+/** Finished turns by start row, valid for one `historyBase` (eviction changes the retained prefix). */
 export interface TurnCache {
 	base: number;
 	turns: Map<number, { endAbs: number; hasPrompt: boolean; turn: AnswersTurn }>;

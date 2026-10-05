@@ -11,8 +11,11 @@ The fixture SHA-256 is
 
 Record 184 carries `Claude needs your permission`; record 185 is the single
 Esc input byte. Record 188 renders `User declined to answer questions` and
-`Worked for 4s · done` above the ready composer. A later prompt begins at
-record 196 and is excluded. The regression test replays the source bytes
+`Worked for 4s · done` above the ready composer. Record 195 already paints the next human draft (`Run the shell command: sleep
+25 && echo done. Then reply with one word.`) in the composer; its submitted
+turn begins at record 196 and is excluded. Tests needing the empty ready
+composer replay only records 0–194. Story 1420-f3de uses that recorded prefix
+to protect late foreground discovery and quiet-screen reclassification. The regression test replays the source bytes
 through the PTY chunk processor and the event-bus session-state accumulator.
 
 ## Mobile choice replay (#1212-3093)

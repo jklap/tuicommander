@@ -191,19 +191,21 @@ mod tests {
                 file_scope: vec![],
             })
             .expect("story");
-        assert!(
-            store
-                .transition_for_actor(
-                    &story.id,
-                    story.revision,
-                    StoryCommand::StartManual,
-                    Some("agent")
-                )
-                .is_err()
-        );
+        // Catches: tracking metadata refusing a valid manual start without creating a claim.
         let started = store
-            .transition_for_actor(&story.id, story.revision, StoryCommand::StartManual, None)
-            .expect("start");
+            .transition_for_actor(
+                &story.id,
+                story.revision,
+                StoryCommand::StartManual,
+                Some("agent"),
+            )
+            .expect("trusted manual start");
+        assert_eq!(
+            store.transition_history(&story.id).expect("history")[0].actor,
+            StoryTransitionActor::ManagedSession {
+                session_id: "agent".into()
+            }
+        );
         assert_eq!(started.status, StoryStatus::InProgress);
         assert_eq!(started.claim_session, None);
         let checked = store
@@ -649,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn claiming_session_cannot_approve_but_a_different_reviewer_can() {
+    fn claiming_session_approval_records_managed_provenance() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
         let plan = store
@@ -689,28 +691,15 @@ mod tests {
             )
             .expect("submit review");
 
-        let error = store
+        // Catches: actor tracking refusing a valid approval by the claiming session.
+        let done = store
             .transition_for_actor(
                 &story.id,
                 review.revision,
                 StoryCommand::Approve,
                 Some("implementer"),
             )
-            .expect_err("implementer cannot approve their own story");
-        assert_eq!(error, "a story cannot be approved by its implementer");
-        assert_eq!(
-            store.get_story(&story.id).expect("unchanged").status,
-            StoryStatus::Review
-        );
-
-        let done = store
-            .transition_for_actor(
-                &story.id,
-                review.revision,
-                StoryCommand::Approve,
-                Some("reviewer"),
-            )
-            .expect("independent reviewer approves");
+            .expect("implementer approval");
         assert_eq!(done.status, StoryStatus::Done);
         assert_eq!(done.claim_session, None);
         assert_eq!(
@@ -721,7 +710,7 @@ mod tests {
                 .expect("approval")
                 .actor,
             StoryTransitionActor::ManagedSession {
-                session_id: "reviewer".into()
+                session_id: "implementer".into()
             }
         );
     }
@@ -748,6 +737,20 @@ mod tests {
                 file_scope: vec![],
             })
             .unwrap();
+        // Catches: local administrative actions being refused or losing LocalApi provenance.
+        let blocked = store
+            .transition_from_local_api(&story.id, story.revision, StoryCommand::Block)
+            .expect("local block");
+        let story = store
+            .transition_from_local_api(&story.id, blocked.revision, StoryCommand::Unblock)
+            .expect("local unblock");
+        assert!(
+            store
+                .transition_history(&story.id)
+                .unwrap()
+                .iter()
+                .all(|entry| entry.actor == StoryTransitionActor::LocalApi)
+        );
         let started = store
             .transition_from_local_api(&story.id, story.revision, StoryCommand::StartManual)
             .expect("local action");
@@ -805,19 +808,27 @@ mod tests {
         let claimed = store
             .claim(&story.id, "tab-one", story.revision)
             .expect("claim");
-        assert!(
-            store
-                .transition_for_actor(
-                    &story.id,
-                    claimed.revision,
-                    StoryCommand::CheckCriterion(0),
-                    Some("tab-two"),
-                )
-                .is_err()
-        );
+        // Catches: provenance restricting another caller's criterion update or stealing the claim.
+        let claimed = store
+            .transition_for_actor(
+                &story.id,
+                claimed.revision,
+                StoryCommand::CheckCriterion(0),
+                Some("tab-two"),
+            )
+            .expect("trusted update");
+        assert_eq!(claimed.checked, vec![true]);
+        assert_eq!(claimed.claim_session.as_deref(), Some("tab-one"));
         assert_eq!(
-            store.get_story(&story.id).expect("story").revision,
-            claimed.revision
+            store
+                .transition_history(&story.id)
+                .expect("history")
+                .last()
+                .expect("update")
+                .actor,
+            StoryTransitionActor::ManagedSession {
+                session_id: "tab-two".into()
+            }
         );
         assert!(store.claim(&story.id, "tab-two", claimed.revision).is_err());
         assert_eq!(store.release_session_claims("tab-one").expect("release"), 1);
@@ -1115,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_caller_cannot_remove_an_otherwise_valid_cancelled_edge() {
+    fn managed_caller_can_remove_an_otherwise_valid_cancelled_edge() {
         let dir = tempfile::tempdir().expect("temporary config");
         let store = StoryStore::open_at(&dir.path().join("stories.sqlite3")).expect("store");
         let plan = store
@@ -1145,13 +1156,12 @@ mod tests {
         store
             .transition_for_actor(&target.id, target.revision, StoryCommand::WontFix, None)
             .expect("cancel target");
-        let error = store
+        // Catches: actor metadata preventing release after a cancelled dependency is removed.
+        let released = store
             .remove_dependency(&dependent.id, &target.id, dependent.revision, Some("agent"))
-            .expect_err("managed caller refused");
-        assert!(error.contains("user action"), "{error}");
-        assert_eq!(
-            store.get_story(&dependent.id).expect("unchanged").revision,
-            dependent.revision
-        );
+            .expect("managed removal");
+        assert_eq!(released.status, StoryStatus::Ready);
+        assert!(released.dependencies.is_empty());
+        assert_eq!(released.revision, dependent.revision + 1);
     }
 }

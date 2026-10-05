@@ -4,6 +4,17 @@
 
 **Application adapters:** `src-tauri/src/dictation/`
 
+The application enables native dictation with the non-default Cargo feature
+`dictation`. Plain application Cargo dev/test builds omit Whisper and WebRTC;
+use `--features dictation` to check or test the voice adapters. Tauri builds
+(including `make dev` and releases) enable the feature in `tauri.conf.json`,
+and desktop CI enables it explicitly. `cuda` and `vulkan` imply `dictation`.
+Headless `tuic-remote --no-default-features` does not compile the audio stack.
+
+Notification audio remains available in desktop builds without dictation. Both
+notification and speech output share `tuic-core::audio_output`, behind its
+optional `audio-output` feature. The output-device selection is unchanged.
+
 Local voice-to-text using Whisper with Metal acceleration on macOS. Push-to-talk workflow with streaming partial results: hold hotkey to record, see partial transcriptions in real-time, release to finalize.
 
 ## Module Structure
@@ -1742,7 +1753,7 @@ gated or gain-ridden.
 statically links the APM rather than looking for a system library, because there
 is one on Linux, a brew-only one on macOS, and none at all on Windows. Upstream
 CI runs `ubuntu-latest` and `macos-latest` only, and the `bundled` build does not
-work on Windows at all; four of our five patches exist for that, and the fifth
+work on Windows at all; five of our six patches exist for that, and one
 for a macOS link failure. They are listed, with the exact symptom each one fixes,
 in the `[patch.crates-io]` comment in `src-tauri/Cargo.toml`.
 
@@ -1754,6 +1765,13 @@ abseil-cpp 20240722.0 from github.com while the build runs. None of this
 reaches `tuic-remote` — `cargo tree --no-default-features -i
 webrtc-audio-processing` matches no packages, so the headless binary needs
 neither meson nor ninja.
+
+Windows MSVC targets force Meson's Visual Studio environment with `--vsenv`,
+so MinGW on `PATH` cannot become the bundled library's compiler. Compilation
+and installation run through `meson compile` and `meson install` to reactivate
+that environment in each subprocess.
+MSVC setup uses `--wipe` so a restored Meson cache cannot retain a previously
+selected MinGW compiler; other targets continue to use `--reconfigure`.
 
 | Platform | Extra | Why |
 |---|---|---|

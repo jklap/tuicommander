@@ -11,6 +11,7 @@ import { extractRenderedTabComponents, extractRenderedTabKeys, extractTab } from
  * one of these (RemoteMachinesTab wraps RemoteMachinesPanel) is listed by hand;
  * the top-level ones are checked against `SettingsPanel` below. */
 const TAB_SOURCES: Record<string, string[]> = {
+	telegram: ["tabs/TelegramTab.tsx"],
 	general: ["tabs/GeneralTab.tsx"],
 	appearance: ["tabs/AppearanceTab.tsx"],
 	notifications: ["tabs/NotificationsTab.tsx"],
@@ -35,6 +36,7 @@ const TAB_SOURCES: Record<string, string[]> = {
  * what was added: give it a static heading if it is a real setting, otherwise
  * update the number here. */
 const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
+	telegram: { dynamic: 0, orphans: 0 },
 	general: { dynamic: 0, orphans: 0 },
 	appearance: { dynamic: 0, orphans: 0 },
 	notifications: { dynamic: 0, orphans: 0 },

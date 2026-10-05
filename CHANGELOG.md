@@ -7,11 +7,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - **Workflow graph foundation** — Durable serial graph positions, bounded predecessor history, decision provenance and repair counters now replay from pinned definitions. Executable validation requires final checks and explicit pause targets. This slice does not enable autonomous scheduling; older pre-contract runs remain inspectable and cancellable.
+- Fix command boundaries, prompt ticks and answers-only prompt association drifting after scrollback eviction.
+### Added
+
+- Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
+
+### Fixed
+
+- Stop workflow check process trees on cancellation and shutdown; record story transition provenance without restricting trusted local workflow actions.
+- Run Git freshness probes outside workflow and story write transactions, rejecting concurrent persisted revision changes.
+- Keep workflow plans Active until approved stories have current integration receipts, and reopen them after canonical ref movement.
+- Background completion queue retries reuse a stable key, preventing duplicate wakes after a lost reply; exhausted ambiguous replies remain uncertain even when mail fallback fails.
+- Retire Telegram opt-in on observed agent exit before a replacement in the same terminal can inherit it.
+- Keep CLI and MCP secret requests connected while users enter values or approve commands; add safe native form creation diagnostics.
+- Launch macOS `make dev` from a stable executable copy outside Cargo/mbx targets so target cleanup cannot orphan the running app's firewall identity.
+- Show every registered native MCP tool in Settings, including disabled tools, using backend descriptions and switches that follow the existing MCP access filters.
+
+- Bound nightly release notes and link to the full comparison when the commit list exceeds the release body budget.
+- Expose the Codex approvals/sandbox bypass in its default run configuration with a warning icon; removing the argument stays effective across restart, older-backend saves, and managed launches. Codex wrapper defaults retain positional task delivery; interactive profiles named `review`, `exec`, or `e` retain submitted task delivery.
+- Initialise headless VT screens at the requested terminal width.
+
+- Preserve Claude subcommand arguments without injecting launch-scoped settings.
+- Deliver remote MCP confirmation dialogs and their resolution to the desktop. Keep newer remote ACP questions visible when an earlier answer completes.
+- Preserve AI Chat replies with parentheses and remote permission snapshots when unrelated card notices arrive.
+- Restore additions and deletions in the changed-file diff list, including renamed files.
+
+- Return the exact archive ref holding a deleted branch tip when a reused branch name needs a suffixed archive.
+
+- Publish the Codex notify script with execute permission already set, including concurrent desktop and daemon starts.
+- Open terminal directory links in the File Browser and report missing paths without creating empty editor tabs.
+
+- Build bundled WebRTC with Visual Studio for Windows MSVC targets even when MinGW is on `PATH`.
+- Restore the Windows process environment API dependency in `tuic-core` after the workspace split.
+
+## [1.8.0] - 2026-10-04
+
+- **Private secret forms** — Agents request only named sensitive fields and run user-approved argv commands with values in the child environment. Values remain in memory, output is masked, and a one-time capability supports browser or phone entry on the existing server. TUIC inspection tools are suspended while entry is open.
+- **Remote peer mail** — A flooding host has its own replay quota. Budget pressure reclaims only departed senders, and disconnect retires old shadow peers even during a reconnect handshake. A departed sender may replay once after pressure evicted its history.
+
+### Fixed
+
+- Desktop MCP now discovers and addresses configured remote terminals and peers, preserving native output and semantic submit behavior. Authenticated peer mail supports remote replies and remote-to-remote delivery through the desktop hub.
+- **Workflow recovery** — Recover each database once per process and continue past individual run failures. Later opens and runtime reconciliation preserve resumed workers instead of retrying restart recovery.
+
+- **Remote file drops** — Dropping Mac files onto a connected remote repository copies them through the authenticated daemon connection. Directory drops keep the recursion confirmation; existing names are skipped. Uploads have a 17-minute total receive deadline, and read-only directories publish correctly. Abrupt daemon termination can leave a staging directory for manual removal.
+- **HTTP API security** — Reject foreign browser origins and DNS-rebinding Host names before handlers run. Protected HTTP requests now require credentials even from loopback/LAN; local CLI/MCP IPC retains its existing access.
+
+- **Remote agent notices** — MCP toasts from connected daemons reach the desktop notification bell with the host name, original level and requested sound. Open terminal selects the originating remote tab; unknown sessions leave focus unchanged. Disconnected notices are not queued for replay. Malformed remote notice text is discarded, and identically named connections retain separate notices.
+- **Telegram adapter groundwork** — Add offline owner, file authorization, safe Bot API and minimal inbound boundaries. Persist only the atomic polling cursor; unread inbox mail may be lost on restart. Harden offline polling with fixed ten-update batches under a 1 MiB response cap, one cursor write after each successful batch, shared retry scheduling and in-memory rejection stops. Daemon polling and native mail delivery remain disabled pending integration; no live Telegram channel is available yet.
 
 - **MCP Markdown tabs** — Documents opened with `ui action=tab` survive UI reloads in the same window, including native recovery without an unload event. Reopening their stable id updates the restored tab without creating a duplicate.
 - **Remote terminal stream failures** — A stalled initial replay, unreadable frame or disconnected stream now shows a persistent error toast. Reconnect attempts remain bounded until a frame reaches the renderer.
 - **Answers-only view** — Keep marked answers that precede the first tracked prompt. Show a short notice when no marked answers remain in the retained history.
 - **Stable MCP bridge** — Agent configs use an atomically installed bridge outside Cargo targets. Rebuilds and target cleanup no longer remove the executable needed by new MCP connections; previous bridge revisions remain available through updates.
+- **Remote agent detection** — Agents started by hand in a headless terminal gain backend agent state, safe submit and mail wake. HTTP and desktop foreground detection now share the state update. Rejected submissions and unavailable mail wakes explain the cause and the next action.
+- Revoke agent identity when the foreground returns to a shell after the agent was observed, retaining startup presets and transient helpers; recognise native versioned and updater-replaced Claude executables on Linux.
 
 - **Hands-free controls** — Start conversation uses the accent action style. A coloured Running/Stopped indicator keeps the current state visible.
 
@@ -19,6 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Bodyless IPC replies** — CLI and bridge response decoding completes at the headers for HTTP 1xx, 204 and 304, and CLI HEAD replies, instead of waiting for a body or connection EOF.
 
 - **Named-instance IPC clients** — `tuic` and `tuic-bridge` now select the server's instance socket with `--instance <id>` or `TUIC_APP_INSTANCE`. The CLI background runner keeps the same namespace, and bridge fallback discovery cannot connect to another instance.
+- **Claude prompt copy** — Copying a wrapped prompt removes the composer marker and continuation margin, joins width-supported wraps, and retains typed newlines and pasted content. Cleanup requires a column-zero composer origin; partial selections and VT soft-wrap continuations retain literal prompt glyphs and indentation An oldest retained row with an unknown predecessor stays literal until fully erased and rewritten (#1411-097c, #1414-4366, #1418-48c7).
 
 - **Suspend Tab** — Right-click a terminal tab → Suspend Tab ends its process and agent to free memory and CPU, and keeps the tab (marked `zz`) restorable like after a restart. Resume Tab, or the Resume button in the tab, opens a new session in the same folder and resumes the agent. A suspended tab stays suspended across a restart. Suspend is refused while the agent is working or a question awaits input. MCP: `session action=suspend` returns the tab's verdict, or an error when no UI is attached. Unlike auto-standby, which only pauses an idle process, a suspended tab holds no process.
 
@@ -2855,3 +2906,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Known Issues
 - Tabs from all worktrees visible when switching branches (fix planned)
+
+- Add Telegram setup in desktop and mobile Settings: token check/replacement, expiring one-use pairing or explicit chat IDs, live agent selection and safe daemon status.

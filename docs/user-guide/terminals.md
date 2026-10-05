@@ -239,6 +239,7 @@ Also accessible via the "Search Terminals" command in the palette.
 ## Copy & Paste
 
 - **Copy:** Select text in the terminal, then `Cmd+C`. A "Copied to clipboard" confirmation appears in the status bar. Multi-line Claude messages paste as clean text: the repeated `▎` visual gutter is removed while bullets, numbering, and indentation are preserved. Inside such a quote, rows that Claude broke only to fit the terminal width are joined back into one paragraph, so pasting into Slack or an email keeps whole sentences. Blank rows, list items and deeper indents keep their own line, and a quote that never reaches the terminal edge is copied exactly as shown.
+  Claude prompt selections also remove the first `❯ ` marker and the two-column continuation margin. Width-supported wraps join, while short typed lines and additional content indentation remain. A glyph pasted inside the prompt remains part of the text. Composer cleanup applies only when the selection starts at column zero of the first composer row. Selecting body text or a VT soft-wrap continuation preserves literal markers and indentation.
 - **Paste:** `Cmd+V` writes clipboard content to the active terminal
 
 ### Copy on Select
@@ -265,7 +266,7 @@ File paths appearing in terminal output are automatically detected and become cl
 - Other source files open in the built-in editor
 - A `:line` or `:line:col` suffix opens the built-in editor at that position, including for Markdown files. Clicking another position in an already-open file moves its cursor without replacing unsaved edits
 
-Paths are validated against the filesystem before becoming clickable — only real files show as links.
+Paths are validated against the filesystem before becoming clickable — existing files and directories show as links. Directory links open the File Browser at that directory; file links open the usual viewer or editor. Tilde paths expand to the home directory, and relative paths resolve from the terminal working directory. A path removed before opening shows a short notification instead of an empty tab.
 Absolute paths can point outside a registered repository, including files in hidden directories.
 
 Recognized extensions include: `.rs`, `.ts`, `.tsx`, `.js`, `.jsx`, `.py`, `.go`, `.java`, `.css`, `.html`, `.json`, `.yaml`, `.toml`, `.sql`, and many more.
@@ -346,3 +347,7 @@ Terminal output that uses the OSC 8 standard for hyperlinks (e.g., URLs emitted 
 ### Answers-only View
 
 Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marked answers and their tracked prompts. Turns without marked answers are omitted. Output before the first tracked prompt remains available as a prompt-less turn, from the retained history base. If no answers qualify, the view shows a one-line notice. Toggle the view again to return to the terminal.
+
+### Stored terminal marker coordinates
+
+When old output leaves the scrollback, command boundaries and prompt ticks stay attached to their retained output. Ticks for discarded prompts disappear; answers-only history keeps the retained question and answer association.

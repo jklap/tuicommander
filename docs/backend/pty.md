@@ -77,6 +77,11 @@ returns `400` and does not enter the session map.
 
 ### Monitoring
 
+Foreground-agent exit or an observed agent-type change also retires the terminal's volatile Telegram registration
+lifetime synchronously. A restarted agent using the same terminal and MCP identity
+must opt in again, even if the Telegram worker was busy during the transition. Unrecognized
+non-shell probes retain the previous identity and do not revoke registration.
+
 | Command | Description |
 |---------|-------------|
 | `get_orchestrator_stats()` | Active/max/available session counts. |
@@ -278,6 +283,12 @@ The ticker therefore checks the deadline **before** the non-dirty early return, 
 Without this enforcement a single BSU whose ESU is delayed or lost freezes the tab **indefinitely**: content buffers invisibly and only a later ESU releases it. That was the cause of Codex streaming appearing to eat text and then dump it all at once, and it made any binary containing the BSU bytes a permanent tab wedge.
 
 ### Headless Reader Thread
+
+Foreground agent detection is shared by the desktop command, HTTP foreground endpoint and backend silence timer. Spawn records the root role explicitly: shell PTYs use `Shell`; direct IPC, HTTP and MCP agent spawns use `DirectProgram`. On macOS and Linux, the retained child PID and PTY foreground process group identify the owning root without a shell-name list. In a shell PTY, returning to that root revokes an observed identity only when its current image is not a supported agent. A shell can exec into an agent without changing its PID: detection classifies the current root image rather than assuming its spawn role still describes the executable. An agent exec at the root ends the session when it exits; it does not return to an owning shell. A script wrapper named bash is a different foreground group and counts as observed. Unknown wrappers can retain a run-config preset; a startup helper such as direnv/nvm may therefore disarm the preset early, an intentional fail-closed trade-off. Before any child is observed, the startup preset remains armed.
+
+A direct agent has no shell to return to. Its identity remains valid while its root lives; a foreground child (including a nested shell, git or an editor) holds unattended submit and mail wake until the root regains the foreground. Missing root role, PID or foreground evidence also holds input. Mirrors without the owning daemon's answer never infer a role. A different discovered agent drops preset provenance. Creation seeds provenance synchronously; delayed lifecycle events cannot re-arm an observed identity.
+
+OS samples receive a generation under the session lock. Older samples cannot overwrite a newer identity or foreground-input hold; screen reclassification also verifies ownership of its generation. Identity changes reclassify the existing terminal screen so a quiet composer does not retain a shell-era cache. The refresh return value is the effective foreground detection, which can differ from the retained startup preset; lifecycle consumers read stored state.
 
 The output reader checks the grid's alternate-screen state for agent sessions. On the first entry per session, it logs a warning with the agent type and detected CLI version. This catches agent versions or launch paths that bypass the native-scrollback launch defaults without spamming on repaints.
 
@@ -670,6 +681,13 @@ peer/orchestrator entries in their original relative order. Each user command
 carries a process-unique id so the Compose panel can delete a single entry —
 a queue position would shift under the caller as the FIFO drains.
 
+Queue requests may include `idempotencyKey`. A per-PTY bounded recent-key set
+reserves acceptance atomically with FIFO append, before the blocking flush. The
+last 128 keys survive drain and cancellation and are removed with the PTY;
+backend restart also clears them. Duplicate requests do not flush or append.
+Both HTTP and desktop IPC return `accepted`, `typed` and current `queued`;
+a recognized retry can be accepted even with an empty queue and no new typing.
+
 Each nonempty flush attempt emits one `queue delivery attempt` tracing record with
 the session id, agent and shell states at the attempt, queued counts before and
 after, whether text reached the composer, whether submission was confirmed, and
@@ -702,3 +720,11 @@ Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The
   because session metadata is contended.
 - Reader thread holds `Arc<AtomicBool>` for pause signaling
 - Metrics use `AtomicUsize` for zero-overhead counting
+
+### Stored terminal marker coordinates
+
+OSC 133 command boundaries and OSC 7770 prompt rows are eviction-stable all-time rows. The PTY reader forwards these coordinates unchanged on IPC and HTTP/WS; it must not add the end-of-chunk history base.
+
+Claude launch settings apply to prompt and option-first launches. Shell wrappers use backend-captured installed CLI help to recognise subcommands and aliases, without probing again at launch. Help is unavailable unless its `Commands:` section has parseable command rows; empty, whitespace-only or truncated help therefore uses the complete recorded Claude help, including `auth` and advertised aliases. Rust publishes this fallback to the shell environment; generated wrappers also embed it for an unusable cached value. No separate fallback verb list is maintained. The exact hidden `remote-control` command also bypasses settings because its reported CLI refusal confirms that requirement. Hyphenated prompts retain settings. Explicit settings and bare mode remain authoritative.
+
+Headless PTY registration uses the requested terminal geometry without a minimum VT width. A same-size resize preserves that width.

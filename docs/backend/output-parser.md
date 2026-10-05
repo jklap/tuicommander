@@ -254,6 +254,9 @@ AI Chat receives ACP markdown chunks in both desktop and browser mode, without
 terminal rows or wrap metadata. `protocolText.ts` interprets the joined answer
 for that UI: it removes the connection acknowledgement, presents anchored
 `intent:` as status, and exposes bounded bracketed `suggest:` items as replies.
+It takes the title from the consecutive parenthesized marker prefix, preserving
+parenthesized descriptions and same-line reply text, including replies ending in
+parentheses. Ambiguous unbalanced or nested markers remain literal body text.
 It leaves fenced or indented code and prose mentions literal. This is a separate
 logical-line projection of the terminal grammar: reusing the Rust VT parser here would require
 a new backend ACP projection and wire contract, including HTTP/IPC parity.
@@ -333,6 +336,8 @@ Detected as a plain-prefix token at column 0: `suggest: [ A | B | C ]`.
 
 One bounded logical line may soft-wrap across terminal rows and may begin with any parser-supported agent bullet (`●`, `⏺`, `•`, or `◦`), but the bracketed content may not contain a nested `[`/`]`. The closing bracket must be at or before the cursor; cells to the right of the cursor are ignored so stale content left by a carriage-return overwrite cannot complete a partial token. Reconstruction follows at most four soft-wrap transitions and 512 bytes. If those bounds or cursor metadata prevent reconstruction, the cursor-row structural candidate is rejected rather than parsed from rendered cells. Items are pipe-delimited (2–4 per the protocol). Parsing is agent-gated; the raw token is stripped from the log delivered to PWA/REST consumers by `strip_structural_tokens`, and concealed on the desktop canvas by the frontend overlay.
 
+**Mobile wrapped-token masking:** both screen and scrollback log reads run `vt_log::strip_structural_blocks` before delivery. It uses `output_parser::suggest_tail_rows` to remove continuation rows only when a bracketed token closes within the parser's wrap bound; blank rows, nested brackets and new protocol tokens stop the scan. An unclosed token does not consume unrelated output. Suggestion chips share the Rust parser across desktop and mobile; desktop canvas masking remains in `suggestOverlay.ts`, separate from the mobile log filter (#1380-05d8).
+
 ### UsageLimit
 
 Claude Code usage limit percentage:
@@ -380,6 +385,8 @@ ParsedEvent::ShellState {
 ```
 
 Emitted by the reader thread on real-output→busy and idle transitions. The frontend consumes this instead of deriving busy/idle from raw PTY data. See `docs/backend/pty.md` for idle detection details.
+
+The backend foreground probe enables agent parsing for hand-launched agents in both desktop and headless sessions. HTTP foreground queries update the same stored identity. Screen activity cached before identity discovery is reclassified when that identity changes.
 
 Ordinary output and spinner repaints cannot override a protocol idle marker.
 The reader preserves that evidence until the ranked busy decision, and the
@@ -539,3 +546,9 @@ sequences from plain log text. GitHub CI log sanitization and the test-only
 `OutputParser::parse` adapter use it. It preserves printable UTF-8 and
 linefeeds, and discards other executed controls, matching the previous
 `strip-ansi-escapes` policy. The workspace no longer compiles VTE 0.14.
+
+### Stored terminal marker coordinates
+
+A hook-generated `UserInput.line` is an all-time terminal row captured by the OSC 7770 handler. Keystroke-reconstructed events keep `line = -1`. Consumers discard evicted hook rows instead of rebasing stored rows with a newer origin.
+
+AI Chat also preserves reply text that immediately follows a parenthesized intent title on the same line. Untitled intent lines keep their existing status behavior; code examples are left intact.

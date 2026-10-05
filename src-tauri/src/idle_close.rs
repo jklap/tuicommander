@@ -83,7 +83,10 @@ fn bg_wake_blocks_close(session_id: &str) -> bool {
         tracing::warn!(%session_id, "idle-close found mismatched bg wake marker");
         return true;
     }
-    matches!(marker["status"].as_str(), Some("failed" | "retrying"))
+    matches!(
+        marker["status"].as_str(),
+        Some("failed" | "retrying" | "uncertain")
+    )
 }
 
 /// Nobody can answer a child whose parent has no PTY and no MCP session. The
@@ -227,7 +230,7 @@ fn sweep_with_snapshot(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn sweep_with_commands(
     state: &Arc<AppState>,
     tracker: &mut IdleCloseTracker,
@@ -330,6 +333,7 @@ mod tests {
     }
 
     /// The parent is an MCP peer without a PTY, as an orchestrator usually is.
+    #[cfg(unix)]
     fn live_parent(state: &Arc<AppState>) {
         state
             .mcp
@@ -685,13 +689,21 @@ mod tests {
         .unwrap();
         sweep_with_commands(&state, &mut tracker, 1_800_000, &[]);
         assert!(state.session_maps.sessions.contains_key(child));
+        // Catches: exhausted ambiguous queue receipts close a child still owed a wake.
+        std::fs::write(
+            &marker,
+            format!(r#"{{"session_id":"{child}","status":"uncertain"}}"#),
+        )
+        .unwrap();
+        sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
+        assert!(state.session_maps.sessions.contains_key(child));
         std::fs::write(
             &marker,
             format!(r#"{{"session_id":"{child}","status":"queued"}}"#),
         )
         .unwrap();
-        sweep_with_commands(&state, &mut tracker, 1_800_000, &[]);
         sweep_with_commands(&state, &mut tracker, 2_700_000, &[]);
+        sweep_with_commands(&state, &mut tracker, 3_600_000, &[]);
         assert!(!state.session_maps.sessions.contains_key(child));
     }
 
@@ -740,9 +752,11 @@ mod tests {
         sweep_with_commands(state, &mut tracker, 900_000, &[]);
     }
 
+    #[cfg(unix)]
     #[derive(Clone)]
     struct CriticLogSink(Arc<std::sync::Mutex<Vec<u8>>>);
 
+    #[cfg(unix)]
     impl std::io::Write for CriticLogSink {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.0.lock().unwrap().extend_from_slice(bytes);
@@ -753,6 +767,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CriticLogSink {
         type Writer = CriticLogSink;
         fn make_writer(&'a self) -> Self::Writer {

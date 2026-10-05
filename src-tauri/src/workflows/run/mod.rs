@@ -6,6 +6,8 @@ mod reducer;
 mod store;
 
 pub use api::*;
+pub(crate) use check::shutdown_checks;
+#[cfg(test)]
 pub use check::*;
 
 pub use model::*;
@@ -17,6 +19,12 @@ mod critic_tests;
 mod graph_critic_1446a_tests;
 #[cfg(test)]
 mod graph_tests;
+
+#[cfg(test)]
+mod critic_957_tests;
+
+#[cfg(test)]
+mod critic_960_tests;
 
 #[cfg(test)]
 mod tests {
@@ -64,7 +72,14 @@ mod tests {
             argv: vec!["git".into(), "rev-parse".into(), "HEAD".into()],
             timeout_secs: 10,
         };
-        let receipt = execute_pinned_check(&check, repo.path()).expect("check");
+        let receipt = super::check::execute_run_check(
+            &check,
+            repo.path(),
+            repo.path(),
+            "receipt-test",
+            false,
+        )
+        .expect("check");
         assert_eq!(receipt.exit_code, 0);
         assert_eq!(receipt.argv, check.argv);
         assert_eq!(receipt.commit.len(), 40);
@@ -75,22 +90,47 @@ mod tests {
             timeout_secs: 10,
         };
         assert_ne!(
-            execute_pinned_check(&failed, repo.path())
-                .expect("failed check receipt")
-                .exit_code,
+            super::check::execute_run_check(
+                &failed,
+                repo.path(),
+                repo.path(),
+                "receipt-test",
+                false
+            )
+            .expect("failed check receipt")
+            .exit_code,
             0
         );
         std::fs::write(repo.path().join("file.txt"), "changed\n").expect("edit");
         assert!(
-            execute_pinned_check(&check, repo.path())
-                .expect_err("dirty worktree")
-                .contains("clean")
+            super::check::execute_run_check(
+                &check,
+                repo.path(),
+                repo.path(),
+                "receipt-test",
+                false
+            )
+            .expect_err("dirty worktree")
+            .contains("clean")
         );
     }
 
     #[cfg(unix)]
     #[test]
     fn timed_out_pinned_check_stops_its_descendants() {
+        assert_check_tree_stops(false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_pinned_check_stops_descendants_and_fences_late_workers() {
+        // catches: cancellation stops the run projection but leaves checks alive,
+        // or a worker finishes its Git setup and spawns after cancellation.
+        assert_check_tree_stops(true);
+    }
+
+    #[cfg(unix)]
+    fn assert_check_tree_stops(cancel: bool) {
         use std::process::Command;
         let repo = tempfile::tempdir().expect("repo");
         let pid_dir = tempfile::tempdir().expect("pid dir");
@@ -119,10 +159,56 @@ mod tests {
                 "-c".into(),
                 format!("sleep 60 & echo $! > {}; wait", pid_file.display()),
             ],
-            timeout_secs: 1,
+            timeout_secs: if cancel { 60 } else { 1 },
         };
-        let receipt = execute_pinned_check(&check, repo.path()).expect("timed out receipt");
-        assert_eq!(receipt.exit_code, -1);
+        if cancel {
+            let repo_path = repo.path().to_owned();
+            let db_path = pid_dir.path().join("runs.sqlite3");
+            let worker_check = check.clone();
+            let worker_db = db_path.clone();
+            let worker = std::thread::spawn(move || {
+                super::check::execute_run_check(
+                    &worker_check,
+                    &repo_path,
+                    &worker_db,
+                    "cancelled-run",
+                    false,
+                )
+            });
+            // Setup is not the behavior deadline; nextest bounds a stuck setup.
+            while !pid_file.exists() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            super::check::cancel_checks(&db_path, "cancelled-run");
+            assert!(
+                worker
+                    .join()
+                    .expect("check worker")
+                    .unwrap_err()
+                    .contains("cancelled")
+            );
+            assert!(
+                super::check::execute_run_check(
+                    &check,
+                    repo.path(),
+                    &db_path,
+                    "cancelled-run",
+                    false
+                )
+                .unwrap_err()
+                .contains("cancelled")
+            );
+        } else {
+            let receipt = super::check::execute_run_check(
+                &check,
+                repo.path(),
+                repo.path(),
+                "receipt-test",
+                false,
+            )
+            .expect("timed out receipt");
+            assert_eq!(receipt.exit_code, -1);
+        }
         let worker: libc::pid_t = std::fs::read_to_string(&pid_file)
             .expect("worker pid")
             .trim()
@@ -157,7 +243,7 @@ mod tests {
         };
         assert!(
             super::store::require_current_checks(
-                &[check.clone()],
+                std::slice::from_ref(&check),
                 &[receipt.clone()],
                 &receipt.ref_name,
                 &receipt.commit,
@@ -168,7 +254,7 @@ mod tests {
         receipt.exit_code = 0;
         assert!(
             super::store::require_current_checks(
-                &[check.clone()],
+                std::slice::from_ref(&check),
                 &[receipt.clone()],
                 &receipt.ref_name,
                 &"c".repeat(40),
@@ -179,7 +265,7 @@ mod tests {
         receipt.argv.push("--ignored".into());
         assert!(
             super::store::require_current_checks(
-                &[check.clone()],
+                std::slice::from_ref(&check),
                 &[receipt.clone()],
                 &receipt.ref_name,
                 &receipt.commit,
@@ -190,7 +276,7 @@ mod tests {
         receipt.argv = check.argv.clone();
         assert!(
             super::store::require_current_checks(
-                &[check.clone()],
+                std::slice::from_ref(&check),
                 &[receipt.clone()],
                 "refs/heads/moved",
                 &receipt.commit,
@@ -365,6 +451,22 @@ mod tests {
 
     #[test]
     fn recorded_merge_releases_dependents_and_ref_movement_invalidates_receipts() {
+        assert_recorded_merge_receipts(true, false);
+    }
+
+    #[test]
+    fn workflow_plan_done_requires_receipts_and_reopens_until_recertified() {
+        // catches: approved stories make a workflow plan Done before integration,
+        // or Done survives canonical ref movement which invalidates run completion.
+        assert_recorded_merge_receipts(false, false);
+    }
+
+    #[test]
+    fn preflight_git_does_not_hold_writers_and_post_probe_ref_movement_is_rejected_on_read() {
+        assert_recorded_merge_receipts(false, true);
+    }
+
+    fn assert_recorded_merge_receipts(with_dependent: bool, preflight_races: bool) {
         let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
         let definitions = WorkflowStore::open().unwrap();
         let plan_draft = definitions.get_draft(&definition_id).unwrap();
@@ -454,19 +556,30 @@ mod tests {
             .unwrap();
 
         let stories = StoryStore::open().unwrap();
-        let dependent = stories
-            .create_story(NewStory {
-                plan_id: plan_id.clone(),
-                title: "Dependent".into(),
-                criteria: vec!["Done".into()],
-                priority: 1,
-                origin: StoryOrigin::Native,
-                file_scope: vec!["dependent.txt".into()],
-            })
-            .unwrap();
-        stories
-            .add_dependency(&dependent.id, &story_id, dependent.revision)
-            .unwrap();
+        let dependent = if with_dependent {
+            let dependent = stories
+                .create_story(NewStory {
+                    plan_id: plan_id.clone(),
+                    title: "Dependent".into(),
+                    criteria: vec!["Done".into()],
+                    priority: 1,
+                    origin: StoryOrigin::Native,
+                    file_scope: vec!["dependent.txt".into()],
+                })
+                .unwrap();
+            stories
+                .add_dependency(&dependent.id, &story_id, dependent.revision)
+                .unwrap();
+            Some(dependent)
+        } else {
+            None
+        };
+        let assert_plan_state = |expected| {
+            if !with_dependent {
+                assert_eq!(stories.plan_state(&plan_id).unwrap(), expected);
+                assert_eq!(stories.plan_view(&plan_id).unwrap().state, expected);
+            }
+        };
         let store = RunStore::open().unwrap();
         let run = store
             .start_plan(
@@ -561,10 +674,13 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(
-            stories.get_story(&dependent.id).unwrap().status,
-            crate::stories::StoryStatus::Backlog
-        );
+        if let Some(dependent) = &dependent {
+            assert_eq!(
+                stories.get_story(&dependent.id).unwrap().status,
+                crate::stories::StoryStatus::Backlog
+            );
+        }
+        assert_plan_state(crate::stories::PlanState::Active);
         let checked = store
             .execute_check(&run.id, &story_id, "policy", "check", accepted.sequence)
             .unwrap();
@@ -604,14 +720,27 @@ mod tests {
                 .unwrap_err(),
             "post-integration check policy failed"
         );
-        assert_eq!(
-            stories.get_story(&dependent.id).unwrap().status,
-            crate::stories::StoryStatus::Backlog
-        );
+        if let Some(dependent) = &dependent {
+            assert_eq!(
+                stories.get_story(&dependent.id).unwrap().status,
+                crate::stories::StoryStatus::Backlog
+            );
+        }
         crate::git_cli::git_cmd(repo)
             .args(["config", "workflow.testpass", "true"])
             .run()
             .unwrap();
+        if preflight_races {
+            let canonical = repo.to_path_buf();
+            super::store::BEFORE_COMMIT.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move || {
+                    crate::git_cli::git_cmd(&canonical)
+                        .args(["switch", "-qc", "probe-commit-race"])
+                        .run()
+                        .unwrap();
+                }))
+            });
+        }
         let integrated = store
             .record_integrated_story(&run.id, &story_id, "integrate", checked.sequence)
             .unwrap();
@@ -619,6 +748,38 @@ mod tests {
             integrated.event.kind,
             RunEventKind::StoryIntegrated { .. }
         ));
+        if preflight_races {
+            assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
+            crate::git_cli::git_cmd(repo)
+                .args(["switch", "-q", "main"])
+                .run()
+                .unwrap();
+            let writer = store.clone();
+            let run_id = run.id.clone();
+            let project_path = run.project.clone();
+            super::check::BEFORE_GIT.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move || {
+                    // catches: receipt Git probes holding story/run writer locks and timing out unrelated writes.
+                    StoryStore::open()
+                        .unwrap()
+                        .create_plan(NewPlan {
+                            project: project_path,
+                            title: "Unrelated writer".into(),
+                            source: "unrelated.md".into(),
+                        })
+                        .unwrap();
+                    writer
+                        .command(&run_id, "writer-during-git", RunCommand::Pause)
+                        .unwrap();
+                }))
+            });
+            let error = stories
+                .reconcile_integrated_dependencies(&plan_id)
+                .unwrap_err();
+            assert!(error.contains("revisions changed"), "{error}");
+            stories.reconcile_integrated_dependencies(&plan_id).unwrap();
+        }
+        assert_plan_state(crate::stories::PlanState::Done);
         let receipt = integrated
             .snapshot
             .stories
@@ -638,6 +799,7 @@ mod tests {
             integrated.sequence
         );
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
+        assert_plan_state(crate::stories::PlanState::Done);
         // catches: a receipt with an empty post_checks list passing `all()` vacuously and releasing dependents.
         let mut vacuous = integrated.snapshot.clone();
         vacuous
@@ -657,14 +819,19 @@ mod tests {
 
         let mut verification_snapshot = integrated.snapshot.clone();
         verification_snapshot.planning_fingerprint = Some("closed".into());
-        assert!(super::store::ready_to_verify(&verification_snapshot, &[story.clone()]).is_ok());
-        assert_eq!(
-            stories.get_story(&dependent.id).unwrap().status,
-            crate::stories::StoryStatus::Ready
+        assert!(
+            super::store::ready_to_verify(&verification_snapshot, std::slice::from_ref(&story))
+                .is_ok()
         );
+        if let Some(dependent) = &dependent {
+            assert_eq!(
+                stories.get_story(&dependent.id).unwrap().status,
+                crate::stories::StoryStatus::Ready
+            );
+        }
         drop(store);
         let store = RunStore::open().unwrap();
-        assert_eq!(store.reconcile_active().unwrap(), 1);
+        assert_eq!(store.reconcile_active_after_restart().unwrap(), 1);
         assert_eq!(store.snapshot(&run.id).unwrap().status, RunStatus::Paused);
         assert_eq!(
             store.replay(&run.id).unwrap(),
@@ -682,22 +849,31 @@ mod tests {
             .run()
             .unwrap();
         assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
-        assert!(super::store::ready_to_verify(&verification_snapshot, &[story.clone()]).is_err());
-        store.reconcile_active().unwrap();
-        assert_eq!(
-            stories.get_story(&dependent.id).unwrap().status,
-            crate::stories::StoryStatus::Backlog
+        assert_plan_state(crate::stories::PlanState::Active);
+        assert!(
+            super::store::ready_to_verify(&verification_snapshot, std::slice::from_ref(&story))
+                .is_err()
         );
+        store.reconcile_active_after_restart().unwrap();
+        if let Some(dependent) = &dependent {
+            assert_eq!(
+                stories.get_story(&dependent.id).unwrap().status,
+                crate::stories::StoryStatus::Backlog
+            );
+        }
         crate::git_cli::git_cmd(repo)
             .args(["switch", "-q", "main"])
             .run()
             .unwrap();
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
-        store.reconcile_active().unwrap();
-        assert_eq!(
-            stories.get_story(&dependent.id).unwrap().status,
-            crate::stories::StoryStatus::Ready
-        );
+        assert_plan_state(crate::stories::PlanState::Done);
+        store.reconcile_active_after_restart().unwrap();
+        if let Some(dependent) = &dependent {
+            assert_eq!(
+                stories.get_story(&dependent.id).unwrap().status,
+                crate::stories::StoryStatus::Ready
+            );
+        }
         std::fs::write(repo.join("later.txt"), "later\n").unwrap();
         crate::git_cli::git_cmd(repo)
             .args(["add", "later.txt"])
@@ -708,12 +884,15 @@ mod tests {
             .run()
             .unwrap();
         assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
-        let current = stories.get_story(&dependent.id).unwrap();
-        assert!(
-            stories
-                .transition(&dependent.id, current.revision, StoryCommand::StartManual)
-                .is_err()
-        );
+        assert_plan_state(crate::stories::PlanState::Active);
+        if let Some(dependent) = &dependent {
+            let current = stories.get_story(&dependent.id).unwrap();
+            assert!(
+                stories
+                    .transition(&dependent.id, current.revision, StoryCommand::StartManual)
+                    .is_err()
+            );
+        }
         crate::git_cli::git_cmd(repo)
             .args(["config", "--unset", "workflow.testpass"])
             .run()
@@ -779,13 +958,19 @@ mod tests {
             recertified.sequence
         );
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
+        assert_plan_state(crate::stories::PlanState::Done);
         let mut recertified_snapshot = store.snapshot(&run.id).unwrap();
         recertified_snapshot.planning_fingerprint = Some("closed".into());
-        assert!(super::store::ready_to_verify(&recertified_snapshot, &[story.clone()]).is_ok());
-        assert_eq!(
-            stories.get_story(&dependent.id).unwrap().status,
-            crate::stories::StoryStatus::Ready
+        assert!(
+            super::store::ready_to_verify(&recertified_snapshot, std::slice::from_ref(&story))
+                .is_ok()
         );
+        if let Some(dependent) = &dependent {
+            assert_eq!(
+                stories.get_story(&dependent.id).unwrap().status,
+                crate::stories::StoryStatus::Ready
+            );
+        }
         drop(store);
         let store = RunStore::open().unwrap();
         assert_eq!(
@@ -793,6 +978,7 @@ mod tests {
             store.snapshot(&run.id).unwrap()
         );
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
+        assert_plan_state(crate::stories::PlanState::Done);
         let conflict_worktree = config.path().join("conflict-worktree");
         crate::git_cli::git_cmd(repo)
             .args([
@@ -824,6 +1010,7 @@ mod tests {
             .run()
             .unwrap();
         assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
+        assert_plan_state(crate::stories::PlanState::Active);
         assert!(
             crate::git_cli::git_cmd(repo)
                 .args(["merge", "--no-ff", "--no-edit", "conflict"])
@@ -845,6 +1032,7 @@ mod tests {
             .run()
             .unwrap();
         assert!(!story_integrated_at_revision(&story_id, story.revision).unwrap());
+        assert_plan_state(crate::stories::PlanState::Active);
         let cancelled = store
             .command(&run.id, "cancel-after-integration", RunCommand::Cancel)
             .unwrap();
@@ -853,6 +1041,7 @@ mod tests {
             .recertify_canonical(&run.id, "recertify-cancelled-run", cancelled.sequence)
             .expect("a terminal run can renew its integration evidence");
         assert!(story_integrated_at_revision(&story_id, story.revision).unwrap());
+        assert_plan_state(crate::stories::PlanState::Done);
     }
 
     pub(super) fn fixture() -> (
@@ -1743,6 +1932,110 @@ mod tests {
     }
 
     #[test]
+    fn runtime_reconciliation_preserves_live_attempts_and_in_flight_effects() {
+        // catches: invoking runtime reconciliation interrupting a healthy worker
+        // and marking an in-progress external effect uncertain.
+        let (config, project, plan_id, story_id, definition_id, _guard) = fixture();
+        let store = RunStore::open_at(&config.path().join("workflow_runs.sqlite3")).unwrap();
+        let run = store
+            .start_plan(
+                project.path().canonicalize().unwrap().to_str().unwrap(),
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        store
+            .command(
+                &run.id,
+                "live-attempt",
+                RunCommand::StartAttempt {
+                    story_id,
+                    node_id: "implement".into(),
+                },
+            )
+            .unwrap();
+        let live = store
+            .command(
+                &run.id,
+                "live-effect",
+                RunCommand::ReserveEffect {
+                    key: "spawn-live-worker".into(),
+                    kind: EffectKind::SpawnAgent,
+                },
+            )
+            .unwrap()
+            .snapshot;
+        let observed = store.reconcile(&run.id).unwrap();
+        assert_eq!(observed, live);
+        assert_eq!(observed.attempts[0].state, AttemptState::Running);
+        assert_eq!(observed.effects[0].state, EffectState::Intended);
+        assert_eq!(observed.status, RunStatus::Running);
+        assert_eq!(store.replay(&run.id).unwrap(), live);
+    }
+
+    #[test]
+    fn opening_workflow_store_recovers_healthy_runs_past_a_corrupt_snapshot() {
+        // catches: one unreadable run aborting first-open recovery of every other run.
+        let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
+        let db = config.path().join("workflow_runs.sqlite3");
+        let store = RunStore::open_at(&db).unwrap();
+        let project_path = project
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let corrupt = store
+            .start_plan(
+                &project_path,
+                &plan_id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let stories = StoryStore::open().unwrap();
+        let healthy_plan = stories
+            .create_plan(NewPlan {
+                project: project_path.clone(),
+                title: "Healthy plan".into(),
+                source: "healthy.md".into(),
+            })
+            .unwrap();
+        let healthy = store
+            .start_plan(
+                &project_path,
+                &healthy_plan.id,
+                &definition_id,
+                1,
+                RunLimits::default(),
+            )
+            .unwrap();
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE workflow_runs SET snapshot_json='broken JSON' WHERE id=?1",
+            [&corrupt.id],
+        )
+        .unwrap();
+        drop(conn);
+        let reopened = RunStore::open().expect("bad run must not prevent opening the store");
+        let recovered = reopened.snapshot(&healthy.id).unwrap();
+        assert_eq!(recovered.status, RunStatus::Paused);
+        assert_eq!(reopened.replay(&healthy.id).unwrap(), recovered);
+        assert!(reopened.snapshot(&corrupt.id).is_err());
+        assert_eq!(
+            RunStore::open()
+                .unwrap()
+                .snapshot(&healthy.id)
+                .unwrap()
+                .sequence,
+            recovered.sequence
+        );
+    }
+
+    #[test]
     fn first_workflow_open_reconciles_existing_active_run_once() {
         let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
         let db = config.path().join("workflow_runs.sqlite3");
@@ -2166,8 +2459,8 @@ mod tests {
             }
         ));
         let uncertain = store
-            .reconcile(&run.id)
-            .expect("reconcile remaining intent");
+            .reconcile_after_restart(&run.id)
+            .expect("reconcile remaining intent after restart");
         assert_eq!(uncertain.effects[1].state, EffectState::Uncertain);
         let resolved = store
             .command(
@@ -2244,7 +2537,9 @@ mod tests {
             3
         );
         assert_eq!(
-            reopened.reconcile_active().expect("restart reconciliation"),
+            reopened
+                .reconcile_active_after_restart()
+                .expect("restart reconciliation"),
             1
         );
         assert_eq!(
@@ -2382,7 +2677,9 @@ mod tests {
         drop(store);
         let reopened = RunStore::open_at(&config.path().join("runs.sqlite3")).expect("reopen");
         assert_eq!(
-            reopened.reconcile_active().expect("reconcile active runs"),
+            reopened
+                .reconcile_active_after_restart()
+                .expect("reconcile active runs"),
             1
         );
         let snapshot = reopened.snapshot(&run.id).expect("snapshot");
@@ -2627,7 +2924,7 @@ mod tests {
                     run_id: run.id.clone(),
                     command_id: "other-project".into(),
                     expected_sequence: run.sequence,
-                    command: RunCommand::Pause,
+                    command: Box::new(RunCommand::Pause),
                 }
             )
             .is_err()
@@ -2650,7 +2947,7 @@ mod tests {
                 run_id: run.id.clone(),
                 command_id: "pause".into(),
                 expected_sequence: run.sequence,
-                command: RunCommand::Pause,
+                command: Box::new(RunCommand::Pause),
             },
         )
         .expect("pause") else {
@@ -2664,14 +2961,14 @@ mod tests {
                     run_id: run.id.clone(),
                     command_id: "forged-recertification".into(),
                     expected_sequence: paused.sequence,
-                    command: RunCommand::RecordRecertification {
+                    command: Box::new(RunCommand::RecordRecertification {
                         receipt: CanonicalReceipt {
                             canonical_ref: "refs/heads/main".into(),
                             commit: "a".repeat(40),
                             tree: "b".repeat(40),
                             post_checks: vec![],
                         },
-                    },
+                    }),
                 }
             )
             .is_err()
@@ -2683,7 +2980,7 @@ mod tests {
                     run_id: run.id,
                     command_id: "stale-cancel".into(),
                     expected_sequence: run.sequence,
-                    command: RunCommand::Cancel,
+                    command: Box::new(RunCommand::Cancel),
                 }
             )
             .is_err()
@@ -2694,7 +2991,7 @@ mod tests {
                 run_id: paused.snapshot.id,
                 command_id: "cancel-after-pause".into(),
                 expected_sequence: paused.sequence,
-                command: RunCommand::Cancel,
+                command: Box::new(RunCommand::Cancel),
             },
         )
         .expect("cancel") else {

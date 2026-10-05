@@ -1330,3 +1330,19 @@
   outline: none;
   border-color: var(--accent);
 }
+
+.setupActions {
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+}
+
+.setupActions button {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: 8px 16px;
+  font-size: var(--font-md);
+  cursor: pointer;
+}

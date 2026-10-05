@@ -7,6 +7,7 @@ import { uiStore } from "../../stores/ui";
 import { isTauri } from "../../transport";
 import { cx } from "../../utils";
 import { openTerminalFilePath } from "../../utils/filePreview";
+import { SETTINGS_SECTION_EGO } from "../SettingsPanel/sections";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
@@ -14,6 +15,7 @@ import s from "./AIChatPanel.module.css";
 import { Composer } from "./Composer";
 import { aiChatDraft } from "./draft";
 import { Interactions } from "./Interactions";
+import { RemoteInteractions } from "./RemoteInteractions";
 import { SessionControls } from "./SessionControls";
 import { Transcript } from "./Transcript";
 import { trackPanelWidth } from "./trackPanelWidth";
@@ -30,6 +32,7 @@ function basename(path: string): string {
 export interface AIChatPanelProps {
 	visible: boolean;
 	onClose: () => void;
+	onOpenSettings?: (tab: string, section?: string) => void;
 	/** The repository on screen: a hint sent with each prompt, not the chat's scope. */
 	repoPath: string | null;
 	/** Effective filesystem root — the worktree path when on a linked worktree. */
@@ -114,10 +117,17 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		}
 	};
 
+	const configureEgo = async () => {
+		if (isPanelMode() && isTauri()) {
+			await emitTo("main", "panel-action", { panelId: "ai-chat", action: "configure-ego", data: {} });
+			await invoke("focus_main_window");
+		} else props.onOpenSettings?.("general", SETTINGS_SECTION_EGO);
+	};
+
 	const emptyMessage = () => {
 		switch (chat.phase()) {
 			case "unconfigured":
-				return "ACP is not configured. Set the ego executable in Settings to start a conversation.";
+				return "AI Chat is inactive because the ego executable is not configured. Select it in Settings → General, then configure your provider and model in Settings → AI Chat.";
 			case "starting":
 				return "Starting ego…";
 			default:
@@ -254,6 +264,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 					if (session) acpTranscript.clear(session);
 				}}
 			>
+				<RemoteInteractions />
 				<Interactions
 					interactions={chat.interactions}
 					onPermission={(requestId, optionId) => void chat.answerPermission(requestId, optionId)}
@@ -265,6 +276,19 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 					onElicitationCancelled={(requestId) => void chat.answerElicitation(requestId, { action: "cancel" })}
 				/>
 			</Transcript>
+
+			<Show when={chat.phase() === "unconfigured"}>
+				<div class={s.setupActions}>
+					<button
+						type="button"
+						onClick={() =>
+							void configureEgo().catch((error) => appLogger.error("ai-chat", "Failed to open ego settings", error))
+						}
+					>
+						Configure ego
+					</button>
+				</div>
+			</Show>
 
 			<Show when={chat.phase() !== "unconfigured" && chat.phase() !== "starting"}>
 				<Composer chat={chat} />

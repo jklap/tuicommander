@@ -100,13 +100,13 @@ pub fn config_dir() -> PathBuf {
     // callers opt into these seams explicitly from their dev-dependencies.
     #[cfg(feature = "test-support")]
     {
-        return test_support::resolve();
+        test_support::resolve()
     }
     #[cfg(not(feature = "test-support"))]
     {
         let platform_dir = dirs::config_dir();
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let instance = crate::app_instance::current_app_instance();
-        production_path(platform_dir.as_deref(), &home, &instance)
+        production_path(platform_dir.as_deref(), &home, instance)
     }
 }

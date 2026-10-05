@@ -21,6 +21,16 @@ use crate::worktree::{
 
 #[cfg(feature = "desktop")]
 mod commands;
+#[cfg(all(test, unix))]
+mod critic_1420_r2;
+#[cfg(test)]
+mod critic_1420_r3;
+#[cfg(test)]
+mod critic_1420_r4;
+#[cfg(all(test, unix))]
+mod critic_1420_r5;
+#[cfg(all(test, unix))]
+mod critic_1420_r6;
 #[cfg(feature = "desktop")]
 pub(crate) use commands::*;
 
@@ -124,7 +134,7 @@ pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
     }
     let build_keys: Vec<String> = cmd
         .iter_full_env_as_str()
-        .filter_map(|(key, _)| {
+        .filter(|&(key, _)| {
             [
                 "CARGO_PKG_",
                 "CARGO_BIN_EXE_",
@@ -135,8 +145,8 @@ pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
             ]
             .iter()
             .any(|prefix| key.starts_with(prefix))
-            .then(|| key.to_owned())
         })
+        .map(|(key, _)| key.to_owned())
         .collect();
     for key in build_keys {
         cmd.env_remove(key);
@@ -1591,6 +1601,11 @@ pub(crate) struct SilenceState {
     /// reader paints Ready and Working before the confirmation worker wakes.
     last_ready_screen_offset: u64,
     last_working_screen_offset: u64,
+    /// Ring offset when the latest hook `state=busy` was handled, kept after a
+    /// Stop hook clears the busy evidence so a confirmation worker still sees
+    /// the turn. Hooks run before the reader writes their own chunk to the ring,
+    /// so a busy carried by the chunk after Enter is stamped AT the Enter offset.
+    last_hook_busy_offset: Option<u64>,
     /// Recent user request to interrupt (Ctrl-C or bare Escape). This never
     /// changes shell state by itself; it only strengthens a matching interrupted
     /// screen emitted by the agent.
@@ -1619,6 +1634,19 @@ pub(crate) struct SilenceState {
 }
 
 impl SilenceState {
+    /// Keep semantic transitions and their output offsets consistent across
+    /// reader chunks and late foreground-identity discovery.
+    fn record_screen_activity(&mut self, activity: AgentScreenActivity, offset: u64) {
+        if self.cached_screen_activity != activity {
+            match activity {
+                AgentScreenActivity::Ready => self.last_ready_screen_offset = offset,
+                AgentScreenActivity::Working => self.last_working_screen_offset = offset,
+                _ => {}
+            }
+        }
+        self.cached_screen_activity = activity;
+    }
+
     fn close_open_intent(&mut self) -> Option<ParsedEvent> {
         let open = self.open_intent.take()?;
         let mut text = open.text;
@@ -1673,6 +1701,7 @@ impl SilenceState {
             cached_screen_activity: AgentScreenActivity::Unknown,
             last_ready_screen_offset: 0,
             last_working_screen_offset: 0,
+            last_hook_busy_offset: None,
             interrupt_requested_at: None,
             screen_ready_pending_since: None,
             active_injection_claim: None,
@@ -2853,10 +2882,24 @@ fn normalized_process_name(value: &str) -> &str {
 /// Claude's installer notably uses a version number as the executable basename,
 /// so the containing `claude/versions/` path is authoritative.
 fn classify_agent_name_or_path(value: &str) -> Option<&'static str> {
-    let normalized = value.to_ascii_lowercase();
+    let normalized = value.trim_end_matches(" (deleted)").to_ascii_lowercase();
     let basename = normalized_process_name(&normalized);
-    classify_agent(basename)
-        .or_else(|| normalized.split(['/', '\\']).rev().find_map(classify_agent))
+    classify_agent(basename).or_else(|| {
+        // Claude installs version-number executables under this exact layout.
+        // Arbitrary agent-named ancestors do not identify the running program.
+        let parts: Vec<_> = normalized.split(['/', '\\']).collect();
+        let tail = parts.as_slice();
+        if tail.len() >= 3
+            && tail[tail.len() - 3] == "claude"
+            && tail[tail.len() - 2] == "versions"
+            && basename.starts_with(|c: char| c.is_ascii_digit())
+            && basename.chars().all(|c| c.is_ascii_digit() || c == '.')
+        {
+            Some("claude")
+        } else {
+            None
+        }
+    })
 }
 
 fn is_persistent_agent_helper(process: &ProcessTreeEntry) -> bool {
@@ -3864,6 +3907,7 @@ fn is_opencode_frame_close_row(row: &str) -> bool {
 /// present in every state: without it a frame whose status bar has not been painted yet
 /// would read Ready mid-turn — exactly the false idle that lets auto-standby SIGSTOP a live
 /// session. The interrupt hint is checked first so a working screen is never downgraded.
+#[cfg(test)]
 fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
     detect_opencode_screen_activity_at(rows, None)
 }
@@ -4061,6 +4105,7 @@ fn screen_classify_calls() -> usize {
     SCREEN_CLASSIFY_CALLS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+#[cfg(test)]
 fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
     detect_agent_screen_activity_at(agent_type, rows, None)
 }
@@ -4369,6 +4414,7 @@ fn transition_explicit_shell_state(
     );
 }
 
+#[cfg(test)]
 fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
     state: &crate::state::AppState,
     session_id: &str,
@@ -4440,6 +4486,13 @@ fn transition_explicit_shell_state_impl<F: FnOnce()>(
         }
         if let Some(silence) = silence_guard.as_mut() {
             silence.note_explicit_state(target, hook_state);
+            if hook_state && target == SHELL_BUSY {
+                silence.last_hook_busy_offset = state
+                    .session_maps
+                    .output_buffers
+                    .get(session_id)
+                    .map(|ring| ring.lock().total_written);
+            }
             if target == SHELL_BUSY {
                 invalidate_background_probe_boundary_locked(state, session_id);
             }
@@ -4683,6 +4736,11 @@ struct TimerIdleTransition {
     /// dead-code the moment the last assertion on it disappears.
     #[cfg_attr(not(test), allow(dead_code))]
     screen_confirms_idle: bool,
+    // Returned provenance is inspected by regression tests; production uses the transition result.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "test-observed transition provenance")
+    )]
     evidence: Option<Evidence>,
 }
 
@@ -4960,6 +5018,10 @@ fn spawn_silence_timer(
             {
                 silence.lock().expire_orchestrator_notice_uncertainty();
             }
+
+            // Discovery must not depend on a frontend polling the desktop IPC.
+            // Headless/manual launches need the same parser and mail eligibility.
+            refresh_session_agent(&state, &session_id);
 
             // Reconcile high-confidence screen evidence before the silence
             // fallback. Working here means Codex's presence-based status line
@@ -5347,11 +5409,11 @@ fn emit_open_intent_if_idle(
     silence: &Arc<Mutex<SilenceState>>,
     session_id: &str,
 ) {
-    if !state
+    if state
         .session_maps
         .shell_states
         .get(session_id)
-        .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_IDLE)
+        .is_none_or(|shell| shell.load(Ordering::Acquire) != SHELL_IDLE)
     {
         return;
     }
@@ -5402,7 +5464,10 @@ fn clean_action_required_title(title: &str) -> String {
 /// - `awaiting` → confident `Question` (sets `awaiting_input` + `question_confident`)
 /// - `busy`     → `UserInput` clear (hook busy is authoritative — clears an awaiting
 ///   set by a prior `PreToolUse(AskUserQuestion)`; empty content never overwrites
-///   `last_prompt`)
+///   `last_prompt`). Fires on every tool call too, so it carries no prompt row
+///   (`line = -1`).
+/// - `prompt`   → same clear, sent only by the user-prompt-submit hook, and the only
+///   one that carries the prompt row for the scrollbar marker
 /// - anything else (incl. `idle`, unknown) → `None`
 fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
     match payload {
@@ -5410,10 +5475,14 @@ fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
             prompt_text: String::new(),
             confident: true,
         }),
-        // `line` is the absolute prompt row (history_size + cursor row) at the
-        // busy transition — the row the user's submitted prompt sits on. Carried
-        // so the frontend can mark user-prompt lines on the scrollbar.
         "busy" => Some(ParsedEvent::UserInput {
+            content: String::new(),
+            line: -1,
+        }),
+        // `line` is the absolute prompt row (history_size + cursor row) at the
+        // submit — the row the user's prompt sits on. Carried so the frontend can
+        // mark user-prompt lines on the scrollbar.
+        "prompt" => Some(ParsedEvent::UserInput {
             content: String::new(),
             line,
         }),
@@ -5906,7 +5975,7 @@ impl ChunkProcessor {
     fn handle_tuic_state(&self, payload: &str, session_id: &str, state: &AppState) {
         let (target, label) = match payload {
             "idle" => (SHELL_IDLE, "idle"),
-            "busy" => (SHELL_BUSY, "busy"),
+            "busy" | "prompt" => (SHELL_BUSY, "busy"),
             _ => return,
         };
         transition_explicit_shell_state(state, session_id, target, label, true);
@@ -6529,10 +6598,9 @@ impl ChunkProcessor {
             && state.managed_trust_dialogs.contains(session_id)
             && managed_claude_trust_dialog(&screen_buf)
             && state.managed_trust_dialogs.remove(session_id).is_some()
+            && let Err(error) = accept_managed_claude_trust_dialog(state, session_id)
         {
-            if let Err(error) = accept_managed_claude_trust_dialog(state, session_id) {
-                tracing::warn!(source = "terminal", session_id, %error, "Could not accept managed Claude workspace trust dialog");
-            }
+            tracing::warn!(source = "terminal", session_id, %error, "Could not accept managed Claude workspace trust dialog");
         }
 
         if startup_alt_screen {
@@ -6869,10 +6937,11 @@ impl ChunkProcessor {
                         || open.text.starts_with(&text)
                         || same_anchor_repaint
                 });
-                if sl.open_intent.is_some() && !compatible {
-                    if let Some(event) = sl.close_open_intent() {
-                        intent_events.push(event);
-                    }
+                if sl.open_intent.is_some()
+                    && !compatible
+                    && let Some(event) = sl.close_open_intent()
+                {
+                    intent_events.push(event);
                 }
                 // Ink can erase the continuation row, briefly paint the next
                 // paragraph there, then move the intact anchor up one row and
@@ -7513,18 +7582,7 @@ impl ChunkProcessor {
             // changed since this classification unless a later chunk arrives
             // to overwrite it, so the timer reuses this instead of calling
             // `detect_agent_screen_activity` itself — see `cached_screen_activity`.
-            if sl.cached_screen_activity != screen_activity {
-                match screen_activity {
-                    AgentScreenActivity::Ready => {
-                        sl.last_ready_screen_offset = output_offset_after_chunk;
-                    }
-                    AgentScreenActivity::Working => {
-                        sl.last_working_screen_offset = output_offset_after_chunk;
-                    }
-                    _ => {}
-                }
-            }
-            sl.cached_screen_activity = screen_activity;
+            sl.record_screen_activity(screen_activity, output_offset_after_chunk);
             sl.on_chunk(
                 regex_found_question,
                 last_q_line,
@@ -7904,7 +7962,7 @@ fn flush_eof(
 /// [`remove_live_session_state`] enforces for per-session state: a new
 /// peer-keyed map belongs in this function and nowhere else.
 fn retire_peer_identity(state: &AppState, tuic_session: &str) {
-    state.peer_agents.remove(tuic_session);
+    crate::mcp_http::remote_peer::unregister_peer(state, tuic_session);
     state.orchestrator_peers.remove(tuic_session);
     state.agent_inbox.remove(tuic_session);
     state.agent_inbox_evictions.remove(tuic_session);
@@ -7982,10 +8040,11 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
         retire_peer_identity(state, &orphaned);
     }
     state.pending_injections.remove(session_id);
+    state.recent_queue_keys.remove(session_id);
     state.pending_initial_prompts.remove(session_id);
     state.managed_trust_dialogs.remove(session_id);
     state.active_agent_waiters.remove(session_id);
-    state.peer_agents.remove(session_id);
+    crate::mcp_http::remote_peer::unregister_peer(state, session_id);
     state.orchestrator_peers.remove(session_id);
     state.agent_inbox.remove(session_id);
     state.agent_inbox_evictions.remove(session_id);
@@ -8454,6 +8513,17 @@ fn submission_ready(state: &AppState, session_id: &str, human_reply: bool) -> bo
     if !session_is_agent(state, session_id) {
         return false;
     }
+    if state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_none_or(|session| {
+            session.spawn_root_role == crate::state::SpawnRootRole::Unknown
+                || session.foreground_input_blocked
+        })
+    {
+        return false;
+    }
     let idle = state
         .session_maps
         .shell_states
@@ -8699,7 +8769,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
     format!("{}…", text.chars().take(max).collect::<String>())
 }
 
-fn agent_submission_rejection(
+fn agent_composer_rejection(
     state: &AppState,
     session_id: &str,
     human_reply: bool,
@@ -8722,15 +8792,78 @@ fn agent_submission_rejection(
     {
         return Some(("awaiting_input", "empty"));
     }
+    if !submission_ready(state, session_id, human_reply) {
+        return Some(("agent_not_ready", "empty"));
+    }
+    None
+}
+
+/// Explain a safe submission refusal without changing delivery or composer state.
+pub(crate) fn agent_submission_rejection_detail(
+    state: &AppState,
+    session_id: &str,
+    reason: &str,
+) -> String {
+    match reason {
+        "session_not_found" => "The PTY session is closed or unknown. List sessions and choose a live terminal.".into(),
+        "observation_unavailable" => "The PTY output observer is not available, so submission cannot be acknowledged. Wait for session initialization or choose a live terminal.".into(),
+        "not_managed_agent" => {
+            let foreground = session_leaf_pid(state, session_id)
+                .and_then(process_name_from_pid)
+                .unwrap_or_else(|| "unknown (process lookup unavailable)".into());
+            format!("No supported agent has been detected in this PTY; foreground process: {foreground}. Start a supported agent and wait for backend detection, or launch a custom wrapper through an agent run configuration. TUIC_SESSION identifies the terminal, not an agent.")
+        }
+        "partial_composer" => "The composer contains unfinished user input. Submit or clear that input before sending another command.".into(),
+        "awaiting_input" => "An approval or question owns the composer. Have the user answer it, or use an explicit human reply; automated submit must wait.".into(),
+        "agent_not_ready" => {
+            if state.session_maps.session_states.get(session_id).is_some_and(|session| {
+                session.spawn_root_role == crate::state::SpawnRootRole::Unknown || session.foreground_input_blocked
+            }) {
+                return "The owning process cannot accept unattended input: its root role or foreground is unavailable, or a direct agent child owns the terminal. Wait for the agent to regain foreground or use its authoritative daemon connection.".into();
+            }
+
+            if state.session_maps.silence_states.get(session_id)
+                .is_some_and(|silence| silence.lock().injection_delivery_uncertain)
+            {
+                "A previous PTY write has an uncertain outcome. Inspect terminal output and wait for confirmed readiness; do not resend text that may already have reached the agent.".into()
+            } else if state.session_maps.shell_states.get(session_id)
+                .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_BUSY)
+            {
+                "The agent is still busy or starting. Wait for its idle composer or Stop signal before submitting.".into()
+            } else {
+                "The backend has not confirmed a ready agent composer. Bring the normal prompt into view or wait for an agent idle hook; then retry.".into()
+            }
+        }
+        "queued_commands_pending" => "Earlier commands still own the delivery queue. Wait for them to drain or inspect and remove unwanted queued entries before submitting.".into(),
+        "claim_lost" => "The composer changed while submission was claiming it. Wait for confirmed readiness and retry this unwritten command.".into(),
+        _ => "The terminal could not safely accept input. Inspect its state and output before retrying.".into(),
+    }
+}
+
+/// Describe why a terminal could not receive an inbox wake; never drains a queue.
+pub(crate) fn agent_mail_wake_detail(state: &AppState, session_id: &str) -> String {
+    let reason = agent_composer_rejection(state, session_id, false)
+        .map(|(reason, _)| agent_submission_rejection_detail(state, session_id, reason))
+        .unwrap_or_else(|| "The terminal wake path is unavailable. Inspect the recipient's lifecycle before retrying.".into());
+    format!(
+        "{reason} Mail remains in the inbox; the recipient can read it with agent action=inbox or wait."
+    )
+}
+
+fn agent_submission_rejection(
+    state: &AppState,
+    session_id: &str,
+    human_reply: bool,
+) -> Option<(&'static str, &'static str)> {
+    if let Some(rejection) = agent_composer_rejection(state, session_id, human_reply) {
+        return Some(rejection);
+    }
     // Readiness is checked BEFORE the queue, and the order is the fix. An agent
     // whose idle is unconfirmed can never drain its queue — `flush_pending_injections`
     // is gated on the same predicate — so reporting `queued_commands_pending`
     // named the symptom and hid the cause, and the caller retried submit for
     // minutes against a queue that by construction could not move.
     // `agent_not_ready` is the truth, and it is the state that actually changes.
-    if !submission_ready(state, session_id, human_reply) {
-        return Some(("agent_not_ready", "empty"));
-    }
     // A confident question belongs to the human. Its parked automated entries
     // cannot drain until the answer clears the question, and must not prevent
     // that answer from reaching the composer.
@@ -9188,8 +9321,49 @@ fn write_agent_command_with_boundary(
     (InjectionOutcome::Submitted, acknowledgement_offset)
 }
 
-fn write_claimed_agent_command(state: &AppState, session_id: &str, text: &str) -> InjectionOutcome {
-    write_agent_command_with_boundary(state, session_id, text).0
+/// The submit rule for flush and MCP submit (queued input, brief): write, wait
+/// for the child to confirm the turn started, and send at most one more Enter
+/// when the composer still holds the text. Lifecycle notices and voice are
+/// write-only and never reach this function. Returns the outcome and how the
+/// retry went (`none`, `confirmed`, `unconfirmed`).
+fn submit_and_confirm(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+) -> (InjectionOutcome, &'static str) {
+    let initial_screen = agent_submission_ack_kind(state, session_id);
+    let legacy_write = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| {
+            matches!(
+                agent_submit_profile(session.agent_type.as_deref()).confirmation,
+                SubmitConfirmation::LegacyWrite
+            )
+        });
+    let (write_outcome, acknowledgement_offset) =
+        write_agent_command_with_boundary(state, session_id, text);
+    let mut enter_retry = "none";
+    let outcome = if write_outcome == InjectionOutcome::Submitted
+        && !legacy_write
+        && !wait_for_queued_submission(state, session_id, acknowledgement_offset, initial_screen)
+    {
+        if retry_enter_for_retained_composer(state, session_id, text, initial_screen) {
+            enter_retry = "confirmed";
+            InjectionOutcome::Submitted
+        } else {
+            if composer_retains_text(state, session_id, text) {
+                enter_retry = "unconfirmed";
+            }
+            InjectionOutcome::Uncertain(
+                "Enter was written, but agent submission was not confirmed".into(),
+            )
+        }
+    } else {
+        write_outcome
+    };
+    (outcome, enter_retry)
 }
 
 fn commit_injection_claim(state: &AppState, session_id: &str, claim: InjectionClaim) {
@@ -9224,7 +9398,12 @@ fn run_claimed_injection(
     claim: InjectionClaim,
     kind: ClaimedInjectionKind,
 ) -> InjectionOutcome {
-    let outcome = write_claimed_agent_command(state, session_id, text);
+    // Write-only on purpose: notices (lifecycle, wake, mail, urgent) and voice
+    // turns run on the single FIFO `tuic-injection` worker or a caller that must
+    // not stall, and a silent agent would hold it for the whole confirmation
+    // window. Confirmation belongs to `flush_pending_injections_blocking` and
+    // MCP submit.
+    let outcome = write_agent_command_with_boundary(state, session_id, text).0;
     apply_claimed_injection_outcome(state, session_id, text, claim, outcome, kind)
 }
 
@@ -9769,7 +9948,7 @@ pub(crate) fn flush_pending_injections(
 /// and keep the text in its composer. True when the tail of `text` is still on
 /// the tracked screen, or a paste placeholder holds the composer. Only Codex is probed:
 /// an Enter on its empty composer is a no-op, so a stale echo of already-submitted text costs nothing.
-fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool {
+pub(crate) fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool {
     let is_codex = state
         .session_maps
         .session_states
@@ -9794,7 +9973,8 @@ fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool
     }
     state.grid.vt_log_buffers.get(session_id).is_some_and(|vt| {
         let rows = vt.lock().screen_rows();
-        squash(&rows.join("\n")).contains(&tail) || composer_holds_paste_placeholder(&rows)
+        squash(&composer_rows(&rows).join("\n")).contains(&tail)
+            || composer_holds_paste_placeholder(&rows)
     })
 }
 
@@ -9804,18 +9984,33 @@ fn composer_retains_text(state: &AppState, session_id: &str, text: &str) -> bool
 /// must not draw a second Enter). A composer wrapped past the prompt window has no
 /// findable `›` row, so the bottom rows are searched instead.
 fn composer_holds_paste_placeholder(rows: &[String]) -> bool {
+    composer_rows(rows)
+        .iter()
+        .any(|row| row.contains(CODEX_PASTE_PLACEHOLDER))
+}
+
+/// The rows that can hold the composer text. With a live `›` row found, only its
+/// block counts: Codex echoes accepted text as `› <text>` in the transcript above
+/// an empty composer, and that echo is not retained text. A composer wrapped past
+/// the prompt window has no findable `›` row, so the bottom rows are used instead.
+fn composer_rows(rows: &[String]) -> Vec<&str> {
     if let Some(prompt) = find_codex_prompt_row(rows) {
         return rows[prompt..]
             .iter()
             .enumerate()
             .take_while(|(offset, row)| *offset == 0 || !row.trim().is_empty())
-            .any(|(_, row)| row.contains(CODEX_PASTE_PLACEHOLDER));
+            .map(|(_, row)| row.as_str())
+            .collect();
     }
-    rows.iter()
+    let mut bottom: Vec<&str> = rows
+        .iter()
         .rev()
         .filter(|row| !row.trim().is_empty())
         .take(COMPOSER_BOTTOM_ROWS)
-        .any(|row| row.contains(CODEX_PASTE_PLACEHOLDER))
+        .map(String::as_str)
+        .collect();
+    bottom.reverse();
+    bottom
 }
 
 /// What Codex shows in its composer in place of a long pasted text.
@@ -9895,7 +10090,11 @@ fn wait_for_queued_submission(
                 .session_maps
                 .silence_states
                 .get(session_id)
-                .is_some_and(|silence| silence.lock().busy_source_is("hook-busy"));
+                .is_some_and(|silence| {
+                    let silence = silence.lock();
+                    silence.busy_source_is("hook-busy")
+                        || silence.last_hook_busy_offset.is_some_and(|at| at >= offset)
+                });
             let screen_state = agent_submission_ack_kind(state, session_id);
             let fresh_working_transition = state
                 .session_maps
@@ -9906,10 +10105,20 @@ fn wait_for_queued_submission(
                     silence.last_ready_screen_offset > offset
                         && silence.last_working_screen_offset > silence.last_ready_screen_offset
                 });
+            // A Working screen recorded after the Enter boundary proves the turn
+            // started even when a later screen (question overlay, ready) already
+            // replaced it before this observer ran.
+            let working_since_enter = state
+                .session_maps
+                .silence_states
+                .get(session_id)
+                .is_some_and(|silence| silence.lock().last_working_screen_offset > offset);
             let screen_confirms = match profile.confirmation {
+                SubmitConfirmation::WorkingScreen if initial_screen != "working_screen" => {
+                    screen_state == "working_screen" || working_since_enter
+                }
                 SubmitConfirmation::WorkingScreen => {
-                    screen_state == "working_screen"
-                        && (initial_screen != "working_screen" || fresh_working_transition)
+                    screen_state == "working_screen" && fresh_working_transition
                 }
                 SubmitConfirmation::PromptGone => {
                     initial_screen == "ready_screen" && screen_state == "terminal_output"
@@ -10004,38 +10213,7 @@ pub(crate) fn flush_pending_injections_blocking(state: &AppState, session_id: &s
         );
         return;
     };
-    let initial_screen = agent_submission_ack_kind(state, session_id);
-    let legacy_write = state
-        .session_maps
-        .session_states
-        .get(session_id)
-        .is_some_and(|session| {
-            matches!(
-                agent_submit_profile(session.agent_type.as_deref()).confirmation,
-                SubmitConfirmation::LegacyWrite
-            )
-        });
-    let (write_outcome, acknowledgement_offset) =
-        write_agent_command_with_boundary(state, session_id, injection.text());
-    let mut enter_retry = "none";
-    let outcome = if write_outcome == InjectionOutcome::Submitted
-        && !legacy_write
-        && !wait_for_queued_submission(state, session_id, acknowledgement_offset, initial_screen)
-    {
-        if retry_enter_for_retained_composer(state, session_id, injection.text(), initial_screen) {
-            enter_retry = "confirmed";
-            InjectionOutcome::Submitted
-        } else {
-            if composer_retains_text(state, session_id, injection.text()) {
-                enter_retry = "unconfirmed";
-            }
-            InjectionOutcome::Uncertain(
-                "Enter was written, but agent submission was not confirmed".into(),
-            )
-        }
-    } else {
-        write_outcome
-    };
+    let (outcome, enter_retry) = submit_and_confirm(state, session_id, injection.text());
     let outcome = apply_claimed_injection_outcome(
         state,
         session_id,
@@ -10132,6 +10310,8 @@ pub(crate) fn remove_queued_command(state: &AppState, session_id: &str, id: u64)
 /// What the idle gate did with a user-composed command.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct EnqueuedCommand {
+    /// Accepted now or recognized as an earlier keyed acceptance; not a PTY receipt.
+    pub accepted: bool,
     /// The agent was already idle, so the text was typed and submitted at once.
     pub typed: bool,
     /// Commands still waiting, this one included when `typed` is false.
@@ -10149,12 +10329,19 @@ pub(crate) struct EnqueuedCommand {
 /// typed entry and leaves the session BUSY, so the shared queue drains one item
 /// per idle transition and stays FIFO across both producers.
 ///
-/// Agent sessions only (see `session_is_agent`).
+/// Agent sessions only (see `session_is_agent`). Keyed retries are recognized
+/// atomically with append; keys remain recent after the FIFO drains.
 pub(crate) fn enqueue_user_command(
     state: &AppState,
     session_id: &str,
     text: &str,
+    idempotency_key: Option<&str>,
 ) -> Result<EnqueuedCommand, String> {
+    if let Some(key) = idempotency_key
+        && (key.is_empty() || key.len() > 128)
+    {
+        return Err("Invalid idempotency key".into());
+    }
     if text.trim().is_empty() {
         return Err("Command text is empty".to_string());
     }
@@ -10164,14 +10351,45 @@ pub(crate) fn enqueue_user_command(
     if !session_is_agent(state, session_id) {
         return Err("Session is not running an agent".to_string());
     }
-    let (_, _typed, queued) = append_and_flush(
-        state,
-        session_id,
-        crate::state::PendingInjection::user_command(text),
-    );
+    let queued = if let Some(key) = idempotency_key {
+        // Hold this per-session entry only through append, never through the
+        // blocking flush. Concurrent retries cannot both reserve the same key.
+        let mut keys = state
+            .recent_queue_keys
+            .entry(session_id.to_string())
+            .or_default();
+        if keys.iter().any(|recent| recent == key) {
+            return Ok(EnqueuedCommand {
+                accepted: true,
+                typed: false,
+                queued: queued_command_count(state, session_id),
+            });
+        }
+        state
+            .pending_injections
+            .entry(session_id.to_string())
+            .or_default()
+            .push_back(crate::state::PendingInjection::user_command(text));
+        // Bounded in-memory retry window: 128 completions per live PTY.
+        if keys.len() == 128 {
+            keys.pop_front();
+        }
+        keys.push_back(key.to_string());
+        drop(keys);
+        flush_pending_injections_blocking(state, session_id);
+        queued_command_count(state, session_id)
+    } else {
+        let (_, _, queued) = append_and_flush(
+            state,
+            session_id,
+            crate::state::PendingInjection::user_command(text),
+        );
+        queued
+    };
     // An empty queue after the flush means our command was the only one waiting
     // and reached the composer; any remaining entry means it is still parked.
     Ok(EnqueuedCommand {
+        accepted: true,
         typed: queued == 0,
         queued,
     })
@@ -10180,9 +10398,9 @@ pub(crate) fn enqueue_user_command(
 /// Append one entry and run the idle gate over the queue.
 ///
 /// Returns the entry's id, whether that entry is the one the flush typed, and
-/// how many entries remain. Shared by every enqueue path so the append-then-flush
-/// order — which is what keeps the FIFO honest across producers — has one
-/// spelling. `typed` is read back per entry rather than from an emptied queue:
+/// how many entries remain. Unkeyed enqueue uses this path; keyed enqueue
+/// reserves acceptance with append before invoking the same flush.
+/// `typed` is read back per entry rather than from an emptied queue:
 /// a command behind a peer notice is still parked even though the flush
 /// delivered something.
 fn append_and_flush(
@@ -10205,7 +10423,7 @@ fn append_and_flush(
     (id, !still_parked, queued_command_count(state, session_id))
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub use tuic_dictation::continuous::{VoiceHold, VoiceWrite};
 
 /// Type one hands-free turn into an agent's composer now — busy or idle.
@@ -10220,7 +10438,7 @@ pub use tuic_dictation::continuous::{VoiceHold, VoiceWrite};
 /// confident question (speech must never answer a permission dialog) and a
 /// draft in the composer. A held turn stays with the caller. The write itself
 /// is the framed path every injection uses (Ctrl-U, text, a separate Enter).
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) fn write_voice_turn(
     state: &AppState,
     session_id: &str,
@@ -10271,7 +10489,7 @@ pub(crate) fn write_voice_turn(
 /// so an unsupported target is refused where the user can see it rather than
 /// after the first utterance. Deliberately not a "can we reach it somehow"
 /// check: an ACP target has no PTY composer, and there is no fallback for it.
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) fn session_accepts_voice(state: &AppState, session_id: &str) -> bool {
     state.session_maps.sessions.contains_key(session_id) && session_is_agent(state, session_id)
 }
@@ -12121,7 +12339,7 @@ fn is_script_interpreter(name: &str) -> bool {
 }
 
 /// Look up the process name for a given PID using OS-native syscalls.
-/// On macOS uses `proc_pidpath`, on Linux reads `/proc/{pid}/comm`.
+/// On macOS uses `proc_pidpath`, on Linux resolves `/proc/{pid}/exe` with a comm fallback.
 /// Returns None if the lookup fails.
 #[cfg(target_os = "macos")]
 pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
@@ -12154,6 +12372,14 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
+    // Native Claude installs a numeric executable; comm alone cannot name it.
+    // Keep comm/process-title discovery when readlink is denied or the path
+    // describes an interpreter instead of the agent it is hosting.
+    if let Ok(path) = std::fs::read_link(format!("/proc/{pid}/exe"))
+        && let Some(agent) = classify_agent_name_or_path(&path.to_string_lossy())
+    {
+        return Some(agent.to_string());
+    }
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
         .ok()
         .map(|s| s.trim().to_string())
@@ -12217,6 +12443,186 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
         CloseHandle(snapshot);
         found
     }
+}
+
+static FOREGROUND_PROBE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+/// Discover and record the foreground agent for desktop and headless consumers.
+/// Identity alone never confirms readiness or bypasses the composer guards.
+/// Returns the effective foreground detection, not the retained session identity:
+/// a shell foreground returns None even while a startup preset remains armed.
+pub(crate) fn refresh_session_agent(state: &AppState, session_id: &str) -> Option<String> {
+    let (generation, detected, fg_is_shell, input_blocked, fg_name) = {
+        let entry = state.session_maps.sessions.get(session_id)?;
+        let session = entry.value().lock();
+        let generation = FOREGROUND_PROBE_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let role = state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .map(|s| s.spawn_root_role)
+            .unwrap_or_default();
+        let root = session._child.process_id();
+        #[cfg(not(windows))]
+        let foreground = session.master.process_group_leader().map(|pid| pid as u32);
+        #[cfg(windows)]
+        let foreground = root.and_then(deepest_descendant_pid);
+        match (role, root, foreground) {
+            (crate::state::SpawnRootRole::Shell, Some(root), Some(fg)) => {
+                let at_root = fg == root;
+                let name = process_name_from_pid(fg);
+                // exec replaces the shell's image without changing its PID.
+                // Root equality proves shell return only if it is not an agent.
+                let detected = name.as_deref().and_then(classify_agent).map(str::to_string);
+                let fg_is_shell = at_root && name.is_some() && detected.is_none();
+                // DEFERRED (2026-10-03) — retain identity but hold input on a
+                // lookup error until the next refresh. A per-PID name cache
+                // needs exec-aware invalidation: an unchanged PID can now own
+                // a different image, so blindly retaining readiness is unsafe.
+                (
+                    generation,
+                    detected,
+                    fg_is_shell,
+                    name.is_none(),
+                    name.unwrap_or_else(|| "unavailable".into()),
+                )
+            }
+            (crate::state::SpawnRootRole::DirectProgram, Some(root), Some(fg)) => {
+                let name = process_name_from_pid(root);
+                let detected = name.as_deref().and_then(classify_agent).map(str::to_string);
+                (
+                    generation,
+                    detected,
+                    false,
+                    fg != root || name.is_none(),
+                    name.unwrap_or_else(|| "unavailable".into()),
+                )
+            }
+            _ => {
+                tracing::warn!(
+                    session_id,
+                    "Foreground root role or PID unavailable; unattended agent input is held"
+                );
+                (generation, None, false, true, "unavailable".into())
+            }
+        }
+    };
+
+    apply_foreground_agent_observation(
+        state,
+        session_id,
+        generation,
+        detected,
+        fg_is_shell,
+        input_blocked,
+        fg_name,
+    )
+}
+
+/// Apply only observations newer than the last committed OS snapshot. Keeping
+/// sampling and application separate makes the cross-caller ordering explicit.
+fn apply_foreground_agent_observation(
+    state: &AppState,
+    session_id: &str,
+    generation: u64,
+    detected: Option<String>,
+    fg_is_shell: bool,
+    input_blocked: bool,
+    fg_name: String,
+) -> Option<String> {
+    let (effective, identity_changed) = {
+        let mut entry = state.session_maps.session_states.get_mut(session_id)?;
+        if generation <= entry.foreground_probe_generation {
+            return entry.foreground_probe_result.clone();
+        }
+        entry.foreground_probe_generation = generation;
+        entry.foreground_input_blocked = input_blocked;
+        // Non-shell helpers do not prove that the agent exited.
+        let effective = detected.clone().or_else(|| {
+            if fg_is_shell {
+                None
+            } else {
+                entry.agent_type.clone()
+            }
+        });
+        entry.foreground_probe_result = effective.clone();
+        if detected.is_none()
+            && !fg_is_shell
+            && effective.is_none()
+            && !entry.unknown_foreground_warned
+        {
+            entry.unknown_foreground_warned = true;
+            tracing::warn!(session_id, foreground_process = %fg_name, "Unrecognized non-shell foreground process; if this is an agent, Enter uses the safe gap");
+        }
+        if let Some(agent) = detected.as_ref() {
+            if entry.agent_type.as_ref() != Some(agent) {
+                entry.agent_type_from_run_config = false;
+            }
+            entry.agent_foreground_observed = true;
+        } else if !fg_is_shell && entry.agent_type_from_run_config && effective.is_some() {
+            // Any non-shell carrying a preset counts, including unknown wrappers.
+            // direnv/nvm startup helpers may disarm early: fail closed rather than
+            // allow unattended submit into the returned shell.
+            entry.agent_foreground_observed = true;
+        }
+        let next = if fg_is_shell {
+            if entry.agent_type_from_run_config && !entry.agent_foreground_observed {
+                entry.agent_type.clone()
+            } else {
+                entry.agent_type_from_run_config = false;
+                None
+            }
+        } else {
+            effective.clone()
+        };
+        let changed = entry.agent_type != next;
+        if changed {
+            entry.telegram_registration_lifetime = None;
+            entry.agent_type = next;
+            entry.hook_instrumented = hook_instrumented_for(
+                &crate::config::load_agents_config(),
+                entry.agent_type.as_deref(),
+            );
+        }
+        (effective, changed)
+    };
+
+    // The screen may already be quiet when the process is discovered. Its
+    // cached shell-era verdict is not evidence about the newly known agent.
+    // Use the reader's grid -> silence lock order; future chunks share the cache.
+    if identity_changed && let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
+        let vt = vt.lock();
+        // A newer accepted snapshot owns the cache too. The grid lock orders
+        // reclassification; do not publish an older identity after its successor.
+        if state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .is_none_or(|entry| entry.foreground_probe_generation != generation)
+        {
+            return state
+                .session_maps
+                .session_states
+                .get(session_id)
+                .and_then(|entry| entry.foreground_probe_result.clone());
+        }
+        let activity = detect_agent_screen_activity_at(
+            effective.as_deref(),
+            &vt.screen_rows(),
+            Some(vt.grid_columns()),
+        );
+        let offset = state
+            .session_maps
+            .output_buffers
+            .get(session_id)
+            .map(|buffer| buffer.lock().total_written)
+            .unwrap_or(0);
+        if let Some(silence) = state.session_maps.silence_states.get(session_id) {
+            silence.lock().record_screen_activity(activity, offset);
+        }
+    }
+
+    effective
 }
 
 /// Walk the process tree from `root_pid` and return the deepest descendant PID.
@@ -12857,3 +13263,9 @@ where
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod submit_confirmation_critic_tests;
+
+#[cfg(all(test, unix))]
+mod submit_confirmation_critic2_tests;

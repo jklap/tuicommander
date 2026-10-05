@@ -90,10 +90,12 @@ describe("CanvasTerminal link context menu, critic 1336 round 5", () => {
 				}
 				if (cmd === "terminal_get_row_text") return ROW0.trimEnd();
 				if (cmd === "terminal_get_logical_line") return [0, ROW0.trimEnd()];
-				const resolve = (c: string) =>
-					c.startsWith("followups") || c.startsWith("other")
+				const resolve = (candidate: string) => {
+					const c = candidate.replace(/^\/cwd\//, "");
+					return c.startsWith("followups") || c.startsWith("other")
 						? { absolute_path: `/cwd/${c}`, is_directory: false }
 						: null;
+				};
 				if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
 				if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
 				return null;
@@ -179,8 +181,8 @@ describe("CanvasTerminal link context menu, critic 1336 round 5", () => {
 		contextmenu(OSC8_COL); // fast: OSC 8 answers at once
 		await new Promise((r) => setTimeout(r, SLOW_MS * 3));
 		for (const el of openItems()) el.click();
-		expect(onOpen).toHaveBeenCalledTimes(1);
-		expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined);
+		await waitFor(() => expect(onOpen).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined));
 	});
 
 	// Catches: a lookup that resolves after the user dismissed the intent (left click elsewhere) and

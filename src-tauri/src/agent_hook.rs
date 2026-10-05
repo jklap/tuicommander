@@ -29,7 +29,8 @@ fn tty_resolve() -> &'static str {
 }
 
 /// Generate the guarded, self-contained shell command that emits
-/// `OSC 7770;state=<state>` to the controlling tty. Inert outside TUIC, always
+/// `OSC 7770;state=<state>` to the controlling tty. `prompt` is busy plus the
+/// "user submitted a prompt here" mark; only the submit-prompt hooks use it. Inert outside TUIC, always
 /// exits 0, ends with the ownership sentinel.
 pub(crate) fn hook_command(state: &str) -> String {
     format!(
@@ -52,7 +53,7 @@ pub(crate) fn hook_command(state: &str) -> String {
 /// awaiting is sticky, so a set with no clear latches the badge forever.
 pub(crate) fn claude_hook_map() -> Vec<HookEntry> {
     vec![
-        ("UserPromptSubmit", "", hook_command("busy")),
+        ("UserPromptSubmit", "", hook_command("prompt")),
         ("PreToolUse", "", hook_command("busy")),
         (
             "PreToolUse",
@@ -74,7 +75,7 @@ pub(crate) fn claude_hook_map() -> Vec<HookEntry> {
 /// Gemini hooks (same shell-hook shape, different event names; v0.26+).
 pub(crate) fn gemini_hook_map() -> Vec<HookEntry> {
     vec![
-        ("BeforeAgent", "", hook_command("busy")),
+        ("BeforeAgent", "", hook_command("prompt")),
         ("BeforeTool", "", hook_command("busy")),
         ("AfterAgent", "", hook_command("idle")),
         ("Notification", "", hook_command("awaiting")),
@@ -91,7 +92,7 @@ pub(crate) fn gemini_hook_map() -> Vec<HookEntry> {
 /// suppressed under instrumentation.
 pub(crate) fn grok_hook_map() -> Vec<HookEntry> {
     vec![
-        ("UserPromptSubmit", "", hook_command("busy")),
+        ("UserPromptSubmit", "", hook_command("prompt")),
         ("PreToolUse", "", hook_command("busy")),
         ("Stop", "", hook_command("idle")),
         ("SessionEnd", "", hook_command("idle")),
@@ -106,7 +107,7 @@ pub(crate) fn grok_hook_map() -> Vec<HookEntry> {
 pub(crate) fn codex_hook_map() -> Vec<HookEntry> {
     vec![
         ("SessionStart", "", hook_command("busy")),
-        ("UserPromptSubmit", "", hook_command("busy")),
+        ("UserPromptSubmit", "", hook_command("prompt")),
         ("Stop", "", hook_command("idle")),
     ]
 }
@@ -175,6 +176,21 @@ mod tests {
                 .any(|(e, m, c)| *e == "PreToolUse" && m.is_empty() && c.contains("state=busy")),
             "broad PreToolUse must drive busy"
         );
+    }
+
+    /// Catches #1388: if UserPromptSubmit shared PreToolUse's `state=busy`, the
+    /// scrollbar could not tell a prompt from a tool call and ticked both.
+    #[test]
+    fn submit_prompt_hooks_emit_prompt_not_busy() {
+        for (map, event) in [
+            (claude_hook_map(), "UserPromptSubmit"),
+            (gemini_hook_map(), "BeforeAgent"),
+            (grok_hook_map(), "UserPromptSubmit"),
+            (codex_hook_map(), "UserPromptSubmit"),
+        ] {
+            let (_, _, cmd) = map.iter().find(|(e, _, _)| *e == event).unwrap();
+            assert!(cmd.contains("state=prompt"), "{event}: {cmd}");
+        }
     }
 
     /// MCP elicitation blocks the agent on the user but is not a tool call, so

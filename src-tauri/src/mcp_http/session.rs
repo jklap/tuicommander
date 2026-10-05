@@ -185,14 +185,16 @@ pub(super) async fn enqueue_command(
     Json(body): Json<EnqueueCommandRequest>,
 ) -> impl IntoResponse {
     let outcome = tokio::task::spawn_blocking(move || {
-        crate::pty::enqueue_user_command(&state, &session_id, &body.text)
+        crate::pty::enqueue_user_command(
+            &state,
+            &session_id,
+            &body.text,
+            body.idempotency_key.as_deref(),
+        )
     })
     .await;
     match outcome {
-        Ok(Ok(outcome)) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"typed": outcome.typed, "queued": outcome.queued})),
-        ),
+        Ok(Ok(outcome)) => (StatusCode::OK, Json(serde_json::json!(outcome))),
         Ok(Err(e)) if e == "Session not found" => session_not_found(),
         Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
@@ -479,6 +481,28 @@ pub(super) async fn get_output(
 ) -> impl IntoResponse {
     let format = query.format.as_deref().unwrap_or("raw");
 
+    // Both local MCP and the remote proxy use the same serializer, including
+    // cursor windows, secret redaction and retained output after PTY exit.
+    if matches!(format, "mcp" | "mcp_raw") {
+        let result = super::mcp_transport::session_output(
+            &state,
+            &serde_json::json!({
+                "action": "output", "session_id": session_id,
+                "format": if format == "mcp_raw" { "raw" } else { "text" },
+                "limit": query.limit, "from_line": query.from_line,
+                "since_cursor": query.since_cursor,
+            }),
+        );
+        return (
+            if result.get("error").is_some() {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::OK
+            },
+            Json(result),
+        );
+    }
+
     // format=log: return VT100-extracted clean log lines (best for mobile/REST consumers)
     if format == "log" {
         let vt_log = match state.grid.vt_log_buffers.get(&session_id) {
@@ -606,11 +630,6 @@ pub(super) async fn close_session(
     }
 }
 
-/// Column floor for a freshly registered VT screen, kept from the shell-session
-/// path: the grid starts at least this wide whatever geometry the caller asked
-/// for, and `VtLogBuffer::resize` only ever widens `max_cols` from there.
-const NEW_SESSION_MIN_VT_COLS: u16 = 220;
-
 /// Wire a freshly spawned PTY into `AppState`: the session handle, its terminal
 /// alias, the spawn metrics, the output ring, the VT screen **at the geometry the
 /// PTY was actually opened with**, the idle clock, the grid-watch channel, and
@@ -626,6 +645,11 @@ const NEW_SESSION_MIN_VT_COLS: u16 = 220;
 /// A caller that pre-seeds `session_states` or queues injections must do so
 /// **before** calling: this emits `SessionCreated`, and the reader thread the
 /// caller starts afterwards is what consumes them.
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "PTY registration boundary preserves explicit session metadata"
+)]
 pub(super) fn register_pty_session(
     state: &AppState,
     session_id: &str,
@@ -655,11 +679,7 @@ pub(super) fn register_pty_session(
     );
     state.grid.vt_log_buffers.insert(
         session_id.to_string(),
-        Mutex::new(state.new_vt_log_buffer(
-            rows,
-            cols.max(NEW_SESSION_MIN_VT_COLS),
-            VT_LOG_BUFFER_CAPACITY,
-        )),
+        Mutex::new(state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY)),
     );
     state
         .session_maps
@@ -781,6 +801,12 @@ pub(super) fn spawn_pty_session(
         )
     })?;
 
+    state
+        .session_maps
+        .session_states
+        .entry(session_id.clone())
+        .or_default()
+        .spawn_root_role = crate::state::SpawnRootRole::Shell;
     let paused = Arc::new(AtomicBool::new(false));
     register_pty_session(
         &state,
@@ -920,21 +946,7 @@ pub(super) async fn get_foreground_process(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let agent = (|| -> Option<String> {
-        let entry = state.session_maps.sessions.get(&session_id)?;
-        let session = entry.value().lock();
-        #[cfg(not(windows))]
-        {
-            let pgid = session.master.process_group_leader()?;
-            let name = crate::pty::process_name_from_pid(pgid as u32)?;
-            crate::pty::classify_agent(&name).map(|s| s.to_string())
-        }
-        #[cfg(windows)]
-        {
-            drop(session);
-            None
-        }
-    })();
+    let agent = crate::pty::refresh_session_agent(&state, &session_id);
 
     match agent {
         Some(name) => (StatusCode::OK, Json(serde_json::json!({"agent": name}))),
@@ -943,9 +955,8 @@ pub(super) async fn get_foreground_process(
 }
 
 // --- PTY/terminal read-state queries (browser/remote parity, story 062). ---
-// These mirror the desktop-only `#[tauri::command]`s in pty.rs by reading the
-// same AppState directly — the commands themselves are cfg'd out of the remote
-// build, so the access logic is replicated here (as get_foreground_process does).
+// These mirror desktop commands through the same AppState. Foreground identity
+// discovery uses the shared pty::refresh_session_agent path on both transports.
 
 /// Shell state atom ("busy"/"idle") for a session, or null if never produced output.
 pub(super) async fn get_shell_state(
@@ -2337,6 +2348,197 @@ pub(super) async fn get_session_shell_family(
 mod tests {
     use super::*;
 
+    /// Catches: HTTP detects a hand-launched agent but leaves the backend as a
+    /// shell, rejecting submit and refusing a mail wake in the headless build.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_foreground_hand_launched_claude_enables_submit_and_mail_wake() {
+        use crate::pty::{AgentSubmissionWrite, PtyDelivery, SHELL_IDLE};
+        use crate::test_support::ForegroundIdentityProbe;
+
+        let state = super::super::tests::test_state();
+        let sid = "http-hand-launched-claude";
+        let probe = ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+        let response = get_foreground_process(State(state.clone()), Path(sid.into()))
+            .await
+            .into_response();
+        let snapshot = state.session_state_with_shell(sid).unwrap();
+        let submit = crate::pty::write_agent_submission_to_pty(&state, sid, "task");
+        // Model the next independently confirmed idle window, after submit.
+        state
+            .session_maps
+            .shell_states
+            .get(sid)
+            .unwrap()
+            .store(SHELL_IDLE, Ordering::Release);
+        state
+            .session_maps
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .confirm_idle();
+        let wake_allowed = crate::pty::managed_mail_wake_allowed(&state, sid);
+        let wake = crate::pty::deliver_notice_to_pty(&state, sid, crate::pty::PEER_MAIL_WAKE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            body["agent"], "claude",
+            "the OS foreground probe must detect the executable"
+        );
+        assert_eq!(
+            snapshot.agent_state.as_deref(),
+            Some("idle"),
+            "HTTP must persist detected identity for lifecycle consumers"
+        );
+        assert!(
+            matches!(submit, AgentSubmissionWrite::Complete { .. }),
+            "submit: {submit:?}"
+        );
+        assert!(
+            wake_allowed,
+            "a recognised idle agent must be eligible for mail wake"
+        );
+        assert_eq!(wake, PtyDelivery::Typed);
+        let written = probe.bytes.lock().unwrap().clone();
+        assert!(written.windows(4).any(|part| part == b"task"));
+        assert!(
+            String::from_utf8(written)
+                .unwrap()
+                .contains("agent action=inbox")
+        );
+    }
+
+    /// Catches: the HTTP path loses configured wrapper identity, or promotes a
+    /// plain shell/unknown executable to an agent and enables unsafe injection.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_foreground_preserves_wrapper_fallback_and_rejects_plain_shells() {
+        for (name, preset, expected) in [
+            ("cat", None, None),
+            ("bash", None, None),
+            ("cat", Some("claude"), Some("claude")),
+            ("bash", Some("claude"), None),
+        ] {
+            let state = super::super::tests::test_state();
+            let sid = "http-foreground-neighbour";
+            let probe = if name == "bash" {
+                crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, name)
+            } else {
+                crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, name)
+            };
+            {
+                let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+                session.agent_type = preset.map(str::to_string);
+                session.agent_type_from_run_config = preset.is_some();
+            }
+            let response = get_foreground_process(State(state.clone()), Path(sid.into()))
+                .await
+                .into_response();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                body["agent"],
+                serde_json::json!(expected),
+                "{name}, preset={preset:?}"
+            );
+            assert_eq!(
+                state
+                    .session_maps
+                    .session_states
+                    .get(sid)
+                    .unwrap()
+                    .agent_type
+                    .as_deref(),
+                preset,
+                "run-config preset survives wrapper and shell foreground"
+            );
+            if preset.is_none() {
+                assert_eq!(
+                    state.session_state_with_shell(sid).unwrap().agent_state,
+                    None
+                );
+                assert!(matches!(
+                    crate::pty::write_agent_submission_to_pty(&state, sid, "task"),
+                    crate::pty::AgentSubmissionWrite::Rejected {
+                        reason: "not_managed_agent",
+                        ..
+                    }
+                ));
+                assert!(probe.bytes.lock().unwrap().is_empty());
+            }
+        }
+    }
+
+    /// Catches: retrying an earlier job after a later acceptance duplicates the
+    /// first job, or text-based deduplication silently drops the second job.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn interleaved_bg_job_retries_preserve_two_identical_commands() {
+        let state = super::super::tests::test_state();
+        let sid = "interleaved-bg-retries";
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_BUSY);
+        let bytes = crate::test_support::insert_recording_session(&state, sid);
+        for key in ["job-a", "job-b", "job-a", "job-b"] {
+            let request = serde_json::from_value(serde_json::json!({
+                "text": "BG DONE", "idempotencyKey": key
+            }))
+            .unwrap();
+            let response = enqueue_command(State(state.clone()), Path(sid.into()), Json(request))
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let queue = crate::pty::list_queued_commands(&state, sid);
+        assert_eq!(queue.len(), 2, "two jobs survive; neither retry appends");
+        assert!(queue.iter().all(|command| command.text == "BG DONE"));
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "busy composer is untouched"
+        );
+    }
+
+    /// Catches: a lost queue reply lets a retry append and submit the same wake again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn queue_accepted_before_reply_is_lost_is_not_submitted_twice_on_retry() {
+        let state = super::super::tests::test_state();
+        let sid = "lost-queue-reply";
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_IDLE);
+        // No external CLI acceptance is asserted: observe the production PTY bytes.
+        let bytes = crate::test_support::insert_recording_session(&state, sid);
+        for attempt in 0..2 {
+            let request: EnqueueCommandRequest = serde_json::from_value(serde_json::json!({
+                "text": "BG DONE", "idempotencyKey": "bg-job-1"
+            }))
+            .unwrap();
+            let response = enqueue_command(State(state.clone()), Path(sid.into()), Json(request))
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            if attempt == 0 {
+                // Acceptance happened; the caller never receives this response.
+                drop(response);
+            } else {
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(
+                    body,
+                    serde_json::json!({"accepted": true, "typed": false, "queued": 0})
+                );
+            }
+        }
+        assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
+        assert_eq!(*bytes.lock().unwrap(), b"\x15BG DONE\r");
+    }
+
     /// A silent agent may use the full confirmation window, but the async
     /// request handler must yield its runtime worker during that window.
     #[cfg(unix)]
@@ -2371,6 +2573,7 @@ mod tests {
             Path(sid.into()),
             Json(EnqueueCommandRequest {
                 text: "wake".into(),
+                idempotency_key: None,
             }),
         )
         .await;
@@ -3744,6 +3947,50 @@ mod tests {
         assert_eq!(current, vec![10, 20, 30]);
     }
 
+    /// Catches: registration floors the VT at 220 columns, and a no-op resize
+    /// preserves that incorrect width instead of the real headless PTY geometry.
+    #[tokio::test]
+    async fn headless_registration_and_same_size_resize_preserve_requested_width() {
+        let state = super::super::tests::test_state();
+        let (shell, _) = crate::test_support::host_shell();
+        let session_id = spawn_pty_session(
+            state.clone(),
+            shell.into(),
+            None,
+            24,
+            148,
+            None,
+            RequestedIdentity::default(),
+        )
+        .expect("create isolated geometry PTY");
+        assert_eq!(
+            state
+                .grid
+                .vt_log_buffers
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                .grid_columns(),
+            148,
+            "registration must preserve the requested width"
+        );
+        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148)
+            .await
+            .expect("same-size resize");
+        assert_eq!(
+            state
+                .grid
+                .vt_log_buffers
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                .grid_columns(),
+            148,
+            "same-size resize must not preserve a stale 220-column floor"
+        );
+        crate::pty::close_pty_core(&state, &session_id, false);
+    }
+
     /// Verifies that spawn_pty_session registers a grid_watch channel for the session,
     /// so that handle_ws_grid_session can subscribe to it (regression for BUG-2).
     #[tokio::test]
@@ -3766,6 +4013,29 @@ mod tests {
             Ok(id) => id,
             Err(_) => return, // PTY unavailable in CI — skip gracefully
         };
+
+        // Catches: HTTP shell creation leaves the role unknown or labels its
+        // root as a direct agent, preventing shell-return revocation.
+        assert_eq!(
+            state
+                .session_maps
+                .session_states
+                .get(&session_id)
+                .unwrap()
+                .spawn_root_role,
+            crate::state::SpawnRootRole::Shell
+        );
+        assert!(
+            state
+                .session_maps
+                .sessions
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                ._child
+                .process_id()
+                .is_some()
+        );
 
         assert!(
             state.grid.watch.contains_key(&session_id),

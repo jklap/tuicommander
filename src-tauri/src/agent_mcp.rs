@@ -546,8 +546,8 @@ fn install_bridge_binary(source: &std::path::Path) -> Result<PathBuf, String> {
     if matches() {
         return Ok(target);
     }
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create bridge directory: {e}"))?;
-    let mut temp = tempfile::NamedTempFile::new_in(&dir)
+    std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create bridge directory: {e}"))?;
+    let mut temp = tempfile::NamedTempFile::new_in(dir)
         .map_err(|e| format!("Failed to create bridge temp file: {e}"))?;
     copy_verified_bridge(source, &mut temp, &digest)?;
     #[cfg(unix)]
@@ -632,11 +632,10 @@ fn backup_config_once(path: &std::path::Path, agent_label: &str, text: &str) {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = backup.symlink_metadata() {
-                if metadata.is_file() {
-                    let _ =
-                        std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o600));
-                }
+            if let Ok(metadata) = backup.symlink_metadata()
+                && metadata.is_file()
+            {
+                let _ = std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o600));
             }
         }
         return;
@@ -1234,13 +1233,12 @@ fn yaml_edit_is_surgical(
             .get(key)
             .and_then(serde_yaml::Value::as_mapping)
             .is_some_and(serde_yaml::Mapping::is_empty)
+        && let Some(root) = after.as_mapping_mut()
     {
-        if let Some(root) = after.as_mapping_mut() {
-            root.insert(
-                serde_yaml::Value::String(key.to_string()),
-                serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
-            );
-        }
+        root.insert(
+            serde_yaml::Value::String(key.to_string()),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
     }
     if before.get(key).is_none()
         && after.get(key).is_some_and(|section| {
@@ -1799,12 +1797,12 @@ fn install_spec(spec: &McpConfigSpec, bridge_path: &str, agent_label: &str) -> R
             spec.config_path.display()
         ));
     }
-    if let Some(command) = working_configured_command(spec) {
-        if custom_command_should_be_kept(&command, bridge_path) {
-            tracing::info!(source = "mcp", agent = %agent_label, command,
+    if let Some(command) = working_configured_command(spec)
+        && custom_command_should_be_kept(&command, bridge_path)
+    {
+        tracing::info!(source = "mcp", agent = %agent_label, command,
                 "Keeping working bridge entry during explicit install");
-            return Ok(());
-        }
+        return Ok(());
     }
     if bridge_path == BRIDGE_NAME && has_bridge_entry(spec) {
         return Err(format!(
@@ -3033,6 +3031,10 @@ mod tests {
         }
     }
 
+    mod bridge_fixture {
+        include!("agent_mcp_test_fixtures.rs");
+    }
+
     fn command_at_spec(spec: &McpConfigSpec) -> String {
         let path = &spec.config_path;
         match spec.format {
@@ -3070,7 +3072,7 @@ mod tests {
         let source = bridge_path_in(&target);
         // A real native executable, not a shell fake: the OS must be able to
         // spawn the installed bytes after their original directory disappears.
-        std::fs::copy(std::env::current_exe().unwrap(), &source).unwrap();
+        bridge_fixture::copy_native_executable(&source);
         let spec = spec_at(dir.path().join("claude.json"));
         assert!(ensure_spec_entry(&spec, source.to_str().unwrap(), "claude"));
         ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
@@ -3079,19 +3081,7 @@ mod tests {
         assert!(installed.starts_with(config_dir.path()));
         assert!(!installed.starts_with(dir.path()));
         std::fs::remove_dir_all(dir.path().join("target")).unwrap();
-        let output = std::process::Command::new(installed)
-            .arg("--list")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout)
-                .contains("configured_bridge_survives_target_cleanup")
-        );
+        bridge_fixture::assert_runs(installed);
     }
 
     /// Catches: overwriting or deleting an old installed executable on upgrade,
@@ -3101,7 +3091,7 @@ mod tests {
         let _config = with_temp_config_dir();
         let dir = TempDir::new().unwrap();
         let source = bridge_path_in(dir.path());
-        std::fs::copy(std::env::current_exe().unwrap(), &source).unwrap();
+        bridge_fixture::copy_native_executable(&source);
         let old = install_bridge_binary(&source).unwrap();
         let modified = old.metadata().unwrap().modified().unwrap();
         assert_eq!(install_bridge_binary(&source).unwrap(), old);
@@ -3112,11 +3102,7 @@ mod tests {
         let new = install_bridge_binary(&source).unwrap();
         assert_ne!(new, old);
         assert_eq!(std::fs::read(new).unwrap(), b"a different bridge revision");
-        let output = std::process::Command::new(old)
-            .arg("--list")
-            .output()
-            .unwrap();
-        assert!(output.status.success());
+        bridge_fixture::assert_runs(&old);
     }
 
     /// Catches: publishing a new command before its executable is installed,
@@ -3127,7 +3113,7 @@ mod tests {
         let (_guard, config_dir) = with_temp_config_dir();
         let dir = TempDir::new().unwrap();
         let source = bridge_path_in(dir.path());
-        std::fs::copy(std::env::current_exe().unwrap(), &source).unwrap();
+        bridge_fixture::copy_native_executable(&source);
         let spec = spec_at(dir.path().join("claude.json"));
         assert!(ensure_spec_entry(&spec, BRIDGE_NAME, "claude"));
         ensure_mcp_configs_for(&[], Some(&source), [("claude", spec_at_format(&spec))]);
@@ -3519,7 +3505,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let stale_bridge = dir.path().join("moved-bridge");
         let real_bridge = dir.path().join("tuic-bridge");
-        std::fs::copy(std::env::current_exe().unwrap(), &real_bridge).unwrap();
+        bridge_fixture::copy_native_executable(&real_bridge);
         let unrelated_exe_dir = dir.path().join("test-target");
         std::fs::create_dir(&unrelated_exe_dir).unwrap();
 
@@ -3771,19 +3757,23 @@ mod tests {
         } else {
             "tuic-test-runner"
         };
-        let bridge_name = if cfg!(windows) {
-            "tuic-bridge.exe"
-        } else {
-            "tuic-bridge"
-        };
         let exe = sandbox.path().join(runner_name);
         std::fs::hard_link(std::env::current_exe().unwrap(), &exe).unwrap();
-        std::fs::hard_link(&exe, sandbox.path().join(bridge_name)).unwrap();
+        // The bridge is copied and hashed, never launched. Hardlinking the
+        // entire test runner here made owning launches copy hundreds of MB and
+        // block on Linux writeback under the parallel suite's 120s bound.
+        let bridge = fake_bridge(sandbox.path(), b"bridge bytes");
         let linked_worktree = sandbox.path().join("linked");
         std::fs::create_dir_all(&linked_worktree).unwrap();
         std::fs::write(linked_worktree.join(".git"), b"gitdir: isolated-fixture").unwrap();
 
-        let original = r#"{"mcpServers":{"tuicommander":{"type":"stdio","command":"/missing/bridge","args":[],"env":{}}}}"#;
+        // Catches secondary ownership changes independently of custom-command
+        // preservation: a leading slash is only rooted, not absolute, on Windows.
+        let original = serde_json::json!({"mcpServers": {"tuicommander": {
+            "type": "stdio", "command": sandbox.path().join("missing/bridge"),
+            "args": [], "env": {}
+        }}})
+        .to_string();
         let cases = [
             ("named", Some("tuic-test"), main_root, false, false),
             ("worktree", None, linked_worktree.as_path(), false, false),
@@ -3802,7 +3792,7 @@ mod tests {
             std::fs::create_dir_all(home.join(".claude")).unwrap();
             std::fs::write(home.join(".claude/installed"), b"present").unwrap();
             let config = home.join(".claude.json");
-            std::fs::write(&config, original).unwrap();
+            std::fs::write(&config, &original).unwrap();
 
             run_sandboxed_mcp_launch(
                 &exe,
@@ -3826,7 +3816,7 @@ mod tests {
                 );
                 assert_eq!(
                     std::fs::read(command).unwrap(),
-                    std::fs::read(sandbox.path().join(bridge_name)).unwrap(),
+                    std::fs::read(&bridge).unwrap(),
                     "{name}"
                 );
             } else {
@@ -3853,12 +3843,12 @@ mod tests {
         let worktree_sandbox = tempfile::tempdir_in(worktree_tmp).unwrap();
         let worktree_exe = worktree_sandbox.path().join(runner_name);
         std::fs::hard_link(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
-        std::fs::hard_link(&worktree_exe, worktree_sandbox.path().join(bridge_name)).unwrap();
+        fake_bridge(worktree_sandbox.path(), b"bridge bytes");
         let home = sandbox.path().join("worktree-binary");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::write(home.join(".claude/installed"), b"present").unwrap();
         let config = home.join(".claude.json");
-        std::fs::write(&config, original).unwrap();
+        std::fs::write(&config, &original).unwrap();
         run_sandboxed_mcp_launch(&worktree_exe, &home, main_root, None, None, false);
         assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
     }

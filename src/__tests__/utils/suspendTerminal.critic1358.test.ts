@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminalsStore } from "../../stores/terminals";
 import { resumeTerminal, suspendRefusal, suspendTerminal } from "../../utils/suspendTerminal";
 import { makeTerminal, testInScope } from "../helpers/store";
@@ -119,4 +119,8 @@ describe("resumeTerminal (critic 1358)", () => {
 				"claude --dangerously-skip-permissions",
 			);
 		}));
+});
+
+afterEach(() => {
+	terminalsStore._testCancelPendingTimers();
 });

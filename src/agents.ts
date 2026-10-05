@@ -381,6 +381,8 @@ export interface AgentRunConfig {
 
 /** Per-agent settings (matches Rust AgentSettings) */
 export interface AgentSettingsConfig {
+	/** Persisted migration marker; removing bypass from args must remain effective. */
+	codex_bypass_migrated?: boolean;
 	run_configs: AgentRunConfig[];
 	/** Minutes before an idle managed child closes; zero disables it. */
 	idle_close_minutes?: number;

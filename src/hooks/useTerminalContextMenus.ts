@@ -221,12 +221,22 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 				const activeId = terminalsStore.state.activeId;
 				const term = activeId ? terminalsStore.get(activeId) : undefined;
 				const lastBlock = term?.commandBlocks[term.commandBlocks.length - 1];
-				if (!term?.ref || !lastBlock || lastBlock.executionLine == null || lastBlock.endLine == null) return;
+				if (
+					!term?.ref ||
+					!lastBlock ||
+					lastBlock.executionLine == null ||
+					lastBlock.endLine == null ||
+					lastBlock.endLine <= term.historyBase
+				)
+					return;
 				// The menu invokes this without awaiting it, so a rejected buffer read
 				// would surface as an unhandled rejection instead of a failed copy.
 				let lines: string[];
 				try {
-					lines = await term.ref.getBufferLines(lastBlock.executionLine + 1, lastBlock.endLine);
+					lines = await term.ref.getBufferLines(
+						Math.max(0, lastBlock.executionLine + 1 - term.historyBase),
+						lastBlock.endLine - term.historyBase,
+					);
 				} catch (e) {
 					appLogger.warn("terminal", "Copy Block Output failed to read the buffer", { error: String(e) });
 					return;
