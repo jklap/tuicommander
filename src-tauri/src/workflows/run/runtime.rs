@@ -349,14 +349,14 @@ pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, 
                             continue 'graphs;
                         }
                         if attempt.report.is_none()
-                            || attempt.outcome == Some(super::AttemptOutcome::Interrupted)
+                            || attempt.outcome != Some(super::AttemptOutcome::Completed)
                         {
                             return Ok(store
                                 .command_expected(
                                     run_id,
                                     &format!(
-                                        "daemon:{}:{}:missing-report",
-                                        graph.id, activation.id
+                                        "daemon:{}:{}:incomplete-report:{}",
+                                        graph.id, activation.id, snapshot.sequence
                                     ),
                                     snapshot.sequence,
                                     RunCommand::Pause,
