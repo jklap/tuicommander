@@ -418,6 +418,50 @@ fn advance_loop_rejects_unreached_node_and_uses_pinned_cap() {
     assert_eq!(store.replay(&run.id).unwrap(), snapshot);
 }
 
+// Catches: a run paused by node-cap exhaustion that cannot be cancelled, or a cancelled run revived by ResolvePause (#1446-ff21).
+#[test]
+fn exhausted_repair_pause_can_be_cancelled_and_not_resumed() {
+    let (_config, _project, store, run, story, _guard) = graph_fixture();
+    start_graph(&store, &run.id, &story);
+    for cycle in 0..4 {
+        reach_judge(&store, &run.id, cycle == 0);
+        visit(
+            &store,
+            &run.id,
+            "judge",
+            Some(EdgeOutcome::No),
+            Some(evidence()),
+        );
+        visit(&store, &run.id, "repair", None, None);
+    }
+    let paused = visit(&store, &run.id, "pause", None, Some(evidence()));
+    assert_eq!(paused.snapshot.status, RunStatus::Paused);
+    let pause_id = paused.snapshot.graph_executions[0]
+        .activations
+        .last()
+        .unwrap()
+        .id
+        .clone();
+    let cancelled = store
+        .command(&run.id, "cancel-paused", RunCommand::Cancel)
+        .unwrap();
+    assert_eq!(cancelled.snapshot.status, RunStatus::Cancelled);
+    let resolve = RunCommand::Graph {
+        transition: GraphTransition::ResolvePause {
+            execution_id: "story-execution".into(),
+            activation_id: pause_id,
+            resolution: "late resolution".into(),
+        },
+    };
+    assert!(
+        store
+            .command(&run.id, "resolve-cancelled", resolve)
+            .unwrap_err()
+            .contains("terminal")
+    );
+    assert_eq!(store.replay(&run.id).unwrap(), cancelled.snapshot);
+}
+
 // Catches: orphan, unbounded cycle, missing End or duplicate links entering a published execution (cases 18-21).
 #[test]
 fn executable_graph_validation_rejects_invalid_graphs() {
