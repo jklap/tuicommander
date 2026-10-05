@@ -1054,6 +1054,10 @@ fn render_mcp_instructions(
     if show_suggest {
         out.push_str("- `suggest:` — after task done: `suggest: [ A | B | C ]` — wrap the WHOLE list in one `[ … ]`, EXACTLY 3 items separated by `|`, each item ≤40 chars. The brackets bound the token (parsed even if it wraps); never emit 4+ items.\n");
     }
+    // Always on: the answers-only view is a per-terminal toggle with no setting
+    // to switch the marker off, and `answersTurn.ts` anchors on a row that
+    // starts with the marker followed by a space.
+    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` (marker, then a space) at the start of the row. Status reports, tool notices and hook/task notifications are not answers.\n");
     out.push('\n');
 
     // ── Cross-tool rules ─────────────────────────────────────────────
@@ -9176,6 +9180,25 @@ mod tests {
             resolve_spawn_pty_description(PtyDescriptionUpdate::Unchanged, " \n\t "),
             None
         );
+    }
+
+    /// Catches: the answers view stays empty for agents outside the orchestrator
+    /// repo because TUIC never teaches the 💬 marker, even with the intent and
+    /// suggest markers switched off.
+    #[test]
+    fn mcp_instructions_teach_the_answer_marker_regardless_of_other_markers() {
+        let state = test_state();
+        {
+            let mut cfg = state.config.write();
+            cfg.intent_tab_title = false;
+            cfg.suggest_followups = false;
+        }
+        for collapse in [false, true] {
+            let instructions = build_mcp_instructions_for_mode(&state, None, collapse);
+            assert!(instructions.contains(
+                "- `💬 ` — prefix every sentence that directly answers the user's question"
+            ));
+        }
     }
 
     #[test]
