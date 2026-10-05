@@ -1091,9 +1091,8 @@ fn render_mcp_instructions(
         out.push_str("## Progress — mandatory\n\n");
         out.push_str(
             "Call `progress` to report work while the user is away. \
-             `type=done` when an `intent:`'s work is finished, `type=blocked` when you \
-             stop and wait because you cannot proceed without them. Work that continues \
-             while the user acts in parallel is `type=done`.\n\n",
+             `type=done` for finished `intent:` work or work continuing alongside user action; \
+             `type=blocked` only when you stop and wait because you need the user.\n\n",
         );
     }
 
