@@ -83,6 +83,39 @@ fn failed_agent_report_does_not_release_its_successor() {
             .any(|a| a.node_id == "end"),
         "failed implementation released End instead of retaining unresolved work"
     );
+    assert_eq!(after.status, RunStatus::Paused);
+    // catches: resume reusing a cached pause receipt while durable state stays Running.
+    for retry in 0..2 {
+        let graph = &after.graph_executions[0];
+        store
+            .command(
+                &run.id,
+                &format!("critic-failed-resume:{retry}"),
+                RunCommand::ResumeGraph {
+                    execution_id: graph.id.clone(),
+                    activation_id: graph.activations.last().unwrap().id.clone(),
+                    resolution: "Retry without a completed report".into(),
+                },
+            )
+            .unwrap();
+        let current = drive_turn(&store, &run.id).unwrap();
+        assert_eq!(current.status, RunStatus::Paused);
+        assert_eq!(store.snapshot(&run.id).unwrap(), current);
+        assert!(
+            !current.graph_executions[0]
+                .activations
+                .iter()
+                .any(|a| a.node_id == "end")
+        );
+    }
+    assert_eq!(
+        store
+            .command(&run.id, "critic-cancel", RunCommand::Cancel)
+            .unwrap()
+            .snapshot
+            .status,
+        RunStatus::Cancelled
+    );
 }
 
 #[test]
@@ -133,4 +166,6 @@ fn answered_input_does_not_complete_the_unfinished_agent() {
             .any(|a| a.node_id == "end"),
         "answered input released End without a completed implementation report"
     );
+    assert_eq!(after.status, RunStatus::Paused);
+    assert_eq!(store.snapshot(&run.id).unwrap(), after);
 }
