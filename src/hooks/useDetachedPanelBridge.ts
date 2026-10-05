@@ -7,7 +7,7 @@ import { isTauri } from "../transport";
 import { createPanelSyncProvider, type PanelAction } from "../utils/panelSync";
 
 /** Owns main-window listeners, projection sync providers, and detached-window restoration. */
-export function useDetachedPanelBridge(): { restoreDetachedPanels: () => void } {
+export function useDetachedPanelBridge(onConfigureEgo?: () => void): { restoreDetachedPanels: () => void } {
 	/**
 	 * A panel comes home exactly once. `reattachPanel` emits `panel-action` and
 	 * then closes the window, and closing it emits `panel-window-closed`, so one
@@ -33,6 +33,10 @@ export function useDetachedPanelBridge(): { restoreDetachedPanels: () => void } 
 	let unlistenAction: (() => void) | undefined;
 	listen<PanelAction>("panel-action", (event) => {
 		const { panelId, action, data } = event.payload;
+		if (panelId === "ai-chat" && action === "configure-ego") {
+			onConfigureEgo?.();
+			return;
+		}
 		if (action === "reattach") {
 			bringPanelHome(panelId);
 			return;
