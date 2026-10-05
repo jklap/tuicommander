@@ -2811,6 +2811,14 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     *app_state.github.token_source.get_mut() = github_token_source;
 
     let state = Arc::new(app_state);
+    // The Host guard trusts the Tailscale FQDN only while the state is Running, so
+    // the daemon must detect it like the desktop boot does (#1535).
+    *state.tailscale_state.write() = detect_tailscale_bounded(async {
+        tokio::task::spawn_blocking(tailscale::detect)
+            .await
+            .unwrap_or(tailscale::TailscaleState::NotInstalled)
+    })
+    .await;
     state.wire_event_bus();
     crate::github_auth::spawn_deferred_token_resolution(state.clone());
 

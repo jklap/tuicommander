@@ -19,8 +19,34 @@ const APP_ORIGINS: &[&str] = &[
     "http://localhost:1421",
 ];
 
+/// This machine's own names (lowercase): the hostname and its `.local` form. A
+/// MagicDNS short name is the hostname, so peers reach the daemon by it.
+fn own_hostnames() -> Vec<String> {
+    #[cfg(unix)]
+    let raw = {
+        let mut buf = [0u8; 256];
+        // SAFETY: buf is valid for buf.len() bytes; gethostname NUL-terminates on success.
+        let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
+        ok.then(|| {
+            let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+            String::from_utf8_lossy(&buf[..end]).into_owned()
+        })
+    };
+    #[cfg(not(unix))]
+    let raw = std::env::var("COMPUTERNAME").ok();
+    let Some(raw) = raw else {
+        return Vec::new();
+    };
+    let host = raw.trim().trim_end_matches(".local").to_ascii_lowercase();
+    if host.is_empty() {
+        return Vec::new();
+    }
+    vec![format!("{host}.local"), host]
+}
+
 pub(super) struct RequestBoundary {
     local_ips: Vec<String>,
+    hostnames: Vec<String>,
     state: Arc<AppState>,
 }
 
@@ -31,6 +57,7 @@ impl RequestBoundary {
                 .into_iter()
                 .map(|e| e.ip)
                 .collect(),
+            hostnames: own_hostnames(),
             state,
         })
     }
@@ -57,6 +84,7 @@ impl RequestBoundary {
                 .parse::<IpAddr>()
                 .is_ok_and(|ip| ip.is_loopback() || is_private_ip(&ip))
             || self.local_ips.iter().any(|ip| ip == name)
+            || self.hostnames.iter().any(|h| name.eq_ignore_ascii_case(h))
             || matches!(&*self.state.tailscale_state.read(),
                 crate::tailscale::TailscaleState::Running { fqdn, .. }
                     if name.eq_ignore_ascii_case(fqdn));
@@ -200,6 +228,30 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), StatusCode::FORBIDDEN, "{path}");
+        }
+    }
+
+    /// Catches #1535: the daemon answering 403 "Untrusted Host" to its own hostname
+    /// (how a desktop reaches it over MagicDNS), while a foreign name stays rejected.
+    #[tokio::test]
+    async fn own_hostname_is_trusted_and_foreign_name_is_not() {
+        let hostname = own_hostnames().pop().expect("machine has a hostname");
+        let app = super::super::build_remote_router(state());
+        for (host, expected) in [
+            (format!("{hostname}:9877"), StatusCode::OK),
+            (format!("{hostname}.local:9877"), StatusCode::OK),
+            ("attacker.example:9877".to_string(), StatusCode::FORBIDDEN),
+        ] {
+            let req = Request::get("/health")
+                .header(header::HOST, &host)
+                .extension(ConnectInfo(SocketAddr::from(([100, 64, 0, 3], 12345))))
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(req).await.unwrap().status(),
+                expected,
+                "{host}"
+            );
         }
     }
 
