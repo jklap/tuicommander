@@ -1970,15 +1970,15 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).not.toHaveBeenCalled();
 	});
 
-	it("includes later ACP list pages before ordering the picker", async () => {
+	it("keeps the backend projection order across ACP list pages", async () => {
 		client.listSessions.mockImplementation(async (_id, _root, cursor) =>
 			cursor
 				? {
-						sessions: [{ sessionId: "newest", cwd: CHAT_ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
+						sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
 						nextCursor: null,
 					}
 				: {
-						sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
+						sessions: [{ sessionId: "newest", cwd: CHAT_ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
 						nextCursor: "page-2",
 					},
 		);
@@ -2040,12 +2040,12 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(container.textContent).toContain("Earlier answer");
 	});
 
-	it("lists durable conversation titles in latest activity order", async () => {
+	it("renders durable conversation titles in the backend activity order", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: "old", cwd: CHAT_ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
-				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
 				{ sessionId: "newest", cwd: CHAT_ROOT, title: "Latest topic", updatedAt: "2026-09-26T09:00:00Z" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
+				{ sessionId: "old", cwd: CHAT_ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
 			],
 			nextCursor: null,
 		});
@@ -3072,5 +3072,113 @@ describe("AIChatPanel: provider retry status", () => {
 
 		expect(statusLines(container)).toHaveLength(0);
 		expect(container.textContent).toContain("the turn failed: the provider returned HTTP 503");
+	});
+});
+
+describe("AIChatPanel: fork at message", () => {
+	// Catches: offering a message fork to an agent that can only fork at its tip.
+	it("hides the per-reply fork without the at-message capability", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpTranscript.restore(SESSION, [{ id: "reply", kind: "agent", text: "Answer", messageId: "reply-id" }]);
+		await settle();
+		expect(container.querySelector('[aria-label="Fork from here"]')).toBeNull();
+	});
+	// Catches: the selected reply ID lost between the rendered action and the shared client.
+	it("passes the selected reply ID from the per-message button", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(
+			snapshot({ capabilities: { ...snapshot().capabilities!, fork: true, forkAtMessage: true } }),
+		);
+		acpTranscript.restore(SESSION, [{ id: "reply", kind: "agent", text: "Answer", messageId: "reply-id" }]);
+		client.forkSession.mockResolvedValue(CHILD_SESSION);
+		await settle();
+		container.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')?.click();
+		await settle();
+		expect(client.forkSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT, "reply-id");
+	});
+});
+
+// Catches: inherited replay shown as the child's own conversation or hidden entirely.
+it("renders inherited replay above a boundary and child turns below", async () => {
+	const { container } = await renderPanel();
+	await settle();
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "user_message_chunk",
+			content: { type: "text", text: "Parent question" },
+			_meta: { ego: { inherited: true } },
+		},
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "agent_message_chunk",
+			messageId: "parent",
+			content: { type: "text", text: "Parent answer" },
+			_meta: { ego: { inherited: true } },
+		},
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Child question" } },
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "agent_message_chunk",
+			messageId: "child",
+			content: { type: "text", text: "Child answer" },
+		},
+	});
+	await settle();
+	const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+	const boundary = transcript.querySelector('[role="separator"][aria-label="Inherited history ends"]');
+	expect(boundary).not.toBeNull();
+	const content = transcript.textContent!;
+	expect(content.indexOf("Parent answer")).toBeLessThan(content.indexOf("This conversation"));
+	expect(content.indexOf("Child question")).toBeGreaterThan(content.indexOf("This conversation"));
+	expect(content).toContain("Child answer");
+});
+
+describe("AIChatPanel: lineage picker", () => {
+	// Catches: refreshSessions resorting the backend tree or discarding its indentation/deleted rows.
+	it("keeps two-level ancestry and a disabled deleted parent in the picker", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{
+					sessionId: "root",
+					cwd: CHAT_ROOT,
+					title: "Root",
+					updatedAt: "2026-01-01",
+					_meta: { tuicommander: { lineageDepth: 0 } },
+				},
+				{
+					sessionId: "deleted",
+					cwd: CHAT_ROOT,
+					title: "Deleted conversation",
+					_meta: { tuicommander: { lineageDepth: 1, deleted: true } },
+				},
+				{
+					sessionId: "grandchild",
+					cwd: CHAT_ROOT,
+					title: "Grandchild",
+					updatedAt: "2026-10-05",
+					_meta: {
+						ego: { lineage: { kind: "fork", sourceSessionId: "deleted", rootSessionId: "root", sourceDeleted: true } },
+						tuicommander: { lineageDepth: 2 },
+					},
+				},
+			],
+		});
+		const { container } = await renderPanel();
+		await settle();
+		const rows = [...container.querySelectorAll<HTMLOptionElement>('select[title="Conversation"] option')];
+		expect(rows.map((row) => row.value)).toEqual(["root", "deleted", "grandchild"]);
+		expect(rows[1].disabled).toBe(true);
+		expect(rows[2].textContent).toContain("    ");
+		expect(rows[2].textContent).toContain("Grandchild");
 	});
 });

@@ -37,6 +37,18 @@ export interface AcpListedSession {
 	cwd: string;
 	title?: string | null;
 	updatedAt?: string | null;
+	_meta?: {
+		ego?: {
+			lineage?: {
+				kind?: string;
+				sourceSessionId: string;
+				rootSessionId?: string;
+				atMessageId?: string;
+				sourceDeleted?: boolean;
+			};
+		};
+		tuicommander?: { lineageDepth?: number; deleted?: boolean };
+	};
 }
 
 export interface AcpSessionList {
@@ -270,18 +282,32 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		 * Branch a session at its tip and return the child's id.
 		 *
 		 * The child is attached by this call, so it needs no `session/load`. ego
-		 * does not replay inherited history for a fork child yet (ego plan
-		 * conversation-fork, step 3), so the parent's transcript is copied across:
+		 * replays history on load, not fork, so the parent's visible prefix is copied across:
 		 * the child tab would otherwise open empty on a conversation it carries in
 		 * full. A later load clears before it replays, so the copy cannot double.
 		 */
-		async forkSession(connectionId: AcpConnectionId, sessionId: AcpSessionId, cwd: string): Promise<AcpSessionId> {
+		async forkSession(
+			connectionId: AcpConnectionId,
+			sessionId: AcpSessionId,
+			cwd: string,
+			atMessageId?: string,
+		): Promise<AcpSessionId> {
 			const attachment = await invoke<{ sessionId: AcpSessionId }>("acp_session_fork", {
 				connectionId,
 				sessionId,
+				...(atMessageId ? { atMessageId } : {}),
 				authority: { cwd, additionalDirectories: [] },
 			});
-			acpTranscript.restore(attachment.sessionId, [...acpTranscript.entries(sessionId)]);
+			const entries = acpTranscript.entries(sessionId);
+			const selected = atMessageId ? entries.findIndex((entry) => entry.messageId === atMessageId) : -1;
+			// ego forks after the completed containing turn, including its later replies
+			// and tools. The next user prompt starts the next turn in live and replayed history.
+			const nextTurn = entries.findIndex((entry, index) => index > selected && entry.kind === "user");
+			const cutoff = atMessageId ? (selected < 0 ? 0 : nextTurn < 0 ? entries.length : nextTurn) : entries.length;
+			acpTranscript.restore(
+				attachment.sessionId,
+				entries.slice(0, cutoff).map((entry) => ({ ...entry, inherited: true })),
+			);
 			await this.refresh(connectionId);
 			return attachment.sessionId;
 		},

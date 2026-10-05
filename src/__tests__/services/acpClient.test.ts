@@ -627,3 +627,40 @@ describe("acpClient: letting go", () => {
 		expect(streams.opened).toHaveLength(1);
 	});
 });
+
+// Catches: atMessageId dropped and the child showing all four replies after a mid-history fork.
+it("forks from the second of four replies without changing the parent", async () => {
+	const streams = new FakeStreams();
+	const client = createAcpClient(streams.open);
+	await client.connect(ROOT);
+	for (let index = 1; index <= 4; index++) {
+		acpTranscript.noteUserMessage(SESSION, `prompt ${index}`);
+		acpTranscript.applyFrame({
+			...frame(index),
+			event: {
+				kind: "sessionUpdate",
+				update: {
+					sessionUpdate: "agent_message_chunk",
+					messageId: `reply-${index}`,
+					content: { type: "text", text: `reply ${index}` },
+				},
+			},
+		});
+	}
+	const child = "child";
+	mockInvoke.mockImplementation(answering({ acp_session_fork: { sessionId: child } }));
+	await client.forkSession(CONNECTION, SESSION, ROOT, "reply-2");
+	expect(mockInvoke).toHaveBeenCalledWith("acp_session_fork", {
+		connectionId: CONNECTION,
+		sessionId: SESSION,
+		authority: { cwd: ROOT, additionalDirectories: [] },
+		atMessageId: "reply-2",
+	});
+	expect(acpTranscript.entries(child).map((entry) => ("text" in entry ? entry.text : ""))).toEqual([
+		"prompt 1",
+		"reply 1",
+		"prompt 2",
+		"reply 2",
+	]);
+	expect(acpTranscript.entries(SESSION)).toHaveLength(8);
+});

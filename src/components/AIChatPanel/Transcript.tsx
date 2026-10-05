@@ -148,7 +148,13 @@ function activityRows(entries: AcpTranscriptEntry[]): {
 	const calls = new Map<string, AcpToolCall[]>();
 	let current: AcpToolCall[] | undefined;
 	for (const entry of entries) {
-		if (entry.kind === "user" || entry.kind === "settled" || entry.kind === "failed") current = undefined;
+		if (
+			entry.kind === "user" ||
+			entry.kind === "settled" ||
+			entry.kind === "failed" ||
+			visible.at(-1)?.inherited !== entry.inherited
+		)
+			current = undefined;
 		if (entry.kind === "tool") {
 			if (!current) {
 				current = [];
@@ -172,6 +178,8 @@ export interface TranscriptProps {
 	emptyMessage: string;
 	onOpenFile?: (href: string) => void;
 	onClear?: () => void;
+	canForkAtMessage?: () => boolean;
+	onFork?: (messageId: string) => void;
 	/** `open_result` opens its file. `answer` and `approve` have nothing to open: the open interaction is drawn at the end, and the transcript scrolls there. */
 	onNoticeAction?: (action: AcpNoticeAction) => void;
 	onSuggestion: (text: string) => void;
@@ -243,6 +251,11 @@ const LinkedPlainText: Component<{ text: string; onOpenFile?: (href: string) => 
 
 export const Transcript: Component<TranscriptProps> = (props) => {
 	const activity = createMemo(() => activityRows(props.entries()));
+	const firstLocalId = createMemo(() =>
+		props.entries().some((entry) => entry.inherited)
+			? props.entries().find((entry) => !entry.inherited)?.id
+			: undefined,
+	);
 	const [finding, setFinding] = createSignal(false);
 	const [query, setQuery] = createSignal("");
 	let container: HTMLDivElement | undefined;
@@ -359,117 +372,145 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 				</div>
 			</Show>
 			<Show when={props.entries().length > 0} fallback={<div class={s.emptyState}>{props.emptyMessage}</div>}>
+				<Show when={props.entries()[0]?.inherited}>
+					<div class={s.historyBoundary}>Inherited history</div>
+				</Show>
 				<For each={activity().visible}>
 					{(entry) => (
-						<Switch>
-							<Match when={entry.kind === "user" && entry}>
-								{(user) => (
-									<div class={s.userMsg}>
-										<LinkedPlainText text={user().text} onOpenFile={props.onOpenFile} />
-										<CopyButton label="Copy user message" text={user().text} />
-									</div>
-								)}
-							</Match>
-							<Match when={entry.kind === "agent" && entry}>
-								{(agent) => {
-									const projected = createMemo(() => projectChatProtocolText(agent().text));
-									return (
-										<div class={s.assistantMsg}>
-											<Show when={projected().intent}>
-												{(intent) => (
-													<div class={s.agentIntent} aria-label="Agent intent">
-														<span>{intent().title ?? "Status"}</span>
-														{intent().text}
-													</div>
-												)}
-											</Show>
-											<Show when={projected().body}>
-												<ContentRenderer
-													content={projected().body}
-													incremental={true}
-													onLinkClick={props.onOpenFile}
-													autoLinkFiles={true}
-													onCodeCopy={(text) =>
-														void writeClipboard(text).catch((error) => appLogger.error("ai-chat", "Copy failed", error))
-													}
-												/>
-											</Show>
-											<CopyButton label="Copy assistant message" text={agent().text} />
-											<Show when={projected().suggestions.length > 0}>
-												<div class={s.suggestedReplies} aria-label="Suggested replies">
-													<For each={projected().suggestions}>
-														{(item) => (
-															<button type="button" onClick={() => props.onSuggestion(item)}>
-																{item}
-															</button>
-														)}
-													</For>
+						<>
+							<Show when={entry.id === firstLocalId()}>
+								<div class={s.historyBoundary} role="separator" aria-label="Inherited history ends">
+									This conversation
+								</div>
+							</Show>
+							<Switch>
+								<Match when={entry.kind === "user" && entry}>
+									{(user) => (
+										<div class={s.userMsg}>
+											<LinkedPlainText text={user().text} onOpenFile={props.onOpenFile} />
+											<CopyButton label="Copy user message" text={user().text} />
+										</div>
+									)}
+								</Match>
+								<Match when={entry.kind === "agent" && entry}>
+									{(agent) => {
+										const projected = createMemo(() => projectChatProtocolText(agent().text));
+										return (
+											<div class={s.assistantMsg}>
+												<Show when={projected().intent}>
+													{(intent) => (
+														<div class={s.agentIntent} aria-label="Agent intent">
+															<span>{intent().title ?? "Status"}</span>
+															{intent().text}
+														</div>
+													)}
+												</Show>
+												<Show when={projected().body}>
+													<ContentRenderer
+														content={projected().body}
+														incremental={true}
+														onLinkClick={props.onOpenFile}
+														autoLinkFiles={true}
+														onCodeCopy={(text) =>
+															void writeClipboard(text).catch((error) =>
+																appLogger.error("ai-chat", "Copy failed", error),
+															)
+														}
+													/>
+												</Show>
+												<div class={s.replyActions}>
+													<CopyButton label="Copy assistant message" text={agent().text} />
+													<Show when={props.canForkAtMessage?.() && agent().messageId}>
+														<button
+															type="button"
+															class={s.copyAction}
+															aria-label="Fork from here"
+															disabled={props.busy()}
+															onClick={() => {
+																const id = agent().messageId;
+																if (id) props.onFork?.(id);
+															}}
+														>
+															Fork from here
+														</button>
+													</Show>
 												</div>
+												<Show when={projected().suggestions.length > 0}>
+													<div class={s.suggestedReplies} aria-label="Suggested replies">
+														<For each={projected().suggestions}>
+															{(item) => (
+																<button type="button" onClick={() => props.onSuggestion(item)}>
+																	{item}
+																</button>
+															)}
+														</For>
+													</div>
+												</Show>
+											</div>
+										);
+									}}
+								</Match>
+								<Match when={entry.kind === "notice" && entry}>
+									{(notice) => (
+										<div class={s.noticeCard} role="group" aria-label="Notice">
+											<div class={s.noticeTitle}>
+												{(notice().action && NOTICE_LABELS[notice().action!.kind].title) || "Notice"}
+											</div>
+											<div>{notice().text}</div>
+											<Show when={notice().action}>
+												{(action) => (
+													<button type="button" class={s.noticeAction} onClick={() => runNoticeAction(action())}>
+														{NOTICE_LABELS[action().kind].button}
+													</button>
+												)}
 											</Show>
 										</div>
-									);
-								}}
-							</Match>
-							<Match when={entry.kind === "notice" && entry}>
-								{(notice) => (
-									<div class={s.noticeCard} role="group" aria-label="Notice">
-										<div class={s.noticeTitle}>
-											{(notice().action && NOTICE_LABELS[notice().action!.kind].title) || "Notice"}
+									)}
+								</Match>
+								<Match when={entry.kind === "thought" && entry}>
+									{(thought) => (
+										<details class={s.reasoningDisclosure}>
+											<summary class={s.reasoningSummary}>Thinking</summary>
+											<div class={s.reasoningBody}>{thought().text}</div>
+										</details>
+									)}
+								</Match>
+								<Match when={entry.kind === "tool" && entry}>
+									{(tool) => <ToolActivity calls={() => activity().calls.get(tool().id) ?? []} />}
+								</Match>
+								<Match when={entry.kind === "plan" && entry}>
+									{(plan) => (
+										<div class={s.toolCallCard}>
+											<div class={s.toolCallHeader}>
+												<span class={s.toolCallName}>Plan</span>
+											</div>
+											<ul class={s.planList}>
+												<For each={plan().entries}>
+													{(step) => (
+														<li
+															class={cx(
+																s.planItem,
+																step.status === "completed" && s.planItemDone,
+																step.status === "in_progress" && s.planItemActive,
+															)}
+														>
+															<span>{step.status === "completed" ? "✓" : "•"}</span>
+															<span>{step.content}</span>
+														</li>
+													)}
+												</For>
+											</ul>
 										</div>
-										<div>{notice().text}</div>
-										<Show when={notice().action}>
-											{(action) => (
-												<button type="button" class={s.noticeAction} onClick={() => runNoticeAction(action())}>
-													{NOTICE_LABELS[action().kind].button}
-												</button>
-											)}
-										</Show>
-									</div>
-								)}
-							</Match>
-							<Match when={entry.kind === "thought" && entry}>
-								{(thought) => (
-									<details class={s.reasoningDisclosure}>
-										<summary class={s.reasoningSummary}>Thinking</summary>
-										<div class={s.reasoningBody}>{thought().text}</div>
-									</details>
-								)}
-							</Match>
-							<Match when={entry.kind === "tool" && entry}>
-								{(tool) => <ToolActivity calls={() => activity().calls.get(tool().id) ?? []} />}
-							</Match>
-							<Match when={entry.kind === "plan" && entry}>
-								{(plan) => (
-									<div class={s.toolCallCard}>
-										<div class={s.toolCallHeader}>
-											<span class={s.toolCallName}>Plan</span>
-										</div>
-										<ul class={s.planList}>
-											<For each={plan().entries}>
-												{(step) => (
-													<li
-														class={cx(
-															s.planItem,
-															step.status === "completed" && s.planItemDone,
-															step.status === "in_progress" && s.planItemActive,
-														)}
-													>
-														<span>{step.status === "completed" ? "✓" : "•"}</span>
-														<span>{step.content}</span>
-													</li>
-												)}
-											</For>
-										</ul>
-									</div>
-								)}
-							</Match>
-							<Match when={entry.kind === "settled" && entry}>
-								{(ended) => <div class={s.settledNote}>{settlement(ended().stopReason)}</div>}
-							</Match>
-							<Match when={entry.kind === "failed" && entry}>
-								{(failed) => <div class={s.settledNote}>{failed().message}</div>}
-							</Match>
-						</Switch>
+									)}
+								</Match>
+								<Match when={entry.kind === "settled" && entry}>
+									{(ended) => <div class={s.settledNote}>{settlement(ended().stopReason)}</div>}
+								</Match>
+								<Match when={entry.kind === "failed" && entry}>
+									{(failed) => <div class={s.settledNote}>{failed().message}</div>}
+								</Match>
+							</Switch>
+						</>
 					)}
 				</For>
 			</Show>

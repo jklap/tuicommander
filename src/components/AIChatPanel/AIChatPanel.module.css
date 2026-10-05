@@ -1354,3 +1354,20 @@
   color: var(--warning);
   font-size: var(--font-xs);
 }
+
+.replyActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.replyActions .copyAction {
+  margin-left: 0;
+}
+
+.historyBoundary {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 0;
+  color: var(--fg-muted);
+  font-size: var(--font-xs);
+}
