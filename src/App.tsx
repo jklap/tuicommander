@@ -8,6 +8,7 @@ import type { CleanupStep, StepId, StepStatus } from "./components/PostMergeClea
 import { PromptDrawer } from "./components/PromptDrawer";
 import { PromptOverlay } from "./components/PromptOverlay";
 import type { SettingsContext } from "./components/SettingsPanel";
+import { SETTINGS_SECTION_EGO } from "./components/SettingsPanel/sections";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TabBar } from "./components/TabBar";
@@ -437,7 +438,7 @@ const App: Component = () => {
 	usePluginRuntime();
 	useSystemLifecycle();
 
-	const detachedPanelBridge = useDetachedPanelBridge();
+	const detachedPanelBridge = useDetachedPanelBridge(() => openSettings("general", SETTINGS_SECTION_EGO));
 
 	// Notification sounds are now played natively via Rust (rodio) —
 	// no Web Audio warmup needed.
@@ -967,6 +968,7 @@ const App: Component = () => {
 					>
 						{/* Side panels (right panes inside #terminal-container) */}
 						<PanelOrchestrator
+							onOpenSettings={openSettings}
 							repoPath={gitOps.currentRepoPath() || null}
 							fsRoot={gitOps.activeWorktreePath() || null}
 							onFileOpen={(fsRoot, filePath, line) => {

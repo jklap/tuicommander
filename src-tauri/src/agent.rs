@@ -1604,6 +1604,57 @@ mod tests {
         ));
     }
 
+    // Catches: failed help probes log a generic warning but lose the timeout or IO cause.
+    #[cfg(unix)]
+    #[test]
+    fn screen_probe_errors_keep_timeout_and_io_diagnostics() {
+        #[derive(Clone)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let script = crate::test_support::fake_ssh_script(
+            "screen-probe-warning-timeout",
+            "exec sleep 8",
+            "echo --no-alt-screen",
+        );
+        let dir = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+        let missing = dir.path().join("missing-codex");
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Sink(output.clone()))
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(!supports_no_alt_screen("codex", &script.to_string_lossy()));
+            assert!(!supports_no_alt_screen("codex", &missing.to_string_lossy()));
+        });
+        let log = String::from_utf8(output.lock().clone()).unwrap();
+        let warnings: Vec<_> = log
+            .lines()
+            .filter(|line| line.contains("Agent screen capability probe failed"))
+            .collect();
+        assert_eq!(warnings.len(), 2, "{log}");
+        assert!(warnings[0].contains("WARN"), "{log}");
+        assert!(warnings[0].contains("--help timed out"), "{log}");
+        assert!(warnings[1].contains("WARN"), "{log}");
+        assert!(warnings[1].contains("os error 2"), "{log}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn screen_help_probe_has_a_deadline_and_reaps_its_child() {
@@ -1710,7 +1761,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn failed_screen_help_probe_is_retried_after_cooldown() {
+    // Catches: subtracting the cooldown makes an inconclusive probe retry immediately.
+    fn failed_screen_help_probe_waits_for_cooldown_before_retrying() {
         let script = crate::test_support::fake_ssh_script(
             "screen-help-retry",
             "marker=\"${0%/*}/screen-help-retry.ready\"; if [ ! -f \"$marker\" ]; then touch \"$marker\"; exit 1; fi; printf '%s\\n' '--no-alt-screen'",
@@ -1719,6 +1771,7 @@ mod tests {
         let marker = script.with_file_name("screen-help-retry.ready");
         let _ = std::fs::remove_file(&marker);
         let path = script.to_string_lossy();
+        assert!(!supports_no_alt_screen("codex", &path));
         assert!(!supports_no_alt_screen("codex", &path));
         std::thread::sleep(std::time::Duration::from_millis(750));
         assert!(supports_no_alt_screen("codex", &path));

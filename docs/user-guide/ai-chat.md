@@ -10,7 +10,11 @@ no tool loop and no sandbox of its own.
 1. Turn on **Experimental Features** in `Settings > General`. The panel is behind
    it and there is no separate AI Chat switch.
 2. Set **ego executable** in `Settings > General` (**Select…** opens a file picker). While it is empty, ACP is not
-   configured: the panel says so and launches nothing.
+   configured: the panel explains why it is inactive and offers **Configure ego**, which opens
+   the ego section in General. Use `Settings > AI Chat` to log in to a provider and select
+   the default model (`ego config set model`). Saving the executable enables the composer
+   immediately, without restarting TUICommander.
+   If the panel is detached, return to its window after saving; it refreshes the settings on focus.
 3. Optionally set **ego profile** in `Settings > General` to select a profile from ego's user configuration.
    An empty value leaves ego's usual profile selection in effect. TUICommander passes only the name at launch;
    it does not send profile rules in `session/new`.
