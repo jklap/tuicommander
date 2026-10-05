@@ -99,6 +99,8 @@ impl RunStore {
             }
             (id, revision)
         };
+        // DEFERRED (2026-10-05) — dependency preflight: graph start skips the preflight that
+        // manual start runs (`validate_preflight`); needed before Agent effects in slice C.
         let execution =
             GraphExecution::start("root".into(), target_id.clone(), definition.clone())?;
         let initial = RunSnapshot {
@@ -135,7 +137,7 @@ impl RunStore {
             return Ok(snapshot);
         }
         if kind == WorkflowKind::Story {
-            require_available_story(&tx, &owner, &target_id, None)?;
+            require_available_story(&tx, &owner, &target_id)?;
         }
         // Recheck native identity after obtaining the run writer lock.
         let current_revision = match &request.target {
@@ -254,7 +256,6 @@ pub(super) fn require_available_story(
     conn: &Connection,
     project: &str,
     story_id: &str,
-    own_run: Option<&str>,
 ) -> Result<(), String> {
     let mut stmt = conn.prepare("SELECT snapshot_json FROM workflow_runs WHERE project=?1 AND status IN ('running','paused')")
         .map_err(|e| format!("prepare workflow reservations: {e}"))?;
@@ -263,11 +264,10 @@ pub(super) fn require_available_story(
         .map_err(|e| format!("read workflow reservations: {e}"))?
     {
         let run: RunSnapshot = decode(&row.map_err(|e| format!("read reserved workflow: {e}"))?)?;
-        if Some(run.id.as_str()) != own_run
-            && run
-                .graph_executions
-                .iter()
-                .any(|graph| graph.target_id == story_id)
+        if run
+            .graph_executions
+            .iter()
+            .any(|graph| graph.target_id == story_id)
         {
             return Err("story is reserved by another workflow root".into());
         }
