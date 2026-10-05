@@ -27,6 +27,7 @@ export interface PanelOrchestratorProps {
 	repoPath: string | null;
 	/** Effective filesystem root (worktree path when on a linked worktree) */
 	fsRoot?: string | null;
+	onOpenSettings?: (tab: string, section?: string) => void;
 	onFileOpen: (repoPath: string, filePath: string, line?: number) => void;
 }
 
@@ -92,6 +93,7 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 						repoPath={props.repoPath}
 						fsRoot={props.fsRoot}
 						onClose={() => uiStore.toggleAiChatPanel()}
+						onOpenSettings={props.onOpenSettings}
 					/>
 				</Suspense>
 			</Show>
