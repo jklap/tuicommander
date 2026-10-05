@@ -4692,3 +4692,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] AI Chat message fork: after rebuilding/restarting Rust, fork the second of four ego replies and check the child cutoff while the parent retains all replies. The backend capability and metadata changes require a manual restart.
 
 - [ ] After Boss restarts the Rust backend, verify the internal serial workflow executor with isolated headless runs and configured sol/sonnet profiles: bound reports, Judge edges, retained repair limits, durable Notify and pause/resume duration. Public graph start controls and Resolve plan dispatch are outside this slice. No desktop launch was performed by the implementation peer.
+
+- [ ] After Boss restarts the Rust backend, verify an isolated workflow review checks its artifact before independent approval, refuses implementer approval after exit, and waits for an explicit merge.

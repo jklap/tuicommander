@@ -2,6 +2,7 @@
 use super::graph::{ActivationState, DecisionEvidence, GraphTransition};
 pub(super) mod effects;
 pub(super) mod judge;
+pub(super) mod policy;
 use super::store::{GraphStartRequest, now_ms};
 use super::{RunCommand, RunSnapshot, RunStatus, RunStore, emit_run_changed};
 use crate::state::AppState;
@@ -278,7 +279,11 @@ fn deterministic_work_pending(snapshot: &RunSnapshot) -> bool {
                         n.id == a.node_id
                             && !matches!(
                                 n.kind,
-                                NodeKind::Agent { .. } | NodeKind::Notify | NodeKind::End
+                                NodeKind::Agent { .. }
+                                    | NodeKind::Notify
+                                    | NodeKind::Judge
+                                    | NodeKind::Gate
+                                    | NodeKind::End
                             )
                     })
             })
@@ -369,6 +374,30 @@ pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, 
                 }
                 NodeKind::Judge => {
                     let decision = judge::judge(&snapshot, graph, activation)?;
+                    if decision.0 == super::graph::EdgeOutcome::Yes
+                        && !policy::approved(&snapshot, graph)?
+                    {
+                        if policy::gate(&snapshot, graph)?
+                            .is_some_and(|d| d.0 == super::graph::EdgeOutcome::Fail)
+                        {
+                            outcome = Some(super::graph::EdgeOutcome::Uncertain);
+                            evidence = Some(DecisionEvidence {
+                                actor: "daemon".into(),
+                                reason: "Pre-approval checks failed".into(),
+                                references: decision.1.references,
+                            });
+                        } else {
+                            return Ok(snapshot);
+                        }
+                    } else {
+                        outcome = Some(decision.0);
+                        evidence = Some(decision.1);
+                    }
+                }
+                NodeKind::Gate => {
+                    let Some(decision) = policy::gate(&snapshot, graph)? else {
+                        return Ok(snapshot);
+                    };
                     outcome = Some(decision.0);
                     evidence = Some(decision.1);
                 }

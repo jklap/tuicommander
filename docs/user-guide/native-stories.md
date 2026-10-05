@@ -62,3 +62,8 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 The internal daemon executor follows published serial Agent, Judge, Loop, Pause, Notify and exclusive Join nodes. It needs run profiles named sol (implementation) and sonnet (review/validation). Missing profiles and failed effects pause with a repository progress notice. Manual pause time does not consume active duration. Resume resolves the pinned target without resetting repair limits.
 
 The Designer refuses new publications containing unsupported Gate or plan create/dispatch/coordinator nodes. Keep those graphs as drafts. Existing built-in publications remain readable; public graph start controls and full Resolve plan execution are still in development. A completed graph does not approve or merge a story by itself.
+
+
+### Workflow story policy (slice D)
+
+The daemon runs pinned deterministic checks before accepting an independent reviewer approval. Native approval history preserves the reviewer actor and revision; the run retains the reviewed artifact and check receipts. A workflow implementer cannot approve its story after exit or claim release. Integration remains an explicit operator action.

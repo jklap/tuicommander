@@ -305,7 +305,7 @@ async fn join_ignores_unselected_arrivals_and_actor_continues_after_turn_budget(
 
 #[test]
 fn publication_visibly_refuses_nodes_without_an_executor() {
-    // catches: a transport publishing unsupported Gate or plan dispatch as runnable.
+    // catches: a transport publishing unsupported plan nodes, or refusing the implemented Gate.
     let (_config, project, _plan, _story, template, _guard) = fixture();
     let project = project.path().to_str().unwrap();
     let definitions = WorkflowStore::open().unwrap();
@@ -335,8 +335,7 @@ fn publication_visibly_refuses_nodes_without_an_executor() {
                 expected_revision: draft.draft_revision,
             }
         )
-        .unwrap_err()
-        .contains("not executable")
+        .is_ok()
     );
 }
 
