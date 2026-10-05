@@ -14,6 +14,7 @@ no tool loop and no sandbox of its own.
    the ego section in General. Use `Settings > AI Chat` to log in to a provider and select
    the default model (`ego config set model`). Saving the executable enables the composer
    immediately, without restarting TUICommander.
+   If the panel is detached, return to its window after saving; it refreshes the settings on focus.
 3. Optionally set **ego profile** in `Settings > General` to select a profile from ego's user configuration.
    An empty value leaves ego's usual profile selection in effect. TUICommander passes only the name at launch;
    it does not send profile rules in `session/new`.

@@ -939,6 +939,7 @@ one configured ego binary and speaks ACP to it, per
   the panel explains why it is inactive and offers **Configure ego** to open the
   ego controls in Settings → General. Provider login and the default model remain
   in Settings → AI Chat. Saving the executable enables chat without an app restart
+  (detached windows refresh their settings when focused again)
 - Full user guide: [`docs/user-guide/ai-chat.md`](user-guide/ai-chat.md)
 
 What went with the embedded engine (#784-0aec) and did not come back here:
