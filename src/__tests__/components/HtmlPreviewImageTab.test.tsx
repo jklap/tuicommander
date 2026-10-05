@@ -2,11 +2,15 @@ import { render } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HtmlPreviewTab } from "../../components/HtmlPreviewTab/HtmlPreviewTab";
 import type { HtmlPreviewTab as HtmlPreviewTabData } from "../../stores/mdTabs";
+import { repositoriesStore } from "../../stores/repositories";
 import { classifyFile, isImageFile } from "../../utils/filePreview";
 
 const env = vi.hoisted(() => ({ tauri: true }));
 
-vi.mock("@tauri-apps/api/core", () => ({ convertFileSrc: (p: string) => `asset://localhost${p}` }));
+vi.mock("@tauri-apps/api/core", () => ({
+	convertFileSrc: (p: string) => `asset://localhost${p}`,
+	invoke: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../../transport", async (orig) => ({ ...(await orig<object>()), isTauri: () => env.tauri }));
 vi.mock("../../hooks/useRepository", () => ({ useRepository: () => ({ readFile: vi.fn() }) }));
 vi.mock("../../utils/openUrl", () => ({ handleOpenUrl: vi.fn(), openLocalPath: vi.fn() }));
@@ -30,6 +34,7 @@ function renderedSrc(tab: HtmlPreviewTabData): string | null {
 
 afterEach(() => {
 	env.tauri = true;
+	repositoriesStore._testCancelPendingSave();
 	document.body.innerHTML = "";
 });
 
@@ -56,6 +61,7 @@ describe("image files open as images (1335)", () => {
 	describe("browser mode", () => {
 		// Catches: the shimmed convertFileSrc returning the bare path, which the page origin resolves to a 404.
 		it.each(FORMATS)("serves a repository .%s through the HTTP image route", (ext) => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			env.tauri = false;
 			const src = renderedSrc(imageTab("/repo", `docs/shot.${ext}`));
 			const url = new URL(src!);
