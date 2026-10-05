@@ -1044,7 +1044,7 @@ fn render_mcp_instructions(
     // dropping a marker breaks the UI (stale tab title, missing suggestion bar).
     let (show_intent, show_suggest) = markers;
     out.push_str("## TUIC Protocol — Required Output Markers\n\n");
-    out.push_str("These are protocol tokens. Emit them even under concision rules; omission breaks the UI.\n\n");
+    out.push_str("Required even under concision rules; omission breaks the UI.\n\n");
     out.push_str(&format!(
         "- `ack` — exactly once per MCP connection or reconnect, the first assistant message MUST start: `TUICommander v{ver} is connected.` Never repeat it on each conversational turn.\n"
     ));
@@ -1052,12 +1052,12 @@ fn render_mcp_instructions(
         out.push_str("- `intent: <desc> (<title>)` on its own line, at the start of every user task and on each material work-phase change. Describe the work currently in progress in present tense; `<title>` ≤3 words, spaces not hyphens.\n");
     }
     if show_suggest {
-        out.push_str("- `suggest:` — after task done: `suggest: [ A | B | C ]` — wrap the WHOLE list in one `[ … ]`, EXACTLY 3 items separated by `|`, each item ≤40 chars. The brackets bound the token (parsed even if it wraps); never emit 4+ items.\n");
+        out.push_str("- `suggest:` — after task done: `suggest: [ A | B | C ]` — bracket the WHOLE list; EXACTLY 3 items separated by `|`, each ≤40 chars.\n");
     }
     // Always on: the answers-only view is a per-terminal toggle with no setting
     // to switch the marker off, and `answersTurn.ts` anchors on a row that
     // starts with the marker followed by a space.
-    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` (marker, then a space) at the start of the row. Status reports, tool notices and hook/task notifications are not answers.\n");
+    out.push_str("- `💬 ` — prefix every sentence that directly answers the user's question with `💬 ` at row start (marker + space). Exclude status, tool and hook/task notices.\n");
     out.push('\n');
 
     // ── Cross-tool rules ─────────────────────────────────────────────
@@ -1068,15 +1068,15 @@ fn render_mcp_instructions(
     // owns — one forbids a tool that is not ours, the other spans two calls.
     out.push_str("## Tools\n\n");
     if collapse_tools {
-        out.push_str("Tool discovery and invocation via `search_tools` / `get_tool_schema` / `call_tool` — see their descriptions for usage.\n\n");
-        out.push_str("**Worktrees:** never `git worktree add/remove` — always use `repo action=worktree_create` / `worktree_remove` so TUIC tracks the worktree and can spawn a PTY inside.\n\n");
+        out.push_str("Discover/invoke via `search_tools` / `get_tool_schema` / `call_tool`; read their descriptions.\n\n");
+        out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
         // Kept verbatim in both modes. It is not a restatement of the `session`
         // description: agents split the text and the Enter into two calls, or
         // polled after submitting, until this line existed.
         out.push_str("**Submit:** `call_tool tool_name=session arguments={action:submit,session_id,input}` once; never split text/Enter; never poll.\n\n");
     } else {
-        out.push_str("Each tool's own description carries its actions and rules; read it there rather than expecting a catalogue here.\n\n");
-        out.push_str("**Worktrees:** always `repo action=worktree_create`/`worktree_remove` — never `git worktree add/remove` (TUIC must track them to spawn a PTY inside).\n\n");
+        out.push_str("Read each tool's description for actions and rules.\n\n");
+        out.push_str("**Worktrees:** use `repo action=worktree_create`/`worktree_remove` for TUIC tracking/PTY spawn; never `git worktree add/remove`.\n\n");
         out.push_str("**Submit:** `session action=submit session_id=<id> input=<text>` once; never split text/Enter; never poll.\n\n");
     }
 
@@ -1090,7 +1090,7 @@ fn render_mcp_instructions(
     if progress_tracking {
         out.push_str("## Progress — mandatory\n\n");
         out.push_str(
-            "Call `progress`: the ONLY way the user learns what happened while away. \
+            "Call `progress` to report work while the user is away. \
              `type=done` when an `intent:`'s work is finished, `type=blocked` when you \
              stop and wait because you cannot proceed without them. Work that continues \
              while the user acts in parallel is `type=done`.\n\n",
@@ -1113,7 +1113,7 @@ fn render_mcp_instructions(
         ));
     }
     out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
-    out.push_str("- **Mail:** normal by default; `agent send urgency=urgent` asks a peer to change course before its next step.\n");
+    out.push_str("- **Mail:** default normal; `agent send urgency=urgent` requests a course change before the next step.\n");
     if is_claude_code {
         out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
     }
