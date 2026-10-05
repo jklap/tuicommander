@@ -8,6 +8,8 @@ use crate::workflows::{
 };
 use std::sync::Arc;
 
+mod critic_c;
+
 fn fixture() -> (
     tempfile::TempDir,
     tempfile::TempDir,
@@ -235,11 +237,14 @@ fn start_story_activates_first_successor() {
             )
             .is_err()
     );
-    assert_eq!(
-        drive_turn(&owner.store, &run.id).unwrap(),
-        run,
-        "slice B must not run an Agent effect"
+    let prepared = drive_turn(&owner.store, &run.id).unwrap();
+    assert_eq!(prepared.attempts.len(), 1);
+    assert!(prepared.attempts[0].agent.is_none());
+    assert!(
+        prepared.effects.is_empty(),
+        "deterministic turns do not spawn agents"
     );
+    assert_eq!(owner.store.replay(&run.id).unwrap(), prepared);
 }
 
 fn paused(store: &RunStore, run: &RunSnapshot) -> RunSnapshot {
@@ -417,13 +422,15 @@ fn restart_recovers_graph_without_respawning() {
             "restart",
         ))
         .unwrap();
+    let prepared = drive_turn(&owner.store, &run.id).unwrap();
+    let attempt = prepared.attempts.last().unwrap();
     owner
         .store
         .command(
             &run.id,
             "intent",
             RunCommand::ReserveEffect {
-                key: "crash-boundary".into(),
+                key: format!("spawn:{}", attempt.id),
                 kind: EffectKind::SpawnAgent,
             },
         )
@@ -468,6 +475,8 @@ fn restart_recovers_graph_without_respawning() {
         .command(&run.id, "safe-resume", recovery)
         .unwrap();
     let current = drive_turn(&restarted.store, &run.id).unwrap();
+    assert_eq!(current.status, RunStatus::Paused);
+    assert_eq!(current.attempts.len(), prepared.attempts.len());
     assert_eq!(current.spawns, 1);
     assert_eq!(current.effects.len(), 1);
     assert_eq!(current.graph_executions, before.graph_executions);
@@ -536,3 +545,5 @@ async fn deadline_pauses_idle_run_and_bounds_check() {
 }
 
 mod ownership;
+
+mod semantics;

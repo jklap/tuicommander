@@ -6824,6 +6824,49 @@ fn launch_workflow_agent(
     let owner = crate::progress::resolve_owning_project(Some(&project))?
         .to_string_lossy()
         .to_string();
+    let store = crate::workflows::RunStore::open()?;
+    let run = store.snapshot(&input.run_id)?;
+    if run.project != owner {
+        return Err("workflow run does not belong to calling session's project".into());
+    }
+    let attempt = run
+        .attempts
+        .iter()
+        .find(|a| a.id == input.attempt_id)
+        .ok_or("workflow attempt not found")?;
+    if attempt.story_id != run.plan_id
+        && crate::workflows::active_coordinator_session(&run)?.as_deref() != Some(&caller)
+    {
+        return Err("only this run's active coordinator may launch a story worker".into());
+    }
+    if attempt.story_id == run.plan_id {
+        let cwd = state
+            .session_maps
+            .sessions
+            .get(&caller)
+            .and_then(|session| session.lock().cwd.clone())
+            .ok_or("calling session has no working directory")?;
+        let cwd = std::path::Path::new(&cwd)
+            .canonicalize()
+            .map_err(|e| format!("resolve calling worktree: {e}"))?;
+        let path = std::path::Path::new(&input.worktree_path)
+            .canonicalize()
+            .map_err(|e| format!("resolve workflow worktree: {e}"))?;
+        if !cwd.starts_with(&path) {
+            return Err("workflow plan launch must use the caller's isolated worktree".into());
+        }
+    }
+    launch_workflow_effect(state, addr, mcp_session_id, input, &owner, false)
+}
+
+fn launch_workflow_effect(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    mcp_session_id: Option<&str>,
+    input: WorkflowLaunchInput,
+    owner: &str,
+    daemon: bool,
+) -> Result<serde_json::Value, String> {
     if input.agent_type.trim().is_empty() || input.agent_type.len() > 128 {
         return Err("invalid workflow agent type".into());
     }
@@ -6834,16 +6877,7 @@ fn launch_workflow_agent(
     if worktree == owner {
         return Err("workflow agents require an isolated worktree".into());
     }
-    crate::worktree::validate_worktree_path(&owner, &worktree)?;
-    let caller_cwd = state
-        .session_maps
-        .sessions
-        .get(&caller)
-        .and_then(|session| session.lock().cwd.clone())
-        .ok_or("calling session has no working directory")?;
-    let caller_cwd = std::path::Path::new(&caller_cwd)
-        .canonicalize()
-        .map_err(|error| format!("resolve calling worktree: {error}"))?;
+    crate::worktree::validate_worktree_path(owner, &worktree)?;
     let store = crate::workflows::RunStore::open()?;
     let run = store.snapshot(&input.run_id)?;
     if run.project != owner {
@@ -6859,14 +6893,6 @@ fn launch_workflow_agent(
         .ok_or("workflow attempt not found")?;
     if attempt.state != crate::workflows::AttemptState::Running {
         return Err("workflow attempt is not running".into());
-    }
-    if attempt.story_id != run.plan_id
-        && crate::workflows::active_coordinator_session(&run)?.as_deref() != Some(&caller)
-    {
-        return Err("only this run's active coordinator may launch a story worker".into());
-    }
-    if attempt.story_id == run.plan_id && !caller_cwd.starts_with(std::path::Path::new(&worktree)) {
-        return Err("workflow plan launch must use the caller's isolated worktree".into());
     }
     if let Some(binding) = &attempt.agent {
         return Ok(serde_json::json!({
@@ -6908,10 +6934,17 @@ fn launch_workflow_agent(
         )?
     };
     let effect_key = format!("spawn:{}", attempt.id);
-    if run.effects.iter().any(|effect| effect.key == effect_key) {
+    let intended = run.effects.iter().find(|effect| effect.key == effect_key);
+    if intended
+        .is_some_and(|effect| !daemon || effect.state != crate::workflows::EffectState::Intended)
+    {
         return Err("spawn intent already exists; reconcile before retrying".into());
     }
-    if attempt.story_id != run.plan_id {
+    if attempt.story_id != run.plan_id
+        && !run.stories.iter().any(|story| {
+            story.story_id == attempt.story_id && story.worktree_path.as_deref() == Some(&worktree)
+        })
+    {
         let assignment = store.command(
             &run.id,
             &format!("assign-worktree:{}", attempt.story_id),
@@ -6924,20 +6957,32 @@ fn launch_workflow_agent(
             crate::workflows::emit_run_changed(state, &run.project, &run.id, assignment.sequence);
         }
     }
-    let reserved = store.command(
-        &run.id,
-        &format!("spawn-intent:{}", attempt.id),
-        crate::workflows::RunCommand::ReserveEffect {
-            key: effect_key,
-            kind: crate::workflows::EffectKind::SpawnAgent,
-        },
-    )?;
-    crate::workflows::emit_run_changed(state, &run.project, &run.id, reserved.sequence);
-    let crate::workflows::RunEventKind::EffectReserved { effect } = &reserved.event.kind else {
-        return Err("workflow state changed before spawn; retry after refreshing".into());
+    let effect = if let Some(effect) = intended {
+        effect.clone()
+    } else {
+        let reserved = store.command(
+            &run.id,
+            &format!("spawn-intent:{}", attempt.id),
+            crate::workflows::RunCommand::ReserveEffect {
+                key: effect_key,
+                kind: crate::workflows::EffectKind::SpawnAgent,
+            },
+        )?;
+        crate::workflows::emit_run_changed(state, &run.project, &run.id, reserved.sequence);
+        let crate::workflows::RunEventKind::EffectReserved { effect } = reserved.event.kind else {
+            return Err("workflow state changed before spawn; retry after refreshing".into());
+        };
+        effect
     };
     // The reservation and external spawn cannot share a database transaction.
     // Avoid starting the process when a cancellation already won the race.
+    if daemon && store.duration_expired(&run.id)? {
+        store.command(
+            &run.id,
+            &format!("daemon:spawn-deadline:{}", attempt.id),
+            crate::workflows::RunCommand::ExpireDeadline,
+        )?;
+    }
     if store.snapshot(&run.id)?.status != crate::workflows::RunStatus::Running {
         // No external action happened, so a paused run can close the intent.
         // Cancellation has already marked outstanding intents uncertain.
@@ -27261,4 +27306,69 @@ mod critic_story_tool_text {
         let description = definition["description"].as_str().unwrap_or_default();
         assert!(description.contains("receipt"), "{description}");
     }
+}
+
+/// Called only by the database-owning workflow actor, never by a transport caller.
+pub(crate) fn launch_daemon_workflow_agent(
+    state: &Arc<AppState>,
+    run_id: &str,
+    attempt_id: &str,
+    worktree: &str,
+    agent_type: &str,
+    feedback: Option<String>,
+) -> Result<serde_json::Value, String> {
+    state.workflow_runtime.require_owner()?;
+    let run = crate::workflows::RunStore::open()?.snapshot(run_id)?;
+    let attempt = run
+        .attempts
+        .iter()
+        .find(|a| a.id == attempt_id)
+        .ok_or("workflow attempt missing")?;
+    if !run.graph_executions.iter().any(|g| {
+        g.target_id == attempt.story_id
+            && g.activations.iter().any(|a| {
+                (a.node_id == attempt.node_id
+                    || (attempt.story_id == run.plan_id
+                        && g.definition.graph.nodes.iter().any(|n| {
+                            n.id == a.node_id
+                                && matches!(n.kind, crate::workflows::NodeKind::CreateStories)
+                        })))
+                    && a.state == crate::workflows::graph::ActivationState::Running
+            })
+    }) {
+        return Err("daemon launch requires a reached Agent activation".into());
+    }
+    launch_workflow_effect(
+        state,
+        "127.0.0.1:0"
+            .parse()
+            .map_err(|e| format!("daemon address: {e}"))?,
+        None,
+        WorkflowLaunchInput {
+            run_id: run_id.into(),
+            attempt_id: attempt_id.into(),
+            worktree_path: worktree.into(),
+            agent_type: agent_type.into(),
+            skills: vec![],
+            feedback,
+        },
+        &run.project,
+        true,
+    )
+}
+
+pub(crate) async fn create_daemon_workflow_worktree(
+    state: &Arc<AppState>,
+    project: &str,
+    branch: &str,
+) -> Result<String, String> {
+    super::worktree_routes::create_worktree_shared(state, project.into(), branch.into(), None)
+        .await
+        .map_err(|(_, value)| value.0.to_string())
+        .and_then(|created| {
+            if let Some(error) = created.setup_script_error {
+                return Err(error.to_string());
+            }
+            Ok(created.path)
+        })
 }
