@@ -23,6 +23,9 @@ fn fixture() -> (
 }
 
 fn definition(project: &str, pause: bool, agent: bool) -> crate::workflows::PublishedWorkflow {
+    // Match definition_action: Windows canonicalization adds the verbatim prefix.
+    let project = crate::progress::resolve_owning_project(Some(project)).unwrap();
+    let project = project.to_str().unwrap();
     let mut nodes = vec![
         Node {
             id: "start".into(),
@@ -144,6 +147,27 @@ async fn owner_ready(state: &Arc<crate::state::AppState>) {
     })
     .await
     .expect("daemon setup did not acquire ownership");
+}
+
+/// Catches: raw fixture paths publishing definitions outside the canonical root identity.
+#[test]
+fn runtime_definition_uses_the_api_canonical_owner() {
+    let (config, project, plan, story, _template, _guard) = fixture();
+    let raw = project.path().join(".");
+    let published = definition(raw.to_str().unwrap(), false, false);
+    let plan = StoryStore::open().unwrap().get_plan(&plan).unwrap();
+    assert_eq!(published.project, plan.project);
+    let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+    let run = store
+        .start_graph_run(&request(
+            raw.to_str().unwrap(),
+            &story,
+            &published,
+            "raw-path",
+        ))
+        .unwrap();
+    assert_eq!(run.project, plan.project);
+    assert_eq!(run.status, RunStatus::Running);
 }
 
 #[test]
