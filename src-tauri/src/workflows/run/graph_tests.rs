@@ -322,7 +322,7 @@ fn pause_pins_resume_target_and_pending_request() {
             .unwrap_err()
             .contains("empty")
     );
-    let fenced = reopened.reconcile(&run.id).unwrap();
+    let fenced = reopened.reconcile_after_restart(&run.id).unwrap();
     assert_eq!(fenced.effects[0].state, EffectState::Uncertain);
     let resolve = RunCommand::Graph {
         transition: GraphTransition::ResolvePause {
