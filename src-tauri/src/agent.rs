@@ -1604,6 +1604,17 @@ mod tests {
         ));
     }
 
+    // Catches: a formatter that silently drops the help-probe failure diagnostic.
+    #[test]
+    fn screen_probe_errors_keep_timeout_and_io_diagnostics() {
+        assert_eq!(ScreenProbeError::TimedOut.to_string(), "--help timed out");
+        let io = ScreenProbeError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "help probe permission denied",
+        ));
+        assert_eq!(io.to_string(), "help probe permission denied");
+    }
+
     #[cfg(unix)]
     #[test]
     fn screen_help_probe_has_a_deadline_and_reaps_its_child() {
@@ -1710,7 +1721,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn failed_screen_help_probe_is_retried_after_cooldown() {
+    // Catches: subtracting the cooldown makes an inconclusive probe retry immediately.
+    fn failed_screen_help_probe_waits_for_cooldown_before_retrying() {
         let script = crate::test_support::fake_ssh_script(
             "screen-help-retry",
             "marker=\"${0%/*}/screen-help-retry.ready\"; if [ ! -f \"$marker\" ]; then touch \"$marker\"; exit 1; fi; printf '%s\\n' '--no-alt-screen'",
@@ -1719,6 +1731,7 @@ mod tests {
         let marker = script.with_file_name("screen-help-retry.ready");
         let _ = std::fs::remove_file(&marker);
         let path = script.to_string_lossy();
+        assert!(!supports_no_alt_screen("codex", &path));
         assert!(!supports_no_alt_screen("codex", &path));
         std::thread::sleep(std::time::Duration::from_millis(750));
         assert!(supports_no_alt_screen("codex", &path));
