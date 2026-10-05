@@ -43,7 +43,7 @@ pub(crate) fn guard_manual_story_start(
     let conn = RunStore::open_at(&path)?.connect()?;
     conn.execute_batch("BEGIN IMMEDIATE")
         .map_err(|e| format!("lock workflow reservations: {e}"))?;
-    runtime_start::require_available_story(&conn, project, story_id, None)?;
+    runtime_start::require_available_story(&conn, project, story_id)?;
     Ok(Some(conn))
 }
 
@@ -1464,18 +1464,6 @@ fn persist_event(
         at_ms,
         kind,
     };
-    if let RunEventKind::Graph {
-        event: super::graph::GraphEvent::Started { execution },
-    } = &event.kind
-        && execution.target_id != previous.plan_id
-    {
-        runtime_start::require_available_story(
-            conn,
-            &previous.project,
-            &execution.target_id,
-            Some(&previous.id),
-        )?;
-    }
     let snapshot = apply_event(Some(previous.clone()), &event)?;
     let receipt = RunReceipt {
         sequence: event.sequence,

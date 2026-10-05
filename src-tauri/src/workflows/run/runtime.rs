@@ -228,6 +228,9 @@ pub(super) fn deadline_ms(snapshot: &RunSnapshot) -> i64 {
 }
 
 /// Re-read after each expected-sequence commit; no external effects run here.
+// DEFERRED (2026-10-05) — self-wake after TRANSITIONS_PER_TURN: the turn yields after 32
+// transitions and the actor then waits for the deadline instead of re-waking itself;
+// unreachable with Start/Pause/End only, must wake itself before slice C adds Agent nodes.
 pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, String> {
     for _ in 0..TRANSITIONS_PER_TURN {
         let snapshot = store.snapshot(run_id)?;
