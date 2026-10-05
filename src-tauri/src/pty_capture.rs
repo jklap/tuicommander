@@ -70,7 +70,13 @@ mod tests {
         let default_status = set_enabled_in_config_dir(true, Some("session-a".into()));
         assert_eq!(
             default_status["dir"],
-            serde_json::json!(root.path().join("config/captures").display().to_string())
+            serde_json::json!(
+                root.path()
+                    .join("config")
+                    .join("captures")
+                    .display()
+                    .to_string()
+            )
         );
 
         unsafe { std::env::set_var("TUIC_CAPTURE_DIR", &selected_dir) };

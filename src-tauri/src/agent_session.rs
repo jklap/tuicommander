@@ -281,8 +281,8 @@ fn claude_projects_dir(config_dir_override: Option<&str>) -> Option<PathBuf> {
 
 /// Encode a filesystem path to the slug Claude Code uses as a directory name.
 ///
-/// Claude encodes a path by replacing `/`, `.`, and `_` with `-`,
-/// prepending a leading `-` to represent the root.
+/// Claude replaces every non-ASCII-alphanumeric character with `-`,
+/// including path separators, spaces, `.`, `_`, and the Windows drive colon.
 ///
 /// Example: `/Users/foo.bar/my_project` → `-Users-foo-bar-my-project`
 fn path_to_claude_slug(path: &str) -> String {
@@ -290,8 +290,14 @@ fn path_to_claude_slug(path: &str) -> String {
     let normalised = path.replace('\\', "/");
     // Strip trailing separator to avoid a trailing dash in the slug
     let trimmed = normalised.trim_end_matches('/');
-    // Replace `/`, `.`, and `_` — Claude treats all three as slug delimiters
-    trimmed.replace(['/', '.', '_'], "-")
+    // Claude 2.1.286 replaces non-alphanumeric characters, including the
+    // Windows drive colon, before joining the slug under projects/.
+    // DEFERRED (2026-10-04): Claude hashes slugs longer than 200 characters;
+    // matching that suffix is outside this Windows profile-name correction.
+    trimmed
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// Directory where Claude Code registers one JSON file per *running* process.
@@ -1298,11 +1304,12 @@ mod tests {
         assert_eq!(path_to_claude_slug("/Users/foo/bar/"), "-Users-foo-bar");
     }
 
+    /// Catches: a Windows drive colon leaking into a project directory slug.
     #[test]
     fn test_path_to_claude_slug_windows() {
         assert_eq!(
             path_to_claude_slug("C:\\Users\\foo\\bar"),
-            "C:-Users-foo-bar"
+            "C--Users-foo-bar"
         );
     }
 
@@ -1343,6 +1350,22 @@ mod tests {
         assert!(
             path.ends_with("-Users-foo-bar"),
             "expected slug suffix, got: {path}"
+        );
+    }
+
+    /// Catches: Windows profile spaces surviving the slug and hiding Claude transcripts.
+    #[test]
+    fn claude_project_dir_windows_profile_spaces_match_claude_transcript_directory() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = claude_project_dir(
+            r"C:\Users\Boss Name\work".into(),
+            Some(dir.path().to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        // Recorded from Claude 2.1.286's project-path encoder, independently of TUIC.
+        assert_eq!(
+            PathBuf::from(path),
+            dir.path().join("projects/C--Users-Boss-Name-work")
         );
     }
 
