@@ -1970,15 +1970,15 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).not.toHaveBeenCalled();
 	});
 
-	it("includes later ACP list pages before ordering the picker", async () => {
+	it("keeps the backend projection order across ACP list pages", async () => {
 		client.listSessions.mockImplementation(async (_id, _root, cursor) =>
 			cursor
 				? {
-						sessions: [{ sessionId: "newest", cwd: CHAT_ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
+						sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
 						nextCursor: null,
 					}
 				: {
-						sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
+						sessions: [{ sessionId: "newest", cwd: CHAT_ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
 						nextCursor: "page-2",
 					},
 		);
@@ -2040,12 +2040,12 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(container.textContent).toContain("Earlier answer");
 	});
 
-	it("lists durable conversation titles in latest activity order", async () => {
+	it("renders durable conversation titles in the backend activity order", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: "old", cwd: CHAT_ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
-				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
 				{ sessionId: "newest", cwd: CHAT_ROOT, title: "Latest topic", updatedAt: "2026-09-26T09:00:00Z" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
+				{ sessionId: "old", cwd: CHAT_ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
 			],
 			nextCursor: null,
 		});
