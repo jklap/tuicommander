@@ -196,6 +196,12 @@ impl StoryStore {
     ) -> Result<Story, String> {
         let preflight_plan = self.get_story(story_id)?.plan_id;
         let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
+        let _reservation_guard = if matches!(command, StoryCommand::StartManual) {
+            let project = self.get_plan(&preflight_plan)?.project;
+            crate::workflows::guard_manual_story_start(&project, story_id)?
+        } else {
+            None
+        };
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
         preflight.validate(&tx)?;

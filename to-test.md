@@ -1,3 +1,7 @@
+## Workflow daemon executor (1446-ff21 slice B) — Rust restart required
+
+- [ ] On Boss's next planned backend restart, load the owner-locked workflow runtime and confirm existing run history remains available. The daemon tests cover graph position, control fences and idle deadlines; Agent delivery and start controls remain disabled. Rust does not hot-reload. This lane does not restart the live app or launch a desktop instance.
+
 ## Windows CI remaining regressions (1518-d3a7) — Rust restart required
 
 - [ ] After Boss rebuilds/restarts the backend, confirm Windows archive hooks can run Git and short-name uploads publish or skip an existing destination without replacement. Native Windows CI owns the automated proof. No desktop instance was launched; Rust changes do not hot-reload.
