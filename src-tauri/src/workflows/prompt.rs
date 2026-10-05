@@ -275,6 +275,7 @@ mod tests {
             canonical_ref: None,
             id: "run-1".into(),
             project: "/project".into(),
+            root_target: None,
             plan_id: "plan-1".into(),
             definition_id: "plan-def".into(),
             definition_revision: 2,

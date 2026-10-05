@@ -2000,6 +2000,7 @@ pub struct SessionMaps {
 
 /// Global state for managing PTY sessions and worktrees
 pub struct AppState {
+    pub(crate) workflow_runtime: crate::workflows::WorkflowRuntime,
     pub(crate) secrets: crate::secrets::SecretStore,
     /// Every per-session side table, keyed by session id.
     pub(crate) session_maps: SessionMaps,
@@ -3391,6 +3392,7 @@ impl AppState {
             tunnel_audit.clone(),
         ));
         Self {
+            workflow_runtime: Default::default(),
             secrets: crate::secrets::SecretStore::default(),
             session_maps: SessionMaps::default(),
             data_dir,

@@ -244,6 +244,14 @@ pub struct CanonicalReceipt {
     pub post_checks: Vec<CheckReceipt>,
 }
 
+/// The native root is distinct from its plan relationship and graph target.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "id", rename_all = "snake_case")]
+pub enum RunTarget {
+    Plan(String),
+    Story(String),
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RunSnapshot {
@@ -254,6 +262,8 @@ pub struct RunSnapshot {
     #[serde(default)]
     pub canonical_ref: Option<String>,
     pub plan_id: String,
+    #[serde(default)]
+    pub root_target: Option<RunTarget>,
     pub definition_id: String,
     pub definition_revision: i64,
     pub story_definition_id: String,
@@ -346,7 +356,15 @@ pub enum RunEventKind {
         fingerprint: String,
     },
     Paused,
+    DeadlineExpired {
+        deadline_ms: i64,
+    },
     Resumed,
+    GraphResumed {
+        execution_id: String,
+        activation_id: String,
+        resolution: String,
+    },
     Cancelled,
     Completed,
 }
@@ -434,7 +452,14 @@ pub enum RunCommand {
     FinalVerificationPassed,
     Complete,
     Pause,
+    /// Internal daemon timer command, never a caller-supplied timeout assertion.
+    ExpireDeadline,
     Resume,
+    ResumeGraph {
+        execution_id: String,
+        activation_id: String,
+        resolution: String,
+    },
     Cancel,
 }
 

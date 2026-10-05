@@ -9,10 +9,9 @@ use crate::workflows::{CheckDefinition, NodeKind, PublishedWorkflow, WorkflowKin
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{LazyLock, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -24,14 +23,31 @@ pub struct RunStore {
 /// Layout version recorded in `PRAGMA user_version`. Stores created before the
 /// version was recorded report 0 and already have the version 1 layout.
 /// Version 2 adds graph events and additive JSON snapshot fields. Legacy JSON
-/// is decoded with defaults, without inventing graph positions.
-const RUN_STORE_SCHEMA_VERSION: i64 = 2;
+/// is decoded with defaults, without inventing graph positions. Version 3
+/// records explicit graph-root targets; older binaries must refuse that contract.
+const RUN_STORE_SCHEMA_VERSION: i64 = 3;
+
+mod runtime_start;
+pub(crate) use runtime_start::GraphStartRequest;
+
+/// Serialize a manual claim against graph-root reservations across databases.
+/// The returned connection holds the run writer lock until the story commits.
+pub(crate) fn guard_manual_story_start(
+    project: &str,
+    story_id: &str,
+) -> Result<Option<Connection>, String> {
+    let path = crate::config::config_dir().join("workflow_runs.sqlite3");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = RunStore::open_at(&path)?.connect()?;
+    conn.execute_batch("BEGIN IMMEDIATE")
+        .map_err(|e| format!("lock workflow reservations: {e}"))?;
+    runtime_start::require_available_story(&conn, project, story_id, None)?;
+    Ok(Some(conn))
+}
 
 static SERVICE_RECEIPT_LOCK: Mutex<()> = Mutex::new(());
-// Restart recovery runs once per database path; later opens preserve live work.
-static RECONCILED_STORES: LazyLock<Mutex<HashSet<PathBuf>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
-
 #[cfg(test)]
 thread_local! {
     pub(super) static BEFORE_COMMIT: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
@@ -39,16 +55,7 @@ thread_local! {
 
 impl RunStore {
     pub fn open() -> Result<Self, String> {
-        let db_path = crate::config::config_dir().join("workflow_runs.sqlite3");
-        let store = Self::open_at(&db_path)?;
-        let first_open = RECONCILED_STORES
-            .lock()
-            .map_err(|_| "workflow recovery lock poisoned")?
-            .insert(db_path);
-        if first_open {
-            store.reconcile_runs_after_restart(&store.active_run_ids()?);
-        }
-        Ok(store)
+        Self::open_at(&crate::config::config_dir().join("workflow_runs.sqlite3"))
     }
 
     pub(crate) fn open_at(path: &Path) -> Result<Self, String> {
@@ -208,6 +215,7 @@ impl RunStore {
             canonical_ref: git_output(Path::new(&owner), &["symbolic-ref", "HEAD"]).ok(),
             project: owner,
             plan_id: plan_id.into(),
+            root_target: None,
             definition_id: definition_id.into(),
             definition_revision,
             story_definition_id,
@@ -1115,7 +1123,7 @@ impl RunStore {
         self.snapshot(run_id)
     }
 
-    fn active_run_ids(&self) -> Result<Vec<String>, String> {
+    pub(super) fn active_run_ids(&self) -> Result<Vec<String>, String> {
         let conn = self.connect()?;
         let mut stmt = conn
             .prepare("SELECT id FROM workflow_runs WHERE status IN ('running','paused')")
@@ -1140,7 +1148,7 @@ impl RunStore {
         StoryStore::open()?.reconcile_integrated_dependencies(&snapshot.plan_id)
     }
 
-    fn reconcile_runs_after_restart(&self, run_ids: &[String]) -> usize {
+    pub(super) fn reconcile_runs_after_restart(&self, run_ids: &[String]) -> usize {
         let mut recovered = 0;
         for run_id in run_ids {
             match self.reconcile_run_after_restart(run_id) {
@@ -1383,7 +1391,7 @@ pub(super) fn require_current_checks(
     Ok(())
 }
 
-fn now_ms() -> i64 {
+pub(super) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -1456,6 +1464,18 @@ fn persist_event(
         at_ms,
         kind,
     };
+    if let RunEventKind::Graph {
+        event: super::graph::GraphEvent::Started { execution },
+    } = &event.kind
+        && execution.target_id != previous.plan_id
+    {
+        runtime_start::require_available_story(
+            conn,
+            &previous.project,
+            &execution.target_id,
+            Some(&previous.id),
+        )?;
+    }
     let snapshot = apply_event(Some(previous.clone()), &event)?;
     let receipt = RunReceipt {
         sequence: event.sequence,
@@ -1691,7 +1711,32 @@ fn choose_event(
     {
         return Err("graph runs require an eligible typed activation transition".into());
     }
-    let expired = at_ms > snapshot.started_ms + i64::from(snapshot.limits.max_duration_secs) * 1000;
+    let expired = at_ms
+        >= snapshot
+            .started_ms
+            .saturating_add(i64::from(snapshot.limits.max_duration_secs) * 1000);
+    if matches!(command, RunCommand::ExpireDeadline) {
+        if !expired || snapshot.status != RunStatus::Running {
+            return Err("workflow deadline is not due".into());
+        }
+        return Ok(RunEventKind::DeadlineExpired {
+            deadline_ms: snapshot
+                .started_ms
+                .saturating_add(i64::from(snapshot.limits.max_duration_secs) * 1000),
+        });
+    }
+    if expired
+        && matches!(
+            command,
+            RunCommand::Resume
+                | RunCommand::ResumeGraph { .. }
+                | RunCommand::Graph {
+                    transition: super::graph::GraphTransition::ResolvePause { .. }
+                }
+        )
+    {
+        return Err("workflow deadline expired; cancel and start a new run".into());
+    }
     if expired
         && !matches!(
             command,
@@ -1733,6 +1778,7 @@ fn choose_event(
         && !matches!(
             command,
             RunCommand::Resume
+                | RunCommand::ResumeGraph { .. }
                 | RunCommand::Graph {
                     transition: super::graph::GraphTransition::ResolvePause { .. }
                 }
@@ -2356,6 +2402,45 @@ fn choose_event(
             Ok(RunEventKind::Completed)
         }
         RunCommand::Pause => Ok(RunEventKind::Paused),
+        RunCommand::ExpireDeadline => unreachable!("deadline handled before ordinary commands"),
+        RunCommand::ResumeGraph {
+            execution_id,
+            activation_id,
+            resolution,
+        } => {
+            if resolution.trim().is_empty() || resolution.len() > 4096 {
+                return Err("graph resume needs a bounded explicit resolution".into());
+            }
+            super::reducer::validate_resume(snapshot)?;
+            let graph = snapshot
+                .graph_executions
+                .iter()
+                .find(|graph| graph.id == execution_id)
+                .ok_or("graph execution not found")?;
+            let activation = graph
+                .activations
+                .iter()
+                .find(|activation| activation.id == activation_id)
+                .ok_or("graph activation not reached")?;
+            if activation.state == super::graph::ActivationState::Paused {
+                Ok(RunEventKind::Graph {
+                    event: super::graph::GraphEvent::Transition {
+                        transition: super::graph::GraphTransition::ResolvePause {
+                            execution_id,
+                            activation_id,
+                            resolution,
+                        },
+                    },
+                })
+            } else {
+                validate_graph_recovery(snapshot, &execution_id, &activation_id)?;
+                Ok(RunEventKind::GraphResumed {
+                    execution_id,
+                    activation_id,
+                    resolution,
+                })
+            }
+        }
         RunCommand::Resume => {
             if snapshot
                 .graph_executions
@@ -2363,6 +2448,9 @@ fn choose_event(
                 .any(|graph| graph.pauses.iter().any(|pause| pause.resolution.is_none()))
             {
                 return Err("graph pause needs ResolvePause".into());
+            }
+            if !snapshot.graph_executions.is_empty() {
+                return Err("graph resume needs an explicit activation and resolution".into());
             }
             super::reducer::validate_resume(snapshot)?;
             Ok(RunEventKind::Resumed)
@@ -2485,4 +2573,35 @@ mod preflight_tests {
             store.snapshot(&run.id).unwrap()
         );
     }
+}
+
+/// A recovery resolution names the actual pending position, not an arbitrary node.
+pub(super) fn validate_graph_recovery(
+    snapshot: &RunSnapshot,
+    execution_id: &str,
+    activation_id: &str,
+) -> Result<(), String> {
+    super::reducer::validate_resume(snapshot)?;
+    if snapshot
+        .graph_executions
+        .iter()
+        .any(|graph| graph.pauses.iter().any(|pause| pause.resolution.is_none()))
+    {
+        return Err("graph pause needs ResolvePause".into());
+    }
+    let graph = snapshot
+        .graph_executions
+        .iter()
+        .find(|graph| graph.id == execution_id)
+        .ok_or("graph execution not found")?;
+    if !graph.activations.iter().any(|activation| {
+        activation.id == activation_id
+            && matches!(
+                activation.state,
+                super::graph::ActivationState::Ready | super::graph::ActivationState::Running
+            )
+    }) {
+        return Err("graph activation is not pending recovery".into());
+    }
+    Ok(())
 }

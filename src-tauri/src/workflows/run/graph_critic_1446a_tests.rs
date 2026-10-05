@@ -308,6 +308,7 @@ fn published_graph_run() -> (
 /// Catches: a manual Pause (or any non-graph pause) on a graph run that has no
 /// pending graph Pause node can never be resumed: Resume is refused for every
 /// graph run and ResolvePause needs a pending graph pause, so only Cancel is left.
+/// Slice B provides an explicit activation-bound ResumeGraph recovery resolution.
 #[test]
 fn manual_pause_of_a_graph_run_without_graph_pause_can_be_resumed() {
     let (_config, _project, store, run, story_id, _guard) = published_graph_run();
@@ -328,7 +329,26 @@ fn manual_pause_of_a_graph_run_without_graph_pause_can_be_resumed() {
     store
         .command_expected(&run.id, "pause", seq(&store), RunCommand::Pause)
         .unwrap();
-    let resumed = store.command_expected(&run.id, "resume", seq(&store), RunCommand::Resume);
+    assert!(
+        store
+            .command_expected(
+                &run.id,
+                "status-only-resume",
+                seq(&store),
+                RunCommand::Resume
+            )
+            .is_err()
+    );
+    let resumed = store.command_expected(
+        &run.id,
+        "resume",
+        seq(&store),
+        RunCommand::ResumeGraph {
+            execution_id: "x".into(),
+            activation_id: "a0".into(),
+            resolution: "Operator resolved the manual pause".into(),
+        },
+    );
     assert!(
         resumed.is_ok(),
         "graph run stuck Paused after a manual Pause: {:?}",
