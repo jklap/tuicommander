@@ -1,3 +1,7 @@
+## AI Chat provider retry line (1536-1c9c, ego 288-f994)
+
+- [ ] [VISUAL] After ego `fix/288-provider-retry` is merged and installed, cause an overloaded or 503 provider (or wait for a real one) in AI Chat and take a screenshot: one orange line `… — connection problem, retrying in Ns (attempt n/6)` that updates in place, disappears when the answer starts, and gives way to the turn error after 6/6, with the next prompt accepted. Frontend only (HMR); ego must be rebuilt.
+
 ## Workflow daemon executor (1446-ff21 slice B) — Rust restart required
 
 - [ ] On Boss's next planned backend restart, load the owner-locked workflow runtime and confirm existing run history remains available. The daemon tests cover graph position, control fences and idle deadlines; Agent delivery and start controls remain disabled. Rust does not hot-reload. This lane does not restart the live app or launch a desktop instance.
