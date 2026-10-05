@@ -20846,7 +20846,7 @@ mod tests {
         let out = build_mcp_instructions(&state, None);
         assert!(out.contains("## Tools\n"), "expected classic Tools section");
         assert!(
-            out.contains("Each tool's own description carries its actions and rules"),
+            out.contains("Read each tool's description for actions and rules."),
             "classic mode must delegate to the tool descriptions"
         );
         assert!(!out.contains("## Tools — Lazy Discovery"));
@@ -21399,7 +21399,7 @@ mod tests {
         let state = test_state();
         let out = build_mcp_instructions(&state, None);
         assert!(
-            out.contains("Each tool's own description carries its actions and rules"),
+            out.contains("Read each tool's description for actions and rules."),
             "instructions must send the reader to the descriptions"
         );
 
