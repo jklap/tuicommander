@@ -152,6 +152,18 @@ pub(in crate::workflows::run) fn judge(
     ) {
         return Ok(uncertain("Story must be submitted for independent review"));
     }
+    if !story.checked.iter().all(|checked| *checked)
+        || (0..story.criteria.len()).any(|index| {
+            !report
+                .criterion_results
+                .iter()
+                .any(|r| r.index == index && r.satisfied)
+        })
+    {
+        return Ok(uncertain(
+            "Independent review lacks current criterion evidence",
+        ));
+    }
     Ok((EdgeOutcome::Yes, evidence))
 }
 

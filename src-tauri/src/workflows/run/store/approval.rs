@@ -1,6 +1,18 @@
 use super::*;
 
 impl RunStore {
+    pub(in crate::workflows::run) fn execute_plan_check(
+        &self,
+        run_id: &str,
+        check: &CheckDefinition,
+    ) -> Result<CheckReceipt, String> {
+        let run = self.snapshot(run_id)?;
+        if run.status != RunStatus::Running {
+            return Err("plan is not running".into());
+        }
+        execute_run_check(check, Path::new(&run.project), &self.db_path, run_id, false)
+    }
+
     pub(in crate::workflows::run) fn begin_graph_story(
         &self,
         run: &RunSnapshot,
@@ -8,8 +20,8 @@ impl RunStore {
         session: &str,
     ) -> Result<(), String> {
         let stories = StoryStore::open()?;
-        let story = stories.get_story(story_id)?;
-        if story.status != StoryStatus::Ready {
+        let mut story = stories.get_story(story_id)?;
+        if !matches!(story.status, StoryStatus::Ready | StoryStatus::Review) {
             return Ok(());
         }
         let mut conn = self.connect()?;
@@ -18,6 +30,14 @@ impl RunStore {
             .map_err(|e| format!("begin workflow story: {e}"))?;
         if read_snapshot(&tx, &run.id)? != *run || run.status != RunStatus::Running {
             return Err("workflow moved before story start".into());
+        }
+        if story.status == StoryStatus::Review {
+            story = stories.transition_for_actor(
+                story_id,
+                story.revision,
+                crate::stories::StoryCommand::RejectReview,
+                Some(session),
+            )?;
         }
         stories.begin_workflow_story(story_id, story.revision, session)?;
         tx.commit()

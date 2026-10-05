@@ -165,6 +165,20 @@ fn assert_delivery(expected: EdgeOutcome, automatic: bool, fail_checks: bool) {
             *resume_to = Some("implement".into());
         }
     }
+    if fail_checks {
+        graph.nodes.push(Node {
+            id: "preapproval".into(),
+            kind: NodeKind::Gate,
+        });
+        graph
+            .edges
+            .iter_mut()
+            .find(|e| e.from == "review")
+            .unwrap()
+            .to = "preapproval".into();
+        graph.edges.push(edge("preapproval", "judge", Some("pass")));
+        graph.edges.push(edge("preapproval", "pause", Some("fail")));
+    }
     let mut published = publish(project_path, graph);
     if fail_checks {
         let draft = definitions.get_draft(&published.id).unwrap();
@@ -309,7 +323,7 @@ fn assert_delivery(expected: EdgeOutcome, automatic: bool, fail_checks: bool) {
         } else {
             ReviewDecision::Approved
         },
-        artifact_digest: if expected == EdgeOutcome::Uncertain {
+        artifact_digest: if matches!(expected, EdgeOutcome::Uncertain | EdgeOutcome::Fail) {
             "0".repeat(64)
         } else {
             artifact_digest(&commit, &tree)
@@ -403,7 +417,7 @@ fn assert_delivery(expected: EdgeOutcome, automatic: bool, fail_checks: bool) {
     let graph = &current.graph_executions[0];
     let decision = &graph.decisions[0];
     let expected = if fail_checks {
-        EdgeOutcome::Uncertain
+        EdgeOutcome::Fail
     } else {
         expected
     };
@@ -413,6 +427,7 @@ fn assert_delivery(expected: EdgeOutcome, automatic: bool, fail_checks: bool) {
         Some(match expected {
             EdgeOutcome::Yes => "yes",
             EdgeOutcome::No => "no",
+            EdgeOutcome::Fail => "fail",
             _ => "uncertain",
         })
     );
@@ -422,11 +437,11 @@ fn assert_delivery(expected: EdgeOutcome, automatic: bool, fail_checks: bool) {
             .iter()
             .filter(|a| a.node_id == "judge")
             .count(),
-        1
+        if fail_checks { 0 } else { 1 }
     );
     assert_eq!(
         decision.evidence.actor,
-        if expected == EdgeOutcome::Uncertain {
+        if matches!(expected, EdgeOutcome::Uncertain | EdgeOutcome::Fail) {
             "daemon"
         } else {
             "reviewer"
@@ -460,3 +475,6 @@ fn preapproval_failed_check_never_closes_the_story() {
 
 #[path = "semantics_controls.rs"]
 mod controls;
+
+#[path = "plan_dispatch.rs"]
+mod plan_dispatch;

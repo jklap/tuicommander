@@ -297,3 +297,8 @@ Resolve plan create/dispatch/replan remains slice E. Independent approval automa
 ### Slice D capability boundary
 
 Story Judge waits for daemon-computed pre-approval checks and an independent native approval transition before yes. Native history retains the approving session and revision; the bound report and current Git digest retain the artifact subject. Failed checks cannot approve. Gate selects pass/fail from current deterministic receipts. Merge stays explicit; plan dispatch follows in E. No new persistence format is introduced.
+
+
+### Slice E capability boundary
+
+Plan agents and repeated Create Stories visits reuse managed attempts and idempotent proposal keys. Dispatch creates child graph executions under existing writer-fenced project reservations and scope limits. Done without integration waits; WontFix blocks dependencies. Final canonical checks record existing canonical receipts and verification fingerprints before completion. Replan requests a fresh bound coordinator. No automatic merge, second state machine or new persistence format is introduced.

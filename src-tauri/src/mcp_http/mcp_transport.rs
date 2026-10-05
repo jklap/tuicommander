@@ -27327,7 +27327,12 @@ pub(crate) fn launch_daemon_workflow_agent(
     if !run.graph_executions.iter().any(|g| {
         g.target_id == attempt.story_id
             && g.activations.iter().any(|a| {
-                a.node_id == attempt.node_id
+                (a.node_id == attempt.node_id
+                    || (attempt.story_id == run.plan_id
+                        && g.definition.graph.nodes.iter().any(|n| {
+                            n.id == a.node_id
+                                && matches!(n.kind, crate::workflows::NodeKind::CreateStories)
+                        })))
                     && a.state == crate::workflows::graph::ActivationState::Running
             })
     }) {

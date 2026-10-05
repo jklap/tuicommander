@@ -2,6 +2,7 @@
 use super::graph::{ActivationState, DecisionEvidence, GraphTransition};
 pub(super) mod effects;
 pub(super) mod judge;
+pub(super) mod plan;
 pub(super) mod policy;
 use super::store::{GraphStartRequest, now_ms};
 use super::{RunCommand, RunSnapshot, RunStatus, RunStore, emit_run_changed};
@@ -270,29 +271,15 @@ fn deterministic_work_pending(snapshot: &RunSnapshot) -> bool {
         .iter()
         .filter(|g| !g.completed)
         .any(|g| {
-            g.activations.iter().any(|a| {
-                if a.state == ActivationState::Ready {
-                    return true;
-                }
-                a.state == ActivationState::Running
-                    && g.definition.graph.nodes.iter().any(|n| {
-                        n.id == a.node_id
-                            && !matches!(
-                                n.kind,
-                                NodeKind::Agent { .. }
-                                    | NodeKind::Notify
-                                    | NodeKind::Judge
-                                    | NodeKind::Gate
-                                    | NodeKind::End
-                            )
-                    })
-            })
+            g.activations
+                .iter()
+                .any(|a| a.state == ActivationState::Ready)
         })
 }
 
 /// Re-read after each expected-sequence commit; external effects stay outside transactions.
 pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, String> {
-    for _ in 0..TRANSITIONS_PER_TURN {
+    'turn: for _ in 0..TRANSITIONS_PER_TURN {
         let snapshot = store.snapshot(run_id)?;
         if snapshot.status != RunStatus::Running {
             return Ok(snapshot);
@@ -307,143 +294,190 @@ pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, 
                 )?
                 .snapshot);
         }
-        let next = snapshot
-            .graph_executions
-            .iter()
-            .filter(|graph| !graph.completed)
-            .find_map(|graph| {
-                graph
-                    .activations
-                    .iter()
-                    .find(|activation| {
-                        matches!(
-                            activation.state,
-                            ActivationState::Ready | ActivationState::Running
-                        )
-                    })
-                    .map(|activation| (graph, activation))
-            });
-        let Some((graph, activation)) = next else {
-            return Ok(snapshot);
-        };
-        let node = graph
-            .definition
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.id == activation.node_id)
-            .ok_or("activation node missing")?;
-        let transition = if activation.state == ActivationState::Ready {
-            GraphTransition::Activate {
-                execution_id: graph.id.clone(),
-                activation_id: activation.id.clone(),
-            }
-        } else {
-            let mut outcome = None;
-            let mut evidence = None;
-            match &node.kind {
-                NodeKind::Agent { .. } => {
-                    let Some(attempt) = effects::activation_attempt(&snapshot, graph, activation)
-                    else {
-                        store.command_expected(
-                            run_id,
-                            &format!("daemon:{}:{}:attempt", graph.id, activation.id),
-                            snapshot.sequence,
-                            RunCommand::StartGraphAgent {
-                                execution_id: graph.id.clone(),
-                                activation_id: activation.id.clone(),
-                            },
-                        )?;
-                        continue;
-                    };
-                    if attempt.state == super::AttemptState::Running {
-                        return Ok(snapshot);
-                    }
-                    if attempt.report.is_none()
-                        || attempt.outcome == Some(super::AttemptOutcome::Interrupted)
-                    {
-                        return Ok(store
-                            .command_expected(
-                                run_id,
-                                &format!("daemon:{}:{}:missing-report", graph.id, activation.id),
-                                snapshot.sequence,
-                                RunCommand::Pause,
-                            )?
-                            .snapshot);
-                    }
+        if matches!(snapshot.root_target, Some(super::RunTarget::Plan(_)))
+            && snapshot.graph_executions.iter().all(|g| g.completed)
+        {
+            return Ok(store
+                .command_expected(
+                    run_id,
+                    "daemon:complete-plan",
+                    snapshot.sequence,
+                    RunCommand::Complete,
+                )?
+                .snapshot);
+        }
+        'graphs: for graph in snapshot.graph_executions.iter().filter(|g| !g.completed) {
+            let Some(activation) = graph
+                .activations
+                .iter()
+                .find(|a| matches!(a.state, ActivationState::Ready | ActivationState::Running))
+            else {
+                continue;
+            };
+            let node = graph
+                .definition
+                .graph
+                .nodes
+                .iter()
+                .find(|node| node.id == activation.node_id)
+                .ok_or("activation node missing")?;
+            let transition = if activation.state == ActivationState::Ready {
+                GraphTransition::Activate {
+                    execution_id: graph.id.clone(),
+                    activation_id: activation.id.clone(),
                 }
-                NodeKind::Judge => {
-                    let decision = judge::judge(&snapshot, graph, activation)?;
-                    if decision.0 == super::graph::EdgeOutcome::Yes
-                        && !policy::approved(&snapshot, graph)?
-                    {
-                        if policy::gate(&snapshot, graph)?
-                            .is_some_and(|d| d.0 == super::graph::EdgeOutcome::Fail)
-                        {
-                            outcome = Some(super::graph::EdgeOutcome::Uncertain);
-                            evidence = Some(DecisionEvidence {
-                                actor: "daemon".into(),
-                                reason: "Pre-approval checks failed".into(),
-                                references: decision.1.references,
-                            });
-                        } else {
-                            return Ok(snapshot);
+            } else {
+                let mut outcome = None;
+                let mut evidence = None;
+                match &node.kind {
+                    NodeKind::Agent { .. } | NodeKind::CreateStories => {
+                        let Some(attempt) =
+                            effects::activation_attempt(&snapshot, graph, activation)
+                        else {
+                            store.command_expected(
+                                run_id,
+                                &format!("daemon:{}:{}:attempt", graph.id, activation.id),
+                                snapshot.sequence,
+                                RunCommand::StartGraphAgent {
+                                    execution_id: graph.id.clone(),
+                                    activation_id: activation.id.clone(),
+                                },
+                            )?;
+                            continue 'turn;
+                        };
+                        if attempt.state == super::AttemptState::Running {
+                            continue 'graphs;
                         }
-                    } else {
+                        if attempt.report.is_none()
+                            || attempt.outcome == Some(super::AttemptOutcome::Interrupted)
+                        {
+                            return Ok(store
+                                .command_expected(
+                                    run_id,
+                                    &format!(
+                                        "daemon:{}:{}:missing-report",
+                                        graph.id, activation.id
+                                    ),
+                                    snapshot.sequence,
+                                    RunCommand::Pause,
+                                )?
+                                .snapshot);
+                        }
+                        if matches!(node.kind, NodeKind::CreateStories)
+                            && snapshot.planning_fingerprint.is_none()
+                        {
+                            store.command_expected(
+                                run_id,
+                                &format!("daemon:close-plan:{}", activation.id),
+                                snapshot.sequence,
+                                RunCommand::ClosePlanning,
+                            )?;
+                            continue 'turn;
+                        }
+                    }
+                    NodeKind::Judge | NodeKind::Gate
+                        if graph.definition.kind == crate::workflows::WorkflowKind::Plan =>
+                    {
+                        let decision = plan::judge(&snapshot, graph)?;
+                        let Some(decision) = decision else {
+                            continue 'graphs;
+                        };
+                        outcome = Some(if matches!(node.kind, NodeKind::Gate) {
+                            if decision.0 == super::graph::EdgeOutcome::Yes {
+                                super::graph::EdgeOutcome::Pass
+                            } else {
+                                super::graph::EdgeOutcome::Fail
+                            }
+                        } else {
+                            decision.0
+                        });
+                        evidence = Some(decision.1);
+                    }
+                    NodeKind::StoryDispatch { .. } => {
+                        match plan::dispatch(store, &snapshot, graph, activation)? {
+                            plan::Dispatch::Advanced => continue 'turn,
+                            plan::Dispatch::Waiting => continue 'graphs,
+                            plan::Dispatch::Decided(decision) => {
+                                outcome = Some(decision.0);
+                                evidence = Some(decision.1);
+                            }
+                        }
+                    }
+                    NodeKind::Judge => {
+                        let decision = judge::judge(&snapshot, graph, activation)?;
+                        if decision.0 == super::graph::EdgeOutcome::Yes
+                            && !policy::approved(&snapshot, graph)?
+                        {
+                            if policy::gate(&snapshot, graph)?
+                                .is_some_and(|d| d.0 == super::graph::EdgeOutcome::Fail)
+                            {
+                                outcome = Some(super::graph::EdgeOutcome::Uncertain);
+                                evidence = Some(DecisionEvidence {
+                                    actor: "daemon".into(),
+                                    reason: "Pre-approval checks failed".into(),
+                                    references: decision.1.references,
+                                });
+                            } else {
+                                continue 'graphs;
+                            }
+                        } else {
+                            outcome = Some(decision.0);
+                            evidence = Some(decision.1);
+                        }
+                    }
+                    NodeKind::Gate => {
+                        let Some(decision) = policy::gate(&snapshot, graph)? else {
+                            continue 'graphs;
+                        };
                         outcome = Some(decision.0);
                         evidence = Some(decision.1);
                     }
-                }
-                NodeKind::Gate => {
-                    let Some(decision) = policy::gate(&snapshot, graph)? else {
-                        return Ok(snapshot);
-                    };
-                    outcome = Some(decision.0);
-                    evidence = Some(decision.1);
-                }
-                NodeKind::Pause { .. } => {
-                    evidence = Some(DecisionEvidence {
-                        actor: "daemon".into(),
-                        reason: graph
-                            .decisions
-                            .last()
-                            .map(|d| d.evidence.reason.clone())
-                            .unwrap_or_else(|| {
-                                "Published graph pause requires an explicit resolution".into()
-                            }),
-                        references: vec![format!("activation:{}:{}", graph.id, activation.id)],
-                    });
-                }
-                NodeKind::Notify => {
-                    let key = format!("notify:{}:{}", graph.id, activation.id);
-                    let Some(effect) = snapshot.effects.iter().find(|e| e.key == key) else {
-                        return Ok(snapshot);
-                    };
-                    if effect.state != super::EffectState::Succeeded {
-                        return Ok(snapshot);
+                    NodeKind::Pause { .. } => {
+                        evidence = Some(DecisionEvidence {
+                            actor: "daemon".into(),
+                            reason: graph
+                                .decisions
+                                .last()
+                                .map(|d| d.evidence.reason.clone())
+                                .unwrap_or_else(|| {
+                                    "Published graph pause requires an explicit resolution".into()
+                                }),
+                            references: vec![format!("activation:{}:{}", graph.id, activation.id)],
+                        });
+                    }
+                    NodeKind::Notify => {
+                        let key = format!("notify:{}:{}", graph.id, activation.id);
+                        let Some(effect) = snapshot.effects.iter().find(|e| e.key == key) else {
+                            continue 'graphs;
+                        };
+                        if effect.state != super::EffectState::Succeeded {
+                            continue 'graphs;
+                        }
+                    }
+                    // End marks graph completion only; approval/integration policy still owns story delivery.
+                    NodeKind::Start | NodeKind::Loop { .. } | NodeKind::Join {} | NodeKind::End => {
                     }
                 }
-                // End marks graph completion only; approval/integration policy still owns story delivery.
-                NodeKind::Start | NodeKind::Loop { .. } | NodeKind::Join {} | NodeKind::End => {}
-                _ => return Err(format!("workflow node '{}' is not executable yet", node.id)),
-            }
-            GraphTransition::Complete {
-                execution_id: graph.id.clone(),
-                activation_id: activation.id.clone(),
-                outcome,
-                evidence,
-            }
-        };
-        let key = format!(
-            "daemon:{}:{}:{:?}",
-            graph.id, activation.id, activation.state
-        );
-        store.command_expected(
-            run_id,
-            &key,
-            snapshot.sequence,
-            RunCommand::Graph { transition },
-        )?;
+                GraphTransition::Complete {
+                    execution_id: graph.id.clone(),
+                    activation_id: activation.id.clone(),
+                    outcome,
+                    evidence,
+                }
+            };
+            let key = format!(
+                "daemon:{}:{}:{:?}",
+                graph.id, activation.id, activation.state
+            );
+            store.command_expected(
+                run_id,
+                &key,
+                snapshot.sequence,
+                RunCommand::Graph { transition },
+            )?;
+            continue 'turn;
+        }
+        return Ok(snapshot);
     }
     // Yield with a durable pending activation; the next turn is explicitly woken.
     store.snapshot(run_id)
