@@ -1,12 +1,21 @@
-//! Offline Telegram adapter boundaries; native delivery is not wired yet.
-// DEFERRED (2026-10-03): start polling in run_remote only after 1419/1420 land
-// and the native mail/wake port is implemented. Never auto-enable here.
+//! Opt-in headless Telegram adapter with native peer mail and correlated replies.
 mod api;
 mod backoff;
+mod callbacks;
 mod config;
 mod inbound;
 mod mail;
+mod native;
+mod notifications;
 mod offset;
+mod outbound;
+mod registration;
+mod runtime;
+pub(crate) mod settings;
+mod tool;
+#[cfg(not(feature = "desktop"))]
+pub(crate) use native::start;
+pub(crate) use tool::{definition as tool_definition, handle as handle_tool};
 
 pub(crate) use api::BotApi;
 pub(crate) use config::{Config, Owner, Paths};
@@ -21,6 +30,7 @@ pub(crate) use mail::{MailPort, PendingMail};
 pub(crate) enum Error {
     Config,
     State,
+    NotRegistered,
     Capacity,
     PrivateFile,
     AlreadyOwned,
@@ -37,6 +47,7 @@ impl std::fmt::Display for Error {
         // No external body, path, URL, credential or chat text crosses this seam.
         f.write_str(match self {
             Self::State => "telegram_invalid_state",
+            Self::NotRegistered => "telegram_not_registered: call telegram register first",
             Self::Capacity => "telegram_mail_capacity",
             Self::Config => "telegram_invalid_config",
             Self::PrivateFile => "telegram_private_file_unavailable",
@@ -56,3 +67,6 @@ impl std::error::Error for Error {}
 mod adversarial_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod critic_setup_tests;

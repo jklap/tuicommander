@@ -374,6 +374,16 @@ pub(crate) async fn receive_copy(
     roots: &[String],
     body: Body,
 ) -> Result<TransferResult, String> {
+    receive_copy_with_extractor(query, roots, body, extract_and_publish).await
+}
+
+// Keep receive/worker ownership identical for production and cancellation tests.
+async fn receive_copy_with_extractor(
+    query: UploadQuery,
+    roots: &[String],
+    body: Body,
+    extract: impl FnOnce(Staging, UploadQuery) -> io::Result<TransferResult> + Send + 'static,
+) -> Result<TransferResult, String> {
     // Refuse excess concurrency rather than buffering bodies in a queue.
     let _slot = UPLOAD_SLOTS
         .try_acquire()
@@ -423,7 +433,7 @@ pub(crate) async fn receive_copy(
     tokio::task::spawn_blocking(move || {
         // A cancelled handler cannot release a slot while extraction still runs.
         let _slot = _slot;
-        extract_and_publish(stage, query)
+        extract(stage, query)
     })
     .await
     .map_err(|e| e.to_string())?

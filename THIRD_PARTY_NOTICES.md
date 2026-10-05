@@ -31,7 +31,6 @@ authors and communities behind each project.
 | clap | 4.6.3 | MIT OR Apache-2.0 |
 | console-subscriber | 0.5.0 | MIT |
 | cpal | 0.17.3 | Apache-2.0 |
-| cron | 0.17.0 | MIT OR Apache-2.0 |
 | ctor | 0.8.0 | Apache-2.0 OR MIT |
 | cuid2 | 0.1.6 | MIT |
 | cursor-icon | 1.2.0 | MIT OR Apache-2.0 OR Zlib |
@@ -62,7 +61,6 @@ authors and communities behind each project.
 | mime_guess | 2.0.5 | MIT |
 | moka | 0.12.15 | MIT OR Apache-2.0 AND Apache-2.0 |
 | notify | 8.2.0 | CC0-1.0 |
-| notify-rust | 4.18.1 | MIT OR Apache-2.0 |
 | oauth2 | 5.0.0 | MIT OR Apache-2.0 |
 | ort | 2.0.0-rc.13 | MIT OR Apache-2.0 |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |

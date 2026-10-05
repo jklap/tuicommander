@@ -77,6 +77,11 @@ returns `400` and does not enter the session map.
 
 ### Monitoring
 
+Foreground-agent exit or an observed agent-type change also retires the terminal's volatile Telegram registration
+lifetime synchronously. A restarted agent using the same terminal and MCP identity
+must opt in again, even if the Telegram worker was busy during the transition. Unrecognized
+non-shell probes retain the previous identity and do not revoke registration.
+
 | Command | Description |
 |---------|-------------|
 | `get_orchestrator_stats()` | Active/max/available session counts. |
@@ -676,6 +681,13 @@ peer/orchestrator entries in their original relative order. Each user command
 carries a process-unique id so the Compose panel can delete a single entry —
 a queue position would shift under the caller as the FIFO drains.
 
+Queue requests may include `idempotencyKey`. A per-PTY bounded recent-key set
+reserves acceptance atomically with FIFO append, before the blocking flush. The
+last 128 keys survive drain and cancellation and are removed with the PTY;
+backend restart also clears them. Duplicate requests do not flush or append.
+Both HTTP and desktop IPC return `accepted`, `typed` and current `queued`;
+a recognized retry can be accepted even with an empty queue and no new typing.
+
 Each nonempty flush attempt emits one `queue delivery attempt` tracing record with
 the session id, agent and shell states at the attempt, queued counts before and
 after, whether text reached the composer, whether submission was confirmed, and
@@ -710,3 +722,11 @@ Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The
 - Metrics use `AtomicUsize` for zero-overhead counting
 
 Claude transcript discovery, session verification, project-directory lookup and subagent paths share the Claude project-path encoder. It replaces every non-ASCII-alphanumeric character with `-`, including Windows drive colons, spaces, Unix dots and underscores. Claude's hashed suffix for paths whose encoded slug exceeds 200 characters remains unsupported.
+
+### Stored terminal marker coordinates
+
+OSC 133 command boundaries and OSC 7770 prompt rows are eviction-stable all-time rows. The PTY reader forwards these coordinates unchanged on IPC and HTTP/WS; it must not add the end-of-chunk history base.
+
+Claude launch settings apply to prompt and option-first launches. Shell wrappers use backend-captured installed CLI help to recognise subcommands and aliases, without probing again at launch. Help is unavailable unless its `Commands:` section has parseable command rows; empty, whitespace-only or truncated help therefore uses the complete recorded Claude help, including `auth` and advertised aliases. Rust publishes this fallback to the shell environment; generated wrappers also embed it for an unusable cached value. No separate fallback verb list is maintained. The exact hidden `remote-control` command also bypasses settings because its reported CLI refusal confirms that requirement. Hyphenated prompts retain settings. Explicit settings and bare mode remain authoritative.
+
+Headless PTY registration uses the requested terminal geometry without a minimum VT width. A same-size resize preserves that width.

@@ -44,9 +44,12 @@ class FakeWs {
 	}
 }
 
+const transports: WsTransport[] = [];
+
 function setup(connectionId?: string) {
 	const errors: unknown[] = [];
 	const t = new WsTransport("sess", connectionId);
+	transports.push(t);
 	t.onStreamError((e) => errors.push(e));
 	return { t, errors };
 }
@@ -59,7 +62,11 @@ beforeEach(() => {
 	setRemoteBaseUrlLookup((id) => (id === "conn" ? "http://remote.test:9876" : undefined));
 	setRemoteTokenLookup((id) => (id === "conn" ? "tok" : undefined));
 });
-afterEach(() => {
+afterEach(async () => {
+	// The fixture owns sockets deliberately left connecting by reconnect assertions.
+	for (const ws of FakeWs.all) ws.open();
+	for (const t of transports.splice(0)) t.unsubscribe();
+	await Promise.resolve();
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
 	setRemoteBaseUrlLookup(() => undefined);

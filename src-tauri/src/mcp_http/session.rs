@@ -185,14 +185,16 @@ pub(super) async fn enqueue_command(
     Json(body): Json<EnqueueCommandRequest>,
 ) -> impl IntoResponse {
     let outcome = tokio::task::spawn_blocking(move || {
-        crate::pty::enqueue_user_command(&state, &session_id, &body.text)
+        crate::pty::enqueue_user_command(
+            &state,
+            &session_id,
+            &body.text,
+            body.idempotency_key.as_deref(),
+        )
     })
     .await;
     match outcome {
-        Ok(Ok(outcome)) => (
-            StatusCode::OK,
-            Json(serde_json::json!({"typed": outcome.typed, "queued": outcome.queued})),
-        ),
+        Ok(Ok(outcome)) => (StatusCode::OK, Json(serde_json::json!(outcome))),
         Ok(Err(e)) if e == "Session not found" => session_not_found(),
         Ok(Err(e)) => (
             StatusCode::BAD_REQUEST,
@@ -628,11 +630,6 @@ pub(super) async fn close_session(
     }
 }
 
-/// Column floor for a freshly registered VT screen, kept from the shell-session
-/// path: the grid starts at least this wide whatever geometry the caller asked
-/// for, and `VtLogBuffer::resize` only ever widens `max_cols` from there.
-const NEW_SESSION_MIN_VT_COLS: u16 = 220;
-
 /// Wire a freshly spawned PTY into `AppState`: the session handle, its terminal
 /// alias, the spawn metrics, the output ring, the VT screen **at the geometry the
 /// PTY was actually opened with**, the idle clock, the grid-watch channel, and
@@ -682,11 +679,7 @@ pub(super) fn register_pty_session(
     );
     state.grid.vt_log_buffers.insert(
         session_id.to_string(),
-        Mutex::new(state.new_vt_log_buffer(
-            rows,
-            cols.max(NEW_SESSION_MIN_VT_COLS),
-            VT_LOG_BUFFER_CAPACITY,
-        )),
+        Mutex::new(state.new_vt_log_buffer(rows, cols, VT_LOG_BUFFER_CAPACITY)),
     );
     state
         .session_maps
@@ -2482,6 +2475,70 @@ mod tests {
         }
     }
 
+    /// Catches: retrying an earlier job after a later acceptance duplicates the
+    /// first job, or text-based deduplication silently drops the second job.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn interleaved_bg_job_retries_preserve_two_identical_commands() {
+        let state = super::super::tests::test_state();
+        let sid = "interleaved-bg-retries";
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_BUSY);
+        let bytes = crate::test_support::insert_recording_session(&state, sid);
+        for key in ["job-a", "job-b", "job-a", "job-b"] {
+            let request = serde_json::from_value(serde_json::json!({
+                "text": "BG DONE", "idempotencyKey": key
+            }))
+            .unwrap();
+            let response = enqueue_command(State(state.clone()), Path(sid.into()), Json(request))
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let queue = crate::pty::list_queued_commands(&state, sid);
+        assert_eq!(queue.len(), 2, "two jobs survive; neither retry appends");
+        assert!(queue.iter().all(|command| command.text == "BG DONE"));
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "busy composer is untouched"
+        );
+    }
+
+    /// Catches: a lost queue reply lets a retry append and submit the same wake again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn queue_accepted_before_reply_is_lost_is_not_submitted_twice_on_retry() {
+        let state = super::super::tests::test_state();
+        let sid = "lost-queue-reply";
+        crate::test_support::agent_session(&state, sid, crate::pty::SHELL_IDLE);
+        // No external CLI acceptance is asserted: observe the production PTY bytes.
+        let bytes = crate::test_support::insert_recording_session(&state, sid);
+        for attempt in 0..2 {
+            let request: EnqueueCommandRequest = serde_json::from_value(serde_json::json!({
+                "text": "BG DONE", "idempotencyKey": "bg-job-1"
+            }))
+            .unwrap();
+            let response = enqueue_command(State(state.clone()), Path(sid.into()), Json(request))
+                .await
+                .into_response();
+            assert_eq!(response.status(), StatusCode::OK);
+            if attempt == 0 {
+                // Acceptance happened; the caller never receives this response.
+                drop(response);
+            } else {
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(
+                    body,
+                    serde_json::json!({"accepted": true, "typed": false, "queued": 0})
+                );
+            }
+        }
+        assert!(crate::pty::list_queued_commands(&state, sid).is_empty());
+        assert_eq!(*bytes.lock().unwrap(), b"\x15BG DONE\r");
+    }
+
     /// A silent agent may use the full confirmation window, but the async
     /// request handler must yield its runtime worker during that window.
     #[cfg(unix)]
@@ -2516,6 +2573,7 @@ mod tests {
             Path(sid.into()),
             Json(EnqueueCommandRequest {
                 text: "wake".into(),
+                idempotency_key: None,
             }),
         )
         .await;
@@ -3887,6 +3945,50 @@ mod tests {
         let rx2 = tx.subscribe();
         let current = rx2.borrow().clone();
         assert_eq!(current, vec![10, 20, 30]);
+    }
+
+    /// Catches: registration floors the VT at 220 columns, and a no-op resize
+    /// preserves that incorrect width instead of the real headless PTY geometry.
+    #[tokio::test]
+    async fn headless_registration_and_same_size_resize_preserve_requested_width() {
+        let state = super::super::tests::test_state();
+        let (shell, _) = crate::test_support::host_shell();
+        let session_id = spawn_pty_session(
+            state.clone(),
+            shell.into(),
+            None,
+            24,
+            148,
+            None,
+            RequestedIdentity::default(),
+        )
+        .expect("create isolated geometry PTY");
+        assert_eq!(
+            state
+                .grid
+                .vt_log_buffers
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                .grid_columns(),
+            148,
+            "registration must preserve the requested width"
+        );
+        crate::pty::resize_session_off_thread(&state, session_id.clone(), 24, 148)
+            .await
+            .expect("same-size resize");
+        assert_eq!(
+            state
+                .grid
+                .vt_log_buffers
+                .get(&session_id)
+                .unwrap()
+                .lock()
+                .grid_columns(),
+            148,
+            "same-size resize must not preserve a stale 220-column floor"
+        );
+        crate::pty::close_pty_core(&state, &session_id, false);
     }
 
     /// Verifies that spawn_pty_session registers a grid_watch channel for the session,

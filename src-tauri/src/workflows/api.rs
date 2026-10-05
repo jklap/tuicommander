@@ -196,3 +196,37 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    /// Catches: policy mutations accepting a relative project path.
+    #[test]
+    fn policy_actions_reject_relative_projects() {
+        for action in [
+            WorkflowAction::CreateDraft {
+                name: "draft".into(),
+                kind: WorkflowKind::Plan,
+                graph: WorkflowGraph {
+                    nodes: vec![],
+                    edges: vec![],
+                },
+            },
+            WorkflowAction::UpdateChecks {
+                id: "draft".into(),
+                expected_revision: 1,
+                checks: vec![],
+            },
+            WorkflowAction::Publish {
+                id: "draft".into(),
+                expected_revision: 1,
+            },
+        ] {
+            assert_eq!(
+                definition_action("relative", action).unwrap_err(),
+                "project must be an absolute path"
+            );
+        }
+    }
+}

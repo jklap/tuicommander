@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRepositoryRefreshCoordinator } from "../../hooks/git/createRepositoryRefreshCoordinator";
 import { createWorktreeWorkflowCoordinator } from "../../hooks/git/createWorktreeWorkflowCoordinator";
 import { repoSettingsStore } from "../../stores/repoSettings";
@@ -90,4 +90,9 @@ describe("orphan removal, terminal close failure (#1188 round 3 critic)", () => 
 
 		expect(closeTerminal).not.toHaveBeenCalled();
 	});
+});
+
+afterEach(() => {
+	repositoriesStore._testCancelPendingSave();
+	for (const id of terminalsStore.getIds()) terminalsStore.remove(id);
 });

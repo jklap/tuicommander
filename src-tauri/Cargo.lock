@@ -558,29 +558,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-lc-rs"
-version = "1.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
-dependencies = [
- "aws-lc-sys",
- "zeroize",
-]
-
-[[package]]
-name = "aws-lc-sys"
-version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
-dependencies = [
- "cc",
- "cmake",
- "dunce",
- "fs_extra",
- "pkg-config",
-]
-
-[[package]]
 name = "axum"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1687,18 +1664,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "cron"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5dcd6f69605c2956916ce24e8af637b754964c9a83f4662d3a2361654cdba09"
-dependencies = [
- "chrono",
- "once_cell",
- "phf 0.11.3",
- "winnow 0.7.15",
 ]
 
 [[package]]
@@ -6895,7 +6860,6 @@ version = "0.11.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4bfc015262b9df63c8845072ce59068853ff5872180c2ce2f13038b970e560"
 dependencies = [
- "aws-lc-rs",
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
@@ -7217,7 +7181,6 @@ dependencies = [
  "mime",
  "percent-encoding",
  "pin-project-lite",
- "quinn",
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
@@ -7399,7 +7362,6 @@ version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
- "aws-lc-rs",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -7463,7 +7425,6 @@ version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
- "aws-lc-rs",
  "ring",
  "rustls-pki-types",
  "untrusted",
@@ -9710,6 +9671,7 @@ dependencies = [
  "parking_lot",
  "rand 0.10.2",
  "regex",
+ "rodio",
  "serde_json",
  "tempfile",
  "tracing",
@@ -9777,7 +9739,6 @@ name = "tuic-ipc"
 version = "1.8.0"
 dependencies = [
  "sha2 0.11.0",
- "tuic-test-support",
 ]
 
 [[package]]
@@ -9796,7 +9757,6 @@ dependencies = [
  "tuic-ansi",
  "tuic-test-support",
  "unicode-width 0.2.2",
- "vte",
 ]
 
 [[package]]
@@ -9832,7 +9792,7 @@ dependencies = [
  "chromey",
  "chrono",
  "console-subscriber",
- "cron",
+ "ctor",
  "cuid2",
  "dashmap",
  "dirs",
@@ -9840,7 +9800,6 @@ dependencies = [
  "flate2",
  "futures-util",
  "gh-token",
- "gix",
  "glob",
  "grep-matcher",
  "grep-regex",
@@ -9849,9 +9808,7 @@ dependencies = [
  "hkdf 0.13.0",
  "ignore",
  "include_dir",
- "jsonc-parser",
  "keepawake",
- "keyring",
  "lazy_static",
  "libc",
  "mac-notification-sys",
@@ -9859,7 +9816,6 @@ dependencies = [
  "mockito",
  "moka",
  "notify",
- "notify-rust",
  "oauth2",
  "objc2",
  "objc2-app-kit",
@@ -11254,9 +11210,6 @@ name = "winnow"
 version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "winnow"

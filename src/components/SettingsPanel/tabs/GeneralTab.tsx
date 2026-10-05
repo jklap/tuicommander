@@ -10,6 +10,7 @@ import { openDialog } from "../../../utils/nativeDialog";
 import { ExpertSetting } from "../ExpertSetting";
 import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
+import { SETTINGS_SECTION_EGO } from "../sections";
 
 interface CliStatus {
 	installed: boolean;
@@ -418,7 +419,7 @@ export const GeneralTab: Component = () => {
 				</div>
 			</Show>
 
-			<h3>
+			<h3 id={SETTINGS_SECTION_EGO}>
 				{t("general.heading.ego", "ego")}
 				<span class={s.infoBadge}>
 					?

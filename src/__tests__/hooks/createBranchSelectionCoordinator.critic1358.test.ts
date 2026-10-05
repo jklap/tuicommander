@@ -22,6 +22,7 @@ describe("branch restore with suspended tabs (critic 1358)", () => {
 	let terminalsStore: typeof import("../../stores/terminals").terminalsStore;
 
 	beforeEach(async () => {
+		vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
 		vi.resetModules();
 		mockInvoke.mockReset().mockResolvedValue(undefined);
 		vi.doMock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
@@ -31,7 +32,9 @@ describe("branch restore with suspended tabs (critic 1358)", () => {
 		terminalsStore = (await import("../../stores/terminals")).terminalsStore;
 		repositoriesStore._testSetHydrated(true);
 	});
-	afterEach(() => {
+	afterEach(async () => {
+		await vi.runAllTimersAsync();
+		vi.useRealTimers();
 		repositoriesStore._testCancelPendingSave();
 	});
 

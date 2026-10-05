@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { terminalsStore } from "../../stores/terminals";
 import { resumeTerminal, suspendRefusal, suspendTerminal } from "../../utils/suspendTerminal";
 import { makeTerminal, testInScope } from "../helpers/store";
@@ -204,4 +204,8 @@ describe("resumeTerminal", () => {
 			expect(terminalsStore.get(id)?.pendingInitCommand).toBeNull();
 		});
 	});
+});
+
+afterEach(() => {
+	terminalsStore._testCancelPendingTimers();
 });

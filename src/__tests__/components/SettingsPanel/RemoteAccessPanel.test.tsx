@@ -146,16 +146,11 @@ describe("RemoteAccessPanel", () => {
 			});
 		}
 
-		const EXPERT_LABELS = [
-			"Port",
-			"Session Token Duration",
-			"Enable IPv6 (dual-stack)",
-			"Allow LAN access without authentication",
-		];
+		const EXPERT_LABELS = ["Port", "Session Token Duration", "Enable IPv6 (dual-stack)"];
 		const shown = (view: ReturnType<typeof render>) =>
 			EXPERT_LABELS.filter((label) => view.queryByText(label) !== null);
 
-		it("hides Port, Token duration, IPv6 and LAN bypass at their defaults", async () => {
+		it("hides Port, Token duration and IPv6 at their defaults", async () => {
 			const view = await renderEnabled();
 			expect(shown(view)).toEqual([]);
 			// The basic credentials stay.
@@ -169,13 +164,22 @@ describe("RemoteAccessPanel", () => {
 				[{ port: 9999 }, {}, "Port"],
 				[{}, { session_token_duration_secs: 3600 }, "Session Token Duration"],
 				[{ ipv6_enabled: true }, {}, "Enable IPv6 (dual-stack)"],
-				[{}, { lan_auth_bypass: true }, "Allow LAN access without authentication"],
 			];
 			for (const [server, auth, label] of cases) {
 				const view = await renderEnabled(server, auth);
 				expect(shown(view)).toEqual([label]);
 				view.unmount();
 			}
+		});
+
+		it("does not offer the retired LAN bypass from a saved config in expert mode", async () => {
+			uiStore.setSettingsExpertMode(true);
+			const view = await renderEnabled({}, { lan_auth_bypass: true });
+			expect(view.queryByText("Allow LAN access without authentication")).toBeNull();
+			expect(view.getByText("Username")).toBeDefined();
+			expect(view.getByText("Password")).toBeDefined();
+			expect(updateAppConfig).not.toHaveBeenCalled();
+			view.unmount();
 		});
 
 		it("shows every control at its default in expert mode", async () => {
