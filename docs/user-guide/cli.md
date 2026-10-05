@@ -164,6 +164,8 @@ on macOS, Linux, and Windows.
 tuic bg "$HOME/Gits/.tmp/build.log" -- make check
 ```
 
+On Windows, the detached runner does not inherit the launcher's input or output pipes. Capturing the launcher output therefore returns before the background command completes.
+
 Each background runner generates one completion key and reuses it on queue
 retries. The backend remembers the last 128 accepted keys per live terminal,
 so a lost reply does not enqueue the same completion again within that window.

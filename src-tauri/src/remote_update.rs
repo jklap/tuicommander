@@ -677,8 +677,13 @@ mod tests {
             target: "t".to_string(),
             sha256: "a".repeat(64),
         };
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(100))
+            .no_proxy()
+            .build()
+            .unwrap();
         let error = send_binary_upload(
-            &reqwest::Client::new(),
+            &client,
             &format!("http://127.0.0.1:{port}"),
             "super-secret-token",
             &build,
