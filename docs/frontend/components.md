@@ -233,7 +233,10 @@ input-listener cleanup. These controllers do not use reactive state.
 
 ### Sidebar (`Sidebar/`)
 
-Repository tree with branch management.
+Repository tree with branch management. Touch branch rows reveal their existing
+actions in a full-height tray after a horizontal left swipe. A Sidebar-owned
+row identity permits one open tray across repositories; vertical scrolling and
+mouse interactions keep their existing behavior.
 
 Branch rows keep the status icon separate from the always-visible agents disclosure button. Clicking status selects the workspace; the chevron toggles its agents.
 

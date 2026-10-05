@@ -1,4 +1,4 @@
-import { type Component, createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
 import { togglePanel } from "../../panelRouter";
 import { githubStore } from "../../stores/github";
@@ -175,6 +175,13 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	const [prDetailTarget, setPrDetailTarget] = createSignal<{ repoPath: string; branch: string } | null>(null);
 	// Tracks whether the popover was opened by a manual badge click (vs auto-show)
 	const [prDetailIsManual, setPrDetailIsManual] = createSignal(false);
+	const [openSwipeRow, setOpenSwipeRow] = createSignal<string | null>(null);
+	const closeSwipeOutside = (e: PointerEvent) => {
+		const row = (e.target as Element).closest?.("[data-swipe-row]");
+		if (row?.getAttribute("data-swipe-row") !== openSwipeRow()) setOpenSwipeRow(null);
+	};
+	document.addEventListener("pointerdown", closeSwipeOutside, true);
+	onCleanup(() => document.removeEventListener("pointerdown", closeSwipeOutside, true));
 
 	// Parked repos popover state
 	const [parkedPopoverVisible, setParkedPopoverVisible] = createSignal(false);
@@ -306,6 +313,8 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 
 		return (
 			<RepoSection
+				openSwipeRow={openSwipeRow()}
+				onSwipeRowChange={setOpenSwipeRow}
 				repo={repo}
 				nameColor={nameColor()}
 				isDragging={drag.draggedRepoPath() === repo.path}
