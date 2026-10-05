@@ -631,6 +631,7 @@
   transition: background 0.1s;
   position: relative;
   min-height: var(--row-h);
+  touch-action: pan-y;
 }
 
 @media (hover: hover) {
@@ -1173,21 +1174,9 @@
   }
 }
 
-/* No hover on touch: the actions (+ with its long-press agent list) stay visible. */
+/* Touch actions live in the swipe tray instead of crowding the row. */
 @media (hover: none) {
-  .branchActions {
-    max-width: 68px;
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .sidebar[data-density="rich"] .branchActions {
-    max-width: 100px;
-  }
-
-  .branchActions .branchMoreBtn {
-    display: flex;
-  }
+  .branchActions { display: none; }
 
   /* Rich rows wrap, and the branch name is the row's identifier: it keeps line 1
      (name, PR badge) to itself and the PR title keeps line 2. The detail block
@@ -2450,4 +2439,57 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+
+.branchSwipeRow {
+  display: contents;
+  position: relative;
+  --swipe-width: 152px;
+}
+.branchSwipeRow:has(.branchSwipeDelete) { --swipe-width: 208px; }
+.branchSwipeRow[data-touch="true"] {
+  display: block;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  touch-action: pan-y;
+}
+.branchSwipeRow[data-touch="true"] .branchActions { display: none; }
+.branchSwipeRow > .branchItem { transition: background 0.1s, transform 0.15s ease; }
+.branchSwipeOpen > .branchItem { transform: translateX(calc(-1 * var(--swipe-width))); }
+.branchSwipeOpen > .branchItem:not(.active) { background: var(--bg-secondary); }
+.branchSwipeActions {
+  display: flex;
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: var(--swipe-width);
+  gap: 0;
+}
+.sidebar[data-density] .branchSwipeActions > button {
+  display: flex;
+  flex: 1;
+  width: auto;
+  height: auto;
+  border-radius: 0;
+  min-width: 44px;
+}
+.branchSwipeActions > .branchMoreBtn {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font-size: var(--font-sm);
+}
+.branchSwipeActions > .branchSwipeDelete {
+  background: var(--error);
+  color: var(--text-on-error);
+}
+@media (hover: none) {
+  .branchSwipeRow {
+    display: block;
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    touch-action: pan-y;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .branchSwipeRow > .branchItem { transition: none; }
 }

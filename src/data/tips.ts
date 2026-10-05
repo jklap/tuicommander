@@ -10,6 +10,11 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Touch Branch Actions",
+		description: "Swipe a sidebar branch left for More, Add Terminal, and worktree removal. Hold + to choose an agent.",
+		shortcut: null,
+	},
+	{
 		feature: "Private Secret Forms",
 		description:
 			"Ask an agent to request named credentials in a private form. Review the exact command before allowing it to use them.",

@@ -230,6 +230,165 @@ describe("Sidebar", () => {
 		vi.useRealTimers();
 	});
 
+	describe("touch swipe actions", () => {
+		const setup = (overrides: Partial<Parameters<typeof Sidebar>[0]> = {}) => {
+			const branch = (id: string, path: string | null, isMain = false) => ({
+				workspaceId: id,
+				branchName: id,
+				worktreePath: path,
+				isMain,
+				terminals: [],
+				additions: 0,
+				deletions: 0,
+			});
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: branch("main", "/repo1", true),
+						feat: branch("feat", "/repo1-feat"),
+						other: branch("other", "/repo1-other"),
+						root: branch("root", "/repo1"),
+						plain: branch("plain", null),
+					},
+				}),
+			});
+			return render(() => <Sidebar {...defaultProps(overrides)} />);
+		};
+		const row = (container: HTMLElement, id: string) =>
+			Array.from(container.querySelectorAll<HTMLElement>("[data-swipe-row]")).find(
+				(el) => el.dataset.swipeRow === JSON.stringify(["/repo1", id]),
+			)!;
+		const pointer = (el: Element, type: string, x: number, y: number, pointerType = "touch") => {
+			const event = new Event(type, { bubbles: true, cancelable: true });
+			Object.assign(event, { pointerType, pointerId: 1, clientX: x, clientY: y, button: 0 });
+			fireEvent(el, event);
+		};
+		const swipe = (el: Element, dx = -60, dy = 0, kind = "touch") => {
+			pointer(el, "pointerdown", 100, 50, kind);
+			pointer(el, "pointermove", 100 + dx, 50 + dy, kind);
+			pointer(el, "pointerup", 100 + dx, 50 + dy, kind);
+		};
+
+		it("touch_swipe_reveals_actions", () => {
+			const onBranchSelect = vi.fn();
+			const { container } = setup({ onBranchSelect });
+			const target = row(container, "feat");
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			swipe(target);
+			expect(target.querySelector(".branchSwipeActions button[aria-label='Branch options']")).not.toBeNull();
+			expect(target.querySelector(".branchSwipeActions button[aria-label='Add terminal']")).not.toBeNull();
+			fireEvent.click(target.querySelector(".branchItem")!);
+			expect(target.querySelector(".branchSwipeActions")).not.toBeNull();
+			expect(onBranchSelect).not.toHaveBeenCalled();
+		});
+
+		it("short_swipes_and_cancelled_vertical_gestures_do_not_open_actions", () => {
+			// Catches: jitter or a browser-cancelled scroll revealing destructive actions.
+			const { container } = setup();
+			const target = row(container, "feat");
+			swipe(target, -29);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			pointer(target, "pointerdown", 100, 50);
+			pointer(target, "pointercancel", 100, 50);
+			pointer(target, "pointermove", 30, 50);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+		});
+
+		it("vertical_drag_keeps_actions_closed", () => {
+			const { container } = setup();
+			const target = row(container, "feat");
+			swipe(target, -15, 60);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			pointer(target, "pointerdown", 100, 50);
+			pointer(target, "pointermove", 98, 75);
+			pointer(target, "pointermove", 30, 80);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+		});
+
+		it("delete_only_removable_worktrees", () => {
+			const onRemoveBranch = vi.fn();
+			const { container } = setup({ onRemoveBranch });
+			for (const id of ["main", "root", "plain"]) {
+				swipe(row(container, id));
+				expect(row(container, id).querySelector(".branchSwipeActions .branchRemoveBtn")).toBeNull();
+			}
+			const target = row(container, "feat");
+			swipe(target);
+			fireEvent.click(target.querySelector(".branchSwipeActions .branchRemoveBtn")!);
+			expect(onRemoveBranch).toHaveBeenCalledExactlyOnceWith("/repo1", "feat");
+		});
+
+		it("second_row_closes_first", () => {
+			const { container } = setup();
+			swipe(row(container, "feat"));
+			swipe(row(container, "other"));
+			expect(row(container, "feat").querySelector(".branchSwipeActions")).toBeNull();
+			expect(row(container, "other").querySelector(".branchSwipeActions")).not.toBeNull();
+		});
+
+		it("mouse_pointer_never_swipes", () => {
+			const { container } = setup();
+			swipe(row(container, "feat"), -60, 0, "mouse");
+			expect(container.querySelector(".branchSwipeActions")).toBeNull();
+		});
+
+		it("right_swipe_row_tap_and_outside_tap_dismiss_actions", () => {
+			// Catches: a revealed tray trapping the row open after dismissal gestures.
+			const { container } = setup();
+			const target = row(container, "feat");
+			swipe(target);
+			swipe(target, 60);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			swipe(target);
+			pointer(target, "pointerdown", 100, 50);
+			pointer(target, "pointerup", 100, 50);
+			fireEvent.click(target.querySelector(".branchItem")!);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			swipe(target);
+			pointer(document.body, "pointerdown", 0, 0);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+		});
+
+		it("tray_add_and_long_press_keep_existing_handlers", () => {
+			// Catches: the swipe tray losing add-terminal or long-press agent launch.
+			const onAddTerminal = vi.fn();
+			const launch = vi.fn();
+			const { container } = setup({
+				onAddTerminal,
+				buildAgentMenuItems: () => [{ label: "Launch test agent", action: launch }],
+			});
+			const target = row(container, "feat");
+			swipe(target);
+			fireEvent.click(target.querySelector(".branchSwipeActions .branchAddBtn")!);
+			expect(onAddTerminal).toHaveBeenCalledExactlyOnceWith("/repo1", "feat");
+			swipe(target);
+			const add = target.querySelector(".branchSwipeActions .branchAddBtn")!;
+			pointer(add, "pointerdown", 100, 50);
+			vi.advanceTimersByTime(500);
+			pointer(add, "pointerup", 100, 50);
+			fireEvent.mouseDown(add);
+			fireEvent.click(add);
+			expect(onAddTerminal).toHaveBeenCalledTimes(1);
+			const menuItem = Array.from(document.querySelectorAll(".menu .item")).find((el) =>
+				el.textContent?.includes("Launch test agent"),
+			);
+			expect(menuItem).toBeDefined();
+			fireEvent.click(menuItem!);
+			expect(launch).toHaveBeenCalledOnce();
+		});
+
+		it("removing_tray_delete_stays_disabled", () => {
+			// Catches: the touch tray enabling deletion during an ongoing removal.
+			const onRemoveBranch = vi.fn();
+			const { container } = setup({ onRemoveBranch, removingBranches: new Set(["/repo1::feat"]) });
+			swipe(row(container, "feat"));
+			const remove = row(container, "feat").querySelector<HTMLButtonElement>(".branchSwipeActions .branchRemoveBtn")!;
+			expect(remove.disabled).toBe(true);
+			fireEvent.click(remove);
+			expect(onRemoveBranch).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("empty state", () => {
 		it("renders 'No repositories' and 'Add Repository' button when no repos exist", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
