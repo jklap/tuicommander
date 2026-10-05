@@ -478,3 +478,6 @@ mod controls;
 
 #[path = "plan_dispatch.rs"]
 mod plan_dispatch;
+
+#[path = "critic_de.rs"]
+mod critic_de;
