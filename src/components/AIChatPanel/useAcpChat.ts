@@ -151,7 +151,7 @@ export function createAcpChat(
 			rows.push(...page.sessions.filter((session) => session.cwd === target));
 			cursor = page.nextCursor || undefined;
 		} while (cursor);
-		setListedSessions(rows.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "")));
+		setListedSessions(rows);
 	}
 
 	/** Show a tab or listed session. Only one not already attached needs a
@@ -453,6 +453,9 @@ export function createAcpChat(
 			}
 			toastsStore.add("Conversation compacted", "Continuing in the compacted conversation", "info");
 			await selectSession(compacted.targetSessionId);
+			const target = root();
+			if (target && connection()?.capabilities?.list)
+				await guard("listing conversations", () => refreshSessions(current.id, target));
 		},
 
 		/** Branch this conversation at its tip into a new tab; the parent keeps its own. */
@@ -467,6 +470,8 @@ export function createAcpChat(
 			);
 			if (child === null) return;
 			await selectSession(child);
+			if (connection()?.capabilities?.list)
+				await guard("listing conversations", () => refreshSessions(current.id, target));
 		},
 
 		async setOption(configId: string, value: AcpSessionConfigOptionValue): Promise<void> {

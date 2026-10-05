@@ -524,6 +524,23 @@ impl AcpClientManager {
         .await
     }
 
+    /// The picker needs the complete ancestry before it can order paginated rows.
+    pub async fn list_sessions_for_display(
+        &self,
+        connection_id: AcpConnectionId,
+        mut request: v1::ListSessionsRequest,
+    ) -> Result<v1::ListSessionsResponse, AcpClientError> {
+        let mut response = self.list_sessions(connection_id, request.clone()).await?;
+        while let Some(cursor) = response.next_cursor.take() {
+            request.cursor = Some(cursor);
+            let page = self.list_sessions(connection_id, request.clone()).await?;
+            response.sessions.extend(page.sessions);
+            response.next_cursor = page.next_cursor;
+        }
+        response.sessions = super::session_tree(response.sessions);
+        Ok(response)
+    }
+
     /// Start a turn and get back its id, not its outcome.
     ///
     /// The outcome is an event, because a turn outlives the call that started

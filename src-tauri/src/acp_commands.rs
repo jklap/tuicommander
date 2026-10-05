@@ -316,7 +316,10 @@ pub(crate) async fn acp_session_list(
     let mut request = v1::ListSessionsRequest::new();
     request.cwd = cwd;
     request.cursor = cursor;
-    state.acp.list_sessions(connection_id, request).await
+    state
+        .acp
+        .list_sessions_for_display(connection_id, request)
+        .await
 }
 
 #[cfg(feature = "desktop")]

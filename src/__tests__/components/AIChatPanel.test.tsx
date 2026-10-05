@@ -3142,3 +3142,43 @@ it("renders inherited replay above a boundary and child turns below", async () =
 	expect(content.indexOf("Child question")).toBeGreaterThan(content.indexOf("This conversation"));
 	expect(content).toContain("Child answer");
 });
+
+describe("AIChatPanel: lineage picker", () => {
+	// Catches: refreshSessions resorting the backend tree or discarding its indentation/deleted rows.
+	it("keeps two-level ancestry and a disabled deleted parent in the picker", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{
+					sessionId: "root",
+					cwd: CHAT_ROOT,
+					title: "Root",
+					updatedAt: "2026-01-01",
+					_meta: { tuicommander: { lineageDepth: 0 } },
+				},
+				{
+					sessionId: "deleted",
+					cwd: CHAT_ROOT,
+					title: "Deleted conversation",
+					_meta: { tuicommander: { lineageDepth: 1, deleted: true } },
+				},
+				{
+					sessionId: "grandchild",
+					cwd: CHAT_ROOT,
+					title: "Grandchild",
+					updatedAt: "2026-10-05",
+					_meta: {
+						ego: { lineage: { kind: "fork", sourceSessionId: "deleted", rootSessionId: "root", sourceDeleted: true } },
+						tuicommander: { lineageDepth: 2 },
+					},
+				},
+			],
+		});
+		const { container } = await renderPanel();
+		await settle();
+		const rows = [...container.querySelectorAll<HTMLOptionElement>('select[title="Conversation"] option')];
+		expect(rows.map((row) => row.value)).toEqual(["root", "deleted", "grandchild"]);
+		expect(rows[1].disabled).toBe(true);
+		expect(rows[2].textContent).toContain("    ");
+		expect(rows[2].textContent).toContain("Grandchild");
+	});
+});

@@ -324,7 +324,12 @@ async fn session_list(
     let mut request = v1::ListSessionsRequest::new();
     request.cwd = query.cwd;
     request.cursor = query.cursor;
-    answer(state.acp.list_sessions(connection_id, request).await)
+    answer(
+        state
+            .acp
+            .list_sessions_for_display(connection_id, request)
+            .await,
+    )
 }
 
 /// The three ways to attach differ only in the kind, so they share one body.

@@ -37,6 +37,18 @@ export interface AcpListedSession {
 	cwd: string;
 	title?: string | null;
 	updatedAt?: string | null;
+	_meta?: {
+		ego?: {
+			lineage?: {
+				kind?: string;
+				sourceSessionId: string;
+				rootSessionId?: string;
+				atMessageId?: string;
+				sourceDeleted?: boolean;
+			};
+		};
+		tuicommander?: { lineageDepth?: number; deleted?: boolean };
+	};
 }
 
 export interface AcpSessionList {
