@@ -168,3 +168,15 @@ When a repo is active, the bottom of the sidebar shows quick action buttons:
 - **Stash** — `git stash`
 
 For more git operations (staging, commit, push, pull, stash, blame, history), use the Git Panel (`Cmd+Shift+D`).
+
+
+### Touch Branch Actions
+
+Swipe a branch row left to reveal **More**, **+**, and, for removable linked
+worktrees, a red remove button. **More** opens the branch menu. Tap **+** to
+add a terminal, or hold it to choose an agent. Removal uses the existing
+confirmation dialog and is disabled while removal is in progress.
+
+Swipe right, tap the row, or tap elsewhere to close the actions. Opening another
+row closes the previous one. Vertical swipes continue to scroll the sidebar.
+Mouse and trackpad controls keep their existing hover behavior.
