@@ -277,6 +277,11 @@ pub fn render_plan_prompt(
     })
 }
 
+/// Stable digest shared by the review prompt and Judge policy.
+pub(crate) fn review_artifact_digest(commit: &str, tree: &str) -> String {
+    hex::encode(Sha256::digest(format!("{commit}:{tree}").as_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,9 +541,4 @@ mod tests {
         assert_eq!(package.role, AgentRole::Coordinator);
         assert_eq!(package.prompt_sha256.len(), 64);
     }
-}
-
-/// Stable digest shared by the review prompt and Judge policy.
-pub(crate) fn review_artifact_digest(commit: &str, tree: &str) -> String {
-    hex::encode(Sha256::digest(format!("{commit}:{tree}").as_bytes()))
 }
