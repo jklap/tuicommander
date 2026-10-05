@@ -26,6 +26,10 @@ Gemini currently defaults to the primary screen (`ui.useAlternateBuffer: false`)
 
 To allow alternate screen, turn off **Prevent alternate screen** for that agent. The preference applies to new TUIC agent launches and new shells. An explicit `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` value in a Claude command's environment retains precedence.
 
+### Startup updates for managed Codex peers
+
+Managed MCP Codex spawns pass `-c check_for_update_on_startup=false` so an available update does not park a child at the Update now / Skip prompt. This applies to the launch; it does not change the user's saved Codex configuration. Real-binary update-trigger and composer checks are tracked in `to-test.md` (1373-85a3).
+
 ### Workspace trust for managed spawns
 
 **Accept workspace trust for managed spawns** is on by default for Claude Code and Codex in Settings → AI → Agents. When an agent starts another agent through TUICommander's `agent spawn` action in a new folder, the child starts without waiting for a workspace trust answer. Codex receives a trust setting for that one launch and folder, including when a custom launcher forwards its arguments to Codex. TUICommander answers Claude Code's initial trust picker only when it shows the expected question with **No, exit** selected. Neither path edits the CLI's saved trust configuration.
