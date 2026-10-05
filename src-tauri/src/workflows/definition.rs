@@ -286,6 +286,33 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
     Ok(())
 }
 
+/// A serial runtime cannot execute plan dispatch or deterministic gates yet.
+pub(crate) fn validate_runtime_nodes(
+    graph: &WorkflowGraph,
+    kind: WorkflowKind,
+) -> Result<(), String> {
+    for node in &graph.nodes {
+        if matches!(
+            node.kind,
+            NodeKind::Gate | NodeKind::CreateStories | NodeKind::StoryDispatch { .. }
+        ) || (kind == WorkflowKind::Plan && matches!(node.kind, NodeKind::Agent { .. }))
+            || matches!(
+                node.kind,
+                NodeKind::Agent {
+                    role: AgentRole::Coordinator | AgentRole::Planner,
+                    ..
+                }
+            )
+        {
+            return Err(format!(
+                "workflow node '{}' is not executable yet; keep this graph as a draft",
+                node.id
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validate settings required by the versioned execution contract.
 /// Legacy definitions remain readable, but need a new revision to execute.
 pub fn validate_executable_graph(

@@ -155,6 +155,7 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             if matches!(
                 command,
                 RunCommand::ExpireDeadline
+                    | RunCommand::StartGraphAgent { .. }
                     | RunCommand::Graph { .. }
                     | RunCommand::BindAgent { .. }
                     | RunCommand::ReportBoundAttempt { .. }

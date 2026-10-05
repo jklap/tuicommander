@@ -56,3 +56,9 @@ A workflow plan reaches Done after all stories are approved and their integratio
 The graph runtime is being delivered in stages. The first stage stores replayable graph positions and requires explicit pause destinations and final checks for executable definitions, but does not automatically run the Designer's graph. Existing pre-contract runs remain available for inspection and cancellation; resuming one requires starting a new run instead. New record-only runs retain the existing explicit command controls during rollout. Fork/all-Join settings and automatic execution are not yet Designer capabilities.
 
 The daemon executor now owns recovery and duration timers under an OS run-database lock. Reads never recover live work, and a non-owner daemon refuses run mutations. Graph resume uses `resume_graph {execution_id,activation_id,resolution}` with an explicit pending activation; status-only resume cannot bypass graph position. Graph start controls, Agent effects and delivery policy remain unavailable until their later slices.
+
+## Workflow graph rollout
+
+The internal daemon executor follows published serial Agent, Judge, Loop, Pause, Notify and exclusive Join nodes. It needs run profiles named sol (implementation) and sonnet (review/validation). Missing profiles and failed effects pause with a repository progress notice. Manual pause time does not consume active duration. Resume resolves the pinned target without resetting repair limits.
+
+The Designer refuses new publications containing unsupported Gate or plan create/dispatch/coordinator nodes. Keep those graphs as drafts. Existing built-in publications remain readable; public graph start controls and full Resolve plan execution are still in development. A completed graph does not approve or merge a story by itself.

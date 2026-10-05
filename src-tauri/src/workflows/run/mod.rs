@@ -1,5 +1,5 @@
 mod api;
-mod check;
+pub(super) mod check;
 pub mod graph;
 mod model;
 mod reducer;

@@ -117,6 +117,8 @@ impl RunStore {
             status: RunStatus::Running,
             sequence: 0,
             started_ms: now_ms(),
+            paused_since_ms: None,
+            paused_duration_ms: 0,
             limits: request.limits.clone(),
             loops: 0,
             story_creations: 0,
