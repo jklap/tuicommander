@@ -4692,3 +4692,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] AI Chat message fork: after rebuilding/restarting Rust, fork the second of four ego replies and check the child cutoff while the parent retains all replies. The backend capability and metadata changes require a manual restart.
 
 - [ ] After Boss restarts the Rust backend, verify the internal serial workflow executor with isolated headless runs and configured sol/sonnet profiles: bound reports, Judge edges, retained repair limits, durable Notify and pause/resume duration. Public graph start controls and Resolve plan dispatch are outside this slice. No desktop launch was performed by the implementation peer.
+
+- [ ] Workflow slice F: after Boss restarts the Rust backend, start a published Ready story in Plans and Stories; inspect decision/pause details and later event pages, answer input, explicitly resolve a graph pause, pause/cancel. Plan start must show unavailable until slice E is integrated. Browser screenshot/layout verification is owed: the screen was locked on 2026-10-06; no desktop instance was launched.

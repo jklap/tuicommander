@@ -367,6 +367,39 @@ describe("transport", () => {
 			});
 		});
 
+		it("preserves pinned graph start and recovery payloads through HTTP", () => {
+			// Catches: graph controls being dropped or reshaped on the browser transport.
+			for (const action of [
+				{
+					action: "start_graph",
+					target: { type: "story", id: "story-1" },
+					expected_revision: 3,
+					definition_id: "flow-1",
+					definition_revision: 2,
+					request_id: "start-key",
+				},
+				{
+					action: "command",
+					run_id: "run-1",
+					command_id: "resume-key",
+					expected_sequence: 4,
+					command: { action: "resume_graph", execution_id: "root", activation_id: "a3", resolution: "Reviewed" },
+				},
+				{
+					action: "command",
+					run_id: "run-1",
+					command_id: "cancel-key",
+					expected_sequence: 4,
+					command: { action: "cancel" },
+				},
+			])
+				expect(mapCommandToHttp("workflow_run_action", { project: "/repo a", action })).toEqual({
+					method: "POST",
+					path: "/workflows/run/action?path=%2Frepo%20a",
+					body: action,
+				});
+		});
+
 		it("maps typed project progress controls", () => {
 			// The whole Progress surface: record, list, delete, and the divider.
 			// Every control the rejected design added — status, pause, resume,

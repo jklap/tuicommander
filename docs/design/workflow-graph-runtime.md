@@ -289,6 +289,10 @@ ResumeGraph records a bounded explicit resolution and names the actual pending a
 
 ### Slice C capability boundary (2026-10-05)
 
-Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Approval automation, plan dispatch, public graph start controls and explicit integration remain later slices; graph completion alone never closes a native story.
+Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Slice F supplies public story graph starts and history controls. Approval automation, plan dispatch and explicit integration remain later slices; graph completion alone never closes a native story.
 
 Resolve plan create/dispatch/replan remains slice E. Independent approval automation remains D. Historical seeded definitions remain record-only; executable root start checks capabilities.
+
+### Slice F capability boundary (2026-10-06)
+
+Public `start_graph` reaches the owning daemon over the existing IPC/HTTP action route and generated `workflow_run` MCP schema. Story starts pin publications and request IDs; run history shows graph positions, decision evidence, pause targets and complete paged event payloads. Graph resume is explicit and sequence-fenced. Plan dispatch is absent from this branch, so its UI control remains visibly unavailable. Visual verification is owed while the screen is locked; no browser/E2E pass is claimed.

@@ -9,6 +9,7 @@ use crate::workflows::{
 use std::sync::Arc;
 
 mod critic_c;
+mod parity;
 
 fn fixture() -> (
     tempfile::TempDir,
