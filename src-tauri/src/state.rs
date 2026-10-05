@@ -10423,10 +10423,6 @@ mod tests {
 
     // Real PTY tests keep the private drain_pty harness here.
 
-    fn make_vt_log() -> VtLogBuffer {
-        VtLogBuffer::new(24, 80, 1000)
-    }
-
     /// Helper: extract plain text from log lines for easy assertion.
     fn log_texts(buf: &VtLogBuffer) -> Vec<String> {
         buf.lines().iter().map(|ll| ll.text()).collect()
