@@ -624,6 +624,10 @@ When intent markers are enabled for the connecting agent, initialize instruction
 
 ### Two instruction surfaces, and which one owns a rule
 
+Initialize instruction prose stays within the existing 1,600-byte classic and
+1,664-byte collapsed empty-state budgets. Compact wording preserves the answer
+marker, urgent mail and progress reporting rules.
+
 TUIC supplies protocol instructions and tool descriptions on different wire
 surfaces. Client receipt does not prove that the model can read either surface
 on its first turn. Deferred tool discovery can expose them later.
