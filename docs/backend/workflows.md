@@ -78,3 +78,8 @@ Loop keeps its published node cap across pause/resume. Exclusive Join consumes t
 The shared IPC/HTTP/MCP publication service visibly refuses Gate, CreateStories, StoryDispatch and plan Agent nodes, plus unsupported story Agent roles. They remain editable drafts; historical seeded publications remain readable and are refused by executable root start. Internal definition-store writes retain their record-only role for legacy seed/ledger consumers. Executable publication requires final checks and pinned Pause targets. Fork/all-Join remains unavailable. Resolve plan create/dispatch/replan, automatic approval, integration policy and public graph start controls belong to later slices. Graph End records graph completion, not story or plan delivery.
 
 Snapshots add pausedSinceMs and pausedDurationMs to the same JSON projection. Historical snapshots without these fields recover timing from the existing event ledger; historical deadline-expiry events remain replayable. Paused time never replenishes an exhausted active budget.
+
+
+### Workflow story policy (slice D)
+
+The daemon runs pinned deterministic checks before accepting an independent reviewer approval. Native approval history preserves the reviewer actor and revision; the run retains the reviewed artifact and check receipts. A workflow implementer cannot approve its story after exit or claim release. Integration remains an explicit operator action.

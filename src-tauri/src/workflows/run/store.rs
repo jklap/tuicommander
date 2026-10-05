@@ -27,6 +27,7 @@ pub struct RunStore {
 /// records explicit graph-root targets; older binaries must refuse that contract.
 const RUN_STORE_SCHEMA_VERSION: i64 = 3;
 
+mod approval;
 mod runtime_start;
 pub(crate) use runtime_start::GraphStartRequest;
 
@@ -268,6 +269,43 @@ impl RunStore {
             .map_err(|e| format!("commit plan run start: {e}"))?;
         StoryStore::open()?.reconcile_integrated_dependencies(plan_id)?;
         Ok(snapshot)
+    }
+
+    /// Retain role authority after reports, exit, cancellation and manual claim release.
+    pub(crate) fn is_story_implementer(
+        &self,
+        story_id: &str,
+        session: &str,
+    ) -> Result<bool, String> {
+        let conn = self.connect()?;
+        let mut stmt = conn
+            .prepare("SELECT snapshot_json FROM workflow_runs")
+            .map_err(|e| format!("read workflow role authority: {e}"))?;
+        for row in stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("read workflow role authority: {e}"))?
+        {
+            let run: RunSnapshot = decode(&row.map_err(|e| format!("read workflow role: {e}"))?)?;
+            for attempt in run.attempts.iter().filter(|a| {
+                a.story_id == story_id && a.agent.as_ref().is_some_and(|a| a.session_id == session)
+            }) {
+                let definition = WorkflowStore::open()?
+                    .get_published(&run.story_definition_id, run.story_definition_revision)?;
+                if definition.graph.nodes.iter().any(|n| {
+                    n.id == attempt.node_id
+                        && matches!(
+                            n.kind,
+                            NodeKind::Agent {
+                                role: crate::workflows::AgentRole::Implementer,
+                                ..
+                            }
+                        )
+                }) {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     pub fn snapshot(&self, run_id: &str) -> Result<RunSnapshot, String> {
@@ -2283,7 +2321,12 @@ fn choose_event(
                 .iter()
                 .find(|item| item.story_id == story_id)
                 .ok_or("story execution not found")?;
-            if !execution.accepted || execution.accepted_revision != Some(story.revision) {
+            if (!execution.accepted || execution.accepted_revision != Some(story.revision))
+                && !snapshot
+                    .graph_executions
+                    .iter()
+                    .any(|g| g.target_id == story_id && !g.completed)
+            {
                 return Err("check receipt has a stale story revision".into());
             }
             if receipt.commit.is_empty() || receipt.tree.is_empty() {

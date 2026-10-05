@@ -294,7 +294,7 @@ pub(crate) fn validate_runtime_nodes(
     for node in &graph.nodes {
         if matches!(
             node.kind,
-            NodeKind::Gate | NodeKind::CreateStories | NodeKind::StoryDispatch { .. }
+            NodeKind::CreateStories | NodeKind::StoryDispatch { .. }
         ) || (kind == WorkflowKind::Plan && matches!(node.kind, NodeKind::Agent { .. }))
             || matches!(
                 node.kind,

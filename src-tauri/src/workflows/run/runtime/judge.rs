@@ -77,7 +77,21 @@ pub(in crate::workflows::run) fn judge(
     let Some(report) = reviewer.report.as_ref() else {
         return Ok(uncertain("Reviewer did not provide a typed report"));
     };
-    if report.story_revision != story.revision {
+    if report.story_revision != story.revision
+        && !(story.status == crate::stories::StoryStatus::Done
+            && report.story_revision.checked_add(1) == Some(story.revision)
+            && crate::stories::StoryStore::open()?
+                .transition_history(&story.id)?
+                .last()
+                .is_some_and(|receipt| {
+                    receipt.revision == story.revision
+                        && receipt.command == crate::stories::StoryCommand::Approve
+                        && receipt.actor
+                            == crate::stories::StoryTransitionActor::ManagedSession {
+                                session_id: binding_session(reviewer).unwrap_or_default().into(),
+                            }
+                }))
+    {
         return Ok(uncertain(
             "Reviewer evidence targets an older story revision",
         ));
@@ -129,25 +143,20 @@ pub(in crate::workflows::run) fn judge(
         .report
         .as_ref()
         .is_none_or(|r| r.outcome != AttemptOutcome::Completed)
-        || story.status != crate::stories::StoryStatus::Done
-        || !execution.accepted
-        || execution.accepted_revision != Some(story.revision)
-        || graph.definition.required_checks.is_empty()
-        || !graph.definition.required_checks.iter().all(|check| {
-            execution.check_receipts.iter().any(|r| {
-                r.check_id == check.id
-                    && r.argv == check.argv
-                    && r.exit_code == 0
-                    && r.commit == commit
-                    && r.tree == tree
-            })
-        })
     {
-        return Ok(uncertain(
-            "Current independent approval and deterministic check receipts are required",
-        ));
+        return Ok(uncertain("Current implementation did not complete"));
+    }
+    if !matches!(
+        story.status,
+        crate::stories::StoryStatus::Review | crate::stories::StoryStatus::Done
+    ) {
+        return Ok(uncertain("Story must be submitted for independent review"));
     }
     Ok((EdgeOutcome::Yes, evidence))
+}
+
+fn binding_session(attempt: &super::super::NodeAttempt) -> Option<&str> {
+    attempt.agent.as_ref().map(|a| a.session_id.as_str())
 }
 
 pub(in crate::workflows::run) use crate::workflows::prompt::review_artifact_digest as artifact_digest;

@@ -269,7 +269,7 @@ The coordinator owns broad integration validation after implementation: one fina
 
 ## Open decision for Boss
 
-**1 — Approval and integration authority:** independent reviewer approval under the existing human policy and explicit merge in the first runtime remain proposed, not approved. The coordinator will ask Boss before slice D. This question does not block A-C; no approval/merge policy is enabled in those slices. An included WontFix never releases dependents.
+**1 — Approval and integration authority (decided, Boss 2026-10-03):** approval comes from an independent reviewer; a workflow implementer may not approve even after claim release or exit. Merge remains explicit, never automatic. An included WontFix never releases dependents.
 
 The named Mac instance path `~/Library/Application Support/com.tuic.commander/instances/wf-verify` is authorized solely for later E2E and cleanup. It is not used in slice A.
 
@@ -292,3 +292,8 @@ ResumeGraph records a bounded explicit resolution and names the actual pending a
 Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Approval automation, plan dispatch, public graph start controls and explicit integration remain later slices; graph completion alone never closes a native story.
 
 Resolve plan create/dispatch/replan remains slice E. Independent approval automation remains D. Historical seeded definitions remain record-only; executable root start checks capabilities.
+
+
+### Slice D capability boundary
+
+Story Judge waits for daemon-computed pre-approval checks and an independent native approval transition before yes. Native history retains the approving session and revision; the bound report and current Git digest retain the artifact subject. Failed checks cannot approve. Gate selects pass/fail from current deterministic receipts. Merge stays explicit; plan dispatch follows in E. No new persistence format is introduced.

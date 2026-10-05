@@ -310,9 +310,15 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                 .iter_mut()
                 .find(|story| story.story_id == *story_id)
                 .ok_or("story execution not found")?;
-            if !story.accepted {
+            if !story.accepted
+                && !snapshot
+                    .graph_executions
+                    .iter()
+                    .any(|g| g.target_id == *story_id && !g.completed)
+            {
                 return Err("story has not been accepted".into());
             }
+            // Graph checks run before independent approval; their artifact is fenced by the service.
             story.check_receipts.push(receipt.clone());
         }
         RunEventKind::StoryIntegrated { story_id, receipt } => {

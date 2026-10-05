@@ -760,3 +760,8 @@ Graph runtime slice A adds version-2 serial activation/predecessor/decision hist
 Workflow graph slice B: AppState owns the serial daemon executor and OS database owner lock on desktop and headless boot. Initial graph position is atomic and start-key idempotent; per-run mailboxes and durable deadlines drive controls without a frontend. Graph roots reserve native stories, and manual claim/start shares the run writer lock. No Agent effects, delivery policy or new UI are enabled; unsupported graphs cannot start as executable workflows.
 
 Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Approval automation, plan dispatch, public graph start controls and explicit integration remain later slices; graph completion alone never closes a native story.
+
+
+### Workflow story policy (slice D)
+
+The daemon runs pinned deterministic checks before accepting an independent reviewer approval. Native approval history preserves the reviewer actor and revision; the run retains the reviewed artifact and check receipts. A workflow implementer cannot approve its story after exit or claim release. Integration remains an explicit operator action.

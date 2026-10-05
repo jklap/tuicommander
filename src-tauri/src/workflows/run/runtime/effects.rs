@@ -53,6 +53,13 @@ pub(in crate::workflows::run) async fn drive_effect(
                 if attempt.state != super::super::AttemptState::Running || attempt.agent.is_some() {
                     return Ok(false);
                 }
+                if *role == AgentRole::Implementer {
+                    store.begin_graph_story(
+                        run,
+                        &graph.target_id,
+                        &format!("workflow:{}", attempt.id),
+                    )?;
+                }
                 let key = format!("spawn:{}", attempt.id);
                 if run.effects.iter().any(|e| e.key == key) {
                     return Err(
@@ -148,6 +155,17 @@ pub(in crate::workflows::run) async fn drive_effect(
                     return Err(error);
                 }
                 return Ok(true);
+            }
+            NodeKind::Judge | NodeKind::Gate => {
+                let store = store.clone();
+                let run = run.clone();
+                let graph = graph.clone();
+                let activation = activation.clone();
+                return tokio::task::spawn_blocking(move || {
+                    super::policy::drive_policy(&store, &run, &graph, &activation)
+                })
+                .await
+                .map_err(|e| format!("workflow policy task: {e}"))?;
             }
             NodeKind::Notify => {
                 let key = format!("notify:{}:{}", graph.id, activation.id);
