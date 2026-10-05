@@ -6,7 +6,7 @@ The shared filesystem router exposes streamed `/fs/upload-copy` on the daemon th
 
 ## CI logs
 
-Use HTTP `GET /repo/ci-failure-logs` with `path` and `branch` to fetch logs
+Use HTTP `GET /repo/ci-failure-logs` with `repoPath` and `branch` to fetch logs
 for the local branch head. For a remote-only PR or a particular CircleCI check,
 use the same route with `checkUrl` and `headSha`, or the
 `fetch_ci_failure_logs` Tauri command with `check_url` and `head_sha`. Both
