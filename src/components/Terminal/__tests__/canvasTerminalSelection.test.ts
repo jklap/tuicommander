@@ -92,13 +92,29 @@ describe("canvas terminal selection controller", () => {
 		const selection = createCanvasSelectionController();
 		selection.start = { row: 7, col: 1 };
 		selection.end = { row: 7, col: 4 };
-		selection.cachedText = "selected";
+		selection.localSnapshot = "selected";
 		selection.selecting = true;
 
 		expect(shouldValidateSelectionSnapshot(selection, true, () => 0)).toBe(false);
 		selection.selecting = false;
 		expect(shouldValidateSelectionSnapshot(selection, true, () => 0)).toBe(true);
 		expect(shouldValidateSelectionSnapshot(selection, false, () => 0)).toBe(false);
+	});
+
+	// Bug: the copy stored the Rust text (soft wraps unwrapped, so it differs from the
+	// row-joined local text) and the next full-replace frame compared against it, clearing
+	// the highlight right after copy-on-select.
+	it("keeps the highlight when the clipboard text differs from the local row text", () => {
+		const selection = createCanvasSelectionController();
+		selection.start = { row: 7, col: 0 };
+		selection.end = { row: 8, col: 3 };
+		selection.localSnapshot = "line one\nwrap";
+		selection.cachedText = "line onewrap";
+
+		expect(shouldValidateSelectionSnapshot(selection, true, () => 0)).toBe(true);
+		expect(selection.cachedText).not.toBe(selection.localSnapshot);
+		selection.invalidateSnapshot();
+		expect(selection.localSnapshot).toBe("");
 	});
 
 	it("extracts forward and reverse multi-row selections and trims trailing space", () => {

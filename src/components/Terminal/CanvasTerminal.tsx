@@ -1843,7 +1843,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// strings from getLocalSelectionText() causing spurious mismatches that clear the selection.
 		if (shouldValidateSelectionSnapshot(selection, decision.fullReplace, selectionAbsRowToViewport)) {
 			const nowText = getLocalSelectionText();
-			if (nowText !== selection.cachedText) selection.clear();
+			if (nowText !== selection.localSnapshot) selection.clear();
 		}
 
 		scheduleRepaint();
@@ -3582,6 +3582,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				},
 				async (text) => {
 					selection.cachedText = text;
+					selection.localSnapshot = getLocalSelectionText();
 					await writeClipboard(text);
 				},
 			);
