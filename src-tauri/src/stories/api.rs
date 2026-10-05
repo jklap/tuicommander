@@ -606,4 +606,49 @@ mod tests {
             "the origin tag shape must be published: {input}"
         );
     }
+    /// Catches: treating authenticated or managed transitions as anonymous LocalApi actions.
+    #[test]
+    fn transition_source_preserves_actor_in_persisted_history() {
+        use super::super::StoryTransitionActor;
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let project = repo.path().to_str().unwrap();
+        for (anonymous, session, expected) in [
+            (false, None, StoryTransitionActor::Human),
+            (true, None, StoryTransitionActor::LocalApi),
+            (
+                false,
+                Some("managed"),
+                StoryTransitionActor::ManagedSession {
+                    session_id: "managed".into(),
+                },
+            ),
+            (
+                true,
+                Some("managed"),
+                StoryTransitionActor::ManagedSession {
+                    session_id: "managed".into(),
+                },
+            ),
+        ] {
+            let (story, _) = two_stories(project);
+            story_action_with_source(
+                project,
+                StoryAction::Transition {
+                    story_id: story.id.clone(),
+                    expected_revision: story.revision,
+                    command: StoryCommand::Block,
+                },
+                session,
+                anonymous,
+            )
+            .unwrap();
+            let history = StoryStore::open()
+                .unwrap()
+                .transition_history(&story.id)
+                .unwrap();
+            assert_eq!(history.last().unwrap().actor, expected);
+        }
+    }
 }
