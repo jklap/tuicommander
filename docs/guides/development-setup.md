@@ -15,15 +15,36 @@
 pnpm install
 ```
 
+### Temporary dependency audit exception
+
+`pnpm-workspace.yaml` configures `auditConfig.ignoreGhsas` for
+[GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) only.
+Boss approved this exception on 2026-10-04; it expires on **2026-11-04**.
+At approval time, `braces` 3.0.3 had no patched version on npm (`3.0.4`
+returned 404). Its only dependency path is build-only:
+`vite-plugin-purgecss → purgecss → fast-glob → micromatch → braces`.
+The advisory concerns stack exhaustion from deeply nested patterns. This path
+processes repository build inputs, rather than runtime terminal or Markdown
+content. Remove the exception when a patch becomes available, and review it
+by the expiry date; pnpm does not enforce the date automatically.
+No other advisory is ignored. `pnpm-workspace.yaml` pins DOMPurify 3.4.16
+for the application and Mermaid, and the development-only `qs` to 6.16.0.
+pnpm 11 ignores the legacy `pnpm.auditConfig` field in `package.json`.
+
 ## Development
 
 ### Native Tauri App
 
 ```bash
-pnpm tauri dev
+make dev
 ```
 
 Starts the Vite dev server and Tauri app. Frontend files use Vite HMR; Rust changes require restarting the development process.
+On macOS, `make dev` requires Python 3 and passes a [Cargo target runner](https://doc.rust-lang.org/cargo/reference/config.html#targetcfgrunner) to Tauri's `cargo run`. The runner copies the desktop executable and its `tuic-remote`, `tuic-bridge`, and `tuic` siblings into `~/Library/Application Support/com.tuic.commander/dev-bin/` before launch. These are real copies, not links into Cargo or mbx targets. Target cleanup can no longer remove the running desktop executable. The path stays the same across runs; files are replaced, not accumulated, and remain after exit. A second launch at that path is rejected while the runner holds its process lock. `TUIC_DEV_BIN_DIR` overrides the directory for isolated script checks. Direct `pnpm tauri dev` does not use this protection. Linux and Windows keep the normal Cargo launch.
+
+The existing MCP bridge installation still verifies and preserves its own revisions; the dev runner keeps its adjacent source available. The bridge installer runs inside the application, so it cannot protect the desktop executable before launch.
+
+The macOS application firewall uses code signing for initial and tracking decisions ([Apple TN2206](https://developer.apple.com/library/archive/technotes/tn2206/)). Its UI also selects applications by filesystem path ([Apple firewall settings](https://support.apple.com/guide/mac-help/block-connections-to-your-mac-with-a-firewall-mh34041/mac)). Both the executable path and signing identity matter: a stable existing path contains the missing-executable failure, but does not promise unchanged firewall permission after a rebuild changes the signature. Confirm LAN and tailnet access after the next launch; no firewall setting is changed by the runner.
 Vite excludes backend files and repository tooling output such as `.tmp/`, `target/`, `dist/`, coverage, reports, plans, stories, and docs from its watcher. Mutation testing keeps its disposable checkout under `.tmp/`; its HTML files must not reload the live WebView. Changes to this watch configuration require restarting the Vite dev server.
 The watch allowlist and Tauri version are resolved from the directory containing `vite.config.ts`, so starting Vite from another working directory still uses this checkout's inputs.
 
@@ -59,11 +80,14 @@ Produces platform-specific installers:
 
 Rust socket tests use `tuic-test-support::short_socket_test_temp_root()`. If the
 checkout's test path exceeds the Unix socket limit, the helper uses a short
-checkout-specific directory under `~/Gits/.tmp/tuic-tests/socket-*`. The
-`scripts/with-test-tmp.sh` wrapper removes abandoned socket directories and
-test-run directories there (and in the checkout's `.tmp/tuic-tests`) after they
-have been unused for more than seven days. Run standalone Rust tests through
-that wrapper.
+checkout-specific directory under the nearest short `Gits/.tmp/s<checkout-hash>`.
+Outside `Gits`, or when all such ancestors are too long, it uses
+`/tmp/tuic-s<checkout-hash>`. It measures every candidate against the socket
+budget, including the full mdkb staging filename and eight bytes of margin. The
+`scripts/with-test-tmp.sh` wrapper removes abandoned Gits socket directories and
+test-run directories under `~/Gits/.tmp/tuic-tests` and the checkout's
+`.tmp/tuic-tests` after they have been unused for more than seven days. Run
+standalone Rust tests through that wrapper.
 
 ### Live peer-mail wake canary
 
@@ -100,6 +124,18 @@ pnpm test:coverage     # Coverage report
 **Framework:** Vitest + SolidJS Testing Library + happy-dom
 
 **Coverage:** ~80%+
+
+### Rust build features
+
+Plain application Cargo builds enable `desktop` but omit native speech. Add
+`--features dictation` for Whisper/WebRTC and the voice adapters. Tauri dev and
+release builds read `build.features = ["dictation"]` from `tauri.conf.json`, so
+`make dev` and `make build` retain voice support. Desktop CI tests that feature;
+headless daemon checks use `--no-default-features`. Workspace tests also select
+the `tuic-dictation` crate explicitly, and therefore compile its native stack.
+
+TLS uses the existing ring provider. Provider-free reqwest/axum-server features
+avoid compiling AWS-LC while retaining HTTPS and WSS.
 
 ### Rust tests in linked worktrees
 

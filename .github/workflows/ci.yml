@@ -68,6 +68,16 @@ jobs:
       - name: Scan cargo fetch through Socket Firewall
         run: cd src-tauri && sfw cargo fetch
 
+  gitlink:
+    timeout-minutes: 5
+    name: Plugins pin is pushed
+    runs-on: ubuntu-22.04
+    steps:
+      # No submodule checkout: an unpushed pin would fail that step before this check ran.
+      - uses: actions/checkout@v6
+      - run: scripts/check-gitlink-reachable.sh
+      - run: TMPDIR="$RUNNER_TEMP" scripts/test-check-gitlink-reachable.sh
+
   frontend:
     timeout-minutes: 20
     name: Frontend (typecheck + tests)
@@ -96,6 +106,10 @@ jobs:
 
       - name: Typecheck
         run: pnpm exec tsc --noEmit
+
+      # A `scripts/*` gitignore rule once hid a script that CI and package.json call.
+      - name: Referenced scripts are tracked
+        run: grep -ohE 'scripts/[A-Za-z0-9_./-]+\.(mjs|sh|js|py)' package.json .github/workflows/*.yml | sort -u | xargs git ls-files --error-unmatch
 
       - name: Third-party notices (JavaScript)
         run: |
@@ -187,7 +201,8 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
+        run: cargo clippy --workspace --exclude bm25 --all-targets --features dictation -- -D warnings
 
       - name: Tests
         working-directory: src-tauri
@@ -200,8 +215,13 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --profile ci
+        run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --features dictation --profile ci
 
+
+      # This check invokes nextest and compiled Rust tests. Keep it out of the
+      # frontend shell-test discovery, whose job installs neither prerequisite.
+      - name: Nextest fixture setup scope
+        run: bash scripts/with-test-tmp.sh bash scripts/check-nextest-fixture-scope.sh
 
       # nextest does not run doctests — run them separately so doc examples stay
       # covered. Linux-only: doctests are platform-independent logic.
@@ -216,7 +236,7 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: bash ../scripts/with-test-tmp.sh cargo test --doc --workspace
+        run: bash ../scripts/with-test-tmp.sh cargo test --doc --workspace --features dictation
 
   # Verify tuic-remote compiles without the desktop feature (catches missing cfg
   # gates) AND run the headless test suite. The `#[cfg(not(feature = "desktop"))]`
@@ -269,6 +289,8 @@ jobs:
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
         run: cargo check --no-default-features --bin tuic-remote
 
+      # --workspace selects desktop-only members independently of feature gates.
+      # Dictation remains covered by the desktop workspace jobs.
       - name: Headless tests
         working-directory: src-tauri
         env:
@@ -280,7 +302,7 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: bash ../scripts/with-test-tmp.sh cargo nextest run --no-default-features --workspace --profile ci
+        run: bash ../scripts/with-test-tmp.sh cargo nextest run --no-default-features --workspace --exclude tuic-dictation --profile ci
 
   # Push to main only: verify build on macOS and Windows.
   # GPU notes:
@@ -414,9 +436,11 @@ jobs:
           CARGO_INCREMENTAL: "0"
           CMAKE_C_COMPILER_LAUNCHER: "sccache"
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
-          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-        run: cargo clippy --workspace --all-targets -- -D warnings
+          # Use -Z7: Git Bash converts /Z7 into a Windows path before native Cargo.
+          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
+          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
+        # bm25 is a vendored third-party patch (patches/bm25): not ours to lint.
+        run: cargo clippy --workspace --exclude bm25 --all-targets --features dictation -- -D warnings
 
       # Windows runs the suite too. It used to be skipped, which is why Windows
       # regressions only ever surfaced in a user's build.
@@ -426,8 +450,13 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
           CARGO_INCREMENTAL: "0"
+          # The macOS 9a49ff1cb run spent 67m17s compiling tests before its
+          # 90-minute cancellation. Test inherits dev's opt-level 1; keep
+          # dependencies at that level, but skip optimizing workspace harnesses.
+          CARGO_PROFILE_TEST_OPT_LEVEL: ${{ matrix.label == 'macOS-ARM' && '0' || '1' }}
           CMAKE_C_COMPILER_LAUNCHER: "sccache"
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
-          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-        run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --profile ci
+          # Use -Z7: Git Bash converts /Z7 into a Windows path before native Cargo.
+          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
+          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
+        run: bash ../scripts/with-test-tmp.sh cargo nextest run --workspace --features dictation --profile ci

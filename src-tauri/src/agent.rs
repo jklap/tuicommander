@@ -630,21 +630,21 @@ impl std::fmt::Display for ScreenProbeError {
 }
 
 #[cfg(unix)]
-struct ScreenProbeTree;
+pub(crate) struct ScreenProbeTree;
 
 #[cfg(unix)]
 impl ScreenProbeTree {
-    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+    pub(crate) fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
         Ok(Self)
     }
 
-    fn assign(&self, _child: &std::process::Child) -> std::io::Result<()> {
+    pub(crate) fn assign(&self, _child: &std::process::Child) -> std::io::Result<()> {
         Ok(())
     }
 
-    fn terminate(self, pid: u32) {
+    pub(crate) fn terminate(self, pid: u32) {
         // The probe owns this group: signal its grandchildren as well as the
         // direct child. The child is reaped separately below.
         unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
@@ -652,11 +652,11 @@ impl ScreenProbeTree {
 }
 
 #[cfg(windows)]
-struct ScreenProbeTree(windows_sys::Win32::Foundation::HANDLE);
+pub(crate) struct ScreenProbeTree(windows_sys::Win32::Foundation::HANDLE);
 
 #[cfg(windows)]
 impl ScreenProbeTree {
-    fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
+    pub(crate) fn prepare(cmd: &mut Command) -> std::io::Result<Self> {
         use std::os::windows::process::CommandExt;
         use windows_sys::Win32::System::JobObjects::{
             CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -680,7 +680,7 @@ impl ScreenProbeTree {
             SetInformationJobObject(
                 job.0,
                 JobObjectExtendedLimitInformation,
-                &limits as *const _ as *const _,
+                std::ptr::from_ref(&limits).cast(),
                 std::mem::size_of_val(&limits) as u32,
             )
         };
@@ -690,7 +690,7 @@ impl ScreenProbeTree {
         Ok(job)
     }
 
-    fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
+    pub(crate) fn assign(&self, child: &std::process::Child) -> std::io::Result<()> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 
@@ -754,7 +754,7 @@ impl ScreenProbeTree {
         Ok(())
     }
 
-    fn terminate(self, _pid: u32) {
+    pub(crate) fn terminate(self, _pid: u32) {
         // Closing the last handle kills the whole job, including cmd.exe's
         // node.exe child when a Windows npm shim hangs on --help.
         drop(self);
@@ -768,9 +768,33 @@ impl Drop for ScreenProbeTree {
     }
 }
 
+// SAFETY: the job handle is owned, never borrowed, and all access by workflow
+// checks is serialized by their process mutex.
+#[cfg(windows)]
+unsafe impl Send for ScreenProbeTree {}
+
 /// A help probe owns and tears down its process tree, including descendants
 /// that inherited stdout or stderr. The shared git deadline helper deliberately
 /// has different child-only semantics, so screen probes keep this local.
+pub(crate) fn cli_help(path: &str) -> Option<String> {
+    let executable = resolve_probe_executable(path);
+    let mut cmd = agent_probe_command(executable.to_str().unwrap_or(path));
+    cmd.arg("--help");
+    crate::cli::apply_no_window(&mut cmd);
+    let output = screen_probe_output(&mut cmd, std::time::Duration::from_secs(2)).ok()?;
+    output
+        .status
+        .success()
+        .then(|| {
+            format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+        .filter(|help| crate::agent_hook_launch::claude_help_is_usable(help))
+}
+
 fn screen_probe_output(
     cmd: &mut Command,
     timeout: std::time::Duration,
@@ -836,14 +860,14 @@ fn screen_probe_output(
 }
 
 fn preferred_agent_path(output: &str) -> Option<&str> {
-    let mut paths = output
+    let paths = output
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty());
     #[cfg(windows)]
     {
         let choices: Vec<&str> = paths.collect();
-        return choices
+        choices
             .iter()
             .copied()
             .find(|path| {
@@ -858,10 +882,11 @@ fn preferred_agent_path(output: &str) -> Option<&str> {
                         .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("cmd"))
                 })
             })
-            .or_else(|| choices.first().copied());
+            .or_else(|| choices.first().copied())
     }
     #[cfg(not(windows))]
     {
+        let mut paths = paths;
         paths.next()
     }
 }
@@ -1455,6 +1480,20 @@ pub(crate) async fn spawn_agent(
         .try_clone_reader()
         .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
 
+    let mut session_state = crate::state::SessionState {
+        spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
+        ..Default::default()
+    };
+    session_state.seed_configured_agent(agent_config.agent_type.clone());
+    session_state.hook_instrumented = crate::pty::hook_instrumented_for(
+        &crate::config::load_agents_config(),
+        agent_config.agent_type.as_deref(),
+    );
+    state
+        .session_maps
+        .session_states
+        .insert(session_id.clone(), session_state);
+
     // Store session (master handle kept for resize support)
     let paused = Arc::new(AtomicBool::new(false));
     state.session_maps.sessions.insert(
@@ -1565,6 +1604,57 @@ mod tests {
         ));
     }
 
+    // Catches: failed help probes log a generic warning but lose the timeout or IO cause.
+    #[cfg(unix)]
+    #[test]
+    fn screen_probe_errors_keep_timeout_and_io_diagnostics() {
+        #[derive(Clone)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Sink {
+            type Writer = Sink;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let script = crate::test_support::fake_ssh_script(
+            "screen-probe-warning-timeout",
+            "exec sleep 8",
+            "echo --no-alt-screen",
+        );
+        let dir = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+        let missing = dir.path().join("missing-codex");
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(Sink(output.clone()))
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            assert!(!supports_no_alt_screen("codex", &script.to_string_lossy()));
+            assert!(!supports_no_alt_screen("codex", &missing.to_string_lossy()));
+        });
+        let log = String::from_utf8(output.lock().clone()).unwrap();
+        let warnings: Vec<_> = log
+            .lines()
+            .filter(|line| line.contains("Agent screen capability probe failed"))
+            .collect();
+        assert_eq!(warnings.len(), 2, "{log}");
+        assert!(warnings[0].contains("WARN"), "{log}");
+        assert!(warnings[0].contains("--help timed out"), "{log}");
+        assert!(warnings[1].contains("WARN"), "{log}");
+        assert!(warnings[1].contains("os error 2"), "{log}");
+    }
+
     #[cfg(unix)]
     #[test]
     fn screen_help_probe_has_a_deadline_and_reaps_its_child() {
@@ -1671,7 +1761,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn failed_screen_help_probe_is_retried_after_cooldown() {
+    // Catches: subtracting the cooldown makes an inconclusive probe retry immediately.
+    fn failed_screen_help_probe_waits_for_cooldown_before_retrying() {
         let script = crate::test_support::fake_ssh_script(
             "screen-help-retry",
             "marker=\"${0%/*}/screen-help-retry.ready\"; if [ ! -f \"$marker\" ]; then touch \"$marker\"; exit 1; fi; printf '%s\\n' '--no-alt-screen'",
@@ -1680,6 +1771,7 @@ mod tests {
         let marker = script.with_file_name("screen-help-retry.ready");
         let _ = std::fs::remove_file(&marker);
         let path = script.to_string_lossy();
+        assert!(!supports_no_alt_screen("codex", &path));
         assert!(!supports_no_alt_screen("codex", &path));
         std::thread::sleep(std::time::Duration::from_millis(750));
         assert!(supports_no_alt_screen("codex", &path));

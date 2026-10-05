@@ -48,7 +48,6 @@ export const RemoteAccessPanel: Component = () => {
 	const [qrDataUrl, setQrDataUrl] = createSignal<string | null>(null);
 	const [tokenDuration, setTokenDuration] = createSignal(2592000);
 	const [ipv6Enabled, setIpv6Enabled] = createSignal(false);
-	const [lanAuthBypass, setLanAuthBypass] = createSignal(false);
 	const [urlCopied, setUrlCopied] = createSignal(false);
 	const [regenerating, setRegenerating] = createSignal(false);
 
@@ -122,7 +121,6 @@ export const RemoteAccessPanel: Component = () => {
 			setRaHasPassword(config.services.auth.password_hash.length > 0);
 			setTokenDuration(config.services.auth.session_token_duration_secs ?? 2592000);
 			setIpv6Enabled(config.services.server.ipv6_enabled ?? false);
-			setLanAuthBypass(config.services.auth.lan_auth_bypass ?? false);
 			setRelayEnabled(config.services.relay.enabled ?? false);
 			setRelayUrl(config.services.relay.url || "wss://relay.tuicommander.com");
 			setRelayToken(config.services.relay.token ?? "");
@@ -415,31 +413,6 @@ export const RemoteAccessPanel: Component = () => {
 							"services.hint.ipv6Description",
 							"Binds the server to both IPv4 and IPv6 addresses. Requires save + server restart.",
 						)}
-					/>
-				</ExpertSetting>
-
-				<ExpertSetting configKey="app.services.auth.lan_auth_bypass" value={lanAuthBypass()}>
-					<SettingToggle
-						checked={lanAuthBypass()}
-						onChange={(val) => {
-							setLanAuthBypass(val);
-							saveConfigField((c) => {
-								c.services.auth.lan_auth_bypass = val;
-							});
-						}}
-						label={t("services.toggle.lanAuthBypass", "Allow LAN access without authentication")}
-						hint={
-							lanAuthBypass()
-								? t(
-										"services.hint.lanAuthBypassWarning",
-										"Devices on your local network can access without a password. Only use on trusted networks.",
-									)
-								: t(
-										"services.hint.lanAuthBypassDescription",
-										"Skips authentication for private/LAN IP addresses (RFC1918, Tailscale, IPv6 ULA)",
-									)
-						}
-						hintStyle={lanAuthBypass() ? { color: "var(--warning, #e5c07b)" } : undefined}
 					/>
 				</ExpertSetting>
 			</Show>

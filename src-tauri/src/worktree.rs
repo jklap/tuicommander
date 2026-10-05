@@ -14,7 +14,7 @@ use tauri::State;
 
 pub(crate) use tuic_git::worktree::*;
 
-fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
+pub(crate) fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
     let Some(url) = crate::git::read_remote_url(repo) else {
         return false;
     };
@@ -204,6 +204,11 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
     )
 }
 
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) fn remove_worktree_with_presence_confirmation(
     repo_path: &str,
     workspace_id: &str,
@@ -238,7 +243,7 @@ pub(crate) fn branch_integrations(repo: &Path) -> Result<Vec<BranchIntegration>,
 pub(crate) fn delete_integrated_local_branch(
     repo_path: &str,
     branch_name: &str,
-) -> Result<&'static str, String> {
+) -> Result<tuic_git::worktree::DeletedBranch, String> {
     tuic_git::worktree::delete_integrated_local_branch_with_pr(
         repo_path,
         branch_name,
@@ -385,6 +390,11 @@ pub(crate) fn get_worktrees_dir(
 /// `delete_branch` defaults to `false` with force and `true` otherwise.
 #[cfg(feature = "desktop")]
 #[tauri::command]
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) async fn remove_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
@@ -931,6 +941,11 @@ pub(crate) fn merge_and_archive_worktree_impl(
     )
 }
 
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
     state: &Arc<AppState>,
     repo_path: String,
@@ -1074,6 +1089,11 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
 /// commits while its worktree is dirty. The frontend sets it after the user confirms.
 #[cfg(feature = "desktop")]
 #[tauri::command]
+// Keep the independently supplied boundary fields explicit; grouping changes this contract.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
 pub(crate) fn merge_and_archive_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
@@ -1407,6 +1427,39 @@ mod tests {
         base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
     };
 
+    // Catches accepting an empty or unregistered orphan list after weakening
+    // the validation OR: neither request may create an actionable dialog.
+    #[test]
+    fn cleanup_rejects_empty_and_unknown_paths_1488() {
+        let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let state = crate::state::tests_support::make_test_app_state();
+        let path = repo.path().to_string_lossy();
+        for paths in [
+            vec![],
+            vec![repo.path().join("unknown").to_string_lossy().into_owned()],
+        ] {
+            assert!(begin_orphan_cleanup_internal(&state, &path, paths).is_err());
+            assert!(state.pending_orphan_cleanup.get(path.as_ref()).is_none());
+        }
+    }
+
+    // Catches replacing a client's answer because the paths are unchanged:
+    // answer.is_some alone must forbid a second answer.
+    #[test]
+    fn cleanup_cannot_overwrite_an_existing_answer_1488() {
+        let state = crate::state::tests_support::make_test_app_state();
+        pending_cleanup(&state, "/repo");
+        answer_orphan_cleanup_internal(&state, "/repo", false).unwrap();
+        assert!(answer_orphan_cleanup_internal(&state, "/repo", false).is_err());
+        assert_eq!(pending_answer(&state, "/repo"), Some(false));
+    }
+
     fn pending_cleanup(state: &AppState, repo: &str) {
         state.pending_orphan_cleanup.insert(
             repo.to_string(),
@@ -1503,6 +1556,12 @@ mod tests {
     #[test]
     fn removal_preview_names_live_nested_session_and_counts_untracked_work() {
         let repo = setup_test_repo();
+        assert!(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
         let worktree = worktree_with(repo.path(), "active-work", false);
         fs::create_dir_all(worktree.join("nested")).expect("nested cwd");
         fs::write(worktree.join("README.md"), "changed").expect("modified file");
@@ -1719,6 +1778,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn one_click_cleanup_keeps_a_clean_worktree_with_a_live_agent() {
         let (_cfg, _guard) = isolated_config();
         for action in ["archive", "delete"] {
@@ -1952,6 +2012,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn automatic_archive_keeps_a_merged_worktree_with_a_live_session() {
         let (_cfg, _guard) = isolated_config();
         let repo = setup_test_repo();

@@ -257,6 +257,34 @@ fn mcp_agent_wait_keeps_the_socket_open_for_eight_seconds() {
 }
 
 #[test]
+fn secret_request_accepts_user_entry_after_four_seconds() {
+    // Catches the real CLI socket dropping a user-entry request after 3 seconds.
+    let (output, requests) = run_with_stub_delay(
+        &[
+            "mcp",
+            "secret",
+            r#"{"action":"request","fields":[{"name":"TEST_USER","kind":"username"}],"reason":"IPC regression"}"#,
+        ],
+        None,
+        Some("peer-1"),
+        r#"{"names":["TEST_USER"],"status":"declined"}"#,
+        false,
+        Duration::from_secs(4),
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!({"names": ["TEST_USER"], "status": "declined"})
+    );
+    assert_eq!(requests[1].1["params"]["name"], "secret");
+}
+
+#[test]
 fn mcp_worktree_remove_accepts_a_reply_after_four_seconds() {
     let (output, requests) = run_with_stub_delay(
         &[

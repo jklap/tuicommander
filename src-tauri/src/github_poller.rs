@@ -5,11 +5,23 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 #[cfg(feature = "desktop")]
-use tauri::{AppHandle, Emitter};
+use tauri::Emitter;
 use tokio::sync::{Notify, mpsc};
 
 use crate::github::BranchPrStatus;
 use crate::state::{AppEvent, AppState};
+
+/// Desktop delivery is optional; the event bus is authoritative on headless daemons.
+fn emit_window<T: Serialize + Clone>(state: &AppState, event: &str, payload: T) {
+    #[cfg(feature = "desktop")]
+    if let Some(handle) = state.app_handle.read().as_ref()
+        && let Err(error) = handle.emit(event, payload)
+    {
+        tracing::warn!(source = "github", event, %error, "GitHub window emission failed");
+    }
+    #[cfg(not(feature = "desktop"))]
+    let _ = (state, event, payload);
+}
 
 // ---------------------------------------------------------------------------
 pub(crate) use tuic_git::github_poller::{PrTransition, detect_transitions};
@@ -60,20 +72,17 @@ pub(crate) struct GitHubPoller {
 }
 
 impl GitHubPoller {
-    #[cfg(feature = "desktop")]
-    pub(crate) fn start(state: Arc<AppState>, handle: AppHandle) -> Self {
+    pub(crate) fn start(state: Arc<AppState>) -> Self {
         let (tx, rx) = mpsc::channel(32);
         let stop = Arc::new(Notify::new());
-        tokio::spawn(poll_loop(state, handle, rx, Arc::clone(&stop)));
+        tokio::spawn(poll_loop(state, rx, Arc::clone(&stop)));
         Self { cmd_tx: tx, stop }
     }
 }
 
-#[cfg(feature = "desktop")]
 /// Per-repo previous PR state for transition comparison.
 type PrevState = HashMap<String, HashMap<String, BranchPrStatus>>;
 
-#[cfg(feature = "desktop")]
 struct PollMutableState {
     prev: PrevState,
     fail_count: u32,
@@ -92,7 +101,6 @@ struct PollMutableState {
 /// Returns `false` when Stop cut the poll short. `biased` makes a Stop that is
 /// already pending win over a poll that happens to be ready in the same tick —
 /// a shutdown must not be delayed by one more round of event emission.
-#[cfg(any(feature = "desktop", test))]
 async fn poll_batch_or_stop(stop: &Notify, batch: impl std::future::Future<Output = ()>) -> bool {
     tokio::select! {
         biased;
@@ -101,13 +109,7 @@ async fn poll_batch_or_stop(stop: &Notify, batch: impl std::future::Future<Outpu
     }
 }
 
-#[cfg(feature = "desktop")]
-async fn poll_loop(
-    state: Arc<AppState>,
-    handle: AppHandle,
-    mut rx: mpsc::Receiver<PollerCmd>,
-    stop: Arc<Notify>,
-) {
+async fn poll_loop(state: Arc<AppState>, mut rx: mpsc::Receiver<PollerCmd>, stop: Arc<Notify>) {
     let mut visible = true;
     let mut paths: Vec<String> = Vec::new();
     let mut issue_filter = String::new();
@@ -147,7 +149,7 @@ async fn poll_loop(
                 let batch = if pending_poll_paths.is_empty() { &paths } else { &pending_poll_paths };
                 let finished = poll_batch_or_stop(
                     &stop,
-                    poll_batch(&state, &handle, batch, false, &issue_filter, pr_hide_drafts, &mut ps),
+                    poll_batch(&state, batch, false, &issue_filter, pr_hide_drafts, &mut ps),
                 )
                 .await;
                 if !finished {
@@ -168,7 +170,7 @@ async fn poll_loop(
                 };
                 let finished = poll_batch_or_stop(
                     &stop,
-                    poll_batch(&state, &handle, &batch_paths, startup, &issue_filter, pr_hide_drafts, &mut ps),
+                    poll_batch(&state, &batch_paths, startup, &issue_filter, pr_hide_drafts, &mut ps),
                 )
                 .await;
                 if !finished {
@@ -303,7 +305,6 @@ fn current_interval(visible: bool, fail_count: u32, rate_budget: u32) -> Duratio
 /// its store reset to empty, so unchanged data must be re-sent or the UI stays
 /// blank until the next real change. `prev_ts == None` means this repo was never
 /// polled before, which always counts as changed.
-#[cfg(any(feature = "desktop", test))]
 fn should_emit(prev_ts: Option<&Option<String>>, cur_ts: &Option<String>, force: bool) -> bool {
     force || prev_ts.is_none_or(|p| p != cur_ts)
 }
@@ -312,15 +313,12 @@ fn should_emit(prev_ts: Option<&Option<String>>, cur_ts: &Option<String>, force:
 /// The count is essential — an item that drops out of the open set (merged/closed
 /// PR, closed issue) shrinks the list without necessarily moving the max
 /// timestamp, so a max-only key would miss the removal and leave the badge stale.
-#[cfg(any(feature = "desktop", test))]
 fn snapshot_key(count: usize, max_updated_at: &str) -> String {
     format!("{count}|{max_updated_at}")
 }
 
-#[cfg(feature = "desktop")]
 async fn poll_batch(
     state: &AppState,
-    handle: &AppHandle,
     paths: &[String],
     include_merged: bool,
     issue_filter: &str,
@@ -351,8 +349,7 @@ async fn poll_batch(
             ps.force_resync = false;
 
             for (repo_path, statuses) in result.prs {
-                let changed =
-                    process_repo_update(state, handle, &repo_path, &statuses, &mut ps.prev);
+                let changed = process_repo_update(state, &repo_path, &statuses, &mut ps.prev);
                 if changed {
                     ps.last_changed.insert(repo_path.clone(), now);
                 } else {
@@ -374,7 +371,8 @@ async fn poll_batch(
                 ps.last_pr_updated_at.insert(repo_path.clone(), cur_ts);
 
                 if emit {
-                    let _ = handle.emit(
+                    emit_window(
+                        state,
                         "github-pr-update",
                         PrUpdatePayload {
                             repo_path: repo_path.clone(),
@@ -405,7 +403,8 @@ async fn poll_batch(
                 ps.last_issue_updated_at.insert(repo_path.clone(), cur_ts);
 
                 if emit {
-                    let _ = handle.emit(
+                    emit_window(
+                        state,
                         "github-issues-update",
                         IssuesUpdatePayload {
                             repo_path: repo_path.clone(),
@@ -428,11 +427,9 @@ async fn poll_batch(
     }
 }
 
-#[cfg(feature = "desktop")]
 /// Process PR updates for a single repo. Returns `true` if any PR data changed.
 fn process_repo_update(
     state: &AppState,
-    handle: &AppHandle,
     repo_path: &str,
     statuses: &[BranchPrStatus],
     prev: &mut PrevState,
@@ -449,7 +446,7 @@ fn process_repo_update(
                 changed = true;
             }
             for t in transitions {
-                let _ = handle.emit("github-transition", &t);
+                emit_window(state, "github-transition", &t);
                 let _ = state
                     .event_bus
                     .send(AppEvent::GitHubTransition { transition: t });
@@ -470,7 +467,7 @@ fn process_repo_update(
                     head_ref_oid: new_pr.head_ref_oid.clone(),
                     author: new_pr.author.clone(),
                 };
-                let _ = handle.emit("github-transition", &t);
+                emit_window(state, "github-transition", &t);
                 let _ = state
                     .event_bus
                     .send(AppEvent::GitHubTransition { transition: t });
@@ -553,10 +550,8 @@ pub(crate) fn send_poller_config(
 /// Already running: forwards the new config and forces a resync for the
 /// (re)subscribing client. This is the single implementation behind both the
 /// Tauri `github_start_polling` command and the HTTP `poller_start` route.
-#[cfg(feature = "desktop")]
 pub(crate) fn ensure_polling(
     state: &Arc<AppState>,
-    app: AppHandle,
     paths: Vec<String>,
     issue_filter: String,
     pr_hide_drafts: bool,
@@ -566,7 +561,7 @@ pub(crate) fn ensure_polling(
         send_poller_config(poller, paths, issue_filter, pr_hide_drafts, true);
         return;
     }
-    let poller = GitHubPoller::start(Arc::clone(state), app);
+    let poller = GitHubPoller::start(Arc::clone(state));
     send_poller_config(&poller, paths, issue_filter, pr_hide_drafts, false);
     *guard = Some(poller);
 }
@@ -579,12 +574,11 @@ pub(crate) fn ensure_polling(
 #[tauri::command]
 pub(crate) async fn github_start_polling(
     state: tauri::State<'_, Arc<AppState>>,
-    app: AppHandle,
     paths: Vec<String>,
     issue_filter: String,
     pr_hide_drafts: bool,
 ) -> Result<(), String> {
-    ensure_polling(state.inner(), app, paths, issue_filter, pr_hide_drafts);
+    ensure_polling(state.inner(), paths, issue_filter, pr_hide_drafts);
     Ok(())
 }
 
@@ -719,6 +713,74 @@ struct IssuesUpdatePayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn headless_poller_cold_starts_without_an_app_handle() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        ensure_polling(&state, vec![], String::new(), false);
+        assert!(state.github.poller.lock().is_some());
+        stop_poller(&state).await.expect("empty-path poller stops");
+    }
+
+    #[test]
+    fn headless_transitions_reach_the_bus_once_without_a_window() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut events = state.event_bus.subscribe();
+        let mut prev = HashMap::new();
+        let mut pr = BranchPrStatus {
+            branch: "feature".into(),
+            number: 42,
+            title: "Feature".into(),
+            state: "OPEN".into(),
+            url: "https://github.com/example/repo/pull/42".into(),
+            additions: 0,
+            deletions: 0,
+            checks: crate::github::CheckSummary {
+                passed: 0,
+                failed: 0,
+                pending: 0,
+                total: 0,
+            },
+            author: "author".into(),
+            commits: 1,
+            mergeable: "MERGEABLE".into(),
+            merge_state_status: "CLEAN".into(),
+            review_decision: String::new(),
+            viewer_did_approve: false,
+            labels: vec![],
+            is_draft: false,
+            base_ref_name: "main".into(),
+            head_ref_oid: "head".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            merge_state_label: None,
+            conflict_state: crate::github::ConflictState::Clear,
+            review_state_label: None,
+            merge_commit_allowed: true,
+            squash_merge_allowed: true,
+            rebase_merge_allowed: true,
+            unresolved_threads: 0,
+            unresolved_threads_truncated: false,
+        };
+        process_repo_update(&state, "/repo", &[pr.clone()], &mut prev);
+        assert!(
+            events.try_recv().is_err(),
+            "initial snapshot must not report opened"
+        );
+        pr.state = "MERGED".into();
+        process_repo_update(&state, "/repo", &[pr.clone()], &mut prev);
+        assert!(matches!(
+            events.try_recv().expect("headless transition"),
+            AppEvent::GitHubTransition {
+                transition: PrTransition::Merged { .. }
+            }
+        ));
+        process_repo_update(&state, "/repo", &[pr], &mut prev);
+        assert!(
+            events.try_recv().is_err(),
+            "unchanged snapshot must not repeat a notice"
+        );
+    }
 
     /// The five control routes used to answer `{"ok": true}` no matter what,
     /// including when no poller was running at all — so a client that changed the

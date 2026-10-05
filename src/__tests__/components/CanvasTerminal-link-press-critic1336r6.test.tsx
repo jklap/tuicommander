@@ -89,10 +89,12 @@ describe("CanvasTerminal link context menu, critic 1336 round 6", () => {
 				}
 				if (cmd === "terminal_get_row_text") return ROW0.trimEnd();
 				if (cmd === "terminal_get_logical_line") return [0, ROW0.trimEnd()];
-				const resolve = (c: string) =>
-					c.startsWith("followups") || c.startsWith("other")
+				const resolve = (candidate: string) => {
+					const c = candidate.replace(/^\/cwd\//, "");
+					return c.startsWith("followups") || c.startsWith("other")
 						? { absolute_path: `/cwd/${c}`, is_directory: false }
 						: null;
+				};
 				if (cmd === "resolve_terminal_path") return resolve(args.candidate ?? "");
 				if (cmd === "resolve_terminal_paths") return (args.candidates ?? []).map(resolve);
 				return null;
@@ -181,7 +183,7 @@ describe("CanvasTerminal link context menu, critic 1336 round 6", () => {
 		rightPress(OSC8_COL);
 		await waitFor(() => expect(openItems()).toHaveLength(1));
 		openItems()[0].click();
-		expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined);
+		await waitFor(() => expect(onOpen).toHaveBeenCalledWith("/cwd/other.md", undefined, undefined));
 	});
 
 	// Catches: the mouseup that ends a macOS ctrl+click (mousedown button 0 → contextmenu → mouseup)

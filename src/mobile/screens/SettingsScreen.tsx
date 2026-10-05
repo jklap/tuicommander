@@ -1,4 +1,5 @@
 import { createSignal, onMount, Show } from "solid-js";
+import { TelegramTab } from "../../components/SettingsPanel/tabs/TelegramTab";
 import { appLogger } from "../../stores/appLogger";
 import { loadMobileTheme, mobileTheme, setMobileTheme } from "../mobileTheme";
 import styles from "./SettingsScreen.module.css";
@@ -20,6 +21,7 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
 type PushState = "unsupported" | "requires-https" | "requires-install" | "denied" | "default" | "subscribed";
 
 export function SettingsScreen(props: SettingsScreenProps) {
+	const [telegramOpen, setTelegramOpen] = createSignal(false);
 	const [soundEnabled, setSoundEnabled] = createSignal(localStorage.getItem(SOUND_KEY) !== "false");
 	const [serverUrl, setServerUrl] = createSignal("");
 	const [serverVersion, setServerVersion] = createSignal<string | null>(null);
@@ -290,6 +292,20 @@ export function SettingsScreen(props: SettingsScreenProps) {
 						<span class={styles.toggleThumb} />
 					</button>
 				</div>
+			</section>
+
+			<section class={styles.section}>
+				<button
+					class={styles.select}
+					disabled={!props.isConnected}
+					onClick={() => setTelegramOpen(!telegramOpen())}
+					aria-expanded={telegramOpen()}
+				>
+					Telegram setup
+				</button>
+				<Show when={telegramOpen()}>
+					<TelegramTab />
+				</Show>
 			</section>
 
 			<section class={styles.section}>

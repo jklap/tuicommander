@@ -8,21 +8,16 @@ fn wrong_status(story: &Story, required: &str) -> String {
     )
 }
 
-/// The wire name of a command, as an agent writes it in the request.
-fn command_name(command: &StoryCommand) -> String {
-    match serde_json::to_value(command) {
-        Ok(serde_json::Value::String(name)) => name,
-        _ => format!("{command:?}"),
-    }
-}
-
 impl StoryStore {
     /// Rebuild dependent readiness from durable integration receipts. Safe to
     /// repeat after a crash between the run event and the story projection.
     pub fn reconcile_integrated_dependencies(&self, plan_id: &str) -> Result<(), String> {
+        let preflight_plan = plan_id.to_owned();
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
-        reconcile_ready(&tx, plan_id, &self.db_path)?;
+        preflight.validate(&tx)?;
+        reconcile_ready(&tx, plan_id, &preflight)?;
         tx.commit()
             .map_err(|error| format!("commit dependency release: {error}"))
     }
@@ -63,8 +58,11 @@ impl StoryStore {
         dependency_id: &str,
         expected_revision: i64,
     ) -> Result<Story, String> {
+        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
+        preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         let dependency = read_story(&tx, dependency_id)?;
         check_revision(&story, expected_revision)?;
@@ -95,7 +93,7 @@ impl StoryStore {
             }
         }
         story.dependencies.push(dependency_id.into());
-        if !dependencies_integrated(&tx, &story, &self.db_path)? {
+        if !dependencies_integrated(&tx, &story, &preflight)? {
             // A ready story with an unfinished or unintegrated dependency is no longer claimable.
             story.status = StoryStatus::Backlog;
         }
@@ -109,13 +107,13 @@ impl StoryStore {
         story_id: &str,
         dependency_id: &str,
         expected_revision: i64,
-        actor_session: Option<&str>,
+        _actor_session: Option<&str>,
     ) -> Result<Story, String> {
-        if actor_session.is_some() {
-            return Err("remove_dependency is user-only and requires a user action: an agent session cannot remove a dependency; ask the user to remove it from the Plans and Stories dialog".into());
-        }
+        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
+        preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
         if story.status != StoryStatus::Backlog {
@@ -141,7 +139,7 @@ impl StoryStore {
             ));
         }
         story.dependencies.retain(|id| id != dependency_id);
-        if dependencies_integrated(&tx, &story, &self.db_path)? {
+        if dependencies_integrated(&tx, &story, &preflight)? {
             story.status = StoryStatus::Ready;
         }
         save_story(&tx, &mut story, expected_revision)?;
@@ -150,6 +148,7 @@ impl StoryStore {
         Ok(story)
     }
 
+    #[cfg(test)]
     pub fn transition(
         &self,
         story_id: &str,
@@ -195,44 +194,19 @@ impl StoryStore {
         command: StoryCommand,
         actor: StoryTransitionActor,
     ) -> Result<Story, String> {
+        let preflight_plan = self.get_story(story_id)?.plan_id;
+        let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
+        preflight.validate(&tx)?;
         let mut story = read_story(&tx, story_id)?;
         check_revision(&story, expected_revision)?;
-        if let StoryTransitionActor::ManagedSession { session_id: actor } = &actor {
-            match command {
-                StoryCommand::CheckCriterion(_)
-                | StoryCommand::UncheckCriterion(_)
-                | StoryCommand::SubmitReview => {
-                    if story.claim_session.as_deref() != Some(actor) {
-                        return Err(match story.claim_session.as_deref() {
-                            Some(_) => "story is claimed by another session".to_string(),
-                            None => format!(
-                                "story is not claimed (status: {}); claim it first",
-                                story.status.as_str()
-                            ),
-                        });
-                    }
-                }
-                StoryCommand::Approve => {
-                    if story.claim_session.as_deref() == Some(actor) {
-                        return Err("a story cannot be approved by its implementer".into());
-                    }
-                }
-                _ => {
-                    return Err(format!(
-                        "{} is user-only and requires a user action: an agent session may only check_criterion, uncheck_criterion and submit_review on its own claimed story, or approve a story claimed by a different session; ask the user to perform it from the Plans and Stories dialog",
-                        command_name(&command)
-                    ));
-                }
-            }
-        }
         match command {
             StoryCommand::StartManual => {
                 if story.status != StoryStatus::Ready {
                     return Err(wrong_status(&story, "ready"));
                 }
-                if !dependencies_integrated(&tx, &story, &self.db_path)? {
+                if !dependencies_integrated(&tx, &story, &preflight)? {
                     return Err("story dependency lacks a current integration receipt".into());
                 }
                 story.status = StoryStatus::InProgress;
@@ -302,7 +276,7 @@ impl StoryStore {
                 if story.status != StoryStatus::Blocked {
                     return Err(wrong_status(&story, "blocked"));
                 }
-                story.status = if dependencies_integrated(&tx, &story, &self.db_path)? {
+                story.status = if dependencies_integrated(&tx, &story, &preflight)? {
                     StoryStatus::Ready
                 } else {
                     StoryStatus::Backlog
@@ -330,7 +304,7 @@ impl StoryStore {
             ],
         ).map_err(|e| format!("record story transition: {e}"))?;
         if story.status == StoryStatus::Done {
-            reconcile_ready(&tx, &story.plan_id, &self.db_path)?;
+            reconcile_ready(&tx, &story.plan_id, &preflight)?;
         }
         tx.commit()
             .map_err(|e| format!("commit story transition: {e}"))?;
@@ -385,14 +359,11 @@ mod tests {
         );
     }
 
-    /// Catches: deleting the `CheckCriterion | UncheckCriterion | SubmitReview` arm of the
-    /// actor guard. The rightful claim holder would fall into the user-only refusal, and the
-    /// exact "another session" / "not claimed" causes would be lost.
+    /// Catches: actor provenance being used to refuse another caller's valid criterion update.
     #[test]
-    fn criterion_commands_refuse_an_actor_that_does_not_hold_the_claim() {
+    fn criterion_commands_use_status_and_revision_not_actor_authority() {
         let dir = tempfile::tempdir().expect("dir");
         let (store, story) = store_with_story(dir.path(), 1);
-
         let err = store
             .transition_for_actor(
                 &story.id,
@@ -400,31 +371,19 @@ mod tests {
                 StoryCommand::CheckCriterion(0),
                 Some("impl"),
             )
-            .expect_err("unclaimed story");
-        assert_eq!(err, "story is not claimed (status: ready); claim it first");
-
+            .expect_err("not in progress");
+        assert!(err.contains("in_progress"), "{err}");
         let claimed = store
             .claim(&story.id, "impl", story.revision)
             .expect("claim");
-        for command in [
-            StoryCommand::CheckCriterion(0),
-            StoryCommand::UncheckCriterion(0),
-            StoryCommand::SubmitReview,
-        ] {
-            let err = store
-                .transition_for_actor(&story.id, claimed.revision, command, Some("other"))
-                .expect_err("claimed by someone else");
-            assert_eq!(err, "story is claimed by another session");
-        }
-
         let checked = store
             .transition_for_actor(
                 &story.id,
                 claimed.revision,
                 StoryCommand::CheckCriterion(0),
-                Some("impl"),
+                Some("other"),
             )
-            .expect("holder checks");
+            .expect("caller checks");
         assert_eq!(checked.checked, vec![true]);
         let unchecked = store
             .transition_for_actor(

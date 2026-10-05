@@ -21,17 +21,20 @@ use std::path::{Path, PathBuf};
 
 /// Refusal text; the frontend matches on `OWNED_ELSEWHERE_MARKER`.
 pub const OWNED_ELSEWHERE: &str = "Dictation is owned by another TUICommander instance. Restart this instance after the other one quits to take dictation over.";
+#[cfg(all(test, feature = "dictation"))]
 pub const OWNED_ELSEWHERE_MARKER: &str = "owned by another TUICommander instance";
 
 const LOCK_FILE: &str = "dictation.lock";
 
 /// What setup registers with the OS, decided by ownership alone.
+#[cfg(any(feature = "dictation", test))]
 #[derive(Debug, PartialEq, Eq)]
 pub struct GlobalInputPlan {
     pub restore_hotkey: bool,
     pub install_fn_monitor: bool,
 }
 
+#[cfg(any(feature = "dictation", test))]
 impl GlobalInputPlan {
     pub fn for_ownership(is_owner: bool) -> Self {
         Self {
@@ -170,6 +173,7 @@ mod tests {
 #[cfg(test)]
 mod critic_tests {
     use super::*;
+    #[cfg(feature = "dictation")]
     use crate::dictation::DictationState;
 
     fn dir() -> tempfile::TempDir {
@@ -208,6 +212,7 @@ mod critic_tests {
         assert!(Ownership::acquire(dir.path()).is_owner());
     }
 
+    #[cfg(feature = "dictation")]
     #[test]
     fn a_state_that_never_claimed_owns_dictation() {
         // Bug caught: the headless build, which never claims, refuses every start.
@@ -216,6 +221,7 @@ mod critic_tests {
         assert!(state.ensure_owner().is_ok());
     }
 
+    #[cfg(feature = "dictation")]
     #[test]
     fn the_refusal_carries_the_marker_the_frontend_matches_on() {
         // Bug caught: the refusal text is edited and the UI notice never shows.
@@ -227,6 +233,7 @@ mod critic_tests {
         assert!(refusal.contains(OWNED_ELSEWHERE_MARKER), "{refusal}");
     }
 
+    #[cfg(feature = "dictation")]
     #[test]
     fn the_claiming_state_keeps_the_lock_until_it_is_dropped() {
         // Bug caught: claim_ownership drops the lock file handle, so a second

@@ -402,7 +402,7 @@ pub struct DeleteBranchResult {
 /// Core logic for deleting a git branch.
 ///
 /// Refuses to delete protected main branches or the currently checked-out branch.
-/// Use `force=true` to delete branches with unmerged commits (`git branch -D`).
+/// Use `force=true` to archive and delete branches with unmerged commits.
 pub fn delete_branch_impl(
     path: &str,
     name: &str,
@@ -436,18 +436,12 @@ pub fn delete_branch_impl(
             was_force: false,
         });
     }
-    let flag = "-D";
-    match git_cmd(&repo_path).args(["branch", flag, "--", name]).run() {
-        Ok(_) => Ok(DeleteBranchResult {
-            deleted: true,
-            branch: name.to_string(),
-            was_force: force,
-        }),
-        Err(crate::git_cli::GitError::NonZeroExit { stderr, .. }) => {
-            Err(format!("git branch delete failed: {stderr}"))
-        }
-        Err(e) => Err(e.to_string()),
-    }
+    crate::worktree::delete_local_branch_with_archive(&repo_path, name)?;
+    Ok(DeleteBranchResult {
+        deleted: true,
+        branch: name.to_owned(),
+        was_force: true,
+    })
 }
 
 /// A recent commit entry for the dropdown
@@ -872,26 +866,37 @@ pub fn get_merged_branches_impl(repo_path: &Path) -> Result<Vec<String>, String>
     let Some(default_branch) = detect_default_branch(&git_dir) else {
         return Ok(vec![]);
     };
-    let main_tip = git_cmd(repo_path)
-        .args([
-            "rev-parse",
-            "--verify",
-            &format!("refs/heads/{default_branch}^{{commit}}"),
-        ])
-        .run()
-        .map_err(|error| format!("Cannot inspect default branch: {error}"))?
-        .stdout;
-    Ok(
-        crate::worktree::branch_integrations_with_pr(repo_path, |_, _, _| false)?
-            .into_iter()
-            .filter(|entry| {
-                entry.branch != default_branch
-                    && entry.tip != main_tip.trim()
-                    && entry.commit_status == crate::worktree::WorkspaceCommitStatus::Merged
-            })
-            .map(|entry| entry.branch)
-            .collect(),
-    )
+    use gix::bstr::ByteSlice;
+    let ref_key = crate::worktree::monitoring_ref_key(repo_path)?;
+    let grepo = gix::open(repo_path).map_err(|e| e.to_string())?;
+    let main_tip = grepo
+        .find_reference(&format!("refs/heads/{default_branch}"))
+        .map_err(|e| e.to_string())?
+        .peel_to_id()
+        .map_err(|e| e.to_string())?
+        .detach();
+    let refs = grepo.references().map_err(|e| e.to_string())?;
+    let mut merged = Vec::new();
+    for reference in refs.prefixed("refs/heads/").map_err(|e| e.to_string())? {
+        let mut reference = reference.map_err(|e| e.to_string())?;
+        let branch = reference.name().shorten().to_str_lossy().into_owned();
+        if branch == default_branch
+            || reference.peel_to_id().map_err(|e| e.to_string())?.detach() == main_tip
+        {
+            continue;
+        }
+        let (status, _) = crate::worktree::monitoring_branch_merge(
+            repo_path,
+            &branch,
+            &ref_key,
+            false,
+            |_, _, _| false,
+        )?;
+        if status == crate::worktree::WorkspaceCommitStatus::Merged {
+            merged.push(branch);
+        }
+    }
+    Ok(merged)
 }
 
 /// Check whether a ref exists in .git/packed-refs (for repos that have been gc'd).
@@ -2208,6 +2213,214 @@ pub async fn get_file_blame(path: String, file: String) -> Result<Vec<BlameLine>
 mod tests {
     use super::*;
     use crate::test_fixtures::setup_test_repo_with_commit;
+
+    // Catches blocking adapters returning empty/default data and losing numstat
+    // counts, even though the lower-level parsers still pass their unit tests.
+    #[test]
+    fn blocking_reads_expose_real_commits_branches_and_diff_counts_1451() {
+        let (_temp, repo) = empty_fixture_repo();
+        assert!(
+            repo.as_path()
+                .canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        std::fs::write(repo.join("tracked.txt"), "before\n").unwrap();
+        git_in(&repo, &["add", "tracked.txt"]);
+        git_in(&repo, &["commit", "-qm", "adapter baseline"]);
+        git_in(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://example.invalid/fixture.git",
+            ],
+        );
+        crate::worktree::set_branch_base(&repo.to_string_lossy(), "main", "develop").unwrap();
+        std::fs::write(repo.join("tracked.txt"), "after\nextra\n").unwrap();
+        let path = repo.to_string_lossy().into_owned();
+        assert_eq!(
+            get_remote_url_blocking(path.clone()).unwrap().as_deref(),
+            Some("https://example.invalid/fixture.git")
+        );
+        assert_eq!(
+            get_branch_base_blocking(path.clone(), "main".into())
+                .unwrap()
+                .as_deref(),
+            Some("develop")
+        );
+        let commits = get_recent_commits_blocking(path.clone(), Some(1)).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].subject, "adapter baseline");
+        assert_eq!(
+            commits[0].hash,
+            git_in(&repo, &["rev-parse", "HEAD"]).trim()
+        );
+        let branches = get_git_branches_blocking(path.clone()).unwrap();
+        let main = branches
+            .iter()
+            .find(|branch| branch["name"] == "main")
+            .unwrap();
+        assert_eq!(main["is_current"], true);
+        assert_eq!(main["is_main"], true);
+        assert_eq!(main["is_remote"], false);
+        let diff = get_git_diff_blocking(path.clone(), None).unwrap();
+        assert!(diff.contains("-before") && diff.contains("+after"));
+        let files = get_changed_files_blocking(path.clone(), None).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "tracked.txt");
+        assert_eq!(files[0].status, "M");
+        assert_eq!((files[0].additions, files[0].deletions), (2, 1));
+        let stats = get_diff_stats_blocking(path.clone(), None).unwrap();
+        assert_eq!((stats.additions, stats.deletions), (2, 1));
+        let file_diff =
+            get_file_diff_blocking(path, "tracked.txt".into(), None, Some(false)).unwrap();
+        assert!(file_diff.contains("-before") && file_diff.contains("+extra"));
+    }
+
+    // Catches the raw/numstat reader confusing rename source and destination,
+    // splitting literal paths, or accidentally reading unstaged work in staged scope.
+    #[test]
+    fn changed_file_counts_preserve_scope_and_rename_paths_1499() {
+        let (_temp, repo) = empty_fixture_repo();
+        assert!(
+            repo.canonicalize()
+                .unwrap()
+                .starts_with(tuic_test_support::test_temp_root().canonicalize().unwrap())
+        );
+        let original = "old name.txt";
+        let renamed = "new name.txt";
+        std::fs::write(repo.join(original), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "baseline"]);
+        let path = repo.to_string_lossy().into_owned();
+        git_in(&repo, &["mv", original, renamed]);
+        std::fs::write(repo.join(renamed), "one\ntwo\nthree\nfour\nfive\nadded\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        let staged = get_changed_files_blocking(path.clone(), Some("staged".into())).unwrap();
+        assert_eq!(staged.len(), 1);
+        assert_eq!(staged[0].path, renamed);
+        assert!(staged[0].status.starts_with('R'), "{}", staged[0].status);
+        assert_eq!((staged[0].additions, staged[0].deletions), (1, 0));
+        std::fs::write(
+            repo.join(renamed),
+            "one\ntwo\nthree\nfour\nfive\nadded\nunstaged\n",
+        )
+        .unwrap();
+        std::fs::write(repo.join("untracked name.txt"), "new\n").unwrap();
+        let working = get_changed_files_blocking(path.clone(), None).unwrap();
+        let changed = working.iter().find(|file| file.path == renamed).unwrap();
+        assert_eq!((changed.additions, changed.deletions), (1, 0));
+        assert!(working.iter().any(|file| file.path == "untracked name.txt"
+            && file.status == "?"
+            && file.additions == 1));
+        git_in(&repo, &["commit", "-qm", "rename"]);
+        let head = git_in(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+        let committed = get_changed_files_blocking(path, Some(head)).unwrap();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].path, renamed);
+        assert_eq!((committed[0].additions, committed[0].deletions), (1, 0));
+    }
+
+    // Catches splitting control-character paths or misaligning binary/deleted
+    // raw records with their numstat records in the public changed-file result.
+    #[cfg(unix)]
+    #[test]
+    fn changed_files_preserve_control_paths_binary_and_deleted_status_critic_1499() {
+        let (_temp, repo) = empty_fixture_repo();
+        let literal = "tracked\tline\nname.txt";
+        std::fs::write(repo.join(literal), "first\nsecond\n").unwrap();
+        std::fs::write(repo.join("deleted.txt"), "removed\n").unwrap();
+        std::fs::write(repo.join("binary.bin"), [0, 1, 2, 3]).unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "critic baseline"]);
+        std::fs::write(repo.join(literal), "first\nreplacement\nthird\n").unwrap();
+        std::fs::remove_file(repo.join("deleted.txt")).unwrap();
+        std::fs::write(repo.join("binary.bin"), [0, 9, 8, 7]).unwrap();
+        let path = repo.to_string_lossy().into_owned();
+        let check = |files: Vec<ChangedFile>| {
+            assert_eq!(files.len(), 3, "unexpected number of changed-file records");
+            for (name, status, additions, deletions) in [
+                (literal, "M", 2, 1),
+                ("deleted.txt", "D", 0, 1),
+                ("binary.bin", "M", 0, 0),
+            ] {
+                let file = files.iter().find(|file| file.path == name).unwrap();
+                assert_eq!(file.status, status, "status for {name:?}");
+                assert_eq!((file.additions, file.deletions), (additions, deletions));
+            }
+        };
+        check(get_changed_files_blocking(path.clone(), None).unwrap());
+        git_in(&repo, &["add", "-A"]);
+        check(get_changed_files_blocking(path.clone(), Some("staged".into())).unwrap());
+        assert!(
+            get_changed_files_blocking(path.clone(), None)
+                .unwrap()
+                .is_empty()
+        );
+        git_in(&repo, &["commit", "-qm", "critic changes"]);
+        let head = git_in(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+        check(get_changed_files_blocking(path, Some(head)).unwrap());
+    }
+
+    // Catches exposing Git's C-quoted display spelling as an untracked path,
+    // which makes the consumer open a nonexistent file and report zero lines.
+    #[cfg(unix)]
+    #[test]
+    fn changed_files_return_literal_untracked_control_path_critic_1499() {
+        let (_temp, repo) = empty_fixture_repo();
+        let literal = "untracked\tline\nname.txt";
+        std::fs::write(repo.join(literal), "first\nsecond\n").unwrap();
+        let files = get_changed_files_blocking(repo.to_string_lossy().into_owned(), None).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].path, literal,
+            "untracked path must be usable by file-diff consumers"
+        );
+        assert_eq!(files[0].status, "?");
+        assert_eq!((files[0].additions, files[0].deletions), (2, 0));
+    }
+
+    // Catches trimming boundary spaces, dropping ordinary untracked files,
+    // or leaking untracked entries into staged/committed scopes.
+    #[cfg(unix)]
+    #[test]
+    fn changed_files_preserve_untracked_boundary_spaces_and_scopes_1502() {
+        let (_temp, repo) = empty_fixture_repo();
+        git_in(&repo, &["commit", "-qm", "empty baseline", "--allow-empty"]);
+        std::fs::write(repo.join("tracked.txt"), "baseline\n").unwrap();
+        git_in(&repo, &["add", "tracked.txt"]);
+        git_in(&repo, &["commit", "-qm", "baseline"]);
+        let head = git_in(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+        let literals = [" leading.txt", "trailing.txt ", "ordinary.txt"];
+        for literal in literals {
+            std::fs::write(repo.join(literal), "first\nsecond\n").unwrap();
+        }
+        let path = repo.to_string_lossy().into_owned();
+        let files = get_changed_files_blocking(path.clone(), None).unwrap();
+        assert_eq!(files.len(), literals.len());
+        for literal in literals {
+            let file = files
+                .iter()
+                .find(|file| file.path == literal)
+                .unwrap_or_else(|| panic!("missing literal untracked path {literal:?}"));
+            assert_eq!(file.status, "?");
+            assert_eq!((file.additions, file.deletions), (2, 0));
+            let diff =
+                get_file_diff_blocking(path.clone(), file.path.clone(), None, Some(true)).unwrap();
+            assert!(diff.contains("+first") && diff.contains("+second"));
+        }
+        assert!(
+            get_changed_files_blocking(path.clone(), Some("staged".into()))
+                .unwrap()
+                .is_empty()
+        );
+        let committed = get_changed_files_blocking(path, Some(head)).unwrap();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(committed[0].path, "tracked.txt");
+        assert_eq!(committed[0].status, "A");
+    }
 
     // --- Fixture repositories ---
     //
@@ -4578,6 +4791,78 @@ filename test.txt
         assert!(r.deleted);
     }
 
+    // Catches: force deletion losing unique commits, clobbering archives, or deleting checked-out branches.
+    #[test]
+    fn force_delete_preserves_unique_tip_archives_collisions_at_a_suffix_and_refuses_checkouts() {
+        let (dir, path) = setup_test_repo_with_commit();
+        let repo = path.to_string_lossy();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(&path)
+                .args(args)
+                .output()
+                .expect("git");
+            assert!(
+                output.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout)
+                .expect("utf8")
+                .trim()
+                .to_owned()
+        };
+        let branch_exists = |name: &str| {
+            std::process::Command::new("git")
+                .current_dir(&path)
+                .args(["show-ref", "--verify", &format!("refs/heads/{name}")])
+                .output()
+                .expect("git")
+                .status
+                .success()
+        };
+        git(&["branch", "-M", "main"]);
+        let original = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-b", "unique"]);
+        git(&["commit", "--allow-empty", "-m", "unique commit"]);
+        let unique = git(&["rev-parse", "HEAD"]);
+        assert_ne!(original, unique);
+        assert!(delete_branch_impl(&repo, "unique", true).is_err());
+        git(&["checkout", "main"]);
+        delete_branch_impl(&repo, "unique", true).expect("force delete unique");
+        assert_eq!(git(&["rev-parse", "refs/archive/unique"]), unique);
+        assert!(!branch_exists("unique"));
+        git(&["branch", "integrated"]);
+        delete_branch_impl(&repo, "integrated", true).expect("force delete integrated");
+        assert_eq!(git(&["rev-parse", "refs/archive/integrated"]), original);
+        git(&["branch", "collision", &unique]);
+        git(&["update-ref", "refs/archive/collision", &original]);
+        delete_branch_impl(&repo, "collision", true).expect("archive collision uses a suffix");
+        assert!(!branch_exists("collision"));
+        assert_eq!(git(&["rev-parse", "refs/archive/collision"]), original);
+        let suffixed = format!("refs/archive/collision-{}", &unique[..7]);
+        assert_eq!(git(&["rev-parse", &suffixed]), unique);
+        // Catches: a branch name force-deleted once, recreated, becoming undeletable.
+        git(&["branch", "collision", &unique]);
+        delete_branch_impl(&repo, "collision", true)
+            .expect("second deletion reuses suffixed archive");
+        assert_eq!(git(&["rev-parse", &suffixed]), unique);
+        git(&["branch", "same-archive"]);
+        git(&["update-ref", "refs/archive/same-archive", &original]);
+        delete_branch_impl(&repo, "same-archive", true).expect("reuse exact archive");
+        assert_eq!(git(&["rev-parse", "refs/archive/same-archive"]), original);
+        let checkout = dir.path().join("linked-checkout");
+        git(&[
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            checkout.to_str().expect("path"),
+        ]);
+        assert!(delete_branch_impl(&repo, "linked", true).is_err());
+        assert_eq!(git(&["rev-parse", "refs/heads/linked"]), original);
+    }
+
     #[test]
     fn test_delete_branch_refuses_main() {
         let (_dir, path) = setup_test_repo_with_commit();
@@ -4950,45 +5235,54 @@ pub fn get_changed_files_blocking(
             return Ok(vec![]);
         }
 
-        // Get file status and per-file stats in a single git diff call
+        // --name-status suppresses --numstat. Raw status records coexist with
+        // numstat; NUL delimiters preserve literal paths and rename destinations.
         let mut args = diff_base_args(&scope)?;
-        args.push("--name-status".into());
-        args.push("--numstat".into());
-
-        // Note: git outputs numstat block first, then name-status block
-        // when both flags are combined. We parse both sections.
+        args.extend(["--raw".into(), "--numstat".into(), "-z".into()]);
         let args_str: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let combined_out = git_cmd(&repo_path)
             .args(&args_str)
             .run()
             .map_err(|e| format!("git diff failed: {e}"))?;
 
-        // Parse: numstat lines have 3+ tab/space-separated fields (digits digits path),
-        // name-status lines have a letter followed by path.
         let mut stats_map: HashMap<String, (u32, u32)> = HashMap::new();
         let mut status_map: HashMap<String, String> = HashMap::new();
-
-        for line in combined_out.stdout.lines() {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 {
-                // Try parsing as numstat (first two fields are numbers or '-')
-                if let (Ok(add), Ok(del)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-                    let file_path = parts[2..].join(" ");
-                    stats_map.insert(file_path, (add, del));
+        let mut records = combined_out.stdout.split('\0');
+        while let Some(record) = records.next() {
+            if record.starts_with(':') {
+                let Some(status) = record.split_whitespace().last() else {
                     continue;
-                }
-                // Binary files show "-\t-\tpath" in numstat
-                if parts[0] == "-" && parts[1] == "-" {
-                    let file_path = parts[2..].join(" ");
-                    stats_map.insert(file_path, (0, 0));
+                };
+                let Some(path) = records.next() else { continue };
+                let path = if status.starts_with(['R', 'C']) {
+                    let Some(destination) = records.next() else {
+                        continue;
+                    };
+                    destination
+                } else {
+                    path
+                };
+                status_map.insert(path.to_owned(), status.to_owned());
+            } else if let Some((add, rest)) = record.split_once('\t') {
+                let Some((del, path)) = rest.split_once('\t') else {
                     continue;
-                }
-            }
-            // Otherwise treat as name-status line
-            if parts.len() >= 2 {
-                let status = parts[0].to_string();
-                let file_path = parts[1..].join(" ");
-                status_map.insert(file_path, status);
+                };
+                let path = if path.is_empty() {
+                    // A rename numstat record carries old and new paths separately.
+                    let Some(_source) = records.next() else {
+                        continue;
+                    };
+                    let Some(destination) = records.next() else {
+                        continue;
+                    };
+                    destination
+                } else {
+                    path
+                };
+                stats_map.insert(
+                    path.to_owned(),
+                    (add.parse().unwrap_or(0), del.parse().unwrap_or(0)),
+                );
             }
         }
 
@@ -5019,12 +5313,11 @@ pub fn get_changed_files_blocking(
         // For working tree scope, also include untracked files
         if scope.is_none() {
             let untracked_out = git_cmd(&repo_path)
-                .args(["ls-files", "--others", "--exclude-standard"])
+                .args(["ls-files", "--others", "--exclude-standard", "-z"])
                 .run_silent();
 
             if let Some(ref out) = untracked_out {
-                for line in out.stdout.lines() {
-                    let file_path = line.trim();
+                for file_path in out.stdout.split('\0') {
                     if file_path.is_empty() {
                         continue;
                     }

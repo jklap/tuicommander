@@ -27,6 +27,7 @@ review semantic changes separately from that reflow.
 | `src/event.rs` | `Event::Osc133 { command, params, line }`, `Event::Osc7(String)`, `Event::Tuic { verb, payload, line }` variants | Carry parsed OSC 133 / OSC 7 / OSC 7770 events from VTE to the application layer. All three carry the grid `line` where the marker landed. |
 | `src/term/mod.rs` | `Config.alt_scrolling_history` + alt-grid history in `Term::new`/`set_options`, era reset in `swap_alt` | User-visible parity with iTerm2's optional alternate-screen scrollback, implemented with Alacritty's separate grids rather than iTerm2's shared persistent line buffer. Upstream gives the alternate grid capacity 0 (XTerm semantics), so an app printing more than a screenful (`gh run watch`, `less`, `man`) loses whatever scrolls off. The field defaults to `0`, preserving upstream behavior for consumers that do not opt in; TUICommander uses the primary cap. Each enter/exit starts a fresh alternate era, so sessions never inherit one another and no alternate lines remain logically retained after exit. Oversized repeated redraws remain repeated because the emulator is byte-faithful, not a semantic snapshot deduplicator. |
 | `src/term/mod.rs` | `pub fn primary_history_size()` | Returns primary-grid history even while the alternate grid is active. Durable-log resize synchronization must stay in this coordinate space; using active alternate history can suppress the first normal-shell lines after exit. |
+| `src/grid/row.rs`, `src/grid/mod.rs`, `src/grid/resize.rs`, `src/term/mod.rs` | `Row::copy_origin_unknown` | Per-row copy provenance: predecessor eviction/purge makes the oldest retained origin unknown; full row reset/erase restores it. Selection cleanup consults this flag without changing absolute row counters. |
 | `src/grid/mod.rs` | `pub fn reset_history_era()` | `clear_history()` keeps `lines_scrolled` monotonic because absolute row ids must be stable for the life of a physical line. The alternate screen is a separate content universe wiped on every enter/exit, so it gets a fresh era instead: history *and* counter reset. Frame-protocol `keyboard_flags` bit 5 marks the transition; the frontend then atomically invalidates row, scroll, selection, search, and link state. |
 | `src/grid/mod.rs` | `lines_scrolled` field + `pub fn total_scrolled()` | Monotonic count of lines ever scrolled into history (incremented in `scroll_up`). `total_scrolled() - history_size()` gives lines evicted from the top, the base for an eviction-stable absolute row coordinate. Excluded from `PartialEq`; `serde(default)` so old ref fixtures still load. |
 | `src/grid/mod.rs` | `pub enum ScrollSource` + `pub fn scroll_up_with(region, positions, source)` | Says *why* lines move up, because the region cannot: a linefeed past the bottom margin and a DL at the top row both present a region that starts at line 0. `Overflow` feeds history, advances `lines_scrolled` and shifts a scrolled-back viewport; `Control` swaps within the region and moves no counter. `scroll_up` still delegates as `Overflow`, so `resize.rs` and `clear_viewport` are untouched (#834-1878). |
@@ -54,8 +55,8 @@ answers three of them differently from DEC and from xterm:
 | ICH (`CSI Ps @`), DCH (`CSI Ps P`), ECH (`CSI Ps X`) | edit the cell under the cursor, therefore resolve the pending wrap | carried the wrap past the edit, so the next character jumped to the following row |
 | ED0 (`CSI 0 J`) | the erase origin is past the right margin, so the current line keeps its last cell; lines below still clear | erased that cell, dropping a character the user had already seen |
 
-ED1, EL0, EL1 and EL2 already agreed with the reference and are deliberately
-unchanged — `clear_line` has carried the `LineClearMode::Right` guard all along.
+ED1 pending-wrap behavior, EL0, EL1 and EL2 already agreed with the reference
+and are deliberately unchanged — `clear_line` has carried the `LineClearMode::Right` guard all along.
 Do not "fix" them alongside the three rows above; `term::tests` pins their
 current behaviour for exactly that reason.
 
@@ -112,7 +113,37 @@ make the two representations overlap.
 
 Clipboard selections use the same absolute grid coordinates. TUICommander joins
 rows marked with `WRAPLINE`, trims terminal padding, and then removes only
-coherent multi-line Claude `NBSP NBSP ▎` visual gutters. This normalization is
+coherent multi-line Claude space/NBSP `▎` visual gutters. Claude composer
+selections remove one leading `❯ ` and two continuation-margin columns only
+when the ordered selection starts at grid column zero with the marker in the
+first two cells and the preceding row has no `WRAPLINE`. Partial body selections
+and VT soft-wrap continuation origins remain literal. At every retained
+row, cleanup requires known row provenance. A single `copy_origin_unknown`
+flag prevents cleanup even when RI/IL moves the physical row. Eviction or purge
+of nonblank predecessor content sets it on the surviving boundary row, including
+a blank survivor; removing only blank rows does not set it. Cap trimming,
+reprint-tail removal and reflow truncation use the same content-loss rule.
+There is no separate latent flag, blank-history exemption or resize promotion.
+Full row replacements (ECH, DCH, ICH, EL or ED covering every column from
+column zero, and DECALN alignment-screen replacement) share `Row::reset`, which
+clears the flag without changing absolute row counters. Partial edits preserve it.
+A composer redrawn on a blank loss boundary can retain its `❯ ` in copied text
+until the row is fully erased. This cosmetic limitation is intentional: literal
+content takes priority over speculative cleanup of an ambiguous origin.
+ED1 resets every row above the cursor, including row zero when the cursor is on
+row one; upstream skips that row with its `cursor.line > 1` guard. The cursor row
+is erased only through its current column, and rows below remain unchanged.
+ED2 resets all visible rows after scrolling occupied content into history. This
+clears loss flags that overflow can attach to a fresh blank row with zero scrollback,
+while retained history keeps its provenance. ED3 does not erase live content.
+DECALN fills live rows with default-background E cells after resetting provenance;
+it does not inherit the active erase background. Ordinary printing, including
+insert-mode shifts and a sequence that overwrites every cell, preserves unknown
+provenance because it has no explicit whole-row replacement boundary.
+RI/IL retains the moved row's flag and literal copy behavior at its new position.
+Unknown content stays literal; the same width-evidence rule rejoins wraps
+while preserving short typed lines and deeper content indentation. Pasted prompt
+glyphs remain content. This normalization is
 outside the Alacritty fork and is shared by desktop IPC and HTTP clients.
 
 Atomic MCP agent-submission receipts require no Alacritty patch. The receipt
@@ -213,3 +244,7 @@ Driven by the `alacritty-upstream` entry in `.claude/scheduled-checks.json` (eve
 | — | P2 | OSC 7770 TUIC protocol (state/suggest/intent) | **Done** — full pipeline from VTE→Event→PTY→ParsedEvent |
 | — | P3 | Use cell_type for idle detection (OSC 133 shells) | Pending — next step after TUIC protocol |
 | 1553-5e8c | P3 | Port Zed child-exit raw waitpid status | Pending |
+
+### Stored terminal marker coordinates
+
+OSC 133 and OSC 7770 event rows use `grid.total_scrolled() + cursor row`. Capture this origin inside the OSC handler, before later bytes in the same chunk can evict history. Retained history size is not an absolute origin.

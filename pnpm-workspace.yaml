@@ -1,9 +1,19 @@
 allowBuilds:
   esbuild: true
 
+# Boss-approved 2026-10-04; expires 2026-11-04 (pnpm does not enforce expiry).
+# No npm patch exists for build-only braces 3.0.3; see development-setup.md.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-vfj7-8cjw-p6xm
+
 # pnpm 11 no longer reads the "pnpm.overrides" field from package.json — overrides
 # live here. These pin transitive deps for security and to dedupe versions.
 overrides:
+  # Pin the runtime sanitizer, including Mermaid's transitive copy.
+  dompurify: "3.4.16"
+  # Development-only dependency via Stryker.
+  qs: "6.16.0"
   "vite-plugin-purgecss>purgecss": "^8.0.0"
   minimatch: ">=3.1.4"
   brace-expansion: ">=1.1.13"

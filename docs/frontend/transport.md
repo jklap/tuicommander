@@ -6,6 +6,8 @@ Repository-owned calls resolve their machine from path arguments, including
 `project` on the Project Progress commands. The remote backend owns the
 journal; the local transport routes reads and writes to it.
 
+OS drops are a cross-machine operation: desktop-only `fs_transfer_remote_paths` runs through local Tauri IPC, reads Finder source paths and streams bounded archives to `/fs/upload-copy` on the connection id supplied by the drop target. It is `INTENTIONALLY_UNMAPPED`: HTTP token holders must not trigger exfiltration of sources that cannot be gated to registered roots. It uses `remote_runtime` for the live endpoint and existing token. It must not route local source paths to the receiving daemon.
+
 ## Files
 
 | File | Purpose |
@@ -126,3 +128,10 @@ The transport abstraction enables:
 4. **MCP integration:** External tools use the same HTTP API
 
 The abstraction is resolved once at module load — no per-call overhead in production Tauri mode.
+
+The `enqueue_agent_command` mapper forwards optional `idempotencyKey` unchanged
+to `POST /sessions/:id/queue`. Both transports return `{ accepted, typed, queued }`.
+A recognized retry has `accepted: true` even after the queue drained; `typed`
+reports no new typing on that retry.
+
+Telegram setup maps `telegram_settings`/`telegram_setup` to authenticated GET/PUT `/config/telegram`, with identical action payloads across IPC and HTTP. Mobile Settings mounts the same Telegram component.

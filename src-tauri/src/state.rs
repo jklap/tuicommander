@@ -480,12 +480,14 @@ pub enum AppEvent {
     /// A Whisper model download moved. `payload` is the body the desktop
     /// `dictation-download-progress` emit carries, built once so the two
     /// transports cannot describe the same download differently.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "dictation-download-progress")]
     DictationDownloadProgress { payload: serde_json::Value },
     /// A speech asset download moved — the runtime library or one language
     /// bundle. Keyed by asset inside the payload, because a user can start two
     /// downloads at once and one shared percent would show each of them the
     /// other's.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-download-progress")]
     SpeechDownloadProgress { payload: serde_json::Value },
     /// A spoken reply changed state: queued, rendering, speaking, finished,
@@ -501,6 +503,7 @@ pub enum AppEvent {
     /// interesting ones (`finished`, `interrupted`) happen on the render thread
     /// long after `speak` returned, and a consumer that had to discover them
     /// would be polling.
+    #[cfg(feature = "dictation")]
     #[serde(rename = "speech-utterance")]
     SpeechUtterance { payload: serde_json::Value },
 }
@@ -613,6 +616,28 @@ pub(crate) struct SessionState {
     /// Detected agent type, if known
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// Run-config identity is armed before first observation; discovered identity
+    /// is revoked when a shell returns to the foreground.
+    #[serde(skip)]
+    pub(crate) agent_type_from_run_config: bool,
+    /// A preset is armed during shell startup only. Once its agent has been
+    /// observed, shell foreground means it has exited and cannot receive input.
+    #[serde(skip)]
+    pub(crate) agent_foreground_observed: bool,
+    /// Telegram opt-in lifetime, retired synchronously on observed agent exit.
+    #[serde(skip)]
+    pub(crate) telegram_registration_lifetime: Option<Arc<()>>,
+    /// Accepted OS foreground snapshot order; late completion cannot overwrite
+    /// a newer observation from another timer/IPC/HTTP caller.
+    #[serde(skip)]
+    pub(crate) foreground_probe_generation: u64,
+    #[serde(skip)]
+    pub(crate) spawn_root_role: SpawnRootRole,
+    /// A direct agent child owns foreground, or root observation is unavailable.
+    #[serde(skip)]
+    pub(crate) foreground_input_blocked: bool,
+    #[serde(skip)]
+    pub(crate) foreground_probe_result: Option<String>,
     /// Keep the foreground detection warning to one record per session.
     #[serde(skip)]
     pub(crate) unknown_foreground_warned: bool,
@@ -664,6 +689,15 @@ pub(crate) struct SessionState {
     /// Epoch ms of last push notification sent for this session (rate limiting)
     #[serde(skip)]
     pub last_push_ms: Option<u64>,
+}
+
+/// Immutable spawn metadata; unknown mirrors cannot authorize local injection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SpawnRootRole {
+    #[default]
+    Unknown,
+    Shell,
+    DirectProgram,
 }
 
 impl SessionState {
@@ -778,6 +812,15 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
 }
 
 /// PartialEq excludes last_activity_ms (telemetry, not logical state).
+impl SessionState {
+    /// Seed configured identity synchronously, before readers/events can use it.
+    pub(crate) fn seed_configured_agent(&mut self, agent_type: Option<String>) {
+        self.agent_type_from_run_config = agent_type.is_some();
+        self.agent_foreground_observed = false;
+        self.agent_type = agent_type;
+    }
+}
+
 /// Used by WS dedup to avoid sending identical state frames.
 impl PartialEq for SessionState {
     fn eq(&self, other: &Self) -> bool {
@@ -1957,6 +2000,7 @@ pub struct SessionMaps {
 
 /// Global state for managing PTY sessions and worktrees
 pub struct AppState {
+    pub(crate) secrets: crate::secrets::SecretStore,
     /// Every per-session side table, keyed by session id.
     pub(crate) session_maps: SessionMaps,
     pub(crate) data_dir: PathBuf,
@@ -2141,6 +2185,8 @@ pub struct AppState {
     /// delivery order is global. Peer `send` payloads are never in here — see
     /// `PendingInjection`. The inbox is the authoritative copy of every message.
     pub(crate) pending_injections: DashMap<String, VecDeque<PendingInjection>>,
+    /// Last 128 accepted queue keys per PTY, including entries already drained.
+    pub(crate) recent_queue_keys: DashMap<String, VecDeque<String>>,
     /// Initial prompts awaiting successful PTY submission. Successful delivery
     /// removes the marker; the delivery watchdog notifies the parent once and
     /// leaves the prompt in place so a child that was blocked on a startup
@@ -2198,6 +2244,8 @@ pub struct AppState {
     /// Sessions running on connected remote machines, mirrored from their own
     /// `GET /sessions` and `/events` so they raise the same badges as local ones.
     pub(crate) remote_sessions: crate::remote_mirror::RemoteSessions,
+    /// Duplex, authenticated agent mail links through this desktop hub.
+    pub(crate) remote_mail: crate::mcp_http::remote_peer::RemoteMail,
     /// Task registry for long-running MCP orchestration. Survives client
     /// reconnects, so an orchestrator is not bound by the 300s wait ceiling.
     pub(crate) tasks: Arc<crate::tasks::TaskRegistry>,
@@ -2428,7 +2476,9 @@ impl AppState {
 
     pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) -> u64 {
         self.track_blocked_hold(recipient, &msg);
-        self.store_agent_inbox(recipient, msg)
+        let timestamp = self.store_agent_inbox(recipient, msg);
+        crate::mcp_http::remote_peer::notice_stored(self, recipient);
+        timestamp
     }
 
     /// `push_agent_inbox` without touching BLOCKED holds, for replaying mail that
@@ -3341,6 +3391,7 @@ impl AppState {
             tunnel_audit.clone(),
         ));
         Self {
+            secrets: crate::secrets::SecretStore::default(),
             session_maps: SessionMaps::default(),
             data_dir,
             worktrees_dir,
@@ -3397,6 +3448,7 @@ impl AppState {
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
             pending_injections: DashMap::new(),
+            recent_queue_keys: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             managed_trust_dialogs: DashSet::new(),
             active_agent_waiters: DashMap::new(),
@@ -3415,6 +3467,7 @@ impl AppState {
             tunnel_manager,
             remote: Default::default(),
             remote_sessions: Default::default(),
+            remote_mail: Default::default(),
             tunnel_audit,
             tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
@@ -3913,6 +3966,7 @@ pub(crate) struct SettledReviewThreads {
 pub(crate) struct GitCacheState {
     pub(crate) repo_info: GitCache<crate::git::RepoInfo>,
     pub(crate) merged_branches: GitCache<Vec<String>>,
+    pub(crate) repo_diff_stats: GitCache<crate::git::RepoDiffStats>,
     pub(crate) branches_detail: GitCache<Vec<crate::git::BranchDetail>>,
     pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
     pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
@@ -3939,6 +3993,7 @@ impl GitCacheState {
         Self {
             repo_info: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             merged_branches: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            repo_diff_stats: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             branches_detail: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_status: build_git_cache(GITHUB_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
@@ -3958,6 +4013,7 @@ impl GitCacheState {
     pub(crate) fn clear_all(&self) {
         self.repo_info.invalidate_all();
         self.merged_branches.invalidate_all();
+        self.repo_diff_stats.invalidate_all();
         self.branches_detail.invalidate_all();
         self.github_status.invalidate_all();
         self.git_status.invalidate_all();
@@ -3969,6 +4025,7 @@ impl GitCacheState {
     pub(crate) fn invalidate_repo(&self, path: &str) {
         self.repo_info.invalidate(path);
         self.merged_branches.invalidate(path);
+        self.repo_diff_stats.invalidate(path);
         self.branches_detail.invalidate(path);
         // github_status (remote PR/CI data) is NOT invalidated here — local git
         // changes don't affect remote PRs. The poller and head-changed → pollRepo
@@ -4236,6 +4293,10 @@ impl AppState {
         }
         state.agent_state = if state.agent_type.is_none() {
             None
+        } else if state.foreground_input_blocked {
+            // A direct program's child owns the terminal even if the retained
+            // ready screen or completion marker still describes the parent.
+            Some("working".to_string())
         } else if state.awaiting_input || state.choice_prompt.is_some() {
             Some("awaiting_input".to_string())
         } else if background_work {
@@ -4311,6 +4372,23 @@ impl AppState {
                             ) {
                                 Self::send_mobile_push_url(&state, url, &body);
                             }
+                        } else if notice.kind == crate::acp::AcpNoticeKind::Card {
+                            let repo = state
+                                .acp
+                                .snapshot(notice.connection_id)
+                                .ok()
+                                .filter(|snapshot| snapshot.generation == notice.generation)
+                                .and_then(|snapshot| {
+                                    snapshot.attachments.into_iter().find(|attachment| {
+                                        Some(&attachment.session_id) == notice.session_id.as_ref()
+                                    })
+                                })
+                                .and_then(|attachment| attachment.cwd.to_str().map(str::to_owned));
+                            if let Some((url, body)) = repo.as_deref().and_then(|repo| {
+                                Self::mobile_push_for_acp_session(&state, &notice, repo)
+                            }) {
+                                Self::send_mobile_push_url(&state, url, &body);
+                            }
                         }
                     }
                     // A notice carries nothing that cannot be re-read: a client
@@ -4338,6 +4416,15 @@ impl AppState {
             return None;
         }
         let (_, repo) = pending?;
+        Self::mobile_push_for_acp_session(state, notice, repo)
+    }
+
+    /// Questions and ego cards spend the same conversation budget.
+    fn mobile_push_for_acp_session(
+        state: &Arc<AppState>,
+        notice: &crate::acp::AcpNotice,
+        repo: &str,
+    ) -> Option<(String, String)> {
         let session_id = notice.session_id.as_ref()?;
         let ready = {
             let config = state.config.read();
@@ -4369,7 +4456,12 @@ impl AppState {
             .finish();
         Some((
             format!("/mobile?{query}"),
-            "AI Chat: response needed".to_string(),
+            if notice.kind == crate::acp::AcpNoticeKind::Card {
+                "AI Chat: new notice"
+            } else {
+                "AI Chat: response needed"
+            }
+            .to_string(),
         ))
     }
 
@@ -4522,12 +4614,16 @@ impl AppState {
                     .entry(session_id.clone())
                     .and_modify(|session| {
                         session.last_activity_ms = now_ms;
-                        session.agent_type = agent_type.clone();
+                        // Creation may be applied after foreground discovery.
+                        // Never re-arm a preset whose agent was already seen.
+                        if session.agent_type.is_none() && !session.agent_foreground_observed {
+                            session.seed_configured_agent(agent_type.clone());
+                        }
                     })
-                    .or_insert_with(|| SessionState {
-                        last_activity_ms: now_ms,
-                        agent_type: agent_type.clone(),
-                        ..Default::default()
+                    .or_insert_with(|| {
+                        let mut session = SessionState { last_activity_ms: now_ms, ..Default::default() };
+                        session.seed_configured_agent(agent_type.clone());
+                        session
                     });
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
@@ -5011,11 +5107,12 @@ impl AppState {
             // A mirrored event is the far end's accumulator output. Feeding it
             // in here would build a second, local row for a session this
             // machine does not run.
-            | AppEvent::RemoteMirrored { .. }
+            | AppEvent::RemoteMirrored { .. } => {}
             // Dictation is bound to a session but says nothing about it: a
             // download belongs to the installation, and a spoken reply belongs
             // to the conversation rather than to the terminal it will reach.
-            | AppEvent::DictationDownloadProgress { .. }
+            #[cfg(feature = "dictation")]
+            AppEvent::DictationDownloadProgress { .. }
             | AppEvent::SpeechDownloadProgress { .. }
             | AppEvent::SpeechUtterance { .. } => {}
         }
@@ -8327,6 +8424,31 @@ mod tests {
         }
     }
 
+    /// Catches: a delayed creation event re-arms a preset after the agent was
+    /// observed and exited, reopening unattended input into the returned shell.
+    #[test]
+    fn delayed_session_created_cannot_rearm_an_observed_agent_after_exit() {
+        let state = Arc::new(make_test_app_state());
+        let mut session = SessionState::default();
+        session.seed_configured_agent(Some("claude".into()));
+        session.agent_foreground_observed = true;
+        session.agent_type = None;
+        session.agent_type_from_run_config = false;
+        state
+            .session_maps
+            .session_states
+            .insert("late-created".into(), session);
+        AppState::apply_event_to_session_state(&state, &session_created("late-created", "claude"));
+        let row = state
+            .session_maps
+            .session_states
+            .get("late-created")
+            .unwrap();
+        assert_eq!(row.agent_type, None);
+        assert!(!row.agent_type_from_run_config);
+        assert!(row.agent_foreground_observed);
+    }
+
     /// Catches: SessionCreated building the row without `last_activity_ms` or
     /// `agent_type` (new-entry path), or not refreshing them on a row that a
     /// PtyParsed event created first (existing-entry path).
@@ -8399,6 +8521,216 @@ mod tests {
                 .is_some(),
             "a current question must record awaiting evidence"
         );
+    }
+
+    // Catches: admitting a current non-question as awaiting evidence when && becomes ||.
+    #[test]
+    fn current_non_question_does_not_record_awaiting_evidence() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "intent",
+                serde_json::json!({"text": "Working", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(!state.session_state_with_shell("s1").unwrap().awaiting_input);
+        assert_eq!(
+            state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank(),
+            None
+        );
+    }
+
+    // Catches: a same-epoch clear for another question retracts the current approval.
+    #[test]
+    fn protocol_clear_for_another_question_preserves_the_current_approval() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({"prompt_text": "Approve deploy?", "confident": true, "_turn_epoch": 0}),
+            ),
+        );
+        let row = apply(
+            &state,
+            &make_parsed(
+                "protocol-question-cleared",
+                serde_json::json!({"expected_question_text": "Approve delete?", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(row.awaiting_input);
+        assert_eq!(row.question_text.as_deref(), Some("Approve deploy?"));
+        let row = apply(
+            &state,
+            &make_parsed(
+                "protocol-question-cleared",
+                serde_json::json!({"expected_question_text": "Approve deploy?", "_turn_epoch": 0}),
+            ),
+        );
+        assert!(!row.awaiting_input);
+        assert_eq!(row.question_text, None);
+    }
+
+    /// Catches: deleting a parsed-state arm silently drops usage, errors, menu
+    /// entries or subtask counts from the snapshot consumed by clients.
+    #[test]
+    fn parsed_agent_details_reach_the_client_snapshot_and_can_be_replaced() {
+        let state = fresh_state();
+        for (kind, payload) in [
+            ("usage-limit", serde_json::json!({ "percentage": 81 })),
+            (
+                "api-error",
+                serde_json::json!({ "matched_text": "authentication failed" }),
+            ),
+            (
+                "slash-menu",
+                serde_json::json!({ "items": [{
+                "command": "/help", "description": "Show commands", "highlighted": true
+            }] }),
+            ),
+            ("active-subtasks", serde_json::json!({ "count": 3 })),
+        ] {
+            apply(&state, &make_parsed(kind, payload));
+        }
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.usage_limit_pct, Some(81));
+        assert_eq!(
+            snapshot.last_error.as_deref(),
+            Some("authentication failed")
+        );
+        assert_eq!(
+            snapshot.slash_menu_items,
+            Some(vec![crate::output_parser::SlashMenuItem {
+                command: "/help".into(),
+                description: "Show commands".into(),
+                highlighted: true,
+            }])
+        );
+        assert_eq!(snapshot.active_sub_tasks, 3);
+
+        apply(
+            &state,
+            &make_parsed("usage-limit", serde_json::json!({ "percentage": 0 })),
+        );
+        apply(
+            &state,
+            &make_parsed("slash-menu", serde_json::json!({ "items": [] })),
+        );
+        apply(
+            &state,
+            &make_parsed("active-subtasks", serde_json::json!({ "count": 0 })),
+        );
+        apply(
+            &state,
+            &make_parsed("status-line", serde_json::json!({ "task_name": "Working" })),
+        );
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.usage_limit_pct, Some(0));
+        assert_eq!(snapshot.last_error, None);
+        assert_eq!(snapshot.slash_menu_items, Some(vec![]));
+        assert_eq!(snapshot.active_sub_tasks, 0);
+    }
+
+    /// Catches: an inverted or removed epoch guard retracts the current prompt
+    /// on a stale clear, or an always-false guard prevents its real answer.
+    #[test]
+    fn question_clear_preserves_current_prompt_until_matching_epoch_arrives() {
+        for (clear_kind, confident) in [
+            ("question-cleared", false),
+            ("protocol-question-cleared", true),
+        ] {
+            let state = fresh_state();
+            state
+                .session_maps
+                .session_states
+                .get_mut("s1")
+                .unwrap()
+                .turn_epoch = 2;
+            apply(
+                &state,
+                &make_parsed(
+                    "question",
+                    serde_json::json!({
+                        "prompt_text": "Proceed with the current operation?",
+                        "confident": confident,
+                        "_turn_epoch": 2,
+                    }),
+                ),
+            );
+            let before = state.session_state_with_shell("s1").unwrap();
+            assert!(before.awaiting_input);
+            let rank = state
+                .session_maps
+                .silence_states
+                .get("s1")
+                .unwrap()
+                .lock()
+                .awaiting_rank();
+            assert!(rank.is_some());
+            apply(
+                &state,
+                &make_parsed(
+                    clear_kind,
+                    serde_json::json!({
+                        "expected_question_text": "Proceed with the current operation?",
+                        "_turn_epoch": 1,
+                    }),
+                ),
+            );
+            let stale = state.session_state_with_shell("s1").unwrap();
+            assert!(
+                stale.awaiting_input,
+                "{clear_kind} cleared a newer question"
+            );
+            assert_eq!(
+                stale.question_text.as_deref(),
+                Some("Proceed with the current operation?")
+            );
+            assert_eq!(
+                state
+                    .session_maps
+                    .silence_states
+                    .get("s1")
+                    .unwrap()
+                    .lock()
+                    .awaiting_rank(),
+                rank
+            );
+
+            apply(
+                &state,
+                &make_parsed(
+                    clear_kind,
+                    serde_json::json!({
+                        "expected_question_text": "Proceed with the current operation?",
+                        "_turn_epoch": 2,
+                    }),
+                ),
+            );
+            let answered = state.session_state_with_shell("s1").unwrap();
+            assert!(
+                !answered.awaiting_input,
+                "{clear_kind} ignored the current answer"
+            );
+            assert_eq!(answered.question_text, None);
+            assert_eq!(
+                state
+                    .session_maps
+                    .silence_states
+                    .get("s1")
+                    .unwrap()
+                    .lock()
+                    .awaiting_rank(),
+                None
+            );
+        }
     }
 
     #[test]
@@ -8474,6 +8806,38 @@ mod tests {
             )),
             "repository paths must stay inside the deep-link query value"
         );
+        let mut card = notice.clone();
+        card.kind = crate::acp::AcpNoticeKind::Card;
+        card.request_id = None;
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            None,
+            "a card must not bypass the question's 30-second conversation budget"
+        );
+        card.session_id = Some(agent_client_protocol::schema::v1::SessionId::new(
+            "card-only",
+        ));
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            Some((
+                "/mobile?repo=%2Frepo&session=card-only".to_string(),
+                "AI Chat: new notice".to_string()
+            ))
+        );
+        assert_eq!(
+            AppState::mobile_push_for_acp_session(&state, &card, "/repo"),
+            None,
+            "repeated cards must not flood the phone"
+        );
+        let first_card = state
+            .acp_push_last_ms
+            .get("card-only")
+            .unwrap()
+            .value()
+            .unwrap();
+        *state.acp_push_last_ms.get_mut("card-only").unwrap() =
+            Some(first_card.saturating_sub(31_000));
+        assert!(AppState::mobile_push_for_acp_session(&state, &card, "/repo").is_some());
         let key = "conversation-1";
         let first = state.acp_push_last_ms.get(key).unwrap().value().unwrap();
         *state.acp_push_last_ms.get_mut(key).unwrap() = Some(first.saturating_sub(31_000));

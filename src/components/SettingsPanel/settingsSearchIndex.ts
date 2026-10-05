@@ -75,6 +75,10 @@ export interface SettingsSearchEntry {
 }
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+	{ tab: "telegram", section: "Telegram" },
+	{ tab: "telegram", section: "Telegram", label: "Bot token", labelKey: "telegram.token" },
+	{ tab: "telegram", section: "Telegram", label: "Authorized chats", labelKey: "telegram.chat" },
+	{ tab: "telegram", section: "Telegram", label: "Enable Telegram", labelKey: "telegram.enabled" },
 	// tabs/GeneralTab.tsx
 	{ tab: "general", section: "General", sectionKey: "general.heading.general" },
 	{ tab: "general", section: "Confirmations", sectionKey: "general.heading.confirmations" },
@@ -601,14 +605,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		labelKey: "services.toggle.enableIpv6",
 		expert: true,
 		configKey: "app.services.server.ipv6_enabled",
-	},
-	{
-		tab: "remote-access",
-		section: "Remote Access",
-		label: "Allow LAN access without authentication",
-		labelKey: "services.toggle.lanAuthBypass",
-		expert: true,
-		configKey: "app.services.auth.lan_auth_bypass",
 	},
 	{ tab: "remote-access", section: "Tailscale HTTPS", label: "Status", labelKey: "services.label.tailscaleStatus" },
 	{

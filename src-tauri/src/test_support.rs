@@ -1,10 +1,20 @@
 //! App-specific fixtures built on the shared platform-neutral test helpers.
 
+// Tests construct reqwest clients without running the desktop/headless startup,
+// which installs this provider before any production client is built.
+#[ctor::ctor]
+fn install_test_tls_provider() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("install the production TLS provider before libtest");
+}
+
 pub(crate) use crate::fs::system32_exe;
+#[cfg(unix)]
+pub(crate) use tuic_test_support::short_socket_test_temp_root;
 pub(crate) use tuic_test_support::{
     dir_outside_home, fail_with_stderr_script, fake_ssh_script, host_shell, normalize_newlines,
-    print_var_script, replay_file_command, short_socket_test_temp_root, slashed, sleep_script,
-    test_temp_root,
+    print_var_script, replay_file_command, slashed, sleep_script, test_temp_root,
 };
 
 /// Scratch dir short enough to bind a Unix socket whatever the checkout path.
@@ -52,68 +62,6 @@ pub(crate) fn assert_fake_ssh_stopped(pids: Vec<i32>) {
         surviving.is_empty(),
         "fake SSH processes survived shutdown: {surviving:?}"
     );
-}
-
-#[cfg(test)]
-mod temp_root_tests {
-    #[test]
-    fn bare_test_binary_keeps_tempfile_dirs_inside_test_root() {
-        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        let inside = repo.join(".tmp/tuic-tests/980-inside");
-        let default_root = repo.join(".tmp/tuic-tests");
-        let outside = repo.join(".tmp/980-outside");
-        std::fs::create_dir_all(&inside).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        for (configured_root, expected_root) in [
-            (Some(inside.as_path()), inside.as_path()),
-            (None, default_root.as_path()),
-        ] {
-            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-            child
-                .args([
-                    "--exact",
-                    "test_support::temp_root_tests::bare_test_binary_child",
-                ])
-                .env("TUIC_TEST_TMP_EXPECTED_ROOT", expected_root)
-                .env("TMPDIR", &outside)
-                .env("TMP", &outside)
-                .env("TEMP", &outside);
-            if let Some(root) = configured_root {
-                child.env("TUIC_TEST_TMP_ROOT", root);
-            } else {
-                child.env_remove("TUIC_TEST_TMP_ROOT");
-            }
-            let output = child.output().unwrap();
-            assert!(
-                output.status.success(),
-                "child used ambient temp: {}",
-                String::from_utf8_lossy(&output.stdout)
-            );
-        }
-    }
-
-    #[test]
-    fn bare_test_binary_child() {
-        let Some(expected) = std::env::var_os("TUIC_TEST_TMP_EXPECTED_ROOT") else {
-            return;
-        };
-        let expected = std::path::PathBuf::from(expected).canonicalize().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let actual = dir.path().canonicalize().unwrap();
-        assert!(
-            actual.starts_with(&expected),
-            "{} escaped the test root",
-            actual.display()
-        );
-        let std_temp = std::env::temp_dir().canonicalize().unwrap();
-        assert!(
-            std_temp.starts_with(&expected),
-            "{} escaped the test root",
-            std_temp.display()
-        );
-    }
 }
 
 /// Feed everything a PTY master produces to `sink`, in the small chunks the
@@ -240,6 +188,7 @@ pub(crate) fn agent_session(state: &crate::state::AppState, sid: &str, shell: u8
         sid.to_string(),
         crate::state::SessionState {
             agent_type: Some("claude".to_string()),
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             ..Default::default()
         },
     );
@@ -360,4 +309,345 @@ pub(crate) fn insert_session_with_writer(
             shell: "/bin/sh".to_string(),
         }),
     );
+}
+
+/// A real foreground OS executable with a chosen basename, plus recorded PTY
+/// writes. This probes process identity, never a third-party CLI's behavior.
+#[cfg(unix)]
+pub(crate) struct ForegroundIdentityProbe {
+    pub(crate) bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    state: std::sync::Arc<crate::state::AppState>,
+    session_id: String,
+    _scratch: tempfile::TempDir,
+    foreground_child: Option<u32>,
+}
+
+#[cfg(unix)]
+impl ForegroundIdentityProbe {
+    pub(crate) fn new(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        name: &str,
+    ) -> Self {
+        Self::spawn(
+            state,
+            sid,
+            name,
+            crate::state::SpawnRootRole::DirectProgram,
+            false,
+            false,
+        )
+    }
+
+    pub(crate) fn shell_root(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        name: &str,
+    ) -> Self {
+        Self::spawn(
+            state,
+            sid,
+            name,
+            crate::state::SpawnRootRole::Shell,
+            false,
+            false,
+        )
+    }
+
+    pub(crate) fn shell_parent(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        name: &str,
+    ) -> Self {
+        Self::spawn(
+            state,
+            sid,
+            name,
+            crate::state::SpawnRootRole::Shell,
+            true,
+            false,
+        )
+    }
+
+    pub(crate) fn bash_wrapper(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        role: crate::state::SpawnRootRole,
+    ) -> Self {
+        Self::spawn(state, sid, "bash", role, true, true)
+    }
+
+    /// Attach the production reader so normal EOF, rather than a manually
+    /// injected lifecycle event, removes the probe's live process and identity.
+    pub(crate) fn start_reader(&self) {
+        let (reader, paused) = {
+            let entry = self
+                .state
+                .session_maps
+                .sessions
+                .get(&self.session_id)
+                .unwrap();
+            let session = entry.lock();
+            (
+                session.master.try_clone_reader().unwrap(),
+                session.paused.clone(),
+            )
+        };
+        // Match spawn bookkeeping: the reader decrements this on native exit.
+        self.state
+            .metrics
+            .active_sessions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        crate::pty::spawn_reader_thread(
+            reader,
+            paused,
+            self.session_id.clone(),
+            self.state.clone(),
+            None,
+        );
+    }
+
+    pub(crate) fn return_to_root(&mut self) {
+        let pid = self
+            .foreground_child
+            .take()
+            .expect("probe owns a foreground child");
+        // SAFETY: this PID belongs to the child started by this probe.
+        assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
+        loop {
+            let session = self
+                .state
+                .session_maps
+                .sessions
+                .get(&self.session_id)
+                .unwrap();
+            let session = session.lock();
+            if session.master.process_group_leader()
+                == session._child.process_id().map(|pid| pid as i32)
+            {
+                break;
+            }
+            drop(session);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn spawn(
+        state: std::sync::Arc<crate::state::AppState>,
+        sid: &str,
+        name: &str,
+        role: crate::state::SpawnRootRole,
+        shell_parent: bool,
+        bash_script: bool,
+    ) -> Self {
+        use parking_lot::Mutex;
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use std::sync::{Arc, atomic::AtomicBool};
+
+        let scratch = tempfile::tempdir_in(test_temp_root()).unwrap();
+        let executable = scratch.path().join(name);
+        std::fs::copy("/bin/cat", &executable).unwrap();
+        // macOS kills a relocated Apple platform binary (verified exit -9).
+        // Ad-hoc signing the scratch copy makes it a local identity probe.
+        #[cfg(target_os = "macos")]
+        {
+            let signed = std::process::Command::new("/usr/bin/codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&executable)
+                .output()
+                .expect("sign scratch identity probe");
+            assert!(
+                signed.status.success(),
+                "codesign: {}",
+                String::from_utf8_lossy(&signed.stderr)
+            );
+        }
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let command = if shell_parent {
+            let mut command = CommandBuilder::new("/bin/bash");
+            // Real job control puts the launched child in its own foreground group.
+            // Keep another builtin after it so bash cannot exec away the shell root.
+            command.args(["-c", "set -m; \"$@\"; read -r completion", "probe-root"]);
+            if bash_script {
+                let script = scratch.path().join("wrapper.sh");
+                std::fs::write(&script, "read -r input\n").unwrap();
+                command.arg("/bin/bash");
+                command.arg(script);
+            } else {
+                command.arg(&executable);
+            }
+            command
+        } else if role == crate::state::SpawnRootRole::Shell {
+            // A real shell exec preserves its root PID while replacing its image.
+            // This models exec into either an agent-name or a renamed shell root.
+            let mut command = CommandBuilder::new("/bin/sh");
+            if name == "bash" {
+                // Exercise a real shell-to-shell image replacement as well.
+                command.args(["-c", "exec /bin/bash -c 'read -r input'", "probe-root"]);
+            } else {
+                command.args(["-c", "exec \"$1\"", "probe-root"]);
+                command.arg(&executable);
+            }
+            command
+        } else {
+            CommandBuilder::new(&executable)
+        };
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        let child_pid = child.process_id().unwrap();
+        // fork precedes setsid/exec. This is setup, not a latency assertion;
+        // nextest bounds a genuine hang without charging startup to behavior.
+        let foreground_pid = loop {
+            if let Some(fg) = pair.master.process_group_leader().map(|pid| pid as u32) {
+                let group_ready = if shell_parent {
+                    fg != child_pid
+                } else {
+                    fg == child_pid
+                };
+                if group_ready && crate::pty::process_name_from_pid(fg).as_deref() == Some(name) {
+                    break fg;
+                }
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!("identity probe exited before setup: {status:?}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        state.session_maps.sessions.insert(
+            sid.into(),
+            Mutex::new(crate::state::PtySession {
+                writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
+                    bytes: bytes.clone(),
+                }))),
+                master: pair.master,
+                _child: child,
+                paused: Arc::new(AtomicBool::new(false)),
+                worktree: None,
+                cwd: None,
+                display_name: None,
+                display_name_is_custom: false,
+                display_name_from_spawn: false,
+                is_remote: false,
+                shell: "/bin/sh".into(),
+            }),
+        );
+        agent_session(&state, sid, crate::pty::SHELL_IDLE);
+        {
+            let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+            session.agent_type = None;
+            session.spawn_root_role = role;
+        }
+        Self {
+            bytes,
+            state,
+            session_id: sid.into(),
+            _scratch: scratch,
+            foreground_child: (foreground_pid != child_pid).then_some(foreground_pid),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ForegroundIdentityProbe {
+    fn drop(&mut self) {
+        if let Some((_, session)) = self.state.session_maps.sessions.remove(&self.session_id) {
+            let mut session = session.into_inner();
+            // macOS waits for slave output to drain during process exit. These
+            // identity-only probes have no production reader, so an unread
+            // bash job-control message can keep child.wait() blocked forever.
+            let mut reader = session
+                .master
+                .try_clone_reader()
+                .expect("probe drain reader");
+            let drain = std::thread::spawn(move || {
+                let mut bytes = [0u8; 4096];
+                loop {
+                    match reader.read(&mut bytes) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+            });
+            if let Some(pid) = self.foreground_child {
+                // This is the child created by our probe, never an ancestor.
+                // SAFETY: kill takes a numeric PID and a valid signal.
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+            }
+            session._child.kill().expect("kill our identity probe");
+            session._child.wait().expect("reap our identity probe");
+            drop(session);
+            drain.join().expect("join probe output drain");
+        }
+    }
+}
+
+#[cfg(test)]
+mod temp_root_tests {
+    #[test]
+    fn bare_test_binary_keeps_tempfile_dirs_inside_test_root() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let inside = repo.join(".tmp/tuic-tests/980-inside");
+        let default_root = repo.join(".tmp/tuic-tests");
+        let outside = repo.join(".tmp/980-outside");
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        for (configured_root, expected_root) in [
+            (Some(inside.as_path()), inside.as_path()),
+            (None, default_root.as_path()),
+        ] {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "test_support::temp_root_tests::bare_test_binary_child",
+                ])
+                .env("TUIC_TEST_TMP_EXPECTED_ROOT", expected_root)
+                .env("TMPDIR", &outside)
+                .env("TMP", &outside)
+                .env("TEMP", &outside);
+            if let Some(root) = configured_root {
+                child.env("TUIC_TEST_TMP_ROOT", root);
+            } else {
+                child.env_remove("TUIC_TEST_TMP_ROOT");
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "child used ambient temp: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+    }
+
+    #[test]
+    fn bare_test_binary_child() {
+        let Some(expected) = std::env::var_os("TUIC_TEST_TMP_EXPECTED_ROOT") else {
+            return;
+        };
+        let expected = std::path::PathBuf::from(expected).canonicalize().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let actual = dir.path().canonicalize().unwrap();
+        assert!(
+            actual.starts_with(&expected),
+            "{} escaped the test root",
+            actual.display()
+        );
+        let std_temp = std::env::temp_dir().canonicalize().unwrap();
+        assert!(
+            std_temp.starts_with(&expected),
+            "{} escaped the test root",
+            std_temp.display()
+        );
+    }
 }

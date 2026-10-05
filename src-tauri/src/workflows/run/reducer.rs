@@ -133,7 +133,7 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
                     });
                 }
             }
-            snapshot.attempts.push(attempt.clone());
+            snapshot.attempts.push((**attempt).clone());
         }
         RunEventKind::WorktreeAssigned { story_id, path } => {
             let story = snapshot

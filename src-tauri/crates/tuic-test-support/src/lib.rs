@@ -37,17 +37,20 @@ pub fn test_temp_root() -> std::path::PathBuf {
     root
 }
 
-/// Return a short scratch path for Unix-domain socket tests.
 #[cfg(unix)]
-pub fn short_socket_test_temp_root() -> std::path::PathBuf {
-    let requested = test_temp_root();
-    if requested
-        .join("sXXXXXX/.mdkb/daemon-hook.sock.4294967295.tmp")
+fn socket_root_fits(root: &std::path::Path) -> bool {
+    root.join("sXXXXXX/.mdkb/daemon-hook.sock.4294967295.tmp")
         .as_os_str()
         .len()
         + 8
         < 104
-    {
+}
+
+/// Return a short, checkout-specific scratch path for Unix-domain socket tests.
+#[cfg(unix)]
+pub fn short_socket_test_temp_root() -> std::path::PathBuf {
+    let requested = test_temp_root();
+    if socket_root_fits(&requested) {
         return requested;
     }
     use std::hash::{Hash, Hasher};
@@ -55,11 +58,21 @@ pub fn short_socket_test_temp_root() -> std::path::PathBuf {
     let checkout = checkout_root();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     checkout.hash(&mut hasher);
+    let suffix = format!("s{:016x}", hasher.finish());
+    // A nested Gits directory can itself be too long. Try every ancestor,
+    // preserving the short Gits scratch root used by developer worktrees.
     let root = checkout
         .ancestors()
-        .find(|path| path.file_name().is_some_and(|name| name == "Gits"))
-        .map(|gits| gits.join(format!(".tmp/s{:016x}", hasher.finish())))
-        .unwrap_or(requested);
+        .filter(|path| path.file_name().is_some_and(|name| name == "Gits"))
+        .map(|gits| gits.join(".tmp").join(&suffix))
+        .find(|root| socket_root_fits(root))
+        // CI checkouts need not live under Gits. Do not use env::temp_dir():
+        // the test constructor points it back at the oversized requested root.
+        .unwrap_or_else(|| std::path::Path::new("/tmp").join(format!("tuic-{suffix}")));
+    assert!(
+        socket_root_fits(&root),
+        "short socket root exceeds Unix path budget"
+    );
     std::fs::create_dir_all(&root).expect("create short socket test root");
     root
 }
@@ -70,6 +83,15 @@ pub fn host_shell() -> (&'static str, &'static str) {
         ("cmd", "/C")
     } else {
         ("sh", "-c")
+    }
+}
+
+/// Wait for stdin without spawning a child process; the parent keeps the pipe open.
+pub fn wait_for_stdin_script() -> String {
+    if cfg!(windows) {
+        "set /p value=".to_owned()
+    } else {
+        "read value".to_owned()
     }
 }
 

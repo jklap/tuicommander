@@ -122,14 +122,12 @@ impl AudioCapture {
                         move |data: &[f32], _: &cpal::InputCallbackInfo| {
                             process_audio_chunk(
                                 data,
-                                sample_rate,
-                                channels,
+                                (sample_rate, channels),
                                 &buffer_clone,
                                 &level_clone,
                                 &dropped_clone,
                                 &active_clone,
-                                &mut mono_buf,
-                                &mut resample_buf,
+                                (&mut mono_buf, &mut resample_buf),
                             );
                         },
                         |err| tracing::error!(source = "dictation", "Audio stream error: {err}"),
@@ -150,14 +148,12 @@ impl AudioCapture {
                                 .extend(data.iter().map(|&s| f32::from(s) / f32::from(i16::MAX)));
                             process_audio_chunk(
                                 &float_buf,
-                                sample_rate,
-                                channels,
+                                (sample_rate, channels),
                                 &buffer_clone,
                                 &level_clone,
                                 &dropped_clone,
                                 &active_clone,
-                                &mut mono_buf,
-                                &mut resample_buf,
+                                (&mut mono_buf, &mut resample_buf),
                             );
                         },
                         |err| tracing::error!(source = "dictation", "Audio stream error: {err}"),
@@ -243,15 +239,15 @@ impl AudioCapture {
 /// the closure to avoid per-callback heap allocations.
 fn process_audio_chunk(
     data: &[f32],
-    sample_rate: u32,
-    channels: usize,
+    input_format: (u32, usize),
     buffer: &Arc<Mutex<VecDeque<f32>>>,
     level: &Arc<AtomicU32>,
     dropped_samples: &Arc<AtomicUsize>,
     active: &Arc<AtomicBool>,
-    mono_buf: &mut Vec<f32>,
-    resample_buf: &mut Vec<f32>,
+    scratch: (&mut Vec<f32>, &mut Vec<f32>),
 ) {
+    let (sample_rate, channels) = input_format;
+    let (mono_buf, resample_buf) = scratch;
     if !active.load(Ordering::Acquire) {
         return;
     }
@@ -357,14 +353,12 @@ mod tests {
         fn process(&mut self, data: &[f32], sample_rate: u32, channels: usize) {
             process_audio_chunk(
                 data,
-                sample_rate,
-                channels,
+                (sample_rate, channels),
                 &self.buffer,
                 &self.level,
                 &self.dropped_samples,
                 &self.active,
-                &mut self.mono,
-                &mut self.resample,
+                (&mut self.mono, &mut self.resample),
             );
         }
 
@@ -420,7 +414,11 @@ mod tests {
 
         let captured = fx.captured();
         assert_eq!(captured.len(), 31 * 16_000 + 1);
-        assert_eq!(captured[0], 0.25, "the beginning of the dictation was lost");
+        assert_eq!(
+            captured[0].to_bits(),
+            0.25_f32.to_bits(),
+            "the beginning of the dictation was lost"
+        );
         assert_eq!(captured.last(), Some(&0.5));
     }
 
@@ -443,6 +441,85 @@ mod tests {
         assert_samples(&fx.captured(), &[0.5, 0.2]);
     }
 
+    /// Catches the meter arithmetic in `process_audio_chunk` (square, mean,
+    /// `* 20.0`, `sqrt`, `clamp`) flipping: a constant 0.0125 has RMS 0.0125,
+    /// so the meter reads sqrt(0.25) = 0.5; full scale saturates at 1.0.
+    #[test]
+    fn process_audio_chunk_meter_follows_the_square_root_rms_curve() {
+        let meter = |data: &[f32]| {
+            let mut fx = ChunkFixture::new();
+            fx.process(data, 16_000, 1);
+            f32::from_bits(fx.level.load(Ordering::Relaxed))
+        };
+        assert!((meter(&[0.0125; 4]) - 0.5).abs() < 1e-3);
+        assert_eq!(meter(&[1.0; 4]).to_bits(), 1.0_f32.to_bits());
+        assert_eq!(meter(&[0.0; 4]).to_bits(), 0.0_f32.to_bits());
+    }
+
+    /// Catches the resample index arithmetic flipping (`i / ratio`): 48 kHz
+    /// keeps every third sample, 8 kHz repeats each sample twice.
+    #[test]
+    fn process_audio_chunk_resamples_to_16khz_nearest_neighbour() {
+        let mut down = ChunkFixture::new();
+        down.process(&[0.0, 0.1, 0.2, 0.3, 0.4, 0.5], 48_000, 1);
+        assert_samples(&down.captured(), &[0.0, 0.3]);
+
+        let mut up = ChunkFixture::new();
+        up.process(&[0.1, 0.2, 0.3], 8_000, 1);
+        assert_samples(&up.captured(), &[0.1, 0.1, 0.2, 0.2, 0.3, 0.3]);
+    }
+
+    /// Catches the cap comparison (`len > max_samples` becoming `==` or `<`)
+    /// and the drop count (`len - max_samples` becoming `+` or `/`): a few
+    /// samples over the cap drops exactly the oldest ones.
+    /// `len > max_samples` -> `>=` (audio.rs:315) is an equivalent mutant: at
+    /// `len == max_samples` it drops 0 samples either way, so no test can
+    /// tell the two apart.
+    #[test]
+    fn process_audio_chunk_caps_the_buffer_at_the_recording_horizon() {
+        let max = (16_000.0 * crate::streaming::MAX_RECORDING_S) as usize;
+
+        // Boundary sanity check, not a mutant-killer: exactly the cap keeps
+        // everything and drops nothing.
+        let mut at_cap = ChunkFixture::new();
+        at_cap.process(&vec![0.25; max], 16_000, 1);
+        assert_eq!(at_cap.buffer.lock().len(), max);
+        assert_eq!(at_cap.dropped_samples.load(Ordering::Relaxed), 0);
+
+        let mut over = ChunkFixture::new();
+        over.process(&[0.125, 0.125, 0.125], 16_000, 1);
+        over.process(&vec![0.25; max], 16_000, 1);
+        assert_eq!(over.buffer.lock().len(), max);
+        assert_eq!(over.dropped_samples.load(Ordering::Relaxed), 3);
+        assert!(
+            over.buffer
+                .lock()
+                .iter()
+                .all(|&s| s.to_bits() == 0.25_f32.to_bits()),
+            "the oldest samples must be the ones dropped"
+        );
+    }
+
+    /// 44.1 kHz is the other common device rate and its ratio is not an exact
+    /// fraction. Catches `output_len` rounding up (the audio grows by a sample
+    /// per callback, so dictation drifts against real time) and a source index
+    /// that overruns or reorders the chunk. 442 ramp samples -> 160 outputs;
+    /// out[i] is input sample floor(i * 2.75625), checked away from exact
+    /// integer products where f64 rounding may legitimately pick either side.
+    #[test]
+    fn process_audio_chunk_resamples_44_1khz_keeping_length_and_order() {
+        let ramp: Vec<f32> = (0..442).map(|i| i as f32).collect();
+        let mut fx = ChunkFixture::new();
+        fx.process(&ramp, 44_100, 1);
+        let out = fx.captured();
+        assert_eq!(out.len(), 160, "442 * 16000 / 44100 = 160.36, floored");
+        assert!(out.windows(2).all(|w| w[0] <= w[1]), "order lost: {out:?}");
+        assert_eq!(out[0].to_bits(), 0.0_f32.to_bits());
+        assert_eq!(out[1].to_bits(), 2.0_f32.to_bits());
+        assert_eq!(out[100].to_bits(), 275.0_f32.to_bits());
+        assert_eq!(out[159].to_bits(), 438.0_f32.to_bits());
+    }
+
     /// A device reporting 0 Hz makes `ratio` infinite, and
     /// `(len as f64 * f64::INFINITY) as usize` saturates to `usize::MAX` — so
     /// `reserve` aborts on capacity overflow, on the real-time audio thread.
@@ -458,14 +535,12 @@ mod tests {
 
         process_audio_chunk(
             &[0.1, 0.2, 0.3, 0.4],
-            0,
-            1,
+            (0, 1),
             &buffer,
             &level,
             &dropped_samples,
             &active,
-            &mut mono_buf,
-            &mut resample_buf,
+            (&mut mono_buf, &mut resample_buf),
         );
 
         assert!(
@@ -578,26 +653,22 @@ mod tests {
         let mut resample = Vec::new();
         process_audio_chunk(
             &[0.25],
-            16_000,
-            1,
+            (16_000, 1),
             &capture.buffer,
             &capture.level,
             &capture.dropped_samples,
             &capture.active,
-            &mut mono,
-            &mut resample,
+            (&mut mono, &mut resample),
         );
         capture.stop_stream();
         process_audio_chunk(
             &[0.75],
-            16_000,
-            1,
+            (16_000, 1),
             &capture.buffer,
             &capture.level,
             &capture.dropped_samples,
             &capture.active,
-            &mut mono,
-            &mut resample,
+            (&mut mono, &mut resample),
         );
 
         assert_eq!(capture.drain_all(), vec![0.25]);
@@ -614,14 +685,12 @@ mod tests {
         let data = vec![0.5f32; 16]; // 16 mono samples at 16kHz
         process_audio_chunk(
             &data,
-            16000,
-            1,
+            (16000, 1),
             &buf,
             &level,
             &dropped_samples,
             &active,
-            &mut mono_buf,
-            &mut resample_buf,
+            (&mut mono_buf, &mut resample_buf),
         );
         assert_eq!(buf.lock().len(), 16);
         assert!(f32::from_bits(level.load(Ordering::Relaxed)) > 0.9);
@@ -630,14 +699,12 @@ mod tests {
         let guard = buf.lock();
         process_audio_chunk(
             &data,
-            16000,
-            1,
+            (16000, 1),
             &buf,
             &level,
             &dropped_samples,
             &active,
-            &mut mono_buf,
-            &mut resample_buf,
+            (&mut mono_buf, &mut resample_buf),
         );
         assert_eq!(guard.len(), 16); // still 16, new samples dropped
         assert_eq!(dropped_samples.load(Ordering::Relaxed), 16);
@@ -659,14 +726,12 @@ mod tests {
 
         process_audio_chunk(
             &stereo_data,
-            16000,
-            2,
+            (16000, 2),
             &buf,
             &level,
             &dropped_samples,
             &active,
-            &mut mono_buf,
-            &mut resample_buf,
+            (&mut mono_buf, &mut resample_buf),
         );
         let result: Vec<f32> = buf.lock().drain(..).collect();
         assert_eq!(result.len(), 8, "Stereo→mono should halve the sample count");
@@ -691,14 +756,12 @@ mod tests {
         let data = vec![0.25f32; 480];
         process_audio_chunk(
             &data,
-            48000,
-            1,
+            (48000, 1),
             &buf,
             &level,
             &dropped_samples,
             &active,
-            &mut mono_buf,
-            &mut resample_buf,
+            (&mut mono_buf, &mut resample_buf),
         );
         let result: Vec<f32> = buf.lock().drain(..).collect();
 
@@ -725,14 +788,12 @@ mod tests {
         let stereo_data: Vec<f32> = (0..480).flat_map(|_| vec![0.8, 0.2]).collect();
         process_audio_chunk(
             &stereo_data,
-            48000,
-            2,
+            (48000, 2),
             &buf,
             &level,
             &dropped_samples,
             &active,
-            &mut mono_buf,
-            &mut resample_buf,
+            (&mut mono_buf, &mut resample_buf),
         );
         let result: Vec<f32> = buf.lock().drain(..).collect();
 
@@ -756,28 +817,24 @@ mod tests {
         let data = vec![0.5f32; 480];
         process_audio_chunk(
             &data,
-            48000,
-            1,
+            (48000, 1),
             &buf,
             &level,
             &dropped_samples,
             &active,
-            &mut mono_buf,
-            &mut resample_buf,
+            (&mut mono_buf, &mut resample_buf),
         );
         let cap_after_first = mono_buf.capacity();
 
         buf.lock().clear();
         process_audio_chunk(
             &data,
-            48000,
-            1,
+            (48000, 1),
             &buf,
             &level,
             &dropped_samples,
             &active,
-            &mut mono_buf,
-            &mut resample_buf,
+            (&mut mono_buf, &mut resample_buf),
         );
         let cap_after_second = mono_buf.capacity();
 

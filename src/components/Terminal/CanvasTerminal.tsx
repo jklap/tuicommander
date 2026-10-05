@@ -88,6 +88,7 @@ import {
 	shouldReportMouseUp,
 } from "./terminalInput";
 import { cssColorToRgb, publishTerminalPalette } from "./terminalPalette";
+import { openTerminalPathLink } from "./terminalPathLink";
 import { latestIntersectionVisibility, retryUntilMeasured, SIZE_RETRY_MAX_FRAMES } from "./visibilityLifecycle";
 
 // Re-export for external consumers
@@ -275,7 +276,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			handleOpenUrl(link.path);
 		} else {
 			const path = link.path.startsWith("file://") ? link.path.slice(7) : link.path;
-			props.onOpenFilePath?.(path, link.line, link.col);
+			if (!invokeRef) return;
+			const termId = terminalsStore.getTerminalForSession(props.sessionId);
+			const cwd = (termId ? terminalsStore.get(termId)?.cwd : undefined) || "";
+			void openTerminalPathLink(path, cwd, invokeRef, props.onOpenFilePath, link.line, link.col);
 		}
 	};
 
@@ -715,7 +719,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const allBlocks = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
 				const viewTop = currentFrame.historySize - currentFrame.displayOffset;
 				const viewCenter = viewTop + Math.floor(currentFrame.screenRows / 2);
-				matches = filterMatchesToBlock(matches, allBlocks, viewCenter);
+				matches = filterMatchesToBlock(matches, allBlocks, viewCenter, currentFrame.historyBase);
 			}
 		}
 		const activeMatch = search.replace(
@@ -805,7 +809,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (blocks.length === 0) return;
 		for (const block of blocks) {
 			if (block.exitCode === null || block.exitCode === 0) continue;
-			const vpRow = absRowToViewport(block.promptLine);
+			const vpRow = absRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
 			if (vpRow === null) continue;
 			octx.fillStyle = "#f85149";
 			octx.fillRect(-GUTTER_PX, vpRow * m.cellHeight, 3, m.cellHeight);
@@ -826,9 +830,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const foldEnd = block.endLine;
 			const foldedCount = foldEnd - foldStart;
 			if (foldedCount <= 0) continue;
-			const startVp = absRowToViewport(foldStart);
+			const startVp = absRowToViewport(foldStart - (currentFrame?.historyBase ?? 0));
 			if (startVp === null) continue;
-			const endVp = absRowToViewport(foldEnd - 1);
+			const endVp = absRowToViewport(foldEnd - 1 - (currentFrame?.historyBase ?? 0));
 			const lastVp = endVp ?? lastResizeRows - 1;
 			const y = startVp * m.cellHeight;
 			const h = (lastVp - startVp + 1) * m.cellHeight;
@@ -842,7 +846,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			octx.fillText(label, 4, y + m.cellHeight * 0.75);
 			// Fold gutter indicator
 			octx.fillStyle = "rgba(88,166,255,0.5)";
-			const gutterVp = absRowToViewport(block.promptLine);
+			const gutterVp = absRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
 			if (gutterVp !== null) {
 				octx.fillRect(-GUTTER_PX, gutterVp * m.cellHeight, 3, m.cellHeight);
 			}
@@ -864,7 +868,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const canvasW = overlayCanvasRef.width / m.dpr;
 		let lastLabelBottom = -Infinity;
 		for (const block of all) {
-			const vpRow = absRowToViewport(block.promptLine);
+			const vpRow = absRowToViewport(block.promptLine - (currentFrame?.historyBase ?? 0));
 			if (vpRow === null) continue;
 			const y = vpRow * m.cellHeight;
 			if (y < lastLabelBottom) continue;
@@ -1007,6 +1011,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!term) return;
 		const blocks = term.commandBlocks;
 		const promptLines = term.userPromptLines;
+		const historyBase = currentFrame?.historyBase ?? 0;
 		const searchCount = search.matches.length;
 		// `showScrollbarMarks` gates the HISTORY markers only — block boundaries and
 		// user-prompt ticks — not the search hits below. Command history is a display
@@ -1019,13 +1024,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// left the last-painted marks on screen forever, because the repaint that
 		// would clear them never ran.
 		const showBlocks = blockTimestampsVisible && settingsStore.state.showScrollbarMarks;
-		const key = `${showBlocks ? blocks.length : 0}:${showBlocks ? promptLines.length : 0}:${totalRows}:${showBlocks ? (blocks[blocks.length - 1]?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
+		const key = `${showBlocks ? blocks.length : 0}:${showBlocks ? promptLines.length : 0}:${totalRows}:${historyBase}:${showBlocks ? (blocks[blocks.length - 1]?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? search.matches[0].row : ""}`;
 		if (key === lastScrollbarMarksKey) return;
 		lastScrollbarMarksKey = key;
 
 		scrollbarMarksContainer.innerHTML = buildScrollbarMarksHtml({
 			blocks,
 			promptLines,
+			historyBase,
 			matchRows: search.matches.map((m) => m.row),
 			totalRows,
 			trackH: scrollbarTrackHeight,
@@ -1075,7 +1081,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			((i: number) => {
 				const row = rowMap.get(i);
 				if (!row) return null;
-				return { text: rowToText(row), isWrapped: row.wrapped };
+				// `row.wrapped` says the row continues onto the NEXT one; the overlay
+				// wants "this row continues the previous one".
+				return { text: rowToText(row), isWrapped: rowMap.get(i - 1)?.wrapped ?? false };
 			});
 
 		// Decide what to mask before building anything: most repaints leave the
@@ -1280,7 +1288,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			updateSuggestOverlay(currentFrame, m, undefined, (i) => {
 				const cached = cacheRow(hist - intOffset + i);
 				if (!cached) return null;
-				return { text: rowToText(cached), isWrapped: cached.wrapped };
+				return { text: rowToText(cached), isWrapped: cacheRow(hist - intOffset + i - 1)?.wrapped ?? false };
 			});
 		}
 	}
@@ -1580,6 +1588,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// carry only their damaged columns and take the rest of the line from what
 		// is already on screen.
 		const frame = decodeBinaryFrame(buffer, rowMap);
+		if (frame && terminalsStore.get(props.terminalId)?.historyBase !== frame.historyBase) {
+			terminalsStore.update(props.terminalId, { historyBase: frame.historyBase });
+		}
 		if (timing) recordFrameTiming(props.sessionId, "decode", performance.now() - decodeT0);
 		if (!frame) {
 			// The only way to land here is a buffer shorter than the 26-byte header:
@@ -1724,6 +1735,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 			fullRepaintNeeded = true;
 		}
+		// Damage can include unchanged text (cursor, colours, or a full redraw).
+		// Compare before installing the new rows: clearing those matches while the
+		// asynchronous search refresh is pending makes every highlight blink.
+		const rewrittenSearchRows = new Set<number>();
+		if (searchQuery) {
+			const viewportTop = frame.historySize - frame.displayOffset;
+			for (const row of frame.rows) {
+				const previous = rowMap.get(row.index);
+				if (scrollChanged || !previous || rowToText(previous) !== rowToText(row)) {
+					rewrittenSearchRows.add(viewportTop + row.index);
+				}
+			}
+		}
 		installFrameRows(rowMap, frame, decision);
 		for (const row of frame.rows) {
 			pendingDirtyRows.add(row.index);
@@ -1739,18 +1763,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 		}
 
-		// Every row in this frame just had its text replaced. A search match anchored
-		// to one of those absolute rows describes text that no longer exists, so drop
-		// it now rather than painting a highlight over whatever the TUI wrote there
-		// (ink agents repaint their bottom rows continuously). The debounced re-search
-		// then re-establishes the matches that still hit.
+		// Invalidate only changed text; unchanged rows keep their decorations until
+		// the backend refresh adopts the next result. Changed rows still clear now
+		// so a highlight cannot linger over text that no longer matches.
 		if (searchQuery && frame.rows.length > 0) {
-			const viewportTop = frame.historySize - frame.displayOffset;
-			const rewritten = new Set<number>();
-			for (const row of frame.rows) rewritten.add(viewportTop + row.index);
-			// No repaint flag needed: repaintOverlay() clears and redraws the overlay
-			// canvas (where highlights live) on every frame.
-			search.dropRows(rewritten);
+			search.dropRows(rewrittenSearchRows);
 			scheduleSearchRefresh();
 		}
 
@@ -2645,9 +2662,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				if (term) {
 					const blocks = term.commandBlocks;
 					const active = term.activeBlock;
-					const allPromptLines = blocks.map((b) => b.promptLine).concat(active ? [active.promptLine] : []);
+					const allPromptLines = blocks
+						.map((b) => b.promptLine)
+						.concat(active ? [active.promptLine] : [])
+						.filter((line) => line >= (currentFrame?.historyBase ?? 0));
 					if (allPromptLines.length > 0 && currentFrame) {
-						const currentViewLine = currentFrame.historySize - currentFrame.displayOffset;
+						const currentViewLine = currentFrame.historyBase + currentFrame.historySize - currentFrame.displayOffset;
 						let targetLine: number | undefined;
 						if (e.key === "ArrowUp") {
 							for (let i = allPromptLines.length - 1; i >= 0; i--) {
@@ -2665,9 +2685,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 							}
 						}
 						if (targetLine !== undefined) {
-							invokeRef?.("terminal_scroll_to", { sessionId: props.sessionId, line: targetLine }).catch(
-								ipcErr("terminal_scroll_to"),
-							);
+							invokeRef?.("terminal_scroll_to", {
+								sessionId: props.sessionId,
+								line: targetLine - currentFrame.historyBase,
+							}).catch(ipcErr("terminal_scroll_to"));
 						}
 						e.preventDefault();
 						return;
@@ -2685,7 +2706,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			) {
 				const term = terminalsStore.get(props.terminalId);
 				if (term && currentFrame) {
-					const viewTop = currentFrame.historySize - currentFrame.displayOffset;
+					const viewTop = currentFrame.historyBase + currentFrame.historySize - currentFrame.displayOffset;
 					const blocks = [...term.commandBlocks, term.activeBlock].filter(
 						Boolean,
 					) as import("../../stores/terminals").CommandBlock[];
@@ -2981,10 +3002,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						const allBlocks = [...term.commandBlocks, term.activeBlock].filter(
 							Boolean,
 						) as import("../../stores/terminals").CommandBlock[];
-						const block = allBlocks.find((b) => b.promptLine <= gridRow && (b.endLine ?? Infinity) >= gridRow);
+						const block = allBlocks.find((b) => b.promptLine <= absRow && (b.endLine ?? Infinity) >= absRow);
 						if (block) {
-							const startRow = historyBase + (block.executionLine ?? block.promptLine) + 1;
-							const endRow = historyBase + (block.endLine ?? gridRow) - 1;
+							const startRow = Math.max(historyBase, (block.executionLine ?? block.promptLine) + 1);
+							const endRow = (block.endLine ?? absRow) - 1;
 							if (endRow >= startRow) {
 								selection.start = { row: startRow, col: 0 };
 								selection.end = { row: endRow, col: lastResizeCols - 1 };

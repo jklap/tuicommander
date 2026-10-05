@@ -4,9 +4,11 @@ use super::*;
 use crate::state::VtLogBuffer;
 // Session builders live in `test_support` so modules other than this one can
 // build a session an agent is deliverable to.
+use crate::test_support::agent_session;
+#[cfg(unix)]
+use crate::test_support::insert_recording_session;
 #[cfg(unix)]
 use crate::test_support::{RecordingWriter, TtyMode, insert_session_with_writer};
-use crate::test_support::{agent_session, insert_recording_session};
 
 #[test]
 fn agent_alternate_screen_warning_is_once_per_session() {
@@ -680,6 +682,17 @@ fn test_classify_agent_version_strip_does_not_overreach() {
     assert_eq!(classify_agent("grok-wrapper"), None);
     assert_eq!(classify_agent("not-grok"), None);
     assert_eq!(classify_agent("postgres-16"), None);
+    // Catches: installer support misidentifies any agent-named ancestor.
+    assert_eq!(classify_agent_name_or_path("/opt/pi/tool"), None);
+    assert_eq!(classify_agent_name_or_path("/opt/claude/bin/tool"), None);
+    assert_eq!(
+        classify_agent_name_or_path("/opt/claude/versions/tool"),
+        None
+    );
+    assert_eq!(
+        classify_agent_name_or_path("/opt/claude/versions/2.1.87"),
+        Some("claude")
+    );
 }
 
 /// The ready-screen adapter is the whole point of detecting the agent: grok
@@ -4131,6 +4144,7 @@ fn sanitized_background_command_keeps_agent_working_across_adapters() {
         state.session_maps.session_states.insert(
             sid.clone(),
             crate::state::SessionState {
+                spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
                 agent_type: Some(agent.to_string()),
                 background_work: true,
                 ..Default::default()
@@ -10838,7 +10852,13 @@ fn a_human_reply_can_answer_a_confident_question_without_weakening_agent_injecti
         AgentSubmissionWrite::Complete { .. }
     ));
     let written = bytes.lock().unwrap();
-    assert_eq!(written.iter().filter(|byte| **byte == b'y').count(), 1);
+    assert_eq!(
+        written
+            .iter()
+            .map(|&byte| usize::from(byte == b'y'))
+            .sum::<usize>(),
+        1
+    );
     assert_eq!(written.last(), Some(&b'\r'));
 }
 
@@ -11227,6 +11247,7 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     state.session_maps.session_states.insert(
         "q".to_string(),
         crate::state::SessionState {
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             agent_type: Some("claude".to_string()),
             awaiting_input: true,
             question_confident: true,
@@ -11254,6 +11275,7 @@ fn should_inject_now_false_for_shell_and_confident_question() {
     state.session_maps.session_states.insert(
         "ready".to_string(),
         crate::state::SessionState {
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             agent_type: Some("codex".to_string()),
             awaiting_input: true,
             question_confident: false,
@@ -11293,9 +11315,9 @@ fn enqueue_parks_command_while_agent_is_busy() {
     agent_session(&state, "busy", SHELL_BUSY);
     let bytes = insert_recording_session(&state, "busy");
 
-    let first = enqueue_user_command(&state, "busy", "run the tests").expect("enqueued");
+    let first = enqueue_user_command(&state, "busy", "run the tests", None).expect("enqueued");
     assert_eq!((first.typed, first.queued), (false, 1));
-    let second = enqueue_user_command(&state, "busy", "then push").expect("enqueued");
+    let second = enqueue_user_command(&state, "busy", "then push", None).expect("enqueued");
     assert_eq!((second.typed, second.queued), (false, 2));
 
     let queue = state.pending_injections.get("busy").expect("queue");
@@ -11342,16 +11364,17 @@ async fn queued_codex_command_submits_when_ready_confirms_after_shell_idle() {
     let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "codex-ready-after-idle";
     agent_session(&state, sid, SHELL_BUSY);
-    state
-        .session_maps
-        .session_states
-        .get_mut(sid)
-        .unwrap()
-        .agent_type = Some("codex".into());
+    {
+        // The recording writer uses a shell child, not the captured agent.
+        // The explicitly seeded identity models a configured launch preset.
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("codex".into());
+        session.agent_type_from_run_config = true;
+    }
     let (writes, received) = std::sync::mpsc::channel();
     insert_session_with_writer(&state, sid, Box::new(WriteChannel(writes)), TtyMode::Raw);
 
-    let enqueued = enqueue_user_command(&state, sid, "resume queued work").unwrap();
+    let enqueued = enqueue_user_command(&state, sid, "resume queued work", None).unwrap();
     assert_eq!((enqueued.typed, enqueued.queued), (false, 1));
     assert!(
         received.try_recv().is_err(),
@@ -11427,7 +11450,7 @@ async fn queued_codex_command_waits_when_idle_shell_still_shows_working() {
         .agent_type = Some("codex".into());
     let bytes = insert_recording_session(&state, sid);
     assert_eq!(
-        enqueue_user_command(&state, sid, "wait for completion")
+        enqueue_user_command(&state, sid, "wait for completion", None)
             .unwrap()
             .queued,
         1
@@ -11471,13 +11494,13 @@ fn enqueue_refuses_shells_and_dead_sessions() {
         .insert("shell".to_string(), crate::state::SessionState::default());
     insert_recording_session(&state, "shell");
     assert_eq!(
-        enqueue_user_command(&state, "shell", "ls").unwrap_err(),
+        enqueue_user_command(&state, "shell", "ls", None).unwrap_err(),
         "Session is not running an agent"
     );
 
     agent_session(&state, "gone", SHELL_IDLE);
     assert_eq!(
-        enqueue_user_command(&state, "gone", "hi").unwrap_err(),
+        enqueue_user_command(&state, "gone", "hi", None).unwrap_err(),
         "Session not found",
         "a tombstoned agent still has session_states — the PTY is what decides"
     );
@@ -11485,7 +11508,7 @@ fn enqueue_refuses_shells_and_dead_sessions() {
     agent_session(&state, "blank", SHELL_IDLE);
     insert_recording_session(&state, "blank");
     assert_eq!(
-        enqueue_user_command(&state, "blank", "   \n ").unwrap_err(),
+        enqueue_user_command(&state, "blank", "   \n ", None).unwrap_err(),
         "Command text is empty"
     );
     assert_eq!(queued_command_count(&state, "blank"), 0);
@@ -11511,7 +11534,7 @@ fn queued_wake_without_agent_response_reports_uncertain_delivery() {
         let bytes = insert_recording_session(&state, &sid);
         let mut alerts = state.event_bus.subscribe();
 
-        enqueue_user_command(&state, &sid, "wake the agent").unwrap();
+        enqueue_user_command(&state, &sid, "wake the agent", None).unwrap();
 
         assert!(
             state
@@ -11567,7 +11590,7 @@ fn unverified_agents_keep_legacy_queued_write_result() {
             .agent_type = Some(agent_type.into());
         let bytes = insert_recording_session(&state, &sid);
         let mut alerts = state.event_bus.subscribe();
-        enqueue_user_command(&state, &sid, "wake the agent").unwrap();
+        enqueue_user_command(&state, &sid, "wake the agent", None).unwrap();
         assert!(bytes.lock().unwrap().ends_with(b"\r"));
         assert!(
             !state
@@ -11602,7 +11625,7 @@ fn manual_submit_after_uncertain_delivery_reopens_next_queue_slot() {
         .agent_type = Some("codex".into());
     let bytes = insert_recording_session(&state, sid);
 
-    enqueue_user_command(&state, sid, "first wake").unwrap();
+    enqueue_user_command(&state, sid, "first wake", None).unwrap();
     assert!(
         state
             .session_maps
@@ -11612,7 +11635,7 @@ fn manual_submit_after_uncertain_delivery_reopens_next_queue_slot() {
             .lock()
             .injection_delivery_uncertain
     );
-    enqueue_user_command(&state, sid, "second wake").unwrap();
+    enqueue_user_command(&state, sid, "second wake", None).unwrap();
     assert_eq!(queued_command_count(&state, sid), 1);
     assert!(!String::from_utf8_lossy(&bytes.lock().unwrap()).contains("second wake"));
 
@@ -11761,7 +11784,7 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
     );
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
@@ -11839,7 +11862,7 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
     let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
@@ -11917,7 +11940,7 @@ fn run_codex_queued_delivery(
     let mut seen = Vec::new();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
@@ -12039,7 +12062,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
     let mut seen = Vec::new();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, &brief).unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, &brief, None).unwrap());
         for expected in [b"\x15".as_slice(), framed_brief.as_bytes(), b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
@@ -12148,7 +12171,7 @@ fn queued_agent_without_child_response_remains_uncertain() {
         let bytes = insert_recording_session(&state, &sid);
         let mut alerts = state.event_bus.subscribe();
 
-        enqueue_user_command(&state, &sid, "wake the agent").unwrap();
+        enqueue_user_command(&state, &sid, "wake the agent", None).unwrap();
 
         assert!(bytes.lock().unwrap().ends_with(b"\r"));
         assert!(
@@ -12215,7 +12238,7 @@ fn queued_claude_hook_busy_four_seconds_after_enter_confirms_submission() {
     let busy_hook = &capture[start..end];
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
@@ -12287,7 +12310,7 @@ fn queued_codex_accepts_ready_then_working_after_enter() {
     let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
 
     std::thread::scope(|scope| {
-        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent").unwrap());
+        scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
         for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
             assert_eq!(
                 received
@@ -12365,7 +12388,7 @@ fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
         );
 
         std::thread::scope(|scope| {
-            scope.spawn(|| enqueue_user_command(&state, &sid, "check status").unwrap());
+            scope.spawn(|| enqueue_user_command(&state, &sid, "check status", None).unwrap());
             for expected in [b"\x15".as_slice(), b"check status", b"\r"] {
                 assert_eq!(
                     received
@@ -12404,7 +12427,7 @@ fn queued_prompt_disappearing_after_enter_confirms_gemini_and_aider() {
     }
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(all(unix, feature = "dictation"))]
 fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
     state
         .session_maps
@@ -12414,7 +12437,7 @@ fn set_question_confident(state: &AppState, session_id: &str, confident: bool) {
         .question_confident = confident;
 }
 
-#[cfg(feature = "desktop")]
+#[cfg(all(unix, feature = "dictation"))]
 fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
     state
         .session_maps
@@ -12429,7 +12452,7 @@ fn shell_state_of(state: &AppState, session_id: &str) -> u8 {
 /// agent queues or takes mid-turn itself. The Compose queue is for something
 /// else (one message, let the agent work, then the next), so the turn never
 /// enters it. Parking it there until idle cost a median 103 s, max 594 s.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12456,7 +12479,7 @@ fn a_voice_turn_to_a_busy_agent_is_written_immediately_and_never_queued() {
 
 /// An idle agent takes it too, through the same claim the queue uses, and is
 /// busy afterwards — the write started a turn.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12476,7 +12499,7 @@ fn a_voice_turn_to_an_idle_agent_is_written_and_starts_a_turn() {
 
 /// A confident question owns the composer even mid-turn: speech aimed at the
 /// agent must not answer a permission dialog.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_is_held_by_a_confident_question() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12498,7 +12521,7 @@ fn a_voice_turn_is_held_by_a_confident_question() {
 
 /// A draft in the composer holds the turn: the Ctrl-U that opens every write
 /// would erase what the user is typing.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_is_held_by_partial_input() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12521,13 +12544,14 @@ fn a_voice_turn_is_held_by_partial_input() {
 
 /// The Compose queue is not touched: a typed entry parked for the next idle
 /// stays parked, in place, and a busy agent still receives nothing of it.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_leaves_the_compose_queue_alone() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "voice-compose", SHELL_BUSY);
     let bytes = insert_recording_session(&state, "voice-compose");
-    let parked = enqueue_user_command(&state, "voice-compose", "run the tests").expect("enqueued");
+    let parked =
+        enqueue_user_command(&state, "voice-compose", "run the tests", None).expect("enqueued");
     assert!(!parked.typed);
 
     assert_eq!(
@@ -12550,7 +12574,7 @@ fn a_voice_turn_leaves_the_compose_queue_alone() {
 
 /// A write that never started is held, not lost, and leaves the agent busy:
 /// releasing a claim that never took the idle atom must not invent an idle edge.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_mid_turn_voice_write_that_never_started_is_held_and_the_agent_stays_busy() {
     let state = crate::state::tests_support::make_test_app_state();
@@ -12581,7 +12605,7 @@ fn a_mid_turn_voice_write_that_never_started_is_held_and_the_agent_stays_busy() 
 }
 
 /// Refused outright, as before: not an agent, gone, or empty.
-#[cfg(all(unix, feature = "desktop"))]
+#[cfg(all(unix, feature = "dictation"))]
 #[test]
 fn a_voice_turn_is_refused_for_shells_dead_sessions_and_empty_text() {
     use std::sync::atomic::AtomicU8;
@@ -12609,11 +12633,11 @@ fn clear_queued_commands_preserves_peer_deliveries() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "busy", SHELL_BUSY);
     insert_recording_session(&state, "busy");
-    enqueue_user_command(&state, "busy", "one").expect("enqueued");
+    enqueue_user_command(&state, "busy", "one", None).expect("enqueued");
     state.pending_injections.get_mut("busy").unwrap().push_back(
         crate::state::PendingInjection::notice("[TUIC message from lead] first peer"),
     );
-    enqueue_user_command(&state, "busy", "two").expect("enqueued");
+    enqueue_user_command(&state, "busy", "two", None).expect("enqueued");
     state.pending_injections.get_mut("busy").unwrap().push_back(
         crate::state::PendingInjection::notice("[TUIC message from worker] second peer"),
     );
@@ -12675,13 +12699,13 @@ fn list_and_remove_expose_every_parked_entry() {
     let state = crate::state::tests_support::make_test_app_state();
     agent_session(&state, "busy", SHELL_BUSY);
     insert_recording_session(&state, "busy");
-    enqueue_user_command(&state, "busy", "one").expect("enqueued");
+    enqueue_user_command(&state, "busy", "one", None).expect("enqueued");
     state
         .pending_injections
         .get_mut("busy")
         .unwrap()
         .push_back(crate::state::PendingInjection::notice(PEER_MAIL_WAKE));
-    enqueue_user_command(&state, "busy", "two").expect("enqueued");
+    enqueue_user_command(&state, "busy", "two", None).expect("enqueued");
 
     let listed = list_queued_commands(&state, "busy");
     assert_eq!(
@@ -12720,7 +12744,7 @@ fn enqueue_types_immediately_when_agent_is_idle() {
     agent_session(&state, "idle-now", SHELL_IDLE);
     let bytes = insert_recording_session(&state, "idle-now");
 
-    let outcome = enqueue_user_command(&state, "idle-now", "ship it").expect("enqueued");
+    let outcome = enqueue_user_command(&state, "idle-now", "ship it", None).expect("enqueued");
     assert_eq!((outcome.typed, outcome.queued), (true, 0));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
@@ -12743,7 +12767,7 @@ fn enqueue_never_overtakes_a_command_already_waiting() {
         .or_default()
         .push_back(crate::state::PendingInjection::notice("first"));
 
-    let outcome = enqueue_user_command(&state, "fifo", "second").expect("enqueued");
+    let outcome = enqueue_user_command(&state, "fifo", "second", None).expect("enqueued");
     assert_eq!((outcome.typed, outcome.queued), (false, 1));
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
@@ -13596,6 +13620,7 @@ fn flush_keeps_pending_while_question_confident() {
     state.session_maps.session_states.insert(
         "sess".to_string(),
         crate::state::SessionState {
+            spawn_root_role: crate::state::SpawnRootRole::DirectProgram,
             agent_type: Some("claude".to_string()),
             awaiting_input: true,
             question_confident: true,
@@ -13655,8 +13680,11 @@ fn injection_payload_single_line_is_the_text_alone() {
 /// Records every `write` call with the instant it arrived, so a test can tell
 /// two writes apart in time rather than only in order.
 #[cfg(unix)]
+type TimedWrites = Arc<std::sync::Mutex<Vec<(std::time::Instant, Vec<u8>)>>>;
+
+#[cfg(unix)]
 struct TimedWriter {
-    writes: Arc<std::sync::Mutex<Vec<(std::time::Instant, Vec<u8>)>>>,
+    writes: TimedWrites,
 }
 
 #[cfg(unix)]
@@ -14208,17 +14236,56 @@ fn tuic_state_awaiting_yields_confident_question() {
 }
 
 #[test]
-fn tuic_state_busy_yields_userinput_clear_with_prompt_line() {
-    // The busy transition's absolute prompt row (history_size + cursor row,
-    // here 42) must reach the UserInput event so the frontend can mark the
-    // user-prompt line on the scrollbar.
-    match tuic_state_awaiting_event("busy", 42) {
+fn tuic_state_prompt_yields_userinput_clear_with_prompt_line() {
+    // The submit hook's absolute prompt row (history_size + cursor row, here 42)
+    // must reach the UserInput event so the frontend can mark the user-prompt
+    // line on the scrollbar.
+    match tuic_state_awaiting_event("prompt", 42) {
         Some(ParsedEvent::UserInput { content, line }) => {
-            assert_eq!(content, "", "busy clear must not overwrite last_prompt");
-            assert_eq!(line, 42, "busy UserInput must carry the prompt row");
+            assert_eq!(content, "", "prompt clear must not overwrite last_prompt");
+            assert_eq!(line, 42, "prompt UserInput must carry the prompt row");
         }
         other => panic!("expected UserInput clear, got {other:?}"),
     }
+}
+
+#[test]
+fn tuic_state_busy_carries_no_prompt_row() {
+    // Catches #1388: PreToolUse fires state=busy on every tool call, and each one
+    // used to mark a user-prompt tick at the cursor row, painting a solid green
+    // band on the scrollbar. Busy still clears awaiting but has no prompt row.
+    match tuic_state_awaiting_event("busy", 42) {
+        Some(ParsedEvent::UserInput { content, line }) => {
+            assert_eq!(content, "");
+            assert_eq!(line, -1, "busy must not claim a prompt row");
+        }
+        other => panic!("expected UserInput clear, got {other:?}"),
+    }
+}
+
+#[test]
+fn tuic_state_prompt_drives_shell_busy() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-tuic-prompt";
+    state.session_maps.shell_states.insert(
+        session_id.to_string(),
+        std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+    );
+    state
+        .session_maps
+        .shell_state_since_ms
+        .insert(session_id.to_string(), std::sync::atomic::AtomicU64::new(0));
+
+    let proc = ChunkProcessor::new(None, None);
+    proc.handle_tuic_state("prompt", session_id, &state);
+
+    let current = state
+        .session_maps
+        .shell_states
+        .get(session_id)
+        .unwrap()
+        .load(std::sync::atomic::Ordering::Acquire);
+    assert_eq!(current, SHELL_BUSY);
 }
 
 #[test]
@@ -14356,6 +14423,7 @@ fn agent_prompt_fixture(name: &str) -> Vec<u8> {
 /// the production chunk processor rather than the row parser alone: an open
 /// intent must absorb every growing prefix before Progress sees it.
 #[test]
+#[cfg(unix)]
 fn captured_codex_streaming_intent_emits_one_complete_marker() {
     #[cfg(not(feature = "desktop"))]
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -16216,16 +16284,25 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
     let (rows, cols) = capture.geometry.expect("recorded terminal geometry");
     let sid = "opencode-mini-queue";
     let (state, silence) = chunk_trace_state(sid);
+    {
+        // The recording writer uses a shell child, not the captured agent.
+        // The explicitly seeded identity models a configured launch preset.
+        let mut session = state.session_maps.session_states.get_mut(sid).unwrap();
+        session.agent_type = Some("opencode".into());
+        session.agent_type_from_run_config = true;
+    }
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+    // Captured agent output owns this recording composer; the shell
+    // child is only its PTY holder, not a foreground-detection scenario.
     state
         .session_maps
         .session_states
         .get_mut(sid)
         .unwrap()
-        .agent_type = Some("opencode".into());
-    state
-        .grid
-        .vt_log_buffers
-        .insert(sid.into(), Mutex::new(VtLogBuffer::new(rows, cols, 2000)));
+        .spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
     let bytes = insert_recording_session(&state, sid);
     // The turn is running when the user queues: the Enter of its own prompt
     // left the shell busy, as observed live (`shell-state` stayed `busy`).
@@ -16236,7 +16313,7 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
         .unwrap()
         .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
     assert_eq!(
-        enqueue_user_command(&state, sid, "resume queued work")
+        enqueue_user_command(&state, sid, "resume queued work", None)
             .unwrap()
             .queued,
         1
@@ -17541,6 +17618,14 @@ async fn claude_askuser_esc_capture_retracts_awaiting_after_turn_done() {
     #[cfg(unix)]
     {
         silence.lock().confirm_idle();
+        // Captured agent output owns this recording composer; the shell
+        // child is only its PTY holder, not a foreground-detection scenario.
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
         let bytes = insert_recording_session(&state, sid);
         assert!(matches!(
             write_agent_submission_to_pty(&state, sid, "echo ready"),
@@ -20280,6 +20365,14 @@ async fn critic_1302_queued_injection_flushes_after_a_dismissed_question() {
     use std::collections::VecDeque;
     let sid = "critic-1302-queue";
     let (state, _silence, _processor) = replay_claude_askuser_esc(sid).await;
+    // Captured agent output owns this recording composer; the shell
+    // child is only its PTY holder, not a foreground-detection scenario.
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .spawn_root_role = crate::state::SpawnRootRole::DirectProgram;
     let bytes = insert_recording_session(&state, sid);
     let mut queue = VecDeque::new();
     queue.push_back(crate::state::PendingInjection::notice("after esc"));
@@ -20457,7 +20550,7 @@ async fn queued_command_does_not_drain_when_the_captured_mini_screen_is_not_read
         .get(sid)
         .unwrap()
         .store(SHELL_BUSY, std::sync::atomic::Ordering::Release);
-    enqueue_user_command(&state, sid, "resume queued work").unwrap();
+    enqueue_user_command(&state, sid, "resume queued work", None).unwrap();
 
     let mut processor = ChunkProcessor::new(None, None);
     for record in capture.records {
@@ -21051,4 +21144,669 @@ fn retry_enter_only_when_composer_retained_and_clause_two() {
         !retry("retry-flush-fails", RetryWriterFault::Flush),
         "a failed flush is not a confirmed submission"
     );
+}
+
+/// Catches: confirmation samples only the current Working screen and forgets a
+/// submitted turn that has already reached its question before the worker runs.
+/// The response is the real Codex request_user_input capture, not invented ANSI.
+#[cfg(unix)]
+#[test]
+fn submit_paths_do_not_toast_when_captured_codex_turn_already_reached_a_question() {
+    // The capture holds terminal queries whose replies need this writer's lock,
+    // which Enter still holds while the response is consumed inline. A cooked tty
+    // withholds replies (`tty_would_swallow_reply`), so they cannot self-deadlock.
+    struct CapturedTurnWriter {
+        state: Arc<AppState>,
+        sid: String,
+        response: Vec<Vec<u8>>,
+        writes: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+    }
+    impl std::io::Write for CapturedTurnWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.writes.lock().unwrap().push(bytes.to_vec());
+            if bytes == b"\r" {
+                let silence = self
+                    .state
+                    .session_maps
+                    .silence_states
+                    .get(&self.sid)
+                    .unwrap()
+                    .clone();
+                let mut reader = ChunkProcessor::new(None, None);
+                for chunk in &self.response {
+                    reader.process_chunk(
+                        &String::from_utf8_lossy(chunk),
+                        &silence,
+                        &self.sid,
+                        &self.state,
+                    );
+                }
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    use crate::pty_capture::CaptureDirection::{Input, Output};
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "codex-request-user-input-20260929.tcap",
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let text_index = capture
+        .records
+        .iter()
+        .position(|record| {
+            record.direction == Input && record.data.starts_with(b"Before doing any work")
+        })
+        .unwrap();
+    let enter_index = text_index + 1;
+    assert_eq!(capture.records[enter_index].data, b"\r");
+    let text = String::from_utf8(capture.records[text_index].data.clone()).unwrap();
+    let question_end = capture
+        .records
+        .iter()
+        .enumerate()
+        .skip(enter_index + 1)
+        .find(|(_, record)| {
+            record
+                .data
+                .windows(b"state=idle".len())
+                .any(|w| w == b"state=idle")
+        })
+        .map(|(index, _)| index + 1)
+        .unwrap();
+    let response: Vec<Vec<u8>> = capture.records[enter_index + 1..question_end]
+        .iter()
+        .filter(|record| record.direction == Output)
+        .map(|record| record.data.clone())
+        .collect();
+
+    for path in ["brief", "queued_input", "lifecycle_wake", "mail_notice"] {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = format!("captured-confirmation-{path}");
+        agent_session(&state, &sid, SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut(&sid)
+            .unwrap()
+            .agent_type = Some("codex".into());
+        let mut vt = VtLogBuffer::new(rows, cols, 2000);
+        for record in capture.records[..text_index]
+            .iter()
+            .filter(|record| record.direction == Output)
+        {
+            vt.process(&record.data);
+        }
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.clone(), Mutex::new(vt));
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.clone(), Mutex::new(OutputRingBuffer::new(1 << 20)));
+        let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        insert_session_with_writer(
+            &state,
+            &sid,
+            Box::new(CapturedTurnWriter {
+                state: Arc::clone(&state),
+                sid: sid.clone(),
+                response: response.clone(),
+                writes: Arc::clone(&writes),
+            }),
+            TtyMode::Cooked,
+        );
+        let injection = match path {
+            "brief" => crate::state::PendingInjection::initial_prompt(&text),
+            "queued_input" => crate::state::PendingInjection::user_command(&text),
+            _ => crate::state::PendingInjection::notice(&text),
+        };
+        state
+            .pending_injections
+            .entry(sid.clone())
+            .or_default()
+            .push_back(injection);
+        let mut alerts = state.event_bus.subscribe();
+        flush_pending_injections_blocking(&state, &sid);
+        assert!(std::iter::from_fn(|| alerts.try_recv().ok()).all(|event| !matches!(event,
+            crate::state::AppEvent::McpToast { ref title, .. } if title == "Agent input was not confirmed"
+        )), "{path}: the accepted turn must not produce a false failure toast");
+        assert_eq!(
+            writes
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|write| write.as_slice() == b"\r")
+                .count(),
+            1,
+            "{path}: a confirmed turn must not receive a duplicate Enter"
+        );
+    }
+}
+
+/// Catches: a headless terminal needs UI polling to discover an agent, or retains
+/// a shell-era screen cache after the foreground identity becomes known.
+#[cfg(unix)]
+#[tokio::test]
+async fn headless_foreground_timer_discovers_claude_and_reclassifies_quiet_screen() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "headless-foreground-discovery";
+    let _probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+    let capture = crate::pty_capture::decode_capture(&agent_prompt_fixture(
+        "claude-askuser-esc-20260929.tcap",
+    ))
+    .unwrap();
+    let (rows, cols) = capture.geometry.unwrap();
+    let mut vt = VtLogBuffer::new(rows, cols, 2000);
+    state
+        .session_maps
+        .output_buffers
+        .insert(sid.into(), Mutex::new(OutputRingBuffer::new(4096)));
+    // Recorded ready composer after Esc, before record 195 paints the next draft.
+    for record in capture.records.into_iter().take(195) {
+        if record.direction == crate::pty_capture::CaptureDirection::Output {
+            vt.process(&record.data);
+            state
+                .session_maps
+                .output_buffers
+                .get(sid)
+                .unwrap()
+                .lock()
+                .write(&record.data);
+        }
+    }
+    let output_offset = state
+        .session_maps
+        .output_buffers
+        .get(sid)
+        .unwrap()
+        .lock()
+        .total_written;
+    state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let running = Arc::new(AtomicBool::new(true));
+    // Paused Tokio time advances the timer without asserting startup latency.
+    tokio::time::pause();
+    spawn_silence_timer(silence.clone(), running.clone(), sid.into(), state.clone());
+    // Sleeping past the first scheduled tick lets Tokio dispatch its sleeper;
+    // advance(interval) followed by yield can inspect before that dispatch.
+    tokio::time::sleep(SILENCE_CHECK_INTERVAL * 2).await;
+    running.store(false, Ordering::Release);
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("idle")
+    );
+    assert_eq!(
+        silence.lock().cached_screen_activity,
+        AgentScreenActivity::Ready
+    );
+    assert_eq!(silence.lock().last_ready_screen_offset, output_offset);
+}
+
+/// Catches: clearing an armed run-config identity during shell startup blocks
+/// the configured agent before it has ever reached the foreground.
+#[cfg(unix)]
+#[test]
+fn configured_agent_is_submittable_during_shell_startup_before_first_observation() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "preset-shell-startup";
+    let probe =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "start task"),
+        AgentSubmissionWrite::Complete { .. }
+    ));
+    assert_eq!(*probe.bytes.lock().unwrap(), b"\x15start task\r");
+}
+
+/// Catches: a configured preset stays permanently armed after its agent was
+/// observed, letting unattended submit/mail type into the shell after exit.
+#[cfg(unix)]
+#[test]
+fn configured_agent_seen_then_exited_to_shell_is_not_submittable_or_wakeable() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "preset-agent-exit";
+    let agent =
+        crate::test_support::ForegroundIdentityProbe::shell_parent(state.clone(), sid, "claude");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    let seen = state.session_maps.session_states.get(sid).unwrap().clone();
+    assert!(seen.agent_foreground_observed);
+    drop(agent);
+    let shell =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
+    // Replace only the test PTY child; carry the same production identity state.
+    state.session_maps.session_states.insert(sid.into(), seen);
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type,
+        None
+    );
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe shell command"),
+        AgentSubmissionWrite::Rejected {
+            reason: "not_managed_agent",
+            ..
+        }
+    ));
+    assert!(!should_inject_now(&state, sid));
+    assert!(shell.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: treating an unclassified startup helper as unseen leaves the preset
+/// armed forever, allowing unattended submission into its returned shell.
+/// Early disarming is the intentional safe trade-off for direnv/nvm hooks.
+#[cfg(unix)]
+#[test]
+fn non_shell_startup_helper_disarms_preset_and_refuses_submit_after_shell_return() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "preset-startup-helper";
+    let helper =
+        crate::test_support::ForegroundIdentityProbe::shell_parent(state.clone(), sid, "direnv");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    let seen = state.session_maps.session_states.get(sid).unwrap().clone();
+    assert!(seen.agent_foreground_observed);
+    drop(helper);
+    let shell =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
+    state.session_maps.session_states.insert(sid.into(), seen);
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe shell command"),
+        AgentSubmissionWrite::Rejected {
+            reason: "not_managed_agent",
+            ..
+        }
+    ));
+    assert!(!should_inject_now(&state, sid));
+    assert!(shell.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: a slow shell snapshot sampled before a newer agent snapshot revokes
+/// the live agent, or a late agent snapshot re-arms a newer returned shell.
+#[test]
+fn stale_foreground_snapshot_cannot_revoke_newer_agent_or_rearm_returned_shell() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "foreground-snapshot-order";
+    agent_session(&state, sid, SHELL_IDLE);
+    assert_eq!(
+        apply_foreground_agent_observation(
+            &state,
+            sid,
+            2,
+            Some("claude".into()),
+            false,
+            false,
+            "claude".into()
+        )
+        .as_deref(),
+        Some("claude")
+    );
+    // The older sample completes after generation 2 committed.
+    assert_eq!(
+        apply_foreground_agent_observation(&state, sid, 1, None, true, false, "bash".into())
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        apply_foreground_agent_observation(&state, sid, 3, None, true, false, "bash".into()),
+        None
+    );
+    assert_eq!(
+        apply_foreground_agent_observation(
+            &state,
+            sid,
+            2,
+            Some("claude".into()),
+            false,
+            false,
+            "claude".into()
+        ),
+        None
+    );
+    let session = state.session_maps.session_states.get(sid).unwrap();
+    assert_eq!(session.agent_type, None);
+    assert_eq!(session.foreground_probe_generation, 3);
+}
+
+/// Catches: a shell absent from a basename allowlist retains a discovered agent
+/// forever. The root process identity must revoke for every shell spelling.
+#[cfg(unix)]
+#[test]
+fn shell_root_identity_revokes_agent_for_ash_and_renamed_shell() {
+    // Linux /proc/comm exposes at most 15 bytes. Keep the real executable's
+    // arbitrary name within that limit so setup waits for an observable name.
+    for name in ["ash", "renamed-shell"] {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "unlisted-root-shell";
+        let probe =
+            crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, name);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some("claude".into());
+        assert_eq!(refresh_session_agent(&state, sid), None);
+        assert!(!should_inject_now(&state, sid));
+        assert!(matches!(
+            write_agent_submission_to_pty(&state, sid, "unsafe"),
+            AgentSubmissionWrite::Rejected {
+                reason: "not_managed_agent",
+                ..
+            }
+        ));
+        assert!(probe.bytes.lock().unwrap().is_empty());
+    }
+}
+
+/// Catches: a bash-script wrapper is mistaken for the owning shell on macOS,
+/// never observed, and leaves its preset armed after returning to the real root.
+#[cfg(unix)]
+#[test]
+fn bash_script_wrapper_is_observed_and_revoked_only_when_its_shell_root_returns() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "bash-script-wrapper-root";
+    let mut probe = crate::test_support::ForegroundIdentityProbe::bash_wrapper(
+        state.clone(),
+        sid,
+        crate::state::SpawnRootRole::Shell,
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_foreground_observed
+    );
+    probe.return_to_root();
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(!should_inject_now(&state, sid));
+    assert!(probe.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: a nested shell opened by a direct agent revokes its identity, or
+/// receives an unattended task/mail wake intended for the parent agent.
+#[cfg(unix)]
+#[test]
+fn direct_agent_nested_subshell_holds_input_without_revoking_identity() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "direct-agent-nested-shell";
+    let mut probe = crate::test_support::ForegroundIdentityProbe::bash_wrapper(
+        state.clone(),
+        sid,
+        crate::state::SpawnRootRole::DirectProgram,
+    );
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .seed_configured_agent(Some("claude".into()));
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_state_with_shell(sid)
+            .unwrap()
+            .agent_state
+            .as_deref(),
+        Some("working")
+    );
+    assert!(!should_inject_now(&state, sid));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe child input"),
+        AgentSubmissionWrite::Rejected {
+            reason: "agent_not_ready",
+            ..
+        }
+    ));
+    assert!(probe.bytes.lock().unwrap().is_empty());
+    probe.return_to_root();
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert!(should_inject_now(&state, sid));
+}
+
+/// Catches: a mirrored/legacy session with no authoritative spawn role permits
+/// unattended input using a configured agent identity alone.
+#[cfg(unix)]
+#[test]
+fn unknown_spawn_root_role_refuses_submit_and_mail_wake() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "missing-root-role";
+    let _probe = crate::test_support::ForegroundIdentityProbe::new(state.clone(), sid, "claude");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .spawn_root_role = crate::state::SpawnRootRole::Unknown;
+    assert!(!should_inject_now(&state, sid));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe"),
+        AgentSubmissionWrite::Rejected {
+            reason: "agent_not_ready",
+            ..
+        }
+    ));
+}
+
+/// Catches: exec into a different shell image at the same root PID is promoted
+/// to an agent or retains an old discovered agent's identity.
+#[cfg(unix)]
+#[test]
+fn shell_root_exec_into_another_shell_still_revokes_agent_identity() {
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "exec-root-shell";
+    let probe =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "bash");
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .agent_type = Some("claude".into());
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type,
+        None
+    );
+    assert!(!should_inject_now(&state, sid));
+    assert!(probe.bytes.lock().unwrap().is_empty());
+}
+
+/// Catches: an agent exec'd into the shell root leaves live agent identity and
+/// a mail/submit target behind after its process exits instead of a shell return.
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_root_agent_exit_clears_identity_and_refuses_submit_and_mail() {
+    use std::io::Write;
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let sid = "exec-root-agent-exit";
+    let _probe =
+        crate::test_support::ForegroundIdentityProbe::shell_root(state.clone(), sid, "claude");
+    assert_eq!(
+        refresh_session_agent(&state, sid).as_deref(),
+        Some("claude")
+    );
+    assert_eq!(
+        state
+            .session_maps
+            .session_states
+            .get(sid)
+            .unwrap()
+            .agent_type
+            .as_deref(),
+        Some("claude")
+    );
+    assert!(
+        should_inject_now(&state, sid),
+        "the live exec'd agent must receive input"
+    );
+    crate::state::AppState::spawn_session_state_accumulator(state.clone());
+    _probe.start_reader();
+    // The probe's actual cat image exits normally on terminal EOF. The recorded
+    // writer remains untouched; use its native master solely to end our process.
+    {
+        let entry = state.session_maps.sessions.get(sid).unwrap();
+        let session = entry.lock();
+        session
+            .master
+            .take_writer()
+            .unwrap()
+            .write_all(b"\x04")
+            .unwrap();
+    }
+    // Do not wait for the child while holding the session mutex: the native
+    // reader needs that lock before it can drain macOS PTY output and see EOF.
+    // Native reader EOF now owns lifecycle publication and process cleanup.
+    while state.session_maps.session_states.contains_key(sid)
+        || state.session_maps.sessions.contains_key(sid)
+    {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(refresh_session_agent(&state, sid), None);
+    assert!(!should_inject_now(&state, sid));
+    assert!(matches!(
+        write_agent_submission_to_pty(&state, sid, "unsafe"),
+        AgentSubmissionWrite::Rejected {
+            reason: "session_not_found",
+            ..
+        }
+    ));
+}
+
+/// Catches: concurrent retries both append, or identical text with a new key is discarded.
+#[cfg(unix)]
+#[test]
+fn queue_idempotency_concurrent_retries_preserve_distinct_jobs_and_sessions() {
+    let state = crate::state::tests_support::make_test_app_state();
+    for sid in ["keyed-one", "keyed-two"] {
+        agent_session(&state, sid, SHELL_BUSY);
+        insert_recording_session(&state, sid);
+    }
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            let state = &state;
+            scope.spawn(move || {
+                let receipt =
+                    enqueue_user_command(state, "keyed-one", "wake", Some("job-1")).unwrap();
+                assert!(receipt.accepted);
+            });
+        }
+    });
+    enqueue_user_command(&state, "keyed-one", "wake", Some("job-2")).unwrap();
+    enqueue_user_command(&state, "keyed-two", "wake", Some("job-1")).unwrap();
+    enqueue_user_command(&state, "keyed-one", "wake", None).unwrap();
+    enqueue_user_command(&state, "keyed-one", "wake", None).unwrap();
+    assert_eq!(list_queued_commands(&state, "keyed-one").len(), 4);
+    assert_eq!(list_queued_commands(&state, "keyed-two").len(), 1);
+}
+
+/// Catches: invalid keys reserve acceptance, and old keys remain forever rather than bounded.
+#[cfg(unix)]
+#[test]
+fn queue_idempotency_validates_keys_and_bounds_recent_acceptance() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "key-bounds";
+    agent_session(&state, sid, SHELL_BUSY);
+    insert_recording_session(&state, sid);
+    for key in [String::new(), "x".repeat(129)] {
+        assert!(enqueue_user_command(&state, sid, "wake", Some(&key)).is_err());
+    }
+    assert!(list_queued_commands(&state, sid).is_empty());
+    for n in 0..129 {
+        enqueue_user_command(&state, sid, "wake", Some(&format!("job-{n}"))).unwrap();
+        clear_queued_commands(&state, sid);
+    }
+    // Most recent acceptance remains known even after cancellation.
+    enqueue_user_command(&state, sid, "wake", Some("job-128")).unwrap();
+    assert!(list_queued_commands(&state, sid).is_empty());
+    // The oldest falls outside the documented 128-key window.
+    enqueue_user_command(&state, sid, "wake", Some("job-0")).unwrap();
+    assert_eq!(list_queued_commands(&state, sid).len(), 1);
 }

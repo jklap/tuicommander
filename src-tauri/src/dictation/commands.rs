@@ -2389,15 +2389,15 @@ pub(crate) fn arm_hands_free(
 /// The seam exists so a test can drive the whole armed path — bind, capture,
 /// segment, transcribe, hold back, write — without a microphone or a
 /// multi-gigabyte model, against a real session and the real sink.
+type OpenVoiceEndpoint<'a> =
+    dyn Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> + 'a;
+
 pub(crate) fn arm_hands_free_with(
     state: &Arc<crate::state::AppState>,
     dictation: &DictationState,
     session_id: &str,
     owner: &str,
-    open_endpoint: &dyn Fn(
-        &DictationState,
-        &str,
-    ) -> Result<Box<dyn continuous::VoiceEndpoint>, String>,
+    open_endpoint: &OpenVoiceEndpoint<'_>,
 ) -> Result<HandsFreeStatus, String> {
     dictation.ensure_owner()?;
     check_binding_field(session_id, "Session id")?;
@@ -2595,8 +2595,8 @@ fn partial_dictation_config_keeps_valid_fields() {
     assert_eq!(loaded.hotkey, "F8");
     assert_eq!(loaded.language, "it");
     assert_eq!(
-        loaded.speech_volume_db,
-        DictationConfig::default().speech_volume_db
+        loaded.speech_volume_db.to_bits(),
+        DictationConfig::default().speech_volume_db.to_bits()
     );
     assert!(loaded.recovered_from_corruption);
 }
@@ -3020,7 +3020,7 @@ mod tests {
             serde_json::to_value(&response).unwrap()["skip_reason"],
             "audio too quiet (RMS 0.0005 < 0.0010)"
         );
-        assert_eq!(response.duration_s, 1.25);
+        assert_eq!(response.duration_s.to_bits(), 1.25_f64.to_bits());
     }
 
     #[test]
@@ -3036,11 +3036,13 @@ mod tests {
     /// After its one phrase it keeps handing back room silence, exactly as a
     /// live capture device does — a device that stops delivering samples is a
     /// failure, and this fake must not fake one.
+    #[cfg(unix)]
     struct ScriptedEndpoint {
         phrase: parking_lot::Mutex<Option<Vec<f32>>>,
         transcript: String,
     }
 
+    #[cfg(unix)]
     impl continuous::VoiceEndpoint for ScriptedEndpoint {
         fn drain(&mut self) -> Result<Vec<f32>, String> {
             Ok(self
@@ -3067,6 +3069,7 @@ mod tests {
     ///
     /// The notices are about the *mode*, so a test for them must not have to
     /// stage a spoken turn to see one.
+    #[cfg(unix)]
     fn silent_endpoint()
     -> impl Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
         |_dictation, _owner| {
@@ -3081,6 +3084,7 @@ mod tests {
     ///
     /// The composer flushes on its own schedule, so the alternative is a fixed
     /// sleep — a guess about scheduling rather than a deadline.
+    #[cfg(unix)]
     fn wait_for_typed(bytes: &Arc<std::sync::Mutex<Vec<u8>>>, needle: &str) -> String {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
@@ -3097,6 +3101,7 @@ mod tests {
     /// Whether `needle` is typed into the recorded terminal inside `window`.
     /// Used for the assertion that it is not; the caller measures the window
     /// rather than guessing it.
+    #[cfg(unix)]
     fn typed_within(
         bytes: &Arc<std::sync::Mutex<Vec<u8>>>,
         needle: &str,
@@ -3113,6 +3118,7 @@ mod tests {
     }
 
     /// A spoken phrase: 600ms of tone, then long enough a pause to close it.
+    #[cfg(unix)]
     fn spoken_phrase() -> Vec<f32> {
         let sample_rate = continuous::SAMPLE_RATE as f32;
         let speech = (0..(sample_rate as usize * 600 / 1000))
@@ -3122,6 +3128,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(unix)]
     fn scripted_endpoint(
         transcript: &'static str,
     ) -> impl Fn(&DictationState, &str) -> Result<Box<dyn continuous::VoiceEndpoint>, String> {
@@ -3697,7 +3704,7 @@ mod tests {
 
         let saved = get_dictation_config();
         assert_eq!(saved.model, "small");
-        assert_eq!(saved.speech_volume_db, -24.0);
+        assert_eq!(saved.speech_volume_db.to_bits(), (-24.0_f32).to_bits());
     }
 
     #[test]
@@ -3736,8 +3743,10 @@ mod tests {
         let mut desired = base.clone();
         desired.model = "small".to_string();
 
-        let mut concurrent = DictationConfig::default();
-        concurrent.language = "fr".to_string();
+        let concurrent = DictationConfig {
+            language: "fr".to_string(),
+            ..DictationConfig::default()
+        };
         std::fs::write(&path, serde_json::to_string(&concurrent).unwrap()).unwrap();
         save_dictation_config(base, desired, None).unwrap();
 
@@ -3767,7 +3776,7 @@ mod tests {
 
         let saved = get_dictation_config();
         assert_eq!(saved.model, "small");
-        assert_eq!(saved.speech_volume_db, -24.0);
+        assert_eq!(saved.speech_volume_db.to_bits(), (-24.0_f32).to_bits());
         assert_eq!(saved.hotkey, "F5");
     }
 
@@ -3900,7 +3909,11 @@ mod tests {
                 speech_volume_db: stored,
                 ..DictationConfig::default()
             };
-            assert_eq!(config.loudness().volume_db, expected, "stored {stored}");
+            assert_eq!(
+                config.loudness().volume_db.to_bits(),
+                f32::to_bits(expected),
+                "stored {stored}"
+            );
         }
     }
 
@@ -3938,7 +3951,9 @@ mod tests {
             })
             .collect();
         let level = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
-        samples.iter_mut().for_each(|s| *s *= rms / level);
+        for s in &mut samples {
+            *s *= rms / level;
+        }
         samples
     }
 
@@ -3998,7 +4013,7 @@ mod tests {
             let mut canceller = WebRtc::new().expect("the bundled APM starts");
             let silence = vec![0.0_f32; FRAME_SAMPLES];
             let mut output = input.clone();
-            for frame in output.chunks_exact_mut(FRAME_SAMPLES) {
+            for frame in output.as_chunks_mut::<FRAME_SAMPLES>().0 {
                 canceller.cancel(&silence, frame);
             }
             // Skip the first second: the filter may still be settling.
@@ -4559,9 +4574,12 @@ mod tests {
     /// A hands-free conversation must not read as a silent microphone.
     #[test]
     fn the_level_falls_back_to_the_hands_free_capture() {
-        assert_eq!(capture_level(None, Some(0.4)), 0.4);
-        assert_eq!(capture_level(Some(0.2), Some(0.4)), 0.2);
-        assert_eq!(capture_level(None, None), 0.0);
+        assert_eq!(capture_level(None, Some(0.4)).to_bits(), 0.4_f32.to_bits());
+        assert_eq!(
+            capture_level(Some(0.2), Some(0.4)).to_bits(),
+            0.2_f32.to_bits()
+        );
+        assert_eq!(capture_level(None, None).to_bits(), 0.0_f32.to_bits());
     }
 
     /// The frontend keys its bar on `asset` and ends it on `done`; a progress
@@ -4949,13 +4967,12 @@ mod tests {
         .expect("config save");
 
         assert!(dictation.speaker.lock().is_some());
-        assert_eq!(
-            speech_status(&dictation, Some(&accepted.utterance_id))
+        assert!(
+            !speech_status(&dictation, Some(&accepted.utterance_id))
                 .utterance
                 .expect("asked")
                 .state
                 .is_empty(),
-            false,
             "the reply in flight still has a fate to report"
         );
     }

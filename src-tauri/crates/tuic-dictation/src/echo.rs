@@ -361,7 +361,7 @@ impl EchoGuard {
         }
 
         let mut cleaned: Vec<f32> = self.remainder.drain(..frames * FRAME_SAMPLES).collect();
-        for frame in cleaned.chunks_exact_mut(FRAME_SAMPLES) {
+        for frame in cleaned.as_chunks_mut::<FRAME_SAMPLES>().0 {
             let far_end = self.far_end.take(FRAME_SAMPLES);
             self.canceller.cancel(&far_end, frame);
         }
@@ -676,7 +676,10 @@ mod tests {
         probe.guard.clean(&vec![0.0; reply.len()]);
 
         let seen = probe.far_end_seen();
-        let diverged = seen.iter().zip(&reply).position(|(a, b)| a != b);
+        let diverged = seen
+            .iter()
+            .zip(&reply)
+            .position(|(a, b)| a.to_bits() != b.to_bits());
         assert_eq!(
             (seen.len(), diverged),
             (reply.len(), None),
@@ -1090,7 +1093,9 @@ mod tests {
             let far_end: Vec<f32> = seen.lock().iter().flatten().copied().collect();
             assert_eq!(far_end.len(), FRAME_SAMPLES * 3);
             assert!(
-                far_end.iter().all(|sample| *sample == 1.0),
+                far_end
+                    .iter()
+                    .all(|sample| sample.to_bits() == 1.0_f32.to_bits()),
                 "the reference went silent while the device kept playing"
             );
         }

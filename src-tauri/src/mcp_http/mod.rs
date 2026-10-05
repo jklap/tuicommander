@@ -4,7 +4,7 @@ mod agent_routes;
 pub(crate) mod auth;
 mod claude_routes;
 mod config_routes;
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 mod dictation_routes;
 mod ego_routes;
 mod fs_routes;
@@ -15,20 +15,27 @@ mod log_routes;
 pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod plugin_routes;
+mod remote_mcp_sessions;
+pub(crate) mod remote_peer;
 mod remote_session_proxy;
+mod request_boundary;
+#[cfg(test)]
+mod secret_critic1435_tests;
 pub(crate) mod session;
 pub(crate) mod sse_routes;
-mod static_files;
+pub(crate) mod static_files;
 #[cfg(feature = "desktop")]
 mod system_routes;
+mod telegram_routes;
 pub(crate) mod types;
 mod watcher_routes;
 mod worktree_routes;
 mod ws_compression;
 
 use crate::AppState;
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
-use axum::http::{Method, StatusCode, header};
+#[cfg(test)]
+use axum::http::header::CONTENT_TYPE;
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{
@@ -39,7 +46,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
-use tower_http::cors::CorsLayer;
 #[cfg(unix)]
 use tuic_ipc::named_socket_path;
 
@@ -390,6 +396,7 @@ async fn post_progress_report(
 #[derive(serde::Deserialize)]
 struct SubmitAgentReplyRequest {
     input: String,
+    timeout_ms: Option<u64>,
 }
 
 /// Browser counterpart of the managed session `submit` action. Both transports
@@ -417,7 +424,7 @@ async fn submit_agent_reply(
     }
     let result = mcp_transport::handle_session_submit(
         &state,
-        &serde_json::json!({"session_id": session_id, "input": body.input}),
+        &serde_json::json!({"session_id": session_id, "input": body.input, "timeout_ms": body.timeout_ms}),
         true,
     )
     .await;
@@ -474,20 +481,26 @@ struct StoryActionRequest {
 
 async fn post_story_action(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    caller: Option<Extension<ConnectInfo<SocketAddr>>>,
     auth: Option<Extension<guards::Authenticated>>,
+    user_auth: Option<Extension<guards::UserAuthenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(input): Json<StoryActionRequest>,
 ) -> Response {
+    let addr = caller.map_or(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        |Extension(ConnectInfo(addr))| addr,
+    );
     if let Some(r) = progress_auth(&addr, auth.is_some()) {
         return r;
     }
     let result = tokio::task::spawn_blocking(move || {
-        crate::stories::story_action_for_http(
+        crate::stories::story_action_for_http_authenticated(
             &state,
             &q.path,
             input.action,
             input.session_id.as_deref(),
+            user_auth.is_some(),
         )
     })
     .await
@@ -501,11 +514,15 @@ async fn get_story_capabilities() -> Json<bool> {
 }
 
 async fn post_workflow_definition_action(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    caller: Option<Extension<ConnectInfo<SocketAddr>>>,
     auth: Option<Extension<guards::Authenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(action): Json<crate::workflows::WorkflowAction>,
 ) -> Response {
+    let addr = caller.map_or(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        |Extension(ConnectInfo(addr))| addr,
+    );
     if let Some(response) = progress_auth(&addr, auth.is_some()) {
         return response;
     }
@@ -518,11 +535,15 @@ async fn post_workflow_definition_action(
 }
 async fn post_workflow_run_action(
     State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    caller: Option<Extension<ConnectInfo<SocketAddr>>>,
     auth: Option<Extension<guards::Authenticated>>,
     Query(q): Query<types::PathQuery>,
     Json(action): Json<crate::workflows::RunAction>,
 ) -> Response {
+    let addr = caller.map_or(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        |Extension(ConnectInfo(addr))| addr,
+    );
     if let Some(response) = progress_auth(&addr, auth.is_some()) {
         return response;
     }
@@ -805,6 +826,7 @@ const API_PREFIXES: &[&str] = &[
     "registry",
     "remote",
     "repo",
+    "secrets",
     "sessions",
     "stats",
     "stories",
@@ -887,6 +909,7 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
 /// the per-router `/fs/read-editor*` handler down-scope (SECURITY).
 fn shared_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/mcp/peer", get(remote_peer::endpoint))
         // Version (authenticated)
         .route("/api/version", get(session::app_version))
         // Shared on purpose: this is how a remote client escapes the header-only
@@ -1266,6 +1289,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/fs/copy-abs", post(fs_routes::copy_path_abs_http))
         .route("/fs/move-abs", post(fs_routes::move_path_abs_http))
         .route("/fs/transfer", post(fs_routes::fs_transfer_paths_http))
+        .route("/fs/upload-copy", post(fs_routes::upload_copy_http))
         // Claude Usage dashboard
         .route("/claude/usage", get(claude_routes::claude_usage_api))
         .route(
@@ -1480,7 +1504,7 @@ fn acp_prompt_body_limit() -> usize {
 /// `only_the_voice_import_route_accepts_a_large_body` pins both halves.
 /// The remote binary upload reads the raw Body as a stream, so its separate
 /// 512 MiB limit is enforced while copying chunks rather than by this layer.
-#[cfg(feature = "desktop")]
+#[cfg(feature = "dictation")]
 pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
     crate::dictation::speech::assets::MAX_USER_VOICE_BYTES.div_ceil(3) * 4 + 64 * 1024;
 
@@ -1492,48 +1516,33 @@ pub(crate) const SPEECH_VOICE_IMPORT_BODY_BYTES: usize =
 /// exercising different code (AGENTS.md, "Which timing assertions are
 /// load-bearing").
 ///
-/// Both layers are safe over SSE and WebSocket. `tower_http`'s `ResponseFuture`
-/// races its sleep only against the future that produces the `Response`; once
+/// Both layers are safe over SSE and WebSocket. The timeout races its sleep
+/// only against the future that produces the `Response`; once
 /// headers are returned the timeout is dropped and the body streams
 /// unwatched. `Sse` and `WebSocketUpgrade` both return immediately, so neither
 /// `/events` nor a PTY socket can be cut off mid-stream.
 pub(crate) fn with_server_limits(routes: Router, timeout: std::time::Duration) -> Router {
     routes
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            StatusCode::REQUEST_TIMEOUT,
-            timeout,
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                // Upload bodies carry their own idle, size and total receive budgets.
+                // The ordinary response deadline is too short for large transfers.
+                if request.uri().path() == "/fs/upload-copy" {
+                    return next.run(request).await;
+                }
+                match tokio::time::timeout(timeout, next.run(request)).await {
+                    Ok(response) => response,
+                    Err(_) => StatusCode::REQUEST_TIMEOUT.into_response(),
+                }
+            },
         ))
 }
 
 pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
-    // When remote access is enabled, allow any origin (Basic Auth secures the endpoint).
-    // Otherwise, restrict to localhost and Tauri webview origins.
-    let cors = if remote_auth {
-        CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-    } else {
-        let allowed_origins = [
-            "http://localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "http://127.0.0.1"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "tauri://localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "https://tauri.localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-        ];
-        CorsLayer::new()
-            .allow_origin(allowed_origins.to_vec())
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-    };
+    // false selects the trusted local IPC transport; every TCP listener uses true.
+    let boundary = request_boundary::RequestBoundary::new(state.clone());
+    let cors = boundary.cors();
 
     let mut routes = Router::new()
         // Routes common to the remote daemon router live in shared_routes().
@@ -1669,6 +1678,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/api/auth/rotate-token",
             post(config_routes::rotate_session_token),
+        )
+        .route(
+            "/config/telegram",
+            get(telegram_routes::get).put(telegram_routes::put),
         )
         .route(
             "/config/notifications",
@@ -1827,6 +1840,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))
+        .route("/secrets/forms/{nonce}", get(crate::secrets::form_http))
+        .route("/secrets/forms/submit", post(crate::secrets::submit_http))
         // Debug: reload the main WebView natively (loopback-only, enforced in
         // handler). Local router only — the remote client reloads its own tab.
         .route(
@@ -2028,8 +2043,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         );
 
     // Dictation — desktop-only: `crate::dictation` owns the audio capture and
-    // the whisper model, both gated on the `desktop` feature.
-    #[cfg(feature = "desktop")]
+    // the whisper model, both gated on the opt-in `dictation` feature.
+    #[cfg(feature = "dictation")]
     let routes = routes
         .route(
             "/dictation/status",
@@ -2182,6 +2197,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            auth::workflow_actor_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             remote_session_proxy::proxy_http,
         ))
         .layer(cors)
@@ -2194,10 +2213,15 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     let routes = with_server_limits(routes, REQUEST_TIMEOUT);
 
     if remote_auth {
-        routes.layer(axum::middleware::from_fn_with_state(
-            state,
-            auth::basic_auth_middleware,
-        ))
+        routes
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                auth::basic_auth_middleware,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                boundary,
+                request_boundary::check,
+            ))
     } else {
         routes
     }
@@ -2216,10 +2240,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 /// Auth and compression layers are applied identically to `build_router()`.
 #[allow(dead_code)] // Used by tuic-remote binary (not(desktop) build)
 pub fn build_remote_router(state: Arc<AppState>) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(tower_http::cors::Any)
-        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([AUTHORIZATION, CONTENT_TYPE]);
+    let boundary = request_boundary::RequestBoundary::new(state.clone());
+    let cors = boundary.cors();
 
     let public_routes = Router::new()
         .route("/health", get(session::health))
@@ -2252,7 +2274,12 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
         axum::middleware::from_fn_with_state(state, auth::basic_auth_middleware),
     );
 
-    public_routes.merge(authed)
+    public_routes
+        .merge(authed)
+        .layer(axum::middleware::from_fn_with_state(
+            boundary,
+            request_boundary::check,
+        ))
 }
 
 /// Rebind the TCP listener after a config write changed remote-access settings.
@@ -2320,7 +2347,7 @@ fn evict_peers_for_reaped_mcp_session_locked(
         .map(|entry| entry.key().clone())
         .partition(|tuic| state.peer_identity_is_reapable(tuic));
     for tuic in &removed {
-        state.peer_agents.remove(tuic);
+        crate::mcp_http::remote_peer::unregister_peer(state, tuic);
         state.orchestrator_peers.remove(tuic);
         state.active_agent_waiters.remove(tuic);
         let _ = state
@@ -2812,6 +2839,7 @@ mod tests {
         addr: std::net::SocketAddr,
     ) -> Request<Body> {
         let mut req = Request::post(url)
+            .header(header::HOST, "127.0.0.1:9876")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::to_string(body).expect("serialize JSON body"),
@@ -2828,6 +2856,7 @@ mod tests {
 
     fn get_localhost(url: &str) -> Request<Body> {
         let mut req = Request::get(url)
+            .header(header::HOST, "127.0.0.1:9876")
             .body(Body::empty())
             .expect("build GET request");
         req.extensions_mut()
@@ -2838,6 +2867,7 @@ mod tests {
     /// Build a PUT request with ConnectInfo from the given address.
     fn put_from(url: &str, body: &serde_json::Value, addr: std::net::SocketAddr) -> Request<Body> {
         let mut req = Request::put(url)
+            .header(header::HOST, "127.0.0.1:9876")
             .header("content-type", "application/json")
             .body(Body::from(
                 serde_json::to_string(body).expect("serialize JSON body"),
@@ -2996,6 +3026,7 @@ mod tests {
         state.config.write().services.auth.lan_auth_bypass = false;
         let app = build_remote_router(state);
         let mut request = Request::post("/remote/update")
+            .header(header::HOST, "127.0.0.1:9876")
             .body(Body::from("not a binary"))
             .unwrap();
         request
@@ -3021,6 +3052,7 @@ mod tests {
         }
         let credentials = base64::engine::general_purpose::STANDARD.encode("boss:known-password");
         let mut request = Request::post("/remote/update")
+            .header(header::HOST, "127.0.0.1:9876")
             .header(
                 axum::http::header::AUTHORIZATION,
                 format!("Basic {credentials}"),
@@ -3095,6 +3127,7 @@ mod tests {
             ),
         ] {
             let mut request = Request::post("/remote/update?token=update-secret")
+                .header(header::HOST, "127.0.0.1:9876")
                 .header("x-tuic-target", target)
                 .header("x-tuic-sha256", sha256)
                 .header("x-tuic-confirmed-sessions", sessions)
@@ -3143,6 +3176,7 @@ mod tests {
             ),
         ] {
             let mut request = Request::post("/remote/update?token=update-secret")
+                .header(header::HOST, "127.0.0.1:9876")
                 .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
                 .header("x-tuic-sha256", hash)
                 .header("x-tuic-confirmed-sessions", "0")
@@ -3160,6 +3194,7 @@ mod tests {
             assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
         }
         let mut duplicate = Request::post("/remote/update?token=update-secret")
+            .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header("x-tuic-sha256", good_hash)
             .header("x-tuic-confirmed-sessions", "0")
@@ -3207,6 +3242,7 @@ mod tests {
             Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"replacement"))
         }));
         let mut first = Request::post("/remote/update?token=update-secret")
+            .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
                 "x-tuic-sha256",
@@ -3225,6 +3261,7 @@ mod tests {
         first_chunk_received.await.unwrap();
 
         let mut second = Request::post("/remote/update?token=update-secret")
+            .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
                 "x-tuic-sha256",
@@ -3518,7 +3555,10 @@ mod tests {
             format!("/fs/markdown-image?{}", params.finish())
         };
         let request = |path: String, addr: std::net::SocketAddr| {
-            let mut req = Request::get(path).body(Body::empty()).unwrap();
+            let mut req = Request::get(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .body(Body::empty())
+                .unwrap();
             req.extensions_mut().insert(ConnectInfo(addr));
             req
         };
@@ -3534,27 +3574,13 @@ mod tests {
             .unwrap();
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
 
-        #[cfg(feature = "desktop")]
-        {
-            let accepted_local = app
-                .clone()
-                .oneshot(request(uri("docs/images/chart.png", None), local))
-                .await
-                .unwrap();
-            assert_eq!(accepted_local.status(), StatusCode::OK);
-        }
-
-        // Headless serves remote clients and requires auth even over loopback.
-        // The desktop-only webview bypass is intentionally unavailable there.
-        #[cfg(not(feature = "desktop"))]
-        {
-            let denied_local = app
-                .clone()
-                .oneshot(request(uri("docs/images/chart.png", None), local))
-                .await
-                .unwrap();
-            assert_eq!(denied_local.status(), StatusCode::UNAUTHORIZED);
-        }
+        // Loopback HTTP must authenticate in desktop and headless builds alike.
+        let denied_local = app
+            .clone()
+            .oneshot(request(uri("docs/images/chart.png", None), local))
+            .await
+            .unwrap();
+        assert_eq!(denied_local.status(), StatusCode::UNAUTHORIZED);
 
         let accepted_remote = app
             .clone()
@@ -3633,7 +3659,7 @@ mod tests {
             .unwrap();
         let story = store
             .create_story(NewStory {
-                plan_id: plan.id,
+                plan_id: plan.id.clone(),
                 title: "Story".into(),
                 criteria: vec!["Done".into()],
                 priority: 1,
@@ -3643,7 +3669,9 @@ mod tests {
             .unwrap();
         let path = format!("/stories/action?path={}", project.path().display());
         let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-        let app = build_router(test_state(), false, true);
+        let state = test_state();
+        let token = state.session_token.read().clone();
+        let app = build_router(state, false, true);
         let response = app.clone().oneshot(mcp_post_from(&path, &serde_json::json!({
             "action": { "action": "transition", "story_id": story.id, "expected_revision": story.revision, "command": "start_manual" }
         }), local)).await.unwrap();
@@ -3659,7 +3687,7 @@ mod tests {
         let review = store
             .transition(&story.id, checked.revision, StoryCommand::SubmitReview)
             .unwrap();
-        let response = app.oneshot(mcp_post_from(&path, &serde_json::json!({
+        let response = app.clone().oneshot(mcp_post_from(&path, &serde_json::json!({
             "action": { "action": "transition", "story_id": story.id, "expected_revision": review.revision, "command": "approve" }
         }), local)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -3676,6 +3704,101 @@ mod tests {
                 .actor,
             StoryTransitionActor::LocalApi
         );
+        let other = store
+            .create_story(NewStory {
+                plan_id: plan.id,
+                title: "Operator decision".into(),
+                criteria: vec!["Done".into()],
+                priority: 1,
+                origin: StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let body = serde_json::json!({"action": {
+            "action": "transition", "story_id": other.id,
+            "expected_revision": other.revision, "command": "block"
+        }});
+        let response = app
+            .clone()
+            .oneshot(mcp_post_from(&path, &body, local))
+            .await
+            .unwrap();
+        // Catches: administrative local actions being refused or attributed to Human.
+        assert_eq!(response.status(), StatusCode::OK);
+        let blocked = store.get_story(&other.id).unwrap();
+        assert_eq!(blocked.status, StoryStatus::Blocked);
+        assert_eq!(
+            store.transition_history(&other.id).unwrap()[0].actor,
+            StoryTransitionActor::LocalApi
+        );
+        let body = serde_json::json!({"action": {
+            "action": "transition", "story_id": other.id,
+            "expected_revision": blocked.revision, "command": "unblock"
+        }});
+        let response = app
+            .oneshot(mcp_post_from(
+                &format!("{path}&token={token}"),
+                &body,
+                local,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            store.get_story(&other.id).unwrap().status,
+            StoryStatus::Ready
+        );
+        let history = store.transition_history(&other.id).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[1].actor, StoryTransitionActor::Human);
+    }
+
+    #[tokio::test]
+    async fn workflow_actor_metadata_does_not_block_local_actions() {
+        // Catches: local requests failing actor authorization instead of normal missing-record validation.
+        let config = tempfile::tempdir().expect("config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().expect("project");
+        let state = test_state();
+        let token = state.session_token.read().clone();
+        let app = build_router(state, false, true);
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        for (route, body) in [
+            (
+                "/workflows/definition/action",
+                serde_json::json!({
+                    "action": "publish", "id": "missing", "expected_revision": 1
+                }),
+            ),
+            (
+                "/workflows/run/action",
+                serde_json::json!({
+                    "action": "command", "run_id": "missing", "command_id": "decision",
+                    "expected_sequence": 1, "command": {"action": "resume"}
+                }),
+            ),
+        ] {
+            let path = format!("{route}?path={}", project.path().display());
+            let response = app
+                .clone()
+                .oneshot(mcp_post_from(&path, &body, local))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains("not found"));
+            let path = format!("{path}&token={token}");
+            let response = app
+                .clone()
+                .oneshot(mcp_post_from(&path, &body, local))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            assert!(String::from_utf8_lossy(&bytes).contains("not found"));
+        }
     }
 
     /// `edd69ea7` moved the Progress routes into `shared_routes()` so a
@@ -4051,6 +4174,9 @@ mod tests {
         let app = build_router(state, false, true);
         let mut unrouted: Vec<String> = Vec::new();
         for path in paths {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let resp = app
                 .clone()
                 .oneshot(
@@ -4283,10 +4409,10 @@ mod tests {
                     }
                     ws.on_upgrade(move |mut socket| async move {
                         let _ = socket.send(Message::Text("{\"type\":\"log\",\"lines\":[{\"spans\":[{\"text\":\"live remote line\"}]}],\"total_lines\":1}".into())).await;
-                        if let Some(Ok(Message::Text(input))) = socket.recv().await {
-                            if let Some(sender) = input_sender.lock().unwrap().take() {
-                                let _ = sender.send(input.to_string());
-                            }
+                        if let Some(Ok(Message::Text(input))) = socket.recv().await
+                            && let Some(sender) = input_sender.lock().unwrap().take()
+                        {
+                            let _ = sender.send(input.to_string());
                         }
                     }).into_response()
                 }
@@ -4475,6 +4601,106 @@ mod tests {
         assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
     }
 
+    // Catches: omitting the maintenance task leaves expired protocol sessions and orphan inboxes live.
+    #[tokio::test(start_paused = true)]
+    async fn maintenance_task_reaps_expired_sessions_and_orphan_inboxes() {
+        let state = test_state();
+        let now = std::time::Instant::now();
+        for (sid, last_activity) in [
+            ("expired", now - std::time::Duration::from_secs(7200)),
+            ("fresh", now),
+        ] {
+            state.mcp.sessions.insert(
+                sid.into(),
+                crate::state::McpSessionMeta {
+                    last_activity,
+                    is_claude_code: false,
+                    requires_meta_tools: false,
+                    has_sse_stream: false,
+                    sse_generation: 0,
+                    repo_path: None,
+                },
+            );
+        }
+        state
+            .agent_inbox
+            .insert("orphan".into(), std::collections::VecDeque::new());
+        spawn_maintenance_sweep(&state);
+        // Yield first so the sweep arms its own timer; no wall-clock startup deadline.
+        tokio::task::yield_now().await;
+        tokio::time::sleep(std::time::Duration::from_secs(61)).await;
+        assert!(!state.mcp.sessions.contains_key("expired"));
+        assert!(state.mcp.sessions.contains_key("fresh"));
+        assert!(!state.agent_inbox.contains_key("orphan"));
+    }
+
+    // Catches: workflow route handlers return an empty default response instead of backend errors.
+    #[tokio::test]
+    async fn workflow_action_routes_preserve_project_validation_errors() {
+        let app = build_router(test_state(), false, true);
+        for (path, body) in [
+            (
+                "/workflows/definition/action?path=relative",
+                r#"{"action":"list_drafts"}"#,
+            ),
+            (
+                "/workflows/run/action?path=relative",
+                r#"{"action":"get","run_id":"missing"}"#,
+            ),
+        ] {
+            let mut req = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap();
+            req.extensions_mut()
+                .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{path}"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(body["error"], "project must be an absolute path");
+        }
+    }
+
+    // Catches: removing the tunnel subrouter turns an implemented route into HTTP 404.
+    #[tokio::test]
+    async fn tunnel_subrouter_keeps_session_listing_available() {
+        let mut req = Request::builder()
+            .uri("/tunnels/active")
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+        let response = build_router(test_state(), false, true)
+            .oneshot(req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!([])
+        );
+    }
+
+    // Catches: arithmetic mutations under-size the documented 10 MiB base64 image plus JSON allowance.
+    #[test]
+    fn acp_prompt_cap_preserves_the_documented_image_and_framing_allowance() {
+        assert_eq!(acp_prompt_body_limit(), 14_046_552);
+    }
+
     /// The SSH host and agent-key listings disclose machine names and key
     /// fingerprints. Catches: `tunnel_routes()` being merged outside the
     /// Basic Auth layer so a public address reads them without credentials.
@@ -4494,6 +4720,7 @@ mod tests {
                 ("GET", "/tunnels/agent-keys"),
             ] {
                 let mut req = Request::builder()
+                    .header(header::HOST, "127.0.0.1:9876")
                     .method(method)
                     .uri(path)
                     .header("content-type", "application/json")
@@ -4536,6 +4763,7 @@ mod tests {
             .clone()
             .oneshot(
                 Request::get("/api/auth/session-token")
+                    .header(header::HOST, "127.0.0.1:9876")
                     .extension(remote())
                     .body(Body::empty())
                     .unwrap(),
@@ -4549,6 +4777,7 @@ mod tests {
         let authenticated = app
             .oneshot(
                 Request::get("/api/auth/session-token")
+                    .header(header::HOST, "127.0.0.1:9876")
                     .header(header::AUTHORIZATION, format!("Basic {credentials}"))
                     .extension(remote())
                     .body(Body::empty())
@@ -5542,6 +5771,130 @@ mod tests {
         );
     }
 
+    /// Catches: Settings inventories only enabled tools, loses newly registered
+    /// tools, or offers switches which MCP discovery ignores.
+    #[tokio::test]
+    async fn native_settings_catalog_keeps_disabled_tools_and_disables_every_registry_tool() {
+        let state = test_state();
+        let definitions = mcp_transport::test_mcp_tool_definitions();
+        let app = build_router(state.clone(), false, true);
+        for tool in definitions.as_array().unwrap() {
+            let name = tool["name"].as_str().unwrap();
+            {
+                let mut cfg = state.config.write();
+                cfg.disabled_native_tools = vec![name.to_owned()];
+                cfg.collapse_tools = true;
+                cfg.progress_tracking = false;
+            }
+            let response = app
+                .clone()
+                .oneshot(get_localhost("/mcp/status"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let status: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let catalog = status["native_tools"].as_array().unwrap();
+            assert_eq!(catalog.len(), definitions.as_array().unwrap().len());
+            for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
+                assert_eq!(entry["name"], definition["name"]);
+                assert_eq!(entry["description"], definition["description"]);
+                assert_eq!(
+                    entry["summary"],
+                    definition["description"]
+                        .as_str()
+                        .unwrap()
+                        .lines()
+                        .next()
+                        .unwrap()
+                );
+            }
+            // Collapse/progress gates must not shrink the Settings inventory.
+            {
+                let mut cfg = state.config.write();
+                cfg.collapse_tools = false;
+                cfg.progress_tracking = true;
+            }
+            let response = app
+                .clone()
+                .oneshot(mcp_post(
+                    "/mcp",
+                    &serde_json::json!({
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
+                    }),
+                ))
+                .await
+                .unwrap();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let listing: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let listed = listing["result"]["tools"].as_array().unwrap();
+            assert_eq!(listed.len(), catalog.len() - 1, "disabled {name}");
+            assert!(
+                listed.iter().all(|entry| entry["name"] != name),
+                "disabled {name} remains discoverable"
+            );
+        }
+    }
+
+    /// Catches: a Settings switch hides critical tools but direct or collapsed
+    /// calls still execute them (the stdio bridge forwards to this same route).
+    #[tokio::test]
+    async fn disabled_critical_native_tools_cannot_bypass_settings_through_dispatch() {
+        let state = test_state();
+        state.config.write().disabled_native_tools =
+            vec!["session".into(), "agent".into(), "progress".into()];
+        let app = build_router(state.clone(), false, true);
+        for collapse in [false, true] {
+            state.config.write().collapse_tools = collapse;
+            for (name, arguments) in [
+                ("session", serde_json::json!({"action": "list"})),
+                ("agent", serde_json::json!({"action": "list_peers"})),
+                (
+                    "progress",
+                    serde_json::json!({"type": "done", "message": "must not run"}),
+                ),
+            ] {
+                for meta in [false, true] {
+                    let params = if meta {
+                        serde_json::json!({"name": "call_tool", "arguments": {
+                            "tool_name": name, "arguments": arguments
+                        }})
+                    } else {
+                        serde_json::json!({"name": name, "arguments": arguments})
+                    };
+                    let response = app
+                        .clone()
+                        .oneshot(mcp_post(
+                            "/mcp",
+                            &serde_json::json!({
+                                "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params
+                            }),
+                        ))
+                        .await
+                        .unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let reply: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    assert_eq!(
+                        reply["result"]["isError"], true,
+                        "{name} collapse={collapse} meta={meta}: {reply}"
+                    );
+                    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+                    assert!(
+                        text.contains(&format!("Tool '{name}' is disabled by configuration")),
+                        "{reply}"
+                    );
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_mcp_tools_list_respects_disabled_native_tools() {
         let state = test_state();
@@ -6432,6 +6785,7 @@ mod tests {
     }
 
     /// A clean detached checkout with a live session registered in it.
+    #[cfg(unix)]
     fn orphan_with_live_session() -> (tempfile::TempDir, std::path::PathBuf, Arc<AppState>) {
         let repo = create_temp_git_repo();
         let linked = repo.path().join("linked");
@@ -6461,6 +6815,7 @@ mod tests {
     // Catches: a clean detached checkout reported safe (and auto-removed) while
     // an agent session is still working inside it.
     #[tokio::test]
+    #[cfg(unix)]
     async fn orphan_cleanup_assessment_names_live_sessions_and_is_not_safe() {
         let (repo, linked, state) = orphan_with_live_session();
 
@@ -6490,6 +6845,7 @@ mod tests {
     // Catches: the agent/MCP "remove" answer and the safe-only HTTP removal
     // skipping the session registry that the assessment consults.
     #[tokio::test]
+    #[cfg(unix)]
     async fn orphan_cleanup_answer_and_safe_removal_refuse_a_live_session() {
         let (repo, linked, state) = orphan_with_live_session();
         let pending = build_router(state.clone(), false, true)
@@ -6543,6 +6899,7 @@ mod tests {
     // started after the user reviewed the dialog, or refusing the sessions the
     // user did see.
     #[tokio::test]
+    #[cfg(unix)]
     async fn confirmed_orphan_removal_refuses_only_sessions_the_user_did_not_see() {
         let (repo, linked, state) = orphan_with_live_session();
         let remove = |sessions: serde_json::Value| {
@@ -6588,6 +6945,7 @@ mod tests {
     // Catches: a client that predates `confirmedSessions` (field absent) being treated as
     // having reviewed every session, so its removal closes a live checkout.
     #[tokio::test]
+    #[cfg(unix)]
     async fn confirmed_orphan_removal_without_the_session_field_refuses_a_live_checkout() {
         let (repo, linked, state) = orphan_with_live_session();
         let response = build_router(state, false, true)
@@ -6640,6 +6998,7 @@ mod tests {
     // Catches: a path outside the repo's worktree list being refused as a server error (500)
     // instead of 400 on the confirmed (safeOnly=false) path.
     #[tokio::test]
+    #[cfg(unix)]
     async fn confirmed_orphan_removal_of_an_unregistered_path_is_a_400() {
         let (repo, _linked, state) = orphan_with_live_session();
         let stranger = tempfile::tempdir().unwrap();
@@ -6864,6 +7223,7 @@ mod tests {
     // Catches (critic-1367): the path route bypassing the session registry, so an agent
     // working in the checkout loses its directory to another agent's cleanup.
     #[tokio::test]
+    #[cfg(unix)]
     async fn worktree_remove_by_path_refuses_a_checkout_with_a_live_session() {
         let (repo, linked, state) = orphan_with_live_session();
 
@@ -7445,6 +7805,9 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         for (method, path) in PROBES {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let req = if *method == "GET" {
                 Request::get(*path).body(Body::empty()).unwrap()
             } else {
@@ -7473,6 +7836,9 @@ mod tests {
         let _failure = crate::audio_enumeration::fail_enumeration_for_test();
         let app = build_router(test_state(), false, true);
         for path in ["/dictation/devices", "/audio/output-devices"] {
+            if !cfg!(feature = "dictation") && path.starts_with("/dictation/") {
+                continue;
+            }
             let response = app
                 .clone()
                 .oneshot(Request::get(path).body(Body::empty()).unwrap())
@@ -9256,7 +9622,7 @@ mod tests {
 
     /// A voice file is imported whole, as base64 in JSON, so its one route has
     /// to take more than the 2 MB every other route is held to — and only it.
-    #[cfg(feature = "desktop")]
+    #[cfg(feature = "dictation")]
     #[tokio::test]
     async fn only_the_voice_import_route_accepts_a_large_body() {
         async fn post_json(path: &str, body_bytes: usize) -> StatusCode {
@@ -9615,7 +9981,10 @@ mod tests {
             .unwrap();
         assert_eq!(put.status(), StatusCode::OK);
 
-        let mut get = Request::get(url).body(Body::empty()).unwrap();
+        let mut get = Request::get(url)
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
         get.extensions_mut().insert(ConnectInfo(address));
         let response = app.oneshot(get).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -9676,5 +10045,100 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(rx.await.unwrap(), Err("refused".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod workflow_authority_critic_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    /// Catches: accepted loopback token actions being refused or recorded as LocalApi instead of Human.
+    #[tokio::test]
+    async fn loopback_token_exchange_records_human_provenance_for_successful_action() {
+        let config =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("isolated config");
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project =
+            tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("isolated project");
+        let store = crate::stories::StoryStore::open().unwrap();
+        let plan = store
+            .create_plan(crate::stories::NewPlan {
+                project: project.path().to_string_lossy().into_owned(),
+                title: "Operator plan".into(),
+                source: "operator.md".into(),
+            })
+            .unwrap();
+        let story = store
+            .create_story(crate::stories::NewStory {
+                plan_id: plan.id,
+                title: "Operator decision".into(),
+                criteria: vec!["Approved by the operator".into()],
+                priority: 1,
+                origin: crate::stories::StoryOrigin::Native,
+                file_scope: vec![],
+            })
+            .unwrap();
+        let app = build_router(super::tests::test_state(), false, true);
+        let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+        let mut request = Request::get("/api/auth/session-token")
+            .header(header::HOST, "127.0.0.1:9876")
+            .body(Body::empty())
+            .unwrap();
+        request.extensions_mut().insert(ConnectInfo(local));
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let token = value["token"].as_str().expect("returned token");
+        for (index, (with_address, with_token, command)) in [
+            (true, true, "block"),
+            (false, false, "unblock"),
+            (true, false, "block"),
+            (false, true, "unblock"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let current = store.get_story(&story.id).unwrap();
+            let body = serde_json::json!({"action": {
+                "action": "transition", "story_id": story.id,
+                "expected_revision": current.revision, "command": command
+            }});
+            let mut path = format!("/stories/action?path={}", project.path().display());
+            if with_token {
+                path.push_str(&format!("&token={token}"));
+            }
+            let mut request = Request::post(path)
+                .header(header::HOST, "127.0.0.1:9876")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            if with_address {
+                request.extensions_mut().insert(ConnectInfo(local));
+            }
+            let response = app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let expected_status = if command == "block" {
+                crate::stories::StoryStatus::Blocked
+            } else {
+                crate::stories::StoryStatus::Ready
+            };
+            assert_eq!(store.get_story(&story.id).unwrap().status, expected_status);
+            let history = store.transition_history(&story.id).unwrap();
+            assert_eq!(history.len(), index + 1);
+            assert_eq!(
+                history[index].actor,
+                if with_token {
+                    crate::stories::StoryTransitionActor::Human
+                } else {
+                    crate::stories::StoryTransitionActor::LocalApi
+                }
+            );
+        }
     }
 }

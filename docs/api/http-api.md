@@ -1,5 +1,11 @@
 # HTTP API Reference
 
+## Request authentication and browser boundary
+
+Every TCP request validates its Host and Origin before reaching a handler, including login, health and preflight requests. Unknown/missing/duplicate Host or foreign/opaque Origin returns 403. Allowed hosts are localhost, loopback/private IP literals, local interface IPs and the detected Tailscale FQDN. Allowed origins are the exact bundled WebView origins, Vite `http://127.0.0.1:1421`/`http://localhost:1421`, and the HTTP/HTTPS origin of the validated Host. Cross-site requests are rejected except for the explicit WebView/development origins.
+
+Protected routes require the existing `?token=...`, `tui-session` cookie or Basic Auth even from loopback/LAN. Native HTTP clients may omit Origin, but must send Host and credentials. Login assets and valid preflight remain public; the headless `/health` probe remains public. Local Unix socket and Windows named-pipe clients keep their existing IPC access.
+
 ## Workflow runs
 
 `POST /workflows/run/action?path=<absolute-project>` accepts one tagged `RunAction` and returns `{type,value}`. Actions: `start_plan {plan_id,definition_id,definition_revision,limits}`, `get {run_id}`, `list_plan_runs {plan_id,limit}`, `events {run_id,after_sequence,limit}`, `command {run_id,command_id,expected_sequence,command}`, `execute_check {run_id,story_id,check_id,command_id,expected_sequence}`, `record_integration {run_id,story_id,command_id,expected_sequence}`, and `recertify_canonical {run_id,command_id,expected_sequence}`. `list_plan_runs` returns newest first and accepts a limit of 1–100. Run commands include planning closure, agent attempt and effect bookkeeping, loop advancement, story acceptance, final verification, pause/resume, cancellation, and completion. The server checks canonical project ownership for every action and rejects a command whose expected sequence is stale. Event cursors start at zero and return up to 500 entries. A duplicate command ID returns its original receipt only when the payload matches. See [Workflow runs](../backend/workflows.md) for recovery and completion rules. Automatic node execution is under development.
@@ -18,11 +24,11 @@ The `command` action also accepts `answer_input {attempt_id,answer}` for a pause
 
 `POST /stories/action?path=<absolute-project>` accepts `{ "action": StoryAction, "sessionId"?: string }` and returns a tagged `StoryReply` (`{type, value}`). `StoryAction` uses a snake-case `action` discriminator: `create_plan`, `list_plans`, `list_plan_sources`, `add_plan_source`, `get_plan`, `plan_state`, `plan_view`, `create_story`, `list_stories`, `get_story`, `transition_history`, `add_dependency`, `remove_dependency`, `claim`, or `transition`. Create-story input uses the shared camel-case `NewStory` fields. `create_plan` takes `title` and `source`; `add_plan_source` takes a local document `source` and derives its title from front matter or the first heading. `list_plan_sources` reads top-level Markdown files in `plans/` and `.claude/plans/`, so a new file appears on the next call. It returns `{type:"plan_sources",value:[{title,source}]}`. `get_plan`, `plan_state`, `plan_view`, and `list_stories` take `plan_id`; `get_story` and `transition_history` take `story_id`; `claim` takes `story_id` and `expected_revision`; `transition` also takes a `command`; both dependency actions take `story_id`, `dependency_id`, and `expected_revision`. `transition_history` returns committed transitions with their resulting revisions, commands, and actor provenance.
 
-HTTP access authentication does not identify a person: a request without `sessionId` records `local_api` provenance, including for approval. A managed session may approve only a story claimed by a different session. The claiming session receives `a story cannot be approved by its implementer`.
+Story transition provenance comes from host-validated credentials: desktop IPC and credential-authenticated HTTP record `human`; sessionless local HTTP records `local_api`. Managed calls record their session identity, including when the claiming session approves its own story. Actor identity never restricts actions; state, revision, project and claim-conflict rules remain enforced.
 
 `plan_view` returns `{type:"plan_view",value:{stories,state,wontFixCount,allCancelled}}`. Each story in `stories` includes a read-only `abandoned` boolean, derived from whether that story or any dependency reachable from it is WontFix. The summary and state are derived from the same read; no abandonment flag is persisted.
 
-The project path is resolved to its canonical owner, so a managed worktree shares its parent project's plans. Unknown action and create-story fields are rejected. Claim requires a live PTY session in that project. `transition` accepts the user-only `start_manual` command to begin a Ready story without a terminal. A session-bound agent may check criteria and submit review only for its own claim; review and administrative transitions require a user action. `remove_dependency` is user-only and accepts only a Backlog dependent with a direct WontFix prerequisite; it returns the revised story, Ready only when all remaining prerequisites are Done. WontFix never satisfies dependencies. A nonempty plan with only Done/WontFix stories has `plan_state: done`, while an empty plan is `draft`. Reads and writes verify the stored plan's project; a story ID alone grants no cross-project access. Revisions are required for mutations to detect stale clients. The same service backs desktop IPC and MCP. There is no import or export endpoint.
+The project path is resolved to its canonical owner, so a managed worktree shares its parent project's plans. Unknown action and create-story fields are rejected. Claim requires a live PTY session in that project. `transition` accepts the `start_manual` command to begin a Ready story without a terminal. Actor identity is tracking only; managed, local API and human callers use the same transition rules. `remove_dependency` accepts only a Backlog dependent with a direct WontFix prerequisite; it returns the revised story, Ready only when all remaining prerequisites are Done. WontFix never satisfies dependencies. A nonempty plan with only Done/WontFix stories has `plan_state: done`, while an empty plan is `draft`. Reads and writes verify the stored plan's project; a story ID alone grants no cross-project access. Revisions are required for mutations to detect stale clients. The same service backs desktop IPC and MCP. There is no import or export endpoint.
 
 ## Project Progress
 
@@ -193,7 +199,7 @@ failures spend one shared budget. The service worker never caches
 
 ## Server Limits
 
-Every route on both the desktop and remote routers is subject to two bounds
+Both the desktop and remote routers apply request bounds
 (`with_server_limits` in `mcp_http/mod.rs`):
 
 - **`408 Request Timeout`** — a handler that has not produced a response within
@@ -203,6 +209,9 @@ Every route on both the desktop and remote routers is subject to two bounds
   body always wins the race instead of a bare 408 (`docs/backend/mcp-http.md` →
   "Server Limits"). SSE (`/events`) and WebSocket endpoints return their
   headers immediately and then stream for as long as they like, unaffected.
+  Streamed `/fs/upload-copy` uses a 30 s idle deadline per body chunk instead
+  of this total response deadline. A separate 17-minute total receive budget
+  also prevents trickling clients from retaining an upload slot.
 - **`413 Payload Too Large`** — a request body over 2 MB is refused rather than
   buffered.
 
@@ -410,7 +419,8 @@ solitary keystroke keeps the plain `/write` route.
 POST /sessions/:id/queue
 Content-Type: application/json
 
-{ "text": "run the tests" }        -> { "typed": false, "queued": 2 }
+{ "text": "run the tests", "idempotencyKey": "bg-job-1" }
+                                  -> { "accepted": true, "typed": false, "queued": 2 }
 
 GET /sessions/:id/queue            -> [ { "id": 7, "text": "run the tests" } ]
 
@@ -427,6 +437,16 @@ submitted one per idle window in backend acceptance order (a run of hands-free
 voice entries at the head is joined into one submission). `queued`,
 `state.queued_commands`, and `DELETE` count or remove only user commands;
 clearing Compose commands never deletes pending peer/orchestrator delivery.
+
+`idempotencyKey` is optional. Use the same key for retries of one logical
+command; distinct commands need distinct keys even when their text is identical.
+Keys contain 1–128 UTF-8 bytes. The backend
+remembers the last 128 accepted keys per live PTY, including drained or cancelled
+entries. A recognized retry returns `accepted: true`, `typed: false` and the
+current queue depth without appending or flushing again. `accepted` confirms
+queue acceptance, not a model turn. Keys expire on eviction, PTY teardown or
+backend restart; this is an in-memory retry window. Omitted keys preserve the
+usual append behavior. HTTP and Tauri use the same request and response fields.
 
 Agent sessions only — `400` for a plain shell (`"Session is not running an
 agent"`) or empty text, `404` when the PTY is gone. The current depth is also on
@@ -484,7 +504,7 @@ Returns the current Kitty keyboard protocol flags (integer) for a session.
 GET /sessions/:id/foreground
 ```
 
-Returns the foreground process info for a session.
+Returns the foreground process info for a session. Detection uses the spawn-recorded root role and foreground process group. Returning to a shell root revokes an observed agent; a child of a direct agent holds unattended input without revoking its identity. Unknown root ownership refuses unattended input. Concurrent observations apply in generation order.
 
 ### PTY / Terminal Read State
 
@@ -934,6 +954,10 @@ GET /repo/diff-stats/batch?path=/path/to/repo
 ```
 
 Returns `{ "diff_stats": { "/path": { "additions": N, "deletions": N }, ... }, "last_commit_ts": { "branch": N, ... }, "workspace_statuses": { "workspace-id": { "dirty_files": 24, "commit_status": "unmerged", "removal_safety": "requires_force" } } }`. Slow path — computes per-worktree diff stats, timestamps, and lifecycle verdicts. Lifecycle entries are keyed by workspace id, never branch name.
+
+### Background Git Actions
+
+`POST /repo/run-git` accepts `{path, args}` for GitPanel and sidebar operations. Unsupported subcommands or options return HTTP 400 before execution. The flag policy is shared with IPC; see [Git backend](../backend/git.md).
 
 ### Local Branches
 
@@ -1530,7 +1554,7 @@ batch authentication with a five-second connect timeout, and caches results for
 GET /mcp/status
 ```
 
-Returns MCP server status (enabled, port, connected clients).
+Returns MCP server status (enabled, running, active sessions, connected MCP clients, maximum sessions). `native_tools` contains the unfiltered native MCP registry as `{name, summary, description}` entries, including disabled tools. `summary` is the first line of the full registry description. This Settings inventory is independent of upstream tools, collapse mode and progress tracking; MCP client discovery still applies all configured filters.
 
 ### MCP Suspend Response
 
@@ -1580,6 +1604,10 @@ GET /mcp/instructions
 Returns dynamic server instructions for the MCP bridge binary as `{"instructions": "..."}`.
 
 ## Filesystem Endpoints
+
+The sender-side `fs_transfer_remote_paths` coordinator is desktop IPC only (`INTENTIONALLY_UNMAPPED`), with no `/fs/transfer-remote` HTTP route. Data leaves the machine; Finder source paths cannot be gated to registered repository roots, so HTTP token holders must not trigger exfiltration. The desktop coordinator uses the existing authenticated daemon connection; only the receiving upload endpoint is exposed over HTTP.
+
+`POST /fs/upload-copy?destDir=<absolute-directory>&name=<leaf-name>&directory=true|false` accepts a streamed, uncompressed tar body under the existing daemon authentication. All archive paths must start with `name`; only files and directories are accepted. Limits: 256 MiB of archive and extracted file data, 10,000 entries, two concurrent uploads. Destination resolution uses registered repository directory capabilities, rejects traversal and escapes through symlinks, and never follows a target symlink. Staging is removed on failure/disconnect; the completed top-level file or directory is published with a no-replace atomic rename. A concurrently created target is skipped; existing targets drain the bounded body before returning `skipped`. The upload is exempt from the global response timeout and aborts after 30 s without a body chunk. Its total receive budget is 17 minutes. A connection below roughly 2 Mbit/s cannot finish a 256 MiB drop within that budget. The concurrency permit lasts through extraction even if the handler is cancelled. Filenames use the receiver platform rules (POSIX permits colon and backslash); Windows rejects colon and backslash. Unix tar permissions are masked to `0755` for executable files/directories and `0644` for ordinary files, with the receiving umask applied and no privilege bits. Normal request-drop cleanup removes staging. Abrupt process termination (for example, kill -9) can leave a `.tuic-upload-<uuid>` directory in the destination; there is no startup sweep, and the leftover can be removed manually once no upload is running. Final directory permissions are applied after publication; a permission failure is logged and the already published copy remains successful. The sender uses the existing `tui-session` cookie header; tokens are absent from upload URLs and reqwest error text. No new listener or credential is created.
 
 `POST /attachments/upload?kind=pty|acp&id=<session-or-connection-id>&name=<filename>`
 streams a binary request body into the target's working directory at
@@ -1710,7 +1738,8 @@ older than the check and still connects.
 The daemon hashes its running executable once at startup, so `build.sha256`
 identifies the process that answered even after an update stages a new file.
 `POST /remote/update` exists only on the daemon router. It needs the same
-session token as PTY access and the `x-tuic-target`, `x-tuic-sha256`, and
+session token as PTY access, supplied as a `tui-session` cookie or the legacy
+`?token=` query parameter, and the `x-tuic-target`, `x-tuic-sha256`, and
 `x-tuic-confirmed-sessions` headers. It streams at most 512 MiB into the
 daemon executable's own directory, verifies the hash and current session
 count, and atomically promotes the file before restarting. Windows currently
@@ -2659,7 +2688,7 @@ Recovery is a fresh connection and `session/load`.
 This is deliberately not on `/events`: one turn emits more frames per second
 than the 256-entry SSE broadcast can carry without lagging every other
 subscriber. `/events` carries only the low-frequency `acp-notice` wake signal
-(`ready`, `settled`, `interaction_pending`, `interaction_settled`), whose
+(`ready`, `settled`, `interaction_pending`, `interaction_settled`, `card`), whose
 payload names the connection, generation, sequence and — when it has one — the
 session and request it is about.
 
@@ -2716,5 +2745,66 @@ The following commands are accessible only via the Tauri `invoke()` bridge in th
 | `install_agent_mcp` | `agent_mcp.rs` | Install TUICommander MCP entry in agent config |
 | `remove_agent_mcp` | `agent_mcp.rs` | Remove TUICommander MCP entry from agent config |
 
+## Private secret entry
+
+- `GET /secrets/forms/{nonce}` returns only the pending schema, argv and entry
+  capability; no stored values. A guessed or expired nonce returns 404.
+- `POST /secrets/forms/submit` accepts `{nonce,status,values,template}`. Status
+  is `stored`, `approved` or `declined`; values must exactly match requested
+  non-SSO fields. Approval accepts no values; decline accepts neither values
+  nor a template. A valid submit consumes the nonce and returns names/status.
+  Invalid or replayed submissions return 400 without echoing values.
+
+The native private-window identity is the only bootstrap authority. There is no
+public endpoint listing forms or issuing their nonces. Open the entry path
+shown in that window on your trusted server address; it uses the existing
+application origin, authentication and transport. This feature does not enforce
+TLS or origin isolation. Responses carry
+`Cache-Control: no-store`, `Referrer-Policy: no-referrer` and frame denial.
+
+### Remote peer mail
+
+`GET /mcp/peer?connection_id=<configured-id>&token=<daemon-token>` upgrades to
+the desktop-initiated duplex peer-mail WebSocket. A real daemon token is required even
+on loopback. One hub is admitted per daemon. JSON frames use `kind:call` with
+`id`, `sender`, `arguments` and optional `message_id`, or `kind:reply` with
+`id` and `result`. Calls allow register/list_peers/send/inbox/wait; daemon-to-hub
+calls allow send/list_peers. Sender host is bound to the authenticated connection.
+Frames and outstanding requests are bounded; heartbeat loss closes the link.
+
+`GET /sessions/{id}/output?format=mcp|mcp_raw` returns the native MCP output object,
+including `exited`, cursor and truncation fields. It accepts `limit`, `from_line`
+and `since_cursor`. `POST /sessions/{id}/submit` also accepts `timeout_ms`.
+These are the configured remote desktop MCP adapters, sharing native backend behavior.
+
+Peer handshakes serialize per configured connection, so a mute daemon cannot hold
+mail calls to another host behind its network deadline. Session targets reject empty
+ids/prefixes before owner selection. Forwarded notice deduplication survives inbox
+reads: it retains fingerprints of the last 100 forwarded ids per sender and registered
+recipient, without retaining message bodies. The cache holds at most 65,536
+ids globally and 1,024 per remote host. A host quota rejection names the host;
+one host cannot consume every other host's replay budget. Full 100-id windows
+can still rotate in place, and retained replays still deduplicate at either cap.
+
+There is no time expiry: the sender's outbox lives until acknowledgement.
+Only under global or host quota pressure, the cache reclaims all windows of
+the least-recently-active sender with no live peer shadow (within the pressured
+host when its quota is full). Live sender windows are never reclaimed.
+Sender retirement alone preserves dedupe; recipient unregister frees only
+that recipient's records and quota. Accepted risk: a departed sender that
+reconnects after pressure evicted its history can deliver one duplicate.
+Disconnect retires that host's existing shadows synchronously, independently
+of a pending handshake or a later reconnect generation. This is a bounded replay horizon,
+not unbounded or restart-persistent exactly-once delivery.
+
+Workflow definition and run APIs are actorless and share the same services across transports. Story transition actors track provenance and never restrict actions. Desktop IPC and valid HTTP credentials record Human; sessionless local requests record LocalApi; managed story requests record their session. Missing ConnectInfo on Unix sockets and in-process services means local/unknown caller metadata, not HTTP 500. Local token exchange is accepted; state, revision, project and integration checks remain enforced.
+
+### Stored terminal marker coordinates
+
+OSC 133 event `line` and hook-generated `UserInput.line` are eviction-stable all-time rows, identical to IPC. Scroll-to, line reads and search results keep retained-grid coordinates. Convert stored marker rows using the current grid frame `historyBase`.
+
+### Telegram Settings
+
+`GET /config/telegram` mirrors `telegram_settings`. `PUT /config/telegram` accepts `{ "change": { "action": "..." } }` and mirrors `telegram_setup`, including token replacement/check, one-use pairing, typed chat IDs and enable/target updates. Both routes require local access or the existing authenticated remote session. The read response contains only `token_set`, never the token. Chat IDs are decimal strings.
 
 Workflow run snapshots add `eventContractVersion` and default-empty `graphExecutions`. Graph events use the existing paged history shape. Internal graph transition commands are rejected by public `workflow_run_action`; no autonomous-start action is added in slice A. Pre-contract runs can be inspected and cancelled but cannot resume.

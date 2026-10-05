@@ -220,6 +220,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ambient-authority"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9d4ee0d472d1cd2e28c97dfa124b3d8d992e10eb0a035f33f5d12e3a177ba3b"
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -549,29 +555,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef941527c41b0fc0dd48511a8154cd5fc7e29200a0ff8b7203c5d777dbc795cf"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "aws-lc-rs"
-version = "1.18.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
-dependencies = [
- "aws-lc-sys",
- "zeroize",
-]
-
-[[package]]
-name = "aws-lc-sys"
-version = "0.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
-dependencies = [
- "cc",
- "cmake",
- "dunce",
- "fs_extra",
- "pkg-config",
 ]
 
 [[package]]
@@ -1010,6 +993,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f2d30e4173c4026932d51d31d6b0613b1fd3014bf3f9f8943d4ba139c437ba0"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "cap-fs-ext"
+version = "3.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "476f0d0003a760918ed4b1e039a59e11769030416f79c8222551d22785f7f70d"
+dependencies = [
+ "cap-primitives",
+ "cap-std",
+ "io-lifetimes",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "cap-primitives"
+version = "3.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e0bf07d379916947be6c4a07f43684153d710a2896c31f9e97781362895596c"
+dependencies = [
+ "ambient-authority",
+ "fs-set-times",
+ "io-extras",
+ "io-lifetimes",
+ "ipnet",
+ "maybe-owned",
+ "rustix",
+ "rustix-linux-procfs",
+ "windows-sys 0.59.0",
+ "winx",
+]
+
+[[package]]
+name = "cap-std"
+version = "3.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a59e59fa26472d29680ece6a9f8ee8b0551a719a33df2f5240bde065ecbddfd7"
+dependencies = [
+ "cap-primitives",
+ "io-extras",
+ "io-lifetimes",
+ "rustix",
 ]
 
 [[package]]
@@ -1639,18 +1664,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "cron"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5dcd6f69605c2956916ce24e8af637b754964c9a83f4662d3a2361654cdba09"
-dependencies = [
- "chrono",
- "once_cell",
- "phf 0.11.3",
- "winnow 0.7.15",
 ]
 
 [[package]]
@@ -2677,6 +2690,17 @@ checksum = "b91aa448ca50d7e79433bdf3ee8d99215430d2ec02ade5aefab2a073a1822e8a"
 dependencies = [
  "autocfg",
  "tokio",
+]
+
+[[package]]
+name = "fs-set-times"
+version = "0.20.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
+dependencies = [
+ "io-lifetimes",
+ "rustix",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4645,6 +4669,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "io-extras"
+version = "0.18.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2285ddfe3054097ef4b2fe909ef8c3bcd1ea52a8f0d274416caebeef39f04a65"
+dependencies = [
+ "io-lifetimes",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "io-lifetimes"
+version = "2.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06432fb54d3be7964ecd3649233cddf80db2832f47fec34c01f65b3d9d774983"
+
+[[package]]
 name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5253,6 +5293,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "maybe-owned"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
 
 [[package]]
 name = "memchr"
@@ -6814,7 +6860,6 @@ version = "0.11.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4bfc015262b9df63c8845072ce59068853ff5872180c2ce2f13038b970e560"
 dependencies = [
- "aws-lc-rs",
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
@@ -7136,7 +7181,6 @@ dependencies = [
  "mime",
  "percent-encoding",
  "pin-project-lite",
- "quinn",
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
@@ -7292,6 +7336,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustix-linux-procfs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fc84bf7e9aa16c4f2c758f27412dc9841341e16aa682d9c7ac308fe3ee12056"
+dependencies = [
+ "once_cell",
+ "rustix",
+]
+
+[[package]]
 name = "rustix-openpty"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7308,7 +7362,6 @@ version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
- "aws-lc-rs",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -7372,7 +7425,6 @@ version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
- "aws-lc-rs",
  "ring",
  "rustls-pki-types",
  "untrusted",
@@ -9576,14 +9628,14 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tuic-ansi"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "vte",
 ]
 
 [[package]]
 name = "tuic-bridge"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "dirs",
  "serde_json",
@@ -9595,7 +9647,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-cli"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "clap",
  "dirs",
@@ -9607,7 +9659,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-core"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "bm25",
  "dirs",
@@ -9618,17 +9670,19 @@ dependencies = [
  "parking_lot",
  "rand 0.10.2",
  "regex",
+ "rodio",
  "serde_json",
  "tempfile",
  "tracing",
  "tuic-ipc",
  "tuic-test-support",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "tuic-dictation"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "block2",
  "cpal",
@@ -9659,7 +9713,7 @@ dependencies = [
 
 [[package]]
 name = "tuic-git"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "dashmap",
  "gix",
@@ -9681,15 +9735,14 @@ dependencies = [
 
 [[package]]
 name = "tuic-ipc"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "sha2 0.11.0",
- "tuic-test-support",
 ]
 
 [[package]]
 name = "tuic-terminal"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "alacritty_terminal",
  "dirs",
@@ -9703,12 +9756,11 @@ dependencies = [
  "tuic-ansi",
  "tuic-test-support",
  "unicode-width 0.2.2",
- "vte",
 ]
 
 [[package]]
 name = "tuic-test-support"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "ctor",
  "portable-pty",
@@ -9717,7 +9769,7 @@ dependencies = [
 
 [[package]]
 name = "tuicommander"
-version = "1.7.7"
+version = "1.8.0"
 dependencies = [
  "aes-gcm 0.11.0",
  "agent-client-protocol",
@@ -9733,11 +9785,13 @@ dependencies = [
  "bcrypt",
  "block2",
  "bm25",
+ "cap-fs-ext",
+ "cap-std",
  "cc",
  "chromey",
  "chrono",
  "console-subscriber",
- "cron",
+ "ctor",
  "cuid2",
  "dashmap",
  "dirs",
@@ -9745,7 +9799,6 @@ dependencies = [
  "flate2",
  "futures-util",
  "gh-token",
- "gix",
  "glob",
  "grep-matcher",
  "grep-regex",
@@ -9754,9 +9807,7 @@ dependencies = [
  "hkdf 0.13.0",
  "ignore",
  "include_dir",
- "jsonc-parser",
  "keepawake",
- "keyring",
  "lazy_static",
  "libc",
  "mac-notification-sys",
@@ -9764,7 +9815,6 @@ dependencies = [
  "mockito",
  "moka",
  "notify",
- "notify-rust",
  "oauth2",
  "objc2",
  "objc2-app-kit",
@@ -11159,9 +11209,6 @@ name = "winnow"
 version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "winnow"
@@ -11199,6 +11246,16 @@ checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "winx"
+version = "0.36.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
+dependencies = [
+ "bitflags 2.13.1",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

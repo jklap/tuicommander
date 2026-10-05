@@ -452,6 +452,16 @@ describe("transport", () => {
 			expect(result.body).toEqual({ text: "run tests" });
 		});
 
+		// Catches: HTTP drops the idempotency key supplied to the desktop command.
+		it("preserves queue idempotency keys across HTTP and Tauri arguments", () => {
+			const result = mapCommandToHttp("enqueue_agent_command", {
+				sessionId: "abc",
+				text: "run tests",
+				idempotencyKey: "bg-job-1",
+			});
+			expect(result.body).toEqual({ text: "run tests", idempotencyKey: "bg-job-1" });
+		});
+
 		it("maps clear_queued_agent_commands to DELETE /sessions/{id}/queue", () => {
 			const result = mapCommandToHttp("clear_queued_agent_commands", { sessionId: "abc" });
 			expect(result.method).toBe("DELETE");
@@ -1155,6 +1165,19 @@ describe("transport", () => {
 				mode: "move",
 				allowRecursive: true,
 			});
+		});
+
+		// Catches: exposing Finder source paths to HTTP token holders and enabling exfiltration.
+		it("keeps remote copy coordination desktop-only", () => {
+			expect(INTENTIONALLY_UNMAPPED.has("fs_transfer_remote_paths")).toBe(true);
+			expect(() =>
+				mapCommandToHttp("fs_transfer_remote_paths", {
+					connectionId: "mint",
+					destDir: "/repo/dst",
+					paths: ["/Mac/file"],
+					allowRecursive: false,
+				}),
+			).toThrow(/native\/host-only/);
 		});
 
 		// --- PTY/terminal read commands (story 062) ---
@@ -3751,5 +3774,33 @@ describe("owningConnectionFor", () => {
 		expect(warn).toHaveBeenCalledTimes(1);
 		expect(warn.mock.calls[0][1]).toContain("start_native_drag");
 		expect(warn.mock.calls[0][2]).toMatchObject({ command: "start_native_drag", connectionId: TYCHO });
+	});
+});
+
+// A private native bootstrap must not become a public nonce-issuing endpoint.
+describe("private secret transport boundary", () => {
+	it("keeps native nonce bootstrap unmapped and submits the same envelope over HTTP", () => {
+		expect(INTENTIONALLY_UNMAPPED.has("secret_form_bootstrap")).toBe(true);
+		const request = mapCommandToHttp("secret_form_submit", {
+			submission: { nonce: "one-time", status: "declined", values: {}, template: null },
+		});
+		expect(request).toEqual({
+			method: "POST",
+			path: "/secrets/forms/submit",
+			body: { nonce: "one-time", status: "declined", values: {}, template: null },
+		});
+	});
+});
+
+// Catches: phone setup drops the action or reaches a different config surface than IPC.
+describe("Telegram Settings transport", () => {
+	it("maps reads and writes to the same guarded settings route", () => {
+		expect(mapCommandToHttp("telegram_settings", {})).toEqual({ method: "GET", path: "/config/telegram" });
+		const change = { action: "add_chat", chat_id: "123" };
+		expect(mapCommandToHttp("telegram_setup", { change })).toEqual({
+			method: "PUT",
+			path: "/config/telegram",
+			body: { change },
+		});
 	});
 });

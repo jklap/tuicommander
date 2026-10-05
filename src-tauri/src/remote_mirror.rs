@@ -119,13 +119,22 @@ async fn seed(
     let url = format!("{}/sessions", base_url.trim_end_matches('/'));
     let mut request = client.get(&url).timeout(SEED_TIMEOUT);
     if let Some(token) = token {
-        request = request.query(&[("token", token)]);
+        request = request.header(
+            reqwest::header::COOKIE,
+            format!("{}={token}", crate::mcp_http::auth::SESSION_COOKIE),
+        );
     }
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| e.without_url().to_string())?;
     if !response.status().is_success() {
         return Err(format!("GET /sessions answered {}", response.status()));
     }
-    response.json().await.map_err(|e| e.to_string())
+    response
+        .json()
+        .await
+        .map_err(|e| e.without_url().to_string())
 }
 
 /// Stamped into every mirrored payload, and the reason a mirrored event cannot
@@ -147,17 +156,29 @@ pub(crate) const ORIGIN_MARKER: &str = "__tuic_origin";
 /// `worktree-removed` and `repo-changed` to handlers that mutate LOCAL state: a
 /// phantom tab per remote session attached to the local transport, a workspace
 /// written into the local repositories store, git work spawned for a path that
-/// does not exist here. Only these two are session-scoped and idempotent
+/// does not exist here. The allowed notices are session-scoped and idempotent
 /// against a session this client already knows about — the badge push, and the
-/// close that retires it. Everything else still reaches the local bus, where
+/// close that retires it, Progress/workflow receipts, and labelled MCP toasts.
+/// Everything else still reaches the local bus, where
 /// `state.rs` ignores `RemoteMirrored`, and `/events`, where a client that
 /// asked for the mirror wants it.
 #[cfg_attr(all(not(feature = "desktop"), not(test)), allow(dead_code))]
-const WINDOW_MIRRORABLE_EVENTS: [&str; 4] = [
+const WINDOW_MIRRORABLE_EVENTS: [&str; 15] = [
     "session-state-changed",
     "session-closed",
     "progress-recorded",
     "workflow-run-changed",
+    "mcp-toast",
+    "mcp-confirm",
+    "mcp-confirm-resolved",
+    "review-progress",
+    "proposals-ready",
+    "conflict-assist-status",
+    "upstream-status-changed",
+    "acp-notice",
+    "github-transition",
+    "github-pr-update",
+    "github-issues-update",
 ];
 
 /// Whether a mirrored event may be repeated on the desktop window.
@@ -279,6 +300,25 @@ fn apply_frame(state: &Arc<AppState>, connection_id: &str, frame: &Frame) -> boo
         );
         return false;
     }
+    // Teardown removes the runtime entry before aborting this task. Do not
+    // deliver a toast from a chunk already buffered when that happens.
+    if matches!(
+        frame.event.as_str(),
+        "mcp-toast"
+            | "mcp-confirm"
+            | "mcp-confirm-resolved"
+            | "review-progress"
+            | "proposals-ready"
+            | "conflict-assist-status"
+            | "upstream-status-changed"
+            | "acp-notice"
+            | "github-transition"
+            | "github-pr-update"
+            | "github-issues-update"
+    ) && state.remote.base_url(connection_id).is_none()
+    {
+        return false;
+    }
     let reseed = match frame.event.as_str() {
         "session-state-changed" => {
             patch_state(state, connection_id, &payload);
@@ -323,10 +363,49 @@ fn patch_state(state: &Arc<AppState>, connection_id: &str, payload: &serde_json:
 fn republish(state: &Arc<AppState>, connection_id: &str, event: &str, payload: serde_json::Value) {
     let mut payload = payload;
     if let Some(body) = payload.as_object_mut() {
-        body.insert(
-            ORIGIN_MARKER.to_string(),
-            serde_json::json!({ "connection": connection_id }),
-        );
+        let mut origin = serde_json::json!({ "connection": connection_id });
+        if matches!(
+            event,
+            "mcp-toast"
+                | "mcp-confirm"
+                | "mcp-confirm-resolved"
+                | "upstream-status-changed"
+                | "acp-notice"
+                | "github-transition"
+                | "github-pr-update"
+                | "github-issues-update"
+        ) {
+            // Names come from this machine's saved connection, never the peer.
+            let name = match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
+            {
+                Ok(connections) => connections
+                    .into_iter()
+                    .find(|connection| connection.id == connection_id)
+                    .map(|connection| connection.name),
+                Err(error) => {
+                    tracing::warn!(source = "remote", connection = connection_id, %error,
+                        "Could not read the connection name for a remote notice");
+                    None
+                }
+            };
+            origin["name"] = serde_json::json!(name.as_deref().unwrap_or(connection_id));
+        }
+        if event == "mcp-toast" {
+            // MCP identifies the speaking peer; terminal navigation needs its
+            // PTY UUID. The daemon's session rows bind the two identities.
+            if let Some(session) = body.get("origin_session_id").and_then(|id| id.as_str())
+                && let Some(rows) = state.remote_sessions.by_connection.get(connection_id)
+                && let Some(row) = rows.values().find(|row| {
+                    row.session_id == session || row.tuic_session.as_deref() == Some(session)
+                })
+            {
+                body.insert(
+                    "origin_session_id".into(),
+                    serde_json::json!(row.session_id),
+                );
+            }
+        }
+        body.insert(ORIGIN_MARKER.to_string(), origin);
     }
     #[cfg(feature = "desktop")]
     if window_may_hear(event)
@@ -362,9 +441,15 @@ async fn consume_stream(
     let url = format!("{}/events", base_url.trim_end_matches('/'));
     let mut request = client.get(&url);
     if let Some(token) = token {
-        request = request.query(&[("token", token)]);
+        request = request.header(
+            reqwest::header::COOKIE,
+            format!("{}={token}", crate::mcp_http::auth::SESSION_COOKIE),
+        );
     }
-    let response = request.send().await.map_err(|e| e.to_string())?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| e.without_url().to_string())?;
     if !response.status().is_success() {
         return Err(format!("GET /events answered {}", response.status()));
     }
@@ -378,7 +463,7 @@ async fn consume_stream(
             )
         })?;
         let Some(chunk) = next else { break };
-        let chunk = chunk.map_err(|e| e.to_string())?;
+        let chunk = chunk.map_err(|e| e.without_url().to_string())?;
         for frame in decoder.push(&chunk) {
             if apply_frame(state, connection_id, &frame) {
                 match seed(client, base_url, token).await {
@@ -461,6 +546,7 @@ pub(crate) fn spawn(state: &Arc<AppState>, connection_id: String) -> tokio::task
 /// state the machine was in. `session-closed` is what a local session sends
 /// when it goes, and a disconnect is the same news for a mirrored one.
 pub(crate) fn drop_connection(state: &Arc<AppState>, connection_id: &str) {
+    crate::mcp_http::remote_peer::disconnect(state, connection_id);
     let Some((_, rows)) = state.remote_sessions.by_connection.remove(connection_id) else {
         return;
     };
@@ -769,6 +855,14 @@ mod tests {
             "session-closed",
             "progress-recorded",
             "workflow-run-changed",
+            "review-progress",
+            "proposals-ready",
+            "conflict-assist-status",
+            "upstream-status-changed",
+            "acp-notice",
+            "github-transition",
+            "github-pr-update",
+            "github-issues-update",
         ] {
             assert!(window_may_hear(event), "{event} has a safe window consumer");
         }
@@ -786,6 +880,146 @@ mod tests {
                 "{event} mutates local state and must not arrive from a remote daemon"
             );
         }
+    }
+
+    // Catches: confirmations lose their locally trusted host label or a buffered
+    // question resurfaces after disconnect and can be answered on the wrong host.
+    #[test]
+    fn remote_confirmations_keep_host_identity_and_drop_after_disconnect() {
+        use crate::remote_connection::{RemoteConnection, RemoteConnectionStore};
+        let state = Arc::new(make_test_app_state());
+        let mut connection = RemoteConnection::new_direct("mint", "http://daemon:9876", "boss");
+        connection.id = "vps".into();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        state
+            .remote
+            .force_connected_for_test("vps", "http://daemon:9876", None);
+        let mut rx = state.event_bus.subscribe();
+        for event in ["mcp-confirm", "mcp-confirm-resolved"] {
+            let frame = Frame {
+                event: event.into(),
+                data: r#"{"request_id":"same"}"#.into(),
+            };
+            apply_frame(&state, "vps", &frame);
+            let AppEvent::RemoteMirrored { payload, .. } = rx.try_recv().unwrap() else {
+                panic!("missing remote confirmation");
+            };
+            assert_eq!(
+                payload[ORIGIN_MARKER],
+                serde_json::json!({"connection":"vps","name":"mint"})
+            );
+        }
+        crate::remote_runtime::teardown(&state, "vps");
+        // Teardown itself publishes lifecycle events; drain those before the probe.
+        while rx.try_recv().is_ok() {}
+        apply_frame(
+            &state,
+            "vps",
+            &Frame {
+                event: "mcp-confirm".into(),
+                data: r#"{"request_id":"late"}"#.into(),
+            },
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a disconnected question must not reappear"
+        );
+    }
+
+    // Catches: mcp-toast is excluded from the window, loses its sound/level,
+    // trusts the daemon's host label, or navigates using a peer rather than PTY id.
+    #[test]
+    fn remote_toast_reaches_window_with_local_host_label_and_originating_pty() {
+        use crate::remote_connection::{RemoteConnection, RemoteConnectionStore};
+        let state = Arc::new(make_test_app_state());
+        let mut connection = RemoteConnection::new_direct("mac-mint", "http://daemon:9876", "boss");
+        connection.id = "vps".into();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        state
+            .remote
+            .force_connected_for_test("vps", "http://daemon:9876", None);
+        store_seed(
+            &state,
+            "vps",
+            vec![SessionInfo {
+                session_id: "pty-1".into(),
+                tuic_session: Some("peer-1".into()),
+                ..Default::default()
+            }],
+        );
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(&state, "vps", &Frame {
+            event: "mcp-toast".into(),
+            data: r#"{"title":"Need input","message":"Which branch?","level":"warn","sound":"attention","origin_session_id":"peer-1","origin_repo_path":"/remote/repo","name":"forged"}"#.into(),
+        });
+        let AppEvent::RemoteMirrored { event, payload, .. } = rx.try_recv().unwrap() else {
+            panic!("missing mirrored toast");
+        };
+        assert!(
+            window_may_hear(&event),
+            "a remote MCP toast must reach the window emit path"
+        );
+        assert_eq!(
+            payload[ORIGIN_MARKER],
+            serde_json::json!({"connection":"vps", "name":"mac-mint"})
+        );
+        assert_eq!(payload["title"], "Need input");
+        assert_eq!(payload["message"], "Which branch?");
+        assert_eq!(payload["level"], "warn");
+        assert_eq!(payload["sound"], "attention");
+        assert_eq!(payload["origin_session_id"], "pty-1");
+        assert_eq!(payload["origin_repo_path"], "/remote/repo");
+        assert!(rx.try_recv().is_err(), "one frame produces one notice");
+        apply_frame(
+            &state,
+            "vps",
+            &Frame {
+                event,
+                data: payload.to_string(),
+            },
+        );
+        assert!(rx.try_recv().is_err(), "a toast cannot cross a second hop");
+    }
+
+    // Catches: a buffered toast is delivered after teardown, or replayed on reconnect.
+    #[test]
+    fn disconnected_toast_is_dropped_and_reconnect_only_delivers_new_frames() {
+        let state = Arc::new(make_test_app_state());
+        state
+            .remote
+            .force_connected_for_test("vps", "http://daemon:9876", None);
+        crate::remote_runtime::teardown(&state, "vps");
+        let mut rx = state.event_bus.subscribe();
+        let toast = Frame {
+            event: "mcp-toast".into(),
+            data: r#"{"title":"Old","level":"error","sound":null}"#.into(),
+        };
+        apply_frame(&state, "vps", &toast);
+        assert!(rx.try_recv().is_err());
+        state
+            .remote
+            .force_connected_for_test("vps", "http://daemon:9876", None);
+        assert!(
+            rx.try_recv().is_err(),
+            "reconnect must not replay dropped notices"
+        );
+        apply_frame(
+            &state,
+            "vps",
+            &Frame {
+                event: "mcp-toast".into(),
+                data: r#"{"title":"New","level":"info","sound":null}"#.into(),
+            },
+        );
+        let AppEvent::RemoteMirrored { payload, .. } = rx.try_recv().unwrap() else {
+            panic!("missing fresh toast");
+        };
+        assert_eq!(payload["title"], "New");
+        assert_eq!(
+            payload[ORIGIN_MARKER]["name"], "vps",
+            "missing saved names fall back to the connection id"
+        );
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
@@ -839,7 +1073,8 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let route = server
             .mock("GET", "/sessions")
-            .match_query(mockito::Matcher::Regex("^token=tok$".into()))
+            .match_header("cookie", "tui-session=tok")
+            .match_query(mockito::Matcher::Missing)
             .with_header("content-type", "application/json")
             .with_body(
                 r#"[{"session_id":"s1","display_name":"vps claude",
@@ -865,11 +1100,12 @@ mod tests {
     #[tokio::test]
     async fn the_event_stream_is_read_unfiltered_and_every_frame_is_repeated_locally() {
         let mut server = mockito::Server::new_async().await;
-        // `^token=tok$` is the assertion that matters: a `types=` allowlist here
+        // No query is the assertion that matters: a `types=` allowlist here
         // would silently drop every event type nobody thought to name.
         let route = server
             .mock("GET", "/events")
-            .match_query(mockito::Matcher::Regex("^token=tok$".into()))
+            .match_header("cookie", "tui-session=tok")
+            .match_query(mockito::Matcher::Missing)
             .with_header("content-type", "text/event-stream")
             .with_body(concat!(
                 ":ping\n\n",
@@ -1070,6 +1306,115 @@ mod tests {
         daemon.abort();
     }
 
+    fn critic_toast(data: &str) -> Frame {
+        Frame {
+            event: "mcp-toast".into(),
+            data: data.into(),
+        }
+    }
+
+    fn critic_connected(state: &Arc<AppState>, id: &str) {
+        state
+            .remote
+            .force_connected_for_test(id, "http://daemon:9876", None);
+    }
+
+    // Catches: a daemon-supplied origin marker (fake host label, "I am local")
+    // is trusted and shown instead of being dropped as an already-mirrored frame.
+    #[test]
+    fn critic_toast_carrying_a_forged_origin_marker_is_dropped() {
+        let state = Arc::new(make_test_app_state());
+        critic_connected(&state, "vps");
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(
+            &state,
+            "vps",
+            &critic_toast(
+                r#"{"title":"t","level":"info","sound":null,"__tuic_origin":{"connection":"local","name":"This Mac"}}"#,
+            ),
+        );
+        assert!(rx.try_recv().is_err(), "forged marker must not cross");
+    }
+
+    // Catches: peer->PTY translation searches other connections' rows, so a
+    // peer id owned by machine B rewrites a toast raised on machine A onto B's PTY.
+    #[test]
+    fn critic_toast_peer_is_translated_only_within_its_own_connection() {
+        let state = Arc::new(make_test_app_state());
+        critic_connected(&state, "a");
+        critic_connected(&state, "b");
+        store_seed(
+            &state,
+            "b",
+            vec![SessionInfo {
+                session_id: "pty-b".into(),
+                tuic_session: Some("peer-x".into()),
+                ..Default::default()
+            }],
+        );
+        store_seed(&state, "a", vec![]);
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(
+            &state,
+            "a",
+            &critic_toast(
+                r#"{"title":"t","level":"info","sound":null,"origin_session_id":"peer-x"}"#,
+            ),
+        );
+        let AppEvent::RemoteMirrored { payload, .. } = rx.try_recv().unwrap() else {
+            panic!("missing toast");
+        };
+        assert_eq!(payload["origin_session_id"], "peer-x");
+        assert_eq!(payload[ORIGIN_MARKER]["connection"], "a");
+    }
+
+    // Catches: a Rust-side dedup/rate guard that swallows a second legitimate,
+    // identical toast (dedup belongs to the bell, which has its own window).
+    #[test]
+    fn critic_two_identical_toasts_are_both_forwarded() {
+        let state = Arc::new(make_test_app_state());
+        critic_connected(&state, "vps");
+        let mut rx = state.event_bus.subscribe();
+        let frame = critic_toast(r#"{"title":"same","level":"warn","sound":"attention"}"#);
+        apply_frame(&state, "vps", &frame);
+        apply_frame(&state, "vps", &frame);
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_ok());
+    }
+
+    // Catches: an unreadable connections.json drops the toast or panics
+    // instead of labelling it with the connection id.
+    #[test]
+    fn critic_toast_survives_an_unreadable_connection_store() {
+        let state = Arc::new(make_test_app_state());
+        critic_connected(&state, "vps");
+        std::fs::write(state.data_dir.join("connections.json"), "{not json").unwrap();
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(
+            &state,
+            "vps",
+            &critic_toast(r#"{"title":"t","level":"info","sound":null}"#),
+        );
+        let AppEvent::RemoteMirrored { payload, .. } = rx.try_recv().unwrap() else {
+            panic!("toast lost");
+        };
+        assert_eq!(payload[ORIGIN_MARKER]["name"], "vps");
+    }
+
+    // Catches: the disconnect guard also gates a non-toast event, or a toast
+    // for a never-connected id (no runtime entry) is delivered.
+    #[test]
+    fn critic_toast_for_an_unknown_connection_is_dropped() {
+        let state = Arc::new(make_test_app_state());
+        let mut rx = state.event_bus.subscribe();
+        apply_frame(
+            &state,
+            "ghost",
+            &critic_toast(r#"{"title":"t","level":"info","sound":null}"#),
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
     #[test]
     fn a_machine_with_no_remote_connection_mirrors_nothing() {
         let state = Arc::new(make_test_app_state());
@@ -1078,6 +1423,40 @@ mod tests {
             crate::mcp_http::session::session_rows_including_remote(&state).is_empty(),
             "a list call on a machine with no remote connection is the local list"
         );
+    }
+
+    // Catches: reqwest URL credentials reaching mirror errors from seed or SSE requests.
+    #[tokio::test]
+    async fn closed_port_mirror_errors_never_contain_query_credentials() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("address"));
+        drop(listener);
+        let client = reqwest::Client::new();
+        let state = Arc::new(make_test_app_state());
+        let secret = "MIRROR_SECRET_1457";
+        let seed_error = seed(&client, &base, Some(secret))
+            .await
+            .expect_err("seed closed port");
+        let stream_error = consume_stream(
+            &state,
+            &client,
+            "closed",
+            &base,
+            Some(secret),
+            STREAM_IDLE_TIMEOUT,
+        )
+        .await
+        .expect_err("stream closed port");
+        for error in [seed_error, stream_error] {
+            assert!(
+                !error.contains(secret),
+                "credential in mirror error: {error}"
+            );
+            assert!(
+                !error.contains(&base),
+                "request URL in mirror error: {error}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1093,5 +1472,22 @@ mod tests {
             .await
             .expect_err("401 is not a session list");
         assert!(error.contains("401"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod critic_confirmation_delivery {
+    // Catches: remote questions/resolutions reach SSE but are suppressed for
+    // the desktop confirmation host, which subscribes to native window events.
+    #[test]
+    fn remote_confirmation_and_resolution_are_deliverable_to_desktop() {
+        assert!(
+            super::window_may_hear("mcp-confirm"),
+            "remote confirmation never reaches desktop"
+        );
+        assert!(
+            super::window_may_hear("mcp-confirm-resolved"),
+            "remote resolution never dismisses desktop confirmation"
+        );
     }
 }

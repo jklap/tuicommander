@@ -24,7 +24,9 @@ pub use tuic_dictation::vad;
 
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "macos")]
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 pub struct CaptureStopRequest {
@@ -179,6 +181,7 @@ impl DictationState {
 
     /// Stop microphone capture at the native event edge, before WebView delivery.
     /// The IPC stop later joins streaming and transcribes the retained audio.
+    #[cfg(target_os = "macos")]
     pub fn request_native_stop(&self, source: &'static str) {
         if !self.recording.load(Ordering::Acquire) || !self.fn_capture.load(Ordering::Acquire) {
             return;

@@ -135,7 +135,7 @@ function createToastsStore() {
 	const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
 	const durations = new Map<number, number>();
 	const queued: Toast[] = [];
-	let lastBellNotice: Toast | undefined;
+	let lastBellNotice: (Toast & { connectionId?: string }) | undefined;
 
 	function clearDismissTimer(id: number): void {
 		const timer = dismissTimers.get(id);
@@ -175,6 +175,7 @@ function createToastsStore() {
 			repoPath?: string,
 			action?: Toast["action"],
 			sessionId?: string,
+			connectionId?: string,
 		) {
 			if (
 				lastBellNotice?.title === title &&
@@ -182,12 +183,13 @@ function createToastsStore() {
 				lastBellNotice.level === level &&
 				lastBellNotice.repoPath === repoPath &&
 				lastBellNotice.sessionId === sessionId &&
+				lastBellNotice.connectionId === connectionId &&
 				Date.now() - lastBellNotice.createdAt <= NOTICE_WINDOW_MS &&
 				activityStore.getActive().some((item) => item.id === `toast-${lastBellNotice!.id}`)
 			)
 				return -1;
 			const id = nextId++;
-			lastBellNotice = { id, title, message, level, createdAt: Date.now(), repoPath, action, sessionId };
+			lastBellNotice = { id, title, message, level, createdAt: Date.now(), repoPath, action, sessionId, connectionId };
 			mirrorToBell(lastBellNotice, true);
 			return id;
 		},

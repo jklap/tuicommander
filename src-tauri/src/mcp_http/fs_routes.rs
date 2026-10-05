@@ -408,6 +408,14 @@ pub(super) async fn fs_transfer_paths_http(Json(body): Json<FsTransferPathsReque
     ))
 }
 
+/// The existing router/auth middleware also owns this streaming binary RPC.
+pub(super) async fn upload_copy_http(
+    Query(q): Query<crate::remote_transfer::UploadQuery>,
+    body: axum::body::Body,
+) -> Response {
+    json_result(crate::remote_transfer::receive_copy(q, &registered_repo_roots(), body).await)
+}
+
 /// 403 response for an absolute path that escapes every registered repo root.
 fn access_denied() -> Response {
     (

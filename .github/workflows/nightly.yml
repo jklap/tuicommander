@@ -247,9 +247,9 @@ jobs:
           APPLE_API_KEY: ${{ secrets.NOTARIZE_KEY_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # whisper.cpp build flags per platform + /Z7 for sccache MSVC compat
-          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
-          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
+          # whisper.cpp build flags per platform + -Z7 for sccache MSVC compat
+          CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
+          CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '-Z7' || '' }}
         with:
           tauriScript: pnpm tauri
           tagName: nightly
@@ -319,6 +319,8 @@ jobs:
             printf '### Other\n%s\n\n' "$OTHER" >> "$NOTES"
           fi
 
+          python3 scripts/cap-release-notes.py "$NOTES" \
+            "https://github.com/$GITHUB_REPOSITORY/compare/$LAST_STABLE...main"
           gh release edit nightly --repo "$GITHUB_REPOSITORY" --notes-file "$NOTES"
 
       - name: Create versioned nightly release

@@ -192,6 +192,28 @@ const handles = new Map<string, unknown>();
  */
 const pluginPanelClosedListeners = new Set<(tabId: string) => void>();
 
+function mcpFileTab(
+	id: string,
+	mcpUiId: string,
+	repoPath: string,
+	filePath: string,
+	pinned: boolean,
+	branchKey: string | undefined,
+): FileTab {
+	return {
+		type: "file",
+		id,
+		mcpUiId,
+		repoPath,
+		filePath,
+		fileName: pathBasename(filePath) || filePath,
+		branchKey,
+		fsRoot: repoPath,
+		pinned,
+		pinAcrossRepos: true,
+	};
+}
+
 function createMdTabsStore() {
 	const base = createTabManager<MdTabData>("markdown");
 	const [reloadReady, setReloadReady] = createSignal(false);
@@ -247,6 +269,16 @@ function createMdTabsStore() {
 				if (!saved || typeof saved !== "object") return;
 				const snapshot = saved as Record<string, unknown>;
 				if (!Array.isArray(snapshot.tabs)) return;
+				const claimed = new Set<string>();
+				for (const open of Object.values(base.state.tabs)) {
+					if (open.mcpUiId) claimed.add(open.mcpUiId);
+					if (open.type === "plugin-panel") claimed.add(open.pluginId);
+				}
+				for (const open of Object.values(editorTabsStore.state.tabs)) {
+					if (open.mcpUiId) claimed.add(open.mcpUiId);
+				}
+				const restored: FileTab[] = [];
+				let activeId: string | undefined;
 				for (const value of snapshot.tabs) {
 					if (!value || typeof value !== "object") continue;
 					const tab = value as Record<string, unknown>;
@@ -260,18 +292,17 @@ function createMdTabsStore() {
 						(tab.branchKey !== undefined && typeof tab.branchKey !== "string")
 					)
 						continue;
-					// A fresh MCP event received during boot takes precedence over disk.
-					if (
-						Object.values(base.state.tabs).some(
-							(open) => open.mcpUiId === tab.mcpUiId || (open.type === "plugin-panel" && open.pluginId === tab.mcpUiId),
-						) ||
-						Object.values(editorTabsStore.state.tabs).some((open) => open.mcpUiId === tab.mcpUiId)
-					)
-						continue;
-					const id = this.addMcpFile(tab.mcpUiId, tab.repoPath, tab.filePath, tab.pinned, true);
-					base._setState("tabs", id, "branchKey", tab.branchKey as string | undefined);
-					if (tab.mcpUiId === snapshot.activeMcpUiId) base.setActive(id);
+					// Boot-time events and the first valid snapshot entry own each identity.
+					if (claimed.has(tab.mcpUiId)) continue;
+					claimed.add(tab.mcpUiId);
+					const id = base._nextId("md");
+					restored.push(
+						mcpFileTab(id, tab.mcpUiId, tab.repoPath, tab.filePath, tab.pinned, tab.branchKey as string | undefined),
+					);
+					if (tab.mcpUiId === snapshot.activeMcpUiId) activeId = id;
 				}
+				base._addTabsBackground(restored);
+				if (activeId) base.setActive(activeId);
 			} catch (err) {
 				appLogger.warn("store", "Could not restore MCP Markdown tabs after reload", err);
 			} finally {
@@ -365,18 +396,7 @@ function createMdTabsStore() {
 			if (stale) base.remove(stale.id);
 			const existing = Object.values(base.state.tabs).find((tab) => tab.type === "file" && tab.mcpUiId === mcpUiId);
 			const id = existing?.id ?? base._nextId("md");
-			const tab: FileTab = {
-				type: "file",
-				id,
-				mcpUiId,
-				repoPath,
-				filePath,
-				fileName: pathBasename(filePath) || filePath,
-				branchKey: branchKeyFor(repoPath),
-				fsRoot: repoPath,
-				pinned,
-				pinAcrossRepos: true,
-			};
+			const tab = mcpFileTab(id, mcpUiId, repoPath, filePath, pinned, branchKeyFor(repoPath));
 			if (existing) {
 				base._setState("tabs", id, tab);
 				if (!background) base.setActive(id);

@@ -1,7 +1,7 @@
 {
   "name": "tuicommander",
   "private": true,
-  "version": "1.7.7",
+  "version": "1.8.0",
   "description": "Multi-agent terminal orchestrator with native terminal and Tauri",
   "type": "module",
   "packageManager": "pnpm@11.15.1",
@@ -39,7 +39,7 @@
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-deep-link": "^2.4.10",
     "@tauri-apps/plugin-dialog": "^2.7.3",
-    "@tauri-apps/plugin-notification": "^2.5.0",
+    "@tauri-apps/plugin-notification": "~2.4.0",
     "@tauri-apps/plugin-opener": "^2.5.5",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.11.0",

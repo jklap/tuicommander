@@ -1,3 +1,28 @@
+## Main build integration — Rust rebuild required
+
+- [ ] Load the cfg and GitHub lint fixes on Boss's next planned backend rebuild/restart. Rust does not hot-reload; this lane does not restart the live desktop. The fixes preserve config recovery and GitHub emission behavior.
+
+## Telegram channel adapter (1438-79b4) — headless rebuild required
+
+- [ ] After Boss authorizes mint deployment and the bound agent is idle, rebuild/restart tuic-remote and verify registration/replacement/unregister, automatic retirement on agent exit with the shell still open, MCP session end and PTY close, and the allowlisted phone conversation: no-agent reply "Nessun agent registrato", Thinking/activity refresh, exact final reply, authored done/blocked notices and opaque-button callback mail. The Rust changes do not hot-reload. No live token/chat-ID reads, mint deployment or desktop restart were performed by this lane. Offline targeted tests use fake credentials and chats; deterministic publish receipts remain outside this slice.
+## Optional dictation build graph (1394-ff2c) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, confirm push-to-talk, hands-free speech, notification output-device selection, and the global window hotkey still work. Tauri builds enable dictation explicitly; plain Cargo desktop builds omit it. Rust changes do not hot-reload. This lane does not restart the live app or launch another desktop instance.
+## Remote update cookie migration (1490-e3ac) — Rust rebuild required
+
+- [ ] After Boss rebuilds/restarts the daemon, confirm a Direct remote update works with the current client. This release accepts both `tui-session` and the legacy query token; the client switches next release. Rust backend changes do not hot-reload. No desktop instance was launched by this lane.
+
+## Windows Clippy cleanup (1501-e8cb) — rebuild required
+
+- [ ] After the next Windows rebuild, confirm agent executable discovery still prefers `.exe` over `.cmd`, Chrome registry discovery works, and an upload completes. The Rust syntax cleanup does not hot-reload into the running desktop; Boss controls the next restart.
+
+## HTTP API origin boundary (1456-351c) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs a rebuilt release, confirm existing CLI/MCP Unix socket access, authenticated phone/PWA access and desktop remote peer access. Rust does not hot-reload; no desktop instance was launched by this lane. Foreign Origin/Host rejection and token-authenticated clients are covered by targeted router regressions.
+## Release-check lint cleanup (1447-a894) — Rust rebuild required
+
+- [ ] After the next backend rebuild, verify capture/resampling, echo cleanup, loudness and Edge speech still work. These lint-only edits do not hot-reload; existing automated regressions need a final run after the managed background launcher is restored. Do not restart the live desktop from this lane.
+
 ## Bodyless IPC replies (1416-8ad4) — rebuilt clients required
 
 - [ ] Rebuild/reinstall the CLI and bridge before using this decoder fix. The running clients do not hot-reload Rust changes. Automated shared-decoder regression covers 204/304, protocol-switch, bounded headers/interims and final response boundaries; no desktop restart was performed by this lane.
@@ -8,6 +33,9 @@
 ## Stable MCP bridge (1415-ef32) — Rust restart required
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, confirm the primary instance migrates Claude and private Claude MCP commands to `mcp-bridge/<sha256>/tuic-bridge` under its config directory. Start a disposable Claude session and confirm MCP initialize succeeds. Existing desktop Rust code does not hot-reload. Target cleanup and executable lifetime are covered by the targeted regression tests; real Claude startup after the desktop restart remains to check.
+## Remote hand-launched agent detection (1420-f3de) — Rust restart required
+
+- [ ] After Boss approves and loads the rebuilt desktop and remote daemon, use the configured Mac-mint connection through desktop MCP only: create a disposable shell PTY, start Claude by hand, confirm `agent_state` appears, submit one task after its composer is ready, send mail with a payload-free wake and read the reply. Check that a plain shell rejects submit with a cause and a corrective action. Do not restart or redeploy Mac-mint while its live PTYs must be preserved. Coordinator harness: `scripts/test-remote-mcp.py` from story 1419.
 
 ## Suspend Tab (1358-d008) — desktop menu
 
@@ -59,6 +87,14 @@
      then remove the tweak markers. -->
 
 # To Test
+
+## Stable macOS dev executable (1510-03ae) — next Boss launch
+
+- [ ] On Boss's next manual `make dev` restart, confirm the printed executable path is `~/Library/Application Support/com.tuic.commander/dev-bin/tuicommander`, the live process maps that existing file, and LAN/tailnet HTTP requests and the iPhone page work with ALF enabled. Confirm bridge startup and local remote-update fallback still find their adjacent binaries. Script tests cover target deletion without launching the desktop; the live firewall and phone checks remain for Boss. No desktop restart was performed by the peer.
+
+## Remote file drops (1434-1719) — Rust restart required
+
+- [ ] After Boss restarts the desktop and updates the remote daemon, drop a Mac file and a folder onto a registered remote repository in tree and flat views. Verify remote bytes, unchanged local sources, directory confirmation and conflict skipping. This native Finder-to-Tauri interaction requires the desktop rebuild; no second desktop instance was launched.
 
 ## Safe orphan cleanup countdown (story 1257-a30b) — Rust restart required
 
@@ -4473,6 +4509,13 @@ or credential is touched.
 
 - [x] Voice settings: accent Start, distinct Stop, and Running/Stopped indicator (#1409-4ec3). _(verified: accent colour in agent-browser screenshot; Running/Stopped component regression tests)_
 
+## Remote desktop MCP routing (1419-ab18) — coordinated Rust rollout required
+
+
+- [ ] After Boss schedules the desktop restart and coordinator deploys the reviewed daemon build, run `scripts/test-remote-mcp.py --connection <Mac-mint-id> --session <disposable-agent> --exercise`. Confirm remote output/submit, destination wake and reply to the Mac. Run with `--second-connection` and `--second-session` for a disposable second daemon peer. The live desktop does not load Rust changes without a restart; never restart it or a daemon holding live PTYs just to perform this check.
+
+
+- [ ] After Boss schedules the Rust restart, verify a forwarded notice retry does not enqueue again while its ID is within the recipient's last 100 forwarded IDs, including after inbox reads. A retry after 100 newer IDs may deliver again; unregister must clear only that recipient's ring (#1419-ab18).
 - [ ] Remote empty-grid replay control message (#1421-733e): staged Rust WS change requires a rebuilt backend; targeted loopback WS test and isolated headless fixture cover it before deployment. Keep the running desktop and mac-mint daemon intact until the coordinator schedules deployment.
 
 - [ ] Remote replay rollout (#1421-733e): deploy the updated daemon before the updated client. An older daemon without the explicit empty-replay marker can trigger a false 15-second stream error on a healthy idle session whose initial grid is unavailable. Coordinate deployment after live PTYs can be safely preserved or closed; do not restart mac-mint during this incident.
@@ -4481,3 +4524,143 @@ or credential is touched.
 - [ ] Workflow graph slice A (1446-ff21): after Boss rebuilds/restarts, inspect and cancel a pre-contract run; it must refuse Resume without changing its history. Graph runtime remains disabled. Targeted native store/replay tests cover the backend; the running desktop has not loaded these Rust changes.
 
 - [ ] After Boss restarts the desktop or rebuilds release: verify the native workflow graph runtime uses serial predecessor history and refuses pause resolution while effects are uncertain or input is pending (1446 slice A). Internal graph transitions remain unavailable on the public transport.
+## Private secret forms (#1435-6e1d) — Rust restart required
+
+- [ ] (#1520-46b1) After Boss restarts the rebuilt desktop and updates the CLI/bridge, request a throwaway form. Confirm a separate native window opens, wait over 10 seconds, then decline; caller must receive names and `declined`. Repeat with harmless entry and verify only names/`stored` return. If absent, read source `secrets` logs: no `Secret tool dispatched` means the request did not reach this handler; `Opening` without `Creating` means host/store setup failed (see `Secret tool failed`); `Creating` without success/error means native construction did not return; a creation failure reports its native error; `created` means investigate visibility/frontend bootstrap. No desktop was launched by the peer.
+
+- [ ] After restart, with a private form open, verify direct upstream MCP
+  `tools/call` rejects inspection, matching native and `call_tool` entry points.
+
+- [ ] After Boss restarts the desktop backend, request username/password/OTP
+  fields with synthetic data. Verify the separate native window, exact reduced
+  schema, main-window bootstrap rejection, decline, close and timeout cleanup.
+- [ ] On a trusted existing HTTPS server address, submit a desktop-opened request
+  from the one-time entry path; verify one-time consumption and cleared input UI.
+- [ ] Verify exact argv/name/directory approval and template consent. Run a
+  trusted test executable that prints synthetic encoded/wrapped values; confirm
+  masked output and no terminal/tcap entries.
+
+These desktop checks wait for Boss's restart; no second desktop instance is
+launched by the implementer. Security critic and cross-platform validation are
+required before treating the feature as complete.
+- [ ] After Boss restarts the desktop build and updates the remote daemon, drop a read-only directory from Finder onto a remote repository. Verify all files arrive, final directory permissions remain read-only, and the Mac source stays untouched. Rust does not hot-reload; this requires a manual restart when Boss is ready. _(Story 1434 round 3: Linux handler tests cover upload deadlines, staging cleanup and cancellation; native Finder/macOS publication awaits restart.)_
+## Remote MCP toast mirror (1439-d84f) — Rust restart required
+
+- [ ] After Boss restarts `make dev` or installs a `make build` release, connect a daemon, raise an MCP toast from a remote agent, and check the host-labelled Messages entry, requested sound and Open terminal navigation. Disconnect, raise a toast remotely, and reconnect: no stale entry should appear. The mirror backend cannot hot-reload; do not restart Boss's desktop from an agent. Automated Rust/frontend regressions cover the filter, payload, navigation and disconnected-frame behavior.
+
+Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote PTY's cwd/repo is outside every registered remote repository. Navigation ownership currently comes from the repository registry. This is not fixed by the toast mirror change.
+- [ ] #1411-097c: After a backend restart, copy a wrapped Claude prompt. Confirm only the outer `❯ ` and two-column margin disappear, width wraps join, and typed newlines remain. Select the pasted second glyph from column 2, content after an ASCII/wide prefix, and a VT continuation starting with `❯ `: literal glyphs and indentation must remain (#1414-4366). Rust changes require Boss to restart `make dev` or rebuild the release.
+
+- [ ] #1418-48c7: After Boss restarts the backend, copy a literal prompt-shaped VT continuation whose predecessor was evicted from scrollback; the glyph must remain. Targeted grid regression verifies the extraction path; desktop clipboard check awaits restart.
+
+- [ ] #1418-48c7: After the backend restart, clear history, fully erase the top row and redraw a real composer there, including with zero scrollback. Copy must remove the composer marker; purging history without erasing literal prompt-shaped content must preserve it. Automated regression coverage exercises full and partial line erasure.
+
+- [ ] #1418-48c7: After Boss restarts the backend, move a literal prompt-shaped row with RI/IL and copy it at its new position: keep the glyph. Replace the entire row with ECH/DCH/ICH, redraw a fresh composer, and copy: remove only composer chrome. Partial edits must keep unknown-origin content literal. Automated grid and selection regressions cover these paths; desktop clipboard awaits restart.
+
+- [ ] #1418-48c7: After Boss restarts the backend, issue ED1 (`CSI 1 J`) with the cursor on the second row: the first row must be blank. Redraw a fresh composer there and copy it: remove only composer chrome. First-row and last-row erase boundaries and the cursor-row suffix have automated grid regression coverage; desktop verification awaits restart.
+
+- [ ] #1418-48c7: After Boss restarts the backend, fill every row with scrollback set to zero, clear the screen with ED2 (`CSI 2 J`), then redraw and copy a fresh composer on row zero: remove only composer chrome. Automated regressions cover two/three-row screens, the origin flag, and retained history with nonzero scrollback. ED3 must still preserve literal live content.
+
+- [ ] #1418-48c7: After the backend restart, a composer on a blank row whose nonblank predecessor was evicted or purged may retain its `❯ ` when copied until a full row erase. This conservative limitation is accepted by Boss (2026-10-03, option a); the implementation uses one origin flag and no resize promotion.
+- [ ] Telegram offline adapter boundaries (#1438-79b4): after a future rebuild, native startup remains disabled until stable-ID mail integration lands; no Telegram polling or secret reads are wired by slices 1–2.
+
+
+- [ ] Telegram slices 1–2 polling recovery: after the next Rust rebuild and later native integration, verify visible in-memory 403/404 stops, fixed ten-update batches, bounded retries and alert-driven cursor reset. Offline adapter tests cover the cursor/network/mail-port boundary; daemon startup and operator UI remain deferred. Rust changes require Boss's manual restart to load.
+- [ ] Speaker shutdown (#1452-f186, release gate #1447-a894): Rust fix is staged and requires Boss to restart `make dev` or rebuild the release when ready. After a spoken reply drains, close the voice conversation; the render worker must stop without hanging. A forced-interleaving regression covers shutdown during completion dispatch; the current desktop has not loaded this change.
+
+## Debug sidecars for `make dev` / `make test` (1465-3d95) — desktop restart required
+
+- [ ] After a fresh `make dev` (or `make test`) on a checkout with an empty `src-tauri/target`, confirm `src-tauri/target/debug/tuic-bridge` and `tuic` exist and the app finds the bridge (`locate_bridge_binary`). After editing `crates/tuic-bridge/src`, restart: the bridge mtime must change. Do not launch a second desktop instance from an agent lane.
+- [ ] After the approved daemon update, launch Claude manually on the configured Mac-mint connection, exit back to the shell, and verify submit/mail no longer write there; a run-config preset must survive shell startup (#1420-f3de).
+
+- [ ] After the coordinated rebuild, verify shell-root return revokes a manually launched agent regardless of shell basename; a bash-script wrapper is observed, and a nested subshell under a directly spawned agent holds submit/mail until the agent regains foreground (#1420-f3de). Do not restart live PTYs for this check.
+## Concurrent workflow checks (story 953-feed) — Rust restart required
+
+- [ ] After Boss restarts the Rust backend, run independent published checks on disposable workflow runs. Confirm both subprocesses can progress concurrently and a notification event during a check does not discard its receipt. Confirm a changed worktree or cancelled run cannot acquire a receipt. The current backend cannot load this Rust change without a manual restart.
+
+## Workflow merge-tree verification (story 957-dc59) — Rust restart required
+
+- [ ] After Boss restarts the backend, use disposable repositories to verify a clean checked merge receives a receipt, an extra integration-time file does not, and a manually resolved conflict requests separate review. The running Rust backend cannot load the change without a manual restart.
+
+## Workflow recovery boundaries (story 960-8670) — Rust restart required
+
+- [ ] After Boss restarts the backend, verify restart recovery marks old attempts interrupted. On disposable active runs, a runtime reconciliation must preserve healthy attempts and intended effects; one corrupt run must not prevent a healthy run from recovering. After a dependency-refresh failure during recovery, resume the run and start a worker; reopening must preserve that live worker. Failed recovery is not retried by later opens or runtime reconciliation. Startup Git-probe latency remains pending story 959-c69c.
+## Windows core dependency (1478-ead1) — rebuild required
+
+- [ ] Load this manifest fix in the next Windows build. The `tuic-core` MSVC cross-check passes; a separate WebRTC/Abseil C++ build failure is tracked in 1479-f956. Existing desktop processes do not hot-reload Rust; restart only when Boss is ready.
+
+## Security Group C — rebuild required
+
+- [ ] After the next Rust restart, verify run-git rejects unsupported options and GitPanel fetch/push/merge still work (#1460-9ed8).
+
+- [ ] After the next Rust restart, verify force branch deletion retains its tip at refs/archive and refuses archive collisions (#1462-e0e9).
+
+- [ ] After the next Rust restart, verify plugin CLI output over a pipe buffer completes and overflow returns an explicit error (#1461-8d36).
+
+- [ ] After the next Rust restart, verify creating feat-x cannot remove an existing worktree for feat/x (#1458-e1f6).
+
+- [ ] After the next Rust restart, verify remote connection failures contain no token in logs or status and session/SSE mirroring authenticates with the existing cookie (#1457-91e0).
+## Windows WebRTC compiler (1479-f956) — native Nightly required
+
+- [ ] After landing and pushing, the Windows Nightly must report MSVC for both Meson C/C++ compilers, compile Abseil/WebRTC without MinGW header errors, and finish the Tauri NSIS build. This Rust build-script change requires rebuilding; no desktop instance was started for verification.
+
+## Codex notify publication (1483-7a6e) — Rust restart required
+
+- [ ] After Boss loads the rebuilt backend, confirm a disposable Codex session still reports turn completion. The script is now published with owner execute permission already set; the existing concurrent-publication regression covers the race. Rust does not hot-reload; no desktop instance was launched by this lane.
+
+- [ ] After the next backend restart, cancel a workflow while a published check is running and confirm its workers stop (#954-4f33). Automated regression covers process-tree teardown; the running backend must be restarted to load this change.
+
+- [ ] After backend restart, verify CLI/local and authenticated browser workflow actions succeed and story history records local_api or human provenance (#956-9745, #1497-4f55). Actor identity is tracking only. Rust changes require a manual make dev restart (or make build); automated route and provenance regressions cover the backend contract.
+
+- [ ] After backend restart, verify workflow plan Done becomes Active after canonical branch movement and Done after recertification (#962-0888); manual approval completion is preserved. Targeted Git integration tests cover both projections.
+- [ ] After Boss restarts `make dev` (Rust does not hot-reload), exceed the scrollback cap and verify retained command navigation, gutter selection, green prompt ticks and answers-only associations stay on their original rows (#1370-0077). Restart must load backend and frontend together because stored OSC row coordinates changed.
+- [ ] Queue retry idempotency (1106): after Boss rebuilds/restarts the backend, send the same `idempotencyKey` twice to an isolated agent queue, then retry after it drains; verify one wake and `accepted: true` without requeue. Automated HTTP/PTY tests cover bytes and queue state; this check loads the Rust change into the running app. Live per-CLI turn acceptance and composer/reconnect convergence remain separate open criteria.
+## Remote transfer cancellation fixture (1528-cee8) — Rust rebuild
+
+- [x] The cancellation regression must retain worker staging and its upload permit after handler abort, publish both fixture files, clean staging, and release both slots. Production still passes the unchanged extractor. _(verified by source inspection: `remote_transfer.rs` receive/worker ownership and channel-gated regression in `remote_transfer_tests.rs`; targeted execution is recorded in the story worklog. Rust changes require Boss to restart `make dev` or rebuild release before loading; this refactor adds no new runtime behavior.)_
+## Telegram minimal outbound (#1438-79b4) — Rust rebuild required
+
+- [ ] After Boss rebuilds/restarts the headless daemon, a directly observed Claude-to-Codex replacement in the same terminal must require fresh Telegram registration, even without a shell observation. Offline regression: `observed_agent_type_change_does_not_transfer_registration` (#1526-22f3).
+
+- [ ] After Boss rebuilds/restarts the headless daemon, register an agent, let it exit to its shell, then restart an agent in that terminal. Phone mail must receive `Nessun agent registrato` until the replacement explicitly registers. Offline native foreground/inbox coverage: `observed_agent_exit_does_not_transfer_registration_to_restarted_agent` (#1524-dcc1). The running backend needs a restart to load this Rust change.
+- [ ] After Boss rebuilds/restarts the headless daemon, verify drafts have no phone Stop, send/notifications use the single configured chat, and a button press or new message retires previous handles. Live mint verification remains coordinator-owned; no instance was launched here. Rust changes do not hot-reload.
+- [ ] After Boss rebuilds/restarts the headless daemon, verify Telegram Stop on
+  a throwaway phone request: one Escape reaches only the draft-bound current
+  epoch, including a replacement Enter delivered before input bookkeeping;
+  duplicate/stale Stop never revives a draft. Confirm the selected
+  callback label stays disabled. The running Rust backend cannot load these
+  changes until rebuilt/restarted; no restart was performed by this peer.
+
+- [ ] Telegram setup (#1515-cb81): after rebuilding/restarting tuic-remote, use Settings on desktop and phone to replace/check a token, observe the MCP-registered agent read-only, enable, pair once within ten minutes or type a chat ID, remove a chat, and inspect safe status. Rust changes require a restart; no desktop instance was launched by the peer. Live Telegram authentication was not exercised.
+- [ ] After Boss rebuilds/restarts TUIC: Settings > Agents > Codex shows the migrated bypass argument and warning; remove it and confirm terminal and managed launches preserve the removal. The durable migration stamp and wrapper task routing require a rebuilt backend; also confirm a default wrapper receives its positional task. Rust migration requires restart. Visual screenshot attempt could not render the isolated harness while the macOS screen was locked. (#1399-17bd)
+
+- [ ] After Boss rebuilds/restarts the backend, confirm an interactive Codex default with `--profile review` (or `exec`/`e`) receives and submits its managed task. Actual subcommands after root options must retain positional tasks. The public spawn regression covers argv and queued delivery; the running Rust backend requires restart. (#1513-701d)
+- [ ] After Boss restarts `make dev`, verify `claude remote-control --resume main` and `claude auth status` pass through without TUIC settings and normal Claude launches retain status hooks, including when cached help is empty or lacks usable command rows (#1405-a5e4).
+
+- [ ] After Boss restarts the Rust backend, verify a new headless terminal at 148 columns retains that width after a same-size resize (#1413-7dcc).
+- [ ] After Boss restarts the Rust backend, confirm that remote MCP questions show the saved host name, answer only the owning daemon, and disappear when another client answers (#1440-3571).
+
+- [ ] After rebuilding Rust, verify remote GitHub review/proposal/conflict notices update the owning dashboard and leave same-path local repositories unchanged (#1443-e2fd).
+
+- [ ] After rebuilding Rust, verify remote upstream MCP failures show their host with the popup closed and leave local upstream settings unchanged (#1444-95a4).
+
+- [ ] After the Rust restart, check a connected daemon ACP permission/elicitation in AI Chat: host and ACP connection are shown, answer returns to that daemon, settlement/disconnect clears only its cards (#1441-695e).
+
+- [ ] After the Rust restart, check remote GitHub PR transition bell/native notices show the host once, open remote PR details and never touch a same-path local repo (#1442-2100).
+
+- [ ] After the next backend restart, verify an ego card opens mobile Chat and shares the question push cooldown (#1078-05cf). Rust changes require a manual restart by Boss.
+- [ ] After Boss restarts the Rust backend, verify MCP `branch_delete` reports the tip-suffixed archive ref when the primary archive holds older work (#1489-1a14). Targeted regression covers the backend; the running desktop still requires restart.
+
+- [ ] After Boss restarts the Rust backend, confirm the Git diff file list displays tracked-file additions/deletions (#1499-3a34); targeted backend regression covers scopes and renamed paths.
+
+- [ ] After Boss restarts the Rust backend, confirm untracked files with tabs/newlines or boundary spaces appear with their literal names and correct line counts (#1502-8a5e). Backend regressions cover listing and file-diff consumers; Rust does not hot-reload.
+- [ ] After rebuilding/restarting TUIC, verify sidebar dirty and merged badges with 11 writing worktrees, including initialized submodules; sample Git child spawns with the same before/after method (1491-2ae4). Rust backend changes require a manual restart. Include recovery after a PR proof lookup failure without moving refs, and `git rm --cached` leaving both a staged deletion and an untracked file (dirty count 2).
+## Hands-free reply controls audit (#1377-16e1)
+
+- [x] Pause and resume preserve playback ownership without opening a user turn. _(verified: src-tauri/crates/tuic-dictation/src/speaker.rs:590 pause_by_user/resume_by_user only change playback and hold flags; generation changes in hush, not pause. src-tauri/src/dictation/commands.rs:1285 does not change capture state.)_
+- [x] Browser resume continues from the saved sample position without suspending the microphone context. _(verified: src/utils/browserVoice.ts:186 saves the elapsed offset and restarts playback from it; capture remains connected.)_
+- [ ] [VISUAL] Capture the pill while speaking and while user-paused after Boss loads the desktop build. Check Pause/Stop and Play/Stop respectively. No test desktop may be launched by a managed peer.
+- [ ] [HUMAN] On a real phone, tap Pause, Play and Stop during a spoken reply. The reply resumes at its position; Stop drops queued replies; microphone capture stays active. Mouse command dispatch, accessible labels and 44px coarse-pointer targets are present in source; they do not prove real-phone touch/audio behavior.
+- [ ] Native MCP registry Settings (#1522): after Boss rebuilds/restarts the backend, open Settings → MCP → Native tools; confirm all registry tools have switches and description badges, disabled tools can be re-enabled, and Telegram appears when its backend registration lands. Rust does not hot-reload.
+
+- [ ] AI Chat setup (#1406-06f2): with an empty ego executable, confirm the inactive explanation and Configure ego button in inline and detached panels. The button opens Settings → General at the ego controls; selecting the executable shows the composer without restart. Return to the detached window after saving to refresh its settings. _(Automated behavior tests cover routing and activation; agent-browser screenshot attempt was blocked by the locked macOS screen.)_

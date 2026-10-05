@@ -2014,8 +2014,9 @@ mod tests {
                 .unwrap()
                 .five_hour
                 .unwrap()
-                .utilization,
-            42.0
+                .utilization
+                .to_bits(),
+            42.0_f64.to_bits()
         );
         assert!(try_get_fresh_cache(&second).is_none());
         assert!(get_stale_cache(&second).is_none());

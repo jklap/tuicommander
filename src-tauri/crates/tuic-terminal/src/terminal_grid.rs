@@ -1931,12 +1931,41 @@ impl TerminalGrid {
                 >= 2;
 
             if should_strip {
-                out.extend(reflow_quoted_run(&contents, num_cols));
+                out.extend(reflow_copied_run(&contents, num_cols, 4));
             } else {
                 out.extend(lines[run_start..index].iter().map(|line| line.to_string()));
             }
         }
 
+        out.join("\n")
+    }
+
+    /// Normalize only the composer run whose first row was selected from column zero.
+    fn normalize_copied_composer(text: &str, num_cols: usize) -> String {
+        let lines: Vec<&str> = text.split('\n').collect();
+        let Some(first) = lines[0].strip_prefix("❯ ") else {
+            return Self::normalize_copied_selection(text, num_cols);
+        };
+        // Strip one marker and one margin; a second glyph and deeper indent are input.
+        let mut contents = vec![first];
+        let mut index = 1;
+        while index < lines.len() {
+            let Some(content) = lines[index].strip_prefix("  ") else {
+                break;
+            };
+            if content.is_empty() || gutter_content(lines[index]).is_some() {
+                break;
+            }
+            contents.push(content);
+            index += 1;
+        }
+        let mut out = reflow_copied_run(&contents, num_cols, 2);
+        if index < lines.len() {
+            out.push(Self::normalize_copied_selection(
+                &lines[index..].join("\n"),
+                num_cols,
+            ));
+        }
         out.join("\n")
     }
 
@@ -1957,6 +1986,22 @@ impl TerminalGrid {
             } else {
                 (end_row, end_col, start_row, start_col)
             };
+
+        let first_line = Line(r0 as i32 - history_size as i32);
+        // Selection text alone cannot distinguish a pasted glyph from composer chrome.
+        // Check the actual origin before cell extraction loses its column/wrap context.
+        let composer_anchor = c0 == 0
+            && num_cols >= 2
+            && first_line >= grid.topmost_line()
+            && first_line <= grid.bottommost_line()
+            && grid[first_line][Column(0)].c == '❯'
+            && grid[first_line][Column(1)].c == ' '
+            // Lost provenance follows the physical row even when RI/IL moves it.
+            && !grid[first_line].copy_origin_unknown
+            && (first_line == grid.topmost_line()
+                || !grid[Line(first_line.0 - 1)][Column(num_cols - 1)]
+                    .flags
+                    .contains(Flags::WRAPLINE));
 
         let mut result = String::new();
 
@@ -1998,7 +2043,12 @@ impl TerminalGrid {
             }
         }
 
-        Self::normalize_copied_selection(result.trim_end_matches('\n'), num_cols)
+        let text = result.trim_end_matches('\n');
+        if composer_anchor {
+            Self::normalize_copied_composer(text, num_cols)
+        } else {
+            Self::normalize_copied_selection(text, num_cols)
+        }
     }
 
     /// Extract selection text using grid-relative rows from an optional frame snapshot.
@@ -2517,9 +2567,7 @@ fn gutter_content(line: &str) -> Option<&str> {
 ///
 /// Blank rows, list markers and deeper indents always start a new line: they
 /// mark structure the author chose, which the width rule alone cannot see.
-fn reflow_quoted_run(contents: &[&str], num_cols: usize) -> Vec<String> {
-    // Gutter overhead: two indent cells, the bar, and the separator space.
-    const GUTTER_COLS: usize = 4;
+fn reflow_copied_run(contents: &[&str], num_cols: usize, margin_cols: usize) -> Vec<String> {
     // Room for an agent's own right margin plus the ragged edge a greedy
     // wrapper leaves when the overflowing word is long.
     const WRAP_EVIDENCE_SLACK: usize = 24;
@@ -2532,7 +2580,7 @@ fn reflow_quoted_run(contents: &[&str], num_cols: usize) -> Vec<String> {
         .map(|line| line.chars().count())
         .max()
         .unwrap_or(0);
-    let wrap_threshold = num_cols.saturating_sub(GUTTER_COLS + WRAP_EVIDENCE_SLACK);
+    let wrap_threshold = num_cols.saturating_sub(margin_cols + WRAP_EVIDENCE_SLACK);
     if num_cols < MIN_REFLOW_COLS || width < wrap_threshold {
         return contents.iter().map(|line| (*line).to_string()).collect();
     }
@@ -2604,6 +2652,69 @@ pub struct DamageGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches DECALN keeping lost provenance or inheriting the active erase background.
+    #[test]
+    fn copied_selection_decaln_resets_loss_and_replaces_all_cells_with_default_e() {
+        let mut grid = TerminalGrid::new(2, 20, 1);
+        grid.process(b"aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n");
+        grid.resize_with_mode(3, 20, ReflowMode::None);
+        assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
+        grid.process(b"\x1b[41m\x1b#8");
+        for line in 0..3 {
+            let row = &grid.term().grid()[Line(line)];
+            assert!(!row.copy_origin_unknown);
+            assert!(!row.reflow_wrap);
+            for column in 0..20 {
+                let cell = &row[Column(column)];
+                assert_eq!(cell.c, 'E');
+                assert_eq!(cell.bg, alacritty_terminal::term::cell::Cell::default().bg);
+                assert!(cell.flags.is_empty());
+            }
+        }
+        grid.process("\x1b[H❯ hello\x1b[K".as_bytes());
+        assert_eq!(grid.get_selection_text(0, 0, 0, 19), "hello");
+    }
+
+    // Catches whole-row ECH leaving origin loss behind, or partial ECH inventing a fresh origin.
+    #[test]
+    fn copied_selection_ech_full_row_clears_loss_but_partial_keeps_literal() {
+        for count in [19, 20, 999] {
+            let mut grid = TerminalGrid::new(2, 20, 1);
+            grid.process(b"aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n");
+            grid.resize_with_mode(3, 20, ReflowMode::None);
+            assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
+            grid.process(format!("\x1b[H\x1b[{count}X").as_bytes());
+            let remains_unknown = count < 20;
+            assert_eq!(
+                grid.term().grid()[Line(0)].copy_origin_unknown,
+                remains_unknown
+            );
+            grid.resize_with_mode(3, 24, ReflowMode::None);
+            grid.process("❯ hello".as_bytes());
+            assert_eq!(
+                grid.get_selection_text(0, 0, 0, 23),
+                if remains_unknown {
+                    "❯ hello"
+                } else {
+                    "hello"
+                }
+            );
+        }
+    }
+
+    // Catches reactivating predecessor loss after a full erase starts a new composer.
+    #[test]
+    fn copied_selection_full_screen_erase_clears_origin_across_resize() {
+        let mut grid = TerminalGrid::new(2, 20, 1);
+        let _ = grid.process("aaaaaaaaaaaaaaaaaaaab\r\n\r\n\r\n".as_bytes());
+        grid.resize_with_mode(3, 20, ReflowMode::None);
+        assert!(grid.term().grid()[Line(0)].copy_origin_unknown);
+        let _ = grid.process("\x1b[H\x1b[J❯ hello".as_bytes());
+        assert!(!grid.term().grid()[Line(0)].copy_origin_unknown);
+        grid.resize_with_mode(3, 24, ReflowMode::None);
+        assert_eq!(grid.get_selection_text(0, 0, 0, 23), "hello");
+    }
 
     // --- DEC 2026 synchronized update (see `flush_sync_timeout_if_needed`) ---
 
@@ -5047,6 +5158,59 @@ mod tests {
         assert_eq!(text, "abcdefghijklmno\nsecond");
     }
 
+    // Catches raw Claude prompt chrome/width wraps leaking into copied text.
+    #[test]
+    fn copied_selection_normalizes_captured_claude_prompt_without_losing_typed_break() {
+        let capture = include_str!("fixtures/claude-prompt-copy-1411.txt");
+        let mut grid = TerminalGrid::new(5, 148, 0);
+        let _ = grid.process(capture.replace('\n', "\r\n").as_bytes());
+        let expected = concat!(
+            "❯ la porta del piano terra non si apre piu, dipende da qualche script o errore del codice che la manda in blocco? nel senso che se digito il codice\n",
+            "  di apertura sulla tastiera non succede nulla!!"
+        );
+        assert_eq!(grid.get_selection_text(0, 0, 2, 147), expected);
+        // Reversed drag coordinates must use the same normalization seam.
+        assert_eq!(grid.get_selection_text(2, 147, 0, 0), expected);
+        // Selecting only the continuation has no prompt anchor: keep content.
+        assert_eq!(
+            grid.get_selection_text(1, 0, 2, 147),
+            "  codice\n    di apertura sulla tastiera non succede nulla!!"
+        );
+    }
+
+    // Catches prompt cleanup consuming code/table content or short typed lines.
+    #[test]
+    fn copied_selection_preserves_unanchored_code_tables_and_short_prompt_breaks() {
+        let mut grid = TerminalGrid::new(8, 80, 0);
+        let _ = grid.process(b"    let x = 1;\r\n    | key | value |\r\n");
+        assert_eq!(
+            grid.get_selection_text(0, 0, 1, 79),
+            "    let x = 1;\n    | key | value |"
+        );
+        let mut grid = TerminalGrid::new(8, 80, 0);
+        let _ = grid.process("❯ first typed line\r\n  second typed line\r\n    indented code\r\n  ▎ first quote\r\n  ▎ second quote".as_bytes());
+        assert_eq!(
+            grid.get_selection_text(0, 0, 4, 79),
+            "first typed line\nsecond typed line\n  indented code\nfirst quote\nsecond quote"
+        );
+    }
+
+    // Catches prompt-shaped body rows restarting composer cleanup after the origin.
+    #[test]
+    fn copied_selection_keeps_later_literal_prompt_rows_and_indentation() {
+        for (input, expected) in [
+            ("header\r\n❯ literal\r\n  code", "header\n❯ literal\n  code"),
+            (
+                "❯ typed\r\nplain separator\r\n❯ literal\r\n  code",
+                "typed\nplain separator\n❯ literal\n  code",
+            ),
+        ] {
+            let mut grid = TerminalGrid::new(6, 80, 0);
+            let _ = grid.process(input.as_bytes());
+            assert_eq!(grid.get_selection_text(0, 0, 5, 79), expected);
+        }
+    }
+
     #[test]
     fn copied_selection_strips_repeated_claude_gutters() {
         let input = concat!(
@@ -5293,6 +5457,35 @@ mod tests {
         let grid = TerminalGrid::new(5, 20, 0);
         let text = grid.get_row_text(999);
         assert_eq!(text, "");
+    }
+
+    // Catches: OSC rows recorded at the history cap drifting after eviction, or
+    // being rebased with the end-of-chunk base instead of the event-time origin.
+    #[test]
+    fn osc_marker_rows_stay_absolute_across_eviction() {
+        for prefix_rows in [0, 4, 8] {
+            let mut grid = TerminalGrid::new(2, 40, 3);
+            for _ in 0..prefix_rows {
+                grid.process(b"old\r\n");
+            }
+            grid.drain_events();
+            let anchor = grid.screen_origin() + 1;
+            grid.process(b"\x1b[2;1Hanchor\x1b]133;A\x07\x1b]7770;state=prompt\x07\r\nnext\r\n");
+            let events = grid.drain_events();
+            let marker_rows: Vec<usize> = events
+                .iter()
+                .filter_map(|event| match event {
+                    TermEvent::Osc133 { line, .. } | TermEvent::Tuic { line, .. } => Some(*line),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(marker_rows, vec![anchor, anchor]);
+            let base = grid.screen_origin() - grid.scrollback_count();
+            assert_eq!(
+                grid.read_rows_in_range(anchor - base, anchor - base)[0].trim_end(),
+                "anchor"
+            );
+        }
     }
 
     #[test]
