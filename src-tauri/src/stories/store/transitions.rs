@@ -58,15 +58,6 @@ impl StoryStore {
         dependency_id: &str,
         expected_revision: i64,
     ) -> Result<Story, String> {
-        let run_path = self.db_path.with_file_name("workflow_runs.sqlite3");
-        if command == StoryCommand::Approve
-            && run_path.exists()
-            && let StoryTransitionActor::ManagedSession { session_id } = &actor
-            && crate::workflows::RunStore::open_at(&run_path)?
-                .is_story_implementer(story_id, session_id)?
-        {
-            return Err("a story cannot be approved by its workflow implementer".into());
-        }
         let preflight_plan = self.get_story(story_id)?.plan_id;
         let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let mut conn = self.connect()?;
@@ -223,6 +214,15 @@ impl StoryStore {
         actor: StoryTransitionActor,
         workflow_start: bool,
     ) -> Result<Story, String> {
+        let run_path = self.db_path.with_file_name("workflow_runs.sqlite3");
+        if command == StoryCommand::Approve
+            && run_path.exists()
+            && let StoryTransitionActor::ManagedSession { session_id } = &actor
+            && crate::workflows::RunStore::open_at(&run_path)?
+                .is_story_implementer(story_id, session_id)?
+        {
+            return Err("a story cannot be approved by its workflow implementer".into());
+        }
         let preflight_plan = self.get_story(story_id)?.plan_id;
         let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
         let _reservation_guard = if !workflow_start && matches!(command, StoryCommand::StartManual)

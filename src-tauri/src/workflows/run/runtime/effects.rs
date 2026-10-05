@@ -50,7 +50,7 @@ pub(in crate::workflows::run) fn agent_node_id<'a>(
                 )
             })
             .map(|n| n.id.as_str())
-            .ok_or("Create Stories requires a coordinator node");
+            .ok_or_else(|| "Create Stories requires a coordinator node".to_owned());
     }
     Ok(node.id.as_str())
 }
