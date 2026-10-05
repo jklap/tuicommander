@@ -3,7 +3,11 @@ mod check;
 pub mod graph;
 mod model;
 mod reducer;
+mod runtime;
 mod store;
+pub(crate) use runtime::WorkflowRuntime;
+#[cfg(test)]
+mod runtime_tests;
 
 pub use api::*;
 pub(crate) use check::shutdown_checks;
@@ -1893,7 +1897,7 @@ mod tests {
         let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
         let db = config.path().join("runs-versioned.sqlite3");
         let store = RunStore::open_at(&db).unwrap();
-        assert_eq!(stored_schema_version(&db), 2, "fresh store records version");
+        assert_eq!(stored_schema_version(&db), 3, "fresh store records version");
         let run = store
             .start_plan(
                 project.path().to_str().unwrap(),
@@ -1909,7 +1913,7 @@ mod tests {
             .pragma_update(None, "user_version", 0)
             .unwrap();
         let upgraded = RunStore::open_at(&db).unwrap();
-        assert_eq!(stored_schema_version(&db), 2);
+        assert_eq!(stored_schema_version(&db), 3);
         assert_eq!(
             upgraded.snapshot(&run.id).unwrap().sequence,
             run.sequence,
@@ -1976,8 +1980,8 @@ mod tests {
     }
 
     #[test]
-    fn opening_workflow_store_recovers_healthy_runs_past_a_corrupt_snapshot() {
-        // catches: one unreadable run aborting first-open recovery of every other run.
+    fn daemon_owner_startup_recovers_healthy_runs_past_a_corrupt_snapshot() {
+        // catches: one unreadable run aborting owner-startup recovery of every other run.
         let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
         let db = config.path().join("workflow_runs.sqlite3");
         let store = RunStore::open_at(&db).unwrap();
@@ -2020,7 +2024,9 @@ mod tests {
         )
         .unwrap();
         drop(conn);
-        let reopened = RunStore::open().expect("bad run must not prevent opening the store");
+        let owner = super::runtime::RuntimeOwner::acquire(&db)
+            .expect("bad run must not prevent owner-startup recovery of healthy runs");
+        let reopened = &owner.store;
         let recovered = reopened.snapshot(&healthy.id).unwrap();
         assert_eq!(recovered.status, RunStatus::Paused);
         assert_eq!(reopened.replay(&healthy.id).unwrap(), recovered);
@@ -2036,7 +2042,7 @@ mod tests {
     }
 
     #[test]
-    fn first_workflow_open_reconciles_existing_active_run_once() {
+    fn daemon_owner_startup_reconciles_existing_active_run_once() {
         let (config, project, plan_id, _story_id, definition_id, _guard) = fixture();
         let db = config.path().join("workflow_runs.sqlite3");
         let stored = RunStore::open_at(&db).unwrap();
@@ -2052,7 +2058,13 @@ mod tests {
         assert_eq!(stored.snapshot(&run.id).unwrap().status, RunStatus::Running);
 
         let opened = RunStore::open().unwrap();
-        let recovered = opened.snapshot(&run.id).unwrap();
+        assert_eq!(
+            opened.snapshot(&run.id).unwrap().status,
+            RunStatus::Running,
+            "a read must not recover a live run"
+        );
+        let owner = super::runtime::RuntimeOwner::acquire(&db).unwrap();
+        let recovered = owner.store.snapshot(&run.id).unwrap();
         assert_eq!(recovered.status, RunStatus::Paused);
         let reopened = RunStore::open().unwrap();
         assert_eq!(

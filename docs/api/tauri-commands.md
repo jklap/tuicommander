@@ -824,3 +824,5 @@ OSC 133 event `line` and hook-generated `UserInput.line` use all-time rows. `ter
 
 - `telegram_settings`: safe settings snapshot (`enabled`, `token_set`, `bot_alias`, `registered_agent_name` (nullable), decimal-string `chats`, `connected`, `last_error`, `last_message_time`). Never returns a token or message text.
 - `telegram_setup { change }`: `change.action` is `token` (password `token`, checks `getMe`), `pair` (returns `code`, `expires_in_seconds`), `add_chat`/`remove_chat` (`chat_id`), or `configure` (`enabled`). Errors are typed safe Telegram categories.
+
+The daemon executor now owns recovery and duration timers under an OS run-database lock. Reads never recover live work, and a non-owner daemon refuses run mutations. Graph resume uses `resume_graph {execution_id,activation_id,resolution}` with an explicit pending activation; status-only resume cannot bypass graph position. Graph start controls, Agent effects and delivery policy remain unavailable until their later slices.

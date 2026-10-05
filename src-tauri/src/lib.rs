@@ -2522,6 +2522,7 @@ fn build_connect_url(scheme: &str, host: &str, port: u16, token: &str) -> String
 
 /// Spawn background tasks shared by both desktop and headless modes.
 fn spawn_background_tasks(state: &Arc<AppState>) {
+    workflows::WorkflowRuntime::spawn(state);
     AppState::spawn_session_state_accumulator(state.clone());
     idle_close::spawn(state.clone());
     AppState::spawn_acp_notice_pump(state.clone());
@@ -2596,6 +2597,7 @@ pub fn set_password_interactive() -> anyhow::Result<()> {
 /// (#793-23a5).
 #[cfg(not(feature = "desktop"))]
 fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
+    workflows::WorkflowRuntime::spawn(state);
     AppState::spawn_session_state_accumulator(state.clone());
     idle_close::spawn(state.clone());
     AppState::spawn_acp_notice_pump(state.clone());
