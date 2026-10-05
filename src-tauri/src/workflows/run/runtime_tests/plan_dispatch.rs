@@ -2,7 +2,7 @@ use super::super::super::runtime::plan;
 use super::*;
 use crate::stories::{NewStory, StoryOrigin, StoryStatus};
 
-fn plan_definition(
+pub(in super::super) fn plan_definition(
     project: &str,
     template: &str,
     story: &crate::workflows::PublishedWorkflow,
@@ -212,7 +212,7 @@ fn resolve_plan_reaches_verified_fixed_point_after_explicit_dependency_integrati
     let first_tree = init_worktree(project.path(), config.path());
     let definitions = WorkflowStore::open().unwrap();
     let seed = definitions
-        .seed_templates(project_path)
+        .seed_templates(&canonical_owner(project_path))
         .unwrap()
         .into_iter()
         .find(|d| d.kind == WorkflowKind::Story)
@@ -370,7 +370,7 @@ fn two_plan_roots_share_dispatch_reservations_and_wontfix_never_releases_depende
     let stories = StoryStore::open().unwrap();
     let second_plan = stories
         .create_plan(crate::stories::NewPlan {
-            project: project_path.into(),
+            project: canonical_owner(project_path),
             title: "Second plan".into(),
             source: "second-plan.md".into(),
         })
@@ -503,7 +503,7 @@ fn failed_final_plan_gate_replans_through_a_fresh_bound_coordinator() {
     let stories = StoryStore::open().unwrap();
     let empty_plan = stories
         .create_plan(crate::stories::NewPlan {
-            project: project_path.into(),
+            project: canonical_owner(project_path),
             title: "Empty plan".into(),
             source: "empty-plan.md".into(),
         })
@@ -571,7 +571,7 @@ fn disjoint_story_children_share_one_bounded_dispatch_wave() {
     let stories = StoryStore::open().unwrap();
     let plan = stories
         .create_plan(crate::stories::NewPlan {
-            project: project_path.into(),
+            project: canonical_owner(project_path),
             title: "Wave".into(),
             source: "wave.md".into(),
         })

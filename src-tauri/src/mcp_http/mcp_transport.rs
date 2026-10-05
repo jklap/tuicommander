@@ -1321,6 +1321,13 @@ fn native_tool_definitions() -> serde_json::Value {
             }, "required": ["input"] }
         },
         {
+            "name": "workflow_run",
+            "description": "Start and inspect published workflow graphs in the calling managed session's project. Pass a generated RunAction as input: start_graph (payload-bound request_id, pinned definition revision, story expected_revision), get, list_plan_runs, events (after_sequence cursor), command, record_integration, recertify_canonical, execute_check. start_plan is the legacy record-only ledger, not executable delivery. Graph starts require the owning daemon; unsupported plan dispatch is refused visibly. Commands include pause, cancel, answer_input, resume_graph with explicit execution_id, activation_id and resolution. Legacy runs are inspect/cancel only in the UI. History is the same ordered ledger returned over HTTP/IPC, including decisions and evidence.",
+            "inputSchema": { "type": "object", "properties": {
+                "input": crate::workflows::run_action_schema()
+            }, "required": ["input"], "additionalProperties": false }
+        },
+        {
             "name": "workflow_story_create",
             "description": "Create a native story once from a plan run. Only the active bound coordinator may call this. A stable proposalKey prevents duplicate stories after retries; a reused key with different story data is rejected.",
             "inputSchema": { "type": "object", "properties": {
@@ -2219,6 +2226,12 @@ async fn dispatch_mcp_tool_call_with_context(
             let args = args.clone();
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_story(&state, &args, sid.as_deref())).await
+        }
+        "workflow_run" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || handle_workflow_run(&state, &args, sid.as_deref())).await
         }
         "workflow_story_create" => {
             let state = state.clone();
@@ -6599,6 +6612,28 @@ fn handle_story(
         &project,
         action,
         Some(&pty),
+    ))
+}
+
+fn handle_workflow_run(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let Some(pty) = resolve_mcp_origin_pty(state, mcp_session_id) else {
+        return serde_json::json!({"error": "workflow_run requires a bound live managed session"});
+    };
+    let Some(project) = crate::progress::project_for_session(state, &pty) else {
+        return serde_json::json!({"error": "calling session has no registered project"});
+    };
+    let action = match serde_json::from_value(args["input"].clone()) {
+        Ok(value) => value,
+        Err(error) => {
+            return serde_json::json!({"error": format!("invalid workflow run action: {error}")});
+        }
+    };
+    to_json_or_error(crate::workflows::run_action_with_events(
+        state, &project, action,
     ))
 }
 
@@ -18534,6 +18569,7 @@ mod tests {
                 "remote",
                 "repo",
                 "story",
+                "workflow_run",
                 "workflow_story_create",
                 "workflow_report",
                 "workflow_launch",
@@ -18651,6 +18687,125 @@ mod tests {
             ["Bound plan"],
             "the caller's tab project scopes the list"
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_run_history_matches_owner_event_cursor() {
+        // Catches: MCP omitting read actions, losing the event cursor, or using a foreign project.
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().into());
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = project.path().to_string_lossy().to_string();
+        let state = test_state();
+        state
+            .mcp
+            .to_session
+            .insert("run-mcp".into(), TEST_UUID_A.into());
+        insert_managed_test_session(&state, "pty-run", &path);
+        state.bind_live_pty(TEST_UUID_A, "pty-run");
+        crate::repo_watcher::start_watching(&path, &state).unwrap();
+        let plan = crate::stories::StoryStore::open()
+            .unwrap()
+            .create_plan(crate::stories::NewPlan {
+                project: path.clone(),
+                title: "Run history".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let definition = crate::workflows::WorkflowStore::open()
+            .unwrap()
+            .seed_templates(&path)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind == crate::workflows::WorkflowKind::Plan)
+            .unwrap();
+        let store = crate::workflows::RunStore::open().unwrap();
+        let run = store
+            .start_plan(&path, &plan.id, &definition.id, 1, Default::default())
+            .unwrap();
+        store
+            .command(&run.id, "pause", crate::workflows::RunCommand::Pause)
+            .unwrap();
+        for input in [
+            serde_json::json!({"action":"get","run_id":run.id}),
+            serde_json::json!({"action":"list_plan_runs","plan_id":plan.id,"limit":20}),
+            serde_json::json!({"action":"events","run_id":run.id,"after_sequence":1,"limit":1}),
+        ] {
+            let expected = to_json_or_error(crate::workflows::run_action(
+                &path,
+                serde_json::from_value(input.clone()).unwrap(),
+            ));
+            let actual = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                "workflow_run",
+                &serde_json::json!({"input":input}),
+                Some("run-mcp"),
+            )
+            .await;
+            assert_eq!(actual, expected);
+        }
+        let result = handle_workflow_run(
+            &state,
+            &serde_json::json!({"input":{"action":"get","run_id":run.id}}),
+            None,
+        );
+        assert_eq!(
+            result["error"],
+            "workflow_run requires a bound live managed session"
+        );
+        let foreign = crate::stories::StoryStore::open()
+            .unwrap()
+            .create_plan(crate::stories::NewPlan {
+                project: "/another/project".into(),
+                title: "Foreign".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let result = handle_workflow_run(
+            &state,
+            &serde_json::json!({"input":{"action":"list_plan_runs","plan_id":foreign.id,"limit":20}}),
+            Some("run-mcp"),
+        );
+        assert!(
+            result
+                .to_string()
+                .contains("plan does not belong to project")
+        );
+    }
+
+    #[test]
+    fn workflow_run_schema_exposes_typed_starts_and_recovery_without_internal_receipts() {
+        // Catches: schema-less starts/recovery, unresolved embedded refs, or internal commands advertised.
+        let definition = native_tool_named("workflow_run");
+        let schema = &definition["inputSchema"]["properties"]["input"];
+        let encoded = schema.to_string();
+        for required in [
+            "start_graph",
+            "request_id",
+            "expected_revision",
+            "after_sequence",
+            "resume_graph",
+            "activation_id",
+            "resolution",
+        ] {
+            assert!(encoded.contains(required), "missing {required}: {schema}");
+        }
+        assert!(
+            !encoded.contains("$ref"),
+            "embedded schema must inline subtypes"
+        );
+        for internal in [
+            "report_bound_attempt",
+            "bind_agent",
+            "start_graph_agent",
+            "expire_deadline",
+        ] {
+            assert!(
+                !encoded.contains(internal),
+                "internal command {internal} is advertised"
+            );
+        }
     }
 
     #[test]

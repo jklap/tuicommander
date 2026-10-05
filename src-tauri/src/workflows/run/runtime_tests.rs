@@ -9,6 +9,7 @@ use crate::workflows::{
 use std::sync::Arc;
 
 mod critic_c;
+mod parity;
 
 fn fixture() -> (
     tempfile::TempDir,
@@ -24,10 +25,18 @@ fn fixture() -> (
     result
 }
 
-fn definition(project: &str, pause: bool, agent: bool) -> crate::workflows::PublishedWorkflow {
+fn canonical_owner(project: &str) -> String {
     // Match definition_action: Windows canonicalization adds the verbatim prefix.
-    let project = crate::progress::resolve_owning_project(Some(project)).unwrap();
-    let project = project.to_str().unwrap();
+    crate::progress::resolve_owning_project(Some(project))
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn definition(project: &str, pause: bool, agent: bool) -> crate::workflows::PublishedWorkflow {
+    let project = canonical_owner(project);
+    let project = project.as_str();
     let mut nodes = vec![
         Node {
             id: "start".into(),
@@ -159,6 +168,8 @@ fn runtime_definition_uses_the_api_canonical_owner() {
     let published = definition(raw.to_str().unwrap(), false, false);
     let plan = StoryStore::open().unwrap().get_plan(&plan).unwrap();
     assert_eq!(published.project, plan.project);
+    let semantics_definition = semantics::publish(raw.to_str().unwrap(), published.graph.clone());
+    assert_eq!(semantics_definition.project, plan.project);
     let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
     let run = store
         .start_graph_run(&request(

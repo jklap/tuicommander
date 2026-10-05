@@ -72,7 +72,7 @@ async fn parallel_plan_runs_share_project_reservations() {
     let stories = StoryStore::open().unwrap();
     let plan = stories
         .create_plan(NewPlan {
-            project: project.into(),
+            project: canonical_owner(project),
             title: "Independent".into(),
             source: "second.md".into(),
         })
