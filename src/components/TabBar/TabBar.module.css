@@ -229,6 +229,12 @@
   }
 }
 
+@media (hover: none) {
+  .tabClose {
+    opacity: 1;
+  }
+}
+
 @media (hover: hover) {
   .tabClose:hover {
     color: var(--fg-primary);
