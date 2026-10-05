@@ -1366,3 +1366,169 @@ fn advertised(available: bool) -> Option<AcpUnavailableReason> {
 fn included(available: bool) -> Option<AcpUnavailableReason> {
     (!available).then_some(AcpUnavailableReason::ExcludedByContract)
 }
+
+/// Order durable conversations by ancestry for the host picker. Ego metadata is retained.
+pub(super) fn session_tree(mut sessions: Vec<v1::SessionInfo>) -> Vec<v1::SessionInfo> {
+    fn lineage(session: &v1::SessionInfo) -> Option<&Value> {
+        session.meta.as_ref()?.get("ego")?.get("lineage")
+    }
+    fn parent(session: &v1::SessionInfo) -> Option<&str> {
+        lineage(session)?.get("sourceSessionId")?.as_str()
+    }
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let mut placeholders = Vec::new();
+    for session in &sessions {
+        let Some(info) = lineage(session) else {
+            continue;
+        };
+        let Some(source) = parent(session) else {
+            continue;
+        };
+        if info.get("sourceDeleted").and_then(Value::as_bool) != Some(true)
+            || sessions
+                .iter()
+                .chain(placeholders.iter())
+                .any(|row: &v1::SessionInfo| row.session_id.to_string() == source)
+        {
+            continue;
+        }
+        let mut placeholder = v1::SessionInfo::new(source.to_owned(), session.cwd.clone())
+            .title("Deleted conversation");
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "tuicommander".to_owned(),
+            serde_json::json!({"deleted": true}),
+        );
+        // A missing immediate ancestor still belongs under the reported root.
+        if let Some(root) = info
+            .get("rootSessionId")
+            .and_then(Value::as_str)
+            .filter(|root| *root != source)
+        {
+            meta.insert(
+                "ego".to_owned(),
+                serde_json::json!({"lineage": {"sourceSessionId": root}}),
+            );
+        }
+        placeholder.meta = Some(meta);
+        placeholders.push(placeholder);
+    }
+    sessions.extend(placeholders);
+    fn visit(
+        index: usize,
+        depth: usize,
+        rows: &[v1::SessionInfo],
+        seen: &mut std::collections::HashSet<usize>,
+        ordered: &mut Vec<v1::SessionInfo>,
+    ) {
+        if !seen.insert(index) {
+            return;
+        }
+        let mut row = rows[index].clone();
+        let display = row
+            .meta
+            .get_or_insert_default()
+            .entry("tuicommander".to_owned())
+            .or_insert_with(|| serde_json::json!({}));
+        display["lineageDepth"] = serde_json::json!(depth);
+        let id = row.session_id.to_string();
+        ordered.push(row);
+        for (child, _) in rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| parent(row) == Some(id.as_str()))
+        {
+            visit(child, depth + 1, rows, seen, ordered);
+        }
+    }
+    let mut ordered = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (index, row) in sessions.iter().enumerate() {
+        if parent(row).is_none_or(|source| {
+            !sessions
+                .iter()
+                .any(|candidate| candidate.session_id.to_string() == source)
+        }) {
+            visit(index, 0, &sessions, &mut seen, &mut ordered);
+        }
+    }
+    // Preserve every row even if a non-ego agent publishes incomplete ancestry.
+    for index in 0..sessions.len() {
+        visit(index, 0, &sessions, &mut seen, &mut ordered);
+    }
+    ordered
+}
+
+#[cfg(test)]
+mod session_tree_tests {
+    use super::*;
+
+    // Domain input for TUIC's projection; ego's wire contract is exercised in ego 246-a81d.
+    fn row(id: &str, source: Option<&str>, deleted: bool) -> v1::SessionInfo {
+        let mut row = v1::SessionInfo::new(id.to_owned(), "/workspace");
+        if let Some(source) = source {
+            row.meta = Some(serde_json::Map::from_iter([(
+                "ego".to_owned(),
+                serde_json::json!({
+                    "lineage": {"kind": "fork", "sourceSessionId": source, "rootSessionId": "root", "sourceDeleted": deleted}
+                }),
+            )]));
+        }
+        row
+    }
+
+    // Catches: recency ordering flattening nested fork descendants.
+    #[test]
+    fn nested_forks_render_two_levels_below_the_root() {
+        let rows = session_tree(vec![
+            row("grandchild", Some("child"), false),
+            row("root", None, false),
+            row("child", Some("root"), false),
+        ]);
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.session_id.to_string())
+                .collect::<Vec<_>>(),
+            ["root", "child", "grandchild"]
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("tuicommander"))
+                    .and_then(|meta| meta.get("lineageDepth"))
+                    .and_then(Value::as_u64))
+                .collect::<Vec<_>>(),
+            [Some(0), Some(1), Some(2)]
+        );
+        assert_eq!(
+            rows[2].meta.as_ref().unwrap()["ego"]["lineage"]["sourceSessionId"],
+            "child"
+        );
+    }
+
+    // Catches: an orphan disappearing when its immediate parent is deleted.
+    #[test]
+    fn deleted_parent_remains_a_disabled_ancestor_of_its_child() {
+        let rows = session_tree(vec![
+            row("child", Some("deleted"), true),
+            row("root", None, false),
+        ]);
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.session_id.to_string())
+                .collect::<Vec<_>>(),
+            ["root", "deleted", "child"]
+        );
+        assert_eq!(rows[1].title.as_deref(), Some("Deleted conversation"));
+        assert_eq!(
+            rows[1].meta.as_ref().unwrap()["tuicommander"]["deleted"],
+            true
+        );
+        assert_eq!(
+            rows[2].meta.as_ref().unwrap()["tuicommander"]["lineageDepth"],
+            2
+        );
+    }
+}
