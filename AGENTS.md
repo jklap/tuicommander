@@ -466,6 +466,7 @@ whatever sets it owns nothing until something retracts it. These paths clear it:
 | `resolve_choice_prompt_input` | an option keypress | no `choice_prompt` was ever set |
 | `question-cleared` | silence timer sees the question gone from the screen | — (the backstop; low-confidence only) |
 | `protocol-question-cleared` | Claude renders `User declined to answer questions` after Esc and returns to a ready composer | a dialog is still open or a different question replaced it |
+| `progress-superseded` | the same PTY reports `progress done` or journals a `delegated` hand-off after a `progress blocked` | a dialog or any other confident question replaced the blocked one — only `source=progress-blocked` evidence clears |
 
 `question-cleared` is the backstop that catches the rest. It never touches a
 confident question: grok repaints while it waits, so "not on screen this tick"

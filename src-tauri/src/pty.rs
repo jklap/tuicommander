@@ -1384,6 +1384,12 @@ impl TurnEvidence {
         self.awaiting.map(|a| a.rank)
     }
 
+    /// Who recorded the current awaiting evidence. A `progress done` clears
+    /// only a badge that a `progress blocked` raised (#1537-6c4b).
+    pub(crate) fn awaiting_source(&self) -> Option<&'static str> {
+        self.awaiting.map(|a| a.source)
+    }
+
     /// True while the recorded idle evidence is strong/current enough to act
     /// on downstream (standby, peer injection): an explicit protocol marker
     /// or a screen adapter's confirmed ready/interrupted state, or a plain
@@ -1887,6 +1893,10 @@ impl SilenceState {
 
     pub(crate) fn awaiting_rank(&self) -> Option<EvidenceRank> {
         self.evidence.awaiting_rank()
+    }
+
+    pub(crate) fn awaiting_source(&self) -> Option<&'static str> {
+        self.evidence.awaiting_source()
     }
 
     /// BUSY evidence came from an observed agent hook (OSC 7770 `state=busy`

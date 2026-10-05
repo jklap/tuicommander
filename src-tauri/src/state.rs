@@ -4688,7 +4688,16 @@ impl AppState {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
                     let (rank, source) = if new_confident {
-                        (crate::pty::EvidenceRank::Protocol, "question-confident")
+                        // Kept apart so `progress-superseded` can tell a
+                        // blocked report from a dialog it must never clear.
+                        let source = if parsed.get("source").and_then(|v| v.as_str())
+                            == Some("progress-blocked")
+                        {
+                            "progress-blocked"
+                        } else {
+                            "question-confident"
+                        };
+                        (crate::pty::EvidenceRank::Protocol, source)
                     } else {
                         (crate::pty::EvidenceRank::Screen, "question-heuristic")
                     };
@@ -4724,6 +4733,15 @@ impl AppState {
                         .is_some_and(|sl| {
                             sl.lock().awaiting_rank() == Some(crate::pty::EvidenceRank::Protocol)
                         });
+                // A later progress entry from the same PTY retracts only the
+                // badge a `progress blocked` raised; a dialog, a choice prompt
+                // or any other confident question records another source.
+                let awaiting_from_progress = event_type == "progress-superseded"
+                    && state
+                        .session_maps
+                        .silence_states
+                        .get(session_id)
+                        .is_some_and(|sl| sl.lock().awaiting_source() == Some("progress-blocked"));
                 // Applied to the session's SilenceState AFTER `s` (below) is
                 // dropped, for the same lock-order reason.
                 let mut awaiting_evidence_op: Option<AwaitingEvidenceOp> = None;
@@ -4809,6 +4827,12 @@ impl AppState {
                             s.choice_prompt = None;
                             awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
                         }
+                    }
+                    "progress-superseded" if awaiting_from_progress => {
+                        s.awaiting_input = false;
+                        s.question_text = None;
+                        s.question_confident = false;
+                        awaiting_evidence_op = Some(AwaitingEvidenceOp::Clear);
                     }
                     "user-input" => {
                         // User responded — agent will start working
