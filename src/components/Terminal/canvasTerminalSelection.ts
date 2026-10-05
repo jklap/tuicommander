@@ -68,6 +68,8 @@ export interface CanvasSelectionController {
 	start: SelectionPoint | null;
 	end: SelectionPoint | null;
 	cachedText: string;
+	/** Viewport-local text at copy time; the clipboard text differs (soft wraps are unwrapped), so only this one is comparable with later local reads. */
+	localSnapshot: string;
 	invalidateSnapshot: () => void;
 	clear: () => void;
 	hasRange: () => boolean;
@@ -93,7 +95,7 @@ export function shouldValidateSelectionSnapshot(
 ): boolean {
 	return Boolean(
 		selection.start &&
-			selection.cachedText &&
+			selection.localSnapshot &&
 			!selection.selecting &&
 			fullReplace &&
 			!selection.spansOffscreen(toViewportRow),
@@ -105,6 +107,7 @@ export function createCanvasSelectionController(): CanvasSelectionController {
 	let start: SelectionPoint | null = null;
 	let end: SelectionPoint | null = null;
 	let cachedText = "";
+	let localSnapshot = "";
 
 	return {
 		get selecting() {
@@ -131,14 +134,22 @@ export function createCanvasSelectionController(): CanvasSelectionController {
 		set cachedText(value) {
 			cachedText = value;
 		},
+		get localSnapshot() {
+			return localSnapshot;
+		},
+		set localSnapshot(value) {
+			localSnapshot = value;
+		},
 		invalidateSnapshot() {
 			cachedText = "";
+			localSnapshot = "";
 		},
 		clear() {
 			selecting = false;
 			start = null;
 			end = null;
 			cachedText = "";
+			localSnapshot = "";
 		},
 		hasRange() {
 			return Boolean(start && end && (start.row !== end.row || start.col !== end.col));
