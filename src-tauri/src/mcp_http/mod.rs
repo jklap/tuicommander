@@ -5716,6 +5716,8 @@ mod tests {
         );
     }
 
+    // Catches: tools/list re-advertises retired native actions or input aliases,
+    // making clients send requests that the native dispatcher rejects.
     #[tokio::test]
     async fn test_mcp_tools_list() {
         let state = test_state();
@@ -5747,6 +5749,39 @@ mod tests {
             "a second tool family is registered again: {names:?}"
         );
         assert_eq!(tools.len(), names.len());
+        for (tool, retired_actions, retired_parameters) in [
+            (
+                "agent",
+                &["detect", "stats", "metrics"][..],
+                &["project"][..],
+            ),
+            ("session", &["process_stats"][..], &[][..]),
+            (
+                "repo",
+                &["prs", "issues", "close_issue", "reopen_issue", "ci_logs"][..],
+                &["workspace_id"][..],
+            ),
+        ] {
+            let definition = tools.iter().find(|entry| entry["name"] == tool).unwrap();
+            let properties = &definition["inputSchema"]["properties"];
+            let actions = properties["action"]["description"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("One of: ")
+                .unwrap();
+            for action in retired_actions {
+                assert!(
+                    !actions.split(", ").any(|listed| listed == *action),
+                    "tools/list advertises retired {tool} action {action}"
+                );
+            }
+            for parameter in retired_parameters {
+                assert!(
+                    properties.get(*parameter).is_none(),
+                    "tools/list advertises retired {tool} parameter {parameter}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
