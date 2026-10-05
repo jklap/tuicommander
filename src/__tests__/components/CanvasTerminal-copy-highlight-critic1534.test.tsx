@@ -75,7 +75,9 @@ describe("CanvasTerminal copy-on-select highlight", () => {
 	beforeEach(() => {
 		invoke.mockReset();
 		// Backend text: soft wrap unwrapped, so it differs from the local rows joined by "\n".
-		invoke.mockImplementation(async (cmd: string) => (cmd === "terminal_get_selection_text" ? "line0line1" : undefined));
+		invoke.mockImplementation(async (cmd: string) =>
+			cmd === "terminal_get_selection_text" ? "line0line1" : undefined,
+		);
 		fills.styles = [];
 		frameSink.current = null;
 		Object.defineProperty(document, "fonts", {
