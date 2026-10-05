@@ -2930,7 +2930,10 @@ mod tests {
             .is_err()
         );
         let RunReply::Events(events) = run_action(
-            &format!("{project_path}/."),
+            std::path::Path::new(&project_path)
+                .join(".")
+                .to_str()
+                .unwrap(),
             RunAction::Events {
                 run_id: run.id.clone(),
                 after_sequence: 0,
