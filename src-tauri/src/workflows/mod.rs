@@ -66,7 +66,7 @@ mod tests {
         assert!(validate_graph(&graph, WorkflowKind::Story).is_err());
 
         let mut graph = story_graph();
-        graph.nodes[1].kind = NodeKind::Join;
+        graph.nodes[1].kind = NodeKind::Join {};
         assert!(validate_graph(&graph, WorkflowKind::Plan).is_err());
 
         let mut graph = story_graph();

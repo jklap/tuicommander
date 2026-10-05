@@ -691,7 +691,7 @@ fn story_template_graph() -> WorkflowGraph {
             ),
             node("judge", NodeKind::Judge),
             node("repair", NodeKind::Loop { max_iterations: 3 }),
-            node("pause", NodeKind::Pause),
+            node("pause", NodeKind::Pause { resume_to: None }),
             node("end", NodeKind::End),
         ],
         edges: vec![
@@ -728,7 +728,7 @@ fn resolve_plan_graph(story_template_id: &str, story_revision: i64) -> WorkflowG
             ),
             node("judge", NodeKind::Judge),
             node("replan", NodeKind::Loop { max_iterations: 8 }),
-            node("pause", NodeKind::Pause),
+            node("pause", NodeKind::Pause { resume_to: None }),
             node("end", NodeKind::End),
         ],
         edges: vec![
