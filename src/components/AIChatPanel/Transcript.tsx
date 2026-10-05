@@ -113,7 +113,12 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 					{(call) => (
 						<details class={s.toolActivityCall}>
 							<summary class={s.toolActivityCallSummary}>
-								<span class={cx(s.toolCallStatusDot, STATUS_CLASS[call.status ?? "pending"])} />
+								{/* Keyed on status so a settled call gets a fresh element: WebKit does not
+								    restyle a closed <details>, so swapping the class there left the
+								    pending pulse running on a completed dot (#1153-a8b8). */}
+								<Show when={STATUS_CLASS[call.status ?? "pending"]} keyed>
+									{(statusClass) => <span class={cx(s.toolCallStatusDot, statusClass)} />}
+								</Show>
 								<span class={s.toolCallName}>{call.title}</span>
 								<span class={s.toolCallDuration}>
 									{call.kind ?? "other"} ·{" "}

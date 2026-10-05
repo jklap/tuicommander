@@ -2277,6 +2277,7 @@ describe("AIChatPanel: tool activity", () => {
 			const dots = () => [...activity.querySelectorAll("summary > span:first-child")];
 			expect(dots()).toHaveLength(2);
 			for (const dot of dots()) expect(dot.className).toContain("toolCallPending");
+			const pendingRowDot = dots()[1];
 
 			feed({
 				kind: "sessionUpdate",
@@ -2284,6 +2285,9 @@ describe("AIChatPanel: tool activity", () => {
 			});
 			await settle();
 
+			// WebKit keeps a running CSS animation when only the class of an element
+			// inside a closed <details> changes, so the row dot must be a new element.
+			expect(dots()[1]).not.toBe(pendingRowDot);
 			for (const dot of dots()) {
 				expect(dot.className).not.toContain("toolCallPending");
 				expect(dot.className).toContain(status === "failed" ? "toolCallFailure" : "toolCallSuccess");
