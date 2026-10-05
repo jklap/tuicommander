@@ -139,6 +139,12 @@ read its full command and output.
 - **Failed or empty turn.** An ACP prompt error appears in the conversation with
   the agent's diagnostic. A turn that finishes without an answer says so; the
   composer becomes available for another prompt.
+- **Provider retries.** When the provider or the network fails before the
+  agent shows anything, ego retries up to six times and waits longer each time.
+  The conversation shows one orange line with the cause, the wait and the
+  attempt, for example `… — connection problem, retrying in 2s (attempt 2/6)`.
+  The line goes away when an attempt succeeds. After the sixth failure, the
+  turn error replaces the line and the next prompt can be sent.
 - **Tool activity** appears as one collapsed line per turn, with a count,
   observed duration, status and the first two call titles. Expand it to see
   each call's title, kind and status; expand a call to see its output. The

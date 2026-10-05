@@ -362,6 +362,10 @@ export function createAcpChat(
 			const session = sessionId();
 			return session ? acpTranscript.usage(session) : null;
 		},
+		retry: () => {
+			const session = sessionId();
+			return session ? acpTranscript.retry(session) : null;
+		},
 		busy,
 		queuedPrompts: () => attachment()?.queuedPrompts ?? [],
 		held,

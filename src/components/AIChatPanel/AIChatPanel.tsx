@@ -253,6 +253,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			<Transcript
 				entries={chat.entries}
 				busy={chat.busy}
+				retry={chat.retry}
 				emptyMessage={emptyMessage()}
 				onSuggestion={(text) => void chat.send(text)}
 				onOpenFile={(href) => void openFile(href)}
