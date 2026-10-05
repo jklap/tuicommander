@@ -2814,3 +2814,9 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 The ACP session fork route accepts optional `atMessageId` beside `authority`. It is forwarded as `_meta.ego.atMessageId` only when ego advertises `sessionCapabilities.fork._meta.ego.atMessage`; unsupported agents are refused.
 
 The host ACP session list gathers all ego pages before ordering ancestry. Each row retains `_meta.ego.lineage` and adds `_meta.tuicommander.lineageDepth`; placeholder rows for deleted parents add `_meta.tuicommander.deleted=true`. The response has no continuation cursor after collecting the pages.
+
+### Memory diagnostics
+
+`GET /diagnostics/memory` performs payload accounting and the native large-malloc-block census on demand. The watchdog logs only cheap allocator counters and structure counts at footprint thresholds; it does not walk payloads or malloc zones.
+
+`accounted_bytes` sums the measured `maps` rows. `malloc_large_blocks` counts all large allocator blocks, including map-owned blocks. Its `may_overlap_accounted_bytes: true` field warns that its bytes must never be added to `accounted_bytes` as attributed memory. Model `holders` remain separate from heap accounting.
