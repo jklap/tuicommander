@@ -462,8 +462,21 @@ impl AcpClientManager {
         session_id: v1::SessionId,
         authority: AcpSessionAuthority,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        self.attach_at_message(connection_id, kind, session_id, authority, None)
+            .await
+    }
+
+    pub async fn attach_at_message(
+        &self,
+        connection_id: AcpConnectionId,
+        kind: AcpAttachKind,
+        session_id: v1::SessionId,
+        authority: AcpSessionAuthority,
+        at_message_id: Option<String>,
+    ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
         let authority = self.granted(authority);
         self.dispatch(connection_id, |reply| Command::Attach {
+            at_message_id,
             kind,
             session_id,
             authority,
@@ -509,6 +522,23 @@ impl AcpClientManager {
             reply,
         })
         .await
+    }
+
+    /// The picker needs the complete ancestry before it can order paginated rows.
+    pub async fn list_sessions_for_display(
+        &self,
+        connection_id: AcpConnectionId,
+        mut request: v1::ListSessionsRequest,
+    ) -> Result<v1::ListSessionsResponse, AcpClientError> {
+        let mut response = self.list_sessions(connection_id, request.clone()).await?;
+        while let Some(cursor) = response.next_cursor.take() {
+            request.cursor = Some(cursor);
+            let page = self.list_sessions(connection_id, request.clone()).await?;
+            response.sessions.extend(page.sessions);
+            response.next_cursor = page.next_cursor;
+        }
+        response.sessions = super::session_tree(response.sessions);
+        Ok(response)
     }
 
     /// Start a turn and get back its id, not its outcome.

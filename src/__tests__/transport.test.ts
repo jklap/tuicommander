@@ -2122,6 +2122,13 @@ describe("transport", () => {
 				{ authority },
 			],
 			[
+				"acp_session_fork",
+				{ connectionId: CONNECTION, sessionId: SESSION, authority, atMessageId: "reply-id" },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/fork`,
+				{ authority, atMessageId: "reply-id" },
+			],
+			[
 				"acp_session_delete",
 				{ connectionId: CONNECTION, sessionId: SESSION },
 				"DELETE",

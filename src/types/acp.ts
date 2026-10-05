@@ -108,6 +108,7 @@ export interface AcpCapabilitySnapshot {
 	list: boolean;
 	resume: boolean;
 	fork: boolean;
+	forkAtMessage?: boolean;
 	delete: boolean;
 	close: boolean;
 	additionalDirectories: boolean;

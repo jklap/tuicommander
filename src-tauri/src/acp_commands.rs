@@ -316,7 +316,10 @@ pub(crate) async fn acp_session_list(
     let mut request = v1::ListSessionsRequest::new();
     request.cwd = cwd;
     request.cursor = cursor;
-    state.acp.list_sessions(connection_id, request).await
+    state
+        .acp
+        .list_sessions_for_display(connection_id, request)
+        .await
 }
 
 #[cfg(feature = "desktop")]
@@ -354,10 +357,17 @@ pub(crate) async fn acp_session_fork(
     connection_id: AcpConnectionId,
     session_id: v1::SessionId,
     authority: AcpSessionAuthority,
+    at_message_id: Option<String>,
 ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
     state
         .acp
-        .attach(connection_id, AcpAttachKind::Fork, session_id, authority)
+        .attach_at_message(
+            connection_id,
+            AcpAttachKind::Fork,
+            session_id,
+            authority,
+            at_message_id,
+        )
         .await
 }
 

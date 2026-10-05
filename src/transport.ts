@@ -341,7 +341,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => ({
 			method: "POST",
 			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/fork`,
-			body: { authority: args.authority },
+			body: { authority: args.authority, ...(args.atMessageId !== undefined ? { atMessageId: args.atMessageId } : {}) },
 		}),
 	},
 	acp_session_delete: {
