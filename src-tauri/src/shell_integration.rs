@@ -496,7 +496,9 @@ mod tests {
         assert_eq!(
             cmd.get_env("TUIC_SHELL_INTEGRATION"),
             Some(OsStr::new(
-                &dir.path().join("shell-integration/tuic-integration.bash")
+                &dir.path()
+                    .join("shell-integration")
+                    .join("tuic-integration.bash")
             ))
         );
     }

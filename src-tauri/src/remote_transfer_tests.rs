@@ -564,7 +564,7 @@ async fn cancelling_handler_during_extraction_preserves_worker_and_releases_slot
         receive_copy_with_extractor(query, &roots, body, move |stage, query| {
             // The real receive path has moved staging and its permit into this worker.
             // Dropping `release` also unblocks it if an assertion fails.
-            let _ = started.send(stage.name.clone());
+            let _ = started.send(());
             blocked.recv().map_err(io::Error::other)?;
             let result = extract_and_publish(stage, query);
             let _ = finished.send(());
@@ -574,7 +574,15 @@ async fn cancelling_handler_during_extraction_preserves_worker_and_releases_slot
     });
     // Channel handshakes define the lifecycle states. Nextest owns the hang bound;
     // no disk-speed-dependent polling or consecutive internal deadlines are needed.
-    let staging = repo.path().join(waiting.await.unwrap());
+    waiting.await.unwrap();
+    let staging = std::fs::read_dir(repo.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(".tuic-upload-"))
+        })
+        .expect("worker staging directory exists");
     assert!(staging.join("archive").is_file());
     let other_slot = UPLOAD_SLOTS.try_acquire().unwrap();
     assert!(UPLOAD_SLOTS.try_acquire().is_err());

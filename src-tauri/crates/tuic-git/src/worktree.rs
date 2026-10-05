@@ -3289,7 +3289,10 @@ pub fn validate_worktree_path(repo_path: &str, worktree_path: &str) -> Result<()
 
     let entry = parse_worktree_entries(&out.stdout)
         .into_iter()
-        .find(|entry| entry.path == worktree_path)
+        .find(|entry| {
+            tuic_core::path_spelling::portable_spelling(&entry.path)
+                == tuic_core::path_spelling::portable_spelling(worktree_path)
+        })
         .ok_or_else(|| {
             format!(
                 "Refused: '{}' is not a known worktree of '{}'",
@@ -3822,6 +3825,30 @@ pub fn archive_worktree(
 /// on it.
 const SCRIPT_TIMEOUT: Duration = Duration::from_secs(900);
 
+/// Keep cmd.exe's PATH below its environment-value limit, with the first
+/// spelling of each directory retained. Callers put the resolved Git dir first.
+#[cfg(any(windows, test))]
+fn windows_hook_path(path: &str) -> String {
+    let normalized = path.replace('/', "\\");
+    let mut seen = std::collections::HashSet::new();
+    let mut dirs = Vec::new();
+    let mut length = 0;
+    for dir in normalized.split(';') {
+        if !seen.insert(dir.trim_end_matches('\\').to_lowercase()) {
+            continue;
+        }
+        let added = dir.encode_utf16().count() + usize::from(!dirs.is_empty());
+        // cmd silently drops an inherited environment value over 8191 units.
+        // Keep whole directories in precedence order, never a partial last path.
+        if length + added > 8191 {
+            break;
+        }
+        length += added;
+        dirs.push(dir);
+    }
+    dirs.join(";")
+}
+
 /// Run `script` through the platform shell in `cwd`, killing it at `timeout`.
 ///
 /// Both callers pass [`SCRIPT_TIMEOUT`]; the parameter is what lets a test drive
@@ -3839,6 +3866,24 @@ fn run_shell_script(
 
     let mut cmd = std::process::Command::new(shell);
     cmd.arg(flag).arg(script).current_dir(cwd);
+    let path = tuic_core::cli::enriched_path();
+    #[cfg(windows)]
+    let path = tuic_core::cli::which_cli("git")
+        .or_else(|| {
+            // Windows shell PATH lookup can miss the inherited Git installation.
+            // The filesystem fallback must include the executable extension.
+            let git = tuic_core::cli::resolve_cli("git.exe");
+            Path::new(&git).is_absolute().then_some(git)
+        })
+        .and_then(|git| {
+            Path::new(&git)
+                .parent()
+                .map(|dir| format!("{};{path}", dir.display()))
+        })
+        .unwrap_or(path);
+    #[cfg(windows)]
+    let path = windows_hook_path(&path);
+    cmd.env("PATH", path);
     tuic_core::cli::apply_no_window(&mut cmd);
     crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|e| match e {
         crate::git_cli::GitError::TimedOut { after } => format!(
@@ -3895,6 +3940,37 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
     use tuic_test_support::{fail_with_stderr_script, print_file_script, touch_script};
+
+    // Catches: cmd dropping an oversized duplicated PATH and losing Git lookup.
+    #[test]
+    fn windows_hook_path_keeps_git_first_and_bounds_long_duplicate_paths() {
+        let git = r"C:\Program Files\Git\cmd";
+        let repeated = r"c:/program files/git/cmd/;C:\Windows\System32";
+        let path = format!("{git};{}", vec![repeated; 400].join(";"));
+        assert!(path.encode_utf16().count() > 8191);
+        assert_eq!(
+            windows_hook_path(&path),
+            format!(r"{git};C:\Windows\System32")
+        );
+    }
+
+    // Catches: deduplication changing precedence or dropping distinct tool dirs.
+    #[test]
+    fn windows_hook_path_preserves_unique_directory_order() {
+        assert_eq!(
+            windows_hook_path(r"C:/Git/cmd;C:/Tools;D:\Tools;c:\TOOLS\"),
+            r"C:\Git\cmd;C:\Tools;D:\Tools"
+        );
+    }
+
+    // Catches: a long unique PATH exceeding cmd's limit or cutting a UTF-16 path.
+    #[test]
+    fn windows_hook_path_bounds_unique_entries_without_splitting_directories() {
+        let first = format!(r"C:\{}", "界".repeat(8187));
+        let path = format!(r"{first};D:\🦀;E:\Tools");
+        assert_eq!(windows_hook_path(&path), first);
+        assert!(windows_hook_path(&path).encode_utf16().count() <= 8191);
+    }
 
     // Catches: lossy-name recovery deleting another branch's dirty or clean registered checkout.
     #[test]
@@ -7342,8 +7418,9 @@ branch refs/heads/feat
         // hex-of-path scheme doubled a 130-byte dir name past the 255-byte limit.
         let (_temp, repo, _workspaces) = workspace_fixture();
         add_populated_submodule(&repo);
-        let worktree = add_worktree(&repo, &"w".repeat(130));
-        git_cmd(&worktree)
+        let short_worktree = add_worktree(&repo, "long-path-module");
+        let worktree = repo.parent().unwrap().join("w".repeat(130));
+        git_cmd(&short_worktree)
             .args([
                 "-c",
                 "protocol.file.allow=always",
@@ -7353,6 +7430,15 @@ branch refs/heads/feat
             ])
             .run()
             .unwrap();
+        // Initialize before moving: Git for Windows cannot clone a submodule
+        // through its fixed-size $GIT_DIR buffer at this depth.
+        let gitdir = rev_at(&short_worktree.join("modules/local"), "--absolute-git-dir").unwrap();
+        fs::rename(&short_worktree, &worktree).unwrap();
+        git_cmd(&repo)
+            .args(["worktree", "repair", &worktree.to_string_lossy()])
+            .run()
+            .unwrap();
+        repair_archived_submodules(&repo, &worktree, &[("modules/local".into(), gitdir)]).unwrap();
         let head = rev_at(&worktree.join("modules/local"), "HEAD").unwrap();
         preserve_submodule_refs(&repo, &worktree, "modules/local").unwrap();
         let refs = git_cmd(&repo.join("modules/local"))
@@ -7768,9 +7854,15 @@ branch refs/heads/feat
             format!("gitdir: {}\n", repo.join(".git").display()),
         )
         .unwrap();
+        let reported = rev_at(&destination, "--absolute-git-dir").unwrap();
+        #[cfg(unix)]
+        let expected = format!("{}/.git", repo.canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!("{}/.git", repo.display().to_string().replace('\\', "/"));
+        assert_eq!(reported, expected);
         assert_eq!(
-            rev_at(&destination, "--absolute-git-dir").unwrap(),
-            repo.join(".git").to_string_lossy()
+            Path::new(&reported).canonicalize().unwrap(),
+            repo.join(".git").canonicalize().unwrap()
         );
 
         let error = preserve_submodule_refs(&repo, &path, "modules/local").unwrap_err();
@@ -8971,7 +9063,21 @@ branch refs/heads/feat
         commit_file(&repo, name, "rule B\nrule A\n++literal\nextra\n");
         let query = branch_integration_with_pr(&repo, "literal-1295", |_, _, _| false).unwrap();
         assert_eq!(query.proof, Some("content_superset"));
-        assert_eq!(query.worktree_paths, vec![wt.to_string_lossy().to_string()]);
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/literal-1295",
+            _temp.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/literal-1295",
+            _temp.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(query.worktree_paths, vec![expected]);
+        assert_eq!(
+            Path::new(&query.worktree_paths[0]).canonicalize().unwrap(),
+            wt.canonicalize().unwrap()
+        );
         git_cmd(&repo)
             .args(["update-ref", &query.archive_ref, &query.tip])
             .run()
@@ -9034,9 +9140,20 @@ branch refs/heads/feat
         let wt_b = add_worktree(&repo, "beta-1327");
         for (branch, own) in [("alpha-1327", &wt_a), ("beta-1327", &wt_b)] {
             let query = branch_integration_with_pr(&repo, branch, |_, _, _| false).unwrap();
+            #[cfg(unix)]
+            let expected = format!(
+                "{}/{branch}",
+                _temp.path().canonicalize().unwrap().display()
+            );
+            #[cfg(windows)]
+            let expected = format!(
+                "{}/{branch}",
+                _temp.path().display().to_string().replace('\\', "/")
+            );
+            assert_eq!(query.worktree_paths, vec![expected]);
             assert_eq!(
-                query.worktree_paths,
-                vec![own.to_string_lossy().to_string()]
+                Path::new(&query.worktree_paths[0]).canonicalize().unwrap(),
+                own.canonicalize().unwrap()
             );
         }
     }
@@ -9714,6 +9831,38 @@ branch refs/heads/feat
         assert!(error.contains("No workspace found"), "{error}");
         assert!(worktree.exists());
         assert_eq!(rev_at(&worktree, "HEAD").unwrap(), detached_oid);
+    }
+
+    // Catches: applying Windows separator rewriting on Unix authorizes a
+    // different checkout when a registered directory contains a literal backslash.
+    #[cfg(unix)]
+    #[test]
+    fn orphan_validation_does_not_alias_literal_backslash_to_a_separator() {
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let parent = repo.parent().unwrap();
+        let registered = parent.join(r"literal\checkout");
+        git_cmd(&repo)
+            .args([
+                "worktree",
+                "add",
+                "--detach",
+                &registered.to_string_lossy(),
+                "HEAD",
+            ])
+            .run()
+            .unwrap();
+        let different = parent.join("literal").join("checkout");
+        fs::create_dir_all(&different).unwrap();
+        fs::write(different.join("keep.txt"), "unregistered user work\n").unwrap();
+
+        validate_worktree_path(&repo.to_string_lossy(), &registered.to_string_lossy()).unwrap();
+        let error = validate_worktree_path(&repo.to_string_lossy(), &different.to_string_lossy())
+            .unwrap_err();
+        assert!(error.contains("not a known worktree"), "{error}");
+        assert_eq!(
+            fs::read_to_string(different.join("keep.txt")).unwrap(),
+            "unregistered user work\n"
+        );
     }
 
     #[test]

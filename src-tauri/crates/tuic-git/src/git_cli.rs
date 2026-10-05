@@ -644,6 +644,9 @@ pub fn git_cmd(cwd: &Path) -> GitCmd {
     cmd.current_dir(cwd);
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.env("PATH", enriched_path());
+    // Git for Windows otherwise refuses valid deep worktree and ref paths.
+    #[cfg(windows)]
+    cmd.args(["-c", "core.longpaths=true"]);
     cmd.arg("--no-optional-locks");
     tuic_core::cli::apply_no_window(&mut cmd);
     GitCmd {

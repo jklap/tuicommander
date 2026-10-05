@@ -977,7 +977,8 @@ mod critic_round6_tests {
             name,
             &format!("echo x >> \"$0.log\"; sleep {sleep_secs}; exit 0"),
             &format!(
-                "echo x>> \"%~f0.log\"\r\nping -n {} 127.0.0.1 >nul\r\nexit /b 0",
+                "echo x>> \"%~f0.log\"\r\n{} -n {} 127.0.0.1 >nul\r\nexit /b 0",
+                crate::test_support::system32_exe("ping.exe"),
                 sleep_secs + 1
             ),
         );
@@ -1113,14 +1114,20 @@ mod critic_round6_tests {
     async fn a_timed_out_probe_releases_its_permit_to_the_next_host() {
         let script = crate::test_support::fake_ssh_script(
             "ssh-r6-timeout-permit",
-            "case \"$*\" in *slow*) sleep 3;; esac; exit 0",
-            "echo %* | findstr slow >nul\r\nif not errorlevel 1 ping -n 4 127.0.0.1 >nul\r\nexit /b 0",
+            "case \"$*\" in *slow*) sleep 15;; esac; exit 0",
+            &format!(
+                "echo %* | {} slow >nul\r\nif not errorlevel 1 {} -n 16 127.0.0.1 >nul\r\nexit /b 0",
+                crate::test_support::system32_exe("findstr.exe"),
+                crate::test_support::system32_exe("ping.exe"),
+            ),
         );
         let gate = ProbeGate::new(1);
         let listed = vec![config_host("slow"), config_host("fast")];
-        let timeout = Duration::from_millis(300);
+        // The slow fixture exceeds this deadline; the fast one has time to
+        // start even when process creation is delayed on a loaded runner.
+        let timeout = Duration::from_secs(5);
         let statuses = tokio::time::timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(15),
             probe_hosts_with_gate(&gate, listed, &script, timeout),
         )
         .await
