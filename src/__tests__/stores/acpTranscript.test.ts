@@ -292,3 +292,23 @@ it("keeps durable message IDs across chunks and separate replies", () => {
 		{ messageId: "reply-two", text: "second reply" },
 	]);
 });
+
+// Catches: replay origin discarded or inherited and local chunks glued into one reply.
+it("keeps inherited replay separate from the child's own reply", () => {
+	acpTranscript.applyFrame(
+		update({
+			sessionUpdate: "agent_message_chunk",
+			messageId: "parent",
+			content: text("Inherited"),
+			_meta: { ego: { inherited: true } },
+		}),
+	);
+	acpTranscript.applyFrame(
+		update({ sessionUpdate: "agent_message_chunk", messageId: "child", content: text("Local") }),
+	);
+	expect(acpTranscript.entries(SESSION)).toEqual([
+		expect.objectContaining({ kind: "agent", text: "Inherited", messageId: "parent", inherited: true }),
+		expect.objectContaining({ kind: "agent", text: "Local", messageId: "child" }),
+	]);
+	expect(acpTranscript.entries(SESSION)[1].inherited).toBeUndefined();
+});

@@ -38,7 +38,7 @@ export type AcpNoticeAction =
 	| { kind: "answer"; questionId: string }
 	| { kind: "approve"; requestId: string };
 
-export type AcpTranscriptEntry = { messageId?: string } & (
+export type AcpTranscriptEntry = { messageId?: string; inherited?: boolean } & (
 	| { id: string; kind: "user"; text: string }
 	| { id: string; kind: "agent"; text: string }
 	| { id: string; kind: "thought"; text: string }
@@ -99,9 +99,13 @@ function noticeAction(raw: unknown): AcpNoticeAction | undefined {
 }
 
 /** The `_meta.ego` object of an update, when it has one. */
-function egoMeta(record: Record<string, unknown>): { salience?: unknown; action?: unknown } | undefined {
+function egoMeta(
+	record: Record<string, unknown>,
+): { salience?: unknown; action?: unknown; inherited?: unknown } | undefined {
 	const ego = (record._meta as { ego?: unknown } | null | undefined)?.ego;
-	return ego && typeof ego === "object" ? (ego as { salience?: unknown; action?: unknown }) : undefined;
+	return ego && typeof ego === "object"
+		? (ego as { salience?: unknown; action?: unknown; inherited?: unknown })
+		: undefined;
 }
 
 /**
@@ -117,15 +121,26 @@ function appendChunk(
 	kind: "user" | "agent" | "thought",
 	text: string,
 	messageId?: string,
+	inherited?: boolean,
 ): void {
 	if (!text) return;
 	const last = entries.at(-1);
-	if (last?.kind === kind && (!messageId || !last.messageId || last.messageId === messageId)) {
+	if (
+		last?.kind === kind &&
+		last.inherited === inherited &&
+		(!messageId || !last.messageId || last.messageId === messageId)
+	) {
 		last.text += text;
 		if (messageId) last.messageId = messageId;
 		return;
 	}
-	entries.push({ id: `e${draft.nextId}`, kind, text, ...(messageId ? { messageId } : {}) });
+	entries.push({
+		id: `e${draft.nextId}`,
+		kind,
+		text,
+		...(messageId ? { messageId } : {}),
+		...(inherited ? { inherited } : {}),
+	});
 	draft.nextId += 1;
 }
 
@@ -135,6 +150,8 @@ function appendUserChunk(
 	sessionId: AcpSessionId,
 	entries: AcpTranscriptEntry[],
 	text: string,
+	messageId?: string,
+	inherited?: boolean,
 ): void {
 	if (!text) return;
 	const pending = draft.pendingUserEcho[sessionId];
@@ -153,7 +170,7 @@ function appendUserChunk(
 		}
 		delete draft.pendingUserEcho[sessionId];
 	}
-	appendChunk(draft, entries, "user", text);
+	appendChunk(draft, entries, "user", text, messageId, inherited);
 }
 
 /** Fold a tool call, or an update to one, into the single card that shows it. */
@@ -249,7 +266,14 @@ function reduceUpdate(
 			break;
 		}
 		case "user_message_chunk":
-			appendUserChunk(draft, sessionId, entries, textOf(record.content));
+			appendUserChunk(
+				draft,
+				sessionId,
+				entries,
+				textOf(record.content),
+				typeof record.messageId === "string" ? record.messageId : undefined,
+				egoMeta(record)?.inherited === true ? true : undefined,
+			);
 			break;
 		case "agent_message_chunk": {
 			const ego = egoMeta(record);
@@ -258,7 +282,13 @@ function reduceUpdate(
 				// onto the agent's last reply, and the next reply onto it.
 				const cardText = textOf(record.content);
 				if (cardText) {
-					entries.push({ id: `e${draft.nextId}`, kind: "notice", text: cardText, action: noticeAction(ego.action) });
+					entries.push({
+						id: `e${draft.nextId}`,
+						kind: "notice",
+						text: cardText,
+						action: noticeAction(ego.action),
+						...(ego.inherited === true ? { inherited: true } : {}),
+					});
 					draft.nextId += 1;
 				}
 				break;
@@ -270,18 +300,30 @@ function reduceUpdate(
 				"agent",
 				textOf(record.content),
 				typeof record.messageId === "string" ? record.messageId : undefined,
+				egoMeta(record)?.inherited === true ? true : undefined,
 			);
 			if (textOf(record.content)) draft.turnHasReply[sessionId] = true;
 			break;
 		}
 		case "agent_thought_chunk":
 			delete draft.pendingUserEcho[sessionId];
-			appendChunk(draft, entries, "thought", textOf(record.content));
+			appendChunk(
+				draft,
+				entries,
+				"thought",
+				textOf(record.content),
+				typeof record.messageId === "string" ? record.messageId : undefined,
+				egoMeta(record)?.inherited === true ? true : undefined,
+			);
 			break;
 		case "tool_call":
 		case "tool_call_update":
 			delete draft.pendingUserEcho[sessionId];
 			foldToolCall(draft, entries, record);
+			if (egoMeta(record)?.inherited === true) {
+				const tool = entries.find((entry) => entry.kind === "tool" && entry.call.toolCallId === record.toolCallId);
+				if (tool) tool.inherited = true;
+			}
 			break;
 		case "plan": {
 			// The agent sends the whole plan every time and the client replaces

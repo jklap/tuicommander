@@ -270,8 +270,7 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		 * Branch a session at its tip and return the child's id.
 		 *
 		 * The child is attached by this call, so it needs no `session/load`. ego
-		 * does not replay inherited history for a fork child yet (ego plan
-		 * conversation-fork, step 3), so the parent's transcript is copied across:
+		 * replays history on load, not fork, so the parent's visible prefix is copied across:
 		 * the child tab would otherwise open empty on a conversation it carries in
 		 * full. A later load clears before it replays, so the copy cannot double.
 		 */
@@ -289,7 +288,10 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 			});
 			const entries = acpTranscript.entries(sessionId);
 			const cutoff = atMessageId ? entries.findIndex((entry) => entry.messageId === atMessageId) : entries.length - 1;
-			acpTranscript.restore(attachment.sessionId, entries.slice(0, cutoff + 1));
+			acpTranscript.restore(
+				attachment.sessionId,
+				entries.slice(0, cutoff + 1).map((entry) => ({ ...entry, inherited: true })),
+			);
 			await this.refresh(connectionId);
 			return attachment.sessionId;
 		},
