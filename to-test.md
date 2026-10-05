@@ -4696,3 +4696,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] After Boss restarts the Rust backend, verify an isolated workflow review checks its artifact before independent approval, refuses implementer approval after exit, and waits for an explicit merge.
 
 - [ ] After Boss restarts the Rust backend, verify an isolated plan dispatches eligible story waves, holds a dependent until an explicit verified merge, and runs its pinned final checks before completion.
+
+- [ ] After Boss restarts the Rust build: pause a reached workflow Gate, commit a corrected artifact, resume that activation, and verify fresh deterministic check receipts without a reused-command-payload error. Automated regression passes are recorded in the 1446-ff21 critic handoff.

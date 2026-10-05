@@ -118,7 +118,10 @@ pub(in crate::workflows::run) fn drive_policy(
             &run.id,
             &graph.target_id,
             &check.id,
-            &format!("daemon:check:{}:{}:{}", graph.id, activation.id, check.id),
+            &format!(
+                "daemon:check:{}:{}:{}:{}",
+                graph.id, activation.id, check.id, run.sequence
+            ),
             run.sequence,
         )?;
         return Ok(true);
