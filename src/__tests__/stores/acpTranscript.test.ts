@@ -274,3 +274,21 @@ describe("acpTranscript: ego notice cards", () => {
 		expect(acpTranscript.entries(SESSION)).toEqual([{ id: "e1", kind: "agent", text: "plain text" }]);
 	});
 });
+
+// Catches: durable message IDs discarded or separate replies merged, making a mid-history fork target the tip.
+it("keeps durable message IDs across chunks and separate replies", () => {
+	for (const [messageId, body] of [
+		["reply-one", "first "],
+		["reply-one", "reply"],
+		["reply-two", "second reply"],
+	])
+		acpTranscript.applyFrame(update({ sessionUpdate: "agent_message_chunk", messageId, content: text(body) }));
+	expect(
+		acpTranscript
+			.entries(SESSION)
+			.map((entry) => ({ messageId: entry.messageId, text: "text" in entry ? entry.text : "" })),
+	).toEqual([
+		{ messageId: "reply-one", text: "first reply" },
+		{ messageId: "reply-two", text: "second reply" },
+	]);
+});

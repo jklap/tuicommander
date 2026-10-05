@@ -462,8 +462,21 @@ impl AcpClientManager {
         session_id: v1::SessionId,
         authority: AcpSessionAuthority,
     ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        self.attach_at_message(connection_id, kind, session_id, authority, None)
+            .await
+    }
+
+    pub async fn attach_at_message(
+        &self,
+        connection_id: AcpConnectionId,
+        kind: AcpAttachKind,
+        session_id: v1::SessionId,
+        authority: AcpSessionAuthority,
+        at_message_id: Option<String>,
+    ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
         let authority = self.granted(authority);
         self.dispatch(connection_id, |reply| Command::Attach {
+            at_message_id,
             kind,
             session_id,
             authority,

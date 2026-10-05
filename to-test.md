@@ -4688,3 +4688,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] Native MCP registry Settings (#1522): after Boss rebuilds/restarts the backend, open Settings → MCP → Native tools; confirm all registry tools have switches and description badges, disabled tools can be re-enabled, and Telegram appears when its backend registration lands. Rust does not hot-reload.
 
 - [ ] AI Chat setup (#1406-06f2): with an empty ego executable, confirm the inactive explanation and Configure ego button in inline and detached panels. The button opens Settings → General at the ego controls; selecting the executable shows the composer without restart. Return to the detached window after saving to refresh its settings. _(Automated behavior tests cover routing and activation; agent-browser screenshot attempt was blocked by the locked macOS screen.)_
+
+- [ ] AI Chat message fork: after rebuilding/restarting Rust, fork the second of four ego replies and check the child cutoff while the parent retains all replies. The backend capability and metadata changes require a manual restart.

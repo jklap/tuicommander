@@ -251,6 +251,8 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 			</Show>
 
 			<Transcript
+				canForkAtMessage={() => chat.capabilities()?.forkAtMessage === true}
+				onFork={(messageId) => void chat.fork(messageId)}
 				entries={chat.entries}
 				busy={chat.busy}
 				retry={chat.retry}

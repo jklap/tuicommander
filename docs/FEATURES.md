@@ -2607,3 +2607,5 @@ Connected daemon notices carry their host identity. MCP confirmation responses a
 - AI Chat mobile push: pending questions and ego notice cards share the 30-second per-conversation limit.
 
 The graph runtime foundation now persists and replays pinned activations, serial predecessor history, edge decisions and repair counters. Executable validation requires Pause resume targets and deterministic final checks. Fork/all-Join schema and execution wait for slice G; scheduling and designer controls for these settings remain in development. Pause resolution respects uncertain-effect and pending-input fences, and serial history is bounded. Old pre-contract runs support inspect/cancel only.
+
+AI Chat offers **Fork from here** beside a reply when ego advertises message-point forks. The new tab keeps history through that reply’s completed turn; the parent remains open.

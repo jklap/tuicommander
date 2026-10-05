@@ -3074,3 +3074,28 @@ describe("AIChatPanel: provider retry status", () => {
 		expect(container.textContent).toContain("the turn failed: the provider returned HTTP 503");
 	});
 });
+
+describe("AIChatPanel: fork at message", () => {
+	// Catches: offering a message fork to an agent that can only fork at its tip.
+	it("hides the per-reply fork without the at-message capability", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpTranscript.restore(SESSION, [{ id: "reply", kind: "agent", text: "Answer", messageId: "reply-id" }]);
+		await settle();
+		expect(container.querySelector('[aria-label="Fork from here"]')).toBeNull();
+	});
+	// Catches: the selected reply ID lost between the rendered action and the shared client.
+	it("passes the selected reply ID from the per-message button", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(
+			snapshot({ capabilities: { ...snapshot().capabilities!, fork: true, forkAtMessage: true } }),
+		);
+		acpTranscript.restore(SESSION, [{ id: "reply", kind: "agent", text: "Answer", messageId: "reply-id" }]);
+		client.forkSession.mockResolvedValue(CHILD_SESSION);
+		await settle();
+		container.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')?.click();
+		await settle();
+		expect(client.forkSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT, "reply-id");
+	});
+});

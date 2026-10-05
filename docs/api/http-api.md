@@ -2810,3 +2810,5 @@ OSC 133 event `line` and hook-generated `UserInput.line` are eviction-stable all
 Workflow run snapshots add `eventContractVersion` and default-empty `graphExecutions`. Graph events use the existing paged history shape. Internal graph transition commands are rejected by public `workflow_run_action`; no autonomous-start action is added in slice A. Pre-contract runs can be inspected and cancelled but cannot resume.
 
 The daemon executor now owns recovery and duration timers under an OS run-database lock. Reads never recover live work, and a non-owner daemon refuses run mutations. Graph resume uses `resume_graph {execution_id,activation_id,resolution}` with an explicit pending activation; status-only resume cannot bypass graph position. Graph start controls, Agent effects and delivery policy remain unavailable until their later slices.
+
+The ACP session fork route accepts optional `atMessageId` beside `authority`. It is forwarded as `_meta.ego.atMessageId` only when ego advertises `sessionCapabilities.fork._meta.ego.atMessage`; unsupported agents are refused.

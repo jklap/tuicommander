@@ -275,13 +275,21 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 		 * the child tab would otherwise open empty on a conversation it carries in
 		 * full. A later load clears before it replays, so the copy cannot double.
 		 */
-		async forkSession(connectionId: AcpConnectionId, sessionId: AcpSessionId, cwd: string): Promise<AcpSessionId> {
+		async forkSession(
+			connectionId: AcpConnectionId,
+			sessionId: AcpSessionId,
+			cwd: string,
+			atMessageId?: string,
+		): Promise<AcpSessionId> {
 			const attachment = await invoke<{ sessionId: AcpSessionId }>("acp_session_fork", {
 				connectionId,
 				sessionId,
+				...(atMessageId ? { atMessageId } : {}),
 				authority: { cwd, additionalDirectories: [] },
 			});
-			acpTranscript.restore(attachment.sessionId, [...acpTranscript.entries(sessionId)]);
+			const entries = acpTranscript.entries(sessionId);
+			const cutoff = atMessageId ? entries.findIndex((entry) => entry.messageId === atMessageId) : entries.length - 1;
+			acpTranscript.restore(attachment.sessionId, entries.slice(0, cutoff + 1));
 			await this.refresh(connectionId);
 			return attachment.sessionId;
 		},

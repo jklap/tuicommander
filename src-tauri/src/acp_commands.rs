@@ -354,10 +354,17 @@ pub(crate) async fn acp_session_fork(
     connection_id: AcpConnectionId,
     session_id: v1::SessionId,
     authority: AcpSessionAuthority,
+    at_message_id: Option<String>,
 ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
     state
         .acp
-        .attach(connection_id, AcpAttachKind::Fork, session_id, authority)
+        .attach_at_message(
+            connection_id,
+            AcpAttachKind::Fork,
+            session_id,
+            authority,
+            at_message_id,
+        )
         .await
 }
 

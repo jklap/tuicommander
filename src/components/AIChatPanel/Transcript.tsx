@@ -172,6 +172,8 @@ export interface TranscriptProps {
 	emptyMessage: string;
 	onOpenFile?: (href: string) => void;
 	onClear?: () => void;
+	canForkAtMessage?: () => boolean;
+	onFork?: (messageId: string) => void;
 	/** `open_result` opens its file. `answer` and `approve` have nothing to open: the open interaction is drawn at the end, and the transcript scrolls there. */
 	onNoticeAction?: (action: AcpNoticeAction) => void;
 	onSuggestion: (text: string) => void;
@@ -394,7 +396,23 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 													}
 												/>
 											</Show>
-											<CopyButton label="Copy assistant message" text={agent().text} />
+											<div class={s.replyActions}>
+												<CopyButton label="Copy assistant message" text={agent().text} />
+												<Show when={props.canForkAtMessage?.() && agent().messageId}>
+													<button
+														type="button"
+														class={s.copyAction}
+														aria-label="Fork from here"
+														disabled={props.busy()}
+														onClick={() => {
+															const id = agent().messageId;
+															if (id) props.onFork?.(id);
+														}}
+													>
+														Fork from here
+													</button>
+												</Show>
+											</div>
 											<Show when={projected().suggestions.length > 0}>
 												<div class={s.suggestedReplies} aria-label="Suggested replies">
 													<For each={projected().suggestions}>

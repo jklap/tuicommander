@@ -38,7 +38,7 @@ export type AcpNoticeAction =
 	| { kind: "answer"; questionId: string }
 	| { kind: "approve"; requestId: string };
 
-export type AcpTranscriptEntry =
+export type AcpTranscriptEntry = { messageId?: string } & (
 	| { id: string; kind: "user"; text: string }
 	| { id: string; kind: "agent"; text: string }
 	| { id: string; kind: "thought"; text: string }
@@ -48,7 +48,8 @@ export type AcpTranscriptEntry =
 	| { id: string; kind: "notice"; text: string; action?: AcpNoticeAction }
 	/** A turn that ended as something other than a finished answer. */
 	| { id: string; kind: "settled"; stopReason: string }
-	| { id: string; kind: "failed"; message: string };
+	| { id: string; kind: "failed"; message: string }
+);
 
 interface TranscriptState {
 	sessions: Record<AcpSessionId, AcpTranscriptEntry[]>;
@@ -115,14 +116,16 @@ function appendChunk(
 	entries: AcpTranscriptEntry[],
 	kind: "user" | "agent" | "thought",
 	text: string,
+	messageId?: string,
 ): void {
 	if (!text) return;
 	const last = entries.at(-1);
-	if (last?.kind === kind) {
+	if (last?.kind === kind && (!messageId || !last.messageId || last.messageId === messageId)) {
 		last.text += text;
+		if (messageId) last.messageId = messageId;
 		return;
 	}
-	entries.push({ id: `e${draft.nextId}`, kind, text });
+	entries.push({ id: `e${draft.nextId}`, kind, text, ...(messageId ? { messageId } : {}) });
 	draft.nextId += 1;
 }
 
@@ -261,7 +264,13 @@ function reduceUpdate(
 				break;
 			}
 			delete draft.pendingUserEcho[sessionId];
-			appendChunk(draft, entries, "agent", textOf(record.content));
+			appendChunk(
+				draft,
+				entries,
+				"agent",
+				textOf(record.content),
+				typeof record.messageId === "string" ? record.messageId : undefined,
+			);
 			if (textOf(record.content)) draft.turnHasReply[sessionId] = true;
 			break;
 		}
