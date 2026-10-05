@@ -334,6 +334,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 				expected_sequence: selected.sequence,
 				command,
 			});
+			if (selectedRunId() !== selected.id) return;
 			if (reply.type !== "receipt") throw new Error("Invalid run response");
 			setRun(reply.value.snapshot);
 			setRecoveryExecution("");
@@ -341,9 +342,9 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 			setResolution("");
 			await loadRun(selected.id);
 		} catch (cause) {
-			setRunError(String(cause));
+			if (selectedRunId() === selected.id) setRunError(String(cause));
 		} finally {
-			setRunLoading(false);
+			if (selectedRunId() === selected.id) setRunLoading(false);
 		}
 	}
 

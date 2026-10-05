@@ -45,10 +45,14 @@ it("keeps the selected run when an earlier run's cancel response arrives late", 
 		}
 	});
 	render(() => <StoriesDialog project="/repo" onClose={() => {}} />);
-	await waitFor(() => expect(screen.getByRole("button", { name: "Run history" })).not.toBeDisabled());
+	await waitFor(() =>
+		expect((screen.getByRole("button", { name: "Run history" }) as HTMLButtonElement).disabled).toBe(false),
+	);
 	fireEvent.click(screen.getByRole("button", { name: "Run history" }));
 	await screen.findByText("Run · run-first");
-	await waitFor(() => expect(screen.getByRole("button", { name: "Cancel run" })).not.toBeDisabled());
+	await waitFor(() =>
+		expect((screen.getByRole("button", { name: "Cancel run" }) as HTMLButtonElement).disabled).toBe(false),
+	);
 	fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
 	const choices = within(screen.getByRole("complementary", { name: "Plan runs" })).getAllByRole("button");
 	fireEvent.click(choices[2]);
