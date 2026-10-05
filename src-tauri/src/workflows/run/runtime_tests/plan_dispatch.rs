@@ -284,7 +284,13 @@ fn resolve_plan_reaches_verified_fixed_point_after_explicit_dependency_integrati
             .any(|g| g.target_id == second.id)
     );
     crate::git_cli::git_cmd(project.path())
-        .args(["merge", "--ff-only", "artifact"])
+        .args([
+            "merge",
+            "--no-ff",
+            "-m",
+            "Integrate first story",
+            "artifact",
+        ])
         .run()
         .unwrap();
     store
@@ -317,7 +323,13 @@ fn resolve_plan_reaches_verified_fixed_point_after_explicit_dependency_integrati
     finish_child(&store, &run.id, &second.id, &second_tree, "second.txt");
     let waiting = drive_turn(&store, &run.id).unwrap();
     crate::git_cli::git_cmd(project.path())
-        .args(["merge", "--ff-only", "second-artifact"])
+        .args([
+            "merge",
+            "--no-ff",
+            "-m",
+            "Integrate second story",
+            "second-artifact",
+        ])
         .run()
         .unwrap();
     store

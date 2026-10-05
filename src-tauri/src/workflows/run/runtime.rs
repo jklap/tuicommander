@@ -336,7 +336,10 @@ pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, 
                         else {
                             store.command_expected(
                                 run_id,
-                                &format!("daemon:{}:{}:attempt", graph.id, activation.id),
+                                &format!(
+                                    "daemon:{}:{}:attempt:{}",
+                                    graph.id, activation.id, snapshot.sequence
+                                ),
                                 snapshot.sequence,
                                 RunCommand::StartGraphAgent {
                                     execution_id: graph.id.clone(),
@@ -368,7 +371,10 @@ pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, 
                         {
                             store.command_expected(
                                 run_id,
-                                &format!("daemon:close-plan:{}", activation.id),
+                                &format!(
+                                    "daemon:close-plan:{}:{}",
+                                    activation.id, snapshot.sequence
+                                ),
                                 snapshot.sequence,
                                 RunCommand::ClosePlanning,
                             )?;
@@ -466,8 +472,8 @@ pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, 
                 }
             };
             let key = format!(
-                "daemon:{}:{}:{:?}",
-                graph.id, activation.id, activation.state
+                "daemon:{}:{}:{:?}:{}",
+                graph.id, activation.id, activation.state, snapshot.sequence
             );
             store.command_expected(
                 run_id,
