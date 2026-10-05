@@ -286,29 +286,39 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
     Ok(())
 }
 
-/// A serial runtime cannot execute plan dispatch or deterministic gates yet.
+/// Plan and story roles use the same bounded runtime; writable story coordinators are unsupported.
 pub(crate) fn validate_runtime_nodes(
     graph: &WorkflowGraph,
     kind: WorkflowKind,
 ) -> Result<(), String> {
     for node in &graph.nodes {
-        if matches!(
-            node.kind,
-            NodeKind::CreateStories | NodeKind::StoryDispatch { .. }
-        ) || (kind == WorkflowKind::Plan && matches!(node.kind, NodeKind::Agent { .. }))
-            || matches!(
-                node.kind,
+        if let NodeKind::Agent { role, .. } = node.kind {
+            let plan_role = matches!(role, AgentRole::Coordinator | AgentRole::Planner);
+            if plan_role != (kind == WorkflowKind::Plan) {
+                return Err(format!(
+                    "workflow node '{}' has a role not executable for this graph; keep it as a draft",
+                    node.id
+                ));
+            }
+        }
+    }
+    if graph
+        .nodes
+        .iter()
+        .any(|n| matches!(n.kind, NodeKind::CreateStories))
+        && !graph.nodes.iter().any(|n| {
+            matches!(
+                n.kind,
                 NodeKind::Agent {
-                    role: AgentRole::Coordinator | AgentRole::Planner,
+                    role: AgentRole::Coordinator,
                     ..
                 }
             )
-        {
-            return Err(format!(
-                "workflow node '{}' is not executable yet; keep this graph as a draft",
-                node.id
-            ));
-        }
+        })
+    {
+        return Err(
+            "Create Stories requires an executable coordinator; keep this graph as a draft".into(),
+        );
     }
     Ok(())
 }

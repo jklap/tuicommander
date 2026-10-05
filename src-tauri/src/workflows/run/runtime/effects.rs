@@ -9,6 +9,7 @@ pub(in crate::workflows::run) fn activation_attempt<'a>(
     graph: &GraphExecution,
     activation: &Activation,
 ) -> Option<&'a NodeAttempt> {
+    let node_id = agent_node_id(graph, activation).ok()?;
     let ordinal = graph
         .activations
         .iter()
@@ -17,8 +18,41 @@ pub(in crate::workflows::run) fn activation_attempt<'a>(
         .count();
     run.attempts
         .iter()
-        .filter(|a| a.story_id == graph.target_id && a.node_id == activation.node_id)
+        .filter(|a| a.story_id == graph.target_id && a.node_id == node_id)
         .nth(ordinal)
+}
+
+/// CreateStories consumes the first coordinator report; later visits request a fresh replan.
+pub(in crate::workflows::run) fn agent_node_id<'a>(
+    graph: &'a GraphExecution,
+    activation: &Activation,
+) -> Result<&'a str, String> {
+    let node = graph
+        .definition
+        .graph
+        .nodes
+        .iter()
+        .find(|n| n.id == activation.node_id)
+        .ok_or("activation node missing")?;
+    if matches!(node.kind, NodeKind::CreateStories) {
+        return graph
+            .definition
+            .graph
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(
+                    n.kind,
+                    NodeKind::Agent {
+                        role: AgentRole::Coordinator,
+                        ..
+                    }
+                )
+            })
+            .map(|n| n.id.as_str())
+            .ok_or("Create Stories requires a coordinator node");
+    }
+    Ok(node.id.as_str())
 }
 
 /// Return true only after durable progress, so waiting agents never spin.
@@ -46,12 +80,24 @@ pub(in crate::workflows::run) async fn drive_effect(
             .find(|n| n.id == activation.node_id)
             .ok_or("activation node missing")?;
         match &node.kind {
-            NodeKind::Agent { role, .. } => {
+            NodeKind::Agent { .. } | NodeKind::CreateStories => {
+                let agent_id = agent_node_id(graph, activation)?;
+                let NodeKind::Agent { role, .. } = &graph
+                    .definition
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == agent_id)
+                    .ok_or("agent node missing")?
+                    .kind
+                else {
+                    return Err("agent node missing".into());
+                };
                 let Some(attempt) = activation_attempt(run, graph, activation) else {
-                    return Ok(false);
+                    continue;
                 };
                 if attempt.state != super::super::AttemptState::Running || attempt.agent.is_some() {
-                    return Ok(false);
+                    continue;
                 }
                 if *role == AgentRole::Implementer {
                     store.begin_graph_story(
@@ -70,7 +116,7 @@ pub(in crate::workflows::run) async fn drive_effect(
                 let profile = match role {
                     AgentRole::Reviewer | AgentRole::Validator => "sonnet",
                     AgentRole::Implementer => "sol",
-                    _ => return Err("plan Agent execution is not available yet".into()),
+                    AgentRole::Coordinator | AgentRole::Planner => "sol",
                 };
                 let settings = crate::config::load_agents_config();
                 if !settings
@@ -104,7 +150,11 @@ pub(in crate::workflows::run) async fn drive_effect(
                 let worktree = match existing {
                     Some(path) => path,
                     None => {
-                        let branch = format!("workflow/{}-{}", run.id, graph.target_id);
+                        let branch = if graph.target_id == run.plan_id {
+                            format!("workflow/{}-{}", run.id, attempt.id)
+                        } else {
+                            format!("workflow/{}-{}", run.id, graph.target_id)
+                        };
                         match crate::mcp_http::mcp_transport::create_daemon_workflow_worktree(
                             state,
                             &run.project,
@@ -156,16 +206,35 @@ pub(in crate::workflows::run) async fn drive_effect(
                 }
                 return Ok(true);
             }
+            NodeKind::Judge | NodeKind::Gate
+                if graph.definition.kind == crate::workflows::WorkflowKind::Plan =>
+            {
+                let store = store.clone();
+                let run = run.clone();
+                let graph = graph.clone();
+                let activation = activation.clone();
+                let progressed = tokio::task::spawn_blocking(move || {
+                    super::plan::drive_checks(&store, &run, &graph, &activation)
+                })
+                .await
+                .map_err(|e| format!("plan check task: {e}"))??;
+                if progressed {
+                    return Ok(true);
+                }
+            }
             NodeKind::Judge | NodeKind::Gate => {
                 let store = store.clone();
                 let run = run.clone();
                 let graph = graph.clone();
                 let activation = activation.clone();
-                return tokio::task::spawn_blocking(move || {
+                let progressed = tokio::task::spawn_blocking(move || {
                     super::policy::drive_policy(&store, &run, &graph, &activation)
                 })
                 .await
-                .map_err(|e| format!("workflow policy task: {e}"))?;
+                .map_err(|e| format!("workflow policy task: {e}"))??;
+                if progressed {
+                    return Ok(true);
+                }
             }
             NodeKind::Notify => {
                 let key = format!("notify:{}:{}", graph.id, activation.id);

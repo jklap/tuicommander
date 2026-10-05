@@ -310,8 +310,14 @@ fn publication_visibly_refuses_nodes_without_an_executor() {
     let project = project.path().to_str().unwrap();
     let definitions = WorkflowStore::open().unwrap();
     let plan = definitions.get_draft(&template).unwrap();
+    let mut graph = plan.graph;
+    for node in &mut graph.nodes {
+        if let NodeKind::Agent { role, .. } = &mut node.kind {
+            *role = AgentRole::Implementer;
+        }
+    }
     let plan = definitions
-        .update_draft(&plan.id, plan.draft_revision, plan.graph)
+        .update_draft(&plan.id, plan.draft_revision, graph)
         .unwrap();
     let error = crate::workflows::definition_action(
         project,

@@ -279,10 +279,10 @@ impl RunStore {
     ) -> Result<bool, String> {
         let conn = self.connect()?;
         let mut stmt = conn
-            .prepare("SELECT snapshot_json FROM workflow_runs")
+            .prepare("SELECT r.snapshot_json FROM workflow_runs r JOIN workflow_story_executions s ON s.run_id=r.id WHERE s.story_id=?1")
             .map_err(|e| format!("read workflow role authority: {e}"))?;
         for row in stmt
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map([story_id], |row| row.get::<_, String>(0))
             .map_err(|e| format!("read workflow role authority: {e}"))?
         {
             let run: RunSnapshot = decode(&row.map_err(|e| format!("read workflow role: {e}"))?)?;
@@ -1075,6 +1075,16 @@ impl RunStore {
             return Err("stale workflow sequence".into());
         }
         let revisions = fingerprint(&plan_stories(&snapshot)?, true)?;
+        let dispatch_target = match &command {
+            RunCommand::Graph {
+                transition: super::graph::GraphTransition::Start { target_id, .. },
+            } if *target_id != snapshot.plan_id
+                && matches!(snapshot.root_target, Some(RunTarget::Plan(_))) =>
+            {
+                Some(target_id.clone())
+            }
+            _ => None,
+        };
         let cancelled = matches!(&command, RunCommand::Cancel);
         // All filesystem/Git probes finish before acquiring the writer lock.
         let kind = match choose_event(&snapshot, command, at_ms) {
@@ -1096,6 +1106,10 @@ impl RunStore {
             return command_retry(receipt, &command_hash);
         }
         validate_preflight(&tx, &snapshot, &revisions)?;
+        if let Some(target) = dispatch_target {
+            let story = StoryStore::open()?.get_story(&target)?;
+            require_dispatch_slot(&tx, &snapshot, &story)?;
+        }
         let receipt = persist_event(&tx, snapshot, command_id, Some(command_hash), at_ms, kind)?;
         tx.commit()
             .map_err(|e| format!("commit workflow command: {e}"))?;
@@ -1592,7 +1606,7 @@ fn validate_preflight(
     Ok(())
 }
 
-fn fingerprint(stories: &[Story], include_execution: bool) -> Result<String, String> {
+pub(super) fn fingerprint(stories: &[Story], include_execution: bool) -> Result<String, String> {
     let mut sorted = stories.to_vec();
     sorted.sort_by(|a, b| a.id.cmp(&b.id));
     let shape: Vec<_> = sorted
@@ -1731,7 +1745,6 @@ fn choose_event(
             RunCommand::StartAttempt { .. }
                 | RunCommand::StartPlanAgent { .. }
                 | RunCommand::AdvanceLoop
-                | RunCommand::Complete
         )
     {
         return Err("graph runs require an eligible typed activation transition".into());
@@ -1830,8 +1843,31 @@ fn choose_event(
                 let (id, revision) = if *target_id == snapshot.plan_id {
                     (&snapshot.definition_id, snapshot.definition_revision)
                 } else {
-                    if !stories.iter().any(|story| story.id == *target_id) {
-                        return Err("graph target does not belong to run plan".into());
+                    let story = stories
+                        .iter()
+                        .find(|story| story.id == *target_id)
+                        .ok_or("graph target does not belong to run plan")?;
+                    if matches!(snapshot.root_target, Some(RunTarget::Plan(_)))
+                        && story.status != StoryStatus::Ready
+                    {
+                        return Err("only a ready story can dispatch".into());
+                    }
+                    for dependency in &story.dependencies {
+                        let dependency = stories
+                            .iter()
+                            .find(|s| s.id == *dependency)
+                            .ok_or("dependency is not in plan")?;
+                        if dependency.status != StoryStatus::Done
+                            || !receipt_current(snapshot, &dependency.id, dependency.revision)?
+                        {
+                            return Err(
+                                "dependent story dispatch requires a current integration receipt"
+                                    .into(),
+                            );
+                        }
+                    }
+                    if matches!(snapshot.root_target, Some(RunTarget::Plan(_))) {
+                        require_dispatch_slot(&RunStore::open()?.connect()?, snapshot, story)?;
                     }
                     (
                         &snapshot.story_definition_id,
@@ -1893,58 +1929,7 @@ fn choose_event(
             }
             Ok(RunEventKind::WorktreeAssigned { story_id, path })
         }
-        RunCommand::StartPlanAgent { node_id } => {
-            if snapshot.attempts.len() >= 512 {
-                return Err("workflow attempt budget exhausted".into());
-            }
-            let definition = WorkflowStore::open()?
-                .get_published(&snapshot.definition_id, snapshot.definition_revision)?;
-            if !definition.graph.nodes.iter().any(|node| {
-                node.id == node_id
-                    && matches!(
-                        node.kind,
-                        NodeKind::Agent {
-                            role: crate::workflows::AgentRole::Coordinator
-                                | crate::workflows::AgentRole::Planner,
-                            ..
-                        }
-                    )
-            }) {
-                return Err(
-                    "node is not a coordinator or planner in the pinned plan template".into(),
-                );
-            }
-            if snapshot.attempts.iter().any(|attempt| {
-                attempt.story_id == snapshot.plan_id
-                    && attempt.node_id == node_id
-                    && attempt.state == AttemptState::Running
-            }) {
-                return Err("plan node already has a running attempt".into());
-            }
-            let generation = snapshot
-                .attempts
-                .iter()
-                .filter(|attempt| {
-                    attempt.story_id == snapshot.plan_id && attempt.node_id == node_id
-                })
-                .map(|attempt| attempt.generation)
-                .max()
-                .unwrap_or(0)
-                + 1;
-            Ok(RunEventKind::AttemptStarted {
-                attempt: Box::new(NodeAttempt {
-                    id: Uuid::now_v7().to_string(),
-                    story_id: snapshot.plan_id.clone(),
-                    node_id,
-                    generation,
-                    state: AttemptState::Running,
-                    outcome: None,
-                    agent: None,
-                    report: None,
-                    input_answer: None,
-                }),
-            })
-        }
+        RunCommand::StartPlanAgent { node_id } => choose_plan_attempt(snapshot, node_id),
         RunCommand::StartAttempt { story_id, node_id } => {
             choose_story_attempt(snapshot, &stories, story_id, node_id)
         }
@@ -1964,8 +1949,14 @@ fn choose_event(
                     a.id == activation_id && a.state == super::graph::ActivationState::Running
                 })
                 .ok_or("Agent activation is not running")?;
-            if graph.definition.kind != WorkflowKind::Story {
-                return Err("plan Agent execution waits for plan dispatch".into());
+            if graph.definition.kind == WorkflowKind::Plan {
+                let node_id = super::runtime::effects::agent_node_id(graph, activation)?;
+                if super::runtime::effects::activation_attempt(snapshot, graph, activation)
+                    .is_some()
+                {
+                    return Err("plan activation already has an attempt".into());
+                }
+                return choose_plan_attempt(snapshot, node_id.to_owned());
             }
             let reached = graph
                 .activations
@@ -2364,6 +2355,7 @@ fn choose_event(
                     .stories
                     .iter()
                     .any(|story| story.integration_receipt.is_some())
+                    && !matches!(snapshot.root_target, Some(RunTarget::Plan(_)))
             {
                 return Err("canonical recertification has no current integration".into());
             }
@@ -2371,11 +2363,39 @@ fn choose_event(
         }
         RunCommand::FinalVerificationPassed => {
             ready_to_verify(snapshot, &stories)?;
+            if matches!(snapshot.root_target, Some(RunTarget::Plan(_))) {
+                let definition = WorkflowStore::open()?
+                    .get_published(&snapshot.definition_id, snapshot.definition_revision)?;
+                require_nonempty_policy(&definition)?;
+                let (commit, tree) = clean_artifact(Path::new(&snapshot.project))?;
+                let receipt = snapshot
+                    .canonical_recertification
+                    .as_ref()
+                    .ok_or("deterministic final plan receipt missing")?;
+                require_current_checks(
+                    &definition.required_checks,
+                    &receipt.post_checks,
+                    snapshot
+                        .canonical_ref
+                        .as_deref()
+                        .ok_or("canonical ref missing")?,
+                    &commit,
+                    &tree,
+                )?;
+            }
             Ok(RunEventKind::VerificationPassed {
                 fingerprint: fingerprint(&stories, true)?,
             })
         }
         RunCommand::Complete => {
+            if !snapshot.graph_executions.is_empty()
+                && (!matches!(snapshot.root_target, Some(RunTarget::Plan(_)))
+                    || !snapshot.graph_executions.iter().all(|g| g.completed))
+            {
+                return Err(
+                    "graph plan completion requires all reached executions complete".into(),
+                );
+            }
             ready_to_verify(snapshot, &stories)?;
             if snapshot.verification_fingerprint.as_deref()
                 != Some(fingerprint(&stories, true)?.as_str())
@@ -2693,4 +2713,86 @@ fn replay_events(conn: &Connection, run_id: &str) -> Result<RunSnapshot, String>
         snapshot = Some(apply_event(snapshot, &event)?);
     }
     snapshot.ok_or("workflow run has no events".into())
+}
+
+fn choose_plan_attempt(snapshot: &RunSnapshot, node_id: String) -> Result<RunEventKind, String> {
+    if snapshot.attempts.len() >= 512 {
+        return Err("workflow attempt budget exhausted".into());
+    }
+    let definition = WorkflowStore::open()?
+        .get_published(&snapshot.definition_id, snapshot.definition_revision)?;
+    if !definition.graph.nodes.iter().any(|node| {
+        node.id == node_id
+            && matches!(
+                node.kind,
+                NodeKind::Agent {
+                    role: crate::workflows::AgentRole::Coordinator
+                        | crate::workflows::AgentRole::Planner,
+                    ..
+                }
+            )
+    }) {
+        return Err("node is not a coordinator or planner in the pinned plan template".into());
+    }
+    if snapshot.attempts.iter().any(|attempt| {
+        attempt.story_id == snapshot.plan_id
+            && attempt.node_id == node_id
+            && attempt.state == AttemptState::Running
+    }) {
+        return Err("plan node already has a running attempt".into());
+    }
+    let generation = snapshot
+        .attempts
+        .iter()
+        .filter(|attempt| attempt.story_id == snapshot.plan_id && attempt.node_id == node_id)
+        .map(|attempt| attempt.generation)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    Ok(RunEventKind::AttemptStarted {
+        attempt: Box::new(NodeAttempt {
+            id: Uuid::now_v7().to_string(),
+            story_id: snapshot.plan_id.clone(),
+            node_id,
+            generation,
+            state: AttemptState::Running,
+            outcome: None,
+            agent: None,
+            report: None,
+            input_answer: None,
+        }),
+    })
+}
+
+/// Project-wide wave admission uses the existing graph reservations, not another scheduler.
+fn require_dispatch_slot(
+    conn: &Connection,
+    snapshot: &RunSnapshot,
+    story: &Story,
+) -> Result<(), String> {
+    runtime_start::require_available_story(conn, &snapshot.project, &story.id)?;
+    let mut stmt = conn.prepare("SELECT snapshot_json FROM workflow_runs WHERE project=?1 AND status IN ('running','paused')")
+        .map_err(|e| format!("read dispatch wave: {e}"))?;
+    let mut active = 0;
+    for row in stmt
+        .query_map([&snapshot.project], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("read dispatch wave: {e}"))?
+    {
+        let run: RunSnapshot = decode(&row.map_err(|e| format!("read dispatch wave: {e}"))?)?;
+        for graph in run
+            .graph_executions
+            .iter()
+            .filter(|g| g.target_id != run.plan_id && !g.completed)
+        {
+            active += 1;
+            let other = StoryStore::open()?.get_story(&graph.target_id)?;
+            if scopes_may_overlap(&story.file_scope, &other.file_scope) {
+                return Err("story file scope overlaps project dispatch wave".into());
+            }
+        }
+    }
+    if active >= usize::from(snapshot.limits.max_parallel_stories) {
+        return Err("project parallel story limit reached".into());
+    }
+    Ok(())
 }
