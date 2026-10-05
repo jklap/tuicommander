@@ -34,11 +34,14 @@ pub enum NodeKind {
     },
     Judge,
     Gate,
-    Pause,
+    Pause {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume_to: Option<String>,
+    },
     Loop {
         max_iterations: u16,
     },
-    Join,
+    Join {},
     Notify,
     End,
 }
@@ -115,7 +118,7 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
                     );
                 }
             }
-            NodeKind::Join if workflow_kind != WorkflowKind::Story => {
+            NodeKind::Join {} if workflow_kind != WorkflowKind::Story => {
                 return Err("Join may combine only branches of one story attempt".into());
             }
             NodeKind::Loop { max_iterations } if !(1..=100).contains(max_iterations) => {
@@ -153,7 +156,11 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
 
     let mut outgoing: HashMap<&str, Vec<&Edge>> = HashMap::new();
     let mut incoming: HashMap<&str, usize> = HashMap::new();
+    let mut unique_edges = HashSet::new();
     for edge in &graph.edges {
+        if !unique_edges.insert((&edge.from, &edge.to, &edge.outcome)) {
+            return Err("duplicate workflow edge".into());
+        }
         if !nodes.contains_key(edge.from.as_str()) || !nodes.contains_key(edge.to.as_str()) {
             return Err("workflow edge references a missing node".into());
         }
@@ -188,7 +195,7 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
                     node.id
                 ));
             }
-        } else if matches!(node.kind, NodeKind::End | NodeKind::Pause) {
+        } else if matches!(node.kind, NodeKind::End | NodeKind::Pause { .. }) {
             if !edges.is_empty() {
                 return Err(format!(
                     "terminal node {} cannot have an outgoing edge",
@@ -201,7 +208,7 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
                 node.id
             ));
         }
-        if matches!(node.kind, NodeKind::Join)
+        if matches!(node.kind, NodeKind::Join {})
             && incoming.get(node.id.as_str()).copied().unwrap_or(0) < 2
         {
             return Err(format!(
@@ -274,6 +281,33 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
         }
         if !seen.contains(edge.from.as_str()) {
             return Err("Loop repeat edge must return through its Loop node".into());
+        }
+    }
+    Ok(())
+}
+
+/// Validate settings required by the versioned execution contract.
+/// Legacy definitions remain readable, but need a new revision to execute.
+pub fn validate_executable_graph(
+    graph: &WorkflowGraph,
+    kind: WorkflowKind,
+    has_final_checks: bool,
+) -> Result<(), String> {
+    validate_graph(graph, kind)?;
+    if !has_final_checks {
+        return Err("executable workflows require deterministic final checks".into());
+    }
+    for node in &graph.nodes {
+        if let NodeKind::Pause { resume_to } = &node.kind {
+            let target = resume_to
+                .as_ref()
+                .ok_or("executable Pause needs resume_to")?;
+            if !graph.nodes.iter().any(|candidate| {
+                candidate.id == *target
+                    && !matches!(candidate.kind, NodeKind::Start | NodeKind::Pause { .. })
+            }) {
+                return Err("Pause resume_to must name an executable non-Start target".into());
+            }
         }
     }
     Ok(())

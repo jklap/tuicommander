@@ -247,6 +247,8 @@ pub struct CanonicalReceipt {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RunSnapshot {
+    #[serde(default)]
+    pub event_contract_version: u16,
     pub id: String,
     pub project: String,
     #[serde(default)]
@@ -270,11 +272,16 @@ pub struct RunSnapshot {
     pub canonical_recertification: Option<CanonicalReceipt>,
     pub attempts: Vec<NodeAttempt>,
     pub effects: Vec<EffectIntent>,
+    #[serde(default)]
+    pub graph_executions: Vec<super::graph::GraphExecution>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunEventKind {
+    Graph {
+        event: super::graph::GraphEvent,
+    },
     Started {
         initial: Box<RunSnapshot>,
     },
@@ -358,6 +365,10 @@ pub struct RunEvent {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunCommand {
+    /// Internal only: graph transitions are not operator-supplied reports.
+    Graph {
+        transition: super::graph::GraphTransition,
+    },
     ClosePlanning,
     StartAttempt {
         story_id: String,

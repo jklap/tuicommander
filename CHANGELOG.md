@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Workflow graph foundation** — Durable serial graph positions, bounded predecessor history, decision provenance and repair counters now replay from pinned definitions. Executable validation requires final checks and explicit pause targets. This slice does not enable autonomous scheduling; older pre-contract runs remain inspectable and cancellable.
 - Fix command boundaries, prompt ticks and answers-only prompt association drifting after scrollback eviction.
 ### Added
 
