@@ -1,6 +1,6 @@
 # Native workflow graph runtime
 
-**Status:** Approved staged design; slice A implements the schema and ledger foundation. **Date:** 2026-10-03.
+**Status:** Approved staged design; slices A/B and the serial slice C executor are implemented. **Date:** 2026-10-03.
 **Story:** 1446-ff21. **Source baseline:** `140e8950deae7e4bb7a2f4498c7a23c95eacca21`.
 **Scope:** Execute published Story delivery and Resolve plan graphs in the owning Rust daemon. Slice A introduces no scheduler or agent effects; executable delivery remains unavailable.
 
@@ -286,3 +286,9 @@ Executable graph start requires deterministic final checks and pinned Pause targ
 AppState owns a WorkflowRuntime started on both daemon boot paths. An OS lock beside workflow_runs.sqlite3 precedes recovery; store reads never recover. Per-run Notify mailboxes wake serial expected-sequence turns, and persisted duration budgets arm idle timers. Schema 3 adds an explicit optional rootTarget; the event contract remains 2. The existing transaction atomically writes the root Start and its first successor, with payload-bound start retries. Active graph projections are reservations; the run writer lock serializes root starts against manual claim/start. One active run per native plan remains enforced, including direct roots.
 
 ResumeGraph records a bounded explicit resolution and names the actual pending activation. It resolves a pinned Pause target or records restart/operator recovery without resetting budgets; uncertain effects and input remain fences. DeadlineExpired is durable and emitted without client traffic. No agent effect, approval, merge, notification, dispatch policy or UI is enabled. Executable start rejects unsupported nodes; End waits for authoritative delivery semantics in D/E. Cases 01,06-07,25-26,28,37 cover the B ledger/daemon boundary only; later-slice effects and H E2E are not claimed.
+
+### Slice C capability boundary (2026-10-05)
+
+Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Approval automation, plan dispatch, public graph start controls and explicit integration remain later slices; graph completion alone never closes a native story.
+
+Resolve plan create/dispatch/replan remains slice E. Independent approval automation remains D. Historical seeded definitions remain record-only; executable root start checks capabilities.
