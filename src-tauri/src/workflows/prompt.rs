@@ -84,6 +84,22 @@ pub fn render_story_prompt(
         .replace("{{story.id}}", &story.id)
         .replace("{{plan.id}}", &run.plan_id)
         .replace("{{story.title}}", &quoted_title);
+    let artifact_subject = if matches!(role, AgentRole::Reviewer | AgentRole::Validator) {
+        run.stories
+            .iter()
+            .find(|s| s.story_id == story.id)
+            .and_then(|s| s.worktree_path.as_deref())
+            .map(|path| {
+                let (commit, tree) = super::run::check::clean_artifact(std::path::Path::new(path))?;
+                Ok::<_, String>(serde_json::json!({
+                    "artifactDigest": review_artifact_digest(&commit, &tree),
+                    "commit": commit, "tree": tree,
+                }))
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let context = serde_json::json!({
         "contractVersion": PROMPT_CONTRACT_VERSION,
         "role": role,
@@ -102,6 +118,7 @@ pub fn render_story_prompt(
         "fileScope": story.file_scope,
         "skills": skills,
         "feedback": feedback,
+        "artifactSubject": artifact_subject,
     });
     let context = serde_json::to_string_pretty(&context)
         .map_err(|error| format!("encode story prompt context: {error}"))?;
@@ -110,7 +127,7 @@ pub fn render_story_prompt(
          Report the outcome with the workflow_report MCP tool. Supply contractVersion=1, \
          runId, storyId, storyRevision, attemptId, generation, outcome, summary, criterionResults and evidence. \
          For needs_input include inputRequest with a concrete question and optional options. \
-         Reviewer completed reports must include review with decision, artifactDigest (SHA-256 of the reviewed artifact), and findings tied to criterionIndex. \
+         Reviewer completed reports must include review with decision, artifactDigest (the supplied artifactSubject digest, SHA-256 of UTF-8 commit:tree), and findings tied to criterionIndex. \
          Review is advisory; it never changes story status by itself. A terminal exit or an inbox message is not a report. \
          The workflow engine decides the next transition."
     );
@@ -284,6 +301,8 @@ mod tests {
             status: RunStatus::Running,
             sequence: 7,
             started_ms: 1,
+            paused_since_ms: None,
+            paused_duration_ms: 0,
             limits: RunLimits::default(),
             loops: 0,
             story_creations: 0,
@@ -517,4 +536,9 @@ mod tests {
         assert_eq!(package.role, AgentRole::Coordinator);
         assert_eq!(package.prompt_sha256.len(), 64);
     }
+}
+
+/// Stable digest shared by the review prompt and Judge policy.
+pub(crate) fn review_artifact_digest(commit: &str, tree: &str) -> String {
+    hex::encode(Sha256::digest(format!("{commit}:{tree}").as_bytes()))
 }
