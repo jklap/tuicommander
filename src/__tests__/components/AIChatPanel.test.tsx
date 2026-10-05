@@ -3099,3 +3099,46 @@ describe("AIChatPanel: fork at message", () => {
 		expect(client.forkSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT, "reply-id");
 	});
 });
+
+// Catches: inherited replay shown as the child's own conversation or hidden entirely.
+it("renders inherited replay above a boundary and child turns below", async () => {
+	const { container } = await renderPanel();
+	await settle();
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "user_message_chunk",
+			content: { type: "text", text: "Parent question" },
+			_meta: { ego: { inherited: true } },
+		},
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "agent_message_chunk",
+			messageId: "parent",
+			content: { type: "text", text: "Parent answer" },
+			_meta: { ego: { inherited: true } },
+		},
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Child question" } },
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "agent_message_chunk",
+			messageId: "child",
+			content: { type: "text", text: "Child answer" },
+		},
+	});
+	await settle();
+	const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+	const boundary = transcript.querySelector('[role="separator"][aria-label="Inherited history ends"]');
+	expect(boundary).not.toBeNull();
+	const content = transcript.textContent!;
+	expect(content.indexOf("Parent answer")).toBeLessThan(content.indexOf("This conversation"));
+	expect(content.indexOf("Child question")).toBeGreaterThan(content.indexOf("This conversation"));
+	expect(content).toContain("Child answer");
+});
