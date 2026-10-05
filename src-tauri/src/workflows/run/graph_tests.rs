@@ -604,12 +604,12 @@ fn public_run_transport_rejects_internal_graph_mutation() {
         run_id: run.id.clone(),
         command_id: "forged-graph".into(),
         expected_sequence: run.sequence,
-        command: RunCommand::Graph {
+        command: Box::new(RunCommand::Graph {
             transition: GraphTransition::Start {
                 execution_id: "forged".into(),
                 target_id: story_id,
             },
-        },
+        }),
     };
     assert!(
         run_action(project, action)
