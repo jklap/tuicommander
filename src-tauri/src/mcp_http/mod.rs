@@ -10157,7 +10157,13 @@ mod workflow_authority_critic_tests {
         let store = crate::stories::StoryStore::open().unwrap();
         let plan = store
             .create_plan(crate::stories::NewPlan {
-                project: project.path().to_string_lossy().into_owned(),
+                // Match story_action: the store expects the API's canonical identity.
+                project: crate::progress::resolve_owning_project(Some(
+                    project.path().to_str().unwrap(),
+                ))
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
                 title: "Operator plan".into(),
                 source: "operator.md".into(),
             })
