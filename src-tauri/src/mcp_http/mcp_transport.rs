@@ -1088,7 +1088,8 @@ fn render_mcp_instructions(
         out.push_str(
             "Call `progress`: the ONLY way the user learns what happened while away. \
              `type=done` when an `intent:`'s work is finished, `type=blocked` when you \
-             cannot proceed without them.\n\n",
+             stop and wait because you cannot proceed without them. Work that continues \
+             while the user acts in parallel is `type=done`.\n\n",
         );
     }
 
@@ -1342,7 +1343,7 @@ fn native_tool_definitions() -> serde_json::Value {
             // Claude Code defers MCP tools behind ToolSearch unless told not to;
             // a deferred `progress` is a tool Claude agents never call.
             "_meta": { "anthropic/alwaysLoad": true },
-            "description": "Record what happened, for the user who walked away. Mandatory: type=done when the work an `intent:` announced is finished, type=blocked when you cannot proceed without the user.",
+            "description": "Record what happened, for the user who walked away. Mandatory: type=done when the work an `intent:` announced is finished, type=blocked when you stop and wait for the user because you cannot proceed without them. A blocked report marks your tab as waiting for an answer until the user replies or you report done. If you keep working while the user does something in parallel, report that with type=done, not blocked.",
             "inputSchema": { "type": "object", "properties": {
                 "type": { "type": "string", "enum": ["done", "blocked"] },
                 "text": { "type": "string", "maxLength": 500, "description": "Outcome, not implementation." },
@@ -7191,6 +7192,20 @@ fn emit_progress_entry_with_acp(
     let _ = state
         .event_bus
         .send(crate::state::AppEvent::ProgressRecorded { repo_path, payload });
+    // A terminal that reports done or hands work off has moved on from any
+    // question it raised with `blocked`. The accumulator clears only that
+    // source; a later `blocked` re-arms by replacing the question text.
+    if matches!(
+        entry.kind,
+        crate::progress::ProgressKind::Done | crate::progress::ProgressKind::Delegated
+    ) && let Some(session_id) = entry.pty_id.as_deref()
+        && state.session_maps.sessions.contains_key(session_id)
+    {
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: serde_json::json!({"type": "progress-superseded"}).into(),
+        });
+    }
     receipt
 }
 
@@ -18916,6 +18931,242 @@ mod tests {
             }
             other => panic!("expected explicit question after committed report, got {other:?}"),
         }
+    }
+
+    /// Live PTYs whose badge is decided by the spawned accumulator, the same
+    /// task that owns `SessionState` in the app (#1537-6c4b).
+    #[cfg(unix)]
+    fn progress_badge_state(project: &str, ids: &[&str]) -> Arc<AppState> {
+        let state = test_state();
+        for id in ids {
+            insert_managed_test_session(&state, id, project);
+            state
+                .session_maps
+                .session_states
+                .insert(id.to_string(), crate::state::SessionState::default());
+            state.session_maps.silence_states.insert(
+                id.to_string(),
+                Arc::new(parking_lot::Mutex::new(crate::pty::SilenceState::new())),
+            );
+        }
+        crate::state::AppState::spawn_session_state_accumulator(state.clone());
+        state
+    }
+
+    #[cfg(unix)]
+    fn report_for_pty(
+        state: &Arc<AppState>,
+        project: &str,
+        kind: crate::progress::ProgressKind,
+        text: &str,
+        pty_id: &str,
+    ) {
+        report_progress(
+            state,
+            Some(project),
+            crate::progress::ProgressReportInput {
+                kind,
+                text: text.to_string(),
+                step: None,
+            },
+            Some("worker".to_string()),
+            Some("codex"),
+            Some(pty_id),
+            None,
+        )
+        .unwrap();
+    }
+
+    /// The badge after the accumulator has applied every queued event.
+    #[cfg(unix)]
+    async fn settled_session(state: &Arc<AppState>, id: &str) -> crate::state::SessionState {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while state.session_maps.session_state_events.depth() > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the session state accumulator did not drain its lane");
+        state.session_maps.session_states.get(id).unwrap().clone()
+    }
+
+    // Catches: a blocked report latching the badge after the agent reported
+    // that it moved on — the Codex tab that stayed orange for 50 minutes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_progress_badge_clears_when_the_same_pty_reports_done() {
+        use crate::progress::ProgressKind::{Blocked, Done};
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().to_string_lossy().to_string();
+        let state = progress_badge_state(&project, &["codex-pty"]);
+
+        report_for_pty(
+            &state,
+            &project,
+            Blocked,
+            "Should I deploy now?",
+            "codex-pty",
+        );
+        let row = settled_session(&state, "codex-pty").await;
+        assert!(row.awaiting_input && row.question_confident);
+
+        report_for_pty(
+            &state,
+            &project,
+            Done,
+            "Deployed after the human approved.",
+            "codex-pty",
+        );
+        let row = settled_session(&state, "codex-pty").await;
+        assert!(!row.awaiting_input, "done must supersede the blocked badge");
+        assert!(!row.question_confident);
+        assert_eq!(row.question_text, None);
+
+        report_for_pty(&state, &project, Blocked, "Which region next?", "codex-pty");
+        let row = settled_session(&state, "codex-pty").await;
+        assert!(
+            row.awaiting_input && row.question_confident,
+            "a new blocked re-arms"
+        );
+        assert_eq!(row.question_text.as_deref(), Some("Which region next?"));
+    }
+
+    // Catches: a hand-off journalled for the asking terminal (it spawned a
+    // child, so it is working) leaving its own blocked badge latched.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_progress_badge_clears_when_the_same_pty_delegates() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().to_string_lossy().to_string();
+        let state = progress_badge_state(&project, &["codex-pty"]);
+
+        report_for_pty(
+            &state,
+            &project,
+            crate::progress::ProgressKind::Blocked,
+            "Should I deploy now?",
+            "codex-pty",
+        );
+        emit_progress_entry(
+            &state,
+            crate::progress::ProgressEntry {
+                id: 99,
+                project: project.clone(),
+                pty_id: Some("codex-pty".to_string()),
+                created_at_ms: 0,
+                kind: crate::progress::ProgressKind::Delegated,
+                text: "Review the parser".to_string(),
+                step: None,
+                agent_name: None,
+                target_pty_id: Some("child-pty".to_string()),
+                target_name: None,
+            },
+        );
+        let row = settled_session(&state, "codex-pty").await;
+        assert!(
+            !row.awaiting_input,
+            "delegating must supersede the blocked badge"
+        );
+    }
+
+    // Catches: clearing by any session's progress rather than the asking PTY's.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn done_from_another_pty_leaves_the_blocked_badge() {
+        use crate::progress::ProgressKind::{Blocked, Done};
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().to_string_lossy().to_string();
+        let state = progress_badge_state(&project, &["asking-pty", "other-pty"]);
+
+        report_for_pty(
+            &state,
+            &project,
+            Blocked,
+            "Should I deploy now?",
+            "asking-pty",
+        );
+        report_for_pty(&state, &project, Done, "Tests are green.", "other-pty");
+
+        let asking = settled_session(&state, "asking-pty").await;
+        assert!(asking.awaiting_input && asking.question_confident);
+        assert_eq!(
+            asking.question_text.as_deref(),
+            Some("Should I deploy now?")
+        );
+        let other = settled_session(&state, "other-pty").await;
+        assert!(!other.awaiting_input);
+    }
+
+    // Catches: progress clearing a real open dialog — a confident question that
+    // the screen or a hook raised, including one that replaced a blocked report.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn done_does_not_clear_a_confident_dialog_question() {
+        use crate::progress::ProgressKind::{Blocked, Done};
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().to_string_lossy().to_string();
+        let state = progress_badge_state(&project, &["dialog-pty", "replaced-pty"]);
+        let dialog = |session_id: &str| crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: serde_json::json!({
+                "type": "question",
+                "prompt_text": "Approve deploy?",
+                "confident": true,
+            })
+            .into(),
+        };
+
+        state.emit_pty_event(dialog("dialog-pty"));
+        report_for_pty(&state, &project, Done, "Wrote the plan.", "dialog-pty");
+        let row = settled_session(&state, "dialog-pty").await;
+        assert!(row.awaiting_input && row.question_confident);
+        assert_eq!(row.question_text.as_deref(), Some("Approve deploy?"));
+
+        report_for_pty(
+            &state,
+            &project,
+            Blocked,
+            "Should I deploy now?",
+            "replaced-pty",
+        );
+        state.emit_pty_event(dialog("replaced-pty"));
+        report_for_pty(&state, &project, Done, "Wrote the plan.", "replaced-pty");
+        let row = settled_session(&state, "replaced-pty").await;
+        assert!(row.awaiting_input && row.question_confident);
+        assert_eq!(row.question_text.as_deref(), Some("Approve deploy?"));
+    }
+
+    // Catches: the supersede path displacing the existing typed-answer clear.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn blocked_progress_badge_still_clears_on_a_typed_answer() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let project = tempfile::tempdir().unwrap();
+        let project = project.path().to_string_lossy().to_string();
+        let state = progress_badge_state(&project, &["codex-pty"]);
+
+        report_for_pty(
+            &state,
+            &project,
+            crate::progress::ProgressKind::Blocked,
+            "Should I deploy now?",
+            "codex-pty",
+        );
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: "codex-pty".to_string(),
+            parsed: serde_json::json!({"type": "user-input", "content": "yes deploy"}).into(),
+        });
+        let row = settled_session(&state, "codex-pty").await;
+        assert!(!row.awaiting_input && !row.question_confident);
     }
 
     #[cfg(unix)]
