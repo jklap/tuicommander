@@ -2690,6 +2690,74 @@ mod tests {
         server.abort();
     }
 
+    /// Catches: attaching after output ended waits for a new watch update or skips existing scrollback.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn grid_ws_attach_replays_existing_scrollback_without_new_output() {
+        for (offset, first_line) in [(0, "history 7"), (7, "history 0")] {
+            let state = super::super::tests::test_state();
+            let sid = "existing-scrollback-replay";
+            crate::state::tests_support::insert_dummy_session(&state, sid);
+            // Feed our real terminal parser before any client attaches. No
+            // reader/ticker publishes frames after the handshake.
+            let mut vt = VtLogBuffer::new(4, 32, 1000);
+            for line in 0..10 {
+                vt.process(format!("history {line}\r\n").as_bytes());
+            }
+            assert_eq!(vt.grid_history_size(), 7);
+            vt.grid_scroll_to_offset(offset);
+            state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+            state
+                .grid
+                .watch
+                .insert(sid.into(), crate::grid_watch::new_grid_watch());
+            let app = super::super::build_router(state, false, true);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let _ = axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await;
+            });
+            let (mut socket, _) = tokio_tungstenite::connect_async(format!(
+                "ws://{addr}/sessions/{sid}/stream?format=grid"
+            ))
+            .await
+            .expect("complete attach setup before replay deadline");
+            let replay = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
+                .await
+                .expect("existing history must replay without fresh PTY output")
+                .expect("stream open")
+                .expect("replay frame");
+            assert!(
+                replay.is_binary(),
+                "attach must deliver a renderable grid frame"
+            );
+            let bytes = replay.into_data();
+            assert_eq!(u16::from_le_bytes(bytes[0..2].try_into().unwrap()), 4);
+            assert_eq!(
+                u32::from_le_bytes(bytes[7..11].try_into().unwrap()),
+                offset as u32
+            );
+            assert_eq!(u32::from_le_bytes(bytes[11..15].try_into().unwrap()), 7);
+            // Full-frame row 0 starts after the 26-byte header and 4-byte
+            // row header; each cell stores a UTF-32 character plus styling.
+            let text: String = bytes[30..30 + 32 * 11]
+                .as_chunks::<11>()
+                .0
+                .iter()
+                .map(|cell| {
+                    char::from_u32(u32::from_le_bytes(cell[0..4].try_into().unwrap())).unwrap()
+                })
+                .collect();
+            assert_eq!(text.trim_end(), first_line);
+            socket.close(None).await.expect("close disposable client");
+            server.abort();
+        }
+    }
+
     /// Catches: a live but empty grid stream sends nothing on attach, causing
     /// the client replay watchdog to report a false failure on an idle PTY.
     #[cfg(unix)]
