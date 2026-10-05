@@ -2613,3 +2613,5 @@ AI Chat offers **Fork from here** beside a reply when ego advertises message-poi
 Forked AI Chat tabs label inherited history. A separator marks where the child’s own conversation begins, including after loading saved history.
 
 The AI Chat conversation picker groups fork and compaction descendants beneath their ancestors. Deleted immediate parents remain visible as disabled “Deleted conversation” rows.
+
+Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Approval automation, plan dispatch, public graph start controls and explicit integration remain later slices; graph completion alone never closes a native story.
