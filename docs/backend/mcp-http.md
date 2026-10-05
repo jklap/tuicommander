@@ -6,12 +6,11 @@ The shared filesystem router exposes streamed `/fs/upload-copy` on the daemon th
 
 ## CI logs
 
-The MCP `repo` tool's `ci_logs` action accepts `path` and `branch` and fetches
-logs for the local branch head. It does not accept a selected check URL or PR
-head SHA. For a remote-only PR or a particular CircleCI check, use the
-`fetch_ci_failure_logs` Tauri command with `check_url` and `head_sha`, or
-`/repo/ci-failure-logs` with `checkUrl` and `headSha`. Both verify the selected
-check against that PR head.
+Use HTTP `GET /repo/ci-failure-logs` with `path` and `branch` to fetch logs
+for the local branch head. For a remote-only PR or a particular CircleCI check,
+use the same route with `checkUrl` and `headSha`, or the
+`fetch_ci_failure_logs` Tauri command with `check_url` and `head_sha`. Both
+verify the selected check against that PR head.
 
 ## Native stories
 
@@ -571,10 +570,10 @@ one recipient and both MCP connections read the same inbox. This coalescing
 requires the same live PTY; peers on different PTYs remain separate.
 
 **Blocking tool actions run off the runtime worker.** Dispatch is action-aware:
-session create/input/close/kill/process-stats, agent spawn/detect/send, and config
+session create/input/close/kill/resize, agent spawn/send, and config
 writes use `run_blocking_handler` (`tokio::task::spawn_blocking`) because they may
 sleep, spawn processes, write PTYs, or touch disk. Common read-only actions such
-as session list/output/status and agent list-peers/inbox/stats/metrics execute
+as session list/output/status and agent list_peers/inbox execute
 inline without cloning their JSON payload or scheduling blocking-pool work.
 Async waits remain on their event-driven async handlers. A panicking blocking
 handler becomes a tool error rather than killing the request task; `POST /mcp`
