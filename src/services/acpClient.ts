@@ -299,10 +299,14 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 				authority: { cwd, additionalDirectories: [] },
 			});
 			const entries = acpTranscript.entries(sessionId);
-			const cutoff = atMessageId ? entries.findIndex((entry) => entry.messageId === atMessageId) : entries.length - 1;
+			const selected = atMessageId ? entries.findIndex((entry) => entry.messageId === atMessageId) : -1;
+			// ego forks after the completed containing turn, including its later replies
+			// and tools. The next user prompt starts the next turn in live and replayed history.
+			const nextTurn = entries.findIndex((entry, index) => index > selected && entry.kind === "user");
+			const cutoff = atMessageId ? (selected < 0 ? 0 : nextTurn < 0 ? entries.length : nextTurn) : entries.length;
 			acpTranscript.restore(
 				attachment.sessionId,
-				entries.slice(0, cutoff + 1).map((entry) => ({ ...entry, inherited: true })),
+				entries.slice(0, cutoff).map((entry) => ({ ...entry, inherited: true })),
 			);
 			await this.refresh(connectionId);
 			return attachment.sessionId;
