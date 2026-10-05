@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
+
 - Return from captured Windows background launches before the command exits, and resolve Git in Windows worktree hooks.
 
 - Match Claude transcript and subagent directory names for Windows profiles and checkout paths containing spaces or punctuation.

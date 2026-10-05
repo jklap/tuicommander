@@ -1,4 +1,15 @@
-import { type Component, createEffect, createSignal, lazy, on, onCleanup, onMount, Show, Suspense } from "solid-js";
+import {
+	type Component,
+	createEffect,
+	createSignal,
+	lazy,
+	on,
+	onCleanup,
+	onMount,
+	Show,
+	Suspense,
+	untrack,
+} from "solid-js";
 import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
@@ -301,6 +312,21 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
 	const pty = usePty();
 
+	// Launch readiness can arrive before or after command preparation. State
+	// snapshots also carry idle when the first prompt predates subscription.
+	createEffect(() => {
+		const terminal = terminalsStore.get(props.id);
+		const targetSessionId = terminal?.sessionId;
+		const command = terminal?.pendingInitCommand;
+		if (disposed || !targetSessionId || !command || terminal.shellState !== "idle") return;
+		untrack(() => {
+			terminalsStore.update(props.id, { pendingInitCommand: null });
+			pty
+				.sendCommand(targetSessionId, command, null)
+				.catch((error) => appLogger.error("terminal", "Failed to write init command", { error: String(error) }));
+		});
+	});
+
 	/** Track PTY activity for the activity dashboard. CanvasTerminal handles
 	 *  rendering and plugin dispatch; this callback only updates store metadata.
 	 *
@@ -546,17 +572,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					if (parsed.state === "idle") {
 						// Idle arrives first; any parked `suggest:` items follow on a later
 						// silence-timer tick (backend-gated). No promotion logic needed here.
-						const pendingT = terminalsStore.get(props.id);
-						const initCmd = pendingT?.pendingInitCommand;
-						terminalsStore.update(props.id, {
-							shellState: parsed.state,
-							...(initCmd ? { pendingInitCommand: null } : {}),
-						});
-						if (initCmd && targetSessionId) {
-							pty
-								.sendCommand(targetSessionId, initCmd, null)
-								.catch((e) => appLogger.error("terminal", "Failed to write init command", { error: String(e) }));
-						}
+						terminalsStore.update(props.id, { shellState: parsed.state });
 						// Idle: detect agent immediately — only idle can clear a detected agent
 						detectAgentForTerminal(props.id, "idle").catch((err) =>
 							appLogger.warn("terminal", "[AgentDetect] unexpected error", { error: String(err), termId: props.id }),

@@ -76,6 +76,16 @@ describe("a repo registered on a remote machine runs its work there", () => {
 		vi.useRealTimers();
 	});
 
+	// Catches: launch preparation injects the desktop's --settings path into a remote command.
+	it("prepares remote agent arguments on the owning daemon instead of local IPC", async () => {
+		(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+		globalThis.fetch = vi.fn().mockResolvedValue(jsonResponse("[]"));
+		const { prepareAgentLaunchCommand } = await import("../utils/agentSession");
+		expect(await prepareAgentLaunchCommand("claude", null, "claude", REMOTE_REPO)).toBe("claude");
+		expect(fetchedUrls()).toEqual([`${BASE_URL}/agents/launch-args?token=${TOKEN}`]);
+		expect(mockInvoke).not.toHaveBeenCalled();
+	});
+
 	it("sends a git write on a remote repo to that machine", async () => {
 		await rpc("git_commit", { path: REMOTE_REPO, message: "wip", amend: false });
 
