@@ -110,14 +110,10 @@ impl WorkflowRuntime {
         })
     }
 
-    /// Internal root-start boundary; public start controls arrive in slice F.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "graph start transport is delivered in slice F")
-    )]
+    /// Root-start boundary shared by public run transports.
     pub(crate) fn start_graph(
         &self,
-        state: &Arc<AppState>,
+        state: &AppState,
         request: &GraphStartRequest,
     ) -> Result<RunSnapshot, String> {
         let owner = self
