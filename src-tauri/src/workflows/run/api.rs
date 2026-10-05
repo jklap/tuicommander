@@ -154,7 +154,8 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             scoped_snapshot(&store, &owner, &run_id)?;
             if matches!(
                 command,
-                RunCommand::Graph { .. }
+                RunCommand::ExpireDeadline
+                    | RunCommand::Graph { .. }
                     | RunCommand::BindAgent { .. }
                     | RunCommand::ReportBoundAttempt { .. }
                     | RunCommand::AssignWorktree { .. }
@@ -234,6 +235,9 @@ pub fn run_action_with_events(
             | RunAction::RecertifyCanonical { .. }
             | RunAction::ExecuteCheck { .. }
     );
+    if mutation {
+        state.workflow_runtime.require_owner()?;
+    }
     let reply = run_action(project, action)?;
     if mutation {
         let (repo_path, run_id, sequence) = match &reply {
@@ -253,6 +257,16 @@ pub fn run_action_with_events(
 }
 
 pub fn emit_run_changed(
+    state: &crate::state::AppState,
+    repo_path: &str,
+    run_id: &str,
+    sequence: i64,
+) {
+    emit_run_cursor(state, repo_path, run_id, sequence);
+    state.workflow_runtime.wake(run_id);
+}
+
+pub(super) fn emit_run_cursor(
     state: &crate::state::AppState,
     repo_path: &str,
     run_id: &str,

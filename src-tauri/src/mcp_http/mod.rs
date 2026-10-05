@@ -3768,6 +3768,15 @@ mod tests {
         let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
         let project = tempfile::tempdir().expect("project");
         let state = test_state();
+        // The operator API needs the daemon owner, independently of caller metadata.
+        crate::workflows::WorkflowRuntime::spawn(&state);
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            while state.workflow_runtime.require_owner().is_err() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("daemon startup must acquire the run owner lock");
         let token = state.session_token.read().clone();
         let app = build_router(state, false, true);
         let local = std::net::SocketAddr::from(([127, 0, 0, 1], 0));

@@ -368,7 +368,9 @@ impl StoryStore {
     ) -> Result<Story, String> {
         validate_text("session", session, 200)?;
         let preflight_plan = self.get_story(story_id)?.plan_id;
+        let project = self.get_plan(&preflight_plan)?.project;
         let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
+        let _reservation_guard = crate::workflows::guard_manual_story_start(&project, story_id)?;
         let mut conn = self.connect()?;
         let tx = immediate(&mut conn)?;
         preflight.validate(&tx)?;

@@ -25,8 +25,10 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
     {
         return Err("terminal workflow cannot advance".into());
     }
-    if matches!(event.kind, RunEventKind::Graph { .. })
-        && snapshot.event_contract_version != super::graph::RUN_EVENT_CONTRACT_VERSION
+    if matches!(
+        event.kind,
+        RunEventKind::Graph { .. } | RunEventKind::GraphResumed { .. }
+    ) && snapshot.event_contract_version != super::graph::RUN_EVENT_CONTRACT_VERSION
     {
         return Err("unsupported workflow graph event contract".into());
     }
@@ -334,6 +336,26 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
             snapshot.verification_fingerprint = Some(fingerprint.clone())
         }
         RunEventKind::Paused => snapshot.status = RunStatus::Paused,
+        RunEventKind::DeadlineExpired { deadline_ms } => {
+            if snapshot.status != RunStatus::Running
+                || *deadline_ms != super::runtime::deadline_ms(&snapshot)
+                || event.at_ms < *deadline_ms
+            {
+                return Err("invalid workflow deadline expiry".into());
+            }
+            snapshot.status = RunStatus::Paused;
+        }
+        RunEventKind::GraphResumed {
+            execution_id,
+            activation_id,
+            resolution,
+        } => {
+            if resolution.trim().is_empty() || resolution.len() > 4096 {
+                return Err("graph resume needs a bounded explicit resolution".into());
+            }
+            super::store::validate_graph_recovery(&snapshot, execution_id, activation_id)?;
+            snapshot.status = RunStatus::Running;
+        }
         RunEventKind::Resumed => {
             validate_resume(&snapshot)?;
             snapshot.status = RunStatus::Running;

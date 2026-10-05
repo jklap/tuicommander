@@ -5,7 +5,7 @@ use crate::workflows::{WorkflowKind, WorkflowStore};
 
 #[test]
 fn dependency_refresh_failure_after_interruption_does_not_requeue_recovery_of_live_work() {
-    // catches: first-open recovery that interrupted the old attempt but failed in the story
+    // catches: daemon-start recovery that interrupted the old attempt but failed in the story
     // dependency refresh stays "pending", so the next open interrupts a worker the user
     // resumed and started in between.
     let config = tempfile::tempdir().expect("config");
@@ -70,7 +70,9 @@ fn dependency_refresh_failure_after_interruption_does_not_requeue_recovery_of_li
     let moved = config.path().join("stories.sqlite3.moved");
     std::fs::rename(&db, &moved).unwrap();
     std::fs::create_dir(&db).unwrap();
-    let first = RunStore::open().expect("a failed dependency refresh does not block the store");
+    let owner = super::runtime::RuntimeOwner::acquire(&config.path().join("workflow_runs.sqlite3"))
+        .expect("a failed dependency refresh does not block owner startup");
+    let first = &owner.store;
     std::fs::remove_dir(&db).unwrap();
     std::fs::rename(&moved, &db).unwrap();
     assert_eq!(
