@@ -652,7 +652,11 @@ mod tests {
             first
         );
         restarted.config.write().ai_chat_peer_ids.insert(
-            root.path().to_string_lossy().into_owned(),
+            root.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
             uuid::Uuid::parse_str(&first).unwrap().simple().to_string(),
         );
         let repaired = peer_id_for_root(&restarted, root.path()).await.unwrap();

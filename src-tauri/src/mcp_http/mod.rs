@@ -3069,6 +3069,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    // In-process executable replacement is unsupported on Windows (HTTP 501).
+    #[cfg(unix)]
     #[tokio::test]
     async fn remote_update_rejects_invalid_metadata_before_writing() {
         let state = test_state();
@@ -3145,6 +3147,8 @@ mod tests {
         }
     }
 
+    // In-process executable replacement is unsupported on Windows (HTTP 501).
+    #[cfg(unix)]
     #[tokio::test]
     async fn remote_update_preserves_the_old_executable_on_bad_digest_then_promotes() {
         let directory = tempfile::tempdir().unwrap();
@@ -3213,6 +3217,8 @@ mod tests {
     }
 
     // Catches: overlapping valid uploads both promote a binary or leave staging files behind.
+    // In-process executable replacement is unsupported on Windows (HTTP 501).
+    #[cfg(unix)]
     #[tokio::test]
     async fn concurrent_remote_updates_reject_the_second_upload_without_leaking_staging() {
         use futures_util::StreamExt;
@@ -3289,6 +3295,8 @@ mod tests {
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
+    // In-process executable replacement is unsupported on Windows (HTTP 501).
+    #[cfg(unix)]
     #[tokio::test]
     async fn two_local_remote_routers_isolate_update_and_restart_signal() {
         let directory = tempfile::tempdir().unwrap();
@@ -6681,7 +6689,20 @@ mod tests {
             .await
             .unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        #[cfg(unix)]
+        let expected = format!("{}/linked", repo.path().canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/linked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(rows[0]["path"], expected);
+        assert_eq!(
+            std::path::Path::new(rows[0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap()
+        );
         assert_eq!(rows[0]["safe"], false);
         assert!(rows[0]["reason"].as_str().unwrap().contains("untracked"));
         assert!(linked.join("untracked.txt").exists());
@@ -6736,7 +6757,20 @@ mod tests {
             .await
             .unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        #[cfg(unix)]
+        let expected = format!("{}/linked", repo.path().canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/linked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(rows[0]["path"], expected);
+        assert_eq!(
+            std::path::Path::new(rows[0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap()
+        );
         assert_eq!(rows[0]["safe"], false);
         assert!(rows[0]["reason"].as_str().unwrap().contains("branch"));
 
@@ -6831,7 +6865,20 @@ mod tests {
             .await
             .unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(rows[0]["path"], linked.to_string_lossy().as_ref());
+        #[cfg(unix)]
+        let expected = format!("{}/linked", repo.path().canonicalize().unwrap().display());
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/linked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert_eq!(rows[0]["path"], expected);
+        assert_eq!(
+            std::path::Path::new(rows[0]["path"].as_str().unwrap())
+                .canonicalize()
+                .unwrap(),
+            linked.canonicalize().unwrap()
+        );
         assert_eq!(rows[0]["safe"], false);
         assert!(
             rows[0]["reason"]

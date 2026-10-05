@@ -63,6 +63,8 @@ fn dependency_refresh_failure_after_interruption_does_not_requeue_recovery_of_li
             },
         )
         .unwrap();
+    // Close the real SQLite handle before replacing its path on Windows.
+    drop(stories);
     // Make only the story store unusable for the first open.
     let db = config.path().join("stories.sqlite3");
     let moved = config.path().join("stories.sqlite3.moved");

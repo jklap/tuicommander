@@ -228,8 +228,8 @@ mod tests {
     /// profile user starting with `-` is read as an option.
     #[tokio::test]
     async fn one_shot_ssh_and_scp_put_the_destination_after_double_dash() {
-        let script = "printf '%s\\n' \"$*\" > \"$0.log\"; exit 0";
-        let batch = "echo %* > \"%~f0.log\"\r\nexit /b 0";
+        let script = "printf '%s\\n' \"$@\" > \"$0.log\"; exit 0";
+        let batch = "setlocal EnableDelayedExpansion\r\ntype nul > \"%~f0.log\"\r\n:args\r\nif \"%~1\"==\"\" exit /b 0\r\nset \"arg=%~1\"\r\necho(!arg!>>\"%~f0.log\"\r\nshift /1\r\ngoto args";
         let ssh = fake_ssh_script("exec_double_dash_ssh", script, batch);
         let scp = fake_ssh_script("exec_double_dash_scp", script, batch);
         let _ = std::fs::remove_file(format!("{}.log", ssh.display()));
@@ -252,17 +252,20 @@ mod tests {
         .expect("push succeeds");
 
         let scp_log = std::fs::read_to_string(format!("{}.log", scp.display())).unwrap();
-        let expected = format!(
-            "-- {} -oProxyCommand=evil@example.com:.cache/tuic/bin.tmp-",
-            local.display()
-        );
+        let scp_args: Vec<_> = scp_log.lines().collect();
+        let local_arg = local.to_string_lossy();
         assert!(
-            scp_log.contains(&expected),
+            scp_args.windows(3).any(|args| args[0] == "--"
+                && args[1] == local_arg
+                && args[2].starts_with("-oProxyCommand=evil@example.com:.cache/tuic/bin.tmp-")),
             "scp must take `--`, the local path, then the destination: {scp_log}"
         );
         let ssh_log = std::fs::read_to_string(format!("{}.log", ssh.display())).unwrap();
+        let ssh_args: Vec<_> = ssh_log.lines().collect();
         assert!(
-            ssh_log.contains("-T -- -oProxyCommand=evil@example.com"),
+            ssh_args
+                .windows(3)
+                .any(|args| args == ["-T", "--", "-oProxyCommand=evil@example.com"]),
             "{ssh_log}"
         );
     }

@@ -1296,9 +1296,12 @@ pub(crate) fn begin_orphan_cleanup_internal(
 ) -> Result<(), String> {
     let current = tuic_git::worktree::assess_orphan_worktrees(repo_path)?;
     if paths.is_empty()
-        || paths
-            .iter()
-            .any(|path| !current.iter().any(|entry| &entry.path == path))
+        || paths.iter().any(|path| {
+            !current.iter().any(|entry| {
+                tuic_core::path_spelling::portable_spelling(&entry.path)
+                    == tuic_core::path_spelling::portable_spelling(path)
+            })
+        })
     {
         return Err("Pending cleanup must list current orphan worktrees".into());
     }
@@ -2069,13 +2072,29 @@ mod tests {
 
         assert!(error.starts_with(tuic_git::worktree::LOCKED_WORKTREE_PREFIX));
         assert!(worktree.exists());
+        let listed = git_cmd(repo.path())
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .unwrap()
+            .stdout;
+        #[cfg(unix)]
+        let expected = format!(
+            "{}/worktrees/feat-archive-locked",
+            repo.path().canonicalize().unwrap().display()
+        );
+        #[cfg(windows)]
+        let expected = format!(
+            "{}/worktrees/feat-archive-locked",
+            repo.path().display().to_string().replace('\\', "/")
+        );
+        assert!(listed.contains(&expected));
         assert!(
-            git_cmd(repo.path())
-                .args(["worktree", "list", "--porcelain"])
-                .run()
-                .unwrap()
-                .stdout
-                .contains(&worktree.to_string_lossy().to_string())
+            listed
+                .lines()
+                .filter_map(|line| line.strip_prefix("worktree "))
+                .any(|path| {
+                    Path::new(path).canonicalize().unwrap() == worktree.canonicalize().unwrap()
+                })
         );
     }
 

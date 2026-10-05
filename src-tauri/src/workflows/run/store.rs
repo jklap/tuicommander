@@ -1746,7 +1746,10 @@ fn choose_event(
                 return Err("story worktree must be a canonical isolated path".into());
             }
             let registered = crate::worktree::get_worktree_paths_raw(&snapshot.project)?;
-            if !registered.values().any(|worktree| worktree.path == path) {
+            if !registered.values().any(|worktree| {
+                tuic_core::path_spelling::portable_spelling(&worktree.path)
+                    == tuic_core::path_spelling::portable_spelling(&path)
+            }) {
                 return Err("story worktree is not a registered checkout".into());
             }
             Ok(RunEventKind::WorktreeAssigned { story_id, path })

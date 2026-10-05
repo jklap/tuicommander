@@ -1351,15 +1351,17 @@ mod tests {
         );
     }
 
+    /// Catches: the drive colon replacing the projects root during Path::join.
     /// A Windows cwd must slug the same way a Windows Claude does, and the
     /// result must still be assembled by `join` rather than by pasting a
     /// separator into a string.
     #[test]
     fn subagent_map_path_slugs_a_windows_cwd() {
         let path = subagents_path(r"C:\Users\foo\bar", Some("/c"), "u").expect("resolves");
+        assert!(path.starts_with(Path::new("/c").join("projects")));
         assert_eq!(
             tail_components(&path, 3),
-            vec!["C:-Users-foo-bar", "u", "subagents"],
+            vec!["C--Users-foo-bar", "u", "subagents"],
         );
     }
 

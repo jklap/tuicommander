@@ -56,7 +56,10 @@ impl Fixture {
     }
 
     pub fn root(&self) -> PathBuf {
-        self.root.path().to_path_buf()
+        self.root
+            .path()
+            .canonicalize()
+            .expect("canonical fixture root")
     }
 
     /// The launch authority every scenario runs under: the fixture agent, and
