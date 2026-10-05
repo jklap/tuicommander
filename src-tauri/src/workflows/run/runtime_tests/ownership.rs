@@ -72,7 +72,11 @@ async fn parallel_plan_runs_share_project_reservations() {
     let stories = StoryStore::open().unwrap();
     let plan = stories
         .create_plan(NewPlan {
-            project: project.into(),
+            // Match the API and the first plan's canonical project identity on Windows.
+            project: crate::progress::resolve_owning_project(Some(project))
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
             title: "Independent".into(),
             source: "second.md".into(),
         })
