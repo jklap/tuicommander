@@ -1,0 +1,56 @@
+import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { afterEach, expect, it, vi } from "vitest";
+
+const backend = vi.hoisted(() => ({ config: { ego_executable: "", experimental_features_enabled: true } }));
+
+vi.mock("../../invoke", () => ({
+	invoke: vi.fn(async (command: string, args?: Record<string, unknown>) => {
+		if (command === "load_config") return structuredClone(backend.config);
+		if (command === "save_config") {
+			backend.config = structuredClone(args?.config) as typeof backend.config;
+			return;
+		}
+		if (command === "focus_main_window") return;
+		throw new Error(`Unexpected command: ${command}`);
+	}),
+	listen: vi.fn(async () => () => {}),
+	guardTauriUnlisten: (unlisten: () => void) => unlisten,
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+	emitTo: vi.fn(async () => {}),
+	listen: vi.fn(async () => () => {}),
+}));
+vi.mock("../../themes", () => ({
+	loadThemes: vi.fn(async () => {}),
+	listenForThemeChanges: vi.fn(async () => {}),
+	applyAppTheme: vi.fn(),
+	applyFontFamily: vi.fn(),
+}));
+
+afterEach(() => {
+	cleanup();
+	window.history.replaceState({}, "", "/");
+});
+
+// Catches: detached settings stay stale after main-window setup, leaving chat inactive until the window is reopened.
+it("activates the already-open detached composer after ego is configured in the main window", async () => {
+	vi.resetModules();
+	localStorage.clear();
+	window.history.replaceState({}, "", "/?mode=panel&panel=ai-chat");
+	const { initPanelWindow } = await import("../../hooks/initPanelWindow");
+	const { AIChatPanel } = await import("../../components/AIChatPanel/AIChatPanel");
+	await initPanelWindow();
+	const panel = render(() => <AIChatPanel visible={true} repoPath={null} onClose={() => {}} />);
+	expect(panel.queryByRole("textbox")).toBeNull();
+	await fireEvent.click(panel.getByRole("button", { name: "Configure ego" }));
+
+	// A second WebView has its own module instance and saves to the same backend.
+	vi.resetModules();
+	const { settingsStore: mainSettings } = await import("../../stores/settings");
+	await mainSettings.hydrate();
+	mainSettings.setEgoExecutable("/usr/local/bin/ego");
+	await waitFor(() => expect(backend.config.ego_executable).toBe("/usr/local/bin/ego"));
+	window.dispatchEvent(new Event("focus"));
+	document.dispatchEvent(new Event("visibilitychange"));
+	await waitFor(() => expect(panel.queryByRole("textbox")).not.toBeNull());
+});
