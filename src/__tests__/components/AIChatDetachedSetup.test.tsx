@@ -1,7 +1,9 @@
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
+import { createRoot } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 
 const backend = vi.hoisted(() => ({ config: { ego_executable: "", experimental_features_enabled: true } }));
+let disposePanel: (() => void) | undefined;
 
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn(async (command: string, args?: Record<string, unknown>) => {
@@ -29,6 +31,7 @@ vi.mock("../../themes", () => ({
 
 afterEach(() => {
 	cleanup();
+	disposePanel?.();
 	window.history.replaceState({}, "", "/");
 });
 
@@ -39,7 +42,10 @@ it("activates the already-open detached composer after ego is configured in the 
 	window.history.replaceState({}, "", "/?mode=panel&panel=ai-chat");
 	const { initPanelWindow } = await import("../../hooks/initPanelWindow");
 	const { AIChatPanel } = await import("../../components/AIChatPanel/AIChatPanel");
-	await initPanelWindow();
+	await createRoot((dispose) => {
+		disposePanel = dispose;
+		return initPanelWindow();
+	});
 	const panel = render(() => <AIChatPanel visible={true} repoPath={null} onClose={() => {}} />);
 	expect(panel.queryByRole("textbox")).toBeNull();
 	await fireEvent.click(panel.getByRole("button", { name: "Configure ego" }));
