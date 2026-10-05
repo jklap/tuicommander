@@ -66,6 +66,7 @@ pub(super) enum Command {
         reply: Reply<v1::ListSessionsResponse>,
     },
     Attach {
+        at_message_id: Option<String>,
         kind: AcpAttachKind,
         session_id: v1::SessionId,
         authority: AcpSessionAuthority,
@@ -437,11 +438,12 @@ impl ConnectionActor {
                 }
             }
             Command::Attach {
+                at_message_id,
                 kind,
                 session_id,
                 authority,
                 reply,
-            } => match self.start_attach(kind, session_id, &authority, connection) {
+            } => match self.start_attach(kind, session_id, &authority, at_message_id, connection) {
                 Ok((claimed, sent)) => in_flight.push(Box::pin(async move {
                     Pending::Attach {
                         claimed,
@@ -1078,6 +1080,7 @@ impl ConnectionActor {
         kind: AcpAttachKind,
         session_id: v1::SessionId,
         authority: &AcpSessionAuthority,
+        at_message_id: Option<String>,
         connection: &ConnectionTo<Agent>,
     ) -> Result<(Option<v1::SessionId>, Sent<Attached>), AcpClientError> {
         tracing::info!(
@@ -1090,6 +1093,11 @@ impl ConnectionActor {
         let operation = kind.operation();
         self.require(operation)?;
         self.require_authority(authority)?;
+        if at_message_id.is_some() && !self.capabilities.fork_at_message {
+            return Err(AcpClientError::invalid_input(
+                "agent does not support fork at a message",
+            ));
+        }
         // Load and resume name the session they attach to; a fork names the one
         // it forks *from* and comes back with an id of its own, so only these
         // two can land on an attachment this connection already holds. Landing
@@ -1132,6 +1140,12 @@ impl ConnectionActor {
             }
             AcpAttachKind::Fork => {
                 let mut request = v1::ForkSessionRequest::new(session_id, cwd);
+                if let Some(message_id) = at_message_id {
+                    request.meta = Some(serde_json::Map::from_iter([(
+                        "ego".to_owned(),
+                        serde_json::json!({ "atMessageId": message_id }),
+                    )]));
+                }
                 request.additional_directories = roots;
                 request.mcp_servers = servers;
                 let sent = self.send(request, connection, operation);

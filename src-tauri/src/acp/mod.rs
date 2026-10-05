@@ -1195,6 +1195,7 @@ pub struct AcpCapabilitySnapshot {
     pub list: bool,
     pub resume: bool,
     pub fork: bool,
+    pub fork_at_message: bool,
     pub delete: bool,
     pub close: bool,
     pub additional_directories: bool,
@@ -1271,6 +1272,14 @@ pub fn capability_snapshot(
         list: session.list.is_some(),
         resume: session.resume.is_some(),
         fork: session.fork.is_some(),
+        fork_at_message: session
+            .fork
+            .as_ref()
+            .and_then(|fork| fork.meta.as_ref())
+            .and_then(|meta| meta.get("ego"))
+            .and_then(|ego| ego.get("atMessage"))
+            .and_then(Value::as_bool)
+            == Some(true),
         delete: session.delete.is_some(),
         close: session.close.is_some(),
         additional_directories: session.additional_directories.is_some(),

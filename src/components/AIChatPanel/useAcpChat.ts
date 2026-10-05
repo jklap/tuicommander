@@ -456,12 +456,14 @@ export function createAcpChat(
 		},
 
 		/** Branch this conversation at its tip into a new tab; the parent keeps its own. */
-		async fork(): Promise<void> {
+		async fork(atMessageId?: string): Promise<void> {
 			const current = pair();
 			const target = root();
 			if (!current || !target || busy()) return;
 			const child = await guard("forking the conversation", () =>
-				client.forkSession(current.id, current.session, target),
+				atMessageId
+					? client.forkSession(current.id, current.session, target, atMessageId)
+					: client.forkSession(current.id, current.session, target),
 			);
 			if (child === null) return;
 			await selectSession(child);

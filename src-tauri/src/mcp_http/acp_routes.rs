@@ -373,19 +373,30 @@ async fn session_resume(
     .await
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ForkBody {
+    authority: AcpSessionAuthority,
+    at_message_id: Option<String>,
+}
+
 async fn session_fork(
     Path((connection_id, session_id)): Path<(AcpConnectionId, v1::SessionId)>,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<AuthorityBody>,
+    Json(body): Json<ForkBody>,
 ) -> Response {
-    attach(
-        &state,
-        AcpAttachKind::Fork,
-        connection_id,
-        session_id,
-        body.authority,
+    answer(
+        state
+            .acp
+            .attach_at_message(
+                connection_id,
+                AcpAttachKind::Fork,
+                session_id,
+                body.authority,
+                body.at_message_id,
+            )
+            .await,
     )
-    .await
 }
 
 async fn session_delete(

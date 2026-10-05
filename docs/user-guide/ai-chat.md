@@ -235,3 +235,5 @@ model and re-deriving the history later is impossible.
   detection, silence-based idle.
 
 Pending permissions and ego notice cards can alert your phone when the desktop is away. Both share a 30-second limit per conversation; ordinary activity does not send a push.
+
+AI Chat offers **Fork from here** beside a reply when ego advertises message-point forks. The new tab keeps history through that reply’s completed turn; the parent remains open.
