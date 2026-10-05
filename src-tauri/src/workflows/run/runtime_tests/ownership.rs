@@ -148,7 +148,7 @@ async fn parallel_plan_runs_share_project_reservations() {
 
 #[tokio::test]
 async fn unsupported_graph_start_and_non_owner_mutations_are_refused() {
-    // catches: publishing executable delivery before Agent support, or a second process executing it.
+    // catches: executing an unsupported story Coordinator, or a second process executing a graph.
     let (config, project, plan, story, template, _guard) = fixture();
     let state = state(config.path());
     let error = run_action_with_events(
@@ -166,6 +166,20 @@ async fn unsupported_graph_start_and_non_owner_mutations_are_refused() {
     WorkflowRuntime::spawn(&state);
     owner_ready(&state).await;
     let published = definition(project.path().to_str().unwrap(), false, true);
+    let definitions = WorkflowStore::open().unwrap();
+    let draft = definitions.get_draft(&published.id).unwrap();
+    let mut graph = draft.graph;
+    for node in &mut graph.nodes {
+        if let NodeKind::Agent { role, .. } = &mut node.kind {
+            *role = AgentRole::Coordinator;
+        }
+    }
+    let draft = definitions
+        .update_draft(&draft.id, draft.draft_revision, graph)
+        .unwrap();
+    let published = definitions
+        .publish(&draft.id, draft.draft_revision)
+        .unwrap();
     let mut start = request(
         project.path().to_str().unwrap(),
         &story,

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Dispatch bounded plan story waves, wait for explicit dependency integration, and require current deterministic final checks before completion.
+
+- Run pre-approval workflow checks and record independent reviewer approval; retain implementer role restrictions after exit. Execute deterministic story Gate outcomes.
+
+- Execute pinned serial workflow Agent/Judge/Loop/Pause/Notify/Join nodes in the owning daemon with durable reports and effects; refuse unsupported node publication. Manual pause time no longer consumes active run duration. Public graph start controls remain in development.
+
 - **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
 
 - **Workflow graph foundation** — Durable serial graph positions, bounded predecessor history, decision provenance and repair counters now replay from pinned definitions. Executable validation requires final checks and explicit pause targets. This slice does not enable autonomous scheduling; older pre-contract runs remain inspectable and cancellable.
