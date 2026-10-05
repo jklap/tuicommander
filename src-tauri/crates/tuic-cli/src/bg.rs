@@ -170,6 +170,31 @@ pub fn launch(log: &str, command: &[String]) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        // Command::spawn inherits every inheritable handle, including the
+        // launcher's original capture pipes, even with null runner stdio.
+        // This CLI has no concurrent process launches; keep those pipes in
+        // this process so its caller observes EOF as soon as launch returns.
+        use windows_sys::Win32::Foundation::{
+            HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+        };
+        use windows_sys::Win32::System::Console::{
+            GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        };
+        for kind in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: GetStdHandle returns a borrowed process handle; it is
+            // inspected and never closed. Clearing inheritance keeps it usable
+            // by this process and does not alter runner's explicit null stdio.
+            let handle = unsafe { GetStdHandle(kind) };
+            if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+                // SAFETY: handle is a live standard handle owned by this CLI.
+                if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
+                    return Err(format!(
+                        "Cannot detach background standard handle: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+            }
+        }
         runner.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
     let child = runner.spawn().map_err(|e| {

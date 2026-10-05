@@ -2060,7 +2060,8 @@ mod tests {
         let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         assert!(log.contains("WARN"), "{log}");
         for path in searched {
-            assert!(log.contains(&path.to_string_lossy().to_string()), "{log}");
+            let encoded = format!("{path:?}");
+            assert!(log.contains(&encoded), "{log}");
         }
     }
 
@@ -3758,6 +3759,10 @@ mod tests {
             "tuic-test-runner"
         };
         let exe = sandbox.path().join(runner_name);
+        // The CI target and checkout can live on different Windows drives.
+        #[cfg(windows)]
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        #[cfg(not(windows))]
         std::fs::hard_link(std::env::current_exe().unwrap(), &exe).unwrap();
         // The bridge is copied and hashed, never launched. Hardlinking the
         // entire test runner here made owning launches copy hundreds of MB and
@@ -3810,8 +3815,12 @@ mod tests {
                         .as_str()
                         .unwrap(),
                 );
+                // Compare filesystem identities, not a normal Windows path
+                // against canonicalize's verbatim path spelling.
+                let command = command.canonicalize().unwrap();
                 assert!(
-                    command.starts_with(home.join("tuic-config/mcp-bridge")),
+                    command
+                        .starts_with(home.join("tuic-config/mcp-bridge").canonicalize().unwrap()),
                     "{name}"
                 );
                 assert_eq!(
@@ -3842,6 +3851,9 @@ mod tests {
         std::fs::create_dir_all(&worktree_tmp).unwrap();
         let worktree_sandbox = tempfile::tempdir_in(worktree_tmp).unwrap();
         let worktree_exe = worktree_sandbox.path().join(runner_name);
+        #[cfg(windows)]
+        std::fs::copy(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
+        #[cfg(not(windows))]
         std::fs::hard_link(std::env::current_exe().unwrap(), &worktree_exe).unwrap();
         fake_bridge(worktree_sandbox.path(), b"bridge bytes");
         let home = sandbox.path().join("worktree-binary");

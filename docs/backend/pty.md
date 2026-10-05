@@ -721,6 +721,8 @@ Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The
 - Reader thread holds `Arc<AtomicBool>` for pause signaling
 - Metrics use `AtomicUsize` for zero-overhead counting
 
+Claude transcript discovery, session verification, project-directory lookup and subagent paths share the Claude project-path encoder. It replaces every non-ASCII-alphanumeric character with `-`, including Windows drive colons, spaces, Unix dots and underscores. Claude's hashed suffix for paths whose encoded slug exceeds 200 characters remains unsupported.
+
 ### Stored terminal marker coordinates
 
 OSC 133 command boundaries and OSC 7770 prompt rows are eviction-stable all-time rows. The PTY reader forwards these coordinates unchanged on IPC and HTTP/WS; it must not add the end-of-chunk history base.
