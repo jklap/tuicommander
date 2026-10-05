@@ -10,7 +10,9 @@ fn edge(from: &str, to: &str, outcome: Option<&str>) -> Edge {
     }
 }
 
-fn publish(project: &str, graph: WorkflowGraph) -> crate::workflows::PublishedWorkflow {
+pub(super) fn publish(project: &str, graph: WorkflowGraph) -> crate::workflows::PublishedWorkflow {
+    let project = canonical_owner(project);
+    let project = project.as_str();
     let definitions = WorkflowStore::open().unwrap();
     let draft = definitions
         .create_draft(project, "Executor semantics", WorkflowKind::Story, graph)
@@ -154,7 +156,7 @@ fn assert_delivery(expected: EdgeOutcome, automatic: bool, fail_checks: bool) {
     let worktree = init_worktree(project.path(), config.path());
     let definitions = WorkflowStore::open().unwrap();
     let story_template = definitions
-        .seed_templates(project_path)
+        .seed_templates(&canonical_owner(project_path))
         .unwrap()
         .into_iter()
         .find(|d| d.kind == WorkflowKind::Story)
@@ -477,7 +479,7 @@ fn preapproval_failed_check_never_closes_the_story() {
 mod controls;
 
 #[path = "plan_dispatch.rs"]
-mod plan_dispatch;
+pub(super) mod plan_dispatch;
 
 #[path = "critic_de.rs"]
 mod critic_de;

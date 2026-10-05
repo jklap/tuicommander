@@ -47,12 +47,35 @@ type Reply =
 	| { type: "story"; value: Story }
 	| { type: "stories"; value: Story[] };
 
+interface RunGraph {
+	id: string;
+	targetId: string;
+	definition: {
+		id: string;
+		revision: number;
+		graph: {
+			nodes: { id: string; kind: { type: string } }[];
+			edges: { from: string; to: string; outcome?: string | null }[];
+		};
+	};
+	activations: { id: string; nodeId: string; state: string; edgeIndex: number | null }[];
+	decisions: {
+		activationId: string;
+		edgeIndex: number;
+		evidence: { actor: string; reason: string; references: string[] };
+	}[];
+	loops: { nodeId: string; repeats: number }[];
+	pauses: { activationId: string; resumeTo: string; evidence: { reason: string }; resolution: string | null }[];
+	completed: boolean;
+}
 interface RunSnapshot {
 	id: string;
 	planId: string;
 	status: string;
 	sequence: number;
 	startedMs: number;
+	rootTarget?: { type: string; id: string } | null;
+	graphExecutions?: RunGraph[];
 	stories: { storyId: string; accepted: boolean }[];
 	attempts: {
 		id: string;
@@ -67,7 +90,7 @@ interface RunSnapshot {
 interface RunEvent {
 	sequence: number;
 	atMs: number;
-	kind: { type: string };
+	kind: { type: string; [field: string]: unknown };
 }
 type RunReply =
 	| { type: "runs"; value: RunSnapshot[] }
@@ -156,6 +179,23 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 	const [runLoading, setRunLoading] = createSignal(false);
 	const [runError, setRunError] = createSignal("");
 	const [inputAnswer, setInputAnswer] = createSignal("");
+	const [startOpen, setStartOpen] = createSignal(false);
+	const [publishedChoices, setPublishedChoices] = createSignal<
+		{ id: string; name: string; latestPublishedRevision: number }[]
+	>([]);
+	const [workflowChoice, setWorkflowChoice] = createSignal("");
+	const [recoveryExecution, setRecoveryExecution] = createSignal("");
+	const [recoveryActivation, setRecoveryActivation] = createSignal("");
+	const [resolution, setResolution] = createSignal("");
+	let startRequestId = "";
+	createEffect(on(storyId, () => setStartOpen(false)));
+	createEffect(
+		on(selectedRunId, () => {
+			setRecoveryExecution("");
+			setRecoveryActivation("");
+			setResolution("");
+		}),
+	);
 	let closeButton: HTMLButtonElement | undefined;
 	let request = 0;
 	let runRequest = 0;
@@ -239,6 +279,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		try {
 			const reply = await callRun({ action: "list_plan_runs", plan_id: currentPlan, limit: 20 });
 			if (reply.type !== "runs") throw new Error("Invalid run list response");
+			if (currentPlan !== planId() || !showRuns()) return;
 			setRuns(reply.value);
 			const selected = reply.value.find((item) => item.id === selectedRunId())?.id ?? reply.value[0]?.id ?? null;
 			const unchanged = selected === selectedRunId();
@@ -280,25 +321,90 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 		}
 	}
 
-	async function resumeRun(): Promise<void> {
+	async function controlRun(command: Record<string, unknown>): Promise<void> {
 		const selected = run();
-		if (selected?.status !== "paused" || pendingInput()) return;
+		if (!selected) return;
 		setRunLoading(true);
 		setRunError("");
 		try {
 			const reply = await callRun({
 				action: "command",
 				run_id: selected.id,
-				command_id: `resume:${selected.sequence}`,
+				command_id: crypto.randomUUID(),
 				expected_sequence: selected.sequence,
-				command: { action: "resume" },
+				command,
 			});
+			if (selectedRunId() !== selected.id) return;
 			if (reply.type !== "receipt") throw new Error("Invalid run response");
 			setRun(reply.value.snapshot);
+			setRecoveryExecution("");
+			setRecoveryActivation("");
+			setResolution("");
+			await loadRun(selected.id);
 		} catch (cause) {
-			setRunError(String(cause));
+			if (selectedRunId() === selected.id) setRunError(String(cause));
 		} finally {
-			setRunLoading(false);
+			if (selectedRunId() === selected.id) setRunLoading(false);
+		}
+	}
+
+	async function openStart(): Promise<void> {
+		setBusy(true);
+		setError("");
+		const selected = storyId();
+		try {
+			const reply = await invoke<{
+				type: string;
+				value: { id: string; name: string; kind: string; latestPublishedRevision: number | null }[];
+			}>("workflow_definition_action", { project: props.project, action: { action: "list_drafts" } });
+			if (reply.type !== "drafts") throw new Error("Invalid workflow response");
+			if (selected !== storyId()) return;
+			const choices = reply.value.filter(
+				(item): item is typeof item & { latestPublishedRevision: number } =>
+					item.kind === "story" && item.latestPublishedRevision !== null,
+			);
+			setPublishedChoices(choices);
+			setWorkflowChoice(choices[0]?.id ?? "");
+			startRequestId = crypto.randomUUID();
+			setStartOpen(true);
+		} catch (cause) {
+			fail(cause);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	async function startStoryWorkflow(event: SubmitEvent): Promise<void> {
+		event.preventDefault();
+		const selected = selectedStory();
+		const workflow = publishedChoices().find((item) => item.id === workflowChoice());
+		if (!selected || !workflow) return;
+		setBusy(true);
+		setError("");
+		try {
+			const reply = await callRun({
+				action: "start_graph",
+				target: { type: "story", id: selected.id },
+				expected_revision: selected.revision,
+				definition_id: workflow.id,
+				definition_revision: workflow.latestPublishedRevision,
+				request_id: startRequestId,
+			});
+			if (reply.type !== "snapshot") throw new Error("Invalid run response");
+			if (selected.planId !== planId()) return;
+			setStartOpen(false);
+			setShowDesigner(false);
+			setShowRuns(true);
+			setRuns((previous) => [reply.value, ...previous.filter((item) => item.id !== reply.value.id)]);
+			const unchanged = selectedRunId() === reply.value.id;
+			setRun(null);
+			setRunEvents([]);
+			setSelectedRunId(reply.value.id);
+			if (unchanged) await loadRun(reply.value.id);
+		} catch (cause) {
+			fail(cause);
+		} finally {
+			setBusy(false);
 		}
 	}
 
@@ -525,6 +631,17 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 						</button>
 						<button
 							type="button"
+							disabled={busy() || selectedStory()?.status !== "ready" || !!selectedStory()?.claimSession}
+							onClick={() => void openStart()}
+						>
+							Start story workflow
+						</button>
+						{/* DEFERRED (2026-10-06) — plan start awaits the slice E dispatch entry point. */}
+						<button type="button" disabled title="Plan dispatch is unavailable in this build">
+							Start plan workflow · unavailable
+						</button>
+						<button
+							type="button"
 							aria-pressed={showRuns()}
 							disabled={!planId()}
 							onClick={() => {
@@ -577,6 +694,40 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 					<div class={s.message} role="status">
 						{t("stories.loading", "Loading plans and stories…")}
 					</div>
+				</Show>
+				<Show when={startOpen()}>
+					<form class={s.form} onSubmit={(event) => void startStoryWorkflow(event)}>
+						<p>Start · {selectedStory()?.title}</p>
+						<Show
+							when={publishedChoices().length > 0}
+							fallback={<p>No published story workflow. Publish one in Designer.</p>}
+						>
+							<label>
+								Published workflow
+								<select
+									value={workflowChoice()}
+									onChange={(event) => {
+										setWorkflowChoice(event.currentTarget.value);
+										startRequestId = crypto.randomUUID();
+									}}
+								>
+									<For each={publishedChoices()}>
+										{(workflow) => (
+											<option value={workflow.id}>
+												{workflow.name} · revision {workflow.latestPublishedRevision}
+											</option>
+										)}
+									</For>
+								</select>
+							</label>
+							<button type="submit" disabled={busy() || !workflowChoice()}>
+								Start published workflow
+							</button>
+						</Show>
+						<button type="button" onClick={() => setStartOpen(false)}>
+							Dismiss
+						</button>
+					</form>
 				</Show>
 				<Show when={showDesigner()}>
 					<WorkflowDesigner project={props.project} />
@@ -660,17 +811,156 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 												</form>
 											)}
 										</Show>
-										<Show when={selected().status === "paused" && !pendingInput()}>
-											<button type="button" class={s.loadMore} disabled={runLoading()} onClick={() => void resumeRun()}>
-												Resume run
+
+										<Show when={!selected().graphExecutions?.length}>
+											<p class={s.muted}>Legacy run · inspect or cancel only.</p>
+										</Show>
+										<Show when={selected().status === "running" && !!selected().graphExecutions?.length}>
+											<button
+												type="button"
+												class={s.loadMore}
+												disabled={runLoading()}
+												onClick={() => void controlRun({ action: "pause" })}
+											>
+												Pause run
 											</button>
+										</Show>
+										<Show when={selected().status === "running" || selected().status === "paused"}>
+											<button
+												type="button"
+												class={s.loadMore}
+												disabled={runLoading()}
+												onClick={() => void controlRun({ action: "cancel" })}
+											>
+												Cancel run
+											</button>
+										</Show>
+										<For each={selected().graphExecutions ?? []}>
+											{(graph) => (
+												<section aria-label={`Graph ${graph.id}`}>
+													<h4>
+														{graph.id} · {graph.targetId} · revision {graph.definition.revision}
+													</h4>
+													<For each={graph.activations}>
+														{(activation) => (
+															<p>
+																{activation.id} · {activation.nodeId} · {activation.state}
+															</p>
+														)}
+													</For>
+													<For each={graph.decisions}>
+														{(decision) => (
+															<p>
+																Decision · {decision.activationId} ·{" "}
+																{graph.definition.graph.edges[decision.edgeIndex]?.outcome} · {decision.evidence.actor}{" "}
+																· {decision.evidence.reason} · {decision.evidence.references.join(", ")}
+															</p>
+														)}
+													</For>
+													<For each={graph.loops}>
+														{(loop) => (
+															<p>
+																Loop · {loop.nodeId} · {loop.repeats} repeats
+															</p>
+														)}
+													</For>
+													<For each={graph.pauses}>
+														{(pause) => (
+															<p>
+																Pause · {pause.activationId} · {pause.evidence.reason} · resume to {pause.resumeTo} ·{" "}
+																{pause.resolution ?? "unresolved"}
+															</p>
+														)}
+													</For>
+												</section>
+											)}
+										</For>
+										<Show
+											when={selected().status === "paused" && !!selected().graphExecutions?.length && !pendingInput()}
+										>
+											<form
+												class={s.form}
+												onSubmit={(event) => {
+													event.preventDefault();
+													void controlRun({
+														action: "resume_graph",
+														execution_id: recoveryExecution(),
+														activation_id: recoveryActivation(),
+														resolution: resolution().trim(),
+													});
+												}}
+											>
+												<label>
+													Execution
+													<select
+														value={recoveryExecution()}
+														onChange={(event) => {
+															setRecoveryExecution(event.currentTarget.value);
+															setRecoveryActivation("");
+														}}
+													>
+														<option value="">Select execution</option>
+														<For each={selected().graphExecutions ?? []}>
+															{(graph) => (
+																<option value={graph.id}>
+																	{graph.id} · {graph.targetId}
+																</option>
+															)}
+														</For>
+													</select>
+												</label>
+												<label>
+													Resume activation
+													<select
+														value={recoveryActivation()}
+														onChange={(event) => setRecoveryActivation(event.currentTarget.value)}
+													>
+														<option value="">Select activation</option>
+														<For
+															each={
+																selected()
+																	.graphExecutions?.find((graph) => graph.id === recoveryExecution())
+																	?.activations.filter((activation) => activation.state !== "completed") ?? []
+															}
+														>
+															{(activation) => (
+																<option value={activation.id}>
+																	{activation.id} · {activation.nodeId} · {activation.state}
+																</option>
+															)}
+														</For>
+													</select>
+												</label>
+												<label>
+													Resolution
+													<textarea
+														value={resolution()}
+														onInput={(event) => setResolution(event.currentTarget.value)}
+														maxLength={4096}
+													/>
+												</label>
+												<button
+													type="submit"
+													disabled={
+														runLoading() || !recoveryExecution() || !recoveryActivation() || !resolution().trim()
+													}
+												>
+													Resume run
+												</button>
+											</form>
 										</Show>
 										<ol class={s.timeline}>
 											<For each={runEvents()}>
 												{(event) => (
 													<li>
 														<span class={s.eventSequence}>#{event.sequence}</span>
-														<span>{event.kind.type.replaceAll("_", " ")}</span>
+														<div>
+															<span>{event.kind.type.replaceAll("_", " ")}</span>
+															<details>
+																<summary>Event details</summary>
+																<pre>{JSON.stringify(event.kind, null, 2)}</pre>
+															</details>
+														</div>
 														<time>{new Date(event.atMs).toLocaleTimeString()}</time>
 													</li>
 												)}
