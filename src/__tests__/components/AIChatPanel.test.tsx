@@ -74,13 +74,18 @@ vi.mock("../../transport", () => ({
 // empty string nobody checked.
 const settings = vi.hoisted(() => ({ egoExecutable: "/usr/local/bin/ego" }));
 
-vi.mock("../../stores/settings", () => ({
-	settingsStore: {
-		state: settings,
-		isAiChatEnabled: () => true,
-		isAcpConfigured: () => settings.egoExecutable.trim().length > 0,
-	},
-}));
+vi.mock("../../stores/settings", async () => {
+	const { createSignal } = await import("solid-js");
+	const [executable, setExecutable] = createSignal(settings.egoExecutable);
+	Object.defineProperty(settings, "egoExecutable", { get: executable, set: setExecutable });
+	return {
+		settingsStore: {
+			state: settings,
+			isAiChatEnabled: () => true,
+			isAcpConfigured: () => settings.egoExecutable.trim().length > 0,
+		},
+	};
+});
 
 // The client is the IPC boundary and the only thing mocked below it: the store,
 // the transcript projection and every reducer between them are the real ones,
@@ -1212,9 +1217,58 @@ describe("AIChatPanel: without a configured binary", () => {
 		const { container } = renderIdlePanel();
 		await settle();
 
-		expect(container.textContent).toContain("ACP is not configured");
+		expect(container.textContent).toContain("AI Chat is inactive because the ego executable is not configured");
 		expect(client.connect).not.toHaveBeenCalled();
 		expect(container.querySelector("textarea")).toBeNull();
+	});
+	// Catches: missing setup action leaves a fresh profile with no route to configure ego.
+	it("opens the ego settings section from the inactive panel", async () => {
+		settings.egoExecutable = "";
+		const [opened, setOpened] = createSignal("");
+		const view = render(() => (
+			<>
+				<AIChatPanel
+					visible={true}
+					repoPath={ROOT}
+					onClose={() => {}}
+					onOpenSettings={(tab, section) => setOpened(`${tab}/${section}`)}
+				/>
+				<div role="status">{opened()}</div>
+			</>
+		));
+		await settle();
+		view.getByRole("button", { name: "Configure ego" }).click();
+		expect(view.getByRole("status").textContent).toBe("general/settings-ego");
+		expect(client.connect).not.toHaveBeenCalled();
+	});
+
+	// Catches: the detached setup button changes only its own WebView and never opens main Settings.
+	it("routes detached ego setup to the main window", async () => {
+		settings.egoExecutable = "";
+		window.history.replaceState(null, "", "/?mode=panel");
+		const view = renderIdlePanel();
+		await settle();
+		view.getByRole("button", { name: "Configure ego" }).click();
+		await settle();
+		expect(emitTo).toHaveBeenCalledWith("main", "panel-action", {
+			panelId: "ai-chat",
+			action: "configure-ego",
+			data: {},
+		});
+		expect(invoke).toHaveBeenCalledWith("focus_main_window");
+	});
+
+	// Catches: setup completion leaves the inactive panel stuck until TUIC restarts.
+	it("activates the composer immediately after configuring ego", async () => {
+		settings.egoExecutable = "";
+		const view = renderIdlePanel();
+		await settle();
+		expect(view.queryByRole("textbox")).toBeNull();
+		settings.egoExecutable = "/usr/local/bin/ego";
+		await settle();
+		expect(view.queryByRole("button", { name: "Configure ego" })).toBeNull();
+		expect(view.container.querySelector("textarea")).not.toBeNull();
+		expect(client.connect).not.toHaveBeenCalled();
 	});
 });
 
