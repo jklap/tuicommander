@@ -32,6 +32,7 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
     {
         return Err("unsupported workflow graph event contract".into());
     }
+    let previous_status = snapshot.status;
     match &event.kind {
         RunEventKind::Started { .. } => unreachable!(),
         RunEventKind::Graph { event } => match event {
@@ -338,7 +339,11 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
         RunEventKind::Paused => snapshot.status = RunStatus::Paused,
         RunEventKind::DeadlineExpired { deadline_ms } => {
             if snapshot.status != RunStatus::Running
-                || *deadline_ms != super::runtime::deadline_ms(&snapshot)
+                || (*deadline_ms != super::runtime::deadline_ms(&snapshot)
+                    && *deadline_ms
+                        != snapshot
+                            .started_ms
+                            .saturating_add(i64::from(snapshot.limits.max_duration_secs) * 1000))
                 || event.at_ms < *deadline_ms
             {
                 return Err("invalid workflow deadline expiry".into());
@@ -378,6 +383,16 @@ pub fn apply_event(previous: Option<RunSnapshot>, event: &RunEvent) -> Result<Ru
             snapshot.status = RunStatus::Cancelled;
         }
         RunEventKind::Completed => snapshot.status = RunStatus::Completed,
+    }
+    if previous_status != RunStatus::Paused && snapshot.status == RunStatus::Paused {
+        snapshot.paused_since_ms = Some(event.at_ms);
+    } else if previous_status == RunStatus::Paused
+        && snapshot.status != RunStatus::Paused
+        && let Some(since) = snapshot.paused_since_ms.take()
+    {
+        snapshot.paused_duration_ms = snapshot
+            .paused_duration_ms
+            .saturating_add(event.at_ms.saturating_sub(since).max(0));
     }
     snapshot.sequence = event.sequence;
     Ok(snapshot)

@@ -148,7 +148,7 @@ async fn parallel_plan_runs_share_project_reservations() {
 
 #[tokio::test]
 async fn unsupported_graph_start_and_non_owner_mutations_are_refused() {
-    // catches: publishing executable delivery before Agent support, or a second process executing it.
+    // catches: executing an unsupported Gate, or a second process executing a graph.
     let (config, project, plan, story, template, _guard) = fixture();
     let state = state(config.path());
     let error = run_action_with_events(
@@ -165,7 +165,7 @@ async fn unsupported_graph_start_and_non_owner_mutations_are_refused() {
     assert!(error.contains("executor unavailable"));
     WorkflowRuntime::spawn(&state);
     owner_ready(&state).await;
-    let published = definition(project.path().to_str().unwrap(), false, true);
+    let published = definition(project.path().to_str().unwrap(), true, false);
     let mut start = request(
         project.path().to_str().unwrap(),
         &story,

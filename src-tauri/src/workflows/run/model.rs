@@ -271,6 +271,10 @@ pub struct RunSnapshot {
     pub status: RunStatus,
     pub sequence: i64,
     pub started_ms: i64,
+    #[serde(default)]
+    pub paused_since_ms: Option<i64>,
+    #[serde(default)]
+    pub paused_duration_ms: i64,
     pub limits: RunLimits,
     pub loops: u16,
     pub story_creations: u16,
@@ -386,6 +390,11 @@ pub enum RunCommand {
     /// Internal only: graph transitions are not operator-supplied reports.
     Graph {
         transition: super::graph::GraphTransition,
+    },
+    /// Internal daemon primitive: only a reached running Agent may start an attempt.
+    StartGraphAgent {
+        execution_id: String,
+        activation_id: String,
     },
     ClosePlanning,
     StartAttempt {
