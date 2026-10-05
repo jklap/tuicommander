@@ -2999,3 +2999,78 @@ describe("AIChatPanel: pause, resume and compact", () => {
 		expect(container.querySelector('button[aria-label="Compact the conversation"]')).toBeNull();
 	});
 });
+
+describe("AIChatPanel: provider retry status", () => {
+	const CAUSE = "Our servers are currently overloaded. Please try again later.";
+	function retry(attempt: number | null) {
+		const providerRetry =
+			attempt === null
+				? null
+				: {
+						state: "waiting",
+						attempt,
+						limit: 6,
+						delayMs: 1000 * 2 ** (attempt - 1),
+						kind: "transient",
+						cause: CAUSE,
+						text: `${CAUSE} — connection problem, retrying in ${2 ** (attempt - 1)}s (attempt ${attempt}/6)`,
+					};
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "session_info_update", _meta: { ego: { providerRetry } } } as never,
+		});
+	}
+	const statusLines = (container: HTMLElement) => [...container.querySelectorAll("[class*=providerRetry]")];
+
+	async function retryingPanel() {
+		const view = await renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Audit terminali" } });
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await settle();
+		return view;
+	}
+
+	// Catches: one line per retry, or a retry that never shows its n/6 counter.
+	it("shows one status line that a later attempt updates in place", async () => {
+		const { container } = await retryingPanel();
+		retry(1);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+		expect(statusLines(container)[0].textContent).toContain("connection problem");
+		expect(statusLines(container)[0].textContent).toContain("attempt 1/6");
+
+		retry(2);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+		expect(statusLines(container)[0].textContent).toContain("attempt 2/6");
+		expect(statusLines(container)[0].textContent).not.toContain("attempt 1/6");
+		// The retry patch carries no title, so the conversation keeps its name.
+		expect(acpTranscript.title(SESSION)).toBe("Audit terminali");
+	});
+
+	// Catches: a stale retry line left on screen after the provider recovered.
+	it("removes the line when ego clears the retry", async () => {
+		const { container } = await retryingPanel();
+		retry(3);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+
+		retry(null);
+		await settle();
+		expect(statusLines(container)).toHaveLength(0);
+	});
+
+	// Catches: the retry line surviving next to the final error once 6/6 failed.
+	it("replaces the line with the final error when the turn fails", async () => {
+		const { container } = await retryingPanel();
+		retry(6);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+		feed({ kind: "turnFailed", message: "the turn failed: the provider returned HTTP 503", state: "idle" });
+		await settle();
+
+		expect(statusLines(container)).toHaveLength(0);
+		expect(container.textContent).toContain("the turn failed: the provider returned HTTP 503");
+	});
+});

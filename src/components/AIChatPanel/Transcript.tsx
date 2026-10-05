@@ -167,6 +167,8 @@ export interface TranscriptProps {
 	entries: () => AcpTranscriptEntry[];
 	/** Shown while a turn is running and nothing has streamed back yet. */
 	busy: () => boolean;
+	/** ego's provider-retry line ("… retrying in 2s (attempt 2/6)"), shown instead of the pulse. */
+	retry?: () => string | null;
 	emptyMessage: string;
 	onOpenFile?: (href: string) => void;
 	onClear?: () => void;
@@ -254,6 +256,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	createEffect(() => {
 		props.entries();
 		props.busy();
+		props.retry?.();
 		queueMicrotask(() => {
 			if (container && stickToBottom) container.scrollTop = container.scrollHeight;
 		});
@@ -470,8 +473,19 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 					)}
 				</For>
 			</Show>
-			<Show when={props.busy()}>
-				<div class={cx(s.assistantMsg, s.thinkingPulse)}>…</div>
+			<Show
+				when={props.retry?.()}
+				fallback={
+					<Show when={props.busy()}>
+						<div class={cx(s.assistantMsg, s.thinkingPulse)}>…</div>
+					</Show>
+				}
+			>
+				{(retry) => (
+					<div class={s.providerRetry} role="status">
+						{retry()}
+					</div>
+				)}
 			</Show>
 			{props.children}
 		</div>

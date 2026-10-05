@@ -56,6 +56,8 @@ interface TranscriptState {
 	usage: Record<AcpSessionId, { used: number; size: number; cost?: { amount: number; currency: string } }>;
 	turnHasReply: Record<AcpSessionId, boolean>;
 	pendingUserEcho: Record<AcpSessionId, { entryId: string; received: string }>;
+	/** ego's provider-retry status while a turn waits to retry (`_meta.ego.providerRetry`). */
+	retries: Record<AcpSessionId, string>;
 	/** Next entry id. Monotonic across sessions; only distinctness matters. */
 	nextId: number;
 }
@@ -66,6 +68,7 @@ const [state, setState] = createStore<TranscriptState>({
 	usage: {},
 	turnHasReply: {},
 	pendingUserEcho: {},
+	retries: {},
 	nextId: 1,
 });
 
@@ -207,9 +210,17 @@ function reduceUpdate(
 ): void {
 	const record = update as unknown as Record<string, unknown>;
 	switch (update.sessionUpdate) {
-		case "session_info_update":
+		case "session_info_update": {
 			if (typeof record.title === "string" && record.title.trim()) draft.titles[sessionId] = record.title;
+			// A patch: only a present key changes the status, and null clears it.
+			const ego = egoMeta(record) as { providerRetry?: { text?: unknown } | null } | undefined;
+			if (ego && "providerRetry" in ego) {
+				const text = ego.providerRetry?.text;
+				if (typeof text === "string" && text) draft.retries[sessionId] = text;
+				else delete draft.retries[sessionId];
+			}
 			break;
+		}
 		case "usage_update": {
 			if (
 				typeof record.used !== "number" ||
@@ -288,7 +299,7 @@ export const acpTranscript = {
 
 	/** Forget everything. Tests only. */
 	reset(): void {
-		setState({ sessions: {}, titles: {}, usage: {}, turnHasReply: {}, pendingUserEcho: {}, nextId: 1 });
+		setState({ sessions: {}, titles: {}, usage: {}, turnHasReply: {}, pendingUserEcho: {}, retries: {}, nextId: 1 });
 	},
 
 	/**
@@ -310,6 +321,7 @@ export const acpTranscript = {
 				delete s.sessions[sessionId];
 				delete s.turnHasReply[sessionId];
 				delete s.pendingUserEcho[sessionId];
+				delete s.retries[sessionId];
 			}),
 		);
 		return removed;
@@ -363,6 +375,7 @@ export const acpTranscript = {
 				}
 				if (event.kind === "turnFailed") {
 					delete s.pendingUserEcho[sessionId];
+					delete s.retries[sessionId];
 					settleToolCalls(entries, "failed");
 					entries.push({ id: `e${s.nextId}`, kind: "failed", message: event.message });
 					s.nextId += 1;
@@ -370,6 +383,7 @@ export const acpTranscript = {
 				}
 				if (event.kind === "turnSettled") {
 					delete s.pendingUserEcho[sessionId];
+					delete s.retries[sessionId];
 					settleToolCalls(entries, event.stopReason === "end_turn" ? "completed" : "failed");
 				}
 				if (event.kind === "turnSettled" && (event.stopReason !== "end_turn" || !s.turnHasReply[sessionId])) {
@@ -454,6 +468,11 @@ export const acpTranscript = {
 
 	title(sessionId: AcpSessionId): string | null {
 		return state.titles[sessionId] ?? null;
+	},
+
+	/** ego's provider-retry line for a turn waiting to retry, or null. */
+	retry(sessionId: AcpSessionId): string | null {
+		return state.retries[sessionId] ?? null;
 	},
 
 	usage(sessionId: AcpSessionId): { used: number; size: number; cost?: { amount: number; currency: string } } | null {
