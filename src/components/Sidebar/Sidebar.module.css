@@ -2418,3 +2418,27 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
+
+
+.mergedSummary {
+	font-size: var(--font-2xs);
+	display: flex;
+	align-items: center;
+	gap: 3px;
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+
+.mergedCleanup {
+	border: 0;
+	background: transparent;
+	color: var(--fg-muted);
+	font-size: var(--font-2xs);
+	padding: 2px 3px;
+	cursor: pointer;
+}
+
+.mergedCleanup:hover {
+	color: var(--fg-primary);
+	background: var(--bg-secondary);
+}

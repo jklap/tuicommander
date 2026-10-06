@@ -631,6 +631,31 @@ describe("Sidebar", () => {
 			expect(meta).toContain("4 dirty");
 		});
 
+		// Catches: closed-unmerged or live worktrees offered as clean, and bypassing the removal workflow.
+		it("merged_summary_does_not_hide_unsafe_worktrees", () => {
+			const safe = richBranch({
+				terminals: [],
+				isMerged: true,
+				lifecycleStatus: { dirtyFiles: 35, commitStatus: "merged", removalSafety: "destructive" },
+			});
+			const live = richBranch({
+				workspaceId: "live",
+				branchName: "live",
+				isMerged: true,
+				lifecycleStatus: { dirtyFiles: 0, commitStatus: "merged", removalSafety: "safe" },
+			});
+			const unmerged = richBranch({ workspaceId: "closed", branchName: "closed", terminals: [], isMerged: true });
+			setRepos({ "/repo1": makeRepo({ workspaces: { feat: safe, live, closed: unmerged } }) });
+			mockGetPrStatus.mockReturnValue({ state: "CLOSED", number: 1, title: "Closed", url: "" });
+			const onRemoveBranch = vi.fn();
+			const { container } = render(() => <Sidebar {...defaultProps({ onRemoveBranch })} />);
+			const summaries = container.querySelectorAll("[data-testid='merged-worktree-summary']");
+			expect(summaries).toHaveLength(1);
+			expect(summaries[0].textContent).toContain("35 uncommitted");
+			expect(container.querySelectorAll(".branchRichDetail")).toHaveLength(2);
+			fireEvent.click(summaries[0].querySelector("button")!);
+			expect(onRemoveBranch).toHaveBeenCalledExactlyOnceWith("/repo1", "feat");
+		});
 		// Catches: a rich-only detail line leaking into the compact sidebar.
 		it("keeps the compact row free of detail lines", () => {
 			uiStore.cycleSidebarDensityMode(); // auto -> compact
