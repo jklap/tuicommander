@@ -295,6 +295,18 @@ pub(crate) fn acp_subscribe(
     Ok(())
 }
 
+pub(crate) async fn session_new(
+    state: &AppState,
+    connection_id: AcpConnectionId,
+    authority: AcpSessionAuthority,
+) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+    let machine_profile = state.config.read().ego_profile.clone();
+    state
+        .acp
+        .new_session_for_repo(connection_id, authority, &machine_profile)
+        .await
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn acp_session_new(
@@ -302,7 +314,7 @@ pub(crate) async fn acp_session_new(
     connection_id: AcpConnectionId,
     authority: AcpSessionAuthority,
 ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-    state.acp.new_session(connection_id, authority).await
+    session_new(&state, connection_id, authority).await
 }
 
 #[cfg(feature = "desktop")]
