@@ -208,6 +208,16 @@ impl SecretStore {
             .collect();
         mask::mask(text, &needles)
     }
+    /// Mask registered values in full output without moving source-byte cursors.
+    pub(crate) fn mask_preserving_offsets(&self, bytes: &[u8]) -> Zeroizing<Vec<u8>> {
+        let inner = self.inner.lock();
+        let needles: Vec<_> = inner
+            .values
+            .values()
+            .flat_map(|v| mask::representations(v))
+            .collect();
+        mask::mask_preserving_offsets(bytes, &needles)
+    }
     pub(crate) fn clear(&self) {
         let mut inner = self.inner.lock();
         inner.values.clear();

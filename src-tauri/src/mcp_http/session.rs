@@ -490,7 +490,7 @@ pub(super) async fn get_output(
                 "action": "output", "session_id": session_id,
                 "format": if format == "mcp_raw" { "raw" } else { "text" },
                 "limit": query.limit, "from_line": query.from_line,
-                "since_cursor": query.since_cursor,
+                "since_cursor": query.since_cursor, "from_byte": query.from_byte,
             }),
         );
         return (
