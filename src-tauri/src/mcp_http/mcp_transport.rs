@@ -22935,6 +22935,49 @@ mod tests {
         assert!(response.get("hint").is_none());
     }
 
+    // Catches: delta pages expose PEM body rows because only the page, not
+    // the retained multiline key, is considered during secret discovery.
+    #[test]
+    fn session_output_delta_pages_do_not_leak_multiline_private_key_body() {
+        let state = test_state();
+        let sid = "critic-pem-pages";
+        let body = "QWxwaGFCZXRhR2FtbWFEZWx0YUVwc2lsb25aZXRh";
+        let mut vt = crate::state::VtLogBuffer::new(2, 120, 100);
+        vt.process(
+            format!(
+                "-----BEGIN OPENSSH PRIVATE KEY-----\r\n{body}\r\n-----END OPENSSH PRIVATE KEY-----\r\nafter\r\nflush\r\n"
+            )
+            .as_bytes(),
+        );
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(vt));
+        let mut cursor = 0;
+        let mut observed = String::new();
+        loop {
+            let page = session_output(
+                &state,
+                &serde_json::json!({
+                    "action": "output", "session_id": sid,
+                    "since_cursor": cursor, "limit": 1
+                }),
+            );
+            observed.push_str(page["data"].as_str().unwrap());
+            if page["has_more"] == false {
+                break;
+            }
+            let next = page["next_cursor"].as_u64().unwrap();
+            assert!(next > cursor, "paging must advance: {page}");
+            cursor = next;
+        }
+        assert!(observed.contains("after"), "must reach output after the key");
+        assert!(
+            !observed.contains(body),
+            "delta paging leaked a private key body: {observed:?}"
+        );
+    }
+
     // Catches: reusing the absolute window's total cursor skips all later pages.
     #[test]
     fn session_output_pages_clean_history_without_skipping_or_repeating_lines() {
