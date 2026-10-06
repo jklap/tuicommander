@@ -67,6 +67,7 @@ import {
 	cellToTextOffset,
 	clampRowRangeToViewport,
 	computeCursorRect,
+	createFrameStarvationWatchdog,
 	createHiddenAckThrottle,
 	createLeadingThrottle,
 	type DecodedFrame,
@@ -541,6 +542,51 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// The gate must reopen on this ack, not on the ticker deciding the frontend is
 	// stuck. The margin that buys is in HIDDEN_ACK_INTERVAL_MS — do not inline it.
 	const hiddenAck = createHiddenAckThrottle(ackFrame, HIDDEN_ACK_INTERVAL_MS);
+
+	/**
+	 * Rebuild this terminal's grid subscription. Shared by the reattach path
+	 * (`onRef.resubscribe`) and the starvation watchdog below.
+	 */
+	async function resubscribeGrid() {
+		// A pending hidden ack would report the old channel's receipt count
+		// against the fresh gate Rust installs on resubscribe.
+		hiddenAck.cancel();
+		framesReceived = 0;
+		awaitingFullFrame = false;
+		await transport?.resubscribe();
+		// A fresh (re)subscribe only carries new placements from here on —
+		// re-fetch the full set the same way the initial mount does.
+		imageLayer?.hydrate().then(() => {
+			const m = metrics();
+			if (!m) return;
+			switchToSplitCompositingIfNeeded(m);
+			if (currentFrame) repaintImages(currentFrame, m);
+		});
+	}
+
+	// A visible terminal that asked for a frame and got nothing back has a dead
+	// grid channel (Rust sends into a callback the webview no longer has, and
+	// nothing on either side reports it). Rebuild the subscription instead of
+	// sitting on a blank canvas forever. See createFrameStarvationWatchdog.
+	const frameWatchdog = createFrameStarvationWatchdog({
+		getReceived: () => framesReceived,
+		onStarved: () => {
+			if (!alive || hidden) return;
+			appLogger.warn("terminal", "No grid frame after a frame request — resubscribing", {
+				sessionId: props.sessionId,
+			});
+			return resubscribeGrid().catch((e) =>
+				appLogger.error("terminal", "Grid resubscribe after frame starvation failed", {
+					sessionId: props.sessionId,
+					error: String(e),
+				}),
+			);
+		},
+		onGiveUp: () =>
+			appLogger.error("terminal", "Grid channel still silent after resubscribing — giving up", {
+				sessionId: props.sessionId,
+			}),
+	});
 
 	function writePtyNoScroll(data: string) {
 		invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
@@ -3030,15 +3076,18 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 							invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(
 								ipcErr("terminal_request_frame"),
 							);
+							frameWatchdog.arm();
 						});
 					} else {
 						noteFrameRequest();
 						invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(
 							ipcErr("terminal_request_frame"),
 						);
+						frameWatchdog.arm();
 					}
 				} else if (!isVisible && !hidden) {
 					hidden = true;
+					frameWatchdog.cancel();
 					stopBlink();
 					// Shrink to free the backing store while hidden.
 					canvasRef.width = 1;
@@ -4112,6 +4161,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// idempotent on desktop and fixes the black-on-load in browser mode.
 			noteFrameRequest();
 			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+			if (!hidden) frameWatchdog.arm();
 			// Hydrate any placements that existed before this listener attached —
 			// the live "image-placement" event only carries new ones from here on.
 			imageLayer?.hydrate().then(() => {
@@ -4210,22 +4260,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				remeasure();
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 			},
-			resubscribe: async () => {
-				// A pending hidden ack would report the old channel's receipt count
-				// against the fresh gate Rust installs on resubscribe.
-				hiddenAck.cancel();
-				framesReceived = 0;
-				awaitingFullFrame = false;
-				await transport?.resubscribe();
-				// A fresh (re)subscribe only carries new placements from here on —
-				// re-fetch the full set the same way the initial mount does.
-				imageLayer?.hydrate().then(() => {
-					const m = metrics();
-					if (!m) return;
-					switchToSplitCompositingIfNeeded(m);
-					if (currentFrame) repaintImages(currentFrame, m);
-				});
-			},
+			resubscribe: resubscribeGrid,
 			searchFind: async (query: string, blockScope?: boolean) => {
 				if (!query || !invokeRef) {
 					clearSearchState();
@@ -4461,6 +4496,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		clearSettlePending();
 		hiddenAck.cancel();
+		frameWatchdog.cancel();
 		if (reconcileTimer) clearTimeout(reconcileTimer);
 		clearTimeout(resizeDebounce);
 		cancelSizeRetry?.();
