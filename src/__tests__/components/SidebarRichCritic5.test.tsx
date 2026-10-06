@@ -213,7 +213,8 @@ const term = (name: string, sessionId: string, parentSession?: string) => ({
 	awaitingInput: null,
 	shellState: "idle",
 	unseen: false,
-	lastActivityAt: 0,
+	// Cycle visibility is independent of the two-hour idle fold.
+	lastActivityAt: Date.now(),
 	currentTask: null,
 	agentIntent: null,
 	lastPrompt: null,

@@ -900,6 +900,8 @@
 	"sidebar.unmerged": "unmerged",
 	"sidebar.staleHint": "Stale: no commit for more than {days} days and not merged",
 	"sidebar.idleRepos": "Idle",
+  "sidebar.uncommittedCount": "{count} uncommitted",
+  "sidebar.cleanUp": "Clean up",
 	"sidebar.workingCount": "{count} working",
 	"sidebar.returnedCount": "{count} returned",
 	"sidebar.idleSessionCount": "{count} idle sessions",

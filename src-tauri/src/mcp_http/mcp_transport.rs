@@ -28423,15 +28423,22 @@ pub(crate) async fn create_daemon_workflow_worktree(
     project: &str,
     branch: &str,
 ) -> Result<String, String> {
-    super::worktree_routes::create_worktree_shared(state, project.into(), branch.into(), None)
-        .await
-        .map_err(|(_, value)| value.0.to_string())
-        .and_then(|created| {
-            if let Some(error) = created.setup_script_error {
-                return Err(error.to_string());
-            }
-            Ok(created.path)
-        })
+    super::worktree_routes::create_worktree_shared(
+        state,
+        project.into(),
+        branch.into(),
+        None,
+        None,
+        false,
+    )
+    .await
+    .map_err(|(_, value)| value.0.to_string())
+    .and_then(|created| {
+        if let Some(error) = created.setup_script_error {
+            return Err(error.to_string());
+        }
+        Ok(created.path)
+    })
 }
 
 #[cfg(test)]
@@ -28474,6 +28481,7 @@ mod session_placement_tests {
                     display_name_from_spawn: false,
                     is_remote: false,
                     shell: shell.into(),
+                    launch_receipt: None,
                 }),
             );
         }
