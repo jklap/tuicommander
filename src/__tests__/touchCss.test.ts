@@ -72,4 +72,20 @@ describe("touch stylesheet contract (#1329-a31a)", () => {
 		expect(button.display).toBe("flex");
 		expect(getComputedStyle(document.querySelector(".branchActions") as HTMLElement).display).toBe("none");
 	});
+
+	// Catches: attach/send buttons staying vertically centred when the mobile
+	// composer grows to several lines, instead of sticking to the bottom edge.
+	it("mobile command composer row aligns its buttons to the bottom of a growing input", () => {
+		addCss(css("mobile/components/CommandInput.module.css"));
+		document.body.innerHTML = '<div class="form"><button class="attach"></button><textarea class="input"></textarea><button class="send"></button></div>';
+		expect(getComputedStyle(document.querySelector(".form") as HTMLElement).alignItems).toBe("flex-end");
+	});
+
+	// Catches: the AI Chat composer row (shared by the mobile chat screen) centring
+	// its Park/Send buttons against a multi-line textarea.
+	it("AI chat composer row aligns its buttons to the bottom of a growing textarea", () => {
+		addCss(css("components/AIChatPanel/AIChatPanel.module.css"));
+		document.body.innerHTML = '<div class="inputArea"><div class="inputBody"><textarea class="textarea"></textarea></div><button class="sendBtn"></button></div>';
+		expect(getComputedStyle(document.querySelector(".inputArea") as HTMLElement).alignItems).toBe("flex-end");
+	});
 });
