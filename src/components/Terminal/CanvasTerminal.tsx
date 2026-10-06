@@ -2367,9 +2367,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function showStreamNotice(title: string, message: string, level: "warn" | "error"): void {
+		if (!alive) return;
 		clearStreamNotice();
+		const name = terminalsStore.get(props.terminalId)?.name;
 		streamToastId = toastsStore.add(
-			`${title} — ${props.sessionId}`,
+			name ? `${title} — ${name}` : title,
 			message,
 			level,
 			false,
@@ -3629,6 +3631,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	onCleanup(() => {
 		alive = false;
+		clearStreamNotice();
 		clearTimeout(answersTimer);
 		stopBlink();
 		if (rafId !== undefined) {
