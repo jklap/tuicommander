@@ -29,6 +29,8 @@ Three limits are deliberate:
   select a specific agent card or scroll to a control inside it. For managed
   workspace trust, open **Settings → Agents**, expand **Claude** or **Codex**,
   then use **Accept workspace trust for managed spawns** in Expert Mode.
+- **ego permissions are searchable.** Permissions and Filesystem sandbox are
+  in a visible section on the Agents page; no agent card needs expansion.
 - **Settings the current build does not render are not listed.** The same rule
   hides the AI Chat page while Experimental Features is off, so a search does
   not open a page that is not in the navigation.
