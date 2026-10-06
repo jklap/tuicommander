@@ -2532,7 +2532,12 @@ agent over the Agent Client Protocol (v1). No frontend surface yet.
 - The turn stream is a dedicated Channel on the desktop and a dedicated
   WebSocket in the browser; `/events` carries only the low-frequency
   `acp-notice` wake signal
-- Prompt submissions share one FIFO per ACP session across desktop and phone;
+- Text sent during a running turn uses advertised ego v1 ACP steering and enters
+  the current query at the next provider request. Accepted steering is shown only
+  through ego’s user-message echo and is never resent. A not-busy response uses
+  the normal prompt path. Attachments, unavailable steering, and rejections
+  retain the shared queue.
+- Queued prompt submissions share one FIFO per ACP session across desktop and phone;
   queued entries are visible and removable from either view, and active-turn
   cancellation is shared. Queue snapshots and events omit image bytes.
 

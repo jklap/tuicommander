@@ -264,3 +264,21 @@ non-bundled binary that replays a `tests/fixtures/acp/*.jsonl` scenario through
 the exact production launch path. `tests/fixtures/acp/ego-initialize.json` is a
 recording of what real ego answers, copied from ego's own committed golden;
 editing it to make a test pass would turn the recording into a wish.
+
+### Mid-turn text steering
+
+The shared Rust connection actor routes text-only `acp_session_prompt` submissions
+through advertised `agentCapabilities._meta.ego.steer` v1 (`_ego/steer`, text
+content). Only a running, prompting attachment with an empty FIFO qualifies. Accepted input returns
+the existing turn ID, emits no `PromptSent`, and appears through ego's
+`user_message_chunk`. Steering reserves its submission position in the existing
+FIFO until the response arrives; later submissions queue behind it and cannot drain
+past it. Accepted or uncertain outcomes consume the reservation. `not-busy` and
+`rejected` retain it for normal prompt serialization;
+attachments and absent or mismatched capabilities retain the queue. An uncertain
+transport outcome is reported without retry because acceptance may be durable.
+Only the `_ego/steer` request has a 10-second deadline (`EGO_STEER_TIMEOUT`):
+this is a durable append that ego normally acknowledges in milliseconds. A timeout
+reports that delivery is uncertain, releases the FIFO reservation through the
+existing error settlement, and never resends the text. Other ACP requests retain
+their existing behavior.
