@@ -149,7 +149,7 @@ export default function MobileApp() {
 	const showDetail = () => selectedSessionId() !== null && lastKnownSession() !== null;
 
 	const updateBanner = () => (
-		<Show when={updateAvailable()}>
+		<Show when={updateAvailable() && !showDetail() && activeTab() === "sessions"}>
 			<div class={styles.updateBanner} onClick={applyUpdate}>
 				<span>New version available</span>
 				<span>Tap to update</span>
