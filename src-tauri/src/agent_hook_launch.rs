@@ -147,12 +147,99 @@ pub(crate) fn regenerate_launch_assets(config_dir: &Path) -> Result<(), String> 
     Ok(())
 }
 
+/// Translate persisted ego choices once for terminal launches and MCP spawns.
+/// Configured choices replace raw overrides; `--` and its positional text are preserved.
+fn ego_permission_args(config: &crate::config::AgentsConfig, args: &[String]) -> Vec<String> {
+    let Some(settings) = config.agents.get("ego") else {
+        return args.to_vec();
+    };
+    let options = [
+        ("--mode", settings.ego_mode.map(|value| value.as_str())),
+        (
+            "--sandbox",
+            settings.ego_sandbox.map(|value| value.as_str()),
+        ),
+    ];
+    if options.iter().all(|(_, value)| value.is_none()) {
+        return args.to_vec();
+    }
+    // Administrative and ACP verbs from the recorded installed ego help.
+    const NON_RUN_COMMANDS: &[&str] = &[
+        "fork",
+        "compact",
+        "export",
+        "ls",
+        "usage",
+        "models",
+        "hooks",
+        "doctor",
+        "acp",
+        "a2a",
+        "auth",
+        "mcp",
+        "config",
+        "rules",
+        "mcp-server",
+    ];
+    if args
+        .first()
+        .is_some_and(|first| NON_RUN_COMMANDS.contains(&first.as_str()))
+    {
+        return args.to_vec();
+    }
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if arg == "--" {
+            result.extend_from_slice(&args[index..]);
+            break;
+        }
+        if options
+            .iter()
+            .any(|(flag, value)| value.is_some() && arg == flag)
+        {
+            index += 1;
+            if args.get(index).is_some_and(|value| !value.starts_with('-')) {
+                index += 1;
+            }
+            continue;
+        }
+        if options
+            .iter()
+            .any(|(flag, value)| value.is_some() && arg.starts_with(&format!("{flag}=")))
+            || (settings.ego_mode.is_some() && ["--plan", "--yolo"].contains(&arg.as_str()))
+        {
+            index += 1;
+            continue;
+        }
+        result.push(arg.clone());
+        index += 1;
+    }
+    let insertion = usize::from(
+        result
+            .first()
+            .is_some_and(|arg| ["run", "resume"].contains(&arg.as_str())),
+    );
+    result.splice(
+        insertion..insertion,
+        options
+            .into_iter()
+            .filter_map(|(flag, value)| value.map(|value| [flag.to_string(), value.to_string()]))
+            .flatten(),
+    );
+    result
+}
+
 pub(crate) fn augment_args(
     agent_type: &str,
     binary_path: &str,
     args: &[String],
     config_dir: &Path,
 ) -> Vec<String> {
+    if agent_type == "ego" {
+        return ego_permission_args(&crate::config::load_agents_config(), args);
+    }
     let enabled = enabled(agent_type);
     if enabled && agent_type == "claude" && args.first().is_some_and(|arg| !arg.starts_with('-')) {
         let help = crate::agent::cli_help(binary_path).unwrap_or_default();
@@ -180,6 +267,9 @@ pub(crate) fn build_agent_launch_args(
     binary_path: &str,
     args: &[String],
 ) -> Vec<String> {
+    if agent_type == "ego" {
+        return ego_permission_args(&crate::config::load_agents_config(), args);
+    }
     if screen_flag_candidate(agent_type, args).is_none() {
         return args.to_vec();
     }
@@ -448,6 +538,200 @@ mod tests {
             let _ = augment_args(agent, &binary, &args, Path::new("/unused"));
             assert!(!marker.exists(), "{agent} {args:?} needlessly ran --help");
         }
+    }
+
+    /// Catches: UI spelling diverges from installed ego, or unset injects a default.
+    #[test]
+    fn ego_permission_values_match_recorded_help_without_implicit_defaults() {
+        use crate::config::{AgentSettings, AgentsConfig, EgoPermissionMode, EgoSandbox};
+        let dir = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let help = include_str!("../tests/fixtures/agent-help/ego-run-2026-10-06.txt");
+        let resume_help = include_str!("../tests/fixtures/agent-help/ego-resume-2026-10-06.txt");
+        for (key, flag, advertised, values) in [
+            (
+                "ego_mode",
+                "--mode",
+                "Permission mode: ",
+                vec!["plan", "default", "edits", "auto", "yolo"],
+            ),
+            (
+                "ego_sandbox",
+                "--sandbox",
+                "Filesystem confinement: ",
+                vec!["ro", "workspace"],
+            ),
+        ] {
+            for value in values {
+                for recorded in [help, resume_help] {
+                    assert!(recorded.contains(flag));
+                    let options = recorded
+                        .lines()
+                        .find_map(|line| line.trim().strip_prefix(advertised))
+                        .unwrap();
+                    assert!(options.split('|').any(|option| option == value));
+                }
+                let settings: AgentSettings =
+                    serde_json::from_value(serde_json::json!({key: value})).unwrap();
+                let config = AgentsConfig {
+                    agents: [("ego".into(), settings)].into(),
+                    ..Default::default()
+                };
+                crate::config::save_agents_config(crate::config::load_agents_config(), config)
+                    .unwrap();
+                assert_eq!(
+                    build_agent_launch_args("ego", "ego", &["run".into(), "task".into()]),
+                    ["run", flag, value, "task"]
+                );
+            }
+        }
+        let mut config = AgentsConfig::default();
+        config.agents.insert("ego".into(), AgentSettings::default());
+        let args = vec!["run".into(), "--mode".into(), "auto".into(), "task".into()];
+        crate::config::save_agents_config(crate::config::load_agents_config(), config.clone())
+            .unwrap();
+        assert_eq!(build_agent_launch_args("ego", "ego", &args), args);
+        config.agents.get_mut("ego").unwrap().ego_mode = Some(EgoPermissionMode::Plan);
+        config.agents.get_mut("ego").unwrap().ego_sandbox = Some(EgoSandbox::Workspace);
+        crate::config::save_agents_config(crate::config::load_agents_config(), config).unwrap();
+        assert_eq!(
+            build_agent_launch_args(
+                "ego",
+                "ego",
+                &[
+                    "run".into(),
+                    "--yolo".into(),
+                    "--mode=auto".into(),
+                    "--sandbox".into(),
+                    "off".into(),
+                    "--".into(),
+                    "--mode=yolo".into()
+                ]
+            ),
+            [
+                "run",
+                "--mode",
+                "plan",
+                "--sandbox",
+                "workspace",
+                "--",
+                "--mode=yolo"
+            ]
+        );
+        // Catches: a valueless override consumes another option or prompt text.
+        for (args, suffix) in [
+            (
+                vec!["run", "--mode", "--sandbox", "off", "--", "--mode=yolo"],
+                vec!["--", "--mode=yolo"],
+            ),
+            (
+                vec!["run", "--mode", "--verbose", "task"],
+                vec!["--verbose", "task"],
+            ),
+            (vec!["run", "--sandbox"], vec![]),
+        ] {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            let expected = [
+                vec!["run", "--mode", "plan", "--sandbox", "workspace"],
+                suffix,
+            ]
+            .concat();
+            assert_eq!(build_agent_launch_args("ego", "ego", &args), expected);
+            assert_eq!(augment_args("ego", "ego", &args, dir.path()), expected);
+        }
+        for command in [
+            "fork",
+            "compact",
+            "export",
+            "ls",
+            "usage",
+            "models",
+            "hooks",
+            "doctor",
+            "acp",
+            "a2a",
+            "auth",
+            "mcp",
+            "config",
+            "rules",
+            "mcp-server",
+        ] {
+            let recorded = include_str!("../tests/fixtures/agent-help/ego-2026-10-06.txt");
+            assert!(
+                recorded
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(command))
+            );
+            assert_eq!(
+                build_agent_launch_args("ego", "ego", &[command.into()]),
+                [command]
+            );
+        }
+        // Catches: an invalid enum discards the valid sibling permission field.
+        for (document, expected) in [
+            (
+                serde_json::json!({"ego_mode": "invalid", "ego_sandbox": "ro"}),
+                vec!["run", "--sandbox", "ro"],
+            ),
+            (
+                serde_json::json!({"ego_mode": "edits", "ego_sandbox": "off"}),
+                vec!["run", "--mode", "edits"],
+            ),
+            (
+                serde_json::json!({"ego_mode": 42, "ego_sandbox": {}}),
+                vec!["run"],
+            ),
+        ] {
+            let settings: AgentSettings = serde_json::from_value(document).unwrap();
+            let config = AgentsConfig {
+                agents: [("ego".into(), settings)].into(),
+                ..Default::default()
+            };
+            crate::config::save_agents_config(crate::config::load_agents_config(), config).unwrap();
+            assert_eq!(
+                build_agent_launch_args("ego", "ego", &["run".into()]),
+                expected
+            );
+        }
+    }
+
+    /// Catches: either terminal or MCP spawn bypasses persisted ego permissions.
+    #[test]
+    fn ego_permissions_reach_terminal_and_mcp_argument_builders() {
+        use crate::config::{AgentSettings, AgentsConfig, EgoPermissionMode, EgoSandbox};
+        let dir = tempfile::TempDir::new_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let config = AgentsConfig {
+            agents: [(
+                "ego".into(),
+                AgentSettings {
+                    ego_mode: Some(EgoPermissionMode::Edits),
+                    ego_sandbox: Some(EgoSandbox::Ro),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+            ..Default::default()
+        };
+        crate::config::save_agents_config(AgentsConfig::default(), config).unwrap();
+        for args in [
+            vec![],
+            vec!["run".into(), "task".into()],
+            vec!["resume".into(), "session".into()],
+        ] {
+            let terminal = build_agent_launch_args("ego", "ego", &args);
+            let spawn = augment_args("ego", "ego", &args, dir.path());
+            assert_eq!(terminal, spawn);
+            assert!(
+                terminal
+                    .windows(4)
+                    .any(|flags| flags == ["--mode", "edits", "--sandbox", "ro"])
+            );
+        }
+        assert_eq!(
+            build_agent_launch_args("git", "git", &[]),
+            Vec::<String>::new()
+        );
     }
 
     #[cfg(unix)]
@@ -747,3 +1031,7 @@ mod critic_1302_tests {
         assert_eq!(bad, 0, "observed the script without its execute bit {bad}x");
     }
 }
+
+#[cfg(test)]
+#[path = "agent_hook_launch_critic1400_tests.rs"]
+mod critic1400_tests;

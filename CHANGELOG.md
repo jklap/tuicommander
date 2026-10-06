@@ -26,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix command boundaries, prompt ticks and answers-only prompt association drifting after scrollback eviction.
 ### Added
 
+- **ego launch permissions** — Choose permission mode and filesystem sandbox in Settings > Agents > ego. Terminal launches and MCP spawns use the same persisted overrides; leaving either choice unset preserves ego configuration.
+
 - Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
 
 ### Fixed
