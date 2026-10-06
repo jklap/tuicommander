@@ -537,7 +537,7 @@ POST /tmux/windows/:id/layout
 The real half of `select-layout tiled`/`main-vertical`. Resolves the window's own **materialized**
 panes (virtual ones are simply omitted, not a gap) and broadcasts `tmux-window-layout-requested`
 (`{"session_ids": [...], "layout": "tiled"}`) for the frontend to arrange into a split view
-(`paneLayoutStore.arrangeSessionsAsLayout`) — the backend never touches pane-layout state itself.
+(`arrangeSwarmLayout` — into the layout of the repo+branch that owns those sessions, which need not be the one on screen) — the backend never touches pane-layout state itself.
 A no-op (still `200`) when nothing is materialized yet.
 
 `kill-server` has no dedicated endpoint of its own — it is `DELETE /tmux/sessions/:id?label=<label>`

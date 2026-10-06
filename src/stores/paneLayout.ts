@@ -350,6 +350,123 @@ export function mainVertical(ids: string[]): PaneNode | null {
 	};
 }
 
+// ---- Pure layout-state transforms (no store, no reactivity) ----
+// Operate on a `PaneLayoutState` value so the same logic can act on the live
+// store OR on a saved layout belonging to a branch that isn't on screen.
+
+function maxGroupNumber(state: PaneLayoutState): number {
+	const ids = [...Object.keys(state.groups), ...(state.root ? allLeafIds(state.root) : [])];
+	return ids.reduce((max, id) => {
+		const n = /^g(\d+)$/.exec(id);
+		return n ? Math.max(max, Number(n[1])) : max;
+	}, 0);
+}
+
+/**
+ * Drop terminal tabs that no longer exist from a saved layout, and collapse
+ * the tree around whatever that empties. Non-terminal tabs are kept as-is.
+ *
+ * Returns `null` when what's left isn't a split any more (fewer than two
+ * panes, or no live terminal at all) — callers treat that as "nothing worth
+ * restoring" and fall back to the flat view, never as an error. A saved
+ * layout used to be discarded whole if any one terminal in it had been
+ * closed; closing a terminal now costs the split only that terminal's pane.
+ */
+export function pruneLayoutToLiveTerminals(
+	layout: PaneLayoutState,
+	liveTerminalIds: ReadonlySet<string>,
+): PaneLayoutState | null {
+	if (!layout.root) return null;
+
+	const groups: Record<string, PaneGroup> = {};
+	let root: PaneNode | null = layout.root;
+	for (const leafId of allLeafIds(layout.root)) {
+		const group = layout.groups[leafId];
+		if (!group) {
+			root = root ? removeLeaf(root, leafId) : null;
+			continue;
+		}
+		const tabs = group.tabs
+			.filter((t) => t.type !== "terminal" || liveTerminalIds.has(t.id))
+			.map((t) => ({ id: t.id, type: t.type }));
+		// Only a pane that EMPTIED because its terminals died goes away. A pane the
+		// user split open and never filled was empty to begin with and stays.
+		if (tabs.length === 0 && group.tabs.length > 0) {
+			root = root ? removeLeaf(root, leafId) : null;
+			continue;
+		}
+		const activeTabId = tabs.some((t) => t.id === group.activeTabId) ? group.activeTabId : (tabs.at(-1)?.id ?? null);
+		groups[leafId] = { id: group.id, tabs, activeTabId };
+	}
+
+	if (!root || root.type !== "branch") return null;
+	if (!Object.values(groups).some((g) => g.tabs.some((t) => t.type === "terminal"))) return null;
+
+	const leafIds = allLeafIds(root);
+	const activeGroupId =
+		layout.activeGroupId && leafIds.includes(layout.activeGroupId) ? layout.activeGroupId : (leafIds[0] ?? null);
+	return { root, groups, activeGroupId };
+}
+
+export type ArrangeResult = { ok: true; state: PaneLayoutState } | { ok: false; reason: "empty" | "unrelated-panes" };
+
+/**
+ * Arrange `sessionIds` (terminal tab ids, in order) into a split for `layout`
+ * ("tiled" or "main-vertical") inside `current`, returning the new state — the
+ * pure core of the tmux shim's `select-layout` bridge (`arrangeSessionsAsLayout`
+ * is a thin wrapper that applies the result to the live store).
+ *
+ * Rebuilds the WHOLE tree from this call's ids, like real tmux. Refuses
+ * (`unrelated-panes`) when `current`'s tree holds any group none of the ids
+ * live in — that is split state this call doesn't own, and a background tmux
+ * event must never destroy it. A session that is the sole tab of a group
+ * reuses that group; any other gets a fresh one (a move can therefore never
+ * leave its source group empty — a group down to one tab is reused, not moved
+ * out of). The active group is kept if it is still one of those arranged,
+ * else the first.
+ */
+export function arrangeLayoutState(current: PaneLayoutState, sessionIds: string[], layout: string): ArrangeResult {
+	const ids = [...new Set(sessionIds)].filter(Boolean);
+	if (ids.length === 0) return { ok: false, reason: "empty" };
+
+	const groups: Record<string, PaneGroup> = {};
+	for (const [gid, g] of Object.entries(current.groups)) {
+		groups[gid] = { id: g.id, tabs: g.tabs.map((t) => ({ ...t })), activeTabId: g.activeTabId };
+	}
+	const leafIds = current.root ? allLeafIds(current.root) : [];
+	const groupFor = (tabId: string): string | null =>
+		leafIds.find((gid) => groups[gid]?.tabs.some((t) => t.id === tabId)) ?? null;
+
+	const owned = new Set(ids.map(groupFor).filter((g): g is string => g !== null));
+	if (leafIds.some((gid) => !owned.has(gid))) return { ok: false, reason: "unrelated-panes" };
+
+	let counter = maxGroupNumber(current);
+	const groupIds: string[] = [];
+	for (const sessionId of ids) {
+		const existingId = groupFor(sessionId);
+		const existing = existingId ? groups[existingId] : null;
+		if (existingId && existing && existing.tabs.length === 1) {
+			groupIds.push(existingId);
+			continue;
+		}
+		const newId = `g${++counter}`;
+		const tab = existing?.tabs.find((t) => t.id === sessionId) ?? { id: sessionId, type: "terminal" as const };
+		if (existing) {
+			existing.tabs = existing.tabs.filter((t) => t.id !== sessionId);
+			if (existing.activeTabId === sessionId) {
+				existing.activeTabId = existing.tabs[existing.tabs.length - 1].id;
+			}
+		}
+		groups[newId] = { id: newId, tabs: [{ ...tab }], activeTabId: sessionId };
+		groupIds.push(newId);
+	}
+
+	const root = layout === "main-vertical" ? mainVertical(groupIds) : tileLeaves(groupIds);
+	const activeGroupId =
+		current.activeGroupId && groupIds.includes(current.activeGroupId) ? current.activeGroupId : (groupIds[0] ?? null);
+	return { ok: true, state: { root, groups, activeGroupId } };
+}
+
 // ---- Store ----
 // The tree (root) lives in plain JS to avoid SolidJS deep-proxy issues.
 // Groups and activeGroupId live in a SolidJS store for fine-grained reactivity.
@@ -664,53 +781,18 @@ function createPaneLayoutStore() {
 		 * when there was no sensible focus to preserve.
 		 */
 		arrangeSessionsAsLayout(sessionIds: string[], layout: string): void {
-			const ids = [...new Set(sessionIds)].filter(Boolean);
-			if (ids.length === 0) return;
-
-			const existingLeafGroupIds = tree ? allLeafIds(tree) : [];
-			const ownedGroupIds = new Set(ids.map((id) => this.getGroupForTab(id)).filter((g): g is string => g !== null));
-			const hasUnrelatedGroupInTree = existingLeafGroupIds.some((g) => !ownedGroupIds.has(g));
-			if (hasUnrelatedGroupInTree) {
-				appLogger.warn(
-					"app",
-					"tmux select-layout request skipped: the current split view has other panes " +
-						"this swarm doesn't own — leaving the split as-is rather than replacing it.",
-				);
+			const result = arrangeLayoutState(this.serialize(), sessionIds, layout);
+			if (!result.ok) {
+				if (result.reason === "unrelated-panes") {
+					appLogger.warn(
+						"app",
+						"tmux select-layout request skipped: the current split view has other panes " +
+							"this swarm doesn't own — leaving the split as-is rather than replacing it.",
+					);
+				}
 				return;
 			}
-
-			const groupIds: string[] = [];
-			const emptiedGroupIds = new Set<string>();
-			for (const sessionId of ids) {
-				const existingGroupId = this.getGroupForTab(sessionId);
-				const existingGroup = existingGroupId ? state.groups[existingGroupId] : null;
-				if (existingGroup && existingGroup.tabs.length === 1) {
-					groupIds.push(existingGroupId as string);
-					continue;
-				}
-				const newGroupId = this.createGroup();
-				if (existingGroupId) {
-					this.moveTab(existingGroupId, newGroupId, sessionId);
-					if (state.groups[existingGroupId]?.tabs.length === 0) {
-						emptiedGroupIds.add(existingGroupId);
-					}
-				} else {
-					this.addTab(newGroupId, { id: sessionId, type: "terminal" });
-				}
-				groupIds.push(newGroupId);
-			}
-
-			const newRoot = layout === "main-vertical" ? mainVertical(groupIds) : tileLeaves(groupIds);
-			tree = newRoot;
-			bumpTree();
-			setState(
-				produce((s) => {
-					for (const emptied of emptiedGroupIds) delete s.groups[emptied];
-					if (!s.activeGroupId || !groupIds.includes(s.activeGroupId)) {
-						s.activeGroupId = groupIds[0] ?? s.activeGroupId;
-					}
-				}),
-			);
+			this.restore(result.state);
 			scheduleSave();
 		},
 

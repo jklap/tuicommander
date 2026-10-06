@@ -8,6 +8,16 @@
 
 # To Test
 
+## Split panes survive repo switches; tmux swarm splits land in their own branch (2026-10-06)
+
+Frontend only (vitest-covered, not yet seen in the real app). With a swarm of 3-4 tmux-shim
+terminals in repo A: (1) split them, click a terminal under repo B in the sidebar, open and
+switch branches in B, then click back into A — the split should still be there. (2) Close one
+of the four while viewing B, return to A — the other three stay split. (3) While viewing repo B,
+let an Agent-Teams lead in repo A spawn teammates — B's layout must not change, and A shows the
+tiled split when you open it. [HUMAN] only for the live swarm in (3); (1)/(2) can be driven
+via `make dev` + `:9877` with throwaway sessions.
+
 ## An idle Agent-Teams teammate no longer holds its lead "working" (2026-10-01)
 
 Rust change, needs a `make dev` restart. Claude Code lists a teammate as `running` in every

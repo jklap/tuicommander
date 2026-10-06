@@ -27,6 +27,7 @@ import type { WorkspaceState } from "../stores/workspaceIdentity";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { subscribeEvents } from "../transport";
 import type { RepoChangeKind, SavedTerminal } from "../types";
+import { arrangeSwarmLayout } from "../utils/arrangeTmuxLayout";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { ptyCaptureStore } from "../utils/ptyCapture";
@@ -836,7 +837,7 @@ export async function initApp(deps: AppInitDeps) {
 			.map((sessionId) => terminalsStore.getTerminalForSession(sessionId))
 			.filter((id): id is string => id !== null);
 		if (termIds.length === 0) return;
-		paneLayoutStore.arrangeSessionsAsLayout(termIds, layout);
+		arrangeSwarmLayout(termIds, layout);
 	}).catch((err) => appLogger.error("app", "Failed to register tmux-window-layout-requested listener", err));
 
 	// A hardware controller (StreamDock macropad, etc.) asking the UI to

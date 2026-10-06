@@ -289,6 +289,101 @@ describe("createBranchSelectionCoordinator", () => {
 				expect(new Set(paneLayoutStore.getTerminalTabIds())).toEqual(new Set([t1, t2]));
 			});
 		});
+
+		// A terminal closed while its branch was off-screen never reaches the saved copy
+		// (the live-layout `onRemove` sweep only sees what's live). The whole split used to be
+		// discarded on return; now only that terminal's pane goes.
+		it("keeps the rest of a split when one of its terminals was closed while the branch was off-screen", async () => {
+			await testInScope(async () => {
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+				repositoriesStore.setActive("/Gits/alpha");
+				repositoriesStore.setActiveWorkspace("/Gits/alpha", "main");
+
+				const coordinator = makeCoordinator();
+				const t1 = (await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main"))!;
+				const t2 = (await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main"))!;
+				const t3 = (await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main"))!;
+				const g1 = paneLayoutStore.createGroup();
+				paneLayoutStore.addTab(g1, { id: t1, type: "terminal" });
+				const g2 = paneLayoutStore.split(g1, "vertical")!;
+				paneLayoutStore.addTab(g2, { id: t2, type: "terminal" });
+				const g3 = paneLayoutStore.split(g2, "horizontal")!;
+				paneLayoutStore.addTab(g3, { id: t3, type: "terminal" });
+
+				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
+				repositoriesStore.setWorkspace("/Gits/beta", "main", { worktreePath: "/Gits/beta" });
+				await coordinator.handleAddTerminalToWorkspace("/Gits/beta", "main");
+				expect(paneLayoutStore.isSplit()).toBe(false);
+
+				terminalsStore.remove(t3); // closed while alpha is off-screen
+
+				await coordinator.handleBranchSelectInner("/Gits/alpha", "main");
+
+				expect(paneLayoutStore.isSplit()).toBe(true);
+				expect(new Set(paneLayoutStore.getTerminalTabIds())).toEqual(new Set([t1, t2]));
+			});
+		});
+
+		it("falls back to a flat view when the closed terminals leave fewer than two panes", async () => {
+			await testInScope(async () => {
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+				repositoriesStore.setActive("/Gits/alpha");
+				repositoriesStore.setActiveWorkspace("/Gits/alpha", "main");
+
+				const coordinator = makeCoordinator();
+				const t1 = (await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main"))!;
+				const t2 = (await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main"))!;
+				const g1 = paneLayoutStore.createGroup();
+				paneLayoutStore.addTab(g1, { id: t1, type: "terminal" });
+				const g2 = paneLayoutStore.split(g1, "vertical")!;
+				paneLayoutStore.addTab(g2, { id: t2, type: "terminal" });
+
+				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
+				repositoriesStore.setWorkspace("/Gits/beta", "main", { worktreePath: "/Gits/beta" });
+				await coordinator.handleAddTerminalToWorkspace("/Gits/beta", "main");
+				terminalsStore.remove(t2);
+
+				await coordinator.handleBranchSelectInner("/Gits/alpha", "main");
+
+				expect(paneLayoutStore.isSplit()).toBe(false);
+			});
+		});
+
+		it("restores each branch's own split when hopping between two split branches", async () => {
+			await testInScope(async () => {
+				const coordinator = makeCoordinator();
+				const open = async (repo: string, activate: boolean): Promise<[string, string]> => {
+					repositoriesStore.add({ path: repo, displayName: repo });
+					repositoriesStore.setWorkspace(repo, "main", { worktreePath: repo });
+					if (activate) {
+						repositoriesStore.setActive(repo);
+						repositoriesStore.setActiveWorkspace(repo, "main");
+					}
+					// For the second repo this is the real "Add Terminal" click: it flips the active repo itself.
+					const a = (await coordinator.handleAddTerminalToWorkspace(repo, "main"))!;
+					const b = (await coordinator.handleAddTerminalToWorkspace(repo, "main"))!;
+					return [a, b];
+				};
+				const splitLive = (x: string, y: string) => {
+					const g = paneLayoutStore.createGroup();
+					paneLayoutStore.addTab(g, { id: x, type: "terminal" });
+					paneLayoutStore.addTab(paneLayoutStore.split(g, "vertical")!, { id: y, type: "terminal" });
+				};
+
+				const [a1, a2] = await open("/Gits/alpha", true);
+				splitLive(a1, a2);
+				const [b1, b2] = await open("/Gits/beta", false); // switching away saves alpha's split
+				splitLive(b1, b2);
+
+				await coordinator.handleBranchSelectInner("/Gits/alpha", "main");
+				expect(new Set(paneLayoutStore.getTerminalTabIds())).toEqual(new Set([a1, a2]));
+
+				await coordinator.handleBranchSelectInner("/Gits/beta", "main");
+				expect(new Set(paneLayoutStore.getTerminalTabIds())).toEqual(new Set([b1, b2]));
+			});
+		});
 	});
 
 	// `handleBranchSelectInner`'s own orphan-adoption scan (lines ~267-293): a
