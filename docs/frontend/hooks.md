@@ -76,6 +76,8 @@ saying where it went.
 
 High-level git workflows: branch switching, worktree creation, repo management.
 
+Worktree removal holds a per-repository/workspace lock through preflight, confirmation and cleanup, and releases it in `finally`. A failed initial confirmation propagates its error, preserves the workspace and terminals, and allows a later retry.
+
 ### Dependencies
 
 ```typescript
