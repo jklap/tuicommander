@@ -623,6 +623,19 @@ async fn pump(socket: WebSocket, mut frames: UnboundedReceiver<AcpStreamFrame>) 
     let _ = sender.close().await;
 }
 
+/// Conversation-specific executable authority uses the same spawn guard as connect.
+async fn chat_open(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<crate::acp_chat::ChatOpenRequest>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    answer(crate::acp_chat::open(&state, request).await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1018,17 +1031,4 @@ mod tests {
             StatusCode::BAD_GATEWAY
         );
     }
-}
-
-/// Conversation-specific executable authority uses the same spawn guard as connect.
-async fn chat_open(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    auth: Option<axum::Extension<Authenticated>>,
-    State(state): State<Arc<AppState>>,
-    Json(request): Json<crate::acp_chat::ChatOpenRequest>,
-) -> Response {
-    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
-        return resp.into_response();
-    }
-    answer(crate::acp_chat::open(&state, request).await)
 }

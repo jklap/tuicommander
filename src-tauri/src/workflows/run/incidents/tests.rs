@@ -194,8 +194,10 @@ fn incident_live_evidence_does_not_leak_other_tasks_or_retry_pending_prompts() {
 fn incident_working_sessions_are_not_inferred_stuck_and_paused_cause_is_honest() {
     let state = crate::state::tests_support::make_test_app_state();
     let mut run = run();
-    let mut session = crate::state::SessionState::default();
-    session.agent_state = Some("working".into());
+    let mut session = crate::state::SessionState {
+        agent_state: Some("working".into()),
+        ..Default::default()
+    };
     state
         .session_maps
         .session_states

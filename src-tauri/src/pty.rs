@@ -9773,10 +9773,10 @@ fn apply_claimed_injection_outcome(
                     .pending_initial_prompts
                     .remove(session_id)
                     .is_some_and(|(_, pending)| pending.notified);
-                if let Some(session) = state.session_maps.sessions.get(session_id) {
-                    if let Some(receipt) = &mut session.lock().launch_receipt {
-                        receipt.mark_brief_sent();
-                    }
+                if let Some(session) = state.session_maps.sessions.get(session_id)
+                    && let Some(receipt) = &mut session.lock().launch_receipt
+                {
+                    receipt.mark_brief_sent();
                 }
                 if notified {
                     notify_initial_prompt_delivered(state, session_id);
