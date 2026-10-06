@@ -4690,3 +4690,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] AI Chat setup (#1406-06f2): with an empty ego executable, confirm the inactive explanation and Configure ego button in inline and detached panels. The button opens Settings → General at the ego controls; selecting the executable shows the composer without restart. Return to the detached window after saving to refresh its settings. _(Automated behavior tests cover routing and activation; agent-browser screenshot attempt was blocked by the locked macOS screen.)_
 
 - [ ] AI Chat message fork: after rebuilding/restarting Rust, fork the second of four ego replies and check the child cutoff while the parent retains all replies. The backend capability and metadata changes require a manual restart.
+
+- [ ] AI Chat ACP steering: after Boss restarts `make dev` or loads a rebuilt release, use an ego build advertising `_ego/steer`; send text during a turn from desktop/mobile and confirm it affects the next provider request with one echoed bubble. Attachments retain the queue. _(Rust backend does not hot-reload; no desktop instance was launched.)_

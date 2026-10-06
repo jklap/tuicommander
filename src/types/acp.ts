@@ -123,6 +123,7 @@ export interface AcpCapabilitySnapshot {
 	clientBooleanConfig: boolean;
 	/** Present only when ego advertised `_ego/pause` and `_ego/resume` as one pair. */
 	egoHoldVersion: number | null;
+	egoSteerVersion?: number | null;
 	/** Present only when ego advertised `_ego/compact`. */
 	egoCompactVersion: number | null;
 }
