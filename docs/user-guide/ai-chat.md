@@ -19,6 +19,14 @@ no tool loop and no sandbox of its own.
    An empty value leaves ego's usual profile selection in effect. TUICommander passes only the name at launch;
    it does not send profile rules in `session/new`.
 
+A repository can select an ego profile with `"ego_profile": "team"` in its
+`.tuic.json`. For that conversation's workspace, TUIC sends the selected name and
+the explicit machine profile from Settings as `ceilingProfile`. Ego restricts mode,
+sandbox and perimeter to that ceiling and returns warnings, shown in AI Chat's
+existing warning notices. The repository cannot raise the machine policy.
+A repo selection requires an explicit machine profile and an ego build that
+acknowledges the ceiling. Without a repo selection, launch behavior is unchanged.
+
 ## Opening it
 
 `Cmd+Alt+A` (macOS) / `Ctrl+Alt+A` toggles the panel; so do the status-bar

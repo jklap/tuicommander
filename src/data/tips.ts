@@ -28,6 +28,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Repository Ego Profiles",
+		description:
+			"Select ego_profile in a workspace's .tuic.json. Ego restricts it to your explicit machine profile and AI Chat shows any clamp warnings.",
+		shortcut: null,
+	},
+	{
 		feature: "Touch Branch Actions",
 		description: "Swipe a sidebar branch left for More, Add Terminal, and worktree removal. Hold + to choose an agent.",
 		shortcut: null,

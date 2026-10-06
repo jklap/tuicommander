@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add persisted ego profile, workspace and executable options for individual AI Chat conversations, including HTTP creation and reopen.
 - Audit MCP inbox reads with caller, owner and message ids without logging mail bodies.
 - Let MCP agents page retained terminal output without rerunning commands. Responses explain the next page, raw byte offsets work locally and remotely, and tiny raw pages cannot reconstruct masked secrets.
+- Bound repository-selected ego profiles by the machine profile over ACP and show ego's clamp warnings in AI Chat.
 
 - **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
 

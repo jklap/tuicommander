@@ -349,6 +349,14 @@ export function createAcpChat(
 		return id && session ? acpStore.attachment(id, session) : null;
 	};
 
+	const noticedProfiles = new Set<AcpSessionId>();
+	createEffect(() => {
+		const current = attachment();
+		if (!current?.profileWarnings?.length || noticedProfiles.has(current.sessionId)) return;
+		noticedProfiles.add(current.sessionId);
+		toastsStore.add("Repository ego profile", current.profileWarnings.join("\n"), "warn");
+	});
+
 	/** Only this session's questions. Another session on the same connection may
 	 *  be blocked on its own, and answering it from here would answer blind. */
 	const interactions = (): AcpPendingInteraction[] => {
