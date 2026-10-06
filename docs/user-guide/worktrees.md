@@ -179,6 +179,8 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 - **Right-click → Delete Worktree** — Context menu option
 - Both prompt for confirmation
 
+Cancelling or failing the initial confirmation keeps the workspace and its terminals. You can retry removal; duplicate requests for the same workspace remain serialized.
+
 Removing a worktree:
 1. Closes all terminals associated with that branch
 2. Checks checkout and submodule state, restores owner write permission inside the worktree, then runs `git worktree remove` to clean up; a clean populated submodule needs one `--force` after a fresh safety check. If permission repair fails, the checkout stays registered and the error names its path. If Git unregisters the checkout but leaves files behind, TUICommander finishes removing that known checkout before it can delete the branch. If that cleanup fails, the error names the remaining directory.
