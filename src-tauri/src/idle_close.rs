@@ -315,6 +315,7 @@ mod tests {
                     branch: Some("child".into()),
                     base_repo: worktree,
                 }),
+                initial_cwd: None,
                 cwd: None,
                 display_name: Some("worker".into()),
                 display_name_is_custom: false,

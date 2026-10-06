@@ -2401,11 +2401,18 @@ response rather than deriving it from display data. MCP
 `GET /worktrees/lifecycle` provides the removal preview: branch history, dirty and untracked counts, live session names, and warnings. `DELETE /worktrees/:workspaceId` includes the same warnings on success.
 
 Creation announces itself on both transports as `worktree-created`
-(`{ repo_path, workspace_id, branch, worktree_path, kind }`, with `kind` equal
+(`{ repo_path, workspace_id, branch, worktree_path, kind, creator_session, spawn_session }`, with `kind` equal
 to `"worktree"`) and removal as
 `worktree-removed` (`{ repo_path, workspace_id, branch }`) — the desktop Tauri
 event and the `/events` SSE frame serialize the same struct, so the field names
 are identical by construction. Payload table: `docs/sync-matrix.md`.
+
+`creator_session` is the live PTY id resolved from the MCP connection, or null
+for creation without a bound caller. When `spawn_session` is false, the UI moves
+only that session within its existing repository. Explicit session creation
+leaves the caller in place. Placement does not change the shell cwd or send
+input to an agent. The existing per-workspace terminal snapshots preserve the
+placement on restart; an inactive caller does not change the current selection.
 
 ### Worktrees Base Directory
 
@@ -2844,3 +2851,45 @@ The host ACP session list gathers all ego pages before ordering ancestry. Each r
 `POST /acp/chat/open` accepts `{ "profile": "coordinator", "workspace": "/absolute/workspace", "executable": "/absolute/ego" }`. All fields are optional for a new conversation; omitted values use global defaults. It returns `{ connection, sessionId, launch, replayed }`, where `launch` contains the resolved executable, profile, workspace and durable `peerId`. Use the existing ACP session prompt and stream routes with the returned ids.
 
 Reopen with `{ "sessionId": "<returned-session-id>" }`; saved launch options cannot be replaced on reopen. This route requires localhost or authenticated access, like ACP connect. Each custom conversation owns a dedicated peer/process. Its options are persisted under `ai_chat_launches` without modifying the global settings.
+
+### Caller-bound worktree declaration
+
+An agent that uses `git -C` or tools without changing shell cwd can declare an
+existing linked worktree with:
+
+```text
+session action=declare_worktree worktree_path=/absolute/path/to/worktree
+```
+
+The authenticated MCP binding identifies the caller's live PTY. Omit
+`session_id`; a foreign session target is rejected. The backend resolves the
+repository from the immutable launch directory and discovers current worktrees
+from Git. The main checkout, unknown paths and worktrees owned by another
+repository are rejected before any configuration or placement changes. External
+worktrees are discovered without recreating or deleting them.
+
+The response and `session-worktree-declared` event use the worktree lifecycle
+payload, with `creator_session` naming the caller and `spawn_session=false`.
+Only that tab moves. Its real cwd, sibling tabs and an inactive selection stay
+unchanged. Retrying the same declaration is idempotent.
+
+The stable `TUIC_SESSION` association is stored in the owning repository's
+`declaredWorktrees` map using the existing locked repository delta. Any saved
+caller snapshot moves to the target workspace; sibling snapshots are preserved.
+After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
+`list_active_sessions` return the declared `worktree_path` and `worktree_branch`
+while `cwd` remains the actual shell directory. The frontend restores placement
+from that worktree path. Declaration does not acquire worktree cleanup ownership.
+A concurrent repository edit can return a configuration conflict; retry the
+declaration after refreshing rather than overwriting that edit.
+
+The explicit placement remains authoritative over later shell cwd notifications
+until another declaration changes it. The frontend retains the backend placement
+path separately from the observed cwd during reconciliation.
+
+**Intentional request transport exception:** `declare_worktree` is an MCP-only
+action, callable over the existing HTTP `POST /mcp` route with a bound caller.
+There is no Tauri command or `COMMAND_TABLE` entry: window IPC has no managed
+agent caller binding. Its push event is dual-emitted over Tauri and `/events` SSE,
+and session-list response fields are identical over IPC and HTTP. Schema and
+serialization regressions cover these shared contracts.

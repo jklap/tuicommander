@@ -447,6 +447,7 @@ pub(super) async fn spawn_agent_session(
             _child: child,
             paused: paused.clone(),
             worktree: None,
+            initial_cwd: body.cwd.clone(),
             cwd: body.cwd.clone(),
             display_name: None,
             display_name_is_custom: false,
