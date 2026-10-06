@@ -152,7 +152,7 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
                     "mcp"
                 },
             );
-            for key in ["limit", "from_line", "since_cursor"] {
+            for key in ["limit", "from_line", "from_byte", "since_cursor"] {
                 if let Some(value) = args[key].as_u64() {
                     query.append_pair(key, &value.to_string());
                 }
@@ -169,6 +169,11 @@ pub(super) async fn call(state: &Arc<AppState>, host: &str, id: &str, args: &Val
                 );
             }
             value["connection_id"] = json!(host);
+            if let Some(note) = value["continuation"].as_str() {
+                value["continuation"] = json!(format!(
+                    "{note} For this remote page, also pass connection_id={host:?}."
+                ));
+            }
             value
         }
         Err(value) => value,
@@ -251,10 +256,11 @@ mod tests {
         let token = remote.session_token.read().clone();
         hub.remote
             .force_connected_for_test("mint", &url, Some(&token));
+        let remote_server = Arc::clone(&remote);
         let server = tokio::spawn(async move {
             axum::serve(
                 listener,
-                super::super::build_remote_router(remote)
+                super::super::build_remote_router(remote_server)
                     .into_make_service_with_connect_info::<std::net::SocketAddr>(),
             )
             .await
@@ -287,6 +293,28 @@ mod tests {
         assert_eq!(raw["data"], "\u{1b}[31mremote tail\u{1b}[0m\r\n");
         assert_eq!(raw["exited"], true);
         assert_eq!(raw["exit_code"], 42);
+        // Catches: the proxy drops the byte offset or the HTTP query ignores it.
+        for args in [
+            json!({"action":"output","format":"raw","from_byte":7,"limit":3}),
+            json!({"action":"output","format":"raw","since_cursor":7,"limit":3}),
+            json!({"action":"output","from_line":0,"limit":1}),
+        ] {
+            let mut native_args = args.clone();
+            native_args["session_id"] = json!(id);
+            let mut expected = super::super::mcp_transport::session_output(&remote, &native_args);
+            expected["connection_id"] = json!("mint");
+            let mut page = call(&hub, "mint", &id, &args).await;
+            assert!(
+                page["continuation"]
+                    .as_str()
+                    .unwrap()
+                    .contains("connection_id=\"mint\"")
+            );
+            page.as_object_mut().unwrap().remove("continuation");
+            expected.as_object_mut().unwrap().remove("continuation");
+            assert_eq!(page, expected);
+            assert_eq!(page["has_more"], true);
+        }
         server.abort();
     }
 
