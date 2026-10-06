@@ -101,7 +101,7 @@ fn assert_os_child_reaped(pid: libc::pid_t) {
 #[test]
 fn session_removal_reaps_child_that_exits_after_first_poll() {
     for explicit_close in [false, true] {
-        let state = crate::state::tests_support::make_test_app_state();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
         let sid = if explicit_close {
             "reap-close"
         } else {
@@ -132,7 +132,7 @@ fn session_removal_reaps_child_that_exits_after_first_poll() {
 /// or decrements active-session accounting twice on a repeated EOF/close.
 #[test]
 fn session_removal_preserves_already_reaped_exit_status() {
-    let state = crate::state::tests_support::make_test_app_state();
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
     let sid = "reap-already-exited";
     let (mut input, _waited, pid) = insert_gated_child(&state, sid);
     input.write_all(b"release\n").expect("release child");
