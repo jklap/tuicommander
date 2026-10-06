@@ -83,6 +83,14 @@ export function useAppShortcutHandlers(options: AppShortcutHandlerOptions): Shor
 			const previousId = terminalsStore.getPreviousActiveId();
 			if (previousId) navigateToTerminal(previousId);
 		},
+		historyBack: () => {
+			const id = terminalsStore.stepHistory("back");
+			if (id) navigateToTerminal(id);
+		},
+		historyForward: () => {
+			const id = terminalsStore.stepHistory("forward");
+			if (id) navigateToTerminal(id);
+		},
 		jumpWaitingTerminal: () => {
 			const waiting = terminalsStore
 				.getIds()
