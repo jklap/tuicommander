@@ -1,4 +1,4 @@
-//! The three methods that are ego's and not ACP's.
+//! Typed ego extensions outside standard ACP.
 //!
 //! ACP has no way to hold a turn at a boundary and no way to compact a session
 //! into a successor, so ego adds `_ego/pause`, `_ego/resume` and
@@ -105,4 +105,48 @@ impl JsonRpcMessage for EgoCompactWire {
 
 impl JsonRpcRequest for EgoCompactWire {
     type Response = EgoCompactResponse;
+}
+
+/// Text submitted to the current turn; acceptance is durable and must not be retried.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct EgoSteerWire {
+    pub v: u32,
+    pub session_id: String,
+    pub prompt: Vec<agent_client_protocol::schema::v1::ContentBlock>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum EgoSteerState {
+    Accepted,
+    NotBusy,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, agent_client_protocol::JsonRpcResponse)]
+pub(super) struct EgoSteerResponse {
+    pub v: u32,
+    pub state: EgoSteerState,
+}
+
+impl JsonRpcMessage for EgoSteerWire {
+    fn matches_method(method: &str) -> bool {
+        method == super::EGO_STEER_METHOD
+    }
+    fn method(&self) -> &str {
+        super::EGO_STEER_METHOD
+    }
+    fn to_untyped_message(&self) -> Result<UntypedMessage, Error> {
+        UntypedMessage::new(self.method(), self)
+    }
+    fn parse_message(method: &str, params: &impl Serialize) -> Result<Self, Error> {
+        if !Self::matches_method(method) {
+            return Err(Error::method_not_found());
+        }
+        agent_client_protocol::util::json_cast_params(params)
+    }
+}
+impl JsonRpcRequest for EgoSteerWire {
+    type Response = EgoSteerResponse;
 }

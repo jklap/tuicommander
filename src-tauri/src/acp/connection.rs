@@ -144,6 +144,15 @@ pub(super) enum Answer {
 /// Each variant carries everything needed to finish the job, so the actor holds
 /// nothing about a request it has already sent.
 pub(super) enum Pending {
+    Steer {
+        session_id: v1::SessionId,
+        turn_id: AcpTurnId,
+        prompt: Vec<v1::ContentBlock>,
+        meta: Option<v1::Meta>,
+        outcome: Result<ego_ext::EgoSteerResponse, AcpClientError>,
+        reply: Reply<AcpTurnId>,
+    },
+
     Attach {
         /// The session a load or resume holds in `attaching` until it settles.
         claimed: Option<v1::SessionId>,
@@ -485,21 +494,28 @@ impl ConnectionActor {
                 prompt,
                 meta,
                 reply,
-            } => match self.start_prompt(&session_id, prompt, meta, connection) {
-                Ok((turn_id, sent)) => {
-                    let _ = reply.send(Ok(turn_id));
-                    if let Some(sent) = sent {
-                        in_flight.push(Box::pin(async move {
-                            Pending::Turn {
-                                session_id,
-                                turn_id,
-                                outcome: sent.await,
-                            }
-                        }));
-                    }
+            } => {
+                if self.capabilities.ego_steer_version == Some(1)
+                    && !prompt.is_empty()
+                    && prompt.iter().all(|block| matches!(block, v1::ContentBlock::Text(text) if !text.text.trim().is_empty()))
+                    && self.attachments.get(&session_id).is_some_and(|attachment| {
+                        attachment.state == AcpAttachmentState::Prompting
+                            && attachment.active_turn.as_ref().is_some_and(|turn| turn.state == AcpTurnState::Running)
+                    })
+                {
+                    let turn_id = self.turn_of(&session_id).expect("running turn checked above");
+                    let sent = self.send(ego_ext::EgoSteerWire {
+                        v: ego_ext::EGO_EXTENSION_VERSION,
+                        session_id: session_id.to_string(),
+                        prompt: prompt.clone(),
+                    }, connection, None);
+                    in_flight.push(Box::pin(async move {
+                        Pending::Steer { session_id, turn_id, prompt, meta, outcome: sent.await, reply }
+                    }));
+                } else {
+                    self.handle_prompt(session_id, prompt, meta, reply, connection, in_flight);
                 }
-                Err(error) => drop(reply.send(Err(error))),
-            },
+            }
             Command::Cancel { session_id, reply } => {
                 let _ = reply.send(self.cancel(&session_id, connection));
             }
@@ -918,6 +934,36 @@ impl ConnectionActor {
 
     fn settle(&mut self, pending: Pending, connection: &ConnectionTo<Agent>, in_flight: &InFlight) {
         match pending {
+            Pending::Steer {
+                session_id,
+                turn_id,
+                prompt,
+                meta,
+                outcome,
+                reply,
+            } => {
+                match outcome {
+                    Ok(response) if response.v == ego_ext::EGO_EXTENSION_VERSION => {
+                        match response.state {
+                            ego_ext::EgoSteerState::Accepted => {
+                                let _ = reply.send(Ok(turn_id));
+                            }
+                            ego_ext::EgoSteerState::NotBusy | ego_ext::EgoSteerState::Rejected => {
+                                // Reuse prompt serialization if the closing turn response is still in flight.
+                                self.handle_prompt(
+                                    session_id, prompt, meta, reply, connection, in_flight,
+                                );
+                            }
+                        }
+                    }
+                    Ok(_) => drop(reply.send(Err(AcpClientError::invalid_input(
+                        "unsupported ego steering response version; acceptance is unknown",
+                    )))),
+                    // An uncertain transport outcome must never resend possibly accepted text.
+                    Err(error) => drop(reply.send(Err(error))),
+                }
+            }
+
             Pending::Attach {
                 claimed,
                 outcome,
@@ -1193,6 +1239,32 @@ impl ConnectionActor {
                 Box::pin(async move { sent.await.map(drop) })
             }
         })
+    }
+
+    fn handle_prompt(
+        &mut self,
+        session_id: v1::SessionId,
+        prompt: Vec<v1::ContentBlock>,
+        meta: Option<v1::Meta>,
+        reply: Reply<AcpTurnId>,
+        connection: &ConnectionTo<Agent>,
+        in_flight: &InFlight,
+    ) {
+        match self.start_prompt(&session_id, prompt, meta, connection) {
+            Ok((turn_id, sent)) => {
+                let _ = reply.send(Ok(turn_id));
+                if let Some(sent) = sent {
+                    in_flight.push(Box::pin(async move {
+                        Pending::Turn {
+                            session_id,
+                            turn_id,
+                            outcome: sent.await,
+                        }
+                    }));
+                }
+            }
+            Err(error) => drop(reply.send(Err(error))),
+        }
     }
 
     /// Accept a turn, queueing it when the session already has one in flight.
