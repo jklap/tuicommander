@@ -130,49 +130,47 @@ pub(crate) async fn open(
         mcp_servers: vec![],
     };
     let mut replayed = false;
-    let session_id = if let Some(session) = request.session_id {
-        if !connection
-            .attachments
-            .iter()
-            .any(|attachment| attachment.session_id.to_string() == session)
-        {
-            replayed = true;
-            if let Err(error) = state
-                .acp
-                .attach(
-                    connection.connection_id,
-                    AcpAttachKind::Load,
-                    session.clone().into(),
-                    authority,
-                )
-                .await
+    let session_id =
+        if let Some(session) = request.session_id {
+            if !connection
+                .attachments
+                .iter()
+                .any(|attachment| attachment.session_id.to_string() == session)
             {
+                replayed = true;
+                if let Err(error) = state
+                    .acp
+                    .attach(
+                        connection.connection_id,
+                        AcpAttachKind::Load,
+                        session.clone().into(),
+                        authority,
+                    )
+                    .await
+                {
+                    let _ = state.acp.disconnect(connection.connection_id).await;
+                    return Err(error);
+                }
+            }
+            session
+        } else {
+            let attachment =
+                match crate::acp_commands::session_new(state, connection.connection_id, authority)
+                    .await
+                {
+                    Ok(attachment) => attachment,
+                    Err(error) => {
+                        let _ = state.acp.disconnect(connection.connection_id).await;
+                        return Err(error);
+                    }
+                };
+            let session = attachment.session_id.to_string();
+            if let Err(error) = persist(state, &session, &launch).await {
                 let _ = state.acp.disconnect(connection.connection_id).await;
                 return Err(error);
             }
-        }
-        session
-    } else {
-        let attachment = match crate::acp_commands::session_new(
-            state,
-            connection.connection_id,
-            authority,
-        )
-        .await
-        {
-            Ok(attachment) => attachment,
-            Err(error) => {
-                let _ = state.acp.disconnect(connection.connection_id).await;
-                return Err(error);
-            }
+            session
         };
-        let session = attachment.session_id.to_string();
-        if let Err(error) = persist(state, &session, &launch).await {
-            let _ = state.acp.disconnect(connection.connection_id).await;
-            return Err(error);
-        }
-        session
-    };
     Ok(ChatOpened {
         connection: state.acp.snapshot(connection.connection_id)?,
         session_id,
