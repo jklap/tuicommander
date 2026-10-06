@@ -13,6 +13,9 @@ pub enum RunAction {
         definition_revision: i64,
         limits: RunLimits,
     },
+    Incidents {
+        run_id: String,
+    },
     Get {
         run_id: String,
     },
@@ -58,6 +61,7 @@ pub enum RunReply {
     Runs(Vec<RunSnapshot>),
     Events(Vec<RunEvent>),
     Receipt(Box<RunReceipt>),
+    Incidents(Vec<super::RunIncident>),
 }
 
 /// The live coordinator is the only inbox recipient for story-worker results.
@@ -120,6 +124,12 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             definition_revision,
             limits,
         )?))),
+        RunAction::Incidents { run_id } => {
+            let run = scoped_snapshot(&store, &owner, &run_id)?;
+            Ok(RunReply::Incidents(super::incidents::project_incidents(
+                &run, None,
+            )))
+        }
         RunAction::Get { run_id } => Ok(RunReply::Snapshot(Box::new(scoped_snapshot(
             &store, &owner, &run_id,
         )?))),
@@ -227,6 +237,21 @@ pub fn run_action_with_events(
     project: &str,
     action: RunAction,
 ) -> Result<RunReply, String> {
+    if let RunAction::Incidents { run_id } = &action {
+        let RunReply::Snapshot(run) = run_action(
+            project,
+            RunAction::Get {
+                run_id: run_id.clone(),
+            },
+        )?
+        else {
+            unreachable!("get returns a snapshot")
+        };
+        return Ok(RunReply::Incidents(super::incidents::project_incidents(
+            &run,
+            Some(state),
+        )));
+    }
     let mutation = matches!(
         action,
         RunAction::StartPlan { .. }
@@ -247,7 +272,7 @@ pub fn run_action_with_events(
                 &receipt.snapshot.id,
                 receipt.sequence,
             ),
-            RunReply::Events(_) | RunReply::Runs(_) => {
+            RunReply::Events(_) | RunReply::Runs(_) | RunReply::Incidents(_) => {
                 unreachable!("mutations return a snapshot or receipt")
             }
         };

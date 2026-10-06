@@ -76,3 +76,11 @@
 .dependencyRow button:hover { background: var(--bg-highlight); }
 .dependencyRow button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 760px) { .content { grid-template-columns: minmax(135px, 34%) minmax(0, 1fr); } .detail { grid-column: 1 / -1; min-height: 260px; border-top: 1px solid var(--border); } .storyColumn { border-right: 0; } .runContent { grid-template-columns: minmax(145px, 38%) minmax(0, 1fr); } .runDetail { padding: 14px; } .timeline li { grid-template-columns: 32px minmax(0, 1fr); } .timeline time { grid-column: 2; } }
+
+.incidents { margin: 20px 0; padding-top: 16px; border-top: 1px solid var(--border); }
+.incidents h4 { margin: 0; font-size: var(--font-sm); }
+.incident { margin-top: 12px; padding: 12px; background: var(--bg-tertiary); border: 1px solid var(--border); border-left: 3px solid var(--attention); border-radius: var(--radius-sm); }
+.incidentCause { margin: 8px 0; color: var(--fg-primary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.incidentIds { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 8px 0; color: var(--fg-muted); font: var(--font-xs) var(--font-mono); }
+.incidentIds dd { margin: 0; overflow-wrap: anywhere; }
+.incidentNext { margin: 12px 0 0; color: var(--fg-secondary); font-size: var(--font-sm); white-space: pre-wrap; overflow-wrap: anywhere; }

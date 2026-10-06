@@ -2613,3 +2613,5 @@ AI Chat offers **Fork from here** beside a reply when ego advertises message-poi
 Forked AI Chat tabs label inherited history. A separator marks where the child’s own conversation begins, including after loading saved history.
 
 The AI Chat conversation picker groups fork and compaction descendants beneath their ancestors. Deleted immediate parents remain visible as disabled “Deleted conversation” rows.
+
+- **Run incidents and next steps:** Plans and Stories run history connects recorded workflow and bound-agent failure/input outcomes to their cause, identifiers and manual next action. Session/task evidence is transient; no automatic incident retry.
