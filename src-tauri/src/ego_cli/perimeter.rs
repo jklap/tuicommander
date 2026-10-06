@@ -278,3 +278,6 @@ pub(crate) async fn ego_set_perimeter_network(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod critic_tests;

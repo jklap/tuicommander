@@ -39,3 +39,20 @@ of ego commit `c8bbb8231f5c163db7772ead4def8efdef4d6bf6` in worktree
 the headless `not_checked` state and its reason; it contains no probe evidence.
 Build/artifact/capture logs are in `~/Gits/.tmp/tuic-1401/ego297-capture.log` and
 `ego297-artifacts.jsonl`. No extra probes were executed.
+
+## Critic inherited-profile capture
+
+`stored-inherited-profile.json` and `effective-inherited-profile.json` were captured
+on 2026-10-06 from the same ego297 executable above, with isolated
+`EGO_HOME=~/Gits/.tmp/critic-1401/ego-home` and cwd
+`~/Gits/.tmp/critic-1401/workspace`. The root directory existed. Commands:
+
+```sh
+ego config set -- 'roots=[{path="/Users/stefano.straus/Gits/.tmp/critic-1401/root",access="read"}]'
+ego config set --profile=review -- 'network="off"'
+ego config ls --profile=review --json
+ego config ls --profile=review --effective --json
+```
+
+The profile listing omits roots while its effective view inherits the user root.
+No provider calls, probes, or credentials were used.
