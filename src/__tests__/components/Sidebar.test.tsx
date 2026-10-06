@@ -829,8 +829,14 @@ describe("Sidebar", () => {
 				})),
 				truncated: false,
 			});
-			const setup = (terms: Record<string, unknown>, subs: ReturnType<typeof sub>[], ids = Object.keys(terms)) => {
-				mockTerminalsGet.mockImplementation((id: string) => terms[id] ?? null);
+			const setup = (
+				terms: Record<string, unknown> | (() => Record<string, unknown>),
+				subs: ReturnType<typeof sub>[],
+				ids = Object.keys(typeof terms === "function" ? terms() : terms),
+			) => {
+				mockTerminalsGet.mockImplementation(
+					(id: string) => (typeof terms === "function" ? terms() : terms)[id] ?? null,
+				);
 				vi.spyOn(progressStore, "sidebarFlow").mockReturnValue(flowOf(subs) as never);
 				vi.spyOn(progressStore, "refreshSidebarFlow").mockResolvedValue();
 				settingsStore.setTabTreeEnabled(true);
@@ -838,6 +844,55 @@ describe("Sidebar", () => {
 				return render(() => <Sidebar {...defaultProps()} />);
 			};
 			afterEach(() => vi.restoreAllMocks());
+
+			// Catches: folding at the threshold, hiding attention/selection, or reordering restored rows.
+			it("idle_fold_preserves_attention_and_order", () => {
+				const old = Date.now() - 2 * 3600_000 - 1;
+				const [terms, setTerms] = createSignal({
+					old: term("old", { shellState: "idle", lastActivityAt: old }),
+					exact: term("exact", { shellState: "idle", lastActivityAt: old + 1 }),
+					question: term("question", { shellState: "idle", lastActivityAt: old, awaitingInput: "question" }),
+					unread: term("unread", { shellState: "idle", lastActivityAt: old, unseen: true }),
+					working: term("working", { shellState: "idle", lastActivityAt: old, agentState: "working" }),
+					unknown: term("unknown", { shellState: "idle", lastActivityAt: null }),
+				});
+				const { container } = setup(terms, []);
+				const labels = () =>
+					[...container.querySelectorAll(".branchTabItem .branchAgentActivity")].map((e) => e.textContent);
+				expect(labels()).toEqual(["exact", "question", "unread", "working", "unknown"]);
+				const fold = () => container.querySelector<HTMLButtonElement>("[data-testid='idle-session-fold']")!;
+				expect(fold().textContent).toBe("1 idle sessions");
+				fireEvent.click(fold());
+				expect(labels()).toEqual(Object.keys(terms()));
+				fireEvent.click(fold());
+				setTerms({
+					...terms(),
+					old: term("old", { shellState: "idle", lastActivityAt: old, awaitingInput: "question" }),
+				});
+				expect(labels()).toEqual(Object.keys(terms()));
+				expect(fold()).toBeNull();
+			});
+
+			// Catches: hiding a live child by folding its old parent or changing compact rows.
+			it("idle_fold_keeps_parents_of_live_children_and_compact_rows", () => {
+				const { container } = setup(
+					{
+						parent: term("parent", { shellState: "idle", lastActivityAt: Date.now() - 3 * 3600_000 }),
+						child: term("child", { parentSession: "tuic-parent", shellState: "busy" }),
+						old: term("old", { shellState: "idle", lastActivityAt: Date.now() - 3 * 3600_000 }),
+					},
+					[],
+				);
+				expect(container.querySelectorAll(".branchTabItem")).toHaveLength(2);
+				uiStore.cycleSidebarDensityMode();
+				try {
+					expect(container.querySelectorAll(".branchTabItem")).toHaveLength(3);
+					expect(container.querySelector("[data-testid='idle-session-fold']")).toBeNull();
+				} finally {
+					uiStore.cycleSidebarDensityMode();
+					uiStore.cycleSidebarDensityMode();
+				}
+			});
 
 			// Catches: subagents missing from the rich agent row (Boss: "non ci sono i subagents").
 			it("lists each subagent with state, title, tool calls and age", () => {

@@ -7,8 +7,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- Fold old idle sessions in the rich sidebar without changing session order.
 - Hide zero PR and worktree counts in rich sidebar repository metadata.
-
 
 - **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
 

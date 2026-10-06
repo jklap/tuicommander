@@ -364,6 +364,27 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	// are on this branch. A child whose parent is elsewhere stays a top-level row.
 	const topLevel = () => (rich() ? props.terminalIds.filter((id) => parentOf(id) === null) : props.terminalIds);
 	const childrenOf = (id: string) => (rich() ? props.terminalIds.filter((other) => parentOf(other) === id) : []);
+	const [idleExpanded, setIdleExpanded] = createSignal(false);
+	const oldIdle = (id: string): boolean => {
+		const term = terminalsStore.get(id);
+		return (
+			!!term &&
+			term.shellState === "idle" &&
+			!terminalsStore.isBusy(id) &&
+			!term.backgroundWork &&
+			!term.awaitingInput &&
+			!term.unseen &&
+			term.agentState !== "working" &&
+			term.agentState !== "starting" &&
+			term.agentState !== "awaiting_input" &&
+			terminalsStore.state.activeId !== id &&
+			term.lastActivityAt != null &&
+			clock() - term.lastActivityAt > 2 * 60 * 60_000 &&
+			childrenOf(id).every(oldIdle)
+		);
+	};
+	const idleIds = createMemo(() => (rich() ? props.terminalIds.filter(oldIdle) : []));
+
 	onCleanup(progressStore.holdSidebarFlow(props.repoPath));
 	// Subagents come from the project flow: ask for it while rich shows an agent,
 	// again on every busy flip and every minute.
@@ -419,7 +440,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 		};
 
 		return (
-			<Show when={term()}>
+			<Show when={(!idleIds().includes(id) || idleExpanded()) && term()}>
 				{(t) => (
 					<>
 						<button
@@ -482,6 +503,17 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
 			<For each={topLevel()}>{(id) => renderTab(id, false)}</For>
+			<Show when={idleIds().length > 0}>
+				<button
+					class={s.subagentFold}
+					data-testid="idle-session-fold"
+					aria-expanded={idleExpanded()}
+					onClick={() => setIdleExpanded((open) => !open)}
+				>
+					<ChevronIcon />
+					{t("sidebar.idleSessionCount", "{count} idle sessions", { count: String(idleIds().length) })}
+				</button>
+			</Show>
 		</div>
 	);
 };
