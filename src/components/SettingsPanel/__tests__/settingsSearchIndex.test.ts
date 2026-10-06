@@ -25,7 +25,7 @@ const TAB_SOURCES: Record<string, string[]> = {
 	plugins: ["tabs/PluginsTab.tsx"],
 	"smart-prompts": ["tabs/SmartPromptsTab.tsx"],
 	agents: ["tabs/AgentsTab.tsx"],
-	"ai-chat": ["tabs/AiChatTab.tsx"],
+	"ai-chat": ["tabs/EgoPerimeterSection.tsx", "tabs/AiChatTab.tsx"],
 };
 
 /** Occurrences the extraction rule cannot index, pinned so a new one is loud.
@@ -56,17 +56,17 @@ const UNINDEXABLE: Record<string, { dynamic: number; orphans: number }> = {
 	// daemon alive" labels, whose text sits in a nested `<span>`.
 	"remote-machines": { dynamic: 3, orphans: 0 },
 	plugins: { dynamic: 1, orphans: 0 },
-	"smart-prompts": { dynamic: 4, orphans: 11 },
+	"smart-prompts": { dynamic: 3, orphans: 12 },
 	// The per-agent "Native status signals", "Prevent alternate screen", and
 	// "Accept workspace trust for managed spawns" toggles sit in runtime-rendered
-	// cards and have no static scroll target. Workspace trust appears only in the
+	// cards and have no static scroll target; their static captions are orphans. Workspace trust appears only in the
 	// expanded Claude and Codex cards, so a global search result could not open
 	// the right card or scroll to its control.
 	// The machine selector's "Configure agents on" label scopes the page. The
 	// idle-close control sits inside a collapsed, per-agent card: search cannot
 	// identify which card to expand or scroll to its hidden control. Neither has
 	// a stable search target.
-	agents: { dynamic: 10, orphans: 2 },
+	agents: { dynamic: 0, orphans: 12 },
 	// The `<optgroup label={provider.name}>` inside the default-model picker. It
 	// groups the options by provider and is not a setting anybody can scroll to.
 	"ai-chat": { dynamic: 1, orphans: 0 },
@@ -154,9 +154,22 @@ describe("settings search index — drift guard", () => {
 		}).toEqual(UNINDEXABLE[tab]);
 	});
 
-	it("classifies only the machine selector and per-agent idle close as Agents orphans", () => {
+	it("keeps per-agent captions and the machine selector out of static search targets", () => {
 		const orphans = extractTab(readPage("agents")).settings.filter((setting) => !setting.section);
-		expect(orphans.map((setting) => setting.text)).toEqual(["Close idle managed child after", "Configure agents on"]);
+		expect(orphans.map((setting) => setting.text)).toEqual([
+			"Usage Dashboard",
+			"Close idle managed child after",
+			"Enabled",
+			"Auto-retry on server errors",
+			"Prevent alternate screen",
+			"Accept workspace trust for managed spawns",
+			"Native status signals",
+			"Install hooks globally",
+			"Track agent intent",
+			"Collect progress",
+			"Show suggested follow-ups",
+			"Configure agents on",
+		]);
 	});
 
 	it("indexes no tab the panel cannot open", () => {
