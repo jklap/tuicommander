@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use crate::state::VtLogBuffer;
 use portable_pty::{Child, ChildKiller, ExitStatus};
 use std::io;
 use std::process::{Command, Stdio};
