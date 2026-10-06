@@ -619,14 +619,14 @@ describe("Sidebar", () => {
 			mockGetGroupedLayout.mockImplementation(() => ({ groups: [], ungrouped: [repo()] }));
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const meta = () => container.querySelector("[data-testid='repo-rich-meta']")!;
-			expect(meta().textContent).not.toMatch(/open PR|worktree|[·|]/);
+			expect(meta()).toBeNull();
 			setPrs([{ number: 1 }, { number: 2 }] as ReturnType<typeof githubStore.getAllOpenPrs>);
 			setRepo(makeRepo({ workspaces: { feat: richBranch() } }));
-			expect(meta().textContent).toContain("2 open PRs");
-			expect(meta().textContent).toContain("1 worktree");
+			expect(meta()!.textContent).toContain("2 open PRs");
+			expect(meta()!.textContent).toContain("1 worktree");
 			setPrs([]);
 			setRepo(makeRepo());
-			expect(meta().textContent).not.toMatch(/open PR|worktree|[·|]/);
+			expect(meta()).toBeNull();
 		});
 
 		// Catches: idle agents keeping expanded intent rows, or blank intent hiding tooltip fallback.
@@ -790,7 +790,8 @@ describe("Sidebar", () => {
 			withBranch(richBranch({ branchName: "feature/a-very-long-branch-name" }));
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const name = container.querySelector(".branchName");
-			expect(name?.getAttribute("data-tooltip")).toBe("feature/a-very-long-branch-name");
+			expect(name?.getAttribute("data-tooltip")).toContain("feature/a-very-long-branch-name");
+			expect(name?.getAttribute("data-tooltip")).toContain("Last commit: 3h");
 			expect(container.querySelector(".branchItem [title]")).toBeNull();
 		});
 
@@ -799,7 +800,7 @@ describe("Sidebar", () => {
 			"keeps the full current branch %s in the rich repo chip tooltip",
 			(branchName) => {
 				setRepos({
-					"/repo1": makeRepo({ workspaces: { main: richBranch({ branchName }) } }),
+					"/repo1": makeRepo({ workspaces: { main: richBranch({ branchName }), feat: richBranch() } }),
 				});
 				const { container } = render(() => <Sidebar {...defaultProps()} />);
 				const chip = container.querySelector("[data-testid='repo-rich-meta'] .richChip");
@@ -934,16 +935,34 @@ describe("Sidebar", () => {
 				}
 			});
 
+			// Catches: returned history filling the sidebar or being folded together with active work.
+			it("returned_subagents_fold_without_hiding_running_children", () => {
+				const returned = Array.from({ length: 30 }, (_, i) => sub(i + 2, "done"));
+				const { container } = setup({ t1: term("t1") }, [sub(1), ...returned]);
+				const rows = () => [...container.querySelectorAll(".subagentRow")].map((e) => e.textContent);
+				expect(rows()).toHaveLength(1);
+				expect(rows()[0]).toContain("Sub task 1");
+				const fold = container.querySelector<HTMLButtonElement>("[data-testid='returned-subagent-fold']")!;
+				expect(fold.textContent).toBe("30 returned");
+				fireEvent.click(fold);
+				expect(rows()).toHaveLength(31);
+				returned.forEach((row, i) => expect(rows()[i + 1]).toContain(row.title));
+				fireEvent.click(fold);
+				expect(rows()).toHaveLength(1);
+			});
+
 			// Catches: subagents missing from the rich agent row (Boss: "non ci sono i subagents").
 			it("lists each subagent with state, title, tool calls and age", () => {
 				const { container } = setup({ t1: term("t1") }, [sub(1), sub(2, "done")]);
 				const rows = [...container.querySelectorAll(".subagentRow")].map((r) => r.textContent ?? "");
-				expect(rows).toHaveLength(2);
+				expect(rows).toHaveLength(1);
 				expect(rows[0]).toContain("Running");
 				expect(rows[0]).toContain("Sub task 1");
 				expect(rows[0]).toContain("3 calls");
 				expect(rows[0]).toContain("5m");
-				expect(rows[1]).toContain("Returned");
+				const returned = container.querySelector<HTMLButtonElement>("[data-testid='returned-subagent-fold']")!;
+				fireEvent.click(returned);
+				expect(container.querySelectorAll(".subagentRow")[1].textContent).toContain("Returned");
 			});
 
 			// Catches: a long subagent list pushing every other row off screen.
