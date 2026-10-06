@@ -35,8 +35,7 @@ use super::guards::{Authenticated, require_local_or_auth};
 use crate::AppState;
 use crate::acp::{
     AcpAttachKind, AcpClientError, AcpClientErrorCode, AcpConnectionId, AcpDetachKind,
-    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoCompactRequest,
-    EgoHoldRequest,
+    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoHoldRequest,
 };
 use crate::acp_commands;
 
@@ -45,6 +44,7 @@ use crate::acp_commands;
 pub(super) fn acp_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/workspace", get(workspace_root))
+        .route("/chat/open", post(chat_open))
         .route("/connections", post(connect))
         .route(
             "/connections/{connection_id}",
@@ -391,16 +391,14 @@ async fn session_fork(
     Json(body): Json<ForkBody>,
 ) -> Response {
     answer(
-        state
-            .acp
-            .attach_at_message(
-                connection_id,
-                AcpAttachKind::Fork,
-                session_id,
-                body.authority,
-                body.at_message_id,
-            )
-            .await,
+        crate::acp_chat::fork(
+            &state,
+            connection_id,
+            session_id,
+            body.authority,
+            body.at_message_id,
+        )
+        .await,
     )
 }
 
@@ -523,18 +521,7 @@ async fn session_compact(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RequestIdBody>,
 ) -> Response {
-    answer(
-        state
-            .acp
-            .compact(
-                connection_id,
-                EgoCompactRequest {
-                    session_id,
-                    request_id: body.request_id,
-                },
-            )
-            .await,
-    )
+    answer(crate::acp_chat::compact(&state, connection_id, session_id, body.request_id).await)
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,4 +1018,17 @@ mod tests {
             StatusCode::BAD_GATEWAY
         );
     }
+}
+
+/// Conversation-specific executable authority uses the same spawn guard as connect.
+async fn chat_open(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<crate::acp_chat::ChatOpenRequest>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    answer(crate::acp_chat::open(&state, request).await)
 }

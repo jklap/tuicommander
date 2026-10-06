@@ -2081,6 +2081,13 @@ describe("transport", () => {
 		// way the code does would agree with any typo.
 		it.each([
 			["acp_workspace_root", {}, "GET", "/acp/workspace", undefined],
+			[
+				"acp_chat_open",
+				{ request: { profile: "coordinator", workspace: "/repo", executable: "/bin/ego" } },
+				"POST",
+				"/acp/chat/open",
+				{ profile: "coordinator", workspace: "/repo", executable: "/bin/ego" },
+			],
 			["acp_connect", { root: "/repo" }, "POST", "/acp/connections", { root: "/repo" }],
 			["acp_connection_snapshot", { connectionId: CONNECTION }, "GET", `/acp/connections/${CONNECTION}`, undefined],
 			["acp_disconnect", { connectionId: CONNECTION }, "DELETE", `/acp/connections/${CONNECTION}`, undefined],

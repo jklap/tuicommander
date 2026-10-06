@@ -759,3 +759,7 @@ Workflow safety: pinned checks own process trees and stop on timeout, run cancel
 Graph runtime slice A adds version-2 serial activation/predecessor/decision history and executable start validation with pinned Pause targets and deterministic final checks. History is bounded to 4096 activations per execution. Fork/all-Join schema and execution are deferred to slice G. Pre-contract runs support inspect/cancel only. Autonomous scheduling remains disabled pending slice B and authorization story 956-9745.
 
 Workflow graph slice B: AppState owns the serial daemon executor and OS database owner lock on desktop and headless boot. Initial graph position is atomic and start-key idempotent; per-run mailboxes and durable deadlines drive controls without a frontend. Graph roots reserve native stories, and manual claim/start shares the run writer lock. No Agent effects, delivery policy or new UI are enabled; unsupported graphs cannot start as executable workflows.
+
+### Conversation-specific AI Chat launch (implemented)
+
+Custom conversations snapshot executable/profile/workspace overrides in `ai_chat_launches`, keyed by ego session id, and retain a host-issued peer identity. Each has its own ACP connection; default chats continue on the shared default connection. The header shows saved launch values. `acp_chat_open` and `POST /acp/chat/open` create or reopen the same conversation. MCP inbox reads emit content-free INFO audit events with protocol caller, bound peer/owner and returned message ids.

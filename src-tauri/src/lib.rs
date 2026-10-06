@@ -5,6 +5,7 @@
 )]
 
 pub mod acp;
+pub(crate) mod acp_chat;
 pub(crate) mod acp_commands;
 pub(crate) mod agent;
 pub(crate) mod agent_hook;
@@ -2405,6 +2406,7 @@ pub fn run() {
             design_mode::tauri_commands::get_design_mode_status,
             acp_commands::acp_workspace_root,
             acp_commands::acp_connect,
+            acp_chat::acp_chat_open,
             acp_commands::acp_reconnect,
             acp_commands::acp_disconnect,
             acp_commands::acp_kill,

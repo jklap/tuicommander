@@ -91,6 +91,7 @@ vi.mock("../../stores/settings", async () => {
 // the transcript projection and every reducer between them are the real ones,
 // so a test that passes proves the panel reads what the wire actually carries.
 const client = vi.hoisted(() => ({
+	openConversation: vi.fn(),
 	connect: vi.fn(),
 	reconnect: vi.fn(),
 	disconnect: vi.fn(),
@@ -3180,5 +3181,91 @@ describe("AIChatPanel: lineage picker", () => {
 		expect(rows[1].disabled).toBe(true);
 		expect(rows[2].textContent).toContain("    ");
 		expect(rows[2].textContent).toContain("Grandchild");
+	});
+});
+
+describe("conversation launch overrides", () => {
+	// Catches: creating a coordinator chat changes settings or sends its next turn through the daily connection.
+	it("opens options on a dedicated conversation and returns default chats to their connection", async () => {
+		const view = await renderPanel();
+		const customConnection = "01932d5e-0000-7000-8000-0000000000c2";
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {}, ai_chat_launches: { [SECOND_SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		client.openConversation.mockImplementation(async () => {
+			const connection = snapshot({
+				connectionId: customConnection,
+				attachments: [attachment({ sessionId: SECOND_SESSION })],
+			});
+			acpStore.applySnapshot(connection);
+			acpStore.markStreaming(customConnection);
+			return { connection, sessionId: SECOND_SESSION, launch };
+		});
+		(view.container.querySelector('button[aria-label="New conversation with options"]') as HTMLButtonElement).click();
+		await settle();
+		for (const [label, value] of [
+			["Ego profile", "coordinator"],
+			["Workspace", "/srv/observer"],
+			["Ego executable", "/opt/observer/ego"],
+		]) {
+			const input = view.container.querySelector(`input[aria-label="${label}"]`) as HTMLInputElement;
+			input.value = value;
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		}
+		(
+			[...view.container.querySelectorAll("button")].find(
+				(button) => button.textContent === "Create",
+			) as HTMLButtonElement
+		).click();
+		await settle();
+		expect(client.openConversation).toHaveBeenCalledWith({
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			executable: "/opt/observer/ego",
+		});
+		expect(view.container.textContent).toContain("coordinator · /srv/observer · /opt/observer/ego");
+		await typeAndSend(view.container, "observe");
+		expect(client.prompt).toHaveBeenLastCalledWith(customConnection, SECOND_SESSION, "observe", [], ROOT);
+		(view.container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		await typeAndSend(view.container, "daily");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "daily", [], ROOT);
+		expect(settings.egoExecutable).toBe("/usr/local/bin/ego");
+	});
+
+	// Catches: a webview reload restores a custom tab on the global connection and loses its launch options.
+	it("reopens a persisted custom tab without starting the default ego", async () => {
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		aiChatTabs.add("global", SECOND_SESSION);
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_launches: { [SECOND_SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		client.openConversation.mockImplementation(async () => {
+			const connection = snapshot({ attachments: [attachment({ sessionId: SECOND_SESSION })] });
+			acpStore.applySnapshot(connection);
+			acpStore.markStreaming(CONNECTION);
+			return { connection, sessionId: SECOND_SESSION, launch };
+		});
+		const view = renderIdlePanel();
+		await settle();
+		await typeAndSend(view.container, "resume observation");
+		expect(client.openConversation).toHaveBeenCalledWith({ sessionId: SECOND_SESSION });
+		expect(client.connect).not.toHaveBeenCalled();
+		expect(view.container.textContent).toContain("coordinator · /srv/observer · /opt/observer/ego");
 	});
 });
