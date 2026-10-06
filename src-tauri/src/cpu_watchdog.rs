@@ -391,14 +391,14 @@ fn next_memory_threshold(footprint: u64, armed: u64) -> Option<u64> {
 /// Log where the memory is, at a level that survives log filtering.
 fn log_memory_report(state: &Arc<AppState>, footprint: u64) {
     const GB: f64 = (1024 * 1024 * 1024) as f64;
-    let report = crate::memory_report::report(state);
+    let report = crate::memory_report::summary(state);
     tracing::error!(
         source = "diagnostics",
         report = %report,
         "Memory footprint {:.2} GB — this is far above a healthy backend and is what \
-         gets the app killed by macOS under memory pressure. The report lists every \
-         structure that grows, biggest first; `accounted_bytes` well below the \
-         footprint means the memory belongs to something outside AppState.",
+         gets the app killed by macOS under memory pressure. This summary contains \
+         allocator counters and structure counts only; request /diagnostics/memory \
+         explicitly for payload accounting and the large-block census.",
         footprint as f64 / GB,
     );
 }
