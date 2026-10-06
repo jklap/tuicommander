@@ -27,12 +27,18 @@ const {
 		getGroupForTab: vi.fn<(id: string) => string | null>(() => null),
 		setActiveGroup: vi.fn(),
 		setActiveTab: vi.fn(),
+		serialize: vi.fn(() => ({ root: null, groups: {}, activeGroupId: null })),
+		restore: vi.fn(),
+		reset: vi.fn(),
+		consumeRestoredFromDisk: vi.fn(() => false),
 	};
 
 	const mockFocus = vi.fn();
 	const mockTerminalsStore = {
 		setActive: vi.fn(),
 		get: vi.fn<(id: string) => { ref?: { focus: () => void } } | undefined>(),
+		getIds: vi.fn<() => string[]>(() => []),
+		isDetached: vi.fn(() => false),
 	};
 
 	const mockGlobalWorkspaceStore = {

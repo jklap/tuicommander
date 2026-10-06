@@ -20,6 +20,7 @@ import { mdTabsStore } from "../../stores/mdTabs";
 import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
+import { paneLayoutKey, savedPaneLayouts } from "../../stores/savedPaneLayouts";
 import { settingsStore } from "../../stores/settings";
 import { reconcileTerminalOwnership } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
@@ -1527,6 +1528,64 @@ describe("initApp", () => {
 			expect(arrangeSpy).not.toHaveBeenCalled();
 			expect(paneLayoutStore.getRoot()).toBeNull();
 			arrangeSpy.mockRestore();
+		});
+
+		// The swarm's terminals belong to a repo+branch; the split must be built in THAT
+		// branch's layout, not in whichever branch happens to be on screen.
+		describe("branch ownership", () => {
+			function setUpRepos(): void {
+				for (const path of ["/repo/onscreen", "/repo/swarm"]) {
+					repositoriesStore.add({ path, displayName: path.split("/").pop()! });
+					repositoriesStore.setWorkspace(path, "main", { branchName: "main", worktreePath: path });
+					repositoriesStore.setActiveWorkspace(path, "main");
+				}
+			}
+
+			beforeEach(() => {
+				savedPaneLayouts.clear();
+				setUpRepos();
+			});
+
+			afterEach(() => {
+				savedPaneLayouts.clear();
+				paneLayoutStore.flushSave();
+			});
+
+			it("builds the split in the live layout when the terminals' branch is on screen", async () => {
+				const getCb = captureWindowLayoutRequested();
+				await initApp(createMockDeps());
+				const term1 = terminalsStore.add(makeTerminal({ sessionId: "sess-a" }));
+				const term2 = terminalsStore.add(makeTerminal({ sessionId: "sess-b" }));
+				repositoriesStore.addTerminalToWorkspace("/repo/swarm", "main", term1);
+				repositoriesStore.addTerminalToWorkspace("/repo/swarm", "main", term2);
+				repositoriesStore.setActive("/repo/swarm");
+
+				getCb()!({ payload: { session_ids: ["sess-a", "sess-b"], layout: "tiled" } });
+
+				expect(paneLayoutStore.isSplit()).toBe(true);
+				expect(savedPaneLayouts.size).toBe(0);
+			});
+
+			it("builds the split in the owning branch's saved layout when another repo is on screen", async () => {
+				const getCb = captureWindowLayoutRequested();
+				await initApp(createMockDeps());
+				const term1 = terminalsStore.add(makeTerminal({ sessionId: "sess-a" }));
+				const term2 = terminalsStore.add(makeTerminal({ sessionId: "sess-b" }));
+				repositoriesStore.addTerminalToWorkspace("/repo/swarm", "main", term1);
+				repositoriesStore.addTerminalToWorkspace("/repo/swarm", "main", term2);
+				repositoriesStore.setActive("/repo/onscreen");
+
+				getCb()!({ payload: { session_ids: ["sess-a", "sess-b"], layout: "tiled" } });
+
+				expect(paneLayoutStore.isSplit()).toBe(false);
+				const saved = savedPaneLayouts.get(paneLayoutKey("/repo/swarm", "main"));
+				expect(saved?.root?.type).toBe("branch");
+				expect(
+					Object.values(saved?.groups ?? {})
+						.flatMap((g) => g.tabs.map((t) => t.id))
+						.sort(),
+				).toEqual([term1, term2].sort());
+			});
 		});
 	});
 

@@ -3,6 +3,8 @@ import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
+import { resolvePaneLayoutForBranch, savePaneLayoutForBranch } from "./branchPaneLayout";
+import { filterValidTerminals } from "./terminalFilter";
 
 /**
  * Navigate to a terminal: switch repo/branch context, activate the terminal,
@@ -35,11 +37,23 @@ export function navigateToTerminal(id: string): void {
 		if (repo) {
 			for (const [workspaceId, workspace] of Object.entries(repo.workspaces)) {
 				if (workspace.terminals.includes(id)) {
-					if (repositoriesStore.state.activeRepoPath !== repoPath) {
-						repositoriesStore.setActive(repoPath);
-					}
-					if (repo.activeWorkspaceId !== workspaceId) {
-						repositoriesStore.setActiveWorkspace(repoPath, workspaceId);
+					const repoChanges = repositoriesStore.state.activeRepoPath !== repoPath;
+					const workspaceChanges = repo.activeWorkspaceId !== workspaceId;
+					if (repoChanges || workspaceChanges) {
+						// Same save-on-leave / resolve-on-arrive a branch-row select does. Without
+						// it the branch being left never gets its split saved, and the first
+						// reset while away (any branch select) destroys it for good.
+						const prevRepoPath = repositoriesStore.state.activeRepoPath;
+						const prevWorkspaceId = prevRepoPath
+							? repositoriesStore.state.repositories[prevRepoPath]?.activeWorkspaceId
+							: null;
+						if (prevRepoPath && prevWorkspaceId) savePaneLayoutForBranch(prevRepoPath, prevWorkspaceId);
+						if (repoChanges) repositoriesStore.setActive(repoPath);
+						if (workspaceChanges) repositoriesStore.setActiveWorkspace(repoPath, workspaceId);
+						const validTerminals = filterValidTerminals(workspace.terminals, terminalsStore.getIds()).filter(
+							(tid) => !terminalsStore.isDetached(tid),
+						);
+						resolvePaneLayoutForBranch(repoPath, workspaceId, validTerminals);
 					}
 					break;
 				}
