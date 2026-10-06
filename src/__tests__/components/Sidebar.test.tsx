@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import "@testing-library/jest-dom/vitest";
 import { fireEvent, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -625,7 +626,7 @@ describe("Sidebar", () => {
 			deletions: 3,
 			isMerged: false,
 			lastCommitTs: Date.now() - 3 * 3600_000,
-			lifecycleStatus: { dirtyFiles: 4, commitStatus: "unmerged", removalSafety: "destructive" },
+			lifecycleStatus: { dirtyFiles: 4, commitStatus: "unmerged" as const, removalSafety: "requires_force" as const },
 			...over,
 		});
 		const withBranch = (b: Record<string, unknown>) => setRepos({ "/repo1": makeRepo({ workspaces: { feat: b } }) });
@@ -934,6 +935,8 @@ describe("Sidebar", () => {
 				id,
 				name: id,
 				sessionId: `s-${id}`,
+				fontSize: 14,
+				cwd: null,
 				tuicSession: `tuic-${id}`,
 				shellState: "busy",
 				unseen: false,
