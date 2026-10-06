@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FilesScreen } from "../screens/FilesScreen";
 
-vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
 
 const files = new Map([
 	["src/hello.txt", "hello\n"],
@@ -24,6 +24,7 @@ let failSave = false;
 let delayedSearch: Promise<Array<{ name: string; path: string; is_dir: boolean; size: number }>> | null = null;
 
 vi.mock("../../transport", () => ({
+	isTauri: () => false,
 	rpc: vi.fn(async (command: string, args?: Record<string, string>) => {
 		calls.push(command);
 		if (command === "load_repositories") return { repos: { "/repo-one": {}, "/repo-two": {} } };

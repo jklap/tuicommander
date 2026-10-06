@@ -20,13 +20,26 @@ export function browserLocalImageUrl(path: string): string | null {
 	return location.fsRoot ? repoImageUrl(location.fsRoot, location.filePath, location.repoPath) : null;
 }
 
+/** The serialized `src` attribute back to the filesystem filename: HTML entities first, then URL escapes. */
+function decodeImagePath(attribute: string): string {
+	const text = document.createElement("textarea");
+	text.innerHTML = attribute;
+	return text.value.replace(/(?:%[0-9a-f]{2})+/gi, (escaped) => {
+		try {
+			return decodeURIComponent(escaped);
+		} catch {
+			return escaped; // malformed escape: keep as written
+		}
+	});
+}
+
 /** Keep unavailable local images visible without issuing a doomed browser request. */
 export function rewriteLocalImages(html: string, baseDir?: string, imageSrc?: (path: string) => string): string {
 	if (isTauri() && !baseDir && !imageSrc) return html;
 	return html.replace(
 		/<img\b[^>]*\ssrc=(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi,
 		(tag, doubleQuoted: string | undefined, singleQuoted: string | undefined, unquoted: string | undefined) => {
-			const path = doubleQuoted ?? singleQuoted ?? unquoted ?? "";
+			const path = decodeImagePath(doubleQuoted ?? singleQuoted ?? unquoted ?? "");
 			if (/^(https?:\/\/|\/\/|data:|asset:\/\/)/i.test(path)) return tag;
 			const local = isAbsolutePath(path) ? path : baseDir ? joinPath(baseDir, path) : path;
 			const src = imageSrc ? imageSrc(path) : isTauri() ? convertFileSrc(local) : browserLocalImageUrl(local);
