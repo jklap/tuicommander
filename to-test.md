@@ -4691,5 +4691,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] AI Chat message fork: after rebuilding/restarting Rust, fork the second of four ego replies and check the child cutoff while the parent retains all replies. The backend capability and metadata changes require a manual restart.
 
-- [ ] ego launch permissions (#1400-9576): after Boss restarts `make dev` or installs a rebuilt release, select mode/sandbox in Settings > Agents > ego and verify a new terminal launch and MCP spawn receive the chosen flags. Rust changes require restart; existing sessions retain their launch settings.
+- [ ] ego launch permissions (#1400-9576): after Boss restarts `make dev` or installs a rebuilt release, select mode/sandbox in Settings > Agents > ego and verify a new terminal launch and MCP spawn receive the chosen flags. Rust changes require restart; existing sessions retain their launch settings. After restart, also confirm `ego mcp-server` receives no permission flags and a raw `--mode --` preserves the prompt suffix (#1400 critic fixes).
 - [ ] ego permission controls visual check: preview loaded the worktree AgentsTab, but the locked macOS screen prevented bounded browser click/screenshot verification (2026-10-06). Capture after unlock.

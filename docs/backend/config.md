@@ -833,7 +833,7 @@ Custom keyboard shortcut overrides.
 
 ### Agents Config (`agents.json`)
 
-The `ego` entry supports optional `ego_mode` (`plan|default|edits|auto|yolo`) and `ego_sandbox` (`ro|workspace`). Missing values add no flags. The shared Rust launch translator injects `--mode` and `--sandbox` for terminal and MCP launches (including `run` and `resume`), replacing corresponding raw overrides before `--`. Administrative subcommands and ACP are excluded. These choices apply only to new launches and do not rewrite ego configuration.
+The `ego` entry supports optional `ego_mode` (`plan|default|edits|auto|yolo`) and `ego_sandbox` (`ro|workspace`). Missing values add no flags. The shared Rust launch translator injects `--mode` and `--sandbox` for terminal and MCP launches (including `run` and `resume`), replacing corresponding raw overrides before `--`. Administrative subcommands (including `mcp-server`) and ACP are excluded. The prompt separator `--` and its full suffix stay unchanged, even after a raw option without a value. An invalid saved ego choice is ignored for that field only; the valid sibling choice and other agents' settings remain intact. These choices apply only to new launches and do not rewrite ego configuration.
 
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
