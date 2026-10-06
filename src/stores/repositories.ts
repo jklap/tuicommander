@@ -46,6 +46,8 @@ export interface RepositoryState {
 	/** Which workspace is on screen. Indexes `workspaces`, so it is an id — read
 	 *  `workspaces[activeWorkspaceId].branchName` when you want the branch. */
 	activeWorkspaceId: WorkspaceId | null;
+	/** Backend-authored stable agent placement; retained by repository persistence. */
+	declaredWorktrees?: Record<string, { workspaceId: string; branch: string; worktreePath: string }>;
 	/** Which remote connection this repo belongs to (undefined = local) */
 	connectionId?: string;
 }

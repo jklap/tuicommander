@@ -861,3 +861,9 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 ### `acp_chat_open`
 
 Arguments: `{ request: { sessionId?, profile?, workspace?, executable? } }`. Returns `{ connection, sessionId, launch, replayed }`. Creates a conversation with its own durable launch options, or reopens the saved `sessionId`. HTTP equivalent: `POST /acp/chat/open` with the request object as the body. Global ACP connect defaults remain unchanged.
+
+MCP `session action=declare_worktree` is intentionally not a Tauri command. It
+requires a bound managed caller, which window IPC does not supply. Call it via
+HTTP `POST /mcp`. Its `session-worktree-declared` push is also emitted to Tauri;
+`list_active_sessions` and HTTP `GET /sessions` report the persisted declaration
+in their existing worktree fields. See [MCP backend](../backend/mcp-http.md).

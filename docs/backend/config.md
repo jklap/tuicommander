@@ -1149,3 +1149,11 @@ Telegram Settings uses `~/.config/tuic-telegram/`: `bot.token`, `allowed_chat_id
 ### Per-conversation AI Chat launch authority
 
 `ai_chat_launches` maps ego session ids to `{ executable, profile, workspace, peerId }` objects (camelCase). Creation snapshots the selected overrides and defaults; reopen uses that saved object, including the peer identity. Writes use the locked configuration delta path. The global `ego_executable`, `ego_profile`, and `ai_chat_workspace` settings are unchanged.
+
+Repository records may contain backend-authored `declaredWorktrees`, keyed by
+the stable `TUIC_SESSION`. Values contain `workspaceId`, `branch` and
+`worktreePath`. Caller-bound MCP declarations update this map through the
+repository delta under the existing cross-process lock. Frontend saves retain
+it. Existing saved terminal records are moved to the declared workspace without
+changing their actual shell cwd. The association survives backend restart; it
+does not turn an externally created worktree into a disposable PTY-owned one.

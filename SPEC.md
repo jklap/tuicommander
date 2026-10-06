@@ -382,6 +382,14 @@ Features:
 
 ## Workspaces: linked worktrees with warm artifacts
 
+MCP callers can declare an existing linked worktree through
+`session action=declare_worktree worktree_path=/absolute/path`. Ownership comes
+from the immutable PTY launch directory and registered Git worktrees. The
+caller-only association persists under stable `TUIC_SESSION`, survives restart
+and does not change shell cwd or acquire cleanup ownership. MCP creation
+without a session spawn also places only the same-repository creator.
+
+
 Every workspace created by TUICommander is a linked Git worktree. Its refs and
 objects are shared with the parent repository, so commits are visible from the
 parent immediately. Git permits a branch to be checked out in only one
