@@ -22982,6 +22982,51 @@ mod tests {
         );
     }
 
+    // Catches: splitting secret discovery at the history/screen boundary exposes
+    // a PEM body even though the complete key remains in the terminal.
+    #[test]
+    fn session_output_pages_do_not_leak_private_key_crossing_history_screen() {
+        let state = test_state();
+        let sid = "critic-pem-screen-boundary";
+        let body = "QWxwaGFCZXRhR2FtbWFEZWx0YUVwc2lsb25aZXRh";
+        let text = format!(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\r\n{body}\r\n-----END OPENSSH PRIVATE KEY-----\r\n"
+        );
+        let mut vt = crate::state::VtLogBuffer::new(2, 120, 100);
+        vt.process(text.as_bytes());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(vt));
+        let mut ring = crate::OutputRingBuffer::new(4096);
+        ring.write(text.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        let mut leaked = Vec::new();
+        for request in [
+            serde_json::json!({"from_line":1,"limit":1}),
+            serde_json::json!({"since_cursor":1,"limit":1}),
+            serde_json::json!({"limit":1}),
+            serde_json::json!({"format":"raw","from_byte":0,"limit":4096}),
+            serde_json::json!({"format":"raw","since_cursor":0,"limit":4096}),
+        ] {
+            let mut args = request.clone();
+            args["action"] = "output".into();
+            args["session_id"] = sid.into();
+            let page = session_output(&state, &args);
+            let data = page["data"].as_str().expect("terminal output must exist");
+            if data.contains(body) {
+                leaked.push(request);
+            }
+        }
+        assert!(
+            leaked.is_empty(),
+            "retained PEM body leaked across history/screen boundary: {leaked:?}"
+        );
+    }
+
     // Catches: reusing the absolute window's total cursor skips all later pages.
     #[test]
     fn session_output_pages_clean_history_without_skipping_or_repeating_lines() {
