@@ -5861,15 +5861,20 @@ mod tests {
             for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
                 assert_eq!(entry["name"], definition["name"]);
                 assert_eq!(entry["description"], definition["description"]);
-                assert_eq!(
-                    entry["summary"],
-                    definition["description"]
+                // Catches: HTTP status retaining description prefixes while Settings
+                // switches to dedicated, concise native registry summaries.
+                let summary = entry["summary"].as_str().unwrap();
+                assert!(!summary.trim().is_empty());
+                assert!(summary.chars().count() <= 70);
+                assert!(
+                    !definition["description"]
                         .as_str()
                         .unwrap()
-                        .lines()
-                        .next()
-                        .unwrap()
+                        .starts_with(summary)
                 );
+                if entry["name"] == "secret" {
+                    assert_eq!(summary, "Request sensitive values from the user securely.");
+                }
             }
             // Collapse/progress gates must not shrink the Settings inventory.
             {
