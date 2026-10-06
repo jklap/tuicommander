@@ -1,6 +1,11 @@
 ## Launch instruction inspector (1547-2f5c) — Rust restart required
 
 - [ ] After Boss chooses to rebuild/restart the backend, launch a new managed peer and open **Inspect Launch Instructions…** from its terminal context menu. Confirm the final brief includes peer context, explicit system instruction sections/file snapshots and served MCP initialization sections have sources/bytes, and secrets are redacted. A shell-launched or restored session must show its launch as unavailable while retaining any MCP initialization instructions actually served; autonomous agent file reads must remain unobservable. The standalone real-component preview was visually checked; live desktop/backend integration waits for the authorized restart. No second desktop instance was launched.
+# To Test
+
+## Paged MCP terminal output (1551-5fa4) — Rust restart required
+
+- [ ] After Boss's next planned `make dev` restart or `make build`, read a long terminal result with `session action=output`; follow `continuation`/`next_cursor` for text and `format=raw` byte pages. Confirm the existing command is not rerun and a connected rebuilt daemon returns the same metadata. Rust does not hot-reload; this lane does not restart the desktop.
 
 ## Progress blocked badge supersede (1537-6c4b) — Rust restart required
 
@@ -105,7 +110,6 @@
      Read each comment, apply the feedback to the highlighted text,
      then remove the tweak markers. -->
 
-# To Test
 
 ## Stable macOS dev executable (1510-03ae) — next Boss launch
 
@@ -4713,3 +4717,4 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] After Boss restarts `make dev` (or rebuilds release), open Plans and Stories → Run history and refresh incidents for a recorded failed/input-required run. Confirm retained report and bound session/task evidence. Rust does not hot-reload; worktree UI preview alone does not verify the live backend.
 - [ ] After Boss restarts `make dev` or rebuilds, create a coordinator chat with **New conversation with options**, send a turn, switch to a daily chat and reopen the coordinator after restart. Confirm its header and dedicated mail peer. Rust changes require a restart; no desktop instance was launched by the agent.
 - [ ] After restart, inspect `/logs?source=agent_msg&level=info` for `event=inbox_read`, protocol caller, peer owner and message ids; confirm bodies are absent.
+- [ ] MCP delta paging (#1551-5fa4): after Boss rebuilds/restarts Rust, read a throwaway terminal containing a harmless PEM-shaped sample with `since_cursor` and `limit=1`; each body page must stay redacted, including when the footer remains on screen and the header/body are in scrollback. Rust does not hot-reload; no desktop test instance was launched.

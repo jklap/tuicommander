@@ -1154,9 +1154,11 @@ marker and reserves `idle` for an unclassified ready state.
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `limit` | `8192` | Max bytes to read |
+| `limit` | `50` | Max scrollback rows, or source bytes for raw output. Whole logical lines and UTF-8 codepoints can extend a page beyond the limit |
 | `format` | (text) | `"raw"` preserves ANSI escape codes |
-| `since_cursor` | (none) | Cursor from a previous response — returns only new scrollback lines since this position |
+| `since_cursor` | (none) | Forward page from a previous cursor (text: scrollback rows; raw: source bytes) |
+| `from_line` | (none) | Absolute text scrollback row; omit to read the tail |
+| `from_byte` | (none) | Absolute raw source-byte offset; omit to read the tail |
 
 `session action=input` and HTTP `POST /sessions/:id/write` share the same raw PTY
 bookkeeping: each write stamps `last_input_ms` and feeds the `InputLineBuffer`
@@ -1179,6 +1181,36 @@ the initial task. Updates are emitted as `pty-description-changed` over both
 Tauri events and `/events` SSE.
 
 **Delta reads:** The non-raw output path returns a `cursor` field (monotonic scrollback position). Pass `since_cursor` on subsequent calls to receive only new lines since that position, avoiding full re-reads. The `total_written` field is kept alongside `cursor` for backwards compatibility. When `since_cursor` is provided, screen rows are excluded — only scrollback log lines are returned.
+
+**Retained-output paging:** Every window reports `start_offset`, `oldest_offset`,
+`has_more`, `next_cursor` (null at the end), and `truncated`. A truncated response
+includes `continuation` with the exact `session action=output` request for the
+next page, or for older retained output when the default tail omitted history.
+For text, start with `from_line=oldest_offset` and follow `from_line=next_cursor`.
+The legacy absolute/tail `cursor` remains the total scrollback position; use
+`next_cursor`, not that snapshot cursor, to page. Delta `cursor` stops at the
+returned page boundary. For raw output, start with `format=raw,
+from_byte=oldest_offset` and follow `from_byte=next_cursor`; `since_cursor` also
+accepts source-byte positions. Raw `cursor` is the returned page end and
+`total_written` is the total original byte count, independent of redaction.
+Explicit raw pages mask sensitive bytes with `*` using the complete retained
+ring and terminal context before slicing, so even one-byte pages cannot
+reconstruct a secret. Clean absolute and delta pages also discover secrets from the retained terminal
+context, so a page containing only a multiline private key body stays masked,
+including when its footer is still on screen and its header is in scrollback.
+Tail snapshots retain the existing `[REDACTED]` format.
+UTF-8 starts round down and ends extend to whole codepoints. Invalid PTY bytes
+use lossy decoding without changing source-byte cursors. `data_length` counts
+returned UTF-8 bytes, which can differ from the source range.
+
+Buffers remain the only output store: text retains its configured scrollback;
+raw retains up to 2 MiB. Output appended after a read is available on later
+pages; this is not a frozen snapshot. A cursor older than `oldest_offset` starts
+at the oldest retained position and adds `missed_count` (rows or source bytes).
+Evicted output cannot be fetched. Exhausted/future offsets return an empty page.
+The HTTP `format=mcp|mcp_raw` and remote MCP proxy use this same serializer.
+Remote continuation notes also name the required `connection_id`.
+
 
 ### MCP Tool: `repo` — Worktree Create (Claude Code Agent Hint)
 

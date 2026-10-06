@@ -1218,7 +1218,7 @@ fn native_tool_definitions() -> serde_json::Value {
         crate::telegram::tool_definition(),
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call, including local and connected remote sessions. Remote rows carry connection_id and address=connection/session_id. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call, including local and connected remote sessions. Remote rows carry connection_id and address=connection/session_id. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice. Windowed reads report has_more and next_cursor; follow the continuation note to fetch retained output without rerunning the command. Raw pages use from_byte=oldest_offset then from_byte=next_cursor (source-byte positions). Evicted output cannot be recovered.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
             "inputSchema": { "type": "object", "properties": {
                 "connection_id": { "type": "string", "description": "Configured remote connection qualifier (session list/output/submit; agent list_peers/send). Remote addresses also accept connection/id; local/id addresses the desktop hub." },
                 "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, suspend, close, kill, pause, resume" },
@@ -1235,10 +1235,11 @@ fn native_tool_definitions() -> serde_json::Value {
                 "cols": { "type": "integer", "description": "Terminal cols (action=create or resize)" },
                 "shell": { "type": "string", "description": "Shell binary path (action=create)" },
                 "cwd": { "type": "string", "description": "Working directory (action=create)" },
-                "limit": { "type": "integer", "description": "Max lines to return (default 50). Use 50-100 for snapshots; delta reads (since_cursor) are already bounded by new content (action=output)" },
+                "limit": { "type": "integer", "description": "Max scrollback rows (raw: source bytes), default 50. Logical lines and UTF-8 codepoints stay whole, so pages can exceed this limit (action=output)" },
+                "from_byte": { "type": "integer", "minimum": 0, "description": "Absolute source-byte offset for format=raw. Use oldest_offset to start, then next_cursor to continue retained output without rerunning a command (action=output)" },
                 "from_line": { "type": "integer", "description": "Absolute line number to start reading from. Use oldest_offset from a previous response to read from the beginning of the buffer. Omit to read the tail (action=output)" },
                 "format": { "type": "string", "description": "Output format: ANSI escape codes are stripped by default; pass 'raw' to preserve them (action=output)" },
-                "since_cursor": { "type": "integer", "description": "Cursor from a previous output response — returns only new lines since this position. Most token-efficient for polling. Omit for snapshot (action=output)" }
+                "since_cursor": { "type": "integer", "description": "Cursor from a previous output response (raw: source bytes; text: scrollback rows). Returns a bounded forward page; follow next_cursor while has_more. Omit for snapshot (action=output)" }
             }, "required": ["action"] }
         },
         {
@@ -3041,10 +3042,21 @@ fn terminal_secrets(buf: &mut crate::state::VtLogBuffer) -> Vec<String> {
     let screen = crate::redaction::join_wrapped_rows(
         buf.screen_rows().into_iter().zip(buf.screen_row_wraps()),
     );
-    secrets.extend(crate::redaction::secrets_in(&format!(
-        "{}{screen}",
-        buf.screen_head_context()
-    )));
+    let screen_context = format!("{}{screen}", buf.screen_head_context());
+    secrets.extend(crate::redaction::secrets_in(&screen_context));
+    // A PEM footer can still be on screen while its header/body are in history.
+    // Join both only for that boundary; ordinary polling keeps the log cache.
+    if screen_context.contains("-----END ") && screen_context.contains("PRIVATE KEY-----") {
+        let (log_lines, _) = buf.lines_since_owned(buf.oldest_offset(), usize::MAX);
+        secrets.extend(crate::redaction::secrets_in(
+            &crate::redaction::join_wrapped_rows(
+                log_lines
+                    .iter()
+                    .map(|ll| (ll.text(), ll.wrapped))
+                    .chain(buf.screen_rows().into_iter().zip(buf.screen_row_wraps())),
+            ),
+        ));
+    }
     secrets
 }
 
@@ -3055,15 +3067,74 @@ fn terminal_secrets(buf: &mut crate::state::VtLogBuffer) -> Vec<String> {
 fn redact_raw_output(
     state: &Arc<AppState>,
     session_id: &str,
-    window: &str,
+    bytes: &[u8],
+    window: std::ops::Range<usize>,
     mut known: Vec<String>,
+    paged: bool,
 ) -> String {
     if let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
         known.extend(terminal_secrets(&mut vt.lock()));
     }
-    state.secrets.mask(&crate::redaction::redact_secrets(
-        &crate::redaction::scrub_fragments(window, &known),
-    ))
+    if !paged {
+        return state.secrets.mask(&crate::redaction::redact_secrets(
+            &crate::redaction::scrub_fragments(&String::from_utf8_lossy(&bytes[window]), &known),
+        ));
+    }
+    let masked = state.secrets.mask_preserving_offsets(bytes);
+    let context = String::from_utf8_lossy(&masked);
+    let redacted = crate::redaction::mask_raw_context(&context, &known);
+    // Lossy decoding can expand invalid source bytes. Translate source-byte
+    // boundaries after registry masking, before the length-preserving redaction.
+    let start = String::from_utf8_lossy(&masked[..window.start]).len();
+    let end = String::from_utf8_lossy(&masked[..window.end]).len();
+    redacted[start..end].to_owned()
+}
+
+/// Describe a page of retained output and the existing action that continues it.
+fn add_output_page_metadata(
+    response: &mut serde_json::Value,
+    args: &serde_json::Value,
+    start: u64,
+    next: u64,
+    total: u64,
+    oldest: u64,
+) {
+    let raw = args["format"] == "raw";
+    let position_key = if raw { "from_byte" } else { "from_line" };
+    let requested = args["since_cursor"]
+        .as_u64()
+        .or_else(|| args[position_key].as_u64());
+    let missed = requested.map_or(0, |offset| oldest.saturating_sub(offset));
+    let has_more = next < total;
+    let omitted_tail_history = requested.is_none() && start > oldest;
+    response["start_offset"] = start.into();
+    response["oldest_offset"] = oldest.into();
+    response["has_more"] = has_more.into();
+    response["next_cursor"] = if has_more {
+        next.into()
+    } else {
+        serde_json::Value::Null
+    };
+    response["truncated"] = (has_more || omitted_tail_history || missed > 0).into();
+    if missed > 0 {
+        response["missed_count"] = missed.into();
+    }
+    if has_more || omitted_tail_history {
+        let mut request = serde_json::json!({
+            "action": "output", "session_id": args["session_id"],
+            "limit": args["limit"].as_u64().unwrap_or(50).max(1),
+        });
+        if raw {
+            request["format"] = "raw".into();
+        }
+        request[position_key] = if has_more { next.into() } else { oldest.into() };
+        response["continuation"] = format!(
+            "Output truncated to a retained window. Fetch {} with session {}; do not rerun the command. Positions may expire when the buffer evicts output.",
+            if has_more { "the next page" } else { "older output" }, request
+        ).into();
+    } else if missed > 0 {
+        response["continuation"] = "Requested output was evicted; no further retained page is available. The missing output cannot be recovered from this buffer.".into();
+    }
 }
 
 pub(super) fn session_output(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
@@ -3432,15 +3503,24 @@ fn handle_session(
 
                 // Delta read: if since_cursor provided, return only new scrollback lines.
                 if let Some(since) = args["since_cursor"].as_u64().map(|v| v as usize) {
-                    let (log_lines, new_cursor) = buf.lines_since_logical(since, limit);
+                    let (log_lines, start, new_cursor) = buf.lines_since_logical(since, limit);
                     // Redaction applies to all three reads below — delta, absolute
                     // and raw ring. `format=raw` keeps ANSI; it is not an opt-out
                     // of redaction, and `data_length` reports what was returned.
+                    let known = terminal_secrets(&mut buf);
                     let data = crate::redaction::redact_wrapped_rows(
                         log_lines.iter().map(|ll| (ll.text(), ll.wrapped)),
-                        &[],
+                        &known,
                     );
                     let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
+                    add_output_page_metadata(
+                        &mut response,
+                        args,
+                        start as u64,
+                        new_cursor as u64,
+                        total as u64,
+                        oldest as u64,
+                    );
                     insert_optional_value(
                         response
                             .as_object_mut()
@@ -3457,7 +3537,7 @@ fn handle_session(
                 } else {
                     total.saturating_sub(limit)
                 };
-                let (log_lines, _) = buf.lines_since_logical(offset, limit);
+                let (log_lines, start, page_end) = buf.lines_since_logical(offset, limit);
                 let mut all_lines: Vec<(String, bool)> =
                     log_lines.iter().map(|ll| (ll.text(), ll.wrapped)).collect();
                 // Only append screen rows when reading the tail (no from_line).
@@ -3479,6 +3559,14 @@ fn handle_session(
                 let known = terminal_secrets(&mut buf);
                 let data = crate::redaction::redact_wrapped_rows(all_lines, &known);
                 let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
+                add_output_page_metadata(
+                    &mut response,
+                    args,
+                    start as u64,
+                    page_end as u64,
+                    total as u64,
+                    oldest as u64,
+                );
                 insert_optional_value(
                     response
                         .as_object_mut()
@@ -3508,14 +3596,41 @@ fn handle_session(
                 });
                 (all_bytes, total_written, secrets)
             };
-            let window = &all_bytes[all_bytes.len().saturating_sub(limit)..];
+            let oldest = total_written.saturating_sub(all_bytes.len() as u64);
+            let requested = args["since_cursor"]
+                .as_u64()
+                .or_else(|| args["from_byte"].as_u64());
+            let offset = requested
+                .unwrap_or_else(|| total_written.saturating_sub(limit as u64))
+                .clamp(oldest, total_written);
+            let mut start = (offset - oldest) as usize;
+            let mut end = start.saturating_add(limit).min(all_bytes.len());
+            // Source-byte cursors must not split a UTF-8 codepoint across pages.
+            // A caller's mid-codepoint start rounds down; our next cursor always
+            // points past the whole codepoint. Raw invalid bytes remain lossy text.
+            while start > 0 && start < all_bytes.len() && all_bytes[start] & 0xc0 == 0x80 {
+                start -= 1;
+            }
+            while end < all_bytes.len() && all_bytes[end] & 0xc0 == 0x80 {
+                end += 1;
+            }
             let data = redact_raw_output(
                 state,
                 session_id,
-                &String::from_utf8_lossy(window),
+                &all_bytes,
+                start..end,
                 ring_secrets,
+                requested.is_some(),
             );
-            let mut response = serde_json::json!({"data": data, "data_length": data.len(), "total_written": total_written, "exited": exited});
+            let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": oldest + end as u64, "total_written": total_written, "exited": exited});
+            add_output_page_metadata(
+                &mut response,
+                args,
+                oldest + start as u64,
+                oldest + end as u64,
+                total_written,
+                oldest,
+            );
             insert_optional_value(
                 response
                     .as_object_mut()
@@ -23307,6 +23422,374 @@ mod tests {
         assert_eq!(response["met"], false);
         assert_eq!(response["timed_out"], true);
         assert!(response.get("hint").is_none());
+    }
+
+    // Catches: delta pages expose PEM body rows because only the page, not
+    // the retained multiline key, is considered during secret discovery.
+    #[test]
+    fn session_output_delta_pages_do_not_leak_multiline_private_key_body() {
+        let state = test_state();
+        let sid = "critic-pem-pages";
+        let body = "QWxwaGFCZXRhR2FtbWFEZWx0YUVwc2lsb25aZXRh";
+        let mut vt = crate::state::VtLogBuffer::new(2, 120, 100);
+        vt.process(
+            format!(
+                "-----BEGIN OPENSSH PRIVATE KEY-----\r\n{body}\r\n-----END OPENSSH PRIVATE KEY-----\r\nafter\r\nflush\r\n"
+            )
+            .as_bytes(),
+        );
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(vt));
+        let mut cursor = 0;
+        let mut observed = String::new();
+        loop {
+            let page = session_output(
+                &state,
+                &serde_json::json!({
+                    "action": "output", "session_id": sid,
+                    "since_cursor": cursor, "limit": 1
+                }),
+            );
+            observed.push_str(page["data"].as_str().unwrap());
+            if page["has_more"] == false {
+                break;
+            }
+            let next = page["next_cursor"].as_u64().unwrap();
+            assert!(next > cursor, "paging must advance: {page}");
+            cursor = next;
+        }
+        assert!(
+            observed.contains("after"),
+            "must reach output after the key"
+        );
+        assert!(
+            !observed.contains(body),
+            "delta paging leaked a private key body: {observed:?}"
+        );
+    }
+
+    // Catches: splitting secret discovery at the history/screen boundary exposes
+    // a PEM body even though the complete key remains in the terminal.
+    #[test]
+    fn session_output_pages_do_not_leak_private_key_crossing_history_screen() {
+        let state = test_state();
+        let sid = "critic-pem-screen-boundary";
+        let body = "QWxwaGFCZXRhR2FtbWFEZWx0YUVwc2lsb25aZXRh";
+        let text = format!(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\r\n{body}\r\n-----END OPENSSH PRIVATE KEY-----\r\n"
+        );
+        let mut vt = crate::state::VtLogBuffer::new(2, 120, 100);
+        vt.process(text.as_bytes());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(vt));
+        let mut ring = crate::OutputRingBuffer::new(4096);
+        ring.write(text.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        let mut leaked = Vec::new();
+        for request in [
+            serde_json::json!({"from_line":1,"limit":1}),
+            serde_json::json!({"since_cursor":1,"limit":1}),
+            serde_json::json!({"limit":1}),
+            serde_json::json!({"format":"raw","from_byte":0,"limit":4096}),
+            serde_json::json!({"format":"raw","since_cursor":0,"limit":4096}),
+        ] {
+            let mut args = request.clone();
+            args["action"] = "output".into();
+            args["session_id"] = sid.into();
+            let page = session_output(&state, &args);
+            let data = page["data"].as_str().expect("terminal output must exist");
+            if data.contains(body) {
+                leaked.push(request);
+            }
+        }
+        assert!(
+            leaked.is_empty(),
+            "retained PEM body leaked across history/screen boundary: {leaked:?}"
+        );
+    }
+
+    // Catches: reusing the absolute window's total cursor skips all later pages.
+    #[test]
+    fn session_output_pages_clean_history_without_skipping_or_repeating_lines() {
+        let defs = native_tool_definitions();
+        let session = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "session")
+            .unwrap();
+        assert_eq!(
+            session["inputSchema"]["properties"]["from_byte"]["minimum"],
+            0
+        );
+        let state = test_state();
+        let sid = "paged-clean";
+        let mut vt = crate::state::VtLogBuffer::new(2, 12, 100);
+        for line in [
+            "first",
+            "a long line wrapping across several rows",
+            "日本語",
+            "fourth",
+            "screen",
+            "",
+        ] {
+            vt.process(format!("{line}\r\n").as_bytes());
+        }
+        let (expected, _, total) = vt.lines_since_logical(0, usize::MAX);
+        let expected =
+            crate::redaction::join_wrapped_rows(expected.iter().map(|l| (l.text(), l.wrapped)));
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(vt));
+        let mut position = 0;
+        let mut pages = Vec::new();
+        loop {
+            let page = session_output(
+                &state,
+                &serde_json::json!({
+                    "action":"output", "session_id":sid, "from_line":position, "limit":2
+                }),
+            );
+            assert_eq!(page["cursor"], total); // Existing snapshot/delta contract.
+            pages.push(page["data"].as_str().unwrap().to_owned());
+            if !page["has_more"].as_bool().unwrap() {
+                assert!(page["next_cursor"].is_null());
+                break;
+            }
+            assert_eq!(page["truncated"], true);
+            assert!(page["continuation"].as_str().unwrap().contains("from_line"));
+            let next = page["next_cursor"].as_u64().unwrap();
+            assert!(next > position && next < total as u64);
+            position = next;
+        }
+        assert_eq!(pages.join("\n"), expected);
+        let delta = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "since_cursor":0, "limit":1
+            }),
+        );
+        assert_eq!(delta["cursor"], delta["next_cursor"]);
+        assert_eq!(delta["has_more"], true);
+        let tail = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "limit":1
+            }),
+        );
+        assert_eq!(tail["truncated"], true);
+        assert!(
+            tail["continuation"]
+                .as_str()
+                .unwrap()
+                .contains("older output")
+        );
+    }
+
+    // Catches: source-byte windows split Unicode or keep returning the tail.
+    #[test]
+    fn session_output_pages_raw_unicode_and_ansi_without_reexecuting() {
+        let state = test_state();
+        let sid = "paged-raw";
+        let expected = "\x1b[31mfirst café 日本語🙂\x1b[0m\r\nlast";
+        let mut ring = crate::OutputRingBuffer::new(4096);
+        ring.write(expected.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        for limit in [1, 2, 7, 50] {
+            let mut position = 0;
+            let mut actual = String::new();
+            loop {
+                let page = session_output(
+                    &state,
+                    &serde_json::json!({
+                        "action":"output", "session_id":sid, "format":"raw", "since_cursor":position, "limit":limit
+                    }),
+                );
+                actual.push_str(page["data"].as_str().unwrap());
+                assert_eq!(page["start_offset"], position);
+                assert_eq!(page["total_written"], expected.len());
+                let next = page["cursor"].as_u64().unwrap();
+                assert!(next > position);
+                if !page["has_more"].as_bool().unwrap() {
+                    assert_eq!(next, expected.len() as u64);
+                    break;
+                }
+                assert_eq!(page["next_cursor"], next);
+                assert!(page["continuation"].as_str().unwrap().contains("from_byte"));
+                position = next;
+            }
+            assert_eq!(actual, expected, "limit={limit}");
+        }
+        let tail = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "format":"raw", "limit":3
+            }),
+        );
+        assert_eq!(tail["data"], "ast");
+        assert_eq!(tail["truncated"], true);
+        assert!(
+            tail["continuation"]
+                .as_str()
+                .unwrap()
+                .contains("older output")
+        );
+    }
+
+    // Catches: eviction is silently presented as complete output, or a future
+    // offset underflows and panics instead of producing an exhausted page.
+    #[test]
+    fn session_output_raw_pages_report_eviction_and_exhausted_offsets() {
+        let state = test_state();
+        let sid = "paged-eviction";
+        let mut ring = crate::OutputRingBuffer::new(8);
+        ring.write(b"0123456789abcdef");
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        let stale = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "format":"raw", "from_byte":0, "limit":3
+            }),
+        );
+        assert_eq!(stale["data"], "89a");
+        assert_eq!(stale["oldest_offset"], 8);
+        assert_eq!(stale["missed_count"], 8);
+        assert_eq!(stale["next_cursor"], 11);
+        for offset in [16, 100, u64::MAX] {
+            let empty = session_output(
+                &state,
+                &serde_json::json!({
+                    "action":"output", "session_id":sid, "format":"raw", "from_byte":offset
+                }),
+            );
+            assert_eq!(empty["data"], "");
+            assert_eq!(empty["cursor"], 16);
+            assert_eq!(empty["has_more"], false);
+            assert_eq!(empty["truncated"], false);
+        }
+        let entry = state.session_maps.output_buffers.get(sid).unwrap();
+        let mut ring = entry.lock();
+        *ring = crate::OutputRingBuffer::new(8);
+        drop(ring);
+        drop(entry);
+        let empty = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "format":"raw", "from_byte":0
+            }),
+        );
+        assert_eq!(empty["data"], "");
+        assert_eq!(empty["cursor"], 0);
+        assert_eq!(empty["has_more"], false);
+    }
+
+    // Catches: tiny raw pages leak fragments that reconstruct a full token,
+    // including registered values whose byte length changes during masking.
+    #[test]
+    fn session_output_raw_tiny_pages_cannot_reconstruct_secrets() {
+        let state = test_state();
+        let sid = "paged-secret";
+        let registered = "private-value日本語";
+        let form = crate::secrets::Form::request(
+            vec![crate::secrets::Field {
+                name: "TOKEN".into(),
+                kind: crate::secrets::FieldKind::Password,
+                display: None,
+            }],
+            "test".into(),
+        )
+        .unwrap();
+        let opened = state.secrets.open(form).unwrap();
+        state
+            .secrets
+            .submit(
+                &opened.nonce,
+                serde_json::from_value(serde_json::json!({
+                    "nonce":opened.nonce, "status":"stored", "values":{"TOKEN":registered}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let raw = format!("before {WRAP_SECRET} after {registered} end");
+        let mut ring = crate::OutputRingBuffer::new(4096);
+        ring.write(raw.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        let mut actual = String::new();
+        let mut position = 0;
+        loop {
+            let page = session_output(
+                &state,
+                &serde_json::json!({
+                    "action":"output", "session_id":sid, "format":"raw", "from_byte":position, "limit":1
+                }),
+            );
+            actual.push_str(page["data"].as_str().unwrap());
+            let next = page["cursor"].as_u64().unwrap();
+            assert!(next > position);
+            if page["has_more"] == false {
+                break;
+            }
+            position = next;
+        }
+        assert_eq!(
+            actual,
+            format!(
+                "before {} after {} end",
+                "*".repeat(WRAP_SECRET.len()),
+                "*".repeat(registered.len())
+            )
+        );
+    }
+
+    // Catches: lossy decoding expands malformed PTY bytes and makes the next
+    // source-byte cursor index into a different position or panic.
+    #[test]
+    fn session_output_raw_pages_keep_source_offsets_for_invalid_utf8() {
+        let state = test_state();
+        let sid = "paged-invalid";
+        let bytes = b"a\xff\xc3\xa9\xfez";
+        let mut ring = crate::OutputRingBuffer::new(64);
+        ring.write(bytes);
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        let mut output = String::new();
+        let mut cursor = 0;
+        loop {
+            let page = session_output(
+                &state,
+                &serde_json::json!({
+                    "action":"output", "session_id":sid, "format":"raw", "from_byte":cursor, "limit":1
+                }),
+            );
+            output.push_str(page["data"].as_str().unwrap());
+            let next = page["cursor"].as_u64().unwrap();
+            assert!(next > cursor);
+            cursor = next;
+            if page["has_more"] == false {
+                break;
+            }
+        }
+        assert_eq!(cursor, bytes.len() as u64);
+        assert_eq!(output, String::from_utf8_lossy(bytes));
     }
 
     /// `session output` response includes `cursor` field (== total VtLog lines)
