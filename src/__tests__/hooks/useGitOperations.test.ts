@@ -2572,14 +2572,25 @@ describe("useGitOperations", () => {
 			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
 		});
 
-		it("does not remove when user cancels worktree confirmation", async () => {
+		// Catches: destructive cleanup deleting dirty files or closing sessions after cancellation.
+		it("dirty_worktree_cleanup_cancellation_preserves_files_and_sessions", async () => {
 			mockDialogs.confirmRemoveWorktree.mockResolvedValue(false);
+			const lifecycle = {
+				dirtyFiles: 35,
+				dirtyFingerprint: "dirty-worktree",
+				commitStatus: "merged",
+				removalSafety: "destructive",
+			};
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce(lifecycle);
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", lifecycle, true);
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
 		});
 	});
 
