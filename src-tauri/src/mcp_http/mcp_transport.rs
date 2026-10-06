@@ -22971,7 +22971,10 @@ mod tests {
             assert!(next > cursor, "paging must advance: {page}");
             cursor = next;
         }
-        assert!(observed.contains("after"), "must reach output after the key");
+        assert!(
+            observed.contains("after"),
+            "must reach output after the key"
+        );
         assert!(
             !observed.contains(body),
             "delta paging leaked a private key body: {observed:?}"
