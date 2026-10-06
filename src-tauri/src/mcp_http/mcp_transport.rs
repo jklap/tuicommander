@@ -1206,6 +1206,54 @@ async fn handle_remote_update(
     }
 }
 
+/// User-facing Settings summaries, separate from MCP descriptions and schemas.
+const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
+    ("secret", "Request sensitive values from the user securely."),
+    (
+        "telegram",
+        "Send messages and receive replies through Telegram.",
+    ),
+    (
+        "session",
+        "Create terminals, send input, and read their output.",
+    ),
+    ("agent", "Launch agents and exchange messages with them."),
+    ("task", "Track background work and retrieve its results."),
+    (
+        "remote",
+        "Manage connections to remote TUICommander instances.",
+    ),
+    ("repo", "Inspect repositories and manage their worktrees."),
+    ("story", "Read project stories and update their progress."),
+    (
+        "workflow_story_create",
+        "Create a story for a project workflow.",
+    ),
+    (
+        "workflow_report",
+        "Report the outcome of a workflow attempt.",
+    ),
+    (
+        "workflow_launch",
+        "Launch an agent for a workflow assignment.",
+    ),
+    ("progress", "Record and review project progress."),
+    (
+        "ui",
+        "Show notifications and ask the user for confirmation.",
+    ),
+    (
+        "plugin_dev_guide",
+        "Read the guide for developing TUICommander plugins.",
+    ),
+    ("config", "Read and update application settings."),
+    ("debug", "Inspect application logs and runtime state."),
+    (
+        "voice",
+        "Speak replies in the active hands-free conversation.",
+    ),
+];
+
 /// Full MCP tool definitions — the one native tool family.
 ///
 /// This returns the unfiltered schema list. Public listing/search paths MUST
@@ -1546,7 +1594,10 @@ pub(crate) fn native_tool_catalog() -> Vec<serde_json::Value> {
             let description = tool["description"].as_str().unwrap_or_default();
             serde_json::json!({
                 "name": tool["name"],
-                "summary": description.lines().next().unwrap_or_default(),
+                "summary": NATIVE_TOOL_SUMMARIES.iter()
+                    .find(|(name, _)| Some(*name) == tool["name"].as_str())
+                    .map(|(_, summary)| *summary)
+                    .unwrap_or_default(),
                 "description": description,
             })
         })
@@ -9339,6 +9390,46 @@ mod tests {
     #[cfg(unix)]
     use crate::OutputRingBuffer;
     use base64::Engine;
+
+    // Catches: Settings rows reuse long MCP paragraphs or omit newly registered tools.
+    #[test]
+    fn native_tool_catalog_summaries_are_short_and_not_description_prefixes() {
+        let definitions = native_tool_definitions();
+        let tools = definitions.as_array().unwrap();
+        let catalog = native_tool_catalog();
+        assert!(!tools.is_empty());
+        assert_eq!(catalog.len(), tools.len());
+        assert_eq!(NATIVE_TOOL_SUMMARIES.len(), tools.len());
+        for (tool, entry) in tools.iter().zip(&catalog) {
+            let name = tool["name"].as_str().unwrap();
+            let description = tool["description"].as_str().unwrap();
+            let summary = entry["summary"].as_str().unwrap();
+            assert_eq!(entry["name"], tool["name"]);
+            assert_eq!(entry["description"], tool["description"]);
+            assert!(!summary.trim().is_empty(), "{name} needs a summary");
+            assert!(summary.chars().count() <= 70, "{name} summary is too long");
+            assert!(
+                !summary.contains('\n'),
+                "{name} summary must be one sentence"
+            );
+            assert!(
+                !description.starts_with(summary),
+                "{name} summary must not reuse its MCP description"
+            );
+            assert!(
+                tool.get("summary").is_none(),
+                "{name} leaks app metadata into MCP"
+            );
+            assert_eq!(
+                NATIVE_TOOL_SUMMARIES
+                    .iter()
+                    .filter(|(key, _)| *key == name)
+                    .count(),
+                1,
+                "{name} must have exactly one declared summary"
+            );
+        }
+    }
 
     /// Catches: a storm that cannot be traced to a process (no pid logged), or a
     /// client-supplied header written to the log verbatim (log injection).
