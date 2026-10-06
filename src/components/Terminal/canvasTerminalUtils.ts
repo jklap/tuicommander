@@ -406,6 +406,99 @@ export function createHiddenAckThrottle(ack: () => void, intervalMs: number): Hi
 }
 
 /**
+ * How long a visible terminal waits for ANY frame after asking for one before it
+ * decides its grid channel is dead.
+ *
+ * Must clear the backend's own recovery from a merely slow frontend: a closed
+ * gate is abandoned after {@link BACKEND_FRAME_ABANDON_MS}, and three such
+ * abandons in a row pause the ticker for 1 s (`STUCK_PAUSE_MS`). 2 s sits above
+ * both, so a busy-but-healthy WebView is not resubscribed; a false positive is
+ * harmless anyway (resubscribing is idempotent and installs a fresh gate).
+ */
+export const FRAME_STARVATION_MS = 2000;
+
+/** Resubscribes tried before giving up and leaving the error in the log. */
+export const FRAME_STARVATION_MAX_ATTEMPTS = 3;
+
+/** Frame-starvation watchdog (see createFrameStarvationWatchdog). */
+export interface FrameStarvationWatchdog {
+	/** A visible terminal just asked for a frame: start waiting, unless already waiting. */
+	arm(): void;
+	/** Stop waiting (hidden, unmount) and forget the attempt count. */
+	cancel(): void;
+}
+
+/**
+ * Notice a grid channel that has silently died, and rebuild it.
+ *
+ * Found 2026-10-06: a tab showed only its cursor and gutter bars, forever. Rust
+ * still held a grid `Channel` whose JS callback no longer existed in the webview
+ * (Tauri logged `Couldn't find callback id N` every ~540 ms), so every frame —
+ * including the one `terminal_request_frame` produces on show — was sent into the
+ * void, and the component, alive and measuring, never learned. Nothing on the
+ * Rust side can detect it: `Channel::send` does not fail when the callback is
+ * gone. Only the receiver can see that frames stopped, so it has to ask.
+ *
+ * `arm()` is called when a VISIBLE terminal requests a frame. If the receipt
+ * counter has not moved when the timeout fires, `onStarved` resubscribes (which
+ * also re-requests a frame). The counter is re-read after `onStarved` runs,
+ * because resubscribing resets it to zero. Retries are bounded: a terminal that
+ * is still starved after `maxAttempts` gets `onGiveUp` once and no more timers,
+ * rather than a resubscribe loop at timer rate.
+ *
+ * Do not arm for a hidden terminal — it acks late on purpose and a background
+ * tab legitimately receives nothing for long stretches.
+ */
+export function createFrameStarvationWatchdog(opts: {
+	/** Total frames received on the current subscription. */
+	getReceived: () => number;
+	/** Rebuild the subscription. May return a promise; failures are the callee's to report. */
+	onStarved: () => void | Promise<void>;
+	/** Retries exhausted. */
+	onGiveUp: () => void;
+	timeoutMs?: number;
+	maxAttempts?: number;
+}): FrameStarvationWatchdog {
+	const timeoutMs = opts.timeoutMs ?? FRAME_STARVATION_MS;
+	const maxAttempts = opts.maxAttempts ?? FRAME_STARVATION_MAX_ATTEMPTS;
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	let attempts = 0;
+
+	function wait() {
+		const baseline = opts.getReceived();
+		timer = setTimeout(() => {
+			timer = null;
+			if (opts.getReceived() > baseline) {
+				attempts = 0;
+				return;
+			}
+			if (attempts >= maxAttempts) {
+				opts.onGiveUp();
+				return;
+			}
+			attempts++;
+			Promise.resolve(opts.onStarved()).catch(() => {});
+			// onStarved resets the counter synchronously, so the new baseline is the
+			// post-reset value; reading it before the call would compare against a
+			// number the fresh subscription can never reach.
+			wait();
+		}, timeoutMs);
+	}
+
+	return {
+		arm() {
+			if (timer != null) return;
+			wait();
+		},
+		cancel() {
+			if (timer != null) clearTimeout(timer);
+			timer = null;
+			attempts = 0;
+		},
+	};
+}
+
+/**
  * Terminal grid dimensions for a pixel box — THE single source of truth shared
  * by CanvasTerminal's remeasure and Terminal's reconnect path. The width loses
  * the left gutter and the scrollbar strip before dividing into columns.

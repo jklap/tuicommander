@@ -74,6 +74,56 @@ Frontend-side rules that follow from it:
   (`canvasTerminalUtils.ts`) before using it to index into the live grid. See the
   `CommandBlock` doc comment in `terminals.ts`.
 
+## A Visible Terminal Must Notice A Dead Grid Channel (Frame-Starvation Watchdog)
+
+Found 2026-10-06 from a live report: the `main 1` tab showed only its cursor bar
+and the command-block gutter marks, no text, and stayed that way through tab
+switches and window resizes. The backend was fine (full scrollback via
+`/sessions/{id}/output`). The component was alive too — its cursor blinked and a
+resize re-measured and re-sized its canvases — but it received zero grid frames
+and sent zero `ack_terminal_frame`. Rust still held a grid `Channel` whose JS
+callback was gone from the webview (Tauri logged `Couldn't find callback id N`,
+same id, every ~540 ms while idle), so the ticker sent into the void, the gate
+timed out after 500 ms and was abandoned, and the cycle repeated. A webview reload
+(sessions live in Rust and survive it) healed it at once.
+
+**Rust cannot detect this** — `Channel::send` does not fail when the callback is
+missing — so the receiver has to. `createFrameStarvationWatchdog`
+(`canvasTerminalUtils.ts`) is armed by `CanvasTerminal` whenever a *visible*
+terminal requests a frame (the show path and the initial subscribe) and
+resubscribes via the shared `resubscribeGrid()` if `framesReceived` has not
+advanced within `FRAME_STARVATION_MS` (2 s). Bounded to
+`FRAME_STARVATION_MAX_ATTEMPTS` (3), then one logged error and no more timers;
+cancelled on hide and unmount.
+
+Rules that follow, each one a way an earlier draft of this idea goes wrong:
+
+- **Never arm it for a hidden terminal.** A background tab acks late on purpose and
+  legitimately receives nothing for long stretches.
+- **Re-read the counter AFTER `onStarved`.** Resubscribing resets `framesReceived`
+  to zero synchronously; a baseline captured before the call is a number the fresh
+  subscription may never reach, which reads a working channel as starved.
+  `frameStarvationWatchdog.test.ts` pins this.
+- **The timeout must clear the backend's own recovery** (500 ms abandon + the 1 s
+  `STUCK_PAUSE_MS`), or a busy-but-healthy WebView gets resubscribed. A false
+  positive is harmless (resubscribe is idempotent and installs a fresh gate), but
+  it is churn.
+- **Do not add a second `resubscribe` implementation.** `onRef.resubscribe` (the
+  reattach path) and the watchdog share `resubscribeGrid()`.
+
+**The root cause of the callback being lost is NOT known** — this is a self-heal,
+not a cause fix. If the `Couldn't find callback id` warning is ever seen again
+with the watchdog in place, look at what unregistered the Channel's callback
+(`@tauri-apps/api` `Channel`, `transformCallback`) rather than at the gate.
+
+Diagnosing a blank tab: `grid frame gate stuck` alone is routine noise for hidden
+tabs (`frontend_liveness.rs`); it only means something for a visible one. The
+discriminating signals are (a) the idle `callback id` warning loop and (b) no
+`ack_terminal_frame` from the visible session — wrap
+`window.__TAURI_INTERNALS__.invoke` from `debug invoke_js` to watch for it. Run an
+**idle** control (no requests) before dismissing a recurring warning as a probe
+artifact — an earlier pass here did exactly that and was wrong.
+
 ## Terminal Keydown vs. Global Shortcuts
 
 `keyToSequence()` (`terminalInput.ts`) excludes `metaKey` but not `ctrlKey` from its
