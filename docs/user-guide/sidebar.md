@@ -135,7 +135,7 @@ The **layout button** in the toolbar (left of the filter icon) cycles the sideba
 
 - **Branch:** the PR state word and title; last-commit age; ahead/behind of the upstream (`↑2 ↓1`); diff stats; `N dirty` (click opens Changes); `Merged`, `Stale` (no commit for 30 days, not merged), `Unknown` (removal blocked, status could not be read) and `unmerged`. Each chip explains itself in a tooltip, with the same removal-safety text compact shows. A main checkout never shows stale, merged, dirty or unknown.
 - **Agent:** its state (Working, Idle, Needs input, Error) and what it is doing; its in-session subagents, one line each with state, title, tool calls and age (more than three fold into "N subagents", click to expand); TUIC child sessions nest under their parent agent.
-- **Repository:** current branch, open PRs, worktrees and the age of the last remote poll.
+- **Repository:** current branch, positive open-PR and worktree counts, and the age of the last remote poll.
 
 Compact carries the same facts in tooltips: the branch name's tooltip has the commit age, ahead/behind and the stale rule; an agent row's tooltip has its state and line. Subagents and nesting exist only in rich.
 
