@@ -1,7 +1,9 @@
 mod api;
 mod check;
 pub mod graph;
+mod incidents;
 mod model;
+pub use incidents::RunIncident;
 mod reducer;
 mod runtime;
 mod store;
@@ -2900,6 +2902,38 @@ mod tests {
         };
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, run.id);
+        // Catches: an incident read bypasses project scope or advances the run.
+        let state = crate::state::tests_support::make_test_app_state();
+        let RunReply::Incidents(incidents) = run_action_with_events(
+            &state,
+            &project_path,
+            RunAction::Incidents {
+                run_id: run.id.clone(),
+            },
+        )
+        .expect("incidents") else {
+            panic!("incident reply")
+        };
+        assert!(incidents.is_empty());
+        assert_eq!(
+            RunStore::open()
+                .unwrap()
+                .snapshot(&run.id)
+                .unwrap()
+                .sequence,
+            run.sequence
+        );
+        assert!(
+            run_action_with_events(
+                &state,
+                other.path().to_str().unwrap(),
+                RunAction::Incidents {
+                    run_id: run.id.clone()
+                },
+            )
+            .is_err()
+        );
+
         assert!(
             run_action(
                 other.path().to_str().unwrap(),
