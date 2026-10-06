@@ -26,10 +26,13 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
 import { ToastContainer } from "../../components/ToastContainer/ToastContainer";
+import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 
 beforeEach(() => {
 	subscribe.mockReset().mockResolvedValue(undefined);
+	vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+	vi.spyOn(appLogger, "error").mockImplementation(() => {});
 	Object.defineProperty(document, "fonts", {
 		configurable: true,
 		value: { load: () => Promise.resolve([]), ready: Promise.resolve() },
@@ -54,6 +57,12 @@ beforeEach(() => {
 	);
 });
 afterEach(() => {
+	for (const [, message] of vi.mocked(appLogger.warn).mock.calls) {
+		expect(message).toMatch(/^Pane stayed unsized for 120 frames/);
+	}
+	for (const [, message] of vi.mocked(appLogger.error).mock.calls) {
+		expect(message).toBe("Failed to subscribe to terminal grid channel");
+	}
 	for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
@@ -68,7 +77,17 @@ describe("stream notice ownership on terminal disposal", () => {
 		const terminal = openTerminal();
 		try {
 			await waitFor(() => expect(subscribe).toHaveBeenCalled());
-			toastsStore.add("Unrelated failure", "Keep this error", "error", false, undefined, 0);
+			toastsStore.add(
+				"Unrelated failure",
+				"Keep this error",
+				"error",
+				false,
+				undefined,
+				0,
+				undefined,
+				undefined,
+				false,
+			);
 			streamError.handler?.(new Error("Terminal stream disconnected"));
 			expect(notices.container.textContent).toContain("Terminal stream reconnecting");
 			terminal.unmount();
