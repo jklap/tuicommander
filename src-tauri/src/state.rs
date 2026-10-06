@@ -132,6 +132,10 @@ impl PendingInitialPrompt {
 /// cannot spell a field differently.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct WorktreeCreatedPayload {
+    /// Live PTY resolved from the authenticated MCP caller, never request arguments.
+    pub(crate) creator_session: Option<String>,
+    /// An explicit spawn keeps the creator in its existing workspace.
+    pub(crate) spawn_session: bool,
     pub(crate) repo_path: String,
     pub(crate) workspace_id: String,
     pub(crate) branch: String,
@@ -342,6 +346,9 @@ pub enum AppEvent {
     /// A worktree was created via MCP — frontend may offer to switch to it
     #[serde(rename = "worktree-created")]
     WorktreeCreated(WorktreeCreatedPayload),
+    /// Caller-only placement; the directory already exists.
+    #[serde(rename = "session-worktree-declared")]
+    SessionWorktreeDeclared(WorktreeCreatedPayload),
     /// A worktree was removed (UI, MCP, HTTP, or merge&archive) — frontend must
     /// drop its sidebar row and close any terminal still living in it.
     #[serde(rename = "worktree-removed")]
@@ -1407,6 +1414,7 @@ pub use tuic_git::worktree::WorktreeInfo;
 pub type SharedPtyWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 
 pub struct PtySession {
+    pub(crate) launch_receipt: Option<crate::prompt_receipt::PromptReceipt>,
     /// Kept outside the session mutex so terminal-generated replies can wait
     /// for an in-flight user write without blocking the reader thread.
     pub writer: SharedPtyWriter,
@@ -1414,6 +1422,8 @@ pub struct PtySession {
     pub(crate) _child: Box<dyn portable_pty::Child + Send + Sync>,
     pub(crate) paused: Arc<AtomicBool>,
     pub worktree: Option<WorktreeInfo>,
+    /// Immutable launch directory used for repository ownership, independent of OSC 7.
+    pub(crate) initial_cwd: Option<String>,
     pub cwd: Option<String>,
     /// Display name set by the desktop UI, agent launch, or intent title.
     pub display_name: Option<String>,
@@ -1473,6 +1483,7 @@ impl SessionMetrics {
 /// Stored per session_id so tool handlers can check client identity at call time.
 #[derive(Debug, Clone)]
 pub struct McpSessionMeta {
+    pub(crate) prompt_instructions: Option<crate::prompt_receipt::PromptReceipt>,
     /// Last time the session was used (any request); reaper checks this.
     pub last_activity: Instant,
     /// Whether the client identified as Claude Code (or tuic-bridge) at initialize time
@@ -4200,6 +4211,18 @@ impl AppState {
         let _ = self.event_bus.send(AppEvent::WorktreeRemoved(payload));
     }
 
+    /// Announce persisted caller placement over both transports.
+    pub(crate) fn notify_session_worktree_declared(&self, payload: WorktreeCreatedPayload) {
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            use tauri::Emitter;
+            let _ = app.emit("session-worktree-declared", &payload);
+        }
+        let _ = self
+            .event_bus
+            .send(AppEvent::SessionWorktreeDeclared(payload));
+    }
+
     /// Announce a newly created workspace, so the frontend can offer to switch
     /// to it.
     ///
@@ -5104,6 +5127,7 @@ impl AppState {
             | AppEvent::McpConfirmResolved { .. }
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
+            | AppEvent::SessionWorktreeDeclared { .. }
             | AppEvent::WorktreeCreated { .. }
             | AppEvent::WorktreeRemoved { .. }
             | AppEvent::PeerRegistered { .. }
@@ -5236,11 +5260,13 @@ pub(crate) mod tests_support {
         state.session_maps.sessions.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: std::sync::Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
                 paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: None,
                 cwd: None,
                 display_name: None,
                 display_name_is_custom: false,
@@ -5316,6 +5342,8 @@ mod worktree_event_payloads {
 
     fn created() -> WorktreeCreatedPayload {
         WorktreeCreatedPayload {
+            creator_session: Some("creator-pty".into()),
+            spawn_session: false,
             repo_path: "/repo".to_string(),
             workspace_id: "feature/x".to_string(),
             branch: "feature/x".to_string(),
@@ -5344,6 +5372,8 @@ mod worktree_event_payloads {
                 "workspace_id": "feature/x",
                 "branch": "feature/x",
                 "worktree_path": "/repo__wt/feature-x",
+                "creator_session": "creator-pty",
+                "spawn_session": false,
                 "kind": "worktree",
             })
         );

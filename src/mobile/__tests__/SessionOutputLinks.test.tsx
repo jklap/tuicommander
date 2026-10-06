@@ -12,7 +12,7 @@ const { rpc, subscribePty, output } = vi.hoisted(() => ({
 	output: { text: "" },
 }));
 
-vi.mock("../../transport", () => ({ rpc, subscribePty }));
+vi.mock("../../transport", () => ({ rpc, subscribePty, isTauri: () => false }));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));

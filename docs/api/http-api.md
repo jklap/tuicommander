@@ -8,9 +8,11 @@ Protected routes require the existing `?token=...`, `tui-session` cookie or Basi
 
 ## Workflow runs
 
-`POST /workflows/run/action?path=<absolute-project>` accepts one tagged `RunAction` and returns `{type,value}`. Actions: `start_plan {plan_id,definition_id,definition_revision,limits}`, `get {run_id}`, `list_plan_runs {plan_id,limit}`, `events {run_id,after_sequence,limit}`, `command {run_id,command_id,expected_sequence,command}`, `execute_check {run_id,story_id,check_id,command_id,expected_sequence}`, `record_integration {run_id,story_id,command_id,expected_sequence}`, and `recertify_canonical {run_id,command_id,expected_sequence}`. `list_plan_runs` returns newest first and accepts a limit of 1–100. Run commands include planning closure, agent attempt and effect bookkeeping, loop advancement, story acceptance, final verification, pause/resume, cancellation, and completion. The server checks canonical project ownership for every action and rejects a command whose expected sequence is stale. Event cursors start at zero and return up to 500 entries. A duplicate command ID returns its original receipt only when the payload matches. See [Workflow runs](../backend/workflows.md) for recovery and completion rules. Automatic node execution is under development.
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
 
-The `command` action also accepts `answer_input {attempt_id,answer}` for a paused run. The answer is an idempotent durable event; `resume` is a separate command and refuses an unanswered input request.
+`POST /workflows/run/action?path=<absolute-project>` accepts one tagged `RunAction` and returns `{type,value}`. Actions: `start_plan {plan_id,definition_id,definition_revision,limits}`, `get {run_id}`, `incidents {run_id}` (read-only causes and manual next steps), `list_plan_runs {plan_id,limit}`, `events {run_id,after_sequence,limit}`, `command {run_id,command_id,expected_sequence,command}`, `execute_check {run_id,story_id,check_id,command_id,expected_sequence}`, `record_integration {run_id,story_id,command_id,expected_sequence}`, and `recertify_canonical {run_id,command_id,expected_sequence}`. `list_plan_runs` returns newest first and accepts a limit of 1–100. Run commands include planning closure, agent attempt and effect bookkeeping, loop advancement, story acceptance, final verification, pause/resume, cancellation, and completion. The server checks canonical project ownership for every action and rejects a command whose expected sequence is stale. Event cursors start at zero and return up to 500 entries. A duplicate command ID returns its original receipt only when the payload matches. See [Workflow runs](../backend/workflows.md) for recovery and completion rules. Serial story graph execution is available through `start_graph`; `start_plan` remains the legacy record-only ledger.
+
+The `command` action also accepts `answer_input {attempt_id,answer}` for a paused run. The answer is an idempotent durable event; graph runs resume separately with an explicit activation and resolution. An unanswered input request prevents resume.
 
 `start_plan.limits` accepts `maxParallelStories` (default 2 when omitted, range 1–8). `start_attempt` conservatively serializes unknown or overlapping file scopes and refuses dependent stories lacking a current integration receipt at the accepted revision. `execute_check` runs only a check from the pinned story definition in its assigned worktree; `record_integration` verifies a completed non-fast-forward merge and runs the pinned checks again on the canonical result. `recertify_canonical` validates a later clean canonical tip and reruns those checks without claiming a new merge. `assign_worktree`, `record_check`, `record_integration`, and `record_recertification` as nested commands are internal and rejected on this operator API.
 
@@ -2399,11 +2401,18 @@ response rather than deriving it from display data. MCP
 `GET /worktrees/lifecycle` provides the removal preview: branch history, dirty and untracked counts, live session names, and warnings. `DELETE /worktrees/:workspaceId` includes the same warnings on success.
 
 Creation announces itself on both transports as `worktree-created`
-(`{ repo_path, workspace_id, branch, worktree_path, kind }`, with `kind` equal
+(`{ repo_path, workspace_id, branch, worktree_path, kind, creator_session, spawn_session }`, with `kind` equal
 to `"worktree"`) and removal as
 `worktree-removed` (`{ repo_path, workspace_id, branch }`) — the desktop Tauri
 event and the `/events` SSE frame serialize the same struct, so the field names
 are identical by construction. Payload table: `docs/sync-matrix.md`.
+
+`creator_session` is the live PTY id resolved from the MCP connection, or null
+for creation without a bound caller. When `spawn_session` is false, the UI moves
+only that session within its existing repository. Explicit session creation
+leaves the caller in place. Placement does not change the shell cwd or send
+input to an agent. The existing per-workspace terminal snapshots preserve the
+placement on restart; an inactive caller does not change the current selection.
 
 ### Worktrees Base Directory
 
@@ -2694,7 +2703,7 @@ session and request it is about.
 
 ## ego Command Line (`mcp_http/ego_routes.rs`)
 
-The browser half of `ego_providers` / `ego_set_default_model` — what the Settings →
+The browser half of the dedicated ego configuration commands — what the Settings →
 AI Chat page reads and writes. Same field names, same response body, same error
 body: an `EgoCliError` serialized whole (`code`, `message`, `command`, `stdout`,
 `stderr`, `exitCode`).
@@ -2702,16 +2711,19 @@ body: an `EgoCliError` serialized whole (`code`, `message`, `command`, `stdout`,
 ```
 GET  /ego/providers[?refresh=true]     -> EgoProviders
 POST /ego/providers/model              {model} -> EgoProviders
+GET  /ego/perimeter                      -> PerimeterView
+POST /ego/perimeter/roots                {roots:{rootDir,rootAccess,readAllowlist,writableDirs}} -> PerimeterView
+POST /ego/perimeter/network              {enabled} -> PerimeterView
 ```
 
-**Both** routes take the loopback-or-authenticated guard, which is stricter than
+**All** routes take the loopback-or-authenticated guard, which is stricter than
 `/acp/*`, where only `connect` and `reconnect` do. The difference is deliberate:
 every route here runs a process, and the write one changes a configuration file
 that decides which model a later run uses. Neither is a read of state TUIC
 already holds.
 
 The executable is never in the request. It comes from the `ego_executable`
-setting, read per call. `model` is the only writable key, and it is its own
+setting, read per call. Only `model`, `roots` and `network` are writable keys, each through its own
 route rather than a `key`/`value` pair, so no body can reach `sandbox` or
 `permissions.judge`.
 
@@ -2720,7 +2732,7 @@ The status is a translation of `code`, never a second opinion about it:
 | `code` | Status |
 |--------|--------|
 | `notConfigured` | 409 — no ego executable is set; nothing was run |
-| `invalidInput` | 400 — the model id was refused before ego was started |
+| `invalidInput` | 400 — the model id, root paths or workspace were refused before ego was started |
 | `launchFailed` | 424 — a binary is named and could not be started |
 | `commandFailed`, `unreadableOutput` | 502 — ego ran and failed, or printed something unreadable |
 
@@ -2774,7 +2786,12 @@ Frames and outstanding requests are bounded; heartbeat loss closes the link.
 
 `GET /sessions/{id}/output?format=mcp|mcp_raw` returns the native MCP output object,
 including `exited`, cursor and truncation fields. It accepts `limit`, `from_line`
-and `since_cursor`. `POST /sessions/{id}/submit` also accepts `timeout_ms`.
+and `since_cursor`, plus `from_byte` for raw source-byte pages. Follow
+`next_cursor` while `has_more` is true; `continuation` names the next native
+request. Tail reads name how to fetch older output. `oldest_offset` and
+`missed_count` identify eviction gaps; evicted data cannot be recovered. Explicit
+raw pages mask secrets before slicing and keep original-byte cursor positions.
+`POST /sessions/{id}/submit` also accepts `timeout_ms`.
 These are the configured remote desktop MCP adapters, sharing native backend behavior.
 
 Peer handshakes serialize per configured connection, so a mute daemon cannot hold
@@ -2814,3 +2831,65 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 The ACP session fork route accepts optional `atMessageId` beside `authority`. It is forwarded as `_meta.ego.atMessageId` only when ego advertises `sessionCapabilities.fork._meta.ego.atMessage`; unsupported agents are refused.
 
 The host ACP session list gathers all ego pages before ordering ancestry. Each row retains `_meta.ego.lineage` and adds `_meta.tuicommander.lineageDepth`; placeholder rows for deleted parents add `_meta.tuicommander.deleted=true`. The response has no continuation cursor after collecting the pages.
+
+### Memory diagnostics
+
+`GET /diagnostics/memory` performs payload accounting and the native large-malloc-block census on demand. The watchdog logs only cheap allocator counters and structure counts at footprint thresholds; it does not walk payloads or malloc zones.
+
+`accounted_bytes` sums the measured `maps` rows. `malloc_large_blocks` counts all large allocator blocks, including map-owned blocks. Its `may_overlap_accounted_bytes: true` field warns that its bytes must never be added to `accounted_bytes` as attributed memory. Model `holders` remain separate from heap accounting.
+
+## Launch instruction receipts
+
+`GET /sessions/{id}/prompt-receipt` mirrors `get_prompt_receipt`. Missing sessions return 404. The response is `{sections, captureLimited}`. Each section has `label`, `source`, `bytes` (original UTF-8 payload size, or null when unknown), `text` (redacted bounded preview), `status` (`sent`, `queued`, `served`, `file_snapshot`, or `not_observable`) and `truncated`. The endpoint reads live PTY/MCP metadata and never rebuilds text from settings. Capture/retention limits and unobservable cases are documented in [AI Agents](../user-guide/ai-agents.md#inspect-launch-instructions).
+
+### Run incident projection
+
+`POST /workflows/run/action?path=<project>` accepts `{"action":"incidents","run_id":"<id>"}`. The read-only reply is `{"type":"incidents","value":[...]}`. Entries use camelCase fields: `runId`, nullable `attemptId`, `storyId`, `nodeId`, `sessionId`, `taskId`, plus `source`, `cause` and `nextAction`. Sources are `workflow_report`, `attempt_interrupted`, `prompt_delivery_failed`, `session_exit`, `state_change`, `task_record`, or `run_state`. Only evidence explicitly bound to the run is returned. Project ownership is checked before reading live evidence. The action never mutates the run or executes recovery. The desktop `workflow_run_action` returns the same shape.
+
+### Conversation-specific AI Chat launch
+
+`POST /acp/chat/open` accepts `{ "profile": "coordinator", "workspace": "/absolute/workspace", "executable": "/absolute/ego" }`. All fields are optional for a new conversation; omitted values use global defaults. It returns `{ connection, sessionId, launch, replayed }`, where `launch` contains the resolved executable, profile, workspace and durable `peerId`. Use the existing ACP session prompt and stream routes with the returned ids.
+
+Reopen with `{ "sessionId": "<returned-session-id>" }`; saved launch options cannot be replaced on reopen. This route requires localhost or authenticated access, like ACP connect. Each custom conversation owns a dedicated peer/process. Its options are persisted under `ai_chat_launches` without modifying the global settings.
+
+### Caller-bound worktree declaration
+
+An agent that uses `git -C` or tools without changing shell cwd can declare an
+existing linked worktree with:
+
+```text
+session action=declare_worktree worktree_path=/absolute/path/to/worktree
+```
+
+The authenticated MCP binding identifies the caller's live PTY. Omit
+`session_id`; a foreign session target is rejected. The backend resolves the
+repository from the immutable launch directory and discovers current worktrees
+from Git. The main checkout, unknown paths and worktrees owned by another
+repository are rejected before any configuration or placement changes. External
+worktrees are discovered without recreating or deleting them.
+
+The response and `session-worktree-declared` event use the worktree lifecycle
+payload, with `creator_session` naming the caller and `spawn_session=false`.
+Only that tab moves. Its real cwd, sibling tabs and an inactive selection stay
+unchanged. Retrying the same declaration is idempotent.
+
+The stable `TUIC_SESSION` association is stored in the owning repository's
+`declaredWorktrees` map using the existing locked repository delta. Any saved
+caller snapshot moves to the target workspace; sibling snapshots are preserved.
+After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
+`list_active_sessions` return the declared `worktree_path` and `worktree_branch`
+while `cwd` remains the actual shell directory. The frontend restores placement
+from that worktree path. Declaration does not acquire worktree cleanup ownership.
+A concurrent repository edit can return a configuration conflict; retry the
+declaration after refreshing rather than overwriting that edit.
+
+The explicit placement remains authoritative over later shell cwd notifications
+until another declaration changes it. The frontend retains the backend placement
+path separately from the observed cwd during reconciliation.
+
+**Intentional request transport exception:** `declare_worktree` is an MCP-only
+action, callable over the existing HTTP `POST /mcp` route with a bound caller.
+There is no Tauri command or `COMMAND_TABLE` entry: window IPC has no managed
+agent caller binding. Its push event is dual-emitted over Tauri and `/events` SSE,
+and session-list response fields are identical over IPC and HTTP. Schema and
+serialization regressions cover these shared contracts.

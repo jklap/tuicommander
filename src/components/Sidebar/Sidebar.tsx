@@ -1,4 +1,4 @@
-import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { type Accessor, type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
 import { togglePanel } from "../../panelRouter";
 import { githubStore } from "../../stores/github";
@@ -307,12 +307,13 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	};
 
 	/** Render a single RepoSection with all its props */
-	const renderRepoSection = (repo: RepositoryState) => {
+	const renderRepoSection = (repo: RepositoryState, idleSummary = false) => {
 		// Color inheritance: repo color > group color > undefined
 		const nameColor = () => getRepoTextColor(repo.path);
 
 		return (
 			<RepoSection
+				idleSummary={idleSummary}
 				openSwipeRow={openSwipeRow()}
 				onSwipeRowChange={setOpenSwipeRow}
 				repo={repo}
@@ -376,6 +377,18 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 		);
 	};
 
+	const renderRepoList = (repos: Accessor<RepositoryState[]>) => (
+		<Show when={density() === "rich"} fallback={<For each={repos()}>{(repo) => renderRepoSection(repo)}</For>}>
+			<For each={repos().filter(repoIsActive)}>{(repo) => renderRepoSection(repo)}</For>
+			<Show when={repos().some((repo) => !repoIsActive(repo))}>
+				<div class={s.idleReposHeading} data-testid="idle-repos-heading">
+					{t("sidebar.idleRepos", "Idle")}
+				</div>
+				<For each={repos().filter((repo) => !repoIsActive(repo))}>{(repo) => renderRepoSection(repo, true)}</For>
+			</Show>
+		</Show>
+	);
+
 	return (
 		<SidebarDensityContext.Provider value={density}>
 			<aside id="sidebar" class={s.sidebar} data-testid="sidebar" data-density={density()}>
@@ -426,12 +439,12 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 													: undefined
 										}
 									>
-										<For each={entry.repos}>{(repo) => renderRepoSection(repo)}</For>
+										{renderRepoList(() => entry.repos)}
 									</GroupSection>
 								)}
 							</For>
 							{/* Ungrouped repos */}
-							<For each={filteredLayout().ungrouped}>{(repo) => renderRepoSection(repo)}</For>
+							{renderRepoList(() => filteredLayout().ungrouped)}
 							<Show when={!hasVisibleRepos()}>
 								<div class={s.empty}>
 									<p>{t("sidebar.noRepositories", "No repositories")}</p>

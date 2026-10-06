@@ -67,6 +67,13 @@ returns `400` and does not enter the session map.
 
 ### Session Control
 
+Session removal polls the child once and releases the PTY handles immediately.
+If the child has not terminated yet, a separate waiter owns only its child handle
+until `wait()` reaps it. This covers reader EOF arriving before process exit and
+explicit close/kill racing termination, without holding session or map locks.
+The existing post-mortem buffers still expire through the five-minute tombstone
+sweeper; explicit close removes them immediately.
+
 | Command | Description |
 |---------|-------------|
 | `write_pty(session_id, data)` | Write data (user input) to the PTY. Raises the calling thread to `QOS_CLASS_USER_INTERACTIVE` on macOS for the duration of the write and restores the previous class on the way out, so a keystroke is not scheduled behind background work on a pool thread TUIC only borrowed. |
@@ -730,3 +737,8 @@ OSC 133 command boundaries and OSC 7770 prompt rows are eviction-stable all-time
 Claude launch settings apply to prompt and option-first launches. Shell wrappers use backend-captured installed CLI help to recognise subcommands and aliases, without probing again at launch. Help is unavailable unless its `Commands:` section has parseable command rows; empty, whitespace-only or truncated help therefore uses the complete recorded Claude help, including `auth` and advertised aliases. Rust publishes this fallback to the shell environment; generated wrappers also embed it for an unusable cached value. No separate fallback verb list is maintained. The exact hidden `remote-control` command also bypasses settings because its reported CLI refusal confirms that requirement. Hyphenated prompts retain settings. Explicit settings and bare mode remain authoritative.
 
 Headless PTY registration uses the requested terminal geometry without a minimum VT width. A same-size resize preserves that width.
+
+MCP retained-output pages use `VtLogBuffer::lines_since_logical` source-row
+start/end positions, including omitted chrome slots. The end is a page boundary,
+not the total scrollback size. Logical wrap lines stay whole; raw pages use the
+existing output ring and original-byte cursors. See [MCP output paging](mcp-http.md#mcp-tool-session-output).

@@ -1,4 +1,5 @@
 use super::check::CheckReceipt;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -21,7 +22,7 @@ impl RunStatus {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RunLimits {
     pub max_loops: u16,
@@ -67,7 +68,7 @@ impl RunLimits {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AttemptOutcome {
     Completed,
@@ -179,7 +180,7 @@ pub struct AttemptReport {
     pub review: Option<ReviewAssessment>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectKind {
     SpawnAgent,
@@ -245,7 +246,7 @@ pub struct CanonicalReceipt {
 }
 
 /// The native root is distinct from its plan relationship and graph target.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "type", content = "id", rename_all = "snake_case")]
 pub enum RunTarget {
     Plan(String),
@@ -271,6 +272,10 @@ pub struct RunSnapshot {
     pub status: RunStatus,
     pub sequence: i64,
     pub started_ms: i64,
+    #[serde(default)]
+    pub paused_since_ms: Option<i64>,
+    #[serde(default)]
+    pub paused_duration_ms: i64,
     pub limits: RunLimits,
     pub loops: u16,
     pub story_creations: u16,
@@ -380,12 +385,19 @@ pub struct RunEvent {
     pub kind: RunEventKind,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunCommand {
     /// Internal only: graph transitions are not operator-supplied reports.
+    #[schemars(skip)]
     Graph {
         transition: super::graph::GraphTransition,
+    },
+    /// Internal daemon primitive: only a reached running Agent may start an attempt.
+    #[schemars(skip)]
+    StartGraphAgent {
+        execution_id: String,
+        activation_id: String,
     },
     ClosePlanning,
     StartAttempt {
@@ -393,6 +405,7 @@ pub enum RunCommand {
         node_id: String,
     },
     /// Internal only: a managed coordinator binds a registered worktree before spawn.
+    #[schemars(skip)]
     AssignWorktree {
         story_id: String,
         path: String,
@@ -406,11 +419,13 @@ pub enum RunCommand {
         outcome: AttemptOutcome,
     },
     /// Internal only: the public run transport rejects this command.
+    #[schemars(skip)]
     BindAgent {
         attempt_id: String,
         binding: AgentBinding,
     },
     /// Internal only: the public run transport rejects this command.
+    #[schemars(skip)]
     ReportBoundAttempt {
         caller_session: String,
         report: AttemptReport,
@@ -436,16 +451,19 @@ pub enum RunCommand {
         story_id: String,
     },
     /// Internal only: receipts are computed by the backend check runner.
+    #[schemars(skip)]
     RecordCheck {
         story_id: String,
         receipt: CheckReceipt,
     },
     /// Internal only: integration receipts are computed by the backend.
+    #[schemars(skip)]
     RecordIntegration {
         story_id: String,
         receipt: IntegrationReceipt,
     },
     /// Internal only: canonical receipts are computed by the backend.
+    #[schemars(skip)]
     RecordRecertification {
         receipt: CanonicalReceipt,
     },
@@ -453,6 +471,7 @@ pub enum RunCommand {
     Complete,
     Pause,
     /// Internal daemon timer command, never a caller-supplied timeout assertion.
+    #[schemars(skip)]
     ExpireDeadline,
     Resume,
     ResumeGraph {

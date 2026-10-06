@@ -16,6 +16,11 @@ When you click a non-main branch in the sidebar:
 
 Main branches (main, master, develop) use the original repository directory — no worktree is created.
 
+When an agent creates a worktree without spawning a separate session, its tab
+stays associated with that worktree during repository refreshes. This changes
+sidebar placement while preserving the shell's working directory. An explicit
+worktree declaration also survives restart when a saved agent tab is restored.
+
 ## Worktree Storage Strategies
 
 Configure where worktrees are stored (Settings → Git & GitHub → Worktree Defaults → Storage):
@@ -178,6 +183,8 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 - **Sidebar `×` button** on a non-main branch — Removes worktree and branch entry
 - **Right-click → Delete Worktree** — Context menu option
 - Both prompt for confirmation
+
+Cancelling or failing the initial confirmation keeps the workspace and its terminals. You can retry removal; duplicate requests for the same workspace remain serialized.
 
 Removing a worktree:
 1. Closes all terminals associated with that branch

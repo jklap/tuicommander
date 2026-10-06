@@ -202,7 +202,7 @@ cell's full text span, since native search points have no subcell index.
 | MCP atomic agent submission | OK | Backend-only `session action=submit`; the shared PTY writer lock spans payload, raw-mode gap, and Enter, so CanvasTerminal input cannot splice the submitted command. No renderer state or new frontend transport exists. |
 | Image paste detection | OK | Checks `items[i].type.startsWith("image/")` |
 | Resume banner keyboard | OK | Space/Enter/Escape/printable |
-| Touch tap/swipe/pinch (mobile) | OK | `installTouchHandlers` via offscreen textarea |
+| Touch tap/swipe/pinch (mobile) | OK | `installTouchHandlers` focuses the shared keyboard input; touch and compatibility mouse events retain one focus target |
 
 ### Selection & Clipboard
 
@@ -310,3 +310,5 @@ None. All tracked gaps have been resolved or marked wontfix.
 ### Stored terminal marker coordinates
 
 Stored command blocks and user prompt markers use all-time rows. Answers history consumes them directly. Gutter, scrollbar, search scope, navigation and buffer reads subtract the current frame history base at grid-relative boundaries. Evicted markers are omitted.
+
+Terminal stream reconnect notices use the current terminal name when available and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice. Closing the terminal removes its notice, and late subscription failures cannot publish a notice after closure.

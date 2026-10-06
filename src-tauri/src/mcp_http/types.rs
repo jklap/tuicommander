@@ -122,6 +122,7 @@ pub(super) struct OutputQuery {
     pub limit: Option<usize>,
     /// Native MCP output windows, used only by format=mcp/mcp_raw.
     pub from_line: Option<usize>,
+    pub from_byte: Option<u64>,
     pub since_cursor: Option<usize>,
     /// When set to "text", ANSI escape sequences are stripped from the output.
     pub format: Option<String>,

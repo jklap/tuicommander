@@ -33,7 +33,7 @@ export function reconcileTerminalOwnership(terminalId?: string): void {
 		const terminal = terminalsStore.get(terminalId);
 		if (!terminal) continue;
 
-		const owner = resolveRepoOwner(terminal.cwd);
+		const owner = resolveRepoOwner(terminal.placementPath ?? terminal.cwd);
 		// Still unclaimed. Leave the parked tab where it is — moving it nowhere
 		// would only make it invisible.
 		if (!owner) continue;

@@ -1,5 +1,13 @@
 import { createStore, produce } from "solid-js/store";
-import { AGENTS, type AgentRunConfig, type AgentsConfig, type AgentType, type HeadlessAgentChoice } from "../agents";
+import {
+	AGENTS,
+	type AgentRunConfig,
+	type AgentsConfig,
+	type AgentType,
+	type EgoPermissionMode,
+	type EgoSandbox,
+	type HeadlessAgentChoice,
+} from "../agents";
 import { invoke } from "../invoke";
 import { rpc } from "../transport";
 import { getRemoteBaseUrl, getRepoConnection } from "../transportRuntime";
@@ -52,6 +60,8 @@ interface AgentConfigsState {
 			native_status_signals?: boolean;
 			prevent_alt_screen?: boolean;
 			skip_trust_dialog?: boolean;
+			ego_mode?: EgoPermissionMode;
+			ego_sandbox?: EgoSandbox;
 		}
 	>;
 	/** Which agent CLI to use for headless prompt execution (user-chosen in Settings) */
@@ -123,6 +133,21 @@ export function createAgentConfigsStore(io: AgentConfigIO = defaultIO) {
 				appLogger.error("config", "Failed to hydrate agent configs", err);
 				setState({ loaded: false, loadError: err instanceof Error ? err.message : String(err) });
 				throw err;
+			}
+		},
+
+		/** Persist ego launch choices through the existing machine-specific config transport. */
+		async setEgoPermissions(permissions: { ego_mode?: EgoPermissionMode; ego_sandbox?: EgoSandbox }): Promise<void> {
+			setState(
+				produce((s) => {
+					if (!s.agents.ego) s.agents.ego = { run_configs: [] };
+					Object.assign(s.agents.ego, permissions);
+				}),
+			);
+			try {
+				await saveToDisk();
+			} catch (_err) {
+				/* saveToDisk logs the error */
 			}
 		},
 

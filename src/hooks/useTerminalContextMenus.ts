@@ -26,6 +26,7 @@ interface TerminalContextMenuOptions {
 	splitPanes: ReturnType<typeof useSplitPanes>;
 	terminalLifecycle: ReturnType<typeof useTerminalLifecycle>;
 	closeActiveTabOrPane: () => void;
+	openPromptInspector: (sessionId: string) => void;
 	setTermRenameDefault: Setter<string>;
 	setTermRenamePromptVisible: Setter<boolean>;
 }
@@ -205,6 +206,14 @@ export function useTerminalContextMenus(options: TerminalContextMenuOptions): {
 	};
 
 	const getContextMenuItems = (): ContextMenuItem[] => [
+		{
+			label: "Inspect Launch Instructions…",
+			disabled: !terminalsStore.getActive()?.sessionId,
+			action: () => {
+				const id = terminalsStore.getActive()?.sessionId;
+				if (id) options.openPromptInspector(id);
+			},
+		},
 		...(options.agentDetection.getAvailable().length > 0
 			? [{ label: "Agents", action: () => {}, disabled: activeTerminalBusy(), children: buildAgentMenuItems() }]
 			: []),

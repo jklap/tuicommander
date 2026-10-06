@@ -22,6 +22,7 @@ mod request_boundary;
 #[cfg(test)]
 mod secret_critic1435_tests;
 pub(crate) mod session;
+mod session_placement;
 pub(crate) mod sse_routes;
 pub(crate) mod static_files;
 #[cfg(feature = "desktop")]
@@ -995,6 +996,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::get_session_shell_family),
         )
         .route("/sessions/{id}/last-prompt", get(session::get_last_prompt))
+        .route(
+            "/sessions/{id}/prompt-receipt",
+            get(session::get_prompt_receipt),
+        )
         .route(
             "/sessions/{id}/input-buffer",
             get(session::get_input_buffer_content),
@@ -4630,6 +4635,7 @@ mod tests {
             state.mcp.sessions.insert(
                 sid.into(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity,
                     is_claude_code: false,
                     requires_meta_tools: false,
@@ -5693,6 +5699,7 @@ mod tests {
         state.mcp.sessions.insert(
             "test-sid".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now,
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -5790,6 +5797,7 @@ mod tests {
         state.mcp.sessions.insert(
             "ping-session".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now() - std::time::Duration::from_secs(60),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -5853,15 +5861,20 @@ mod tests {
             for (entry, definition) in catalog.iter().zip(definitions.as_array().unwrap()) {
                 assert_eq!(entry["name"], definition["name"]);
                 assert_eq!(entry["description"], definition["description"]);
-                assert_eq!(
-                    entry["summary"],
-                    definition["description"]
+                // Catches: HTTP status retaining description prefixes while Settings
+                // switches to dedicated, concise native registry summaries.
+                let summary = entry["summary"].as_str().unwrap();
+                assert!(!summary.trim().is_empty());
+                assert!(summary.chars().count() <= 70);
+                assert!(
+                    !definition["description"]
                         .as_str()
                         .unwrap()
-                        .lines()
-                        .next()
-                        .unwrap()
+                        .starts_with(summary)
                 );
+                if entry["name"] == "secret" {
+                    assert_eq!(summary, "Request sensitive values from the user securely.");
+                }
             }
             // Collapse/progress gates must not shrink the Settings inventory.
             {
@@ -8411,6 +8424,7 @@ mod tests {
         state.mcp.sessions.insert(
             "test-sid-proxy".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now,
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -8450,6 +8464,7 @@ mod tests {
         state.mcp.sessions.insert(
             "test-sid-native".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now,
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -9319,6 +9334,7 @@ mod tests {
         state.mcp.sessions.insert(
             SID.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now - std::time::Duration::from_secs(7200),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -9390,6 +9406,7 @@ mod tests {
             state.mcp.sessions.insert(
                 sid.to_string(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity,
                     is_claude_code: true,
                     requires_meta_tools: false,
@@ -9453,6 +9470,7 @@ mod tests {
         state.mcp.sessions.insert(
             SID.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now() - std::time::Duration::from_secs(7200),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -9507,6 +9525,7 @@ mod tests {
             state.mcp.sessions.insert(
                 sid.to_string(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity,
                     is_claude_code: true,
                     requires_meta_tools: false,

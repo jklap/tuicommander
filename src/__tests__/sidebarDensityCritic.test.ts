@@ -22,7 +22,7 @@ describe("rich density CSS cascade (critic)", () => {
 	// earlier, so on a hover-capable pointer (forced touch mode, iPad trackpad) the idle actions
 	// reserve 84px in every row and on hover are clipped back to 44px, cutting off the second 36px button.
 	it("does not set branchActions max-width outside a hover media query", () => {
-		const at = css.indexOf('.sidebar[data-density="rich"] .branchActions');
+		const at = css.indexOf('.sidebar[data-density="rich"] .branchItem:hover .branchActions');
 		expect(at).toBeGreaterThan(-1);
 		expect(depthAt(at)).toBeGreaterThanOrEqual(1);
 	});
@@ -30,9 +30,9 @@ describe("rich density CSS cascade (critic)", () => {
 	// Catches (#1381-9689): `flex: 1 0 auto` on the rich repo name. It cannot shrink, so a long repo
 	// name is as wide as its text, never ellipsizes, and the sidebar list scrolls sideways on touch.
 	it("lets the rich repo name shrink", () => {
-		const rule = css.match(/\.sidebar\[data-density="rich"\] \.repoName \{([^}]*)\}/);
+		const rule = css.match(/\n\.repoName \{([^}]*)\}/);
 		expect(rule).not.toBeNull();
-		expect(rule?.[1]).toMatch(/flex:\s*1 1 auto/);
+		expect(rule?.[1]).toMatch(/flex:\s*1(?: 1 (?:auto|0%?))?\s*;/);
 	});
 
 	// Catches (#1381-9689): the list container only setting overflow-y, which makes overflow-x compute

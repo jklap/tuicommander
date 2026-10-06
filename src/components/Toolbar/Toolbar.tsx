@@ -20,6 +20,7 @@ import { isTauri } from "../../transport";
 import { getRepoConnection } from "../../transportRuntime";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
+import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { getRepoTextColor } from "../../utils/repoColor";
 import type { SidebarDensityMode } from "../../utils/sidebarDensity";
 import { IdeLauncher } from "../IdeLauncher";
@@ -53,6 +54,24 @@ const DENSITY_TITLES: Record<SidebarDensityMode, () => string> = {
 	compact: () => t("toolbar.densityCompact", "Sidebar layout: compact — click for rich"),
 	rich: () => t("toolbar.densityRich", "Sidebar layout: rich (details on every row) — click for auto"),
 };
+
+/** Back/forward arrows over the terminal activation history. */
+const HISTORY_BUTTONS = [
+	{
+		direction: "back",
+		action: "history-back",
+		icon: "M10 3 5 8l5 5",
+		go: (name: string) => t("toolbar.historyBack", "Back to {name}", { name }),
+		none: () => t("toolbar.historyBackNone", "No earlier terminal"),
+	},
+	{
+		direction: "forward",
+		action: "history-forward",
+		icon: "m6 3 5 5-5 5",
+		go: (name: string) => t("toolbar.historyForward", "Forward to {name}", { name }),
+		none: () => t("toolbar.historyForwardNone", "No later terminal"),
+	},
+] as const;
 
 /** Row glyph: five tight lines for compact, a title with a detail line for rich. */
 const DENSITY_LABELS: Record<SidebarDensityMode, () => string> = {
@@ -466,6 +485,41 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 			</div>
 
 			<div class={s.center} data-tauri-drag-region>
+				<For each={HISTORY_BUTTONS}>
+					{(btn) => {
+						const target = () => terminalsStore.getHistoryTarget(btn.direction);
+						const title = () => {
+							const id = target();
+							if (!id) return btn.none();
+							const name = terminalsStore.get(id)?.name ?? "";
+							return `${btn.go(name)} (${keyFor(btn.action)})`;
+						};
+						return (
+							<button
+								class={s.filterToggle}
+								disabled={!target()}
+								onClick={() => {
+									const id = terminalsStore.stepHistory(btn.direction);
+									if (id) navigateToTerminal(id);
+								}}
+								title={title()}
+								data-tooltip={title()}
+								data-tooltip-pos="bottom"
+								data-testid={`history-${btn.direction}`}
+							>
+								<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+									<path
+										d={btn.icon}
+										stroke="currentColor"
+										stroke-width="1.5"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+									/>
+								</svg>
+							</button>
+						);
+					}}
+				</For>
 				<Show when={activeBranchName()}>
 					<button
 						class={s.branch}

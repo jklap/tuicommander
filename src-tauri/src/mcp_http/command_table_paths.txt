@@ -2,6 +2,7 @@
 # One HTTP path per COMMAND_TABLE entry, query stripped, deduplicated.
 # Read by mcp_http::tests::command_table_paths_all_hit_a_registered_route.
 # Regenerate: pnpm vitest run src/__tests__/transport.test.ts -u
+/acp/chat/open
 /acp/connections
 /acp/connections/x
 /acp/connections/x/elicitations/x/response
@@ -129,6 +130,9 @@
 /dictation/start
 /dictation/status
 /dictation/stop
+/ego/perimeter
+/ego/perimeter/network
+/ego/perimeter/roots
 /ego/providers
 /ego/providers/model
 /exec/shell-script
@@ -292,6 +296,7 @@
 /sessions/x/leaf-pid
 /sessions/x/name
 /sessions/x/pause
+/sessions/x/prompt-receipt
 /sessions/x/queue
 /sessions/x/queue/x
 /sessions/x/resize
