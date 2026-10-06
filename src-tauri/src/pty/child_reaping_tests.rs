@@ -152,3 +152,62 @@ fn session_removal_preserves_already_reaped_exit_status() {
     assert_eq!(state.metrics.active_sessions.load(Ordering::Relaxed), 0);
     assert_os_child_reaped(pid);
 }
+
+/// Catches: removing scrollback owners leaves hundreds of MiB of freed glibc
+/// arena pages resident, on explicit close or expiry of post-mortem buffers.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn linux_glibc_session_payload_release_returns_scrollback_pages() {
+    fn resident_bytes() -> usize {
+        let status = std::fs::read_to_string("/proc/self/status").expect("process memory status");
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("VmRSS:"))
+            .expect("resident memory")
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .parse::<usize>()
+            .unwrap()
+            * 1024
+    }
+
+    for tombstone in [false, true] {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let ids: Vec<_> = (0..6).map(|n| format!("rss-owner-{n}")).collect();
+        // Production grids are allocated by separate PTY reader threads. Use
+        // real threads and real grids so this exercises glibc's thread arenas.
+        let workers: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                let state = Arc::clone(&state);
+                let id = id.clone();
+                std::thread::spawn(move || {
+                    let mut grid = VtLogBuffer::new(24, 220, 10000);
+                    grid.process(&b"row\r\n".repeat(10024));
+                    state.grid.vt_log_buffers.insert(id, Mutex::new(grid));
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().expect("scrollback allocator thread");
+        }
+        let before = resident_bytes();
+        if tombstone {
+            reap_tombstones(&state, &ids);
+        } else {
+            for id in &ids {
+                cleanup_session(id, &state);
+            }
+        }
+        assert!(state.grid.vt_log_buffers.is_empty());
+        let after = resident_bytes();
+        // Six 10000-row, 220-column grids hold over 300 MiB. A deliberately
+        // loose OS-level bound tolerates metadata/caches without accepting the
+        // measured failure where all freed grid pages stay resident.
+        assert!(
+            before.saturating_sub(after) > 64 * 1024 * 1024,
+            "freed scrollback must return resident pages: tombstone={tombstone}, before={before}, after={after}"
+        );
+    }
+}
