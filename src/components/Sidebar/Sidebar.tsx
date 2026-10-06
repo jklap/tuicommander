@@ -439,7 +439,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 													: undefined
 										}
 									>
-										<For each={entry.repos}>{(repo) => renderRepoSection(repo)}</For>
+										{renderRepoList(() => entry.repos)}
 									</GroupSection>
 								)}
 							</For>
