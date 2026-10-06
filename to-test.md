@@ -4693,3 +4693,13 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] Verify browser HTML/Markdown and image-tab placeholders for local images outside open repositories; confirm inside-repository images still load.
 - [ ] After Boss restarts the Rust backend, verify threshold memory logs contain only allocator counters and structure counts; `/diagnostics/memory` still returns the explicit census and its overlap warning (#977).
+- [ ] After Boss restarts the Rust backend, verify the internal serial workflow executor with isolated headless runs and configured sol/sonnet profiles: bound reports, Judge edges, retained repair limits, durable Notify and pause/resume duration. Public graph start controls and Resolve plan dispatch are outside this slice. No desktop launch was performed by the implementation peer.
+
+- [ ] After Boss restarts the Rust backend, verify an isolated workflow review checks its artifact before independent approval, refuses implementer approval after exit, and waits for an explicit merge.
+
+- [ ] After Boss restarts the Rust backend, verify an isolated plan dispatches eligible story waves, holds a dependent until an explicit verified merge, and runs its pinned final checks before completion.
+
+- [ ] After Boss restarts the Rust build: pause a reached workflow Gate, commit a corrected artifact, resume that activation, and verify fresh deterministic check receipts without a reused-command-payload error. Automated regression passes are recorded in the 1446-ff21 critic handoff.
+- [ ] Workflow slice F: after Boss restarts the Rust backend, start a published Ready story in Plans and Stories; inspect decision/pause details and later event pages, answer input, explicitly resolve a graph pause, pause/cancel. Plan start must show unavailable until slice E is integrated. Browser screenshot/layout verification is owed: the screen was locked on 2026-10-06; no desktop instance was launched.
+
+- [ ] After Boss restarts the Rust build, start a published Resolve plan through the owning daemon API; verify the pinned coordinator and explicit integration waits. The dialog plan button remains visibly unavailable.

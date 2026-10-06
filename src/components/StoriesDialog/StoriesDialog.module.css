@@ -1,7 +1,7 @@
 .dialog { display: flex; flex-direction: column; width: min(1120px, calc(100vw - 32px)); max-height: min(82vh, 860px); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-popup); overflow: hidden; color: var(--fg-primary); font-family: var(--font-ui); }
 .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border); }
 .header h2 { margin: 0 0 2px; font-size: var(--font-xl); }
-.headerActions { display: flex; align-items: center; gap: 8px; }
+.headerActions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 .headerActions button { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--fg-secondary); padding: 5px 9px; font: var(--font-xs) var(--font-ui); cursor: pointer; }
 .headerActions button[aria-pressed="true"] { color: var(--fg-primary); border-color: var(--accent); }
 .headerActions button:disabled { opacity: .5; cursor: default; }
@@ -17,6 +17,7 @@
 .timeline { list-style: none; margin: 18px 0 0; padding: 0; border-top: 1px solid var(--border); }
 .timeline li { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); color: var(--fg-secondary); font-size: var(--font-sm); text-transform: capitalize; }
 .timeline time, .eventSequence { color: var(--fg-muted); font: var(--font-xs) var(--font-mono); white-space: nowrap; }
+.timeline pre { white-space: pre-wrap; overflow-wrap: anywhere; text-transform: none; font: var(--font-xs) var(--font-mono); }
 .loadMore { margin-top: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--fg-primary); padding: 5px 9px; font: var(--font-xs) var(--font-ui); cursor: pointer; }
 .loadMore:hover { background: var(--bg-highlight); }
 .loadMore:disabled { opacity: .5; cursor: default; }
