@@ -3,11 +3,22 @@ import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HtmlPreviewTab } from "../../components/HtmlPreviewTab/HtmlPreviewTab";
 import { ContentRenderer } from "../../components/ui/ContentRenderer";
+import { FilesScreen } from "../../mobile/screens/FilesScreen";
 import type { HtmlPreviewTab as PreviewTab } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { rewriteLocalImages } from "../../utils/repoImageUrl";
 
-vi.mock("../../transport", async (original) => ({ ...(await original<object>()), isTauri: () => false }));
+vi.mock("../../transport", async (original) => ({
+	...(await original<object>()),
+	isTauri: () => false,
+	rpc: vi.fn(async (command: string) => {
+		if (command === "resolve_terminal_path") return { absolute_path: "/repo/docs/page.md", is_directory: false };
+		if (command === "load_repositories") return { repos: { "/repo": {} } };
+		if (command === "stat_path") return { exists: true, is_dir: false, size: 20 };
+		if (command === "fs_read_file") return "![x](my%20shot.png)";
+		throw new Error(`Unexpected command: ${command}`);
+	}),
+}));
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn().mockResolvedValue('<html><head></head><body><img src="shot.png"></body></html>'),
 	listen: vi.fn().mockResolvedValue(() => {}),
@@ -65,14 +76,15 @@ describe("browser repository preview boundary", () => {
 			);
 		},
 	);
-	it("keeps a mobile repository resolver — catches: browser fallback overriding the caller's image route", () => {
+	it("requests the filename the mobile file view resolves — catches: the browser fallback or an undecoded path overriding the mobile route", async () => {
 		const { container } = render(() => (
-			<ContentRenderer
-				content="![x](shot.png)"
-				imageSrc={() => "https://phone.example/fs/markdown-image?file=docs/shot.png"}
-			/>
+			<FilesScreen initialRepo={{ cwd: "/repo", worktreePath: "/repo" }} initialLink={{ candidate: "docs/page.md" }} />
 		));
-		expect(imageUrl(container).host).toBe("phone.example");
+		await waitFor(() => expect(container.querySelector("#markdown-content img")).not.toBeNull());
+		const url = new URL(container.querySelector("#markdown-content img")?.getAttribute("src") ?? "");
+		expect(url.pathname).toBe("/fs/markdown-image");
+		expect(url.searchParams.get("repoPath")).toBe("/repo");
+		expect(url.searchParams.get("file")).toBe("docs/my shot.png");
 	});
 	it("replaces an external mobile absolute path — catches: mobile imageSrc returning an unservable local path", () => {
 		const { container, getByRole } = render(() => (
