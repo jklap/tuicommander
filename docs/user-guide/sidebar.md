@@ -131,7 +131,7 @@ Click **Unpark** on any repo in the parked repos popover. It returns to the main
 
 The **layout button** in the toolbar (left of the filter icon) cycles the sidebar through three modes and prints the current one on itself: **A** (auto, outlined), **C** (compact), **R** (rich). The choice is saved.
 
-**Compact** is the one-line rows. **Rich** adds detail lines:
+**Compact** is the one-line rows. **Rich** keeps the same navigation density and adds facts:
 
 - **Branch:** the PR state word and title; last-commit age; ahead/behind of the upstream (`↑2 ↓1`); diff stats; `N dirty` (click opens Changes); `Merged`, `Stale` (no commit for 30 days, not merged), `Unknown` (removal blocked, status could not be read) and `unmerged`. Each chip explains itself in a tooltip, with the same removal-safety text compact shows. A main checkout never shows stale, merged, dirty or unknown.
 - **Agent:** its state (Working, Idle, Needs input, Error) and what it is doing; its in-session subagents, one line each with state, title, tool calls and age (more than three fold into "N subagents", click to expand); TUIC child sessions nest under their parent agent.
@@ -139,7 +139,7 @@ The **layout button** in the toolbar (left of the filter icon) cycles the sideba
 
 Compact carries the same facts in tooltips: the branch name's tooltip has the commit age, ahead/behind and the stale rule; an agent row's tooltip has its state and line. Subagents and nesting exist only in rich.
 
-**Auto** shows rich when the list fits the window or the primary pointer is a finger (touch targets), compact otherwise. The fit is measured: a rich row is about 52 px, and the window gives the list its height minus 96 px of toolbar and footer, so a 768 px window fits 12 rows and a 900 px window 15. On touch, the + and × buttons stay on the branch name line (28 px) so the PR title keeps the full width of the line below.
+**Auto** shows rich when the list fits the window or the primary pointer is a finger, compact otherwise. It uses a conservative 52 px row budget for expanded working-agent details, minus 96 px of toolbar and footer. Rich branch names and stats stay on one line; long names truncate and full PR titles remain in tooltips. Touch branch actions remain in the existing swipe tray.
 
 Subagent lines come from the existing `progress_flow` command, read at most every 5 seconds per repository, only in rich.
 
@@ -184,3 +184,5 @@ Mouse and trackpad controls keep their existing hover behavior.
 In rich mode, sessions idle for more than two hours fold into an expandable count. Backend activity timestamps determine age; busy sessions, awaiting input, unread output, selected rows and parents of visible children stay visible. Expanding preserves row order. Compact mode does not fold idle sessions.
 
 Rich working agent rows reserve two clamped intent lines. Idle, awaiting-input and error rows stay on one line with status dots; their full intent, task or prompt remains in the tooltip. Compact rows keep their one-line layout.
+
+Rich navigation keeps compact typography and padding. Branch identity and facts share one line, with names truncated and full PR/lifecycle facts in tooltips. Repository metadata disappears when PR and worktree counts are both zero. Header controls use compact sizing to protect repo names. Returned subagents fold into an expandable count independently of running work.

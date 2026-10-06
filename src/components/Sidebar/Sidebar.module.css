@@ -24,63 +24,9 @@
   overflow: hidden;
 }
 
-/* Density (set by Sidebar.tsx from row count, pointer type and the toolbar
-   toggle). `compact` is the base above. `rich` spends spare room on detail lines
-   under each row: larger type, roomier padding and the chips below. No handler,
-   drag or long-press rule depends on it. */
-.sidebar[data-density="rich"] {
-  --row-pad-x: 10px;
-  --row-icon: 16px;
-  --row-gap: 7px;
-  --row-h: 30px;
-  --tree-indent: 12px;
-  --font-2xs: 11px;
-  --font-xs: 12px;
-  --font-sm: 13px;
-  --font-md: 14px;
-}
-
-.sidebar[data-density="rich"] .repoHeader {
-  padding: 9px 10px 3px;
-}
-
+/* Rich adds facts without enlarging the compact navigation chrome. */
 .sidebar[data-density="rich"] .branchItem {
-  flex-wrap: wrap;
-  align-items: center;
-  padding-top: 5px;
-  padding-bottom: 5px;
-}
-
-/* A finger: 44px targets (Apple HIG) on every control of a rich row, also with
-   a trackpad that still reports a coarse primary pointer. */
-@media (pointer: coarse) {
-  .sidebar[data-density="rich"] {
-    --row-pad-x: 12px;
-    --row-icon: 18px;
-    --row-gap: 8px;
-    --row-h: 44px;
-    --tree-indent: 14px;
-    --font-2xs: 12px;
-    --font-xs: 13px;
-    --font-sm: 15px;
-    --font-md: 16px;
-  }
-
-  .sidebar[data-density="rich"] .repoHeader {
-    padding: 10px 12px 4px;
-    min-height: 44px;
-  }
-
-  .sidebar[data-density="rich"] .repoSection {
-    margin-bottom: 6px;
-  }
-
-  .sidebar[data-density="rich"] .branchMoreBtn,
-  .sidebar[data-density="rich"] .branchAddBtn,
-  .sidebar[data-density="rich"] .branchRemoveBtn {
-    width: 36px;
-    height: 36px;
-  }
+  flex-wrap: nowrap;
 }
 
 /* Forces the wrap between the name line and the detail line; only touch uses it. */
@@ -1178,50 +1124,7 @@
 @media (hover: none) {
   .branchActions { display: none; }
 
-  /* Rich rows wrap, and the branch name is the row's identifier: it keeps line 1
-     (name, PR badge) to itself and the PR title keeps line 2. The detail block
-     dissolves into the row so the buttons can sit at the right end of the meta
-     line (line 3) — or of the first line when the row has no detail (shell rows). */
-  .sidebar[data-density="rich"] .branchRichDetail {
-    display: contents;
-  }
 
-  /* The name never gives way to the PR badge: it keeps its full width and the
-     badge wraps to the next line when the two do not fit together. */
-  .sidebar[data-density="rich"] .branchItem .branchContent {
-    flex: 1 0 auto;
-    max-width: calc(100% - var(--row-icon) - var(--row-gap));
-  }
-
-  .sidebar[data-density="rich"] .branchRichLine {
-    flex: 0 0 calc(100% - var(--row-icon) - var(--row-gap));
-    margin-left: calc(var(--row-icon) + var(--row-gap));
-  }
-
-  .sidebar[data-density="rich"] .branchRichMeta {
-    flex: 1 1 0;
-    min-width: 0;
-    margin-left: calc(var(--row-icon) + var(--row-gap));
-  }
-
-  .sidebar[data-density="rich"] .branchBreak {
-    display: block;
-    flex: 0 0 100%;
-    height: 0;
-  }
-
-  .sidebar[data-density="rich"] .branchActions {
-    order: 1;
-    margin-left: auto;
-    flex-shrink: 0;
-  }
-
-  .sidebar[data-density="rich"] .branchMoreBtn,
-  .sidebar[data-density="rich"] .branchAddBtn,
-  .sidebar[data-density="rich"] .branchRemoveBtn {
-    width: 28px;
-    height: 28px;
-  }
 }
 
 .branchMoreBtn {
@@ -1548,25 +1451,12 @@
   }
 
   .sidebar[data-density="rich"] .repoActionBtn {
-    width: 36px;
-    height: 36px;
+    width: 20px;
+    height: 20px;
   }
+  .sidebar[data-density="rich"] .repoActions { gap: 0; }
+  .sidebar[data-density="rich"] .repoActions .addBtn { margin-right: 0; }
 
-  /* The repo name has priority, like a branch name: the action cluster (which
-     never shrinks) gives way with tighter gaps and no extra margin on +. The name
-     itself still shrinks (ellipsis) when it cannot fit; `1 0 auto` made it as wide
-     as its text and the whole list scrolled sideways. */
-  .sidebar[data-density="rich"] .repoName {
-    flex: 1 1 auto;
-  }
-
-  .sidebar[data-density="rich"] .repoActions {
-    gap: 0;
-  }
-
-  .sidebar[data-density="rich"] .repoActions .addBtn {
-    margin-right: 0;
-  }
 }
 
 /* ── Remote-only PR popover ── */
@@ -2505,3 +2395,18 @@
   height: 2.8em;
   flex: 1;
 }
+
+/* Inline rich facts yield space to branch identity; complete facts remain in the tooltip. */
+.sidebar[data-density="rich"] .branchRichDetail {
+  flex: 0 1 auto;
+  max-width: 55%;
+  padding-left: 0;
+  overflow: hidden;
+}
+.sidebar[data-density="rich"] .branchRichLine { display: none; }
+.sidebar[data-density="rich"] .branchRichMeta {
+  flex-wrap: nowrap;
+  gap: 3px;
+  white-space: nowrap;
+}
+.sidebar[data-density="rich"] .branchContent { min-width: 30px; }

@@ -295,7 +295,10 @@ function agentTooltip(term: TerminalState): string {
 /** Rich: the live subagents of one agent row; more than a few fold into a count. */
 const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 	const [open, setOpen] = createSignal(false);
-	const folded = () => props.rows.length > SUBAGENT_COLLAPSE_AFTER && !open();
+	const [returnedOpen, setReturnedOpen] = createSignal(false);
+	const running = () => props.rows.filter((row) => row.running);
+	const returned = () => props.rows.filter((row) => !row.running);
+	const folded = () => running().length > SUBAGENT_COLLAPSE_AFTER && !open();
 	return (
 		<Show when={props.rows.length > 0}>
 			<div class={s.subagentList}>
@@ -303,11 +306,11 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 					when={!folded()}
 					fallback={
 						<button class={s.subagentFold} onClick={() => setOpen(true)} aria-expanded="false">
-							{t("sidebar.subagentCount", "{count} subagents", { count: String(props.rows.length) })}
+							{t("sidebar.subagentCount", "{count} subagents", { count: String(running().length) })}
 						</button>
 					}
 				>
-					<For each={props.rows}>
+					<For each={[...running(), ...(returnedOpen() ? returned() : [])]}>
 						{(row) => (
 							<div class={s.subagentRow} data-tooltip={row.title} data-tooltip-pos="bottom">
 								<span class={cx(s.branchTabState, row.running && s.branchTabState_working)}>
@@ -321,11 +324,25 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 							</div>
 						)}
 					</For>
-					<Show when={props.rows.length > SUBAGENT_COLLAPSE_AFTER}>
+					<Show when={running().length > SUBAGENT_COLLAPSE_AFTER}>
 						<button class={s.subagentFold} onClick={() => setOpen(false)} aria-expanded="true">
 							{t("sidebar.subagentCollapse", "Collapse")}
 						</button>
 					</Show>
+				</Show>
+				<Show when={returned().length > 0}>
+					<button
+						class={s.subagentFold}
+						data-testid="returned-subagent-fold"
+						aria-expanded={returnedOpen()}
+						onClick={() => {
+							setReturnedOpen((value) => !value);
+							setOpen(true);
+						}}
+					>
+						<ChevronIcon />
+						{t("sidebar.returnedCount", "{count} returned", { count: String(returned().length) })}
+					</button>
 				</Show>
 			</div>
 		</Show>
@@ -634,7 +651,8 @@ export const BranchItem: Component<{
 			.filter(Boolean)
 			.join(" · ");
 	// The one overlay of the name: the full name, plus (compact only) the facts the row has no room for.
-	const nameTooltip = () => [rowTitle(), !rich() && factsTooltip()].filter(Boolean).join(" · ");
+	const nameTooltip = () =>
+		[rowTitle(), factsTooltip(), pr()?.title, tipFor("dirty"), tipFor("commit")].filter(Boolean).join(" · ");
 	// Select this branch/worktree first so the Git panel targets it (it follows
 	// activeWorktreePath), then open the changes tab — otherwise a chip would
 	// show the active branch's diff instead of this row's.
@@ -1572,7 +1590,14 @@ export const RepoSection: Component<{
 				</Show>
 			</div>
 
-			<Show when={density() === "rich" && props.repo.isGitRepo !== false && !props.repo.collapsed}>
+			<Show
+				when={
+					density() === "rich" &&
+					props.repo.isGitRepo !== false &&
+					!props.repo.collapsed &&
+					(richRepoFacts().openPrs > 0 || richRepoFacts().worktrees > 0)
+				}
+			>
 				<div class={s.repoRichMeta} data-testid="repo-rich-meta">
 					<Show when={richRepoFacts().currentBranch}>
 						{(name) => (
