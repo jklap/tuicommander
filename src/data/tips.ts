@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "ego Launch Permissions",
+		description:
+			"Choose permission mode and sandbox in Settings > Agents > ego for new terminal launches and managed spawns.",
+		shortcut: null,
+	},
+	{
 		feature: "Touch Branch Actions",
 		description: "Swipe a sidebar branch left for More, Add Terminal, and worktree removal. Hold + to choose an agent.",
 		shortcut: null,

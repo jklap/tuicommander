@@ -833,6 +833,8 @@ Custom keyboard shortcut overrides.
 
 ### Agents Config (`agents.json`)
 
+The `ego` entry supports optional `ego_mode` (`plan|default|edits|auto|yolo`) and `ego_sandbox` (`ro|workspace`). Missing values add no flags. The shared Rust launch translator injects `--mode` and `--sandbox` for terminal and MCP launches (including `run` and `resume`), replacing corresponding raw overrides before `--`. Administrative subcommands and ACP are excluded. These choices apply only to new launches and do not rewrite ego configuration.
+
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
 Each agent entry may also contain `prevent_alt_screen: boolean`. An absent value means `true`. When true, TUIC uses a verified control where one exists: Claude's environment variable, Codex and Grok's `--no-alt-screen`, or OpenCode's `--mini`. A false value suppresses TUIC's screen control for that agent on new structured and shell launches. An agent without a verified control remains unaffected.

@@ -817,6 +817,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Triggers error notification sound and logs to the Error Log Panel
 
 ### 6.9 Agent Configuration (Settings > Agents)
+- **ego permissions:** Select `plan`, `default`, `edits`, `auto`, or `yolo` and filesystem sandbox `ro` or `workspace`. Each choice can remain unset to use ego configuration. One backend translator applies these overrides to terminal launches, MCP spawns, and resumes, replacing matching raw flags. AI Chat over ACP uses separate settings.
 
 - Claude and Codex receive process-scoped native status signals at launch by default (`--settings` / `-c notify`), independently switchable per agent. Existing user overrides take precedence and no global settings are changed.
 - **Managed workspace trust:** Claude and Codex agent-to-agent spawns accept their new working directory by default, controlled by **Accept workspace trust for managed spawns** for each agent. Codex receives a launch-only project trust override, including through custom launchers that forward arguments; Claude's startup picker is answered from its own PTY after the exact question and default **No, exit** selection appear. Normal user-opened terminals retain each CLI's trust behavior. No agent config file is rewritten.
