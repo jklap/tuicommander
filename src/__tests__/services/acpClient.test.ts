@@ -694,3 +694,36 @@ describe("configured conversation replay", () => {
 		]);
 	});
 });
+
+// Catches: switching back to an attached custom chat erases response chunks received during the open request.
+it("retains live response chunks while reopening an already attached custom conversation", async () => {
+	await client.connect(ROOT);
+	acpTranscript.noteUserMessage(SESSION, "question before switching tabs");
+	let finishOpen!: (value: unknown) => void;
+	const pendingOpen = new Promise<unknown>((resolve) => {
+		finishOpen = resolve;
+	});
+	mockInvoke.mockImplementation(answering({ acp_chat_open: pendingOpen }));
+	const reopening = client.openConversation({ sessionId: SESSION });
+	streams.deliver({
+		...frame(2),
+		event: {
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "response arriving during tab switch" },
+			},
+		},
+	});
+	finishOpen({
+		connection: snapshot({ latestSequence: 2 }),
+		sessionId: SESSION,
+		launch: { executable: "/bin/ego", profile: "coordinator", workspace: "/observer", peerId: "peer" },
+		replayed: false,
+	});
+	await reopening;
+	expect(acpTranscript.entries(SESSION).map((entry) => ("text" in entry ? entry.text : ""))).toEqual([
+		"question before switching tabs",
+		"response arriving during tab switch",
+	]);
+});
