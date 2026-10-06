@@ -1144,3 +1144,7 @@ Telegram Settings uses `~/.config/tuic-telegram/`: `bot.token`, `allowed_chat_id
 `pairing.json` holds the one-use six-character code and its absolute ten-minute expiry under the same private permissions, so desktop setup and daemon polling share the authorization credential. A valid private-chat update consumes it; a wrong/expired code or `/start` grants nothing. An explicitly empty allowlist permits polling for pairing, but no outbound sends. A missing or malformed allowlist still fails closed. Enable/target/token changes restart the single daemon adapter; desktop never polls. Status keeps only connectivity, an error category and the last accepted message timestamp.
 
 `status.json` shares safe daemon connectivity/error/timestamps with desktop Settings on the same host. A connection record older than one minute is shown as disconnected. The file contains no token or message text.
+
+### Per-conversation AI Chat launch authority
+
+`ai_chat_launches` maps ego session ids to `{ executable, profile, workspace, peerId }` objects (camelCase). Creation snapshots the selected overrides and defaults; reopen uses that saved object, including the peer identity. Writes use the locked configuration delta path. The global `ego_executable`, `ego_profile`, and `ai_chat_workspace` settings are unchanged.

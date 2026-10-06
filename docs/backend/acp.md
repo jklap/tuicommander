@@ -219,6 +219,11 @@ deliberately does not have:
   session id) so a storm of them can be attributed. The AI Chat panel keeps one
   replay per tab in flight and does not replay a tab whose load failed until a
   person selects it or presses Retry.
+- **Configured conversation reopen preserves live output.** `acp_chat_open`
+  reports whether history was loaded using `replayed`. The client keeps the
+  existing transcript while the request is pending or refused. On a genuine
+  replay, it clears the projection before subscribing to the returned journal;
+  an already attached conversation keeps chunks received during the request.
 - **A replay starts before the load response.** Ego may send `session/update`
   chunks while `session/load` is pending. The requested session ID is already
   known, so those updates enter the ordered journal before the attachment is

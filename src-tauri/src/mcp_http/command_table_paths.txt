@@ -2,6 +2,7 @@
 # One HTTP path per COMMAND_TABLE entry, query stripped, deduplicated.
 # Read by mcp_http::tests::command_table_paths_all_hit_a_registered_route.
 # Regenerate: pnpm vitest run src/__tests__/transport.test.ts -u
+/acp/chat/open
 /acp/connections
 /acp/connections/x
 /acp/connections/x/elicitations/x/response

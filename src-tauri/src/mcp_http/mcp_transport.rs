@@ -6038,6 +6038,17 @@ fn handle_messaging_with_message_id(
                 .max()
                 .unwrap_or(since);
             advance_agent_cursor(state, &tuic_session, next_since);
+            let message_ids: Vec<&str> =
+                messages.iter().map(|message| message.id.as_str()).collect();
+            tracing::info!(
+                source = "agent_msg",
+                event = "inbox_read",
+                caller_session_id = mcp_session_id.unwrap_or(""),
+                caller_peer_id = %tuic_session,
+                inbox_owner = %tuic_session,
+                message_ids = %serde_json::json!(message_ids),
+                "Peer inbox read"
+            );
             let mut resp = serde_json::json!({
                 "messages": messages,
                 "count": messages.len(),
@@ -16449,6 +16460,67 @@ mod tests {
             Some("mcp-1"),
         );
         assert!(r["error"].as_str().unwrap().contains("not registered"));
+    }
+
+    /// Catches: an inbox read omits the MCP caller or conflates it with the peer owner;
+    /// also prevents mail bodies from leaking into the audit.
+    #[test]
+    fn agent_inbox_audit_keeps_caller_owner_and_message_ids_without_bodies() {
+        #[derive(Clone)]
+        struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-audit-sender");
+        register_peer(&state, TEST_UUID_B, "owner", "mcp-audit-caller");
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "PRIVATE_MAIL_BODY"}),
+            Some("mcp-audit-sender"),
+        );
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Sink(Arc::clone(&output));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || sink.clone())
+            .with_ansi(false)
+            .finish();
+        let (read, empty) = tracing::subscriber::with_default(subscriber, || {
+            (
+                handle_messaging(
+                    &state,
+                    &serde_json::json!({"action": "inbox"}),
+                    Some("mcp-audit-caller"),
+                ),
+                handle_messaging(
+                    &state,
+                    &serde_json::json!({"action": "inbox"}),
+                    Some("mcp-audit-caller"),
+                ),
+            )
+        });
+        assert_eq!(read["messages"][0]["id"], sent["message_id"]);
+        assert_eq!(empty["count"], 0);
+        let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert_eq!(log.matches("event=\"inbox_read\"").count(), 2, "{log}");
+        assert!(
+            log.contains("INFO") && log.contains("caller_session_id=\"mcp-audit-caller\""),
+            "{log}"
+        );
+        assert!(log.contains(&format!("inbox_owner={TEST_UUID_B}")), "{log}");
+        assert!(
+            log.contains(&format!("caller_peer_id={TEST_UUID_B}")),
+            "{log}"
+        );
+        assert!(log.contains(sent["message_id"].as_str().unwrap()), "{log}");
+        assert!(log.contains("message_ids=[]"), "{log}");
+        assert!(!log.contains("PRIVATE_MAIL_BODY"), "{log}");
     }
 
     #[test]

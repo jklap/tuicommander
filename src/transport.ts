@@ -288,6 +288,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	acp_workspace_root: {
 		map: () => ({ method: "GET", path: "/acp/workspace" }),
 	},
+	acp_chat_open: {
+		map: (args) => ({ method: "POST", path: "/acp/chat/open", body: args.request }),
+	},
 	acp_connect: {
 		map: (args) => ({ method: "POST", path: "/acp/connections", body: { root: args.root } }),
 	},

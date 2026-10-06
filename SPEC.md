@@ -782,3 +782,7 @@ Implemented: terminal context-menu inspector backed by prospectively captured li
 ### Run incidents
 
 Plans and Stories run history contains a read-only incident projection owned by Rust. Workflow reports, interrupted attempts, bound-session exit/state and pending prompt-delivery failure markers, and bound task records supply evidence. No elapsed-time stuck inference, new persistence or automatic recovery is introduced. Suggestions require operator action. Only agents explicitly bound to the selected run participate; unavailable causes are disclosed. IPC and HTTP use the existing workflow run action contract.
+
+### Conversation-specific AI Chat launch (implemented)
+
+Custom conversations snapshot executable/profile/workspace overrides in `ai_chat_launches`, keyed by ego session id, and retain a host-issued peer identity. Each has its own ACP connection; default chats continue on the shared default connection. The header shows saved launch values. `acp_chat_open` and `POST /acp/chat/open` create or reopen the same conversation. MCP inbox reads emit content-free INFO audit events with protocol caller, bound peer/owner and returned message ids.

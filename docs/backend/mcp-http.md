@@ -1993,3 +1993,9 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 ## Launch receipt read
 
 `GET /sessions/{id}/prompt-receipt` returns the same live receipt as desktop `get_prompt_receipt`. MCP initialize captures the served instructions after peer auto-binding. Protocol metadata retains bounded responses during PTY registration; PTY metadata retains its copy after protocol reaping. Sessions without a captured launch brief still retain served MCP instructions and show an explicit launch-unavailable section. No additional store or settings reconstruction is used. See [HTTP API](../api/http-api.md#launch-instruction-receipts).
+
+### Inbox consumption audit
+
+Every successful `agent action=inbox` read emits an INFO tracing event with `source="agent_msg"`, `event="inbox_read"`, `caller_session_id` (the MCP protocol session), `caller_peer_id` (the bound TUIC peer), `inbox_owner` (that peer), and `message_ids` (a JSON array of returned ids). Empty reads emit an empty array. No message bodies are logged. The audit does not grant access to another peer's inbox: caller and owner remain bound by MCP registration. Read `/logs?source=agent_msg&level=info` and filter `event=inbox_read`.
+
+Conversation-specific launch is available through `POST /acp/chat/open`; see the HTTP API guide. It creates an ACP peer, without a terminal tab.

@@ -2830,3 +2830,9 @@ The host ACP session list gathers all ego pages before ordering ancestry. Each r
 ### Run incident projection
 
 `POST /workflows/run/action?path=<project>` accepts `{"action":"incidents","run_id":"<id>"}`. The read-only reply is `{"type":"incidents","value":[...]}`. Entries use camelCase fields: `runId`, nullable `attemptId`, `storyId`, `nodeId`, `sessionId`, `taskId`, plus `source`, `cause` and `nextAction`. Sources are `workflow_report`, `attempt_interrupted`, `prompt_delivery_failed`, `session_exit`, `state_change`, `task_record`, or `run_state`. Only evidence explicitly bound to the run is returned. Project ownership is checked before reading live evidence. The action never mutates the run or executes recovery. The desktop `workflow_run_action` returns the same shape.
+
+### Conversation-specific AI Chat launch
+
+`POST /acp/chat/open` accepts `{ "profile": "coordinator", "workspace": "/absolute/workspace", "executable": "/absolute/ego" }`. All fields are optional for a new conversation; omitted values use global defaults. It returns `{ connection, sessionId, launch, replayed }`, where `launch` contains the resolved executable, profile, workspace and durable `peerId`. Use the existing ACP session prompt and stream routes with the returned ids.
+
+Reopen with `{ "sessionId": "<returned-session-id>" }`; saved launch options cannot be replaced on reopen. This route requires localhost or authenticated access, like ACP connect. Each custom conversation owns a dedicated peer/process. Its options are persisted under `ai_chat_launches` without modifying the global settings.
