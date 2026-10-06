@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, lazy, Match, on, onCleanup, onMount, Show, Switch } from "solid-js";
 import { McpConfirmHost } from "../components/McpConfirmHost/McpConfirmHost";
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
@@ -12,6 +12,7 @@ import { SessionsScreen } from "./screens/SessionsScreen";
 import { useMobileNotifications } from "./useMobileNotifications";
 import { useSessions } from "./useSessions";
 import { useVersionCheck } from "./useVersionCheck";
+import { recordSessionOpened } from "./utils/recentSessions";
 
 // Screens behind a bottom-tab tap stay out of the initial mobile graph.
 // Eager imports dragged the settings store and the whole i18n string table into
@@ -118,6 +119,9 @@ export default function MobileApp() {
 		if (!id) return null;
 		return sessions().find((s) => s.session_id === id) ?? null;
 	});
+
+	// Feeds the Sessions "Recent" sort; also covers a detail opened from the URL or a notification.
+	createEffect(on(selectedSessionId, (id) => id && recordSessionOpened(id)));
 
 	// Update last known session whenever live data arrives; keep stale value when gone
 	createEffect(() => {

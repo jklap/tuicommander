@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix command boundaries, prompt ticks and answers-only prompt association drifting after scrollback eviction.
 ### Added
 
+- Add terminal history back/forward (`Cmd+Alt+Left/Right`, toolbar arrows) over the last 10 activated terminals, and a Default/Recent sort on the mobile Sessions screen.
 - Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
 
 ### Fixed
