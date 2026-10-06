@@ -74,6 +74,8 @@ fn insert_gated_child(
             _child: Box::new(ObservedChild { child, waited }),
             paused: Arc::new(AtomicBool::new(false)),
             worktree: None,
+            initial_cwd: None,
+            launch_receipt: None,
             cwd: None,
             display_name: None,
             display_name_is_custom: false,
