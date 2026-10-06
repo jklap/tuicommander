@@ -241,3 +241,5 @@ AI Chat offers **Fork from here** beside a reply when ego advertises message-poi
 Forked AI Chat tabs label inherited history. A separator marks where the child’s own conversation begins, including after loading saved history.
 
 The AI Chat conversation picker groups fork and compaction descendants beneath their ancestors. Deleted immediate parents remain visible as disabled “Deleted conversation” rows.
+
+Closed refusal turns show one plain-text card with the agent’s existing ACP refusal text. A refusal without text shows a generic refusal message.
