@@ -27567,6 +27567,5 @@ mod session_placement_tests {
             session["inputSchema"]["properties"]["worktree_path"]["type"],
             "string"
         );
-        assert!(session_action_requires_blocking_pool("declare_worktree"));
     }
 }

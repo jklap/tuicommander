@@ -120,7 +120,7 @@ function worktreeLabel(worktreePath: string): string {
 }
 
 /** Render backend-authored workspace membership without sending shell input. */
-function applyWorktreePlacement(payload: WorktreeCreatedPayload, declared = false): void {
+function applyWorktreePlacement(payload: WorktreeCreatedPayload): void {
 	const { repo_path, workspace_id, branch, worktree_path, kind } = payload;
 	// Register the branch in the store immediately so the sidebar shows the new
 	// worktree right away — independent of whether the user accepts the switch
@@ -139,7 +139,7 @@ function applyWorktreePlacement(payload: WorktreeCreatedPayload, declared = fals
 	// Placement changes the sidebar index, never the agent process or shell cwd.
 	const creatorId = payload.creator_session ? terminalsStore.findBySessionId(payload.creator_session) : undefined;
 	const owner = creatorId ? repositoriesStore.findOwnerForTerminal(creatorId) : undefined;
-	if (declared && creatorId && owner?.repoPath === repo_path && !payload.spawn_session) {
+	if (creatorId && owner?.repoPath === repo_path && !payload.spawn_session) {
 		terminalsStore.update(creatorId, { placementPath: worktree_path });
 	}
 	if (creatorId && owner?.repoPath === repo_path && owner.workspaceId !== workspace_id && !payload.spawn_session) {
@@ -199,7 +199,7 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		.catch((err) => appLogger.error("app", "Failed to register worktree-created listener", err));
 
 	listen<WorktreeCreatedPayload>("session-worktree-declared", (event) => {
-		applyWorktreePlacement(event.payload, true);
+		applyWorktreePlacement(event.payload);
 	})
 		.then((fn) => {
 			unlistenDeclared = fn;
