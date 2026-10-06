@@ -75,7 +75,15 @@ function staticExpression(trimmed: string): ExtractedText | null {
  * Children may be plain text (`<h3>Parameters</h3>`); a prop value may not —
  * accepting a plain run there would read arbitrary code as a label. */
 export function staticText(inner: string, allowPlain: boolean): ExtractedText | null {
-	const trimmed = inner.trim();
+	let trimmed = inner.trim();
+	// Toggle labels put the static caption after a self-closing input.
+	if (trimmed.startsWith("<input")) {
+		const end = endOfOpenTag(trimmed, 0);
+		if (end >= 0 && trimmed[end - 1] === "/") {
+			const caption = trimmed.slice(end + 1).trim();
+			if (caption.startsWith("<span>")) trimmed = caption.slice("<span>".length).trim();
+		}
+	}
 	const expr = staticExpression(trimmed);
 	if (expr) return expr;
 	if (!allowPlain) return null;
