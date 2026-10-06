@@ -2,6 +2,10 @@
 
 Remote terminals replay their current viewport when attached or reconnected. A stream failure or stalled initial replay shows a persistent error toast; the client retries without requiring new terminal output. See [Remote Access](remote-access.md).
 
+## Tablet Keyboard
+
+Tap the terminal to focus its keyboard input. Touch and mouse input use the same field, including soft-keyboard text entry and repeated deletion.
+
 ## Terminal Sessions
 
 Each terminal tab runs an independent PTY (pseudo-terminal) session with your shell. Up to 50 concurrent sessions.

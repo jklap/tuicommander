@@ -132,7 +132,6 @@ const SEARCH_REFRESH_THROTTLE_MS = 150;
 const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let canvasRef!: HTMLCanvasElement;
 	let overlayCanvasRef!: HTMLCanvasElement;
-	let touchTextareaRef!: HTMLTextAreaElement;
 	let keyInputRef!: HTMLInputElement;
 	let scrollbarRef!: HTMLDivElement;
 	let scrollThumbRef!: HTMLDivElement;
@@ -3391,7 +3390,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		};
 
 		// Touch input (mobile/tablet)
-		cleanupTouch = installTouchHandlers(canvasRef, touchTextareaRef, {
+		cleanupTouch = installTouchHandlers(canvasRef, keyInputRef, {
 			onScrollPixels: (dy) => {
 				// Touch is direct manipulation: the content must follow the finger,
 				// the OPPOSITE of the wheel convention handleScrollDelta expects
@@ -3401,12 +3400,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				handleScrollDelta(-dy);
 			},
 			onScrollEnd: resetScrollGesture,
-			onInput: (data) => writePty(data),
-			onFocus: () => {
-				setFocused(true);
-				startBlink();
-				props.onFocus?.();
-			},
 			onFontSizeChange: (delta) => {
 				// Per-terminal, like every keyboard/menu/palette zoom: the global
 				// default is persisted config, and the renderer reads the terminal's
@@ -3690,24 +3683,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				keyInputRef.focus({ preventScroll: true });
 			}}
 		>
-			{/* Offscreen textarea for mobile virtual keyboard input */}
-			<textarea
-				ref={touchTextareaRef!}
-				style={{
-					position: "fixed",
-					top: "-9999px",
-					left: "-9999px",
-					width: "1px",
-					height: "1px",
-					opacity: "0",
-					"pointer-events": "none",
-				}}
-				autocomplete="off"
-				autocorrect="off"
-				autocapitalize="off"
-				spellcheck={false}
-				tabIndex={-1}
-			/>
 			{/* Hidden input that receives all keyboard events including dead-key composition.
 			    Canvas elements in WKWebView don't participate in the macOS text input system,
 			    so dead keys (quotes, accents, etc.) are lost when listeners live on the canvas.
