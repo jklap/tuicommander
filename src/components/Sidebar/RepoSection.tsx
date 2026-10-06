@@ -1244,6 +1244,7 @@ import { GitHubPanel } from "./GitHubPanel";
 /** Repository section component */
 export const RepoSection: Component<{
 	repo: RepositoryState;
+	idleSummary?: boolean;
 	openSwipeRow?: string | null;
 	onSwipeRowChange?: (row: string | null) => void;
 	nameColor?: string;
@@ -1278,6 +1279,17 @@ export const RepoSection: Component<{
 	currentBranch: () => string;
 	onMouseDrag: (e: PointerEvent) => void;
 }> = (props) => {
+	const [idleOpen, setIdleOpen] = createSignal(false);
+	const expanded = () => (props.idleSummary ? idleOpen() : props.repo.expanded);
+	const toggleExpanded = () => (props.idleSummary ? setIdleOpen((value) => !value) : props.onToggle());
+	const workingCount = createMemo(() => {
+		const ids = new Set(Object.values(props.repo.workspaces).flatMap((workspace) => workspace.terminals));
+		return [...ids].filter((id) => {
+			const term = terminalsStore.get(id);
+			return term?.agentType && term.agentState === "working";
+		}).length;
+	});
+
 	const repoMenu = createContextMenu();
 	const [labelDialogBranch, setLabelDialogBranch] = createSignal<{ name: string; current: string | undefined } | null>(
 		null,
@@ -1476,8 +1488,8 @@ export const RepoSection: Component<{
 				class={s.repoHeader}
 				role="button"
 				tabIndex={0}
-				onClick={props.onToggle}
-				onKeyDown={onClickKeyDown(props.onToggle)}
+				onClick={toggleExpanded}
+				onKeyDown={onClickKeyDown(toggleExpanded)}
 				onContextMenu={repoMenu.open}
 			>
 				<Show when={props.repo.collapsed}>
@@ -1512,6 +1524,12 @@ export const RepoSection: Component<{
 							{remoteBadgeLabel()}
 						</span>
 					</Show>
+					<Show when={density() === "rich" && workingCount() > 0}>
+						<span class={s.richChip} data-testid="working-agent-count">
+							{t("sidebar.workingCount", "{count} working", { count: String(workingCount()) })}
+						</span>
+					</Show>
+
 					<div class={cx(s.repoActions, ghBadgeCount() > 0 && s.repoActionsWithBadge)}>
 						<button
 							class={s.repoActionBtn}
@@ -1584,7 +1602,7 @@ export const RepoSection: Component<{
 							</button>
 						</Show>
 					</div>
-					<span class={cx(s.repoChevron, props.repo.expanded && s.expanded)}>
+					<span class={cx(s.repoChevron, expanded() && s.expanded)}>
 						<ChevronIcon />
 					</span>
 				</Show>
@@ -1593,6 +1611,7 @@ export const RepoSection: Component<{
 			<Show
 				when={
 					density() === "rich" &&
+					(!props.idleSummary || idleOpen()) &&
 					props.repo.isGitRepo !== false &&
 					!props.repo.collapsed &&
 					(richRepoFacts().openPrs > 0 || richRepoFacts().worktrees > 0)
@@ -1635,7 +1654,7 @@ export const RepoSection: Component<{
 			</Show>
 
 			{/* Branches */}
-			<Show when={props.repo.expanded && !props.repo.collapsed}>
+			<Show when={expanded() && !props.repo.collapsed}>
 				<div class={s.repoBranches}>
 					<For each={sortedBranches()}>
 						{(branch, index) => (
@@ -1698,7 +1717,7 @@ export const RepoSection: Component<{
 					</Show>
 				</div>
 			</Show>
-			<Show when={props.repo.expanded && !props.repo.collapsed}>
+			<Show when={expanded() && !props.repo.collapsed}>
 				<For each={sidebarPluginStore.getPanels().filter((p) => p.items.length > 0)}>
 					{(panel) => <SidebarPluginSection panel={panel} />}
 				</For>

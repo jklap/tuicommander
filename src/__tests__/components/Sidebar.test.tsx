@@ -542,13 +542,73 @@ describe("Sidebar", () => {
 		});
 	});
 
+	describe("rich repo sections", () => {
+		// Catches: treating idle open terminals as inactive, sorting by work, or persisting the partition.
+		it("rich_repo_sections_use_open_terminals", () => {
+			const [repos, setReposLive] = createSignal([
+				makeRepo({ path: "/idle", displayName: "Idle repo" }),
+				makeRepo({
+					path: "/open",
+					displayName: "Open repo",
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+				makeRepo({ path: "/last", displayName: "Last idle" }),
+			]);
+			mockGetOrderedRepos.mockImplementation(repos);
+			mockGetGroupedLayout.mockImplementation(() => ({ groups: [], ungrouped: repos() }));
+			const [state, setState] = createSignal("idle");
+			mockTerminalsGet.mockImplementation(() => ({
+				id: "t1",
+				agentType: "codex",
+				agentState: state(),
+				shellState: "idle",
+			}));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const paths = () =>
+				[...container.querySelectorAll("[data-sidebar-repo]")].map((e) => e.getAttribute("data-sidebar-repo"));
+			expect(paths()).toEqual(["/open", "/idle", "/last"]);
+			expect(container.querySelectorAll("[data-testid='idle-repos-heading']")).toHaveLength(1);
+			expect(container.querySelector("[data-sidebar-repo='/idle'] .branchItem")).toBeNull();
+			fireEvent.click(container.querySelector("[data-sidebar-repo='/idle'] .repoHeader")!);
+			expect(container.querySelector("[data-sidebar-repo='/idle'] .branchItem")).not.toBeNull();
+			expect(mockToggleExpanded).not.toHaveBeenCalled();
+			expect(paths()).toEqual(["/open", "/idle", "/last"]);
+			expect(container.querySelector("[data-testid='working-agent-count']")).toBeNull();
+			setState("working");
+			expect(container.querySelector("[data-testid='working-agent-count']")?.textContent).toBe("1 working");
+			setState("awaiting_input");
+			expect(container.querySelector("[data-testid='working-agent-count']")).toBeNull();
+			setReposLive(
+				repos().map((repo) => (repo.path === "/open" ? makeRepo({ path: "/open", displayName: "Open repo" }) : repo)),
+			);
+			expect(paths()).toEqual(["/idle", "/open", "/last"]);
+			expect(mockReorderRepo).not.toHaveBeenCalled();
+			uiStore.setRepoFilterActiveOnly(true);
+			try {
+				expect(container.querySelector("[data-testid='idle-repos-heading']")).toBeNull();
+			} finally {
+				uiStore.setRepoFilterActiveOnly(false);
+			}
+		});
+	});
+
 	describe("rich layout", () => {
 		const richBranch = (over: Record<string, unknown> = {}) => ({
 			workspaceId: "feat",
 			branchName: "feat",
 			isMain: false,
 			worktreePath: "/wt/feat",
-			terminals: [],
+			terminals: ["fixture-open"],
 			additions: 12,
 			deletions: 3,
 			isMerged: false,
