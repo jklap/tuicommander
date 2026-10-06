@@ -32,6 +32,7 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
 import { ToastContainer } from "../../components/ToastContainer/ToastContainer";
+import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 
 function openTerminal() {
@@ -77,14 +78,38 @@ describe("CanvasTerminal stream errors", () => {
 				expect(
 					toastsStore.toasts.some(
 						(toast) =>
-							toast.title === "Terminal stream failed — remote-stream" &&
-							toast.message.includes("WebSocket connection failed"),
+							toast.title === "Terminal stream failed" && toast.message.includes("WebSocket connection failed"),
 					),
 				).toBe(true),
 			);
 			expect(unsubscribe).toHaveBeenCalled();
 		} finally {
 			view.unmount();
+			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
+			vi.restoreAllMocks();
+			vi.unstubAllGlobals();
+		}
+	});
+	// Catches: stream notice titles expose a session UUID instead of the current tab name.
+	it("stream notices use the terminal display name instead of the session id", async () => {
+		terminalsStore.register("remote-tab", {
+			sessionId: "remote-stream",
+			name: "Build worker",
+			fontSize: 14,
+			cwd: null,
+			awaitingInput: null,
+		});
+		const view = openTerminal();
+		try {
+			await waitFor(() => expect(subscribe).toHaveBeenCalled());
+			await waitFor(() => expect(view.container.textContent).toContain("Terminal stream failed — Build worker"));
+			expect(view.container.textContent).not.toContain("remote-stream");
+			terminalsStore.update("remote-tab", { name: "Renamed worker" });
+			eventHandlers.get("reconnecting")?.(1, 10);
+			expect(view.container.textContent).toContain("Terminal stream reconnecting — Renamed worker");
+		} finally {
+			view.unmount();
+			terminalsStore.remove("remote-tab");
 			for (const toast of [...toastsStore.toasts]) toastsStore.remove(toast.id);
 			vi.restoreAllMocks();
 			vi.unstubAllGlobals();
@@ -112,7 +137,7 @@ describe("CanvasTerminal stream errors", () => {
 			for (let attempt = 1; attempt <= 10; attempt++) {
 				eventHandlers.get("reconnecting")?.(attempt, 10);
 				expect(view.container.textContent).toContain(`Reconnecting ${attempt}/10`);
-				expect(view.container.textContent).toContain("remote-stream");
+				expect(view.container.textContent).not.toContain("remote-stream");
 				expect(view.container.textContent).not.toContain("Terminal stream failed");
 				expect(toastsStore.toasts.filter((toast) => toast.sessionId === "remote-stream")).toHaveLength(1);
 			}
