@@ -19,6 +19,14 @@ no tool loop and no sandbox of its own.
    An empty value leaves ego's usual profile selection in effect. TUICommander passes only the name at launch;
    it does not send profile rules in `session/new`.
 
+A repository can select an ego profile with `"ego_profile": "team"` in its
+`.tuic.json`. For that conversation's workspace, TUIC sends the selected name and
+the explicit machine profile from Settings as `ceilingProfile`. Ego restricts mode,
+sandbox and perimeter to that ceiling and returns warnings, shown in AI Chat's
+existing warning notices. The repository cannot raise the machine policy.
+A repo selection requires an explicit machine profile and an ego build that
+acknowledges the ceiling. Without a repo selection, launch behavior is unchanged.
+
 ## Opening it
 
 `Cmd+Alt+A` (macOS) / `Ctrl+Alt+A` toggles the panel; so do the status-bar
@@ -157,12 +165,15 @@ read its full command and output.
   advertised that extension, so a build without it shows no button rather than a
   button that fails. Resume remains available when a paused turn ends at its
   boundary; select it to continue the conversation.
-- **Queue** sends another message while a turn runs. TUICommander keeps it in
-  order and sends it only after the running turn ends. If ego pauses at a turn
-  boundary, the queue waits for Resume. The queued list appears
-  in every connected view; either view can remove an item before ego receives
-  it. Stop affects the running turn for every view. The conversation shows a
-  queued message as sent only when it actually reaches ego.
+- **Send during a turn** integrates text into the running query when ego
+  advertises steering. Ego consumes it at the next provider request and echoes
+  it into the conversation; TUICommander never sends accepted steering twice.
+  If the turn has already ended, the message follows the normal prompt path.
+  Attachments, agents without steering, and rejected steering use the **Queue**:
+  messages stay in order until the running turn ends. A paused queue waits for
+  Resume. Every connected view can remove a queued item before ego receives it.
+  Stop affects the running turn for every view. A queued message appears in the
+  conversation when it reaches ego; steering appears when ego echoes it.
 - **Session settings** are published by the current conversation. The control bar
   shows the model's short name and the current mode. Its summary shortens before
   the icon controls, so Pause, Resume, Compact and New stay on one row. Each
@@ -241,3 +252,11 @@ AI Chat offers **Fork from here** beside a reply when ego advertises message-poi
 Forked AI Chat tabs label inherited history. A separator marks where the child’s own conversation begins, including after loading saved history.
 
 The AI Chat conversation picker groups fork and compaction descendants beneath their ancestors. Deleted immediate parents remain visible as disabled “Deleted conversation” rows.
+
+Closed refusal turns show one plain-text card with the agent’s existing ACP refusal text. A refusal without text shows a generic refusal message.
+
+### Conversation launch options
+
+Use **New conversation with options** beside the `+` button to override the ego profile, workspace or executable for one conversation. Empty fields use Settings defaults. The header shows the resolved values. The conversation keeps these values and its peer identity after a restart; other chats keep their existing launch configuration. The plain `+` action creates a chat with the global defaults.
+
+A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.

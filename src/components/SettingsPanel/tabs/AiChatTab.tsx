@@ -7,6 +7,7 @@ import { toastsStore } from "../../../stores/toasts";
 import type { EgoCliError, EgoCredential, EgoProviders } from "../../../types/ego";
 import { asEgoCliError } from "../../../types/ego";
 import s from "../Settings.module.css";
+import { EgoPerimeterSection } from "./EgoPerimeterSection";
 
 /**
  * Which model ego runs by default, and whether each provider can be used.
@@ -99,6 +100,7 @@ export const AiChatTab: Component<{
 
 	return (
 		<>
+			<EgoPerimeterSection />
 			<div class={s.section}>
 				<h3>{t("providers.heading.defaultModel", "Default Model")}</h3>
 				<p class={s.hint}>

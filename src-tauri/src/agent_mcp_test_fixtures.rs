@@ -9,6 +9,21 @@ pub(super) fn copy_native_executable(destination: &std::path::Path) {
     )
     .join("System32/cmd.exe");
     std::fs::copy(source, destination).unwrap();
+    // macOS kills relocated platform binaries (SIGKILL); ad-hoc signing removes
+    // their platform-only identity before the installer hashes these fixture bytes.
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(destination)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "codesign: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 pub(super) fn assert_runs(executable: &std::path::Path) {
@@ -19,7 +34,8 @@ pub(super) fn assert_runs(executable: &std::path::Path) {
         .unwrap();
     assert!(
         output.status.success(),
-        "{}",
+        "native fixture exited {}: {}",
+        output.status,
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(

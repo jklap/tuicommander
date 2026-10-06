@@ -295,7 +295,10 @@ function agentTooltip(term: TerminalState): string {
 /** Rich: the live subagents of one agent row; more than a few fold into a count. */
 const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 	const [open, setOpen] = createSignal(false);
-	const folded = () => props.rows.length > SUBAGENT_COLLAPSE_AFTER && !open();
+	const [returnedOpen, setReturnedOpen] = createSignal(false);
+	const running = () => props.rows.filter((row) => row.running);
+	const returned = () => props.rows.filter((row) => !row.running);
+	const folded = () => running().length > SUBAGENT_COLLAPSE_AFTER && !open();
 	return (
 		<Show when={props.rows.length > 0}>
 			<div class={s.subagentList}>
@@ -303,11 +306,11 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 					when={!folded()}
 					fallback={
 						<button class={s.subagentFold} onClick={() => setOpen(true)} aria-expanded="false">
-							{t("sidebar.subagentCount", "{count} subagents", { count: String(props.rows.length) })}
+							{t("sidebar.subagentCount", "{count} subagents", { count: String(running().length) })}
 						</button>
 					}
 				>
-					<For each={props.rows}>
+					<For each={[...running(), ...(returnedOpen() ? returned() : [])]}>
 						{(row) => (
 							<div class={s.subagentRow} data-tooltip={row.title} data-tooltip-pos="bottom">
 								<span class={cx(s.branchTabState, row.running && s.branchTabState_working)}>
@@ -321,14 +324,81 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 							</div>
 						)}
 					</For>
-					<Show when={props.rows.length > SUBAGENT_COLLAPSE_AFTER}>
+					<Show when={running().length > SUBAGENT_COLLAPSE_AFTER}>
 						<button class={s.subagentFold} onClick={() => setOpen(false)} aria-expanded="true">
 							{t("sidebar.subagentCollapse", "Collapse")}
 						</button>
 					</Show>
 				</Show>
+				<Show when={returned().length > 0}>
+					<button
+						class={s.subagentFold}
+						data-testid="returned-subagent-fold"
+						aria-expanded={returnedOpen()}
+						onClick={() => {
+							setReturnedOpen((value) => !value);
+							setOpen(true);
+						}}
+					>
+						<ChevronIcon />
+						{t("sidebar.returnedCount", "{count} returned", { count: String(returned().length) })}
+					</button>
+				</Show>
 			</div>
 		</Show>
+	);
+};
+
+/** Navigation summaries preserve the workspace placement of children in other repos. */
+const CrossRepoChildren: Component<{ parent: TerminalState; repoPath: string }> = (props) => {
+	const targets = createMemo(() =>
+		Object.values(repositoriesStore.state.repositories)
+			.filter((repo) => repo.path !== props.repoPath)
+			.map((repo) => ({
+				repo,
+				ids: [...new Set(Object.values(repo.workspaces).flatMap((workspace) => workspace.terminals))].filter((id) => {
+					const child = terminalsStore.get(id);
+					return (
+						!!child?.parentSession &&
+						(child.parentSession === props.parent.sessionId || child.parentSession === props.parent.tuicSession)
+					);
+				}),
+			}))
+			.filter((target) => target.ids.length > 0),
+	);
+	const reveal = (repo: RepositoryState, id: string) => {
+		const group = repositoriesStore.getGroupForRepo(repo.path);
+		if (group?.collapsed) repositoriesStore.toggleGroupCollapsed(group.id);
+		if (repo.collapsed) repositoriesStore.toggleCollapsed(repo.path);
+		if (!repo.expanded) repositoriesStore.toggleExpanded(repo.path);
+		const workspace = Object.values(repo.workspaces).find((item) => item.terminals.includes(id));
+		if (workspace?.tabsCollapsed) repositoriesStore.toggleWorkspaceTabsCollapsed(repo.path, workspace.workspaceId);
+		navigateToTerminal(id);
+	};
+	return (
+		<For each={targets()}>
+			{(target) => (
+				<button
+					class={s.crossRepoChildren}
+					data-testid="cross-repo-child-link"
+					data-tooltip={target.repo.displayName}
+					data-tooltip-pos="bottom"
+					onClick={() => reveal(target.repo, target.ids[0])}
+				>
+					<span>
+						{t(
+							target.ids.length === 1 ? "sidebar.agentInRepo" : "sidebar.agentsInRepo",
+							target.ids.length === 1 ? "{count} agent in {repo}" : "{count} agents in {repo}",
+							{
+								count: String(target.ids.length),
+								repo: target.repo.displayName,
+							},
+						)}
+					</span>
+					<ChevronIcon />
+				</button>
+			)}
+		</For>
 	);
 };
 
@@ -364,6 +434,27 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	// are on this branch. A child whose parent is elsewhere stays a top-level row.
 	const topLevel = () => (rich() ? props.terminalIds.filter((id) => parentOf(id) === null) : props.terminalIds);
 	const childrenOf = (id: string) => (rich() ? props.terminalIds.filter((other) => parentOf(other) === id) : []);
+	const [idleExpanded, setIdleExpanded] = createSignal(false);
+	const oldIdle = (id: string): boolean => {
+		const term = terminalsStore.get(id);
+		return (
+			!!term &&
+			term.shellState === "idle" &&
+			!terminalsStore.isBusy(id) &&
+			!term.backgroundWork &&
+			!term.awaitingInput &&
+			!term.unseen &&
+			term.agentState !== "working" &&
+			term.agentState !== "starting" &&
+			term.agentState !== "awaiting_input" &&
+			terminalsStore.state.activeId !== id &&
+			term.lastActivityAt != null &&
+			clock() - term.lastActivityAt > 2 * 60 * 60_000 &&
+			childrenOf(id).every(oldIdle)
+		);
+	};
+	const idleIds = createMemo(() => (rich() ? props.terminalIds.filter(oldIdle) : []));
+
 	onCleanup(progressStore.holdSidebarFlow(props.repoPath));
 	// Subagents come from the project flow: ask for it while rich shows an agent,
 	// again on every busy flip and every minute.
@@ -389,7 +480,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 		const activity = () => term()?.name ?? null;
 		const detail = () => {
 			const t = term();
-			return t ? (t.agentIntent ?? displayTask(t.currentTask, t.agentType) ?? t.lastPrompt) : null;
+			return t ? agentRow(t).line : null;
 		};
 		const accessibleLabel = () => {
 			const t = term();
@@ -419,14 +510,14 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 		};
 
 		return (
-			<Show when={term()}>
+			<Show when={(!idleIds().includes(id) || idleExpanded()) && term()}>
 				{(t) => (
 					<>
 						<button
 							class={cx(
 								s.branchTabItem,
 								isActive() && s.active,
-								rich() && s.branchTabItemRich,
+								rich() && agentRow(t()).state === "working" && s.branchTabItemRich,
 								nested && s.branchTabNested,
 							)}
 							onClick={() => navigateToTerminal(id)}
@@ -459,18 +550,26 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 							</Show>
 							<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, clock())}</span>
 							{/* Rich: what the agent is doing, in words, under the tab title. */}
-							<Show when={rich() ? agentRow(t()) : null}>
+							<Show when={rich() && agentRow(t()).state === "working" ? agentRow(t()) : null}>
 								{(facts) => (
 									<span class={s.branchTabDetail}>
 										<span class={cx(s.branchTabState, s[`branchTabState_${facts().state}`])}>
 											{AGENT_STATE_LABEL[facts().state]()}
 										</span>
-										<Show when={facts().line}>{(line) => <span class={s.branchTabLine}>{line()}</span>}</Show>
+										<Show
+											when={t().agentType}
+											fallback={
+												<Show when={facts().line}>{(line) => <span class={s.branchTabLine}>{line()}</span>}</Show>
+											}
+										>
+											<span class={cx(s.branchTabLine, s.branchTabIntent)}>{facts().line}</span>
+										</Show>
 									</span>
 								)}
 							</Show>
 						</button>
 						<Show when={rich()}>
+							<CrossRepoChildren parent={t()} repoPath={props.repoPath} />
 							<SubagentList rows={subagents(t())} />
 							<For each={childrenOf(id)}>{(child) => renderTab(child, true)}</For>
 						</Show>
@@ -482,6 +581,17 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 	return (
 		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
 			<For each={topLevel()}>{(id) => renderTab(id, false)}</For>
+			<Show when={idleIds().length > 0}>
+				<button
+					class={s.subagentFold}
+					data-testid="idle-session-fold"
+					aria-expanded={idleExpanded()}
+					onClick={() => setIdleExpanded((open) => !open)}
+				>
+					<ChevronIcon />
+					{t("sidebar.idleSessionCount", "{count} idle sessions", { count: String(idleIds().length) })}
+				</button>
+			</Show>
 		</div>
 	);
 };
@@ -577,6 +687,15 @@ export const BranchItem: Component<{
 			})
 		];
 	const lifecycle = () => props.branch.lifecycleStatus;
+	const mergedSummary = () =>
+		rich() &&
+		!props.branch.isMain &&
+		!!props.branch.worktreePath &&
+		props.branch.worktreePath.replace(/\/$/, "") !== props.repoPath.replace(/\/$/, "") &&
+		props.branch.terminals.length === 0 &&
+		lifecycle()?.commitStatus === "merged" &&
+		lifecycle()?.dirtyFiles != null;
+
 	const tipFor = (part: "dirty" | "commit") => {
 		const status = lifecycle();
 		return status ? lifecycleTooltip(status, part) : undefined;
@@ -595,7 +714,8 @@ export const BranchItem: Component<{
 			.filter(Boolean)
 			.join(" · ");
 	// The one overlay of the name: the full name, plus (compact only) the facts the row has no room for.
-	const nameTooltip = () => [rowTitle(), !rich() && factsTooltip()].filter(Boolean).join(" · ");
+	const nameTooltip = () =>
+		[rowTitle(), factsTooltip(), pr()?.title, tipFor("dirty"), tipFor("commit")].filter(Boolean).join(" · ");
 	// Select this branch/worktree first so the Git panel targets it (it follows
 	// activeWorktreePath), then open the changes tab — otherwise a chip would
 	// show the active branch's diff instead of this row's.
@@ -963,7 +1083,7 @@ export const BranchItem: Component<{
 						</span>
 						{/* When a custom label replaces the main line, retain the branch
 					    underneath it so Git-facing identity remains visible. */}
-						<Show when={branchLabel()}>
+						<Show when={branchLabel() && !mergedSummary()}>
 							<span class={b.subLabel} data-tooltip={rowTitle()} data-tooltip-pos="bottom">
 								{props.branch.branchName}
 							</span>
@@ -1065,13 +1185,37 @@ export const BranchItem: Component<{
 							</Show>
 						</div>
 					</Show>
-					{renderActions(false)}
+					<Show when={!mergedSummary()}>{renderActions(false)}</Show>
 					<span class={s.branchShortcut} style={{ display: props.shortcutIndex !== undefined ? undefined : "none" }}>
 						{props.shortcutIndex !== undefined ? keyFor(`switch-branch-${props.shortcutIndex}`) : ""}
 					</span>
 					{/* Rich: a full-width block under the name line, spending the spare room on what
 				    the compact row leaves to tooltips. */}
-					<Show when={rich() && !props.branch.isShell}>
+					<Show when={mergedSummary()}>
+						<span class={s.mergedSummary} data-testid="merged-worktree-summary">
+							<span class={cx(s.richChip, s.richChipMerged)}>{t("sidebar.merged", "Merged")}</span>
+							<span
+								class={cx(s.richChip, facts().dirtyFiles > 0 && s.richChipWarn)}
+								data-tooltip={tipFor("dirty")}
+								data-tooltip-pos="bottom"
+							>
+								{t("sidebar.uncommittedCount", "{count} uncommitted", { count: String(lifecycle()?.dirtyFiles) })}
+							</span>
+							<Show when={props.canRemove}>
+								<button
+									class={s.mergedCleanup}
+									disabled={props.isRemoving}
+									onClick={(e) => {
+										e.stopPropagation();
+										props.onRemove();
+									}}
+								>
+									{props.isRemoving ? t("sidebar.removingWorktree", "Removing…") : t("sidebar.cleanUp", "Clean up")}
+								</button>
+							</Show>
+						</span>
+					</Show>
+					<Show when={rich() && !props.branch.isShell && !mergedSummary()}>
 						<span class={s.branchBreak} aria-hidden="true" />
 						<div class={s.branchRichDetail}>
 							<Show when={pr()}>
@@ -1187,6 +1331,7 @@ import { GitHubPanel } from "./GitHubPanel";
 /** Repository section component */
 export const RepoSection: Component<{
 	repo: RepositoryState;
+	idleSummary?: boolean;
 	openSwipeRow?: string | null;
 	onSwipeRowChange?: (row: string | null) => void;
 	nameColor?: string;
@@ -1221,6 +1366,17 @@ export const RepoSection: Component<{
 	currentBranch: () => string;
 	onMouseDrag: (e: PointerEvent) => void;
 }> = (props) => {
+	const [idleOpen, setIdleOpen] = createSignal(false);
+	const expanded = () => (props.idleSummary ? idleOpen() : props.repo.expanded);
+	const toggleExpanded = () => (props.idleSummary ? setIdleOpen((value) => !value) : props.onToggle());
+	const workingCount = createMemo(() => {
+		const ids = new Set(Object.values(props.repo.workspaces).flatMap((workspace) => workspace.terminals));
+		return [...ids].filter((id) => {
+			const term = terminalsStore.get(id);
+			return term?.agentType && term.agentState === "working";
+		}).length;
+	});
+
 	const repoMenu = createContextMenu();
 	const [labelDialogBranch, setLabelDialogBranch] = createSignal<{ name: string; current: string | undefined } | null>(
 		null,
@@ -1419,8 +1575,8 @@ export const RepoSection: Component<{
 				class={s.repoHeader}
 				role="button"
 				tabIndex={0}
-				onClick={props.onToggle}
-				onKeyDown={onClickKeyDown(props.onToggle)}
+				onClick={toggleExpanded}
+				onKeyDown={onClickKeyDown(toggleExpanded)}
 				onContextMenu={repoMenu.open}
 			>
 				<Show when={props.repo.collapsed}>
@@ -1455,6 +1611,12 @@ export const RepoSection: Component<{
 							{remoteBadgeLabel()}
 						</span>
 					</Show>
+					<Show when={density() === "rich" && workingCount() > 0}>
+						<span class={s.richChip} data-testid="working-agent-count">
+							{t("sidebar.workingCount", "{count} working", { count: String(workingCount()) })}
+						</span>
+					</Show>
+
 					<div class={cx(s.repoActions, ghBadgeCount() > 0 && s.repoActionsWithBadge)}>
 						<button
 							class={s.repoActionBtn}
@@ -1527,13 +1689,21 @@ export const RepoSection: Component<{
 							</button>
 						</Show>
 					</div>
-					<span class={cx(s.repoChevron, props.repo.expanded && s.expanded)}>
+					<span class={cx(s.repoChevron, expanded() && s.expanded)}>
 						<ChevronIcon />
 					</span>
 				</Show>
 			</div>
 
-			<Show when={density() === "rich" && props.repo.isGitRepo !== false && !props.repo.collapsed}>
+			<Show
+				when={
+					density() === "rich" &&
+					(!props.idleSummary || idleOpen()) &&
+					props.repo.isGitRepo !== false &&
+					!props.repo.collapsed &&
+					(richRepoFacts().openPrs > 0 || richRepoFacts().worktrees > 0)
+				}
+			>
 				<div class={s.repoRichMeta} data-testid="repo-rich-meta">
 					<Show when={richRepoFacts().currentBranch}>
 						{(name) => (
@@ -1542,16 +1712,20 @@ export const RepoSection: Component<{
 							</span>
 						)}
 					</Show>
-					<span class={s.richChip}>
-						{richRepoFacts().openPrs}{" "}
-						{richRepoFacts().openPrs === 1 ? t("sidebar.openPrOne", "open PR") : t("sidebar.openPrs", "open PRs")}
-					</span>
-					<span class={s.richChip}>
-						{richRepoFacts().worktrees}{" "}
-						{richRepoFacts().worktrees === 1
-							? t("sidebar.worktreeOne", "worktree")
-							: t("sidebar.worktrees", "worktrees")}
-					</span>
+					<Show when={richRepoFacts().openPrs > 0}>
+						<span class={s.richChip}>
+							{richRepoFacts().openPrs}{" "}
+							{richRepoFacts().openPrs === 1 ? t("sidebar.openPrOne", "open PR") : t("sidebar.openPrs", "open PRs")}
+						</span>
+					</Show>
+					<Show when={richRepoFacts().worktrees > 0}>
+						<span class={s.richChip}>
+							{richRepoFacts().worktrees}{" "}
+							{richRepoFacts().worktrees === 1
+								? t("sidebar.worktreeOne", "worktree")
+								: t("sidebar.worktrees", "worktrees")}
+						</span>
+					</Show>
 					<Show when={richRepoFacts().syncedAge}>
 						{(age) => (
 							<span
@@ -1567,7 +1741,7 @@ export const RepoSection: Component<{
 			</Show>
 
 			{/* Branches */}
-			<Show when={props.repo.expanded && !props.repo.collapsed}>
+			<Show when={expanded() && !props.repo.collapsed}>
 				<div class={s.repoBranches}>
 					<For each={sortedBranches()}>
 						{(branch, index) => (
@@ -1630,7 +1804,7 @@ export const RepoSection: Component<{
 					</Show>
 				</div>
 			</Show>
-			<Show when={props.repo.expanded && !props.repo.collapsed}>
+			<Show when={expanded() && !props.repo.collapsed}>
 				<For each={sidebarPluginStore.getPanels().filter((p) => p.items.length > 0)}>
 					{(panel) => <SidebarPluginSection panel={panel} />}
 				</For>

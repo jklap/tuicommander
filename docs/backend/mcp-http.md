@@ -1,5 +1,7 @@
 # MCP & HTTP Server
 
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+
 ## Remote file copies
 
 The shared filesystem router exposes streamed `/fs/upload-copy` on the daemon through existing authentication. Sender-side `fs_transfer_remote_paths` coordination is desktop IPC only and intentionally unmapped: data leaves the machine, Finder source paths cannot be gated to registered roots, and HTTP token holders must not trigger exfiltration. There is no `/fs/transfer-remote` HTTP route. The receiver resolves registered repository roots through `cap-std` directory handles, validates archive paths, rejects links, bounds bytes/entries/concurrency, and publishes the staged top-level source with an atomic no-replace rename. Uploads use the existing session-cookie header, a 30-second chunk idle deadline (exempt from the global response deadline), and hold their concurrency permit through blocking extraction. Daemon startup sweeps abandoned upload staging inside registered roots without following symlink directories. Cleanup restores owner directory access only inside disposable staging when restrictive tar modes would prevent removal; published permissions remain unchanged. This path uses neither SSH nor shell commands. See the filesystem HTTP API for the wire contract.
@@ -806,7 +808,7 @@ say what was measured, not what the list costs today.
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
 
-Settings reads `native_tools` from `get_mcp_status` / `GET /mcp/status`. Both transports use `native_tool_catalog`, projected from the same unfiltered definitions used by MCP. Entries contain `name`, the first description line as `summary`, and the complete `description`. Disabled tools remain in this app inventory so users can re-enable them. No native tool is always on: even `progress` can be disabled and is also gated by global `progress_tracking`. Upstream tools and meta-tools do not belong to this inventory.
+Settings reads `native_tools` from `get_mcp_status` / `GET /mcp/status`. Both transports use `native_tool_catalog`, projected from the same unfiltered definitions used by MCP. Entries contain `name`, a dedicated user-facing English `summary` (at most 70 characters) declared alongside the registry, and the complete `description`. The `workflow_run` entry summarizes graph starts and execution history. Summaries are app metadata only and are not added to MCP `tools/list`; full MCP descriptions stay unchanged. Disabled tools remain in this app inventory so users can re-enable them. No native tool is always on: even `progress` can be disabled and is also gated by global `progress_tracking`. Upstream tools and meta-tools do not belong to this inventory.
 
 Native MCP inputs use `path` for a repository root in `agent register/list_peers` and `repo`, and `branch` for `repo worktree_lifecycle/worktree_remove`. The old `project` and `workspace_id` input names are rejected. The shared `worktree_create` response still includes `workspace_id` alongside `branch` for HTTP parity. `spawn_session=true` on worktree creation starts a bare shell PTY; spawn an agent separately when one is needed.
 
@@ -1152,9 +1154,11 @@ marker and reserves `idle` for an unclassified ready state.
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `limit` | `8192` | Max bytes to read |
+| `limit` | `50` | Max scrollback rows, or source bytes for raw output. Whole logical lines and UTF-8 codepoints can extend a page beyond the limit |
 | `format` | (text) | `"raw"` preserves ANSI escape codes |
-| `since_cursor` | (none) | Cursor from a previous response — returns only new scrollback lines since this position |
+| `since_cursor` | (none) | Forward page from a previous cursor (text: scrollback rows; raw: source bytes) |
+| `from_line` | (none) | Absolute text scrollback row; omit to read the tail |
+| `from_byte` | (none) | Absolute raw source-byte offset; omit to read the tail |
 
 `session action=input` and HTTP `POST /sessions/:id/write` share the same raw PTY
 bookkeeping: each write stamps `last_input_ms` and feeds the `InputLineBuffer`
@@ -1178,6 +1182,36 @@ Tauri events and `/events` SSE.
 
 **Delta reads:** The non-raw output path returns a `cursor` field (monotonic scrollback position). Pass `since_cursor` on subsequent calls to receive only new lines since that position, avoiding full re-reads. The `total_written` field is kept alongside `cursor` for backwards compatibility. When `since_cursor` is provided, screen rows are excluded — only scrollback log lines are returned.
 
+**Retained-output paging:** Every window reports `start_offset`, `oldest_offset`,
+`has_more`, `next_cursor` (null at the end), and `truncated`. A truncated response
+includes `continuation` with the exact `session action=output` request for the
+next page, or for older retained output when the default tail omitted history.
+For text, start with `from_line=oldest_offset` and follow `from_line=next_cursor`.
+The legacy absolute/tail `cursor` remains the total scrollback position; use
+`next_cursor`, not that snapshot cursor, to page. Delta `cursor` stops at the
+returned page boundary. For raw output, start with `format=raw,
+from_byte=oldest_offset` and follow `from_byte=next_cursor`; `since_cursor` also
+accepts source-byte positions. Raw `cursor` is the returned page end and
+`total_written` is the total original byte count, independent of redaction.
+Explicit raw pages mask sensitive bytes with `*` using the complete retained
+ring and terminal context before slicing, so even one-byte pages cannot
+reconstruct a secret. Clean absolute and delta pages also discover secrets from the retained terminal
+context, so a page containing only a multiline private key body stays masked,
+including when its footer is still on screen and its header is in scrollback.
+Tail snapshots retain the existing `[REDACTED]` format.
+UTF-8 starts round down and ends extend to whole codepoints. Invalid PTY bytes
+use lossy decoding without changing source-byte cursors. `data_length` counts
+returned UTF-8 bytes, which can differ from the source range.
+
+Buffers remain the only output store: text retains its configured scrollback;
+raw retains up to 2 MiB. Output appended after a read is available on later
+pages; this is not a frozen snapshot. A cursor older than `oldest_offset` starts
+at the oldest retained position and adds `missed_count` (rows or source bytes).
+Evicted output cannot be fetched. Exhausted/future offsets return an empty page.
+The HTTP `format=mcp|mcp_raw` and remote MCP proxy use this same serializer.
+Remote continuation notes also name the required `connection_id`.
+
+
 ### MCP Tool: `repo` — Worktree Create (Claude Code Agent Hint)
 
 MCP `repo action=worktree_create` uses the same creation path as HTTP
@@ -1189,6 +1223,12 @@ shared with the parent, while `instructions.warm_artifacts.warmed_directories`
 reports how many ignored directories arrived warm. Parent tracked changes are
 not copied. See `docs/api/http-api.md` § Create Worktree; both transports call
 the same shared core.
+
+The lifecycle event includes `creator_session` resolved from the MCP binding,
+never from a caller-supplied session id, and the requested `spawn_session` flag.
+Without a spawn request, only the creator already placed in the same repository
+moves into the new workspace. Other tabs and an inactive tab selection stay in
+place. This changes placement only, without changing the agent process cwd.
 
 When the MCP client identifies as Claude Code (detected via `clientInfo.name` at initialize time), the `repo action=worktree_create` response includes an additional `cc_agent_hint` field:
 
@@ -1987,3 +2027,55 @@ Native remote health, authentication, session-list, and SSE clients strip reques
 Workflow operator authority is selected by the host: verified HTTP credentials grant Human, unauthenticated loopback grants LocalApi. Request JSON cannot select the actor. Workflow policy writes and human decisions, plus administrative story transitions, require Human authority.
 
 The daemon executor now owns recovery and duration timers under an OS run-database lock. Reads never recover live work, and a non-owner daemon refuses run mutations. Graph resume uses `resume_graph {execution_id,activation_id,resolution}` with an explicit pending activation; status-only resume cannot bypass graph position. Graph start controls, Agent effects and delivery policy remain unavailable until their later slices.
+
+## Launch receipt read
+
+`GET /sessions/{id}/prompt-receipt` returns the same live receipt as desktop `get_prompt_receipt`. MCP initialize captures the served instructions after peer auto-binding. Protocol metadata retains bounded responses during PTY registration; PTY metadata retains its copy after protocol reaping. Sessions without a captured launch brief still retain served MCP instructions and show an explicit launch-unavailable section. No additional store or settings reconstruction is used. See [HTTP API](../api/http-api.md#launch-instruction-receipts).
+
+### Inbox consumption audit
+
+Every successful `agent action=inbox` read emits an INFO tracing event with `source="agent_msg"`, `event="inbox_read"`, `caller_session_id` (the MCP protocol session), `caller_peer_id` (the bound TUIC peer), `inbox_owner` (that peer), and `message_ids` (a JSON array of returned ids). Empty reads emit an empty array. No message bodies are logged. The audit does not grant access to another peer's inbox: caller and owner remain bound by MCP registration. Read `/logs?source=agent_msg&level=info` and filter `event=inbox_read`.
+
+Conversation-specific launch is available through `POST /acp/chat/open`; see the HTTP API guide. It creates an ACP peer, without a terminal tab.
+
+### Agent-declared worktree placement
+
+An agent that uses `git -C` or tools without changing shell cwd can declare an
+existing linked worktree with:
+
+```text
+session action=declare_worktree worktree_path=/absolute/path/to/worktree
+```
+
+The authenticated MCP binding identifies the caller's live PTY. Omit
+`session_id`; a foreign session target is rejected. The backend resolves the
+repository from the immutable launch directory and discovers current worktrees
+from Git. The main checkout, unknown paths and worktrees owned by another
+repository are rejected before any configuration or placement changes. External
+worktrees are discovered without recreating or deleting them.
+
+The response and `session-worktree-declared` event use the worktree lifecycle
+payload, with `creator_session` naming the caller and `spawn_session=false`.
+Only that tab moves. Its real cwd, sibling tabs and an inactive selection stay
+unchanged. Retrying the same declaration is idempotent.
+
+The stable `TUIC_SESSION` association is stored in the owning repository's
+`declaredWorktrees` map using the existing locked repository delta. Any saved
+caller snapshot moves to the target workspace; sibling snapshots are preserved.
+After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
+`list_active_sessions` return the declared `worktree_path` and `worktree_branch`
+while `cwd` remains the actual shell directory. The frontend restores placement
+from that worktree path. Declaration does not acquire worktree cleanup ownership.
+A concurrent repository edit can return a configuration conflict; retry the
+declaration after refreshing rather than overwriting that edit.
+
+The explicit placement remains authoritative over later shell cwd notifications
+until another declaration changes it. The frontend retains the backend placement
+path separately from the observed cwd during reconciliation.
+
+**Intentional request transport exception:** `declare_worktree` is an MCP-only
+action, callable over the existing HTTP `POST /mcp` route with a bound caller.
+There is no Tauri command or `COMMAND_TABLE` entry: window IPC has no managed
+agent caller binding. Its push event is dual-emitted over Tauri and `/events` SSE,
+and session-list response fields are identical over IPC and HTTP. Schema and
+serialization regressions cover these shared contracts.

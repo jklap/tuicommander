@@ -840,6 +840,9 @@ pub(crate) struct AppConfig {
     /// Host-issued peer UUID for the AI Chat conversation at each root.
     #[serde(default)]
     pub(crate) ai_chat_peer_ids: HashMap<String, String>,
+    /// Launch options and durable peer identity for individually configured chats.
+    #[serde(default)]
+    pub(crate) ai_chat_launches: HashMap<String, crate::acp_chat::ChatLaunch>,
     /// Default font size for new terminals
     #[serde(default = "default_font_size")]
     pub(crate) default_font_size: u16,
@@ -1122,6 +1125,7 @@ impl Default for AppConfig {
             ai_chat_workspace: String::new(),
             ai_chat_sessions: HashMap::new(),
             ai_chat_peer_ids: HashMap::new(),
+            ai_chat_launches: HashMap::new(),
             default_font_size: 13,
             attachment_max_bytes: default_attachment_max_bytes(),
             attachment_retention_days: default_attachment_retention_days(),
@@ -1392,6 +1396,9 @@ fn default_settings_nav_width() -> u32 {
 /// but are overridden by per-repo app settings.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct RepoLocalConfig {
+    /// Selected by the repository, bounded by the machine ego profile over ACP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ego_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) base_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1655,6 +1662,54 @@ fn default_idle_close_minutes() -> u32 {
     DEFAULT_IDLE_CLOSE_MINUTES
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum EgoPermissionMode {
+    Plan,
+    Default,
+    Edits,
+    Auto,
+    Yolo,
+}
+
+impl EgoPermissionMode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Default => "default",
+            Self::Edits => "edits",
+            Self::Auto => "auto",
+            Self::Yolo => "yolo",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum EgoSandbox {
+    Ro,
+    Workspace,
+}
+
+impl EgoSandbox {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ro => "ro",
+            Self::Workspace => "workspace",
+        }
+    }
+}
+
+/// Unknown saved ego choices leave that option to ego without resetting other settings.
+fn deserialize_ego_choice<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct AgentSettings {
     /// One-time migration marker: a removed bypass must stay removed.
@@ -1700,6 +1755,19 @@ pub(crate) struct AgentSettings {
     /// Missing means enabled; user-opened terminals retain the CLI's behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) skip_trust_dialog: Option<bool>,
+    /// Launch-only ego permission overrides. Missing leaves ego configuration in control.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_ego_choice",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) ego_mode: Option<EgoPermissionMode>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_ego_choice",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) ego_sandbox: Option<EgoSandbox>,
 }
 
 impl Default for AgentSettings {
@@ -1718,6 +1786,8 @@ impl Default for AgentSettings {
             native_status_signals: None,
             prevent_alt_screen: None,
             skip_trust_dialog: None,
+            ego_mode: None,
+            ego_sandbox: None,
         }
     }
 }
@@ -4811,6 +4881,15 @@ mod tests {
                 "/repo/project".to_string(),
                 "550e8400-e29b-41d4-a716-446655440a01".to_string(),
             )]),
+            ai_chat_launches: HashMap::from([(
+                "observer-session".to_string(),
+                crate::acp_chat::ChatLaunch {
+                    executable: "/opt/observer/ego".to_string(),
+                    profile: "coordinator".to_string(),
+                    workspace: PathBuf::from("/srv/observer"),
+                    peer_id: "550e8400-e29b-41d4-a716-446655440a02".to_string(),
+                },
+            )]),
             default_font_size: 18,
             attachment_max_bytes: default_attachment_max_bytes(),
             attachment_retention_days: default_attachment_retention_days(),
@@ -4891,6 +4970,8 @@ mod tests {
             loaded.ai_chat_peer_ids.get("/repo/project"),
             Some(&"550e8400-e29b-41d4-a716-446655440a01".to_string())
         );
+        // Catches: conversation launch authority disappears in config serialization.
+        assert_eq!(loaded.ai_chat_launches, cfg.ai_chat_launches);
         assert_eq!(loaded.default_font_size, 18);
         assert!(loaded.mcp_server_enabled);
         assert_eq!(loaded.mcp_port, 4000);
@@ -5954,6 +6035,8 @@ mod tests {
                 native_status_signals: None,
                 prevent_alt_screen: None,
                 skip_trust_dialog: Some(false),
+                ego_mode: None,
+                ego_sandbox: None,
                 progress_tracking: Some(false),
             },
         );

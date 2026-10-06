@@ -3,99 +3,57 @@
   bottom: 100%;
   left: 0;
   right: 0;
-  max-height: 40vh;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
-  touch-action: pan-y;
+  touch-action: pan-x;
+  scrollbar-width: none;
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);
-  border-radius: 12px 12px 0 0;
   z-index: 50;
 }
 
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 44px;
-  padding-left: 16px;
-  border-bottom: 1px solid var(--border);
-  color: var(--fg-secondary);
-  font-size: 13px;
+.dropup::-webkit-scrollbar {
+  display: none;
 }
 
-.close {
+.item,
+.control {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  border: none;
-  background: transparent;
-  color: var(--fg-secondary);
-  cursor: pointer;
-}
-
-.item {
-  display: block;
-  padding: 10px 16px;
-  border: none;
-  background: none;
-  color: var(--fg-primary);
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--accent);
   font-size: var(--font-sm);
   font-family: var(--font-mono);
-  width: 100%;
-  text-align: left;
+  font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 
-.item:active {
-  background: rgba(255, 255, 255, 0.08);
+.item:active,
+.control:active {
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .itemHighlighted {
-  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--accent);
 }
 
-.command {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.description {
-  color: var(--fg-muted);
-  font-family: var(--font-ui);
-  font-size: 0.85em;
-  margin-left: 8px;
-}
-
-.nav {
-  display: flex;
-  gap: 8px;
+.control {
   justify-content: center;
-  padding: 6px 0;
-  border-top: 1px solid var(--border);
-}
-
-.navBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
+  padding: 0;
+  min-width: 32px;
   color: var(--fg-muted);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-}
-
-.navBtn:active {
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--fg-primary);
 }

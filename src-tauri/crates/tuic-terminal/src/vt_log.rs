@@ -441,17 +441,19 @@ impl VtLogBuffer {
     /// starts at the head of the line holding `offset` and, when its last row
     /// wraps, runs on to the end of that line. Lines with pieces missing from
     /// the log are replaced by `[REDACTED]`, together with their continuation.
-    pub fn lines_since_logical(&self, offset: usize, limit: usize) -> (Vec<LogLine>, usize) {
+    /// Returns `(lines, start, end)` in source-row positions, including skipped
+    /// chrome slots. `end` is the next page boundary, not the total log size.
+    pub fn lines_since_logical(&self, offset: usize, limit: usize) -> (Vec<LogLine>, usize, usize) {
         if offset >= self.total_pushed {
-            return (Vec::new(), self.total_pushed);
+            return (Vec::new(), self.total_pushed, self.total_pushed);
         }
         let start = self.logical_line_start(offset);
         let oldest = self.oldest_offset();
-        let mut end = (start + limit).min(self.total_pushed);
+        let mut end = start.saturating_add(limit.max(1)).min(self.total_pushed);
         while end < self.total_pushed && self.log[end - 1 - oldest].wrapped {
             end += 1;
         }
-        let (mut lines, cursor) = self.lines_since_owned(start, end - start);
+        let (mut lines, _) = self.lines_since_owned(start, end - start);
         let mut hiding = false;
         let mut previous_wrapped = false;
         for line in &mut lines {
@@ -464,7 +466,7 @@ impl VtLogBuffer {
                 }];
             }
         }
-        (lines, cursor)
+        (lines, start, end)
     }
 
     /// Borrowed view of cached screen rows — avoids cloning when caller holds the lock.

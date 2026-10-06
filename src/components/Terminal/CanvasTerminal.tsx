@@ -132,7 +132,6 @@ const SEARCH_REFRESH_THROTTLE_MS = 150;
 const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let canvasRef!: HTMLCanvasElement;
 	let overlayCanvasRef!: HTMLCanvasElement;
-	let touchTextareaRef!: HTMLTextAreaElement;
 	let keyInputRef!: HTMLInputElement;
 	let scrollbarRef!: HTMLDivElement;
 	let scrollThumbRef!: HTMLDivElement;
@@ -2359,17 +2358,32 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	let scrollGestureEndTimer: ReturnType<typeof setTimeout> | undefined;
 
-	function showStreamError(error: unknown): void {
-		toastsStore.add(
-			"Terminal stream failed",
-			error instanceof Error ? error.message : String(error),
-			"error",
+	let streamToastId: number | undefined;
+
+	function clearStreamNotice(): void {
+		if (streamToastId !== undefined) toastsStore.remove(streamToastId);
+		streamToastId = undefined;
+	}
+
+	function showStreamNotice(title: string, message: string, level: "warn" | "error"): void {
+		if (!alive) return;
+		clearStreamNotice();
+		const name = terminalsStore.get(props.terminalId)?.name;
+		streamToastId = toastsStore.add(
+			name ? `${title} — ${name}` : title,
+			message,
+			level,
 			false,
 			undefined,
 			0,
 			undefined,
 			props.sessionId,
+			false,
 		);
+	}
+
+	function showStreamError(error: unknown): void {
+		showStreamNotice("Terminal stream failed", error instanceof Error ? error.message : String(error), "error");
 	}
 
 	onMount(async () => {
@@ -2410,7 +2424,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		try {
 			// One shape on both transports: the Tauri event and the WS frame both
 			// carry `{ cwd }`, so there is nothing to normalise here.
-			transport.onStreamError?.(showStreamError);
+			transport.onStreamError?.((error) => {
+				showStreamNotice(
+					"Terminal stream reconnecting",
+					error instanceof Error ? error.message : String(error),
+					"warn",
+				);
+			});
+			transport.onStreamReconnecting?.((attempt, maxAttempts) => {
+				showStreamNotice("Terminal stream reconnecting", `Reconnecting ${attempt}/${maxAttempts}`, "warn");
+			});
+			transport.onStreamRecovered?.(clearStreamNotice);
+			transport.onStreamExhausted?.((maxAttempts) => {
+				showStreamError(new Error(`Reconnect failed after ${maxAttempts} attempts`));
+			});
 			await transport.onEvent("cwd", (payload) => {
 				const { cwd } = payload as { cwd: string };
 				terminalsStore.update(props.terminalId, { cwd });
@@ -3363,7 +3390,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		};
 
 		// Touch input (mobile/tablet)
-		cleanupTouch = installTouchHandlers(canvasRef, touchTextareaRef, {
+		cleanupTouch = installTouchHandlers(canvasRef, keyInputRef, {
 			onScrollPixels: (dy) => {
 				// Touch is direct manipulation: the content must follow the finger,
 				// the OPPOSITE of the wheel convention handleScrollDelta expects
@@ -3373,12 +3400,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				handleScrollDelta(-dy);
 			},
 			onScrollEnd: resetScrollGesture,
-			onInput: (data) => writePty(data),
-			onFocus: () => {
-				setFocused(true);
-				startBlink();
-				props.onFocus?.();
-			},
 			onFontSizeChange: (delta) => {
 				// Per-terminal, like every keyboard/menu/palette zoom: the global
 				// default is persisted config, and the renderer reads the terminal's
@@ -3603,6 +3624,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	onCleanup(() => {
 		alive = false;
+		clearStreamNotice();
 		clearTimeout(answersTimer);
 		stopBlink();
 		if (rafId !== undefined) {
@@ -3661,24 +3683,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				keyInputRef.focus({ preventScroll: true });
 			}}
 		>
-			{/* Offscreen textarea for mobile virtual keyboard input */}
-			<textarea
-				ref={touchTextareaRef!}
-				style={{
-					position: "fixed",
-					top: "-9999px",
-					left: "-9999px",
-					width: "1px",
-					height: "1px",
-					opacity: "0",
-					"pointer-events": "none",
-				}}
-				autocomplete="off"
-				autocorrect="off"
-				autocapitalize="off"
-				spellcheck={false}
-				tabIndex={-1}
-			/>
 			{/* Hidden input that receives all keyboard events including dead-key composition.
 			    Canvas elements in WKWebView don't participate in the macOS text input system,
 			    so dead keys (quotes, accents, etc.) are lost when listeners live on the canvas.

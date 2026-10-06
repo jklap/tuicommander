@@ -277,7 +277,7 @@ needs an app restart is what that costs.
 | `ide` | `String` | `""` | IDE for "Open in..." |
 | `ego_executable` | `String` | `""` | Absolute path to the one ego binary this host may launch for ACP. Read at each connect, so a correction takes effect without a restart. Empty means ACP is not configured here and every connect is refused. No ACP command carries it: a connect supplies a working directory and nothing else, so no request can choose which binary runs. It is edited in `Settings > General` and written through `save_config` like any other field |
 | `ai_chat_workspace` | `String` | `""` | Absolute directory every AI Chat conversation runs in. Empty means the home directory of the host that runs ego. A missing directory is created at connect; a relative path or an uncreatable one is refused with a message naming this setting. Conversations and peer identities are keyed by this path, so changing it starts from a fresh conversation list. Edited in `Settings > General > AI Chat workspace`, which refuses a non-absolute path |
-| `ego_profile` | `String` | `""` | Optional name of an ego user-config profile for AI Chat ACP launches. Empty omits `--profile`; a nonempty valid name adds `--profile <name>` after the repository root. Names with whitespace, control characters, a leading dash, or more than 64 UTF-8 bytes are refused before launch. TUICommander does not copy profile policy into ACP requests. |
+| `ego_profile` | `String` | `""` | Optional name of an ego user-config profile for AI Chat ACP launches. Empty omits `--profile`; a nonempty valid name adds `--profile <name>` after the repository root. Names with whitespace, control characters, a leading dash, or more than 64 UTF-8 bytes are refused before launch. TUICommander does not copy profile policy into ACP requests. When `.tuic.json` selects a repo profile, this explicit selection is also its non-relaxable ACP `ceilingProfile`. |
 | `ai_chat_sessions` | `Map<String, String>` | `{}` | Last selected ego session ID per repository root. The AI Chat panel saves it through the shared serialized config update path and uses it to load the previous conversation after restart. |
 | `ai_chat_peer_ids` | `Map<String, String>` | `{}` | Host-issued ACP orchestration peer UUID per canonical repository root. The backend persists it before launching ego and reuses it across reconnect and restart. It is not a PTY tab ID. |
 | `default_font_size` | `u16` | `13` | Default font size for reset |
@@ -833,6 +833,8 @@ Custom keyboard shortcut overrides.
 
 ### Agents Config (`agents.json`)
 
+The `ego` entry supports optional `ego_mode` (`plan|default|edits|auto|yolo`) and `ego_sandbox` (`ro|workspace`). Missing values add no flags. The shared Rust launch translator injects `--mode` and `--sandbox` for terminal and MCP launches (including `run` and `resume`), replacing corresponding raw overrides before `--`. Administrative subcommands (including `mcp-server`) and ACP are excluded. The prompt separator `--` and its full suffix stay unchanged, even after a raw option without a value. An invalid saved ego choice is ignored for that field only; the valid sibling choice and other agents' settings remain intact. These choices apply only to new launches and do not rewrite ego configuration.
+
 Each agent entry may contain `native_status_signals: boolean`. For Claude and Codex, an absent value means `true`; `false` disables launch argument injection. `hook_instrumentation` controls only explicit global installation and remains off when absent.
 
 Each agent entry may also contain `prevent_alt_screen: boolean`. An absent value means `true`. When true, TUIC uses a verified control where one exists: Claude's environment variable, Codex and Grok's `--no-alt-screen`, or OpenCode's `--mini`. A false value suppresses TUIC's screen control for that agent on new structured and shell launches. An agent without a verified control remains unaffected.
@@ -993,6 +995,7 @@ The Design Mode `dev_server_url` is deliberately absent from this format: a comm
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `ego_profile` | `String` | Ego profile for new ACP sessions in this workspace; bounded by the explicit machine `ego_profile`. Ego returns clamp warnings. Missing machine selection refuses the repo selection. |
 | `base_branch` | `String` | Base branch for worktrees |
 | `copy_ignored_files` | `bool` | Copy .gitignored files to worktree |
 | `copy_untracked_files` | `bool` | Copy untracked files to worktree |
@@ -1142,3 +1145,15 @@ Telegram Settings uses `~/.config/tuic-telegram/`: `bot.token`, `allowed_chat_id
 `pairing.json` holds the one-use six-character code and its absolute ten-minute expiry under the same private permissions, so desktop setup and daemon polling share the authorization credential. A valid private-chat update consumes it; a wrong/expired code or `/start` grants nothing. An explicitly empty allowlist permits polling for pairing, but no outbound sends. A missing or malformed allowlist still fails closed. Enable/target/token changes restart the single daemon adapter; desktop never polls. Status keeps only connectivity, an error category and the last accepted message timestamp.
 
 `status.json` shares safe daemon connectivity/error/timestamps with desktop Settings on the same host. A connection record older than one minute is shown as disconnected. The file contains no token or message text.
+
+### Per-conversation AI Chat launch authority
+
+`ai_chat_launches` maps ego session ids to `{ executable, profile, workspace, peerId }` objects (camelCase). Creation snapshots the selected overrides and defaults; reopen uses that saved object, including the peer identity. Writes use the locked configuration delta path. The global `ego_executable`, `ego_profile`, and `ai_chat_workspace` settings are unchanged.
+
+Repository records may contain backend-authored `declaredWorktrees`, keyed by
+the stable `TUIC_SESSION`. Values contain `workspaceId`, `branch` and
+`worktreePath`. Caller-bound MCP declarations update this map through the
+repository delta under the existing cross-process lock. Frontend saves retain
+it. Existing saved terminal records are moved to the declared workspace without
+changing their actual shell cwd. The association survives backend restart; it
+does not turn an externally created worktree into a disposable PTY-owned one.
