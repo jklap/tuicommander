@@ -34,6 +34,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "ego Perimeter",
+		description:
+			"Use Settings > AI Chat to restrict ego roots, edit read and write directories, and inspect ego's effective perimeter before starting a new conversation.",
+		shortcut: null,
+	},
+	{
 		feature: "Touch Branch Actions",
 		description: "Swipe a sidebar branch left for More, Add Terminal, and worktree removal. Hold + to choose an agent.",
 		shortcut: null,

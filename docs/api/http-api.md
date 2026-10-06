@@ -2696,7 +2696,7 @@ session and request it is about.
 
 ## ego Command Line (`mcp_http/ego_routes.rs`)
 
-The browser half of `ego_providers` / `ego_set_default_model` — what the Settings →
+The browser half of the dedicated ego configuration commands — what the Settings →
 AI Chat page reads and writes. Same field names, same response body, same error
 body: an `EgoCliError` serialized whole (`code`, `message`, `command`, `stdout`,
 `stderr`, `exitCode`).
@@ -2704,16 +2704,19 @@ body: an `EgoCliError` serialized whole (`code`, `message`, `command`, `stdout`,
 ```
 GET  /ego/providers[?refresh=true]     -> EgoProviders
 POST /ego/providers/model              {model} -> EgoProviders
+GET  /ego/perimeter                      -> PerimeterView
+POST /ego/perimeter/roots                {roots:{rootDir,rootAccess,readAllowlist,writableDirs}} -> PerimeterView
+POST /ego/perimeter/network              {enabled} -> PerimeterView
 ```
 
-**Both** routes take the loopback-or-authenticated guard, which is stricter than
+**All** routes take the loopback-or-authenticated guard, which is stricter than
 `/acp/*`, where only `connect` and `reconnect` do. The difference is deliberate:
 every route here runs a process, and the write one changes a configuration file
 that decides which model a later run uses. Neither is a read of state TUIC
 already holds.
 
 The executable is never in the request. It comes from the `ego_executable`
-setting, read per call. `model` is the only writable key, and it is its own
+setting, read per call. Only `model`, `roots` and `network` are writable keys, each through its own
 route rather than a `key`/`value` pair, so no body can reach `sandbox` or
 `permissions.judge`.
 
@@ -2722,7 +2725,7 @@ The status is a translation of `code`, never a second opinion about it:
 | `code` | Status |
 |--------|--------|
 | `notConfigured` | 409 — no ego executable is set; nothing was run |
-| `invalidInput` | 400 — the model id was refused before ego was started |
+| `invalidInput` | 400 — the model id, root paths or workspace were refused before ego was started |
 | `launchFailed` | 424 — a binary is named and could not be started |
 | `commandFailed`, `unreadableOutput` | 502 — ego ran and failed, or printed something unreadable |
 

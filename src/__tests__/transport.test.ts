@@ -2305,6 +2305,22 @@ describe("transport", () => {
 	});
 
 	describe("ego command line (Providers)", () => {
+		// Catches: browser writes lose roots/network fields or hit the provider endpoint.
+		it("keeps the perimeter payload identical to IPC on dedicated routes", () => {
+			expect(mapCommandToHttp("ego_perimeter", {})).toEqual({ method: "GET", path: "/ego/perimeter" });
+			const roots = { rootDir: "~/Gits", rootAccess: "read", readAllowlist: "/reference", writableDirs: "/scratch" };
+			expect(mapCommandToHttp("ego_set_perimeter_roots", { roots })).toEqual({
+				method: "POST",
+				path: "/ego/perimeter/roots",
+				body: { roots },
+			});
+			expect(mapCommandToHttp("ego_set_perimeter_network", { enabled: false })).toEqual({
+				method: "POST",
+				path: "/ego/perimeter/network",
+				body: { enabled: false },
+			});
+		});
+
 		it("reads the providers without asking ego to re-enumerate its sources", () => {
 			const mapping = mapCommandToHttp("ego_providers", {});
 			expect(mapping.method).toBe("GET");

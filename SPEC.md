@@ -5,6 +5,18 @@ Published story workflows can start in Plans and Stories through the owning daem
 **Version:** 1.8.0
 **Last Updated:** 2026-09-16
 
+## ego Perimeter Settings — Implemented (#1401-ab1c)
+
+Settings > AI Chat edits user/profile `roots` and `network` through ego CLI,
+with IPC/HTTP parity. Roots add permission reach beside the configured AI Chat
+workspace. The effective preview comes from `ego config ls --effective --json`
+in that workspace/profile. An explicit empty roots declaration stays empty.
+Capability evidence is never inferred from the OS or selected backend; the
+current ego `not_checked` value is shown as **Enforcement not checked** (approved
+by the coordinator on 2026-10-06). The ego297 measured-array contract is supported: all selected exec guarantees
+produce an OS badge; partial/empty arrays produce Prompt only with explanation.
+Unknown evidence remains unverified, and off+online never passes vacuously. Existing ACP sessions retain their admitted state.
+
 ## Overview
 
 TUICommander is a multi-agent terminal orchestrator designed to manage supported AI coding agents, including Claude Code, Gemini CLI, OpenCode, Aider, and Codex, in parallel. It provides per-pane zoom, git worktree isolation, and GitHub integration.
