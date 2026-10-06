@@ -439,6 +439,15 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	ego_set_default_model: {
 		map: (args) => ({ method: "POST", path: "/ego/providers/model", body: { model: args.model } }),
 	},
+	ego_perimeter: {
+		map: () => ({ method: "GET", path: "/ego/perimeter" }),
+	},
+	ego_set_perimeter_roots: {
+		map: (args) => ({ method: "POST", path: "/ego/perimeter/roots", body: { roots: args.roots } }),
+	},
+	ego_set_perimeter_network: {
+		map: (args) => ({ method: "POST", path: "/ego/perimeter/network", body: { enabled: args.enabled } }),
+	},
 
 	// --- Session lifecycle ---
 	create_pty: {
