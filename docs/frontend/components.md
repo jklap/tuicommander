@@ -629,3 +629,5 @@ exact argv/names/directory and optional template consent.
 Pending agent commands in `Terminal` drain once when both the command and an idle shell session are available. Parsed events, shell-state synchronization and WebSocket snapshots feed this same readiness check, including late launch preparation.
 
 Rich `RepoSection` metadata shows PR and worktree count chips only for positive counts, with reactive store updates.
+
+In rich mode, sessions idle for more than two hours fold into an expandable count. Backend activity timestamps determine age; busy sessions, awaiting input, unread output, selected rows and parents of visible children stay visible. Expanding preserves row order. Compact mode does not fold idle sessions.

@@ -877,6 +877,7 @@
 	"sidebar.unknown": "Unknown",
 	"sidebar.unmerged": "unmerged",
 	"sidebar.staleHint": "Stale: no commit for more than {days} days and not merged",
+	"sidebar.idleSessionCount": "{count} idle sessions",
 	"sidebar.subagentCount": "{count} subagents",
 	"sidebar.subagentRunning": "Running",
 	"sidebar.subagentDone": "Returned",
