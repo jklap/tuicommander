@@ -605,9 +605,28 @@ describe("Sidebar", () => {
 			withBranch(richBranch());
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const meta = container.querySelector("[data-testid='repo-rich-meta']")?.textContent ?? "";
-			expect(meta).toContain("0 open PRs");
+			expect(meta).not.toContain("open PR");
 			expect(meta).toContain("1 worktree");
 			expect(meta).not.toContain("1 worktrees");
+		});
+
+		// Catches: stale zero labels or positive counts disappearing after a live store update.
+		it("sidebar_hides_only_known_zero_counts", () => {
+			const [prs, setPrs] = createSignal<ReturnType<typeof githubStore.getAllOpenPrs>>([]);
+			vi.spyOn(githubStore, "getAllOpenPrs").mockImplementation(prs);
+			const [repo, setRepo] = createSignal(makeRepo());
+			mockGetOrderedRepos.mockImplementation(() => [repo()]);
+			mockGetGroupedLayout.mockImplementation(() => ({ groups: [], ungrouped: [repo()] }));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const meta = () => container.querySelector("[data-testid='repo-rich-meta']")!;
+			expect(meta().textContent).not.toMatch(/open PR|worktree|[·|]/);
+			setPrs([{ number: 1 }, { number: 2 }] as ReturnType<typeof githubStore.getAllOpenPrs>);
+			setRepo(makeRepo({ workspaces: { feat: richBranch() } }));
+			expect(meta().textContent).toContain("2 open PRs");
+			expect(meta().textContent).toContain("1 worktree");
+			setPrs([]);
+			setRepo(makeRepo());
+			expect(meta().textContent).not.toMatch(/open PR|worktree|[·|]/);
 		});
 
 		// Catches: the agent row showing only a dot and a title, hiding what the agent is doing or asking.
@@ -769,7 +788,7 @@ describe("Sidebar", () => {
 				}),
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			expect(container.querySelector("[data-testid='repo-rich-meta']")?.textContent).toContain("0 worktrees");
+			expect(container.querySelector("[data-testid='repo-rich-meta']")?.textContent).not.toContain("worktree");
 		});
 
 		describe("subagents and child sessions", () => {

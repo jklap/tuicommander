@@ -337,6 +337,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Unpark a repo from the popover to restore it to the main list
 
 ### 2.7a Sidebar Layout (compact / rich)
+- Rich repository metadata hides zero PR and worktree counts; positive counts update live
 - Toolbar button (left of the filter icon) cycles auto, compact and rich and prints the mode (A, C, R); the mode is saved in UI prefs (`sidebar_density`)
 - Compact: the one-line rows. Rich: detail lines under every row. Auto: rich when the list fits the window (rich row about 52 px; 12 rows at 768 px, 15 at 900 px) or the primary pointer is a finger, compact otherwise
 - Rich branch row: PR state word and title; last-commit age, ahead/behind the upstream, diff stats, dirty-file count (opens Changes), merged, stale (no commit for 30 days), unknown (removal blocked), unmerged; never stale, merged, dirty or unknown on a main checkout. Compact carries the age, ahead/behind and stale rule on the branch name tooltip

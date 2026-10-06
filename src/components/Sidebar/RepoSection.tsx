@@ -1542,16 +1542,20 @@ export const RepoSection: Component<{
 							</span>
 						)}
 					</Show>
-					<span class={s.richChip}>
-						{richRepoFacts().openPrs}{" "}
-						{richRepoFacts().openPrs === 1 ? t("sidebar.openPrOne", "open PR") : t("sidebar.openPrs", "open PRs")}
-					</span>
-					<span class={s.richChip}>
-						{richRepoFacts().worktrees}{" "}
-						{richRepoFacts().worktrees === 1
-							? t("sidebar.worktreeOne", "worktree")
-							: t("sidebar.worktrees", "worktrees")}
-					</span>
+					<Show when={richRepoFacts().openPrs > 0}>
+						<span class={s.richChip}>
+							{richRepoFacts().openPrs}{" "}
+							{richRepoFacts().openPrs === 1 ? t("sidebar.openPrOne", "open PR") : t("sidebar.openPrs", "open PRs")}
+						</span>
+					</Show>
+					<Show when={richRepoFacts().worktrees > 0}>
+						<span class={s.richChip}>
+							{richRepoFacts().worktrees}{" "}
+							{richRepoFacts().worktrees === 1
+								? t("sidebar.worktreeOne", "worktree")
+								: t("sidebar.worktrees", "worktrees")}
+						</span>
+					</Show>
 					<Show when={richRepoFacts().syncedAge}>
 						{(age) => (
 							<span
