@@ -214,14 +214,22 @@ interface TerminalsStoreState {
 	activeId: string | null;
 	/** Last non-null activeId — survives tab switches so non-terminal UI can find the right terminal. */
 	lastActiveId: string | null;
-	/** The terminal that was active before the current one — powers "return to last terminal" toggle. */
-	previousActiveId: string | null;
+	/**
+	 * Distinct activated terminals, most recent first (max HISTORY_LIMIT). The single source
+	 * for "return to last terminal" and history back/forward.
+	 */
+	history: string[];
+	/** Position of the terminal currently shown within `history` (0 = most recent; >0 after stepping back). */
+	historyCursor: number;
 	counter: number;
 	/** Tabs currently detached to floating windows: tabId → window label */
 	detachedWindows: Record<string, string>;
 	/** Debounced busy state per terminal — stays true for BUSY_HOLD_MS after idle */
 	debouncedBusy: Record<string, boolean>;
 }
+
+/** How many recently activated terminals the history keeps. */
+const HISTORY_LIMIT = 10;
 
 /** Debounce hold time: how long isBusy() stays true after shellState goes idle */
 const BUSY_HOLD_MS = 2000;
@@ -232,7 +240,8 @@ function createTerminalsStore() {
 		terminals: {},
 		activeId: null,
 		lastActiveId: null,
-		previousActiveId: null,
+		history: [],
+		historyCursor: 0,
 		counter: 0,
 		detachedWindows: {},
 		debouncedBusy: {},
@@ -567,8 +576,11 @@ function createTerminalsStore() {
 					if (s.lastActiveId === id) {
 						s.lastActiveId = null;
 					}
-					if (s.previousActiveId === id) {
-						s.previousActiveId = null;
+					const at = s.history.indexOf(id);
+					if (at !== -1) {
+						s.history.splice(at, 1);
+						if (at < s.historyCursor) s.historyCursor--;
+						s.historyCursor = Math.max(0, Math.min(s.historyCursor, s.history.length - 1));
 					}
 				}),
 			);
@@ -592,10 +604,14 @@ function createTerminalsStore() {
 					setState("terminals", id, "activity", false);
 					setState("terminals", id, "unseen", false);
 					setState("lastActiveId", id);
-					// Remember the terminal we're leaving so "return to last terminal"
-					// can toggle back to it (and back again on the next press).
-					if (prevId && prevId !== id) {
-						setState("previousActiveId", prevId);
+					// Walking the history lands on the entry under the cursor: keep order.
+					// Any other activation drops the forward part and moves to the front.
+					if (state.history[state.historyCursor] !== id) {
+						setState(
+							"history",
+							[id, ...state.history.slice(state.historyCursor).filter((h) => h !== id)].slice(0, HISTORY_LIMIT),
+						);
+						setState("historyCursor", 0);
 					}
 				}
 				setState("activeId", id);
@@ -923,10 +939,25 @@ function createTerminalsStore() {
 			return state.activeId ? state.terminals[state.activeId] : undefined;
 		},
 
-		/** The terminal that was active before the current one, if it still exists. */
+		/** The most recently active terminal other than the current one ("return to last terminal"). */
 		getPreviousActiveId(): string | null {
-			const id = state.previousActiveId;
-			return id && state.terminals[id] ? id : null;
+			return state.history.find((id) => id !== state.activeId) ?? null;
+		},
+
+		/** Terminal one step back / forward in the history, or null at the ends. */
+		getHistoryTarget(direction: "back" | "forward"): string | null {
+			return state.history[state.historyCursor + (direction === "back" ? 1 : -1)] ?? null;
+		},
+
+		/**
+		 * Move the history cursor one step and return the terminal to show, or null at the end.
+		 * The caller then activates it; setActive recognises it as the cursor entry and keeps order.
+		 */
+		stepHistory(direction: "back" | "forward"): string | null {
+			const step = direction === "back" ? 1 : -1;
+			const id = state.history[state.historyCursor + step] ?? null;
+			if (id) setState("historyCursor", state.historyCursor + step);
+			return id;
 		},
 
 		/** Find the best terminal with an active PTY session: active > lastActive > any. */

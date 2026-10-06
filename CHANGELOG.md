@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Inspect managed-agent launch instructions from the terminal context menu: captured brief (including peer context), explicit system instruction arguments/file snapshots and MCP initialize responses, with source, original UTF-8 bytes, redaction and capture limits. Historical and agent-autoloaded instructions are explicitly unobservable.
 - Add ego Perimeter controls in Settings > AI Chat for root access, read allowlists, extra writable directories and network mode. Show ego's effective view and a measured or unverified exec-sandbox badge; writes use ego CLI.
 
+- Add terminal history back/forward (`Cmd+Alt+Left/Right`, toolbar arrows) over the last 10 activated terminals, and a Default/Recent sort on the mobile Sessions screen.
 - Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
 
 ### Fixed
