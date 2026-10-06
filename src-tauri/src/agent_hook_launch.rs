@@ -940,3 +940,7 @@ mod critic_1302_tests {
         assert_eq!(bad, 0, "observed the script without its execute bit {bad}x");
     }
 }
+
+#[cfg(test)]
+#[path = "agent_hook_launch_critic1400_tests.rs"]
+mod critic1400_tests;
