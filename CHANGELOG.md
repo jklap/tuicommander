@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Reap PTY children that exit after terminal EOF or session removal, preventing zombie shells in the headless daemon and desktop backend.
+- Return freed terminal scrollback pages to the OS after session cleanup on Linux/glibc instead of retaining them in allocator arenas.
 
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 

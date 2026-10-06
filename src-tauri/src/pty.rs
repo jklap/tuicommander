@@ -8097,15 +8097,32 @@ fn remove_live_session_state(session_id: &str, state: &AppState) {
 /// out — or immediately, when the session is closed outright.
 ///
 /// See [`remove_live_session_state`] for why these are the only two lists.
-fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
-    state.session_maps.output_buffers.remove(session_id);
-    state.grid.vt_log_buffers.remove(session_id);
-    state.grid.pty_raw_rings.remove(session_id);
+fn remove_post_mortem_session_state(session_id: &str, state: &AppState) -> bool {
+    let output_removed = state
+        .session_maps
+        .output_buffers
+        .remove(session_id)
+        .is_some();
+    let grid_removed = state.grid.vt_log_buffers.remove(session_id).is_some();
+    let raw_removed = state.grid.pty_raw_rings.remove(session_id).is_some();
     state.session_maps.last_output_ms.remove(session_id);
     state.session_maps.exit_codes.remove(session_id);
     state.session_maps.term_aliases.remove(session_id);
     state.session_maps.marker_stats.remove(session_id);
     state.session_maps.session_visibility.remove(session_id);
+    output_removed || grid_removed || raw_removed
+}
+
+/// Return freed scrollback pages glibc otherwise keeps resident in thread arenas.
+/// Called only after payload owners and their map guards have been dropped.
+fn trim_unused_session_heap() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        // SAFETY: malloc_trim is glibc's thread-safe allocator operation. It
+        // releases only unused pages, preserving all live session allocations.
+        // A zero return simply means there were no releasable pages.
+        let _ = unsafe { libc::malloc_trim(0) };
+    }
 }
 
 // NOT A DEFERRAL — two session-keyed maps are deliberately NOT reaped by
@@ -8181,7 +8198,9 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     flush_open_intent_before_session_removal(session_id, state);
     remove_pty_session(session_id, state);
     remove_live_session_state(session_id, state);
-    remove_post_mortem_session_state(session_id, state);
+    if remove_post_mortem_session_state(session_id, state) {
+        trim_unused_session_heap();
+    }
 }
 
 /// Reap the state the dead process owned, and stamp `last_output_ms` so the
@@ -10720,12 +10739,16 @@ fn aged_out_tombstones(state: &AppState, now_ms: u64) -> Vec<String> {
 /// needs a per-id generation stamped at insert and compared at removal, which is
 /// a `sessions` API change; not worth it while ids are random UUIDs in practice.
 fn reap_tombstones(state: &AppState, candidates: &[String]) {
+    let mut released_payload = false;
     for id in candidates {
         if state.session_maps.sessions.contains_key(id) {
             continue;
         }
-        remove_post_mortem_session_state(id, state);
+        released_payload |= remove_post_mortem_session_state(id, state);
         tracing::debug!(source = "pty", session_id = %id, "Tombstone reaped");
+    }
+    if released_payload {
+        trim_unused_session_heap();
     }
 }
 
