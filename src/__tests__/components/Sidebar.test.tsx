@@ -3297,6 +3297,51 @@ describe("Sidebar", () => {
 	});
 
 	describe("group sections", () => {
+		// Catches: flattening groups, moving repos between groups, or orphan Idle headings after filtering.
+		it("grouped_repo_activity_split_preserves_membership", () => {
+			const idle = makeRepo({ path: "/idle" });
+			const active = makeRepo({
+				path: "/active",
+				workspaces: { main: { ...idle.workspaces.main, terminals: ["t1"] } },
+			});
+			const secondIdle = makeRepo({ path: "/second" });
+			const loose = makeRepo({ path: "/loose" });
+			setRepos({ "/idle": idle, "/active": active, "/second": secondIdle, "/loose": loose });
+			mockGetGroupedLayout.mockReturnValue({
+				groups: [
+					{
+						group: { id: "g1", name: "Mixed", collapsed: false, color: "", repoOrder: ["/idle", "/active"] },
+						repos: [idle, active],
+					},
+					{
+						group: { id: "g2", name: "Idle only", collapsed: false, color: "", repoOrder: ["/second"] },
+						repos: [secondIdle],
+					},
+				],
+				ungrouped: [loose],
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const paths = (id: string) =>
+				[...container.querySelectorAll(`[data-sidebar-group='${id}'] [data-sidebar-repo]`)].map((e) =>
+					e.getAttribute("data-sidebar-repo"),
+				);
+			expect(paths("g1")).toEqual(["/active", "/idle"]);
+			expect(paths("g2")).toEqual(["/second"]);
+			expect(container.querySelectorAll("[data-testid='idle-repos-heading']")).toHaveLength(3);
+			uiStore.setRepoFilterActiveOnly(true);
+			try {
+				expect(paths("g1")).toEqual(["/active"]);
+				expect(container.querySelector("[data-sidebar-group='g2']")).toBeNull();
+				expect(container.querySelector("[data-testid='idle-repos-heading']")).toBeNull();
+			} finally {
+				uiStore.setRepoFilterActiveOnly(false);
+			}
+			expect(paths("g1")).toEqual(["/active", "/idle"]);
+			expect(paths("g2")).toEqual(["/second"]);
+			expect(mockMoveRepoBetweenGroups).not.toHaveBeenCalled();
+			expect(mockReorderRepoInGroup).not.toHaveBeenCalled();
+		});
+
 		it("renders group headers with name and chevron", () => {
 			const repo = makeRepo();
 			setRepos({ "/repo1": repo });
