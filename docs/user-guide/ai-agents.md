@@ -276,3 +276,7 @@ This is useful for enabling feature flags (e.g., `CLAUDE_CODE_EXPERIMENTAL_AGENT
 - **Multiple agents on the same repo** — Use split panes (`Cmd+\`) to run two agents side by side on the same branch
 - **Different agents per branch** — Each worktree is independent, so you can run Claude on one branch and Aider on another
 - **Monitor all at once** — Use the Activity Dashboard (`Cmd+Shift+A`) to see every terminal's agent status in one view
+
+### ego launch permissions
+
+In **Settings > Agents > ego**, choose a permission mode and filesystem sandbox for new terminal launches and managed spawns. **Use ego configuration** leaves that option unchanged. Mode choices are Read-only (`plan`), Ask (`default`), Auto-edit (`edits`), Auto reviewed (`auto`), and Full access (`yolo`). Sandbox choices are Read-only (`ro`) and Workspace writes (`workspace`). The selected choices replace matching raw launch flags. AI Chat uses separate ACP settings.
