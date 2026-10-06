@@ -872,6 +872,7 @@ pub(super) fn refresh_mcp_session(
             state.mcp.sessions.insert(
                 mcp_sid.to_string(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity: std::time::Instant::now(),
                     is_claude_code,
                     requires_meta_tools: false,
@@ -1144,7 +1145,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
     super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait";
+const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree";
 const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
 const REPO_ACTIONS: &str = "list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
@@ -1217,10 +1218,10 @@ fn native_tool_definitions() -> serde_json::Value {
         crate::telegram::tool_definition(),
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call, including local and connected remote sessions. Remote rows carry connection_id and address=connection/session_id. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call, including local and connected remote sessions. Remote rows carry connection_id and address=connection/session_id. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice. Windowed reads report has_more and next_cursor; follow the continuation note to fetch retained output without rerunning the command. Raw pages use from_byte=oldest_offset then from_byte=next_cursor (source-byte positions). Evicted output cannot be recovered.\n- declare_worktree: Declare an existing linked worktree for this authenticated live caller. Requires worktree_path; rejects foreign sessions and repositories. Persists sidebar placement without changing shell cwd. Caller-bound MCP-only request, available via POST /mcp.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
             "inputSchema": { "type": "object", "properties": {
                 "connection_id": { "type": "string", "description": "Configured remote connection qualifier (session list/output/submit; agent list_peers/send). Remote addresses also accept connection/id; local/id addresses the desktop hub." },
-                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, suspend, close, kill, pause, resume" },
+                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, suspend, close, kill, pause, resume, declare_worktree" },
                 "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, keep_open, suspend, close, kill, pause, resume, wait" },
                 "name": { "type": "string", "description": "New tab display name, non-empty (action=rename, required)" },
                 "is_custom": { "type": "boolean", "description": "action=rename, default true. true protects the name from later OSC/intent title updates; false lets them refine it." },
@@ -1233,11 +1234,13 @@ fn native_tool_definitions() -> serde_json::Value {
                 "rows": { "type": "integer", "description": "Terminal rows (action=create or resize)" },
                 "cols": { "type": "integer", "description": "Terminal cols (action=create or resize)" },
                 "shell": { "type": "string", "description": "Shell binary path (action=create)" },
+                "worktree_path": { "type": "string", "description": "Absolute existing linked worktree path (action=declare_worktree, required). Caller only; omit session_id." },
                 "cwd": { "type": "string", "description": "Working directory (action=create)" },
-                "limit": { "type": "integer", "description": "Max lines to return (default 50). Use 50-100 for snapshots; delta reads (since_cursor) are already bounded by new content (action=output)" },
+                "limit": { "type": "integer", "description": "Max scrollback rows (raw: source bytes), default 50. Logical lines and UTF-8 codepoints stay whole, so pages can exceed this limit (action=output)" },
+                "from_byte": { "type": "integer", "minimum": 0, "description": "Absolute source-byte offset for format=raw. Use oldest_offset to start, then next_cursor to continue retained output without rerunning a command (action=output)" },
                 "from_line": { "type": "integer", "description": "Absolute line number to start reading from. Use oldest_offset from a previous response to read from the beginning of the buffer. Omit to read the tail (action=output)" },
                 "format": { "type": "string", "description": "Output format: ANSI escape codes are stripped by default; pass 'raw' to preserve them (action=output)" },
-                "since_cursor": { "type": "integer", "description": "Cursor from a previous output response — returns only new lines since this position. Most token-efficient for polling. Omit for snapshot (action=output)" }
+                "since_cursor": { "type": "integer", "description": "Cursor from a previous output response (raw: source bytes; text: scrollback rows). Returns a bounded forward page; follow next_cursor while has_more. Omit for snapshot (action=output)" }
             }, "required": ["action"] }
         },
         {
@@ -1319,6 +1322,13 @@ fn native_tool_definitions() -> serde_json::Value {
             "inputSchema": { "type": "object", "properties": {
                 "input": crate::stories::story_action_schema()
             }, "required": ["input"] }
+        },
+        {
+            "name": "workflow_run",
+            "description": "Start and inspect published workflow graphs in the calling managed session's project. Pass a generated RunAction as input: start_graph (payload-bound request_id, pinned definition revision, story expected_revision), get, list_plan_runs, events (after_sequence cursor), command, record_integration, recertify_canonical, execute_check. start_plan is the legacy record-only ledger, not executable delivery. Graph starts require the owning daemon; unsupported plan dispatch is refused visibly. Commands include pause, cancel, answer_input, resume_graph with explicit execution_id, activation_id and resolution. Legacy runs are inspect/cancel only in the UI. History is the same ordered ledger returned over HTTP/IPC, including decisions and evidence.",
+            "inputSchema": { "type": "object", "properties": {
+                "input": crate::workflows::run_action_schema()
+            }, "required": ["input"], "additionalProperties": false }
         },
         {
             "name": "workflow_story_create",
@@ -1992,7 +2002,10 @@ where
 }
 
 fn session_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(action, "create" | "input" | "kill" | "close" | "resize")
+    matches!(
+        action,
+        "create" | "input" | "kill" | "close" | "resize" | "declare_worktree"
+    )
 }
 
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
@@ -2212,13 +2225,19 @@ async fn dispatch_mcp_tool_call_with_context(
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_task(&state, addr, &args, sid.as_deref())).await
         }
-        "repo" => handle_repo(state, args, is_claude_code).await,
+        "repo" => handle_repo_with_caller(state, args, is_claude_code, mcp_session_id).await,
         "remote" => handle_remote_update(state, args).await,
         "story" => {
             let state = state.clone();
             let args = args.clone();
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_story(&state, &args, sid.as_deref())).await
+        }
+        "workflow_run" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || handle_workflow_run(&state, &args, sid.as_deref())).await
         }
         "workflow_story_create" => {
             let state = state.clone();
@@ -3027,10 +3046,21 @@ fn terminal_secrets(buf: &mut crate::state::VtLogBuffer) -> Vec<String> {
     let screen = crate::redaction::join_wrapped_rows(
         buf.screen_rows().into_iter().zip(buf.screen_row_wraps()),
     );
-    secrets.extend(crate::redaction::secrets_in(&format!(
-        "{}{screen}",
-        buf.screen_head_context()
-    )));
+    let screen_context = format!("{}{screen}", buf.screen_head_context());
+    secrets.extend(crate::redaction::secrets_in(&screen_context));
+    // A PEM footer can still be on screen while its header/body are in history.
+    // Join both only for that boundary; ordinary polling keeps the log cache.
+    if screen_context.contains("-----END ") && screen_context.contains("PRIVATE KEY-----") {
+        let (log_lines, _) = buf.lines_since_owned(buf.oldest_offset(), usize::MAX);
+        secrets.extend(crate::redaction::secrets_in(
+            &crate::redaction::join_wrapped_rows(
+                log_lines
+                    .iter()
+                    .map(|ll| (ll.text(), ll.wrapped))
+                    .chain(buf.screen_rows().into_iter().zip(buf.screen_row_wraps())),
+            ),
+        ));
+    }
     secrets
 }
 
@@ -3041,15 +3071,74 @@ fn terminal_secrets(buf: &mut crate::state::VtLogBuffer) -> Vec<String> {
 fn redact_raw_output(
     state: &Arc<AppState>,
     session_id: &str,
-    window: &str,
+    bytes: &[u8],
+    window: std::ops::Range<usize>,
     mut known: Vec<String>,
+    paged: bool,
 ) -> String {
     if let Some(vt) = state.grid.vt_log_buffers.get(session_id) {
         known.extend(terminal_secrets(&mut vt.lock()));
     }
-    state.secrets.mask(&crate::redaction::redact_secrets(
-        &crate::redaction::scrub_fragments(window, &known),
-    ))
+    if !paged {
+        return state.secrets.mask(&crate::redaction::redact_secrets(
+            &crate::redaction::scrub_fragments(&String::from_utf8_lossy(&bytes[window]), &known),
+        ));
+    }
+    let masked = state.secrets.mask_preserving_offsets(bytes);
+    let context = String::from_utf8_lossy(&masked);
+    let redacted = crate::redaction::mask_raw_context(&context, &known);
+    // Lossy decoding can expand invalid source bytes. Translate source-byte
+    // boundaries after registry masking, before the length-preserving redaction.
+    let start = String::from_utf8_lossy(&masked[..window.start]).len();
+    let end = String::from_utf8_lossy(&masked[..window.end]).len();
+    redacted[start..end].to_owned()
+}
+
+/// Describe a page of retained output and the existing action that continues it.
+fn add_output_page_metadata(
+    response: &mut serde_json::Value,
+    args: &serde_json::Value,
+    start: u64,
+    next: u64,
+    total: u64,
+    oldest: u64,
+) {
+    let raw = args["format"] == "raw";
+    let position_key = if raw { "from_byte" } else { "from_line" };
+    let requested = args["since_cursor"]
+        .as_u64()
+        .or_else(|| args[position_key].as_u64());
+    let missed = requested.map_or(0, |offset| oldest.saturating_sub(offset));
+    let has_more = next < total;
+    let omitted_tail_history = requested.is_none() && start > oldest;
+    response["start_offset"] = start.into();
+    response["oldest_offset"] = oldest.into();
+    response["has_more"] = has_more.into();
+    response["next_cursor"] = if has_more {
+        next.into()
+    } else {
+        serde_json::Value::Null
+    };
+    response["truncated"] = (has_more || omitted_tail_history || missed > 0).into();
+    if missed > 0 {
+        response["missed_count"] = missed.into();
+    }
+    if has_more || omitted_tail_history {
+        let mut request = serde_json::json!({
+            "action": "output", "session_id": args["session_id"],
+            "limit": args["limit"].as_u64().unwrap_or(50).max(1),
+        });
+        if raw {
+            request["format"] = "raw".into();
+        }
+        request[position_key] = if has_more { next.into() } else { oldest.into() };
+        response["continuation"] = format!(
+            "Output truncated to a retained window. Fetch {} with session {}; do not rerun the command. Positions may expire when the buffer evicts output.",
+            if has_more { "the next page" } else { "older output" }, request
+        ).into();
+    } else if missed > 0 {
+        response["continuation"] = "Requested output was evicted; no further retained page is available. The missing output cannot be recovered from this buffer.".into();
+    }
 }
 
 pub(super) fn session_output(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
@@ -3066,6 +3155,25 @@ fn handle_session(
         Err(e) => return e,
     };
     match action {
+        "declare_worktree" => {
+            let Some(peer) = resolve_mcp_origin_session(state, mcp_session_id) else {
+                return serde_json::json!({"error": "declare_worktree requires an authenticated managed caller"});
+            };
+            let Some(pty) = resolve_mcp_origin_pty(state, mcp_session_id) else {
+                return serde_json::json!({"error": "declare_worktree requires the caller's live terminal"});
+            };
+            if args.get("session_id").is_some() && args["session_id"].as_str() != Some(pty.as_str())
+            {
+                return serde_json::json!({"error": "declare_worktree cannot target another session"});
+            }
+            let Some(path) = args["worktree_path"].as_str() else {
+                return serde_json::json!({"error": "declare_worktree requires worktree_path"});
+            };
+            match super::session_placement::declare_worktree(state, &peer, &pty, path) {
+                Ok(payload) => to_json_or_error(payload),
+                Err(error) => serde_json::json!({"error": error}),
+            }
+        }
         "list" => {
             let caller_tuic = mcp_session_id
                 .and_then(|sid| state.mcp.to_session.get(sid))
@@ -3418,15 +3526,24 @@ fn handle_session(
 
                 // Delta read: if since_cursor provided, return only new scrollback lines.
                 if let Some(since) = args["since_cursor"].as_u64().map(|v| v as usize) {
-                    let (log_lines, new_cursor) = buf.lines_since_logical(since, limit);
+                    let (log_lines, start, new_cursor) = buf.lines_since_logical(since, limit);
                     // Redaction applies to all three reads below — delta, absolute
                     // and raw ring. `format=raw` keeps ANSI; it is not an opt-out
                     // of redaction, and `data_length` reports what was returned.
+                    let known = terminal_secrets(&mut buf);
                     let data = crate::redaction::redact_wrapped_rows(
                         log_lines.iter().map(|ll| (ll.text(), ll.wrapped)),
-                        &[],
+                        &known,
                     );
                     let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
+                    add_output_page_metadata(
+                        &mut response,
+                        args,
+                        start as u64,
+                        new_cursor as u64,
+                        total as u64,
+                        oldest as u64,
+                    );
                     insert_optional_value(
                         response
                             .as_object_mut()
@@ -3443,7 +3560,7 @@ fn handle_session(
                 } else {
                     total.saturating_sub(limit)
                 };
-                let (log_lines, _) = buf.lines_since_logical(offset, limit);
+                let (log_lines, start, page_end) = buf.lines_since_logical(offset, limit);
                 let mut all_lines: Vec<(String, bool)> =
                     log_lines.iter().map(|ll| (ll.text(), ll.wrapped)).collect();
                 // Only append screen rows when reading the tail (no from_line).
@@ -3465,6 +3582,14 @@ fn handle_session(
                 let known = terminal_secrets(&mut buf);
                 let data = crate::redaction::redact_wrapped_rows(all_lines, &known);
                 let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
+                add_output_page_metadata(
+                    &mut response,
+                    args,
+                    start as u64,
+                    page_end as u64,
+                    total as u64,
+                    oldest as u64,
+                );
                 insert_optional_value(
                     response
                         .as_object_mut()
@@ -3494,14 +3619,41 @@ fn handle_session(
                 });
                 (all_bytes, total_written, secrets)
             };
-            let window = &all_bytes[all_bytes.len().saturating_sub(limit)..];
+            let oldest = total_written.saturating_sub(all_bytes.len() as u64);
+            let requested = args["since_cursor"]
+                .as_u64()
+                .or_else(|| args["from_byte"].as_u64());
+            let offset = requested
+                .unwrap_or_else(|| total_written.saturating_sub(limit as u64))
+                .clamp(oldest, total_written);
+            let mut start = (offset - oldest) as usize;
+            let mut end = start.saturating_add(limit).min(all_bytes.len());
+            // Source-byte cursors must not split a UTF-8 codepoint across pages.
+            // A caller's mid-codepoint start rounds down; our next cursor always
+            // points past the whole codepoint. Raw invalid bytes remain lossy text.
+            while start > 0 && start < all_bytes.len() && all_bytes[start] & 0xc0 == 0x80 {
+                start -= 1;
+            }
+            while end < all_bytes.len() && all_bytes[end] & 0xc0 == 0x80 {
+                end += 1;
+            }
             let data = redact_raw_output(
                 state,
                 session_id,
-                &String::from_utf8_lossy(window),
+                &all_bytes,
+                start..end,
                 ring_secrets,
+                requested.is_some(),
             );
-            let mut response = serde_json::json!({"data": data, "data_length": data.len(), "total_written": total_written, "exited": exited});
+            let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": oldest + end as u64, "total_written": total_written, "exited": exited});
+            add_output_page_metadata(
+                &mut response,
+                args,
+                oldest + start as u64,
+                oldest + end as u64,
+                total_written,
+                oldest,
+            );
             insert_optional_value(
                 response
                     .as_object_mut()
@@ -3919,10 +4071,20 @@ async fn remove_detached_checkout(
     }
 }
 
+#[cfg(test)]
 async fn handle_worktree(
     state: &Arc<AppState>,
     args: &serde_json::Value,
     is_claude_code: bool,
+) -> serde_json::Value {
+    handle_worktree_with_caller(state, args, is_claude_code, None).await
+}
+
+async fn handle_worktree_with_caller(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    is_claude_code: bool,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let action = match require_action(args, "repo", REPO_ACTIONS) {
         Ok(a) => a,
@@ -4062,6 +4224,8 @@ async fn handle_worktree(
                 path.clone(),
                 branch_name,
                 base_ref,
+                resolve_mcp_origin_pty(state, mcp_session_id),
+                args["spawn_session"].as_bool().unwrap_or(false),
             )
             .await
             {
@@ -4734,6 +4898,13 @@ fn handle_agent_with_parent_cwd(
                     ),
                 );
             }
+            let launch_receipt = crate::prompt_receipt::PromptReceipt::capture(
+                &effective_prompt,
+                "TUIC managed spawn / build_spawn_prompt",
+                &launch_args,
+                effective_cwd.as_deref(),
+                deferred_initial_prompt.is_some(),
+            );
             for arg in launch_args {
                 cmd.arg(arg);
             }
@@ -4832,11 +5003,13 @@ fn handle_agent_with_parent_cwd(
                 state,
                 &session_id,
                 PtySession {
+                    launch_receipt: Some(launch_receipt),
                     writer: Arc::new(Mutex::new(writer)),
                     master: pair.master,
                     _child: child,
                     paused: paused.clone(),
                     worktree: None,
+                    initial_cwd: effective_cwd.clone(),
                     cwd: effective_cwd.clone(),
                     display_name: requested_name.clone(),
                     display_name_is_custom: false,
@@ -4850,6 +5023,7 @@ fn handle_agent_with_parent_cwd(
                 None,
                 published_parent.clone(),
             );
+            crate::prompt_receipt::adopt_mcp_instructions(state, &session_id);
             let cwd_str = effective_cwd.clone();
 
             #[cfg(feature = "desktop")]
@@ -6015,6 +6189,17 @@ fn handle_messaging_with_message_id(
                 .max()
                 .unwrap_or(since);
             advance_agent_cursor(state, &tuic_session, next_since);
+            let message_ids: Vec<&str> =
+                messages.iter().map(|message| message.id.as_str()).collect();
+            tracing::info!(
+                source = "agent_msg",
+                event = "inbox_read",
+                caller_session_id = mcp_session_id.unwrap_or(""),
+                caller_peer_id = %tuic_session,
+                inbox_owner = %tuic_session,
+                message_ids = %serde_json::json!(message_ids),
+                "Peer inbox read"
+            );
             let mut resp = serde_json::json!({
                 "messages": messages,
                 "count": messages.len(),
@@ -6602,6 +6787,28 @@ fn handle_story(
     ))
 }
 
+fn handle_workflow_run(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let Some(pty) = resolve_mcp_origin_pty(state, mcp_session_id) else {
+        return serde_json::json!({"error": "workflow_run requires a bound live managed session"});
+    };
+    let Some(project) = crate::progress::project_for_session(state, &pty) else {
+        return serde_json::json!({"error": "calling session has no registered project"});
+    };
+    let action = match serde_json::from_value(args["input"].clone()) {
+        Ok(value) => value,
+        Err(error) => {
+            return serde_json::json!({"error": format!("invalid workflow run action: {error}")});
+        }
+    };
+    to_json_or_error(crate::workflows::run_action_with_events(
+        state, &project, action,
+    ))
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkflowStoryCreateInput {
@@ -6824,6 +7031,49 @@ fn launch_workflow_agent(
     let owner = crate::progress::resolve_owning_project(Some(&project))?
         .to_string_lossy()
         .to_string();
+    let store = crate::workflows::RunStore::open()?;
+    let run = store.snapshot(&input.run_id)?;
+    if run.project != owner {
+        return Err("workflow run does not belong to calling session's project".into());
+    }
+    let attempt = run
+        .attempts
+        .iter()
+        .find(|a| a.id == input.attempt_id)
+        .ok_or("workflow attempt not found")?;
+    if attempt.story_id != run.plan_id
+        && crate::workflows::active_coordinator_session(&run)?.as_deref() != Some(&caller)
+    {
+        return Err("only this run's active coordinator may launch a story worker".into());
+    }
+    if attempt.story_id == run.plan_id {
+        let cwd = state
+            .session_maps
+            .sessions
+            .get(&caller)
+            .and_then(|session| session.lock().cwd.clone())
+            .ok_or("calling session has no working directory")?;
+        let cwd = std::path::Path::new(&cwd)
+            .canonicalize()
+            .map_err(|e| format!("resolve calling worktree: {e}"))?;
+        let path = std::path::Path::new(&input.worktree_path)
+            .canonicalize()
+            .map_err(|e| format!("resolve workflow worktree: {e}"))?;
+        if !cwd.starts_with(&path) {
+            return Err("workflow plan launch must use the caller's isolated worktree".into());
+        }
+    }
+    launch_workflow_effect(state, addr, mcp_session_id, input, &owner, false)
+}
+
+fn launch_workflow_effect(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    mcp_session_id: Option<&str>,
+    input: WorkflowLaunchInput,
+    owner: &str,
+    daemon: bool,
+) -> Result<serde_json::Value, String> {
     if input.agent_type.trim().is_empty() || input.agent_type.len() > 128 {
         return Err("invalid workflow agent type".into());
     }
@@ -6834,16 +7084,7 @@ fn launch_workflow_agent(
     if worktree == owner {
         return Err("workflow agents require an isolated worktree".into());
     }
-    crate::worktree::validate_worktree_path(&owner, &worktree)?;
-    let caller_cwd = state
-        .session_maps
-        .sessions
-        .get(&caller)
-        .and_then(|session| session.lock().cwd.clone())
-        .ok_or("calling session has no working directory")?;
-    let caller_cwd = std::path::Path::new(&caller_cwd)
-        .canonicalize()
-        .map_err(|error| format!("resolve calling worktree: {error}"))?;
+    crate::worktree::validate_worktree_path(owner, &worktree)?;
     let store = crate::workflows::RunStore::open()?;
     let run = store.snapshot(&input.run_id)?;
     if run.project != owner {
@@ -6859,14 +7100,6 @@ fn launch_workflow_agent(
         .ok_or("workflow attempt not found")?;
     if attempt.state != crate::workflows::AttemptState::Running {
         return Err("workflow attempt is not running".into());
-    }
-    if attempt.story_id != run.plan_id
-        && crate::workflows::active_coordinator_session(&run)?.as_deref() != Some(&caller)
-    {
-        return Err("only this run's active coordinator may launch a story worker".into());
-    }
-    if attempt.story_id == run.plan_id && !caller_cwd.starts_with(std::path::Path::new(&worktree)) {
-        return Err("workflow plan launch must use the caller's isolated worktree".into());
     }
     if let Some(binding) = &attempt.agent {
         return Ok(serde_json::json!({
@@ -6908,10 +7141,17 @@ fn launch_workflow_agent(
         )?
     };
     let effect_key = format!("spawn:{}", attempt.id);
-    if run.effects.iter().any(|effect| effect.key == effect_key) {
+    let intended = run.effects.iter().find(|effect| effect.key == effect_key);
+    if intended
+        .is_some_and(|effect| !daemon || effect.state != crate::workflows::EffectState::Intended)
+    {
         return Err("spawn intent already exists; reconcile before retrying".into());
     }
-    if attempt.story_id != run.plan_id {
+    if attempt.story_id != run.plan_id
+        && !run.stories.iter().any(|story| {
+            story.story_id == attempt.story_id && story.worktree_path.as_deref() == Some(&worktree)
+        })
+    {
         let assignment = store.command(
             &run.id,
             &format!("assign-worktree:{}", attempt.story_id),
@@ -6924,20 +7164,32 @@ fn launch_workflow_agent(
             crate::workflows::emit_run_changed(state, &run.project, &run.id, assignment.sequence);
         }
     }
-    let reserved = store.command(
-        &run.id,
-        &format!("spawn-intent:{}", attempt.id),
-        crate::workflows::RunCommand::ReserveEffect {
-            key: effect_key,
-            kind: crate::workflows::EffectKind::SpawnAgent,
-        },
-    )?;
-    crate::workflows::emit_run_changed(state, &run.project, &run.id, reserved.sequence);
-    let crate::workflows::RunEventKind::EffectReserved { effect } = &reserved.event.kind else {
-        return Err("workflow state changed before spawn; retry after refreshing".into());
+    let effect = if let Some(effect) = intended {
+        effect.clone()
+    } else {
+        let reserved = store.command(
+            &run.id,
+            &format!("spawn-intent:{}", attempt.id),
+            crate::workflows::RunCommand::ReserveEffect {
+                key: effect_key,
+                kind: crate::workflows::EffectKind::SpawnAgent,
+            },
+        )?;
+        crate::workflows::emit_run_changed(state, &run.project, &run.id, reserved.sequence);
+        let crate::workflows::RunEventKind::EffectReserved { effect } = reserved.event.kind else {
+            return Err("workflow state changed before spawn; retry after refreshing".into());
+        };
+        effect
     };
     // The reservation and external spawn cannot share a database transaction.
     // Avoid starting the process when a cancellation already won the race.
+    if daemon && store.duration_expired(&run.id)? {
+        store.command(
+            &run.id,
+            &format!("daemon:spawn-deadline:{}", attempt.id),
+            crate::workflows::RunCommand::ExpireDeadline,
+        )?;
+    }
     if store.snapshot(&run.id)?.status != crate::workflows::RunStatus::Running {
         // No external action happened, so a paused run can close the intent.
         // Cancellation has already marked outstanding intents uncertain.
@@ -7730,6 +7982,7 @@ pub(super) async fn mcp_post(
                 state.mcp.sessions.insert(
                     session_id.clone(),
                     crate::state::McpSessionMeta {
+                        prompt_instructions: None,
                         last_activity: now,
                         is_claude_code,
                         requires_meta_tools,
@@ -7773,6 +8026,7 @@ pub(super) async fn mcp_post(
             let instructions =
                 build_mcp_instructions_for_mode(&state, client_name, effective_collapse);
 
+            crate::prompt_receipt::record_mcp_instructions(&state, &session_id, &instructions);
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -8129,6 +8383,7 @@ pub(super) async fn mcp_get(
         state.mcp.sessions.insert(
             sid.clone(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: is_cc_ua,
                 requires_meta_tools: false,
@@ -8307,10 +8562,20 @@ pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
 // ── Unified handlers (merged tools) ──────────────────────────────────────
 
 /// Merged repo tool: dispatches to workspace, github, or worktree handlers.
+#[cfg(test)]
 async fn handle_repo(
     state: &Arc<AppState>,
     args: &serde_json::Value,
     is_claude_code: bool,
+) -> serde_json::Value {
+    handle_repo_with_caller(state, args, is_claude_code, None).await
+}
+
+async fn handle_repo_with_caller(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    is_claude_code: bool,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let action = match require_action(args, "repo", REPO_ACTIONS) {
         Ok(a) => a,
@@ -8326,7 +8591,9 @@ async fn handle_repo(
         | "worktree_create"
         | "worktree_remove"
         | "orphan_cleanup_answer"
-        | "branch_delete" => handle_worktree(state, args, is_claude_code).await,
+        | "branch_delete" => {
+            handle_worktree_with_caller(state, args, is_claude_code, mcp_session_id).await
+        }
         "progress_list" => {
             let path = match require_path(args, action) {
                 Ok(path) => path,
@@ -11283,11 +11550,13 @@ mod tests {
         state.session_maps.sessions.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
                 paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: Some(cwd.to_string()),
                 cwd: Some(cwd.to_string()),
                 display_name: None,
                 display_name_is_custom: false,
@@ -11296,6 +11565,175 @@ mod tests {
                 shell: "true".to_string(),
             }),
         );
+    }
+
+    // Catches: claiming no MCP initialize was captured for an existing PTY
+    // solely because its launch brief is unavailable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prompt_receipt_does_not_hide_served_initialize_without_a_launch_brief() {
+        let state = test_state();
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
+        let mut headers = HeaderMap::new();
+        headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+        let response = mcp_post(
+            State(Arc::clone(&state)),
+            ConnectInfo("127.0.0.1:1".parse().unwrap()),
+            headers,
+            Json(serde_json::json!({
+                "jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+                    "protocolVersion":"2025-06-18",
+                    "clientInfo":{"name":"tuic-bridge","version":"test"}
+                }
+            })),
+        )
+        .await;
+        let body = axum::body::to_bytes(response.into_response().into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        let wire: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let served = wire["result"]["instructions"].as_str().unwrap();
+        let receipt = crate::prompt_receipt::read_receipt(&state, TEST_UUID_A).unwrap();
+        let section = receipt
+            .sections
+            .iter()
+            .find(|section| section.status == "served")
+            .expect("served MCP instructions must remain observable without a launch brief");
+        assert_eq!(section.text, crate::redaction::redact_secrets(served));
+        assert_eq!(section.bytes, Some(served.len() as u64));
+        assert!(receipt.sections.iter().any(|section| {
+            section.label == "Launch receipt unavailable" && section.status == "not_observable"
+        }));
+    }
+
+    // Catches: persisting the pre-preamble workflow/user brief instead of the
+    // final managed argv, or rebuilding system instructions from later settings.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prompt_receipt_records_final_managed_preamble_and_explicit_instruction_args() {
+        let state = test_state();
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        state
+            .mcp
+            .to_session
+            .insert("receipt-parent-protocol".into(), TEST_UUID_B.into());
+        // A real OS shell waits on input. This probes TUIC's spawn argv/metadata,
+        // not the behavior of any third-party model CLI.
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action":"spawn", "agent_type":"claude", "binary_path":"/bin/sh",
+                "name":"receipt probe", "prompt":"Inspect this launch receipt",
+                "cwd":root.path(), "args":["-c", "read receipt_input", "{prompt}", "--append-system-prompt", "é🦀"]
+            }),
+            Some("receipt-parent-protocol"),
+        );
+        let session_id = spawned["session_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("spawn failed: {spawned}"));
+        let captured = crate::prompt_receipt::read_receipt(&state, session_id);
+        let stopped = handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":session_id}),
+            None,
+        );
+        assert!(
+            stopped.get("error").is_none(),
+            "probe cleanup failed: {stopped}"
+        );
+        let receipt = captured.unwrap();
+        assert!(
+            receipt.sections[0]
+                .text
+                .starts_with("## TUICommander Multi-Agent Context")
+        );
+        assert!(receipt.sections[0].text.contains(TEST_UUID_B));
+        assert!(
+            receipt.sections[0]
+                .text
+                .ends_with("Inspect this launch receipt")
+        );
+        assert_eq!(
+            receipt.sections[0].source,
+            "TUIC managed spawn / build_spawn_prompt"
+        );
+        assert_eq!(receipt.sections[1].text, "é🦀");
+        assert_eq!(receipt.sections[1].bytes, Some(6));
+    }
+
+    // Catches: rebuilding MCP instructions from current settings, losing early
+    // initialize observations, or dropping the PTY copy when the protocol is reaped.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prompt_receipt_keeps_the_served_initialize_payload_after_settings_change_and_reaping()
+    {
+        for late_registration in [false, true] {
+            let state = test_state();
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let attach = || {
+                insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
+                let historical = crate::prompt_receipt::read_receipt(&state, TEST_UUID_A).unwrap();
+                assert_eq!(historical.sections[0].status, "not_observable");
+                assert_eq!(historical.sections[0].text, "Not observable by TUIC");
+                state
+                    .session_maps
+                    .sessions
+                    .get(TEST_UUID_A)
+                    .unwrap()
+                    .lock()
+                    .launch_receipt = Some(crate::prompt_receipt::PromptReceipt::capture(
+                    "é🦀",
+                    "stored generator",
+                    &["é🦀".into()],
+                    None,
+                    false,
+                ));
+            };
+            if !late_registration {
+                attach();
+            }
+            let mut headers = HeaderMap::new();
+            headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+            let response = mcp_post(
+            State(Arc::clone(&state)), ConnectInfo("127.0.0.1:1".parse().unwrap()), headers,
+            Json(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocolVersion":"2025-06-18","clientInfo":{"name":"tuic-bridge","version":"test"}
+            }})),
+        ).await;
+            let bytes = axum::body::to_bytes(response.into_response().into_body(), 128 * 1024)
+                .await
+                .unwrap();
+            let wire: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let served = wire["result"]["instructions"].as_str().unwrap();
+            assert!(
+                served.len() <= 32_768,
+                "test handshake must fit the section cap"
+            );
+            if late_registration {
+                attach();
+            }
+            crate::prompt_receipt::adopt_mcp_instructions(&state, TEST_UUID_A);
+            let old_collapse = state.config.read().collapse_tools;
+            state.config.write().collapse_tools = !old_collapse;
+            // The live PTY must own its copy, independent of MCP protocol lifetime.
+            state.mcp.sessions.clear();
+            let receipt = crate::prompt_receipt::read_receipt(&state, TEST_UUID_A).unwrap();
+            let section = receipt
+                .sections
+                .iter()
+                .find(|s| s.status == "served")
+                .expect("stored initialize receipt");
+            assert_eq!(section.text, crate::redaction::redact_secrets(served));
+            assert_eq!(section.bytes, Some(served.len() as u64));
+            assert!(section.source.starts_with("TUIC MCP initialize ("));
+            assert_eq!(receipt.sections[0].source, "stored generator");
+            assert_eq!(receipt.sections[0].bytes, Some(6));
+            assert_eq!(receipt.sections.last().unwrap().status, "not_observable");
+            assert!(crate::prompt_receipt::read_receipt(&state, "missing-session").is_err());
+        }
     }
 
     #[cfg(unix)]
@@ -11397,6 +11835,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -12390,6 +12829,7 @@ mod tests {
         state.mcp.sessions.insert(
             live.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -12943,6 +13383,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-old".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now()
                     - MCP_OWNER_ACTIVITY_GRACE
                     - std::time::Duration::from_secs(1),
@@ -13141,6 +13582,7 @@ mod tests {
         state.mcp.sessions.insert(
             eager_mcp_session.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -14015,6 +14457,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-stale".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -14532,6 +14975,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-self".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -15835,6 +16279,7 @@ mod tests {
         state.mcp.sessions.insert(
             sid.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -15960,6 +16405,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-old".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now()
                     - MCP_OWNER_ACTIVITY_GRACE
                     - std::time::Duration::from_secs(1),
@@ -16059,11 +16505,13 @@ mod tests {
         state.session_maps.sessions.insert(
             session_id.to_string(),
             Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: Arc::new(Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
                 paused: Arc::new(AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: None,
                 cwd: None,
                 display_name: Some("submission-probe".to_string()),
                 display_name_is_custom: false,
@@ -16179,6 +16627,67 @@ mod tests {
         assert!(r["error"].as_str().unwrap().contains("not registered"));
     }
 
+    /// Catches: an inbox read omits the MCP caller or conflates it with the peer owner;
+    /// also prevents mail bodies from leaking into the audit.
+    #[test]
+    fn agent_inbox_audit_keeps_caller_owner_and_message_ids_without_bodies() {
+        #[derive(Clone)]
+        struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-audit-sender");
+        register_peer(&state, TEST_UUID_B, "owner", "mcp-audit-caller");
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "send", "to": TEST_UUID_B, "message": "PRIVATE_MAIL_BODY"}),
+            Some("mcp-audit-sender"),
+        );
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Sink(Arc::clone(&output));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || sink.clone())
+            .with_ansi(false)
+            .finish();
+        let (read, empty) = tracing::subscriber::with_default(subscriber, || {
+            (
+                handle_messaging(
+                    &state,
+                    &serde_json::json!({"action": "inbox"}),
+                    Some("mcp-audit-caller"),
+                ),
+                handle_messaging(
+                    &state,
+                    &serde_json::json!({"action": "inbox"}),
+                    Some("mcp-audit-caller"),
+                ),
+            )
+        });
+        assert_eq!(read["messages"][0]["id"], sent["message_id"]);
+        assert_eq!(empty["count"], 0);
+        let log = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert_eq!(log.matches("event=\"inbox_read\"").count(), 2, "{log}");
+        assert!(
+            log.contains("INFO") && log.contains("caller_session_id=\"mcp-audit-caller\""),
+            "{log}"
+        );
+        assert!(log.contains(&format!("inbox_owner={TEST_UUID_B}")), "{log}");
+        assert!(
+            log.contains(&format!("caller_peer_id={TEST_UUID_B}")),
+            "{log}"
+        );
+        assert!(log.contains(sent["message_id"].as_str().unwrap()), "{log}");
+        assert!(log.contains("message_ids=[]"), "{log}");
+        assert!(!log.contains("PRIVATE_MAIL_BODY"), "{log}");
+    }
+
     #[test]
     fn messaging_send_and_inbox() {
         let state = test_state();
@@ -16232,6 +16741,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -16307,6 +16817,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -16364,6 +16875,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -16434,6 +16946,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17142,6 +17655,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17211,6 +17725,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17418,6 +17933,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17612,6 +18128,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17859,6 +18376,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 // A bridge-owned SSE stream can look Claude-capable even when
                 // its managed terminal is actually Codex. The PTY type is the
@@ -18489,6 +19007,7 @@ mod tests {
                 "remote",
                 "repo",
                 "story",
+                "workflow_run",
                 "workflow_story_create",
                 "workflow_report",
                 "workflow_launch",
@@ -18606,6 +19125,125 @@ mod tests {
             ["Bound plan"],
             "the caller's tab project scopes the list"
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_run_history_matches_owner_event_cursor() {
+        // Catches: MCP omitting read actions, losing the event cursor, or using a foreign project.
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().into());
+        let project = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = project.path().to_string_lossy().to_string();
+        let state = test_state();
+        state
+            .mcp
+            .to_session
+            .insert("run-mcp".into(), TEST_UUID_A.into());
+        insert_managed_test_session(&state, "pty-run", &path);
+        state.bind_live_pty(TEST_UUID_A, "pty-run");
+        crate::repo_watcher::start_watching(&path, &state).unwrap();
+        let plan = crate::stories::StoryStore::open()
+            .unwrap()
+            .create_plan(crate::stories::NewPlan {
+                project: path.clone(),
+                title: "Run history".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let definition = crate::workflows::WorkflowStore::open()
+            .unwrap()
+            .seed_templates(&path)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind == crate::workflows::WorkflowKind::Plan)
+            .unwrap();
+        let store = crate::workflows::RunStore::open().unwrap();
+        let run = store
+            .start_plan(&path, &plan.id, &definition.id, 1, Default::default())
+            .unwrap();
+        store
+            .command(&run.id, "pause", crate::workflows::RunCommand::Pause)
+            .unwrap();
+        for input in [
+            serde_json::json!({"action":"get","run_id":run.id}),
+            serde_json::json!({"action":"list_plan_runs","plan_id":plan.id,"limit":20}),
+            serde_json::json!({"action":"events","run_id":run.id,"after_sequence":1,"limit":1}),
+        ] {
+            let expected = to_json_or_error(crate::workflows::run_action(
+                &path,
+                serde_json::from_value(input.clone()).unwrap(),
+            ));
+            let actual = handle_mcp_tool_call(
+                &state,
+                loopback_addr(),
+                "workflow_run",
+                &serde_json::json!({"input":input}),
+                Some("run-mcp"),
+            )
+            .await;
+            assert_eq!(actual, expected);
+        }
+        let result = handle_workflow_run(
+            &state,
+            &serde_json::json!({"input":{"action":"get","run_id":run.id}}),
+            None,
+        );
+        assert_eq!(
+            result["error"],
+            "workflow_run requires a bound live managed session"
+        );
+        let foreign = crate::stories::StoryStore::open()
+            .unwrap()
+            .create_plan(crate::stories::NewPlan {
+                project: "/another/project".into(),
+                title: "Foreign".into(),
+                source: "plan.md".into(),
+            })
+            .unwrap();
+        let result = handle_workflow_run(
+            &state,
+            &serde_json::json!({"input":{"action":"list_plan_runs","plan_id":foreign.id,"limit":20}}),
+            Some("run-mcp"),
+        );
+        assert!(
+            result
+                .to_string()
+                .contains("plan does not belong to project")
+        );
+    }
+
+    #[test]
+    fn workflow_run_schema_exposes_typed_starts_and_recovery_without_internal_receipts() {
+        // Catches: schema-less starts/recovery, unresolved embedded refs, or internal commands advertised.
+        let definition = native_tool_named("workflow_run");
+        let schema = &definition["inputSchema"]["properties"]["input"];
+        let encoded = schema.to_string();
+        for required in [
+            "start_graph",
+            "request_id",
+            "expected_revision",
+            "after_sequence",
+            "resume_graph",
+            "activation_id",
+            "resolution",
+        ] {
+            assert!(encoded.contains(required), "missing {required}: {schema}");
+        }
+        assert!(
+            !encoded.contains("$ref"),
+            "embedded schema must inline subtypes"
+        );
+        for internal in [
+            "report_bound_attempt",
+            "bind_agent",
+            "start_graph_agent",
+            "expire_deadline",
+        ] {
+            assert!(
+                !encoded.contains(internal),
+                "internal command {internal} is advertised"
+            );
+        }
     }
 
     #[test]
@@ -19616,6 +20254,7 @@ mod tests {
         state.mcp.sessions.insert(
             "grok-session".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: true,
@@ -20227,11 +20866,13 @@ mod tests {
         state.session_maps.sessions.insert(
             TEST_UUID_A.to_string(),
             parking_lot::Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: Arc::new(parking_lot::Mutex::new(writer)),
                 master: Box::new(FailingResizeMaster(pair.master)),
                 _child: child,
                 paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: Some(TEST_SPAWN_CWD.to_string()),
                 cwd: Some(TEST_SPAWN_CWD.to_string()),
                 display_name: None,
                 display_name_is_custom: false,
@@ -21725,11 +22366,13 @@ mod tests {
         state.session_maps.sessions.insert(
             tuic.clone(),
             parking_lot::Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
                 paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: Some("/Gits/personal/beta".to_string()),
                 cwd: Some("/Gits/personal/beta".to_string()),
                 display_name: None,
                 display_name_is_custom: false,
@@ -21844,6 +22487,7 @@ mod tests {
         state.mcp.sessions.insert(
             mcp_sid.clone(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -22830,6 +23474,374 @@ mod tests {
         assert_eq!(response["met"], false);
         assert_eq!(response["timed_out"], true);
         assert!(response.get("hint").is_none());
+    }
+
+    // Catches: delta pages expose PEM body rows because only the page, not
+    // the retained multiline key, is considered during secret discovery.
+    #[test]
+    fn session_output_delta_pages_do_not_leak_multiline_private_key_body() {
+        let state = test_state();
+        let sid = "critic-pem-pages";
+        let body = "QWxwaGFCZXRhR2FtbWFEZWx0YUVwc2lsb25aZXRh";
+        let mut vt = crate::state::VtLogBuffer::new(2, 120, 100);
+        vt.process(
+            format!(
+                "-----BEGIN OPENSSH PRIVATE KEY-----\r\n{body}\r\n-----END OPENSSH PRIVATE KEY-----\r\nafter\r\nflush\r\n"
+            )
+            .as_bytes(),
+        );
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(vt));
+        let mut cursor = 0;
+        let mut observed = String::new();
+        loop {
+            let page = session_output(
+                &state,
+                &serde_json::json!({
+                    "action": "output", "session_id": sid,
+                    "since_cursor": cursor, "limit": 1
+                }),
+            );
+            observed.push_str(page["data"].as_str().unwrap());
+            if page["has_more"] == false {
+                break;
+            }
+            let next = page["next_cursor"].as_u64().unwrap();
+            assert!(next > cursor, "paging must advance: {page}");
+            cursor = next;
+        }
+        assert!(
+            observed.contains("after"),
+            "must reach output after the key"
+        );
+        assert!(
+            !observed.contains(body),
+            "delta paging leaked a private key body: {observed:?}"
+        );
+    }
+
+    // Catches: splitting secret discovery at the history/screen boundary exposes
+    // a PEM body even though the complete key remains in the terminal.
+    #[test]
+    fn session_output_pages_do_not_leak_private_key_crossing_history_screen() {
+        let state = test_state();
+        let sid = "critic-pem-screen-boundary";
+        let body = "QWxwaGFCZXRhR2FtbWFEZWx0YUVwc2lsb25aZXRh";
+        let text = format!(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\r\n{body}\r\n-----END OPENSSH PRIVATE KEY-----\r\n"
+        );
+        let mut vt = crate::state::VtLogBuffer::new(2, 120, 100);
+        vt.process(text.as_bytes());
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(vt));
+        let mut ring = crate::OutputRingBuffer::new(4096);
+        ring.write(text.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        let mut leaked = Vec::new();
+        for request in [
+            serde_json::json!({"from_line":1,"limit":1}),
+            serde_json::json!({"since_cursor":1,"limit":1}),
+            serde_json::json!({"limit":1}),
+            serde_json::json!({"format":"raw","from_byte":0,"limit":4096}),
+            serde_json::json!({"format":"raw","since_cursor":0,"limit":4096}),
+        ] {
+            let mut args = request.clone();
+            args["action"] = "output".into();
+            args["session_id"] = sid.into();
+            let page = session_output(&state, &args);
+            let data = page["data"].as_str().expect("terminal output must exist");
+            if data.contains(body) {
+                leaked.push(request);
+            }
+        }
+        assert!(
+            leaked.is_empty(),
+            "retained PEM body leaked across history/screen boundary: {leaked:?}"
+        );
+    }
+
+    // Catches: reusing the absolute window's total cursor skips all later pages.
+    #[test]
+    fn session_output_pages_clean_history_without_skipping_or_repeating_lines() {
+        let defs = native_tool_definitions();
+        let session = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "session")
+            .unwrap();
+        assert_eq!(
+            session["inputSchema"]["properties"]["from_byte"]["minimum"],
+            0
+        );
+        let state = test_state();
+        let sid = "paged-clean";
+        let mut vt = crate::state::VtLogBuffer::new(2, 12, 100);
+        for line in [
+            "first",
+            "a long line wrapping across several rows",
+            "日本語",
+            "fourth",
+            "screen",
+            "",
+        ] {
+            vt.process(format!("{line}\r\n").as_bytes());
+        }
+        let (expected, _, total) = vt.lines_since_logical(0, usize::MAX);
+        let expected =
+            crate::redaction::join_wrapped_rows(expected.iter().map(|l| (l.text(), l.wrapped)));
+        state
+            .grid
+            .vt_log_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(vt));
+        let mut position = 0;
+        let mut pages = Vec::new();
+        loop {
+            let page = session_output(
+                &state,
+                &serde_json::json!({
+                    "action":"output", "session_id":sid, "from_line":position, "limit":2
+                }),
+            );
+            assert_eq!(page["cursor"], total); // Existing snapshot/delta contract.
+            pages.push(page["data"].as_str().unwrap().to_owned());
+            if !page["has_more"].as_bool().unwrap() {
+                assert!(page["next_cursor"].is_null());
+                break;
+            }
+            assert_eq!(page["truncated"], true);
+            assert!(page["continuation"].as_str().unwrap().contains("from_line"));
+            let next = page["next_cursor"].as_u64().unwrap();
+            assert!(next > position && next < total as u64);
+            position = next;
+        }
+        assert_eq!(pages.join("\n"), expected);
+        let delta = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "since_cursor":0, "limit":1
+            }),
+        );
+        assert_eq!(delta["cursor"], delta["next_cursor"]);
+        assert_eq!(delta["has_more"], true);
+        let tail = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "limit":1
+            }),
+        );
+        assert_eq!(tail["truncated"], true);
+        assert!(
+            tail["continuation"]
+                .as_str()
+                .unwrap()
+                .contains("older output")
+        );
+    }
+
+    // Catches: source-byte windows split Unicode or keep returning the tail.
+    #[test]
+    fn session_output_pages_raw_unicode_and_ansi_without_reexecuting() {
+        let state = test_state();
+        let sid = "paged-raw";
+        let expected = "\x1b[31mfirst café 日本語🙂\x1b[0m\r\nlast";
+        let mut ring = crate::OutputRingBuffer::new(4096);
+        ring.write(expected.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        for limit in [1, 2, 7, 50] {
+            let mut position = 0;
+            let mut actual = String::new();
+            loop {
+                let page = session_output(
+                    &state,
+                    &serde_json::json!({
+                        "action":"output", "session_id":sid, "format":"raw", "since_cursor":position, "limit":limit
+                    }),
+                );
+                actual.push_str(page["data"].as_str().unwrap());
+                assert_eq!(page["start_offset"], position);
+                assert_eq!(page["total_written"], expected.len());
+                let next = page["cursor"].as_u64().unwrap();
+                assert!(next > position);
+                if !page["has_more"].as_bool().unwrap() {
+                    assert_eq!(next, expected.len() as u64);
+                    break;
+                }
+                assert_eq!(page["next_cursor"], next);
+                assert!(page["continuation"].as_str().unwrap().contains("from_byte"));
+                position = next;
+            }
+            assert_eq!(actual, expected, "limit={limit}");
+        }
+        let tail = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "format":"raw", "limit":3
+            }),
+        );
+        assert_eq!(tail["data"], "ast");
+        assert_eq!(tail["truncated"], true);
+        assert!(
+            tail["continuation"]
+                .as_str()
+                .unwrap()
+                .contains("older output")
+        );
+    }
+
+    // Catches: eviction is silently presented as complete output, or a future
+    // offset underflows and panics instead of producing an exhausted page.
+    #[test]
+    fn session_output_raw_pages_report_eviction_and_exhausted_offsets() {
+        let state = test_state();
+        let sid = "paged-eviction";
+        let mut ring = crate::OutputRingBuffer::new(8);
+        ring.write(b"0123456789abcdef");
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        let stale = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "format":"raw", "from_byte":0, "limit":3
+            }),
+        );
+        assert_eq!(stale["data"], "89a");
+        assert_eq!(stale["oldest_offset"], 8);
+        assert_eq!(stale["missed_count"], 8);
+        assert_eq!(stale["next_cursor"], 11);
+        for offset in [16, 100, u64::MAX] {
+            let empty = session_output(
+                &state,
+                &serde_json::json!({
+                    "action":"output", "session_id":sid, "format":"raw", "from_byte":offset
+                }),
+            );
+            assert_eq!(empty["data"], "");
+            assert_eq!(empty["cursor"], 16);
+            assert_eq!(empty["has_more"], false);
+            assert_eq!(empty["truncated"], false);
+        }
+        let entry = state.session_maps.output_buffers.get(sid).unwrap();
+        let mut ring = entry.lock();
+        *ring = crate::OutputRingBuffer::new(8);
+        drop(ring);
+        drop(entry);
+        let empty = session_output(
+            &state,
+            &serde_json::json!({
+                "action":"output", "session_id":sid, "format":"raw", "from_byte":0
+            }),
+        );
+        assert_eq!(empty["data"], "");
+        assert_eq!(empty["cursor"], 0);
+        assert_eq!(empty["has_more"], false);
+    }
+
+    // Catches: tiny raw pages leak fragments that reconstruct a full token,
+    // including registered values whose byte length changes during masking.
+    #[test]
+    fn session_output_raw_tiny_pages_cannot_reconstruct_secrets() {
+        let state = test_state();
+        let sid = "paged-secret";
+        let registered = "private-value日本語";
+        let form = crate::secrets::Form::request(
+            vec![crate::secrets::Field {
+                name: "TOKEN".into(),
+                kind: crate::secrets::FieldKind::Password,
+                display: None,
+            }],
+            "test".into(),
+        )
+        .unwrap();
+        let opened = state.secrets.open(form).unwrap();
+        state
+            .secrets
+            .submit(
+                &opened.nonce,
+                serde_json::from_value(serde_json::json!({
+                    "nonce":opened.nonce, "status":"stored", "values":{"TOKEN":registered}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let raw = format!("before {WRAP_SECRET} after {registered} end");
+        let mut ring = crate::OutputRingBuffer::new(4096);
+        ring.write(raw.as_bytes());
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        let mut actual = String::new();
+        let mut position = 0;
+        loop {
+            let page = session_output(
+                &state,
+                &serde_json::json!({
+                    "action":"output", "session_id":sid, "format":"raw", "from_byte":position, "limit":1
+                }),
+            );
+            actual.push_str(page["data"].as_str().unwrap());
+            let next = page["cursor"].as_u64().unwrap();
+            assert!(next > position);
+            if page["has_more"] == false {
+                break;
+            }
+            position = next;
+        }
+        assert_eq!(
+            actual,
+            format!(
+                "before {} after {} end",
+                "*".repeat(WRAP_SECRET.len()),
+                "*".repeat(registered.len())
+            )
+        );
+    }
+
+    // Catches: lossy decoding expands malformed PTY bytes and makes the next
+    // source-byte cursor index into a different position or panic.
+    #[test]
+    fn session_output_raw_pages_keep_source_offsets_for_invalid_utf8() {
+        let state = test_state();
+        let sid = "paged-invalid";
+        let bytes = b"a\xff\xc3\xa9\xfez";
+        let mut ring = crate::OutputRingBuffer::new(64);
+        ring.write(bytes);
+        state
+            .session_maps
+            .output_buffers
+            .insert(sid.into(), parking_lot::Mutex::new(ring));
+        let mut output = String::new();
+        let mut cursor = 0;
+        loop {
+            let page = session_output(
+                &state,
+                &serde_json::json!({
+                    "action":"output", "session_id":sid, "format":"raw", "from_byte":cursor, "limit":1
+                }),
+            );
+            output.push_str(page["data"].as_str().unwrap());
+            let next = page["cursor"].as_u64().unwrap();
+            assert!(next > cursor);
+            cursor = next;
+            if page["has_more"] == false {
+                break;
+            }
+        }
+        assert_eq!(cursor, bytes.len() as u64);
+        assert_eq!(output, String::from_utf8_lossy(bytes));
     }
 
     /// `session output` response includes `cursor` field (== total VtLog lines)
@@ -24078,6 +25090,7 @@ mod tests {
         state.mcp.sessions.insert(
             parent_mcp.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -26289,6 +27302,7 @@ mod tests {
         state.mcp.sessions.insert(
             sid.clone(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -26582,6 +27596,7 @@ mod tests {
         state.mcp.sessions.insert(
             sid.clone(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -27260,5 +28275,325 @@ mod critic_story_tool_text {
             .clone();
         let description = definition["description"].as_str().unwrap_or_default();
         assert!(description.contains("receipt"), "{description}");
+    }
+}
+
+/// Called only by the database-owning workflow actor, never by a transport caller.
+pub(crate) fn launch_daemon_workflow_agent(
+    state: &Arc<AppState>,
+    run_id: &str,
+    attempt_id: &str,
+    worktree: &str,
+    agent_type: &str,
+    feedback: Option<String>,
+) -> Result<serde_json::Value, String> {
+    state.workflow_runtime.require_owner()?;
+    let run = crate::workflows::RunStore::open()?.snapshot(run_id)?;
+    let attempt = run
+        .attempts
+        .iter()
+        .find(|a| a.id == attempt_id)
+        .ok_or("workflow attempt missing")?;
+    if !run.graph_executions.iter().any(|g| {
+        g.target_id == attempt.story_id
+            && g.activations.iter().any(|a| {
+                (a.node_id == attempt.node_id
+                    || (attempt.story_id == run.plan_id
+                        && g.definition.graph.nodes.iter().any(|n| {
+                            n.id == a.node_id
+                                && matches!(n.kind, crate::workflows::NodeKind::CreateStories)
+                        })))
+                    && a.state == crate::workflows::graph::ActivationState::Running
+            })
+    }) {
+        return Err("daemon launch requires a reached Agent activation".into());
+    }
+    launch_workflow_effect(
+        state,
+        "127.0.0.1:0"
+            .parse()
+            .map_err(|e| format!("daemon address: {e}"))?,
+        None,
+        WorkflowLaunchInput {
+            run_id: run_id.into(),
+            attempt_id: attempt_id.into(),
+            worktree_path: worktree.into(),
+            agent_type: agent_type.into(),
+            skills: vec![],
+            feedback,
+        },
+        &run.project,
+        true,
+    )
+}
+
+pub(crate) async fn create_daemon_workflow_worktree(
+    state: &Arc<AppState>,
+    project: &str,
+    branch: &str,
+) -> Result<String, String> {
+    super::worktree_routes::create_worktree_shared(state, project.into(), branch.into(), None)
+        .await
+        .map_err(|(_, value)| value.0.to_string())
+        .and_then(|created| {
+            if let Some(error) = created.setup_script_error {
+                return Err(error.to_string());
+            }
+            Ok(created.path)
+        })
+}
+
+#[cfg(test)]
+mod session_placement_tests {
+    use super::super::tests::test_state;
+    use super::*;
+
+    // Catches: accepting another caller's target, cross-repo navigation, main/unknown
+    // checkouts, duplicate saved tabs, or an association lost when backend state restarts.
+    #[test]
+    #[serial_test::serial]
+    fn declared_worktree_is_caller_scoped_and_durable() {
+        fn insert_session(state: &AppState, id: &str) {
+            use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+            let pair = native_pty_system()
+                .openpty(PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .unwrap();
+            let (shell, script_arg) = crate::test_support::host_shell();
+            let mut command = CommandBuilder::new(shell);
+            command.args([script_arg, &tuic_test_support::wait_for_stdin_script()]);
+            let child = pair.slave.spawn_command(command).unwrap();
+            let writer = pair.master.take_writer().unwrap();
+            state.session_maps.sessions.insert(
+                id.into(),
+                parking_lot::Mutex::new(crate::state::PtySession {
+                    writer: Arc::new(parking_lot::Mutex::new(writer)),
+                    master: pair.master,
+                    _child: child,
+                    paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    worktree: None,
+                    initial_cwd: None,
+                    cwd: None,
+                    display_name: None,
+                    display_name_is_custom: false,
+                    display_name_from_spawn: false,
+                    is_remote: false,
+                    shell: shell.into(),
+                }),
+            );
+        }
+        fn git(dir: &std::path::Path, args: &[&str]) {
+            let output = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=Placement Test",
+                    "-c",
+                    "user.email=placement@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(dir.path().join("config"));
+        let root = dir.path().join("repo");
+        let foreign = dir.path().join("foreign");
+        let worktree = dir.path().join("feature");
+        let foreign_worktree = dir.path().join("foreign-feature");
+        for repo in [&root, &foreign] {
+            std::fs::create_dir(repo).unwrap();
+            git(repo, &["init", "-b", "main"]);
+            git(repo, &["commit", "--allow-empty", "-m", "initial"]);
+        }
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                worktree.to_str().unwrap(),
+            ],
+        );
+        git(
+            &foreign,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "foreign-feature",
+                foreign_worktree.to_str().unwrap(),
+            ],
+        );
+        let root_path = root.to_str().unwrap();
+        let foreign_path = foreign.to_str().unwrap();
+        crate::config::replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                root_path: {"path":root_path,"workspaces":{"main":{"worktreePath":root_path,"savedTerminals":[
+                    {"tuicSession":"caller-peer","name":"Caller","cwd":root_path,"fontSize":14,"agentType":"codex"},
+                    {"tuicSession":"sibling-peer","name":"Sibling","cwd":root_path,"fontSize":14,"agentType":"codex"}
+                ]}}},
+                foreign_path: {"path":foreign_path,"workspaces":{}}
+            }, "repoOrder":[root_path,foreign_path]
+        })).unwrap();
+        let state = test_state();
+        insert_session(&state, "caller-pty");
+        {
+            let entry = state.session_maps.sessions.get("caller-pty").unwrap();
+            let mut session = entry.lock();
+            session.initial_cwd = Some(root_path.into());
+            // An OSC 7 navigation must not redefine which repo owns the caller.
+            session.cwd = Some(foreign_path.into());
+        }
+        state.bind_live_pty("caller-peer", "caller-pty");
+        state
+            .mcp
+            .to_session
+            .insert("placement-mcp".into(), "caller-peer".into());
+        let mut events = state.event_bus.subscribe();
+        let request = serde_json::json!({"action":"declare_worktree","worktree_path":worktree});
+        let before = crate::config::load_repositories();
+        for rejected in [
+            serde_json::json!({"action":"declare_worktree","worktree_path":worktree,"session_id":"sibling-pty"}),
+            serde_json::json!({"action":"declare_worktree","worktree_path":foreign_worktree}),
+            serde_json::json!({"action":"declare_worktree","worktree_path":root}),
+            serde_json::json!({"action":"declare_worktree","worktree_path":dir.path().join("missing")}),
+            serde_json::json!({"action":"declare_worktree"}),
+        ] {
+            assert!(handle_session(&state, &rejected, Some("placement-mcp"))["error"].is_string());
+            assert_eq!(crate::config::load_repositories(), before);
+            assert!(
+                events.try_recv().is_err(),
+                "rejection emitted a placement mutation"
+            );
+        }
+        assert!(handle_session(&state, &request, None)["error"].is_string());
+        let placed = handle_session(&state, &request, Some("placement-mcp"));
+        assert!(placed.get("error").is_none(), "{placed}");
+        assert_eq!(placed["creator_session"], "caller-pty");
+        assert_eq!(placed["workspace_id"], "feature");
+        let saved = crate::config::load_repositories();
+        assert_eq!(
+            saved["repos"][root_path]["workspaces"]["main"]["savedTerminals"][0]["tuicSession"],
+            "sibling-peer"
+        );
+        assert_eq!(
+            saved["repos"][root_path]["workspaces"]["feature"]["savedTerminals"][0]["tuicSession"],
+            "caller-peer"
+        );
+        assert_eq!(
+            handle_session(&state, &request, Some("placement-mcp")),
+            placed
+        );
+        assert_eq!(
+            crate::config::load_repositories(),
+            saved,
+            "a retry duplicated or reordered the saved caller"
+        );
+        let declared = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|event| {
+                if let crate::state::AppEvent::SessionWorktreeDeclared(payload) = event {
+                    Some(payload)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(
+            crate::mcp_http::sse_routes::event_payload_for_test(
+                &crate::state::AppEvent::SessionWorktreeDeclared(declared.clone())
+            ),
+            serde_json::to_value(declared).unwrap()
+        );
+        let restarted = test_state();
+        insert_session(&restarted, "restored-pty");
+        restarted
+            .session_maps
+            .sessions
+            .get("restored-pty")
+            .unwrap()
+            .lock()
+            .cwd = Some(root_path.into());
+        restarted.bind_live_pty("caller-peer", "restored-pty");
+        let row = super::super::session::local_session_rows(&restarted)
+            .into_iter()
+            .find(|r| r.session_id == "restored-pty")
+            .unwrap();
+        assert_eq!(
+            row.worktree_path.as_deref(),
+            Some(worktree.to_str().unwrap())
+        );
+        assert_eq!(row.worktree_branch.as_deref(), Some("feature"));
+        assert_eq!(row.cwd.as_deref(), Some(root_path));
+        assert!(
+            restarted
+                .session_maps
+                .sessions
+                .get("restored-pty")
+                .unwrap()
+                .lock()
+                .worktree
+                .is_none(),
+            "declaration must not acquire automatic worktree cleanup ownership"
+        );
+        git(&root, &["worktree", "list", "--porcelain"]);
+        state
+            .session_maps
+            .sessions
+            .get("caller-pty")
+            .unwrap()
+            .lock()
+            ._child
+            .kill()
+            .unwrap();
+        restarted
+            .session_maps
+            .sessions
+            .get("restored-pty")
+            .unwrap()
+            .lock()
+            ._child
+            .kill()
+            .unwrap();
+    }
+
+    // Catches: an implemented declaration omitted from the discoverable request schema.
+    #[test]
+    fn declare_worktree_schema_documents_caller_binding_and_http_transport() {
+        let definitions = native_tool_definitions();
+        let session = definitions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "session")
+            .unwrap();
+        assert!(
+            session["description"]
+                .as_str()
+                .unwrap()
+                .contains("POST /mcp")
+        );
+        assert!(
+            session["inputSchema"]["properties"]["action"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("declare_worktree")
+        );
+        assert_eq!(
+            session["inputSchema"]["properties"]["worktree_path"]["type"],
+            "string"
+        );
     }
 }

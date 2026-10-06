@@ -5,6 +5,7 @@
 )]
 
 pub mod acp;
+pub(crate) mod acp_chat;
 pub(crate) mod acp_commands;
 pub(crate) mod agent;
 pub(crate) mod agent_hook;
@@ -19,6 +20,7 @@ pub(crate) mod ai_agent;
 pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
+pub(crate) mod prompt_receipt;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
@@ -1973,6 +1975,7 @@ pub fn run() {
             pty::resume_pty,
             pty::get_kitty_flags,
             pty::get_last_prompt,
+            prompt_receipt::get_prompt_receipt,
             pty::get_shell_state,
             pty::get_session_shell_family,
             pty::close_pty,
@@ -2405,6 +2408,7 @@ pub fn run() {
             design_mode::tauri_commands::get_design_mode_status,
             acp_commands::acp_workspace_root,
             acp_commands::acp_connect,
+            acp_chat::acp_chat_open,
             acp_commands::acp_reconnect,
             acp_commands::acp_disconnect,
             acp_commands::acp_kill,
@@ -2429,6 +2433,9 @@ pub fn run() {
             acp_commands::acp_respond_elicitation,
             acp_commands::acp_one_shot_prompt,
             ego_cli::ego_providers,
+            ego_cli::perimeter::ego_perimeter,
+            ego_cli::perimeter::ego_set_perimeter_roots,
+            ego_cli::perimeter::ego_set_perimeter_network,
             ego_cli::ego_set_default_model
         ])
         .build(tauri::generate_context!())

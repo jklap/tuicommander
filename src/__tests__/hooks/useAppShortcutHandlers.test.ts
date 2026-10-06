@@ -29,6 +29,7 @@ const { mockDialogs, mockInvoke, mockNavigate, mockStores } = vi.hoisted(() => (
 			state: { activeId: "term-1" as string | null },
 			getActive: vi.fn(),
 			getPreviousActiveId: vi.fn(),
+			stepHistory: vi.fn(),
 			getIds: vi.fn(),
 			get: vi.fn(),
 			isDetached: vi.fn(),
@@ -215,6 +216,19 @@ describe("useAppShortcutHandlers", () => {
 
 		expect(mockNavigate).toHaveBeenNthCalledWith(1, "term-previous");
 		expect(mockNavigate).toHaveBeenNthCalledWith(2, "term-2");
+	});
+
+	it("history back/forward navigate to the terminal the store steps to, and do nothing at the ends", () => {
+		const handlers = useAppShortcutHandlers(createOptions() as never);
+		mockStores.terminals.stepHistory.mockReturnValueOnce("term-older").mockReturnValueOnce(null);
+
+		handlers.historyBack();
+		handlers.historyForward();
+
+		expect(mockStores.terminals.stepHistory).toHaveBeenNthCalledWith(1, "back");
+		expect(mockStores.terminals.stepHistory).toHaveBeenNthCalledWith(2, "forward");
+		expect(mockNavigate).toHaveBeenCalledTimes(1);
+		expect(mockNavigate).toHaveBeenCalledWith("term-older");
 	});
 
 	// This handler picks WHICH block to fold; whether folding is allowed at all

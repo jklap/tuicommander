@@ -741,3 +741,9 @@ mail and replies, semantic shell rejection, then verifies intrahost mail with th
 stopped. It does not claim to test a real agent composer; use `--exercise` for that.
 
 Connected daemon notices carry their host identity. MCP confirmation responses and ACP permission/elicitation answers return to that daemon; disconnected questions disappear without changing local connections. MCP confirmation dialogs appear on the desktop and close when another client answers. AI Chat shows remote questions separately, with their ACP connection identity. Completing an earlier answer preserves questions announced by newer notices. Remote GitHub transitions fetch PR data from the repository owner, notify once, and do not run local repository automation. GitHub polling also works on the headless daemon. MCP upstream health refreshes use a separate host snapshot rather than this machine’s editable configuration.
+
+MCP terminal output can be read in retained pages without running a command again.
+Follow the response's `continuation` instructions and `next_cursor` while
+`has_more` is true. Raw pages use byte positions; text pages use scrollback rows.
+The same paging works through a connected remote daemon. Buffer eviction can
+remove old output, and the response reports the resulting gap.

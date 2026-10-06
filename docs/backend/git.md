@@ -1,5 +1,10 @@
 # Git Operations
 
+Backend-authored creator placement uses the terminal's existing `placementPath`
+so ownership reconciliation preserves its workspace independently of shell cwd.
+Cold saved-terminal restoration recovers explicit placement from the repository's
+`declaredWorktrees` entry keyed by `tuicSession`; the saved cwd remains unchanged.
+
 **Modules:** `src-tauri/crates/tuic-git/src/{git,git_cli,git_graph,git_locks,git_reads,worktree,cow}.rs` (domain), `src-tauri/src/{git,git_graph,worktree}.rs` (app adapters)
 
 The `tuic-git` crate owns Git subprocesses, reads, branch operations, worktree operations, and artifact warming. It depends on `tuic-core` for path spelling. The root app retains Tokio scheduling, `AppState` caches, configuration lookup, Tauri commands, and event emission; its adapters re-export the moved domain items at their former crate paths. The domain crate has no normal Tokio or Tauri dependency. The root `worktree.rs` adapter also fetches merged GitHub PR evidence through `gh` and passes the response to `tuic-git` for SHA and ancestry verification. Workspace removal and MCP `branch_delete` both use that boundary.

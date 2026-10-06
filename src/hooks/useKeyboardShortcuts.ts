@@ -41,6 +41,8 @@ export interface ShortcutHandlers {
 	reopenClosedTab: () => void;
 	navigateTab: (direction: "prev" | "next") => void;
 	focusLastTerminal: () => void;
+	historyBack: () => void;
+	historyForward: () => void;
 	jumpWaitingTerminal: () => void;
 	clearTerminal: () => void;
 	refreshTerminal: () => void;
@@ -376,6 +378,12 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
 			return true;
 		case "focus-last-terminal":
 			handlers.focusLastTerminal();
+			return true;
+		case "history-back":
+			handlers.historyBack();
+			return true;
+		case "history-forward":
+			handlers.historyForward();
 			return true;
 		case "jump-waiting-terminal":
 			handlers.jumpWaitingTerminal();

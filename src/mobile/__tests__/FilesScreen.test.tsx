@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FilesScreen } from "../screens/FilesScreen";
 
-vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
 
 const files = new Map([
 	["src/hello.txt", "hello\n"],
@@ -24,6 +24,7 @@ let failSave = false;
 let delayedSearch: Promise<Array<{ name: string; path: string; is_dir: boolean; size: number }>> | null = null;
 
 vi.mock("../../transport", () => ({
+	isTauri: () => false,
 	rpc: vi.fn(async (command: string, args?: Record<string, string>) => {
 		calls.push(command);
 		if (command === "load_repositories") return { repos: { "/repo-one": {}, "/repo-two": {} } };
@@ -239,12 +240,12 @@ describe("FilesScreen", () => {
 				initialLink={{ candidate: "src/abs.md" }}
 			/>
 		));
-		await waitFor(() => expect(view.container.querySelectorAll("#markdown-content img").length).toBe(2));
-		const [inside, outside] = view.container.querySelectorAll<HTMLImageElement>("#markdown-content img");
-		const url = new URL(inside.src);
+		await waitFor(() => expect(view.container.querySelectorAll("#markdown-content img").length).toBe(1));
+		const url = new URL(view.container.querySelector<HTMLImageElement>("#markdown-content img")!.src);
 		expect(url.pathname).toBe("/fs/markdown-image");
 		expect(url.searchParams.get("file")).toBe("src/images/in.png");
-		expect(outside.getAttribute("src")).toBe("/elsewhere/out.png");
+		// No route serves a path outside the repository: a visible placeholder replaces the broken img.
+		expect(view.getByRole("img", { name: "Image unavailable" })).toBeTruthy();
 	});
 
 	it("refuses large and binary files without offering an editor", async () => {

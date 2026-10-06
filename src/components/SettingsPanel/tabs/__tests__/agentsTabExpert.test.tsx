@@ -40,7 +40,7 @@ vi.mock("../../../../plugins/pluginLoader", () => ({
 	setPluginEnabled: vi.fn(),
 }));
 
-import { AGENTS } from "../../../../agents";
+import { AGENTS, type AgentsConfig } from "../../../../agents";
 import { agentConfigsStore } from "../../../../stores/agentConfigs";
 import { settingsExpertStore } from "../../../../stores/settingsExpert";
 import { uiStore } from "../../../../stores/ui";
@@ -92,7 +92,7 @@ async function setup(agents: Record<string, unknown> = {}) {
 }
 
 /** Render the tab and expand one agent's row, where the per-agent controls live. */
-function renderExpanded(agent: "claude" | "gemini" | "codex" = "claude") {
+function renderExpanded(agent: "claude" | "gemini" | "codex" | "ego" = "claude") {
 	const result = render(() => <AgentsTab />);
 	const header = [...result.container.querySelectorAll("[role='button']")].find((el) =>
 		el.textContent?.includes(AGENTS[agent].name),
@@ -108,8 +108,12 @@ describe("AgentsTab expert controls", () => {
 		vi.clearAllMocks();
 		settingsState.progressTracking = true;
 		uiStore.setSettingsExpertMode(false);
-		mockInvoke.mockImplementation((cmd: string) => {
+		mockInvoke.mockImplementation((cmd: string, payload?: { config: AgentsConfig }) => {
 			if (cmd === "get_config_defaults") return Promise.resolve(DEFAULTS);
+			if (cmd === "save_agents_config" && payload) {
+				agentsConfig = JSON.parse(JSON.stringify(payload.config.agents));
+				return Promise.resolve(undefined);
+			}
 			if (cmd === "load_agents_config") return Promise.resolve({ agents: agentsConfig });
 			// The intent/progress/follow-up overrides render only with the bridge installed.
 			if (cmd === "get_agent_mcp_status")
@@ -121,6 +125,40 @@ describe("AgentsTab expert controls", () => {
 	afterEach(() => {
 		settingsExpertStore._resetForTests();
 		uiStore.setSettingsExpertMode(false);
+	});
+
+	it("persists ego permission choices through config transport instead of losing them on reload", async () => {
+		await setup();
+		const { container } = renderExpanded("ego");
+		fireEvent.change(container.querySelector("#ego-permission-mode")!, { target: { value: "edits" } });
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith(
+				"save_agents_config",
+				expect.objectContaining({
+					config: expect.objectContaining({
+						agents: expect.objectContaining({ ego: expect.objectContaining({ ego_mode: "edits" }) }),
+					}),
+				}),
+			),
+		);
+		fireEvent.change(container.querySelector("#ego-permission-sandbox")!, { target: { value: "ro" } });
+		await waitFor(() =>
+			expect(mockInvoke).toHaveBeenCalledWith(
+				"save_agents_config",
+				expect.objectContaining({
+					config: expect.objectContaining({
+						agents: expect.objectContaining({ ego: expect.objectContaining({ ego_mode: "edits", ego_sandbox: "ro" }) }),
+					}),
+				}),
+			),
+		);
+		// Hydration must recover the actual IO save, not a hand-set oracle.
+		await agentConfigsStore.hydrate();
+		expect((container.querySelector("#ego-permission-mode") as HTMLSelectElement).value).toBe("edits");
+		expect((container.querySelector("#ego-permission-sandbox") as HTMLSelectElement).value).toBe("ro");
+		fireEvent.change(container.querySelector("#ego-permission-mode")!, { target: { value: "" } });
+		await waitFor(() => expect(agentConfigsStore.state.agents.ego.ego_mode).toBeUndefined());
+		expect(agentConfigsStore.state.agents.ego.ego_sandbox).toBe("ro");
 	});
 
 	it.each([
