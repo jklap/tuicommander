@@ -210,9 +210,15 @@ function setRepos(repos: Record<string, unknown>, activeRepoPath?: string) {
 	mockGetGroupedLayout.mockReturnValue({ groups: [], ungrouped: repoValues });
 }
 
+// Legacy row interaction cases exercise compact mode; rich layout cases opt into auto.
+function densityMode(mode: "auto" | "compact") {
+	while (uiStore.state.sidebarDensityMode !== mode) uiStore.cycleSidebarDensityMode();
+}
+
 describe("Sidebar", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		densityMode("compact");
 		vi.clearAllMocks();
 		setRepos({});
 		mockGetActive.mockReturnValue(null);
@@ -229,6 +235,7 @@ describe("Sidebar", () => {
 	});
 
 	afterEach(() => {
+		densityMode("auto");
 		vi.useRealTimers();
 	});
 
@@ -416,6 +423,7 @@ describe("Sidebar", () => {
 	});
 
 	describe("density attribute", () => {
+		beforeEach(() => densityMode("auto"));
 		const manyBranches = (n: number) =>
 			Object.fromEntries(
 				Array.from({ length: n }, (_, i) => [
@@ -545,6 +553,7 @@ describe("Sidebar", () => {
 	});
 
 	describe("rich repo sections", () => {
+		beforeEach(() => densityMode("auto"));
 		// Catches: treating idle open terminals as inactive, sorting by work, or persisting the partition.
 		it("rich_repo_sections_use_open_terminals", () => {
 			const [repos, setReposLive] = createSignal([
@@ -605,6 +614,7 @@ describe("Sidebar", () => {
 	});
 
 	describe("rich layout", () => {
+		beforeEach(() => densityMode("auto"));
 		const richBranch = (over: Record<string, unknown> = {}) => ({
 			workspaceId: "feat",
 			branchName: "feat",
@@ -2062,7 +2072,7 @@ describe("Sidebar", () => {
 
 	describe("branch badges", () => {
 		// The compact row carries these badges; the rich layout moves them into detail lines.
-		beforeEach(() => uiStore.cycleSidebarDensityMode());
+		beforeEach(() => densityMode("compact"));
 		afterEach(() => {
 			uiStore.cycleSidebarDensityMode();
 			uiStore.cycleSidebarDensityMode();
