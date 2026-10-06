@@ -1142,3 +1142,11 @@ Telegram Settings uses `~/.config/tuic-telegram/`: `bot.token`, `allowed_chat_id
 `pairing.json` holds the one-use six-character code and its absolute ten-minute expiry under the same private permissions, so desktop setup and daemon polling share the authorization credential. A valid private-chat update consumes it; a wrong/expired code or `/start` grants nothing. An explicitly empty allowlist permits polling for pairing, but no outbound sends. A missing or malformed allowlist still fails closed. Enable/target/token changes restart the single daemon adapter; desktop never polls. Status keeps only connectivity, an error category and the last accepted message timestamp.
 
 `status.json` shares safe daemon connectivity/error/timestamps with desktop Settings on the same host. A connection record older than one minute is shown as disconnected. The file contains no token or message text.
+
+Repository records may contain backend-authored `declaredWorktrees`, keyed by
+the stable `TUIC_SESSION`. Values contain `workspaceId`, `branch` and
+`worktreePath`. Caller-bound MCP declarations update this map through the
+repository delta under the existing cross-process lock. Frontend saves retain
+it. Existing saved terminal records are moved to the declared workspace without
+changing their actual shell cwd. The association survives backend restart; it
+does not turn an externally created worktree into a disposable PTY-owned one.

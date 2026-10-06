@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add caller-bound MCP worktree declarations for agents using `git -C`, with same-repository validation and placement restored after restart.
+
 - Place only the same-repository MCP caller in its new worktree when no separate session is requested; preserve sibling tabs and inactive selection.
 
 - **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.

@@ -156,6 +156,14 @@ per cell and the configured history limit still apply.
 - Rate-limit false positives reduced for non-ASCII input
 
 ### 1.10 Move Terminal to Worktree
+
+MCP worktree creation without an explicit session spawn places only its
+same-repository caller in the new workspace. Agents working through `git -C`
+can declare an existing worktree with `session action=declare_worktree
+worktree_path=/absolute/path`. The backend validates ownership, moves only the
+caller and persists the association through restart. Shell cwd and other tabs
+remain unchanged. See [MCP backend](backend/mcp-http.md).
+
 - Right-click a terminal tab → "Move to Worktree" submenu lists available worktrees (excluding the current one)
 - Selecting a worktree sends `cd` to the PTY; OSC 7 auto-reassigns the terminal to the target branch
 - Also available via Command Palette: dynamic "Move to worktree: \<branch\>" entries appear when the active terminal belongs to a repo with multiple worktrees
