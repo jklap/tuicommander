@@ -2399,11 +2399,18 @@ response rather than deriving it from display data. MCP
 `GET /worktrees/lifecycle` provides the removal preview: branch history, dirty and untracked counts, live session names, and warnings. `DELETE /worktrees/:workspaceId` includes the same warnings on success.
 
 Creation announces itself on both transports as `worktree-created`
-(`{ repo_path, workspace_id, branch, worktree_path, kind }`, with `kind` equal
+(`{ repo_path, workspace_id, branch, worktree_path, kind, creator_session, spawn_session }`, with `kind` equal
 to `"worktree"`) and removal as
 `worktree-removed` (`{ repo_path, workspace_id, branch }`) — the desktop Tauri
 event and the `/events` SSE frame serialize the same struct, so the field names
 are identical by construction. Payload table: `docs/sync-matrix.md`.
+
+`creator_session` is the live PTY id resolved from the MCP connection, or null
+for creation without a bound caller. When `spawn_session` is false, the UI moves
+only that session within its existing repository. Explicit session creation
+leaves the caller in place. Placement does not change the shell cwd or send
+input to an agent. The existing per-workspace terminal snapshots preserve the
+placement on restart; an inactive caller does not change the current selection.
 
 ### Worktrees Base Directory
 

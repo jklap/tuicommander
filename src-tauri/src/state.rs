@@ -132,6 +132,10 @@ impl PendingInitialPrompt {
 /// cannot spell a field differently.
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct WorktreeCreatedPayload {
+    /// Live PTY resolved from the authenticated MCP caller, never request arguments.
+    pub(crate) creator_session: Option<String>,
+    /// An explicit spawn keeps the creator in its existing workspace.
+    pub(crate) spawn_session: bool,
     pub(crate) repo_path: String,
     pub(crate) workspace_id: String,
     pub(crate) branch: String,
@@ -5316,6 +5320,8 @@ mod worktree_event_payloads {
 
     fn created() -> WorktreeCreatedPayload {
         WorktreeCreatedPayload {
+            creator_session: Some("creator-pty".into()),
+            spawn_session: false,
             repo_path: "/repo".to_string(),
             workspace_id: "feature/x".to_string(),
             branch: "feature/x".to_string(),
@@ -5344,6 +5350,8 @@ mod worktree_event_payloads {
                 "workspace_id": "feature/x",
                 "branch": "feature/x",
                 "worktree_path": "/repo__wt/feature-x",
+                "creator_session": "creator-pty",
+                "spawn_session": false,
                 "kind": "worktree",
             })
         );
