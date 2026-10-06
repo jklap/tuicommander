@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Execute pinned serial workflow Agent/Judge/Loop/Pause/Notify/Join nodes in the owning daemon with durable reports and effects; refuse unsupported node publication. Manual pause time no longer consumes active run duration. Full plan dispatch remains in development.
 - **AI Chat steering** — Text sent during a running turn joins the current query when ego advertises ACP steering, on desktop and mobile. Attachments and unsupported or rejected steering retain the queue. Delayed steering responses preserve submission order with later text and attachments.
 - Add recorded incident causes and manual next-step suggestions to Plans and Stories run history.
+- Add persisted ego profile, workspace and executable options for individual AI Chat conversations, including HTTP creation and reopen.
+- Audit MCP inbox reads with caller, owner and message ids without logging mail bodies.
 
 - **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
 
@@ -36,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Keep backend memory census on demand, use cheap watchdog summaries, and identify census bytes as overlapping map accounting.
+- Preserve live AI Chat response chunks when reopening a configured conversation, including refused reopen requests.
 
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 

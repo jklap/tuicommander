@@ -835,3 +835,7 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 `acp_session_list` uses the same complete ancestry projection as HTTP: original ego lineage plus `_meta.tuicommander.lineageDepth` and disabled deleted-parent placeholders.
 
 `workflow_run_action` also accepts the read-only `incidents` action with `run_id`. It returns the same project-scoped camelCase incident entries as `POST /workflows/run/action`; see the HTTP API run incident projection.
+
+### `acp_chat_open`
+
+Arguments: `{ request: { sessionId?, profile?, workspace?, executable? } }`. Returns `{ connection, sessionId, launch, replayed }`. Creates a conversation with its own durable launch options, or reopens the saved `sessionId`. HTTP equivalent: `POST /acp/chat/open` with the request object as the body. Global ACP connect defaults remain unchanged.

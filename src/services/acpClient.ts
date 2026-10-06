@@ -32,6 +32,25 @@ import type {
 import { randomUuid } from "../utils/randomId";
 import { type AcpStreamHandle, type AcpStreamOpener, openAcpStream } from "./acpStream";
 
+export interface ChatLaunch {
+	executable: string;
+	profile: string;
+	workspace: string;
+	peerId: string;
+}
+export interface ChatOpenRequest {
+	sessionId?: string;
+	executable?: string;
+	profile?: string;
+	workspace?: string;
+}
+export interface ChatOpened {
+	connection: AcpConnectionSnapshot;
+	sessionId: AcpSessionId;
+	launch: ChatLaunch;
+	replayed: boolean;
+}
+
 export interface AcpListedSession {
 	sessionId: AcpSessionId;
 	cwd: string;
@@ -199,6 +218,19 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 	}
 
 	return {
+		async openConversation(request: ChatOpenRequest): Promise<ChatOpened> {
+			const opened = await invoke<ChatOpened>("acp_chat_open", { request });
+			// An attached conversation keeps receiving live output while open is pending.
+			// Replace its projection only when the backend actually loaded history,
+			// before subscribing to the journal that carries that replay.
+			if (opened.replayed) {
+				acpTranscript.clear(opened.sessionId);
+				replaying.set(opened.sessionId, opened.connection.connectionId);
+			}
+			await adopt(opened.connection);
+			return opened;
+		},
+
 		/** Launch ego on a repo root and read everything that connection holds. */
 		async connect(root: string): Promise<AcpConnectionSnapshot> {
 			return adopt(await invoke<AcpConnectionSnapshot>("acp_connect", { root }));

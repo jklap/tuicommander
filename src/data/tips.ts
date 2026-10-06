@@ -22,6 +22,12 @@ export const TIPS: Tip[] = [
 		shortcut: null,
 	},
 	{
+		feature: "Conversation Launch Options",
+		description:
+			"Use the options button beside AI Chat's + to give one conversation its own ego profile, workspace and executable.",
+		shortcut: null,
+	},
+	{
 		feature: "Touch Branch Actions",
 		description: "Swipe a sidebar branch left for More, Add Terminal, and worktree removal. Hold + to choose an agent.",
 		shortcut: null,
