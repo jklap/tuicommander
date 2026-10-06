@@ -215,6 +215,7 @@ describe("Sidebar", () => {
 		vi.clearAllMocks();
 		setRepos({});
 		mockGetActive.mockReturnValue(null);
+		mockGetGroupForRepo.mockReturnValue(undefined);
 		mockTerminalsGet.mockReturnValue(null);
 		mockGetSubAgentTag.mockReturnValue(null);
 		mockGetCheckSummary.mockReturnValue(null);
@@ -971,6 +972,50 @@ describe("Sidebar", () => {
 			};
 			afterEach(() => vi.restoreAllMocks());
 
+			// Catches: opening a wrong child repository, cross-repo nesting, or stale links after children close.
+			it("cross_repo_child_link_navigates_without_reparenting", () => {
+				const [live, setLive] = createSignal(true);
+				const terms = () => ({
+					t1: term("t1"),
+					child: live() ? term("child", { parentSession: "tuic-t1" }) : null,
+					other: term("other", { parentSession: "s-t1" }),
+				});
+				mockTerminalsGet.mockImplementation((id: string) => terms()[id as keyof ReturnType<typeof terms>]);
+				vi.spyOn(progressStore, "sidebarFlow").mockReturnValue(flowOf([]) as never);
+				vi.spyOn(progressStore, "refreshSidebarFlow").mockResolvedValue();
+				settingsStore.setTabTreeEnabled(true);
+				const parentRepo = makeRepo({ workspaces: { feat: richBranch({ terminals: ["t1"] }) } });
+				const childRepo = makeRepo({
+					path: "/child",
+					displayName: "Child repo",
+					collapsed: true,
+					expanded: false,
+					workspaces: { work: richBranch({ workspaceId: "work", terminals: ["child", "other"], tabsCollapsed: true }) },
+				});
+				setRepos({ "/repo1": parentRepo, "/child": childRepo });
+				mockGetGroupForRepo.mockReturnValue({ id: "children", collapsed: true });
+				const { container } = render(() => <Sidebar {...defaultProps()} />);
+				const link = () => container.querySelector<HTMLButtonElement>("[data-testid='cross-repo-child-link']");
+				expect(link()?.textContent).toContain("2 agents in Child repo");
+				expect(container.querySelector("[data-sidebar-repo='/repo1'] .branchTabNested")).toBeNull();
+				const childLink = link();
+				expect(childLink).not.toBeNull();
+				if (!childLink) throw new Error("Missing child navigation link");
+				fireEvent.click(childLink);
+				expect(mockNavigateToTerminal).toHaveBeenCalledWith("child");
+				expect(mockToggleGroupCollapsed).toHaveBeenCalledWith("children");
+				expect(mockToggleCollapsed).toHaveBeenCalledWith("/child");
+				expect(mockToggleExpanded).toHaveBeenCalledWith("/child");
+				expect(mockToggleBranchTabsCollapsed).toHaveBeenCalledWith("/child", "work");
+				expect(repositoriesStore.state.repositories).toEqual({ "/repo1": parentRepo, "/child": childRepo });
+				expect(terms().child?.parentSession).toBe("tuic-t1");
+				setLive(false);
+				expect(link()?.textContent).toContain("1 agent in Child repo");
+				mockTerminalsGet.mockImplementation((id: string) => (id === "t1" ? terms().t1 : null));
+				// Invalidate the reactive child relationship after both children have closed.
+				setLive(true);
+				expect(link()).toBeNull();
+			});
 			// Catches: folding at the threshold, hiding attention/selection, or reordering restored rows.
 			it("idle_fold_preserves_attention_and_order", () => {
 				const old = Date.now() - 2 * 3600_000 - 1;

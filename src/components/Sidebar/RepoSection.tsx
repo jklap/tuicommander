@@ -349,6 +349,59 @@ const SubagentList: Component<{ rows: SubagentRow[] }> = (props) => {
 	);
 };
 
+/** Navigation summaries preserve the workspace placement of children in other repos. */
+const CrossRepoChildren: Component<{ parent: TerminalState; repoPath: string }> = (props) => {
+	const targets = createMemo(() =>
+		Object.values(repositoriesStore.state.repositories)
+			.filter((repo) => repo.path !== props.repoPath)
+			.map((repo) => ({
+				repo,
+				ids: [...new Set(Object.values(repo.workspaces).flatMap((workspace) => workspace.terminals))].filter((id) => {
+					const child = terminalsStore.get(id);
+					return (
+						!!child?.parentSession &&
+						(child.parentSession === props.parent.sessionId || child.parentSession === props.parent.tuicSession)
+					);
+				}),
+			}))
+			.filter((target) => target.ids.length > 0),
+	);
+	const reveal = (repo: RepositoryState, id: string) => {
+		const group = repositoriesStore.getGroupForRepo(repo.path);
+		if (group?.collapsed) repositoriesStore.toggleGroupCollapsed(group.id);
+		if (repo.collapsed) repositoriesStore.toggleCollapsed(repo.path);
+		if (!repo.expanded) repositoriesStore.toggleExpanded(repo.path);
+		const workspace = Object.values(repo.workspaces).find((item) => item.terminals.includes(id));
+		if (workspace?.tabsCollapsed) repositoriesStore.toggleWorkspaceTabsCollapsed(repo.path, workspace.workspaceId);
+		navigateToTerminal(id);
+	};
+	return (
+		<For each={targets()}>
+			{(target) => (
+				<button
+					class={s.crossRepoChildren}
+					data-testid="cross-repo-child-link"
+					data-tooltip={target.repo.displayName}
+					data-tooltip-pos="bottom"
+					onClick={() => reveal(target.repo, target.ids[0])}
+				>
+					<span>
+						{t(
+							target.ids.length === 1 ? "sidebar.agentInRepo" : "sidebar.agentsInRepo",
+							target.ids.length === 1 ? "{count} agent in {repo}" : "{count} agents in {repo}",
+							{
+								count: String(target.ids.length),
+								repo: target.repo.displayName,
+							},
+						)}
+					</span>
+					<ChevronIcon />
+				</button>
+			)}
+		</For>
+	);
+};
+
 /** Collapsible activity card for the terminals attached to a branch. */
 const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (props) => {
 	const density = useSidebarDensity();
@@ -516,6 +569,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 							</Show>
 						</button>
 						<Show when={rich()}>
+							<CrossRepoChildren parent={t()} repoPath={props.repoPath} />
 							<SubagentList rows={subagents(t())} />
 							<For each={childrenOf(id)}>{(child) => renderTab(child, true)}</For>
 						</Show>

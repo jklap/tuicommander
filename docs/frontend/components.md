@@ -641,3 +641,5 @@ In rich mode, ungrouped repositories with open terminals appear first, followed 
 Rich active/idle sections also apply independently inside each existing repository group. Group membership and group ordering remain intact; active-only filtering hides idle-only groups and empty Idle headings.
 
 Rich merged linked worktrees with no sessions and verified lifecycle facts use a one-line summary: Merged, N uncommitted, Clean up. Live, unmerged, or unknown worktrees retain full rows. Clean up enters the existing lifecycle preflight and confirmation workflow; cancellation preserves the worktree.
+
+Rich parent terminal rows show N agents in each other repository containing live children. Clicking reveals the child group, repository and workspace, then selects a child through existing terminal navigation. Session placement and same-branch nesting stay intact; closed children disappear from summaries.
