@@ -2359,17 +2359,30 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	let scrollGestureEndTimer: ReturnType<typeof setTimeout> | undefined;
 
-	function showStreamError(error: unknown): void {
-		toastsStore.add(
-			"Terminal stream failed",
-			error instanceof Error ? error.message : String(error),
-			"error",
+	let streamToastId: number | undefined;
+
+	function clearStreamNotice(): void {
+		if (streamToastId !== undefined) toastsStore.remove(streamToastId);
+		streamToastId = undefined;
+	}
+
+	function showStreamNotice(title: string, message: string, level: "warn" | "error"): void {
+		clearStreamNotice();
+		streamToastId = toastsStore.add(
+			`${title} — ${props.sessionId}`,
+			message,
+			level,
 			false,
 			undefined,
 			0,
 			undefined,
 			props.sessionId,
+			false,
 		);
+	}
+
+	function showStreamError(error: unknown): void {
+		showStreamNotice("Terminal stream failed", error instanceof Error ? error.message : String(error), "error");
 	}
 
 	onMount(async () => {
@@ -2410,7 +2423,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		try {
 			// One shape on both transports: the Tauri event and the WS frame both
 			// carry `{ cwd }`, so there is nothing to normalise here.
-			transport.onStreamError?.(showStreamError);
+			transport.onStreamError?.((error) => {
+				showStreamNotice(
+					"Terminal stream reconnecting",
+					error instanceof Error ? error.message : String(error),
+					"warn",
+				);
+			});
+			transport.onStreamReconnecting?.((attempt, maxAttempts) => {
+				showStreamNotice("Terminal stream reconnecting", `Reconnecting ${attempt}/${maxAttempts}`, "warn");
+			});
+			transport.onStreamRecovered?.(clearStreamNotice);
+			transport.onStreamExhausted?.((maxAttempts) => {
+				showStreamError(new Error(`Reconnect failed after ${maxAttempts} attempts`));
+			});
 			await transport.onEvent("cwd", (payload) => {
 				const { cwd } = payload as { cwd: string };
 				terminalsStore.update(props.terminalId, { cwd });

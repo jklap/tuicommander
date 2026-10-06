@@ -2,7 +2,7 @@ import { render, waitFor } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 
 const { subscribe, unsubscribe, eventHandlers } = vi.hoisted(() => ({
-	eventHandlers: new Map<string, (error: unknown) => void>(),
+	eventHandlers: new Map<string, (error?: unknown, maxAttempts?: number) => void>(),
 	subscribe: vi.fn().mockRejectedValue(new Error("WebSocket connection failed")),
 	unsubscribe: vi.fn(),
 }));
@@ -10,6 +10,11 @@ const { subscribe, unsubscribe, eventHandlers } = vi.hoisted(() => ({
 vi.mock("../../components/Terminal/canvasTerminalTransport", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../components/Terminal/canvasTerminalTransport")>()),
 	createTransport: () => ({
+		onStreamReconnecting: (handler: (attempt: number, maxAttempts: number) => void) =>
+			eventHandlers.set("reconnecting", (attempt, max) => handler(Number(attempt), Number(max))),
+		onStreamRecovered: (handler: () => void) => eventHandlers.set("recovered", handler),
+		onStreamExhausted: (handler: (max: number) => void) =>
+			eventHandlers.set("exhausted", (max) => handler(Number(max))),
 		onStreamError: (handler: (error: unknown) => void) => eventHandlers.set("stream-error", handler),
 		onEvent: vi.fn(async (type: string, handler: (error: unknown) => void) => {
 			// Stream failures are WS-local callbacks, never PTY events.
@@ -72,7 +77,8 @@ describe("CanvasTerminal stream errors", () => {
 				expect(
 					toastsStore.toasts.some(
 						(toast) =>
-							toast.title === "Terminal stream failed" && toast.message.includes("WebSocket connection failed"),
+							toast.title === "Terminal stream failed — remote-stream" &&
+							toast.message.includes("WebSocket connection failed"),
 					),
 				).toBe(true),
 			);
@@ -84,18 +90,39 @@ describe("CanvasTerminal stream errors", () => {
 			vi.unstubAllGlobals();
 		}
 	});
-	// Catches: only rejected subscribe promises show a toast; failures after socket open never reach the rendered notification.
-	it("keeps a post-attach stream error visible until dismissed", async () => {
+	// Catches: stale sticky errors after recovery, premature final failure, duplicate retries, or clearing another session error.
+	it("stream_banner_tracks_retries_and_clears_on_reconnect", async () => {
 		subscribe.mockResolvedValueOnce(undefined);
 		const view = openTerminal();
 		try {
 			await waitFor(() => expect(eventHandlers.has("stream-error")).toBe(true));
 			vi.useFakeTimers();
+			const unrelated = toastsStore.add(
+				"Other session error",
+				"Keep me",
+				"error",
+				false,
+				undefined,
+				0,
+				undefined,
+				"other-session",
+				false,
+			);
 			eventHandlers.get("stream-error")?.(new Error("Timed out waiting for the initial terminal frame"));
+			for (let attempt = 1; attempt <= 10; attempt++) {
+				eventHandlers.get("reconnecting")?.(attempt, 10);
+				expect(view.container.textContent).toContain(`Reconnecting ${attempt}/10`);
+				expect(view.container.textContent).toContain("remote-stream");
+				expect(view.container.textContent).not.toContain("Terminal stream failed");
+				expect(toastsStore.toasts.filter((toast) => toast.sessionId === "remote-stream")).toHaveLength(1);
+			}
+			eventHandlers.get("exhausted")?.(10);
 			expect(view.container.textContent).toContain("Terminal stream failed");
-			expect(view.container.textContent).toContain("Timed out waiting for the initial terminal frame");
 			await vi.advanceTimersByTimeAsync(60_000);
 			expect(view.container.textContent).toContain("Terminal stream failed");
+			eventHandlers.get("recovered")?.();
+			expect(view.container.textContent).not.toContain("Terminal stream failed");
+			expect(toastsStore.toasts.some((toast) => toast.id === unrelated)).toBe(true);
 		} finally {
 			vi.useRealTimers();
 			view.unmount();
