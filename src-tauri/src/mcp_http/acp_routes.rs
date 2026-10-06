@@ -313,7 +313,7 @@ async fn session_new(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AuthorityBody>,
 ) -> Response {
-    answer(state.acp.new_session(connection_id, body.authority).await)
+    answer(crate::acp_commands::session_new(&state, connection_id, body.authority).await)
 }
 
 async fn session_list(

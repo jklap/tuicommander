@@ -264,3 +264,22 @@ non-bundled binary that replays a `tests/fixtures/acp/*.jsonl` scenario through
 the exact production launch path. `tests/fixtures/acp/ego-initialize.json` is a
 recording of what real ego answers, copied from ego's own committed golden;
 editing it to make a test pass would turn the recording into a wish.
+
+## Repository profile ceiling
+
+Desktop `acp_session_new` and HTTP session creation call the same
+`acp_commands::session_new` core. The manager reads `.tuic.json` at the canonical
+session cwd. If it contains `ego_profile`, the request includes
+`_meta.ego.profile` and the machine Settings selection as `ceilingProfile`.
+An empty machine selection refuses creation. TUIC does not calculate policy.
+Ego resolves and restricts mode, sandbox, roots and executable paths.
+
+TUIC requires ego to acknowledge both selected names, an effective policy object
+and a string-array `warnings` result before attaching the session. This prevents
+an older ego that ignores the extension from being exposed as a bounded session.
+Attachment snapshots carry nonempty warnings as `profileWarnings` on both
+transports. AI Chat shows them once per visible conversation through its existing
+warning notice path. With no repo selection, requests and snapshots retain their
+previous shape. Unattended sessions retain their existing launch behavior.
+Load, resume, fork and compact rely on ego's durable ceiling, rather than sending
+a replacement authority from the current repository file.

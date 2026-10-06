@@ -324,6 +324,58 @@ afterEach(() => {
 	cleanupToasts();
 });
 
+describe("AIChatPanel: repository profile warnings", () => {
+	// Catches an authoritative ego clamp silently discarded by the chat host.
+	it("shows recorded ego clamp warnings once for the attached conversation", async () => {
+		const recorded = JSON.parse(
+			readFileSync(resolve(process.cwd(), "src-tauri/tests/fixtures/acp/ego-profile-ceiling.json"), "utf8"),
+		);
+		client.newSession.mockImplementation(async () => {
+			acpStore.applySnapshot(
+				snapshot({
+					attachments: [
+						attachment({
+							profileWarnings: recorded._meta.ego.warnings,
+						}),
+					],
+				}),
+			);
+			return SESSION;
+		});
+		await renderPanel();
+		await settle();
+		expect(
+			toastsStore.toasts
+				.filter((toast) => toast.title === "Repository ego profile")
+				.map((toast) => ({ message: toast.message, level: toast.level })),
+		).toEqual([
+			{
+				message:
+					"mode yolo exceeds profile ceiling default; using default\nsandbox off exceeds profile ceiling workspace; using workspace",
+				level: "warn",
+			},
+		]);
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						profileWarnings: recorded._meta.ego.warnings,
+					}),
+				],
+			}),
+		);
+		await settle();
+		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(1);
+	});
+
+	// Catches ordinary sessions getting a spurious profile warning.
+	it("keeps sessions without repository profile warnings quiet", async () => {
+		await renderPanel();
+		await settle();
+		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(0);
+	});
+});
+
 describe("AIChatPanel: the frame it keeps", () => {
 	// The panel keeps its slot, its id and its detach control across the engine
 	// swap. The registry entry behind this button is what makes Cmd+Alt+A, the

@@ -161,6 +161,8 @@ export interface AcpAttachmentSnapshot {
 	cwd: string;
 	additionalDirectories: string[];
 	configOptions: AcpSessionConfigOption[];
+	/** Authoritative ego clamp notices returned when a repo selects a profile. */
+	profileWarnings?: string[];
 	usage: AcpUsageSnapshot | null;
 	activeTurn: AcpTurnSnapshot | null;
 	queuedPrompts: AcpQueuedPrompt[];

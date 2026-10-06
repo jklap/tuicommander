@@ -1392,6 +1392,9 @@ fn default_settings_nav_width() -> u32 {
 /// but are overridden by per-repo app settings.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct RepoLocalConfig {
+    /// Selected by the repository, bounded by the machine ego profile over ACP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ego_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) base_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
