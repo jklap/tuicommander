@@ -19,6 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix command boundaries, prompt ticks and answers-only prompt association drifting after scrollback eviction.
 ### Added
 
+- Navigate from parent agents to live children in other repositories.
+
 - Summarize merged idle worktrees with a guarded Clean up action.
 
 - Keep rich active/idle repository sections inside their existing groups.
