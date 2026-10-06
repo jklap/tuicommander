@@ -231,3 +231,10 @@ worse than no comment — each one had already talked a reader out of checking:
 Private secret entry: `secret_form_bootstrap` is a short synchronous identity
 check; `secret_form_submit` is async. MCP request/consent waits on a oneshot
 without holding the blocking pool. Run uses Tokio child pipes; no PTY or shell.
+
+### ego perimeter commands (2026-10-06)
+
+`ego_perimeter`, `ego_set_perimeter_roots`, and `ego_set_perimeter_network`
+are async IPC handlers. IPC and HTTP call the same `ego_cli::perimeter` core,
+which awaits `tokio::process::Command` and reads ego's JSON. TUIC performs no
+configuration-file rewrite or provider request on this surface.

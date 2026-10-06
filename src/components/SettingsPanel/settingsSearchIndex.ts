@@ -646,6 +646,17 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		configKey: "app.progress_tracking",
 	},
 	// tabs/AiChatTab.tsx — the inlined former ProvidersTab content, in file order.
+	{ tab: "ai-chat", section: "Perimeter", sectionKey: "perimeter.heading" },
+	{ tab: "ai-chat", section: "Perimeter", label: "Root directory", labelKey: "perimeter.label.rootDir" },
+	{ tab: "ai-chat", section: "Perimeter", label: "Root access", labelKey: "perimeter.label.rootAccess" },
+	{ tab: "ai-chat", section: "Perimeter", label: "Read allowlist", labelKey: "perimeter.label.readAllowlist" },
+	{
+		tab: "ai-chat",
+		section: "Perimeter",
+		label: "Extra writable directories",
+		labelKey: "perimeter.label.writableDirs",
+	},
+	{ tab: "ai-chat", section: "Perimeter", label: "Network enabled", labelKey: "perimeter.label.network" },
 	{ tab: "ai-chat", section: "Default Model", sectionKey: "providers.heading.defaultModel" },
 	{ tab: "ai-chat", section: "Providers", sectionKey: "providers.heading.providers" },
 	{ tab: "ai-chat", section: "Default Model", label: "Default model", labelKey: "providers.label.defaultModel" },

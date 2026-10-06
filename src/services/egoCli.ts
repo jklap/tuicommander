@@ -7,7 +7,19 @@
  */
 
 import { invoke } from "../invoke";
-import type { EgoProviders } from "../types/ego";
+import type { EgoPerimeterView, EgoProviders, EgoRootsEdit } from "../types/ego";
+
+export interface EgoPerimeterClient {
+	perimeter(): Promise<EgoPerimeterView>;
+	setRoots(roots: EgoRootsEdit): Promise<EgoPerimeterView>;
+	setNetwork(enabled: boolean): Promise<EgoPerimeterView>;
+}
+
+export const egoPerimeterCli: EgoPerimeterClient = {
+	perimeter: () => invoke<EgoPerimeterView>("ego_perimeter"),
+	setRoots: (roots) => invoke<EgoPerimeterView>("ego_set_perimeter_roots", { roots }),
+	setNetwork: (enabled) => invoke<EgoPerimeterView>("ego_set_perimeter_network", { enabled }),
+};
 
 export interface EgoCliClient {
 	providers(refresh: boolean): Promise<EgoProviders>;

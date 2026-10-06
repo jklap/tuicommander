@@ -285,17 +285,18 @@ Refresh.
 
 | File | What to update |
 |------|----------------|
-| `src-tauri/src/ego_cli.rs` | Which ego commands are run, how their three answers are joined, and what an ego failure carries. `model` is the only writable key, spelled as its own operation so no caller can reach `sandbox` or `permissions.judge` |
-| `src-tauri/src/mcp_http/ego_routes.rs` | `GET /ego/providers`, `POST /ego/providers/model`. Both are behind `require_local_or_auth` — spawning a process is not a read |
-| `src/transport.ts`, `src/__tests__/transport.test.ts` | The `ego_providers` / `ego_set_default_model` mappings and the generated path snapshot |
+| `src-tauri/src/ego_cli.rs` | Which ego commands are run, how their three answers are joined, and what an ego failure carries. `model`, `roots` and `network` are dedicated write operations so no caller can reach `sandbox` or `permissions.judge` |
+| `src-tauri/src/mcp_http/ego_routes.rs` | `GET /ego/providers`, `POST /ego/providers/model`, `GET /ego/perimeter`, `POST /ego/perimeter/roots`, `POST /ego/perimeter/network`. All are behind `require_local_or_auth` — spawning a process is not a read |
+| `src/transport.ts`, `src/__tests__/transport.test.ts` | The `ego_providers` / `ego_set_default_model` / `ego_perimeter` / `ego_set_perimeter_roots` / `ego_set_perimeter_network` mappings and the generated path snapshot |
 | `src/types/ego.ts` | The TS mirror of the Rust projection. A mirror, not a second opinion — nothing reshapes it |
-| `src/services/egoCli.ts` | The two calls the tab makes |
+| `src/services/egoCli.ts` | The provider and perimeter calls the tab makes |
 | `src/components/SettingsPanel/tabs/AiChatTab.tsx` | What the page draws: the default-model picker, the per-provider credential badge, and each of the four failure states |
+| `src/components/SettingsPanel/tabs/EgoPerimeterSection.tsx` | Root/access/allowlist editors, separate network write, backend-derived exec badge and effective preview |
 | `src/components/SettingsPanel/tabs/GeneralTab.tsx` | The **ego** section: the ego executable field, shown also while Experimental Features is off |
 | `src/components/SettingsPanel/SettingsPanel.tsx` | The nav entry (hidden while `isAiChatEnabled()` is false) and the tab body |
 | `src/components/SettingsPanel/settingsSearchIndex.ts` | Its rows in the settings search index — the drift test re-derives them from the JSX |
 | `docs/user-guide/settings.md` | The AI Chat page section |
-| `docs/api/tauri-commands.md`, `docs/api/http-api.md` | Both transports for the two commands |
+| `docs/api/tauri-commands.md`, `docs/api/http-api.md` | Both transports for the provider and perimeter commands |
 | `docs/FEATURES.md` | The AI Chat page entry under Settings |
 
 ### Session knowledge store and TUI detection

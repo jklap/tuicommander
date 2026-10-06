@@ -9,6 +9,14 @@
 **Last verified:** 2026-09-16  
 **Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.7](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#177---2026-09-16) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
 
+## ego Perimeter Settings
+
+- Settings > AI Chat edits ego roots, root access, read allowlists, writable
+  directories and network mode through the configured CLI.
+- Preview comes from ego's effective view for the AI Chat workspace/profile.
+  The exec-sandbox badge reports unverified enforcement when ego says `not_checked`
+  and renders measured capability arrays without inferring enforcement from backend names.
+
 ## How to use this reference
 
 - **Users:** start with the relevant section, then follow its user-guide link.
