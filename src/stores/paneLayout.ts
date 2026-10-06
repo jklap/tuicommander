@@ -400,7 +400,7 @@ export function pruneLayoutToLiveTerminals(
 		groups[leafId] = { id: group.id, tabs, activeTabId };
 	}
 
-	if (!root || root.type !== "branch") return null;
+	if (root?.type !== "branch") return null;
 	if (!Object.values(groups).some((g) => g.tabs.some((t) => t.type === "terminal"))) return null;
 
 	const leafIds = allLeafIds(root);
