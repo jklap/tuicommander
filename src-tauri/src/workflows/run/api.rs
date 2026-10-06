@@ -1,12 +1,23 @@
 use super::{RunCommand, RunEvent, RunLimits, RunReceipt, RunSnapshot, RunStore};
 use crate::workflows::{AgentRole, NodeKind, WorkflowStore};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RunAction {
+    /// Start a pinned executable root through the owning daemon, never the legacy ledger.
+    StartGraph {
+        target: super::RunTarget,
+        expected_revision: Option<i64>,
+        definition_id: String,
+        definition_revision: i64,
+        request_id: String,
+        #[serde(default)]
+        limits: RunLimits,
+    },
     StartPlan {
         plan_id: String,
         definition_id: String,
@@ -49,6 +60,19 @@ pub enum RunAction {
         command_id: String,
         expected_sequence: i64,
     },
+}
+
+/// Inline schema is embedded under MCP `input`, like the native story schema.
+pub fn run_action_schema() -> serde_json::Value {
+    let generator = schemars::generate::SchemaSettings::draft2020_12()
+        .with(|settings| settings.inline_subschemas = true)
+        .into_generator();
+    let mut schema =
+        serde_json::to_value(generator.into_root_schema_for::<RunAction>()).unwrap_or_default();
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("$schema");
+    }
+    schema
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -108,6 +132,9 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
         .to_string();
     let store = RunStore::open()?;
     match action {
+        RunAction::StartGraph { .. } => {
+            Err("graph start requires the owning daemon service".into())
+        }
         RunAction::StartPlan {
             plan_id,
             definition_id,
@@ -155,6 +182,7 @@ pub fn run_action(project: &str, action: RunAction) -> Result<RunReply, String> 
             if matches!(
                 command,
                 RunCommand::ExpireDeadline
+                    | RunCommand::StartGraphAgent { .. }
                     | RunCommand::Graph { .. }
                     | RunCommand::BindAgent { .. }
                     | RunCommand::ReportBoundAttempt { .. }
@@ -229,7 +257,8 @@ pub fn run_action_with_events(
 ) -> Result<RunReply, String> {
     let mutation = matches!(
         action,
-        RunAction::StartPlan { .. }
+        RunAction::StartGraph { .. }
+            | RunAction::StartPlan { .. }
             | RunAction::Command { .. }
             | RunAction::RecordIntegration { .. }
             | RunAction::RecertifyCanonical { .. }
@@ -238,7 +267,34 @@ pub fn run_action_with_events(
     if mutation {
         state.workflow_runtime.require_owner()?;
     }
-    let reply = run_action(project, action)?;
+    let graph_start = matches!(action, RunAction::StartGraph { .. });
+    let reply = if let RunAction::StartGraph {
+        target,
+        expected_revision,
+        definition_id,
+        definition_revision,
+        request_id,
+        limits,
+    } = action
+    {
+        if !crate::fs::is_absolute_on_any_platform(project) {
+            return Err("project must be an absolute path".into());
+        }
+        RunReply::Snapshot(Box::new(state.workflow_runtime.start_graph(
+            state,
+            &super::store::GraphStartRequest {
+                project: project.into(),
+                target,
+                expected_revision,
+                definition_id,
+                definition_revision,
+                request_id,
+                limits,
+            },
+        )?))
+    } else {
+        run_action(project, action)?
+    };
     if mutation {
         let (repo_path, run_id, sequence) = match &reply {
             RunReply::Snapshot(snapshot) => (&snapshot.project, &snapshot.id, snapshot.sequence),
@@ -251,7 +307,9 @@ pub fn run_action_with_events(
                 unreachable!("mutations return a snapshot or receipt")
             }
         };
-        emit_run_changed(state, repo_path, run_id, sequence);
+        if !graph_start {
+            emit_run_changed(state, repo_path, run_id, sequence);
+        }
     }
     Ok(reply)
 }
