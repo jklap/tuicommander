@@ -140,7 +140,13 @@ pub fn definition_action(project: &str, action: WorkflowAction) -> Result<Workfl
             id,
             expected_revision,
         } => {
-            draft_in_project(&store, &id, &project)?;
+            let draft = draft_in_project(&store, &id, &project)?;
+            super::definition::validate_runtime_nodes(&draft.graph, draft.kind)?;
+            super::validate_executable_graph(
+                &draft.graph,
+                draft.kind,
+                !draft.required_checks.is_empty(),
+            )?;
             Ok(WorkflowReply::Published(
                 store.publish(&id, expected_revision)?,
             ))

@@ -286,6 +286,43 @@ pub fn validate_graph(graph: &WorkflowGraph, workflow_kind: WorkflowKind) -> Res
     Ok(())
 }
 
+/// Plan and story roles use the same bounded runtime; writable story coordinators are unsupported.
+pub(crate) fn validate_runtime_nodes(
+    graph: &WorkflowGraph,
+    kind: WorkflowKind,
+) -> Result<(), String> {
+    for node in &graph.nodes {
+        if let NodeKind::Agent { role, .. } = node.kind {
+            let plan_role = matches!(role, AgentRole::Coordinator | AgentRole::Planner);
+            if plan_role != (kind == WorkflowKind::Plan) {
+                return Err(format!(
+                    "workflow node '{}' has a role not executable for this graph; keep it as a draft",
+                    node.id
+                ));
+            }
+        }
+    }
+    if graph
+        .nodes
+        .iter()
+        .any(|n| matches!(n.kind, NodeKind::CreateStories))
+        && !graph.nodes.iter().any(|n| {
+            matches!(
+                n.kind,
+                NodeKind::Agent {
+                    role: AgentRole::Coordinator,
+                    ..
+                }
+            )
+        })
+    {
+        return Err(
+            "Create Stories requires an executable coordinator; keep this graph as a draft".into(),
+        );
+    }
+    Ok(())
+}
+
 /// Validate settings required by the versioned execution contract.
 /// Legacy definitions remain readable, but need a new revision to execute.
 pub fn validate_executable_graph(

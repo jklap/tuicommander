@@ -12,6 +12,8 @@ interface WorktreeSwitchDeps {
 }
 
 interface WorktreeCreatedPayload {
+	creator_session?: string | null;
+	spawn_session?: boolean;
 	repo_path: string;
 	/** Which workspace was born — the store key. */
 	workspace_id: string;
@@ -117,6 +119,40 @@ function worktreeLabel(worktreePath: string): string {
 	return parent ? `${parent}/${leaf}` : leaf;
 }
 
+/** Render backend-authored workspace membership without sending shell input. */
+function applyWorktreePlacement(payload: WorktreeCreatedPayload): void {
+	const { repo_path, workspace_id, branch, worktree_path, kind } = payload;
+	// Register the branch in the store immediately so the sidebar shows the new
+	// worktree right away — independent of whether the user accepts the switch
+	// offer below. Mirrors the in-app create path (setupNewWorktree → setWorkspace).
+	// Guarded on repo existence so we don't create a half-formed repo entry for a
+	// worktree on a repo that isn't open in the sidebar.
+	if (repositoriesStore.get(repo_path)) {
+		// Same record `setupNewWorktree` writes for an in-app creation.
+		repositoriesStore.setWorkspace(repo_path, workspace_id, {
+			branchName: branch,
+			worktreePath: worktree_path,
+			kind,
+			parentRepoPath: null,
+		});
+	}
+	// Placement changes the sidebar index, never the agent process or shell cwd.
+	const creatorId = payload.creator_session ? terminalsStore.findBySessionId(payload.creator_session) : undefined;
+	const owner = creatorId ? repositoriesStore.findOwnerForTerminal(creatorId) : undefined;
+	if (creatorId && owner?.repoPath === repo_path && !payload.spawn_session) {
+		terminalsStore.update(creatorId, { placementPath: worktree_path });
+	}
+	if (creatorId && owner?.repoPath === repo_path && owner.workspaceId !== workspace_id && !payload.spawn_session) {
+		batch(() => {
+			repositoriesStore.removeTerminalFromWorkspace(repo_path, owner.workspaceId, creatorId);
+			repositoriesStore.addTerminalToWorkspace(repo_path, workspace_id, creatorId);
+			if (terminalsStore.state.activeId === creatorId) {
+				repositoriesStore.setActiveWorkspace(repo_path, workspace_id);
+			}
+		});
+	}
+}
+
 /**
  * Listens for backend worktree lifecycle events: offers to switch the active tab
  * + terminal to a newly created worktree, and prunes the row of a removed one.
@@ -132,28 +168,16 @@ function worktreeLabel(worktreePath: string): string {
 export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 	let unlisten: (() => void) | null = null;
 	let unlistenRemoved: (() => void) | null = null;
+	let unlistenDeclared: (() => void) | null = null;
 
 	listen<WorktreeCreatedPayload>("worktree-created", (event) => {
-		const { repo_path, workspace_id, branch, worktree_path, kind } = event.payload;
+		const { repo_path, workspace_id, branch, worktree_path } = event.payload;
 		const switchToWorktree = () => {
 			switchToCreatedWorktree(deps, repo_path, workspace_id, branch, worktree_path).catch((err) =>
 				appLogger.warn("git", `Failed to switch to worktree "${branch}"`, err),
 			);
 		};
-		// Register the branch in the store immediately so the sidebar shows the new
-		// worktree right away — independent of whether the user accepts the switch
-		// offer below. Mirrors the in-app create path (setupNewWorktree → setWorkspace).
-		// Guarded on repo existence so we don't create a half-formed repo entry for a
-		// worktree on a repo that isn't open in the sidebar.
-		if (repositoriesStore.get(repo_path)) {
-			// Same record `setupNewWorktree` writes for an in-app creation.
-			repositoriesStore.setWorkspace(repo_path, workspace_id, {
-				branchName: branch,
-				worktreePath: worktree_path,
-				kind,
-				parentRepoPath: null,
-			});
-		}
+		applyWorktreePlacement(event.payload);
 		const label = worktreeLabel(worktree_path);
 		activityStore.addItem({
 			id: `wt-${workspace_id}-${Date.now()}`,
@@ -174,6 +198,14 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		})
 		.catch((err) => appLogger.error("app", "Failed to register worktree-created listener", err));
 
+	listen<WorktreeCreatedPayload>("session-worktree-declared", (event) => {
+		applyWorktreePlacement(event.payload);
+	})
+		.then((fn) => {
+			unlistenDeclared = fn;
+		})
+		.catch((err) => appLogger.error("app", "Failed to register session-worktree-declared listener", err));
+
 	listen<WorktreeRemovedPayload>("worktree-removed", (event) => {
 		const { repo_path, workspace_id } = event.payload;
 		pruneRemovedWorktree(repo_path, workspace_id, deps.closeTerminalsForBranch).catch((err) =>
@@ -187,6 +219,7 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 
 	onCleanup(() => {
 		unlisten?.();
+		unlistenDeclared?.();
 		unlistenRemoved?.();
 	});
 }

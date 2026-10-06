@@ -421,6 +421,41 @@ impl AcpClientManager {
         let authority = self.granted(authority);
         self.dispatch(connection_id, |reply| Command::NewSession {
             authority,
+            profiles: None,
+            reply,
+        })
+        .await
+    }
+
+    /// Apply a repository selection only with a machine ceiling. Ego owns the
+    /// policy merge; this host supplies names, never policy values.
+    pub async fn new_session_for_repo(
+        &self,
+        connection_id: AcpConnectionId,
+        authority: AcpSessionAuthority,
+        machine_profile: &str,
+    ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+        let cwd = canonical_root(&authority.cwd).await?;
+        let repo = tokio::task::spawn_blocking(move || {
+            crate::config::load_repo_local_config_from_path(&cwd)
+        })
+        .await
+        .map_err(|error| {
+            AcpClientError::invalid_input(format!("cannot read repo profile: {error}"))
+        })?;
+        let Some(profile) = repo.and_then(|config| config.ego_profile) else {
+            return self.new_session(connection_id, authority).await;
+        };
+        if machine_profile.is_empty() {
+            return Err(AcpClientError::invalid_input(
+                "a repository ego_profile requires an explicit machine ego profile in Settings",
+            ));
+        }
+        let profiles = serde_json::json!({"profile": profile, "ceilingProfile": machine_profile});
+        let authority = self.granted(authority);
+        self.dispatch(connection_id, |reply| Command::NewSession {
+            authority,
+            profiles: Some(profiles),
             reply,
         })
         .await
@@ -446,6 +481,7 @@ impl AcpClientManager {
         let authority = unattended(authority);
         self.dispatch(connection_id, |reply| Command::NewSession {
             authority,
+            profiles: None,
             reply,
         })
         .await

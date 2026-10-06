@@ -1332,9 +1332,59 @@ export const AgentsTab: Component<AgentsTabProps> = (props) => {
 						</For>
 					</div>
 
+					<EgoPermissionsSection />
+
 					<McpIntegrationsSection />
 				</div>
 			</MachineProvider>
 		</AgentConfigProvider>
+	);
+};
+
+const EgoPermissionsSection: Component = () => {
+	const configStore = useAgentConfig();
+	return (
+		<div class={s.section}>
+			<h3>ego permissions</h3>
+			<div class={a.expandedSection}>
+				<label for="ego-permission-mode">Permissions</label>
+				<select
+					id="ego-permission-mode"
+					class={a.formInput}
+					value={configStore.state.agents.ego?.ego_mode ?? ""}
+					onChange={(event) =>
+						void configStore.setEgoPermissions({
+							ego_mode: (event.currentTarget.value as import("../../../agents").EgoPermissionMode) || undefined,
+						})
+					}
+				>
+					<option value="">Use ego configuration</option>
+					<option value="plan">Read-only (plan)</option>
+					<option value="default">Ask (default)</option>
+					<option value="edits">Auto-edit (edits)</option>
+					<option value="auto">Auto (reviewed)</option>
+					<option value="yolo">Full access (yolo)</option>
+				</select>
+				<label for="ego-permission-sandbox">Filesystem sandbox</label>
+				<select
+					id="ego-permission-sandbox"
+					class={a.formInput}
+					value={configStore.state.agents.ego?.ego_sandbox ?? ""}
+					onChange={(event) =>
+						void configStore.setEgoPermissions({
+							ego_sandbox: (event.currentTarget.value as import("../../../agents").EgoSandbox) || undefined,
+						})
+					}
+				>
+					<option value="">Use ego configuration</option>
+					<option value="ro">Read-only (ro)</option>
+					<option value="workspace">Workspace writes (workspace)</option>
+				</select>
+				<p class={s.hint}>
+					Applies to new terminal launches and managed spawns, including resumes. Overrides matching raw flags. AI Chat
+					uses its own ACP settings.
+				</p>
+			</div>
+		</div>
 	);
 };

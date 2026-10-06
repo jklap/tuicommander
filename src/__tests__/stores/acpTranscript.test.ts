@@ -36,6 +36,27 @@ beforeEach(() => {
 });
 
 describe("acpTranscript: messages", () => {
+	// Catches: steering creates an optimistic bubble or merges its echo into the preceding reply.
+	it("shows mid-turn steering once at the echoed conversation position", () => {
+		acpTranscript.applyFrame(frame({ kind: "promptSent", text: "desktop" }));
+		acpTranscript.applyFrame(
+			update({ sessionUpdate: "user_message_chunk", content: text("desktop"), messageId: "first" }),
+		);
+		acpTranscript.applyFrame(
+			update({ sessionUpdate: "agent_message_chunk", content: text("working"), messageId: "reply" }),
+		);
+		acpTranscript.applyFrame(
+			update({ sessionUpdate: "user_message_chunk", content: text("phone"), messageId: "steer" }),
+		);
+		expect(acpTranscript.entries(SESSION).map((entry) => entry.kind)).toEqual(["user", "agent", "user"]);
+		expect(
+			acpTranscript
+				.entries(SESSION)
+				.filter((entry) => entry.kind === "user")
+				.map((entry) => entry.text),
+		).toEqual(["desktop", "phone"]);
+	});
+
 	// Catches: appending an ACP echo to the promptSent bubble doubles the user's text.
 	it("shows a sent prompt once when ego echoes it in chunks", () => {
 		acpTranscript.applyFrame(frame({ kind: "promptSent", text: "Diagnose connection" }));

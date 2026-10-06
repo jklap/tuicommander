@@ -394,6 +394,41 @@ describe("canvasTerminalTransport", () => {
 			expect(handler).toHaveBeenCalledWith({ cwd: "/tmp/work" });
 		});
 
+		// Catches: socket-open clearing the banner before replay, or retry ten appearing as failure before it fails.
+		it("reports actual retries, replay recovery, and exhaustion only after the tenth failure", async () => {
+			const transport = new WsTransport("sess-42");
+			const reconnecting = vi.fn();
+			const recovered = vi.fn();
+			const exhausted = vi.fn();
+			transport.onStreamReconnecting(reconnecting);
+			transport.onStreamRecovered(recovered);
+			transport.onStreamExhausted(exhausted);
+			const initial = transport.subscribe(vi.fn());
+			wsInstances[0].onopen?.();
+			await initial;
+			wsInstances[0].onclose?.();
+			expect(reconnecting).toHaveBeenLastCalledWith(1, 10);
+			await vi.advanceTimersByTimeAsync(1000);
+			wsInstances[1].onopen?.();
+			await Promise.resolve();
+			expect(recovered).not.toHaveBeenCalled();
+			wsInstances[1].onmessage?.({ data: JSON.stringify({ type: "grid-replay-empty" }) });
+			expect(recovered).toHaveBeenCalledTimes(1);
+			wsInstances[1].onclose?.();
+			for (let attempt = 1; attempt <= 10; attempt++) {
+				expect(reconnecting).toHaveBeenLastCalledWith(attempt, 10);
+				expect(exhausted).not.toHaveBeenCalled();
+				await vi.advanceTimersByTimeAsync(1000 * 2 ** Math.min(attempt - 1, 5));
+				wsInstances.at(-1)?.onclose?.();
+				await Promise.resolve();
+			}
+			expect(exhausted).toHaveBeenCalledExactlyOnceWith(10);
+			const socketCount = wsInstances.length;
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(wsInstances).toHaveLength(socketCount);
+			transport.unsubscribe();
+		});
+
 		it("reconnects on unexpected close", async () => {
 			const transport = new WsTransport("sess-1");
 			const subscribePromise = transport.subscribe(vi.fn());

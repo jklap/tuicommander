@@ -26,51 +26,44 @@ export function SlashMenuOverlay(props: SlashMenuOverlayProps) {
 	}
 
 	return (
-		<div class={styles.dropup} onTouchMove={(e) => e.stopPropagation()}>
-			<div class={styles.header}>
-				<span>Commands</span>
-				<button class={styles.close} aria-label="Close slash menu" onClick={() => props.onClose?.()}>
-					<svg
-						width="18"
-						height="18"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						aria-hidden="true"
-					>
-						<path d="M18 6 6 18M6 6l12 12" />
+		<div class={styles.dropup} role="toolbar" aria-label="Commands" onTouchMove={(e) => e.stopPropagation()}>
+			<button class={styles.control} aria-label="Close slash menu" onClick={() => props.onClose?.()}>
+				<svg
+					width="14"
+					height="14"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+					aria-hidden="true"
+				>
+					<path d="M18 6 6 18M6 6l12 12" />
+				</svg>
+			</button>
+			<Show when={!props.local}>
+				<button class={styles.control} onClick={() => navigate("up")} aria-label="Previous">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+						<path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
 					</svg>
 				</button>
-			</div>
+				<button class={styles.control} onClick={() => navigate("down")} aria-label="Next">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+						<path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
+					</svg>
+				</button>
+			</Show>
 			<For each={availableItems()}>
 				{(item) => (
 					<button
 						class={styles.item}
 						classList={{ [styles.itemHighlighted]: item.highlighted }}
+						title={item.description || undefined}
 						onClick={() => props.onSelect(item.command)}
 					>
-						<span class={styles.command}>{item.command}</span>
-						<Show when={item.description}>
-							<span class={styles.description}>{item.description}</span>
-						</Show>
+						{item.command}
 					</button>
 				)}
 			</For>
-			<Show when={!props.local}>
-				<div class={styles.nav}>
-					<button class={styles.navBtn} onClick={() => navigate("up")} aria-label="Previous">
-						<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-							<path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z" />
-						</svg>
-					</button>
-					<button class={styles.navBtn} onClick={() => navigate("down")} aria-label="Next">
-						<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-							<path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z" />
-						</svg>
-					</button>
-				</div>
-			</Show>
 		</div>
 	);
 }

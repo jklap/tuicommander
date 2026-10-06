@@ -31,12 +31,15 @@ export function createTerminalWorktreeCoordinator(deps: TerminalWorktreeCoordina
 		const currentRepoPath = repositoriesStore.getRepoPathForTerminal(terminalId);
 		const currentWorkspaceId = repositoriesStore.findOwnerForTerminal(terminalId)?.workspaceId ?? null;
 
-		let target = findWorkspaceForCwd(newCwd);
+		// Explicit backend placement remains authoritative even when git -C leaves
+		// the shell cwd unchanged or an OSC 7 notification arrives later.
+		const placementCwd = terminalsStore.get(terminalId)?.placementPath ?? newCwd;
+		let target = findWorkspaceForCwd(placementCwd);
 		if (!target && currentRepoPath) {
-			const insideKnownRepo = repositoriesStore.getPaths().some((repoPath) => pathStartsWith(newCwd, repoPath));
+			const insideKnownRepo = repositoriesStore.getPaths().some((repoPath) => pathStartsWith(placementCwd, repoPath));
 			if (insideKnownRepo) {
 				await deps.refreshBranches();
-				target = findWorkspaceForCwd(newCwd);
+				target = findWorkspaceForCwd(placementCwd);
 			}
 		}
 

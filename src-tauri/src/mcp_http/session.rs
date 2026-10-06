@@ -20,6 +20,16 @@ use uuid::Uuid;
 use super::types::*;
 use super::ws_compression::{DEFLATE_SUBPROTOCOL, WsCompression, WsFrameSender};
 
+pub(super) async fn get_prompt_receipt(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match crate::prompt_receipt::read_receipt(&state, &id) {
+        Ok(receipt) => Json(receipt).into_response(),
+        Err(_) => session_not_found().into_response(),
+    }
+}
+
 /// Standard 404 response for missing sessions.
 fn session_not_found() -> (StatusCode, Json<serde_json::Value>) {
     (
@@ -87,6 +97,7 @@ pub(crate) fn live_tuic_sessions_by_pty(
 /// in both lists the same way.
 pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
     let tuic_by_pty = live_tuic_sessions_by_pty(state);
+    let repositories = crate::config::load_repositories();
     state
         .session_maps
         .sessions
@@ -94,13 +105,20 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
         .map(|entry| {
             let session_id = entry.key().clone();
             let session = entry.value().lock();
+            let declared = tuic_by_pty
+                .get(&session_id)
+                .and_then(|peer| super::session_placement::declared_worktree(&repositories, peer));
             SessionInfo {
                 cwd: session.cwd.clone(),
-                worktree_path: session
-                    .worktree
-                    .as_ref()
-                    .map(|w| w.path.to_string_lossy().to_string()),
-                worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
+                worktree_path: declared.as_ref().map(|(path, _)| path.clone()).or_else(|| {
+                    session
+                        .worktree
+                        .as_ref()
+                        .map(|w| w.path.to_string_lossy().to_string())
+                }),
+                worktree_branch: declared
+                    .map(|(_, branch)| branch)
+                    .or_else(|| session.worktree.as_ref().and_then(|w| w.branch.clone())),
                 display_name: session.display_name.clone(),
                 display_name_is_custom: session.display_name_is_custom,
                 display_name_from_spawn: session.display_name_from_spawn,
@@ -490,7 +508,7 @@ pub(super) async fn get_output(
                 "action": "output", "session_id": session_id,
                 "format": if format == "mcp_raw" { "raw" } else { "text" },
                 "limit": query.limit, "from_line": query.from_line,
-                "since_cursor": query.since_cursor,
+                "since_cursor": query.since_cursor, "from_byte": query.from_byte,
             }),
         );
         return (
@@ -812,11 +830,13 @@ pub(super) fn spawn_pty_session(
         &state,
         &session_id,
         PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
             paused: paused.clone(),
             worktree,
+            initial_cwd: cwd.clone(),
             cwd: cwd.clone(),
             display_name: None,
             display_name_is_custom: false,
@@ -1137,6 +1157,8 @@ pub(super) async fn create_session_with_worktree(
     let worktree_branch = worktree.branch.clone();
     let branch_name = worktree_branch.clone().unwrap_or_default();
     state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
+        creator_session: None,
+        spawn_session: true,
         repo_path: base_repo.clone(),
         workspace_id: crate::worktree::workspace_id_of_worktree(&branch_name),
         branch: branch_name.clone(),

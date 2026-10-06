@@ -151,6 +151,7 @@ const OVERRIDABLE_NULL_DEFAULTS: Pick<
 
 /** Repo-local config loaded from .tuic.json (team-shareable, snake_case from Rust) */
 interface RepoLocalConfig {
+	ego_profile?: string;
 	base_branch?: string;
 	copy_ignored_files?: boolean;
 	copy_untracked_files?: boolean;

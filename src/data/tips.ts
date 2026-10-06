@@ -10,6 +10,42 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "ego Launch Permissions",
+		description:
+			"Choose permission mode and sandbox in Settings > Agents > ego for new terminal launches and managed spawns.",
+		shortcut: null,
+	},
+	{
+		feature: "Launch Instruction Inspector",
+		description:
+			"Right-click a terminal and choose Inspect Launch Instructions to read captured launch sections, sources and byte sizes.",
+		shortcut: null,
+	},
+	{
+		feature: "Conversation Launch Options",
+		description:
+			"Use the options button beside AI Chat's + to give one conversation its own ego profile, workspace and executable.",
+		shortcut: null,
+	},
+	{
+		feature: "Repository Ego Profiles",
+		description:
+			"Select ego_profile in a workspace's .tuic.json. Ego restricts it to your explicit machine profile and AI Chat shows any clamp warnings.",
+		shortcut: null,
+	},
+	{
+		feature: "ego Perimeter",
+		description:
+			"Use Settings > AI Chat to restrict ego roots, edit read and write directories, and inspect ego's effective perimeter before starting a new conversation.",
+		shortcut: null,
+	},
+	{
+		feature: "Child Agent Navigation",
+		description:
+			"In the rich sidebar, click the agent count below a parent to open its children in another repository.",
+		shortcut: null,
+	},
+	{
 		feature: "Touch Branch Actions",
 		description: "Swipe a sidebar branch left for More, Add Terminal, and worktree removal. Hold + to choose an agent.",
 		shortcut: null,

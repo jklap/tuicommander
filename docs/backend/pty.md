@@ -744,3 +744,8 @@ OSC 133 command boundaries and OSC 7770 prompt rows are eviction-stable all-time
 Claude launch settings apply to prompt and option-first launches. Shell wrappers use backend-captured installed CLI help to recognise subcommands and aliases, without probing again at launch. Help is unavailable unless its `Commands:` section has parseable command rows; empty, whitespace-only or truncated help therefore uses the complete recorded Claude help, including `auth` and advertised aliases. Rust publishes this fallback to the shell environment; generated wrappers also embed it for an unusable cached value. No separate fallback verb list is maintained. The exact hidden `remote-control` command also bypasses settings because its reported CLI refusal confirms that requirement. Hyphenated prompts retain settings. Explicit settings and bare mode remain authoritative.
 
 Headless PTY registration uses the requested terminal geometry without a minimum VT width. A same-size resize preserves that width.
+
+MCP retained-output pages use `VtLogBuffer::lines_since_logical` source-row
+start/end positions, including omitted chrome slots. The end is a page boundary,
+not the total scrollback size. Logical wrap lines stay whole; raw pages use the
+existing output ring and original-byte cursors. See [MCP output paging](mcp-http.md#mcp-tool-session-output).

@@ -6,16 +6,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Resolve browser HTML and Markdown images through open repositories; show a clear placeholder for external images.
+- Show the existing ACP refusal text once in a plain-text AI Chat card.
+- Integrate workflow approval, plan dispatch and public story controls; public plan API starts share the daemon executor. Canonical workflow test fixtures preserve Windows ownership.
+
+- Dispatch bounded plan story waves, wait for explicit dependency integration, and require current deterministic final checks before completion.
+
+- Run pre-approval workflow checks and record independent reviewer approval; retain implementer role restrictions after exit. Execute deterministic story Gate outcomes.
+
+- Execute pinned serial workflow Agent/Judge/Loop/Pause/Notify/Join nodes in the owning daemon with durable reports and effects; refuse unsupported node publication. Manual pause time no longer consumes active run duration. Public graph start controls remain in development.
+- Start published story workflows from Plans and Stories; inspect pinned graph positions, decision evidence and full paged events. Add explicit graph resume, pause/cancel controls and the generated `workflow_run` MCP surface. Plan start remains visibly unavailable pending dispatch.
+
+- Execute pinned serial workflow Agent/Judge/Loop/Pause/Notify/Join nodes in the owning daemon with durable reports and effects; refuse unsupported node publication. Manual pause time no longer consumes active run duration. Full plan dispatch remains in development.
+- **AI Chat steering** — Text sent during a running turn joins the current query when ego advertises ACP steering, on desktop and mobile. Attachments and unsupported or rejected steering retain the queue. Delayed steering responses preserve submission order with later text and attachments.
+- Add recorded incident causes and manual next-step suggestions to Plans and Stories run history.
+- Add persisted ego profile, workspace and executable options for individual AI Chat conversations, including HTTP creation and reopen.
+- Audit MCP inbox reads with caller, owner and message ids without logging mail bodies.
+- Let MCP agents page retained terminal output without rerunning commands. Responses explain the next page, raw byte offsets work locally and remotely, and tiny raw pages cannot reconstruct masked secrets.
+- Bound repository-selected ego profiles by the machine profile over ACP and show ego's clamp warnings in AI Chat.
+- Add caller-bound MCP worktree declarations for agents using `git -C`, with same-repository validation and placement restored after restart.
+
+- Place only the same-repository MCP caller in its new worktree when no separate session is requested; preserve sibling tabs and inactive selection.
+- Separate active and idle ungrouped repositories in the rich sidebar and show working-agent counts.
+- Keep rich sidebar navigation dense at iPad width and fold returned subagent history.
+- Extend intent only for working rich sidebar agents; keep idle rows on one line and full intent in tooltips.
+- Fold old idle sessions in the rich sidebar without changing session order.
+- Hide zero PR and worktree counts in rich sidebar repository metadata.
+
 - **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
 
 - **Workflow graph foundation** — Durable serial graph positions, bounded predecessor history, decision provenance and repair counters now replay from pinned definitions. Executable validation requires final checks and explicit pause targets. This slice does not enable autonomous scheduling; older pre-contract runs remain inspectable and cancellable.
 - Fix command boundaries, prompt ticks and answers-only prompt association drifting after scrollback eviction.
 ### Added
 
+- **ego launch permissions** — Choose permission mode and filesystem sandbox in Settings > Agents > ego. Terminal launches and MCP spawns use the same persisted overrides; leaving either choice unset preserves ego configuration.
+- Inspect managed-agent launch instructions from the terminal context menu: captured brief (including peer context), explicit system instruction arguments/file snapshots and MCP initialize responses, with source, original UTF-8 bytes, redaction and capture limits. Historical and agent-autoloaded instructions are explicitly unobservable.
+- Add ego Perimeter controls in Settings > AI Chat for root access, read allowlists, extra writable directories and network mode. Show ego's effective view and a measured or unverified exec-sandbox badge; writes use ego CLI.
+
+- Add terminal history back/forward (`Cmd+Alt+Left/Right`, toolbar arrows) over the last 10 activated terminals, and a Default/Recent sort on the mobile Sessions screen.
+- Navigate from parent agents to live children in other repositories.
+
+- Summarize merged idle worktrees with a guarded Clean up action.
+
+- Keep rich active/idle repository sections inside their existing groups.
+
 - Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
 
 ### Fixed
 
+- Keep backend memory census on demand, use cheap watchdog summaries, and identify census bytes as overlapping map accounting.
+- Preserve live AI Chat response chunks when reopening a configured conversation, including refused reopen requests.
+- Clear session-specific terminal stream notices after replay recovery; show reconnect progress through the existing ten-attempt budget.
+- Keep Settings native MCP tool rows concise with dedicated English summaries; preserve full tool descriptions in their information tooltips.
+- Release the worktree removal lock when its confirmation dialog fails, so a later removal can proceed.
+- **Tablet terminal input** — Touch taps use the main keyboard input instead of an offscreen textarea, avoiding a focus switch on subsequent mouse events and sharing soft-keyboard deletion handling.
 - Reap PTY children that exit after terminal EOF or session removal, preventing zombie shells in the headless daemon and desktop backend.
 - Return freed terminal scrollback pages to the OS after session cleanup on Linux/glibc instead of retaining them in allocator arenas.
 
