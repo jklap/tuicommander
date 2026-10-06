@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- Extend intent only for working rich sidebar agents; keep idle rows on one line and full intent in tooltips.
 - Fold old idle sessions in the rich sidebar without changing session order.
 - Hide zero PR and worktree counts in rich sidebar repository metadata.
 

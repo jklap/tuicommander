@@ -631,3 +631,5 @@ Pending agent commands in `Terminal` drain once when both the command and an idl
 Rich `RepoSection` metadata shows PR and worktree count chips only for positive counts, with reactive store updates.
 
 In rich mode, sessions idle for more than two hours fold into an expandable count. Backend activity timestamps determine age; busy sessions, awaiting input, unread output, selected rows and parents of visible children stay visible. Expanding preserves row order. Compact mode does not fold idle sessions.
+
+Rich working agent rows reserve two clamped intent lines. Idle, awaiting-input and error rows stay on one line with status dots; their full intent, task or prompt remains in the tooltip. Compact rows keep their one-line layout.

@@ -2493,3 +2493,15 @@
 @media (prefers-reduced-motion: reduce) {
   .branchSwipeRow > .branchItem { transition: none; }
 }
+
+/* Reserve two intent lines while the agent is working. */
+.branchTabLine.branchTabIntent {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  height: 2.8em;
+  flex: 1;
+}

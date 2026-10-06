@@ -629,3 +629,5 @@ buttons, with at least 44px width per action. Only removable linked worktrees
 show Remove. Keep native vertical scrolling with `touch-action: pan-y`.
 Use the existing palette and radius tokens, and disable slide transitions when
 reduced motion is requested. Mouse hover controls retain their existing layout.
+
+Rich working agent rows reserve two clamped intent lines. Idle, awaiting-input and error rows stay on one line with status dots; their full intent, task or prompt remains in the tooltip. Compact rows keep their one-line layout.
