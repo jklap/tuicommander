@@ -219,17 +219,16 @@ export function createAcpClient(open: AcpStreamOpener = openAcpStream) {
 
 	return {
 		async openConversation(request: ChatOpenRequest): Promise<ChatOpened> {
-			const cleared = request.sessionId ? acpTranscript.clear(request.sessionId) : null;
-			try {
-				const opened = await invoke<ChatOpened>("acp_chat_open", { request });
-				if (!opened.replayed && request.sessionId && cleared) acpTranscript.restore(request.sessionId, cleared);
-				if (opened.replayed) replaying.set(opened.sessionId, opened.connection.connectionId);
-				await adopt(opened.connection);
-				return opened;
-			} catch (error) {
-				if (request.sessionId && cleared) acpTranscript.restore(request.sessionId, cleared);
-				throw error;
+			const opened = await invoke<ChatOpened>("acp_chat_open", { request });
+			// An attached conversation keeps receiving live output while open is pending.
+			// Replace its projection only when the backend actually loaded history,
+			// before subscribing to the journal that carries that replay.
+			if (opened.replayed) {
+				acpTranscript.clear(opened.sessionId);
+				replaying.set(opened.sessionId, opened.connection.connectionId);
 			}
+			await adopt(opened.connection);
+			return opened;
 		},
 
 		/** Launch ego on a repo root and read everything that connection holds. */

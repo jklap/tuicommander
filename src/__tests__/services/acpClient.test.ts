@@ -727,3 +727,32 @@ it("retains live response chunks while reopening an already attached custom conv
 		"response arriving during tab switch",
 	]);
 });
+
+// Catches: a rejected reopen restores stale history over chunks received on the live stream.
+it("retains live response chunks when custom conversation reopen is refused", async () => {
+	await client.connect(ROOT);
+	acpTranscript.noteUserMessage(SESSION, "question before switching tabs");
+	let refuseOpen!: (error: Error) => void;
+	const pendingOpen = new Promise<unknown>((_resolve, reject) => {
+		refuseOpen = reject;
+	});
+	mockInvoke.mockImplementation(answering({ acp_chat_open: pendingOpen }));
+	const reopening = client.openConversation({ sessionId: SESSION });
+	const rejected = expect(reopening).rejects.toThrow("launch refused");
+	streams.deliver({
+		...frame(2),
+		event: {
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "response arriving during refused reopen" },
+			},
+		},
+	});
+	refuseOpen(new Error("launch refused"));
+	await rejected;
+	expect(acpTranscript.entries(SESSION).map((entry) => ("text" in entry ? entry.text : ""))).toEqual([
+		"question before switching tabs",
+		"response arriving during refused reopen",
+	]);
+});
