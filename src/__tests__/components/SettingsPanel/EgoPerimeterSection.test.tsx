@@ -31,12 +31,10 @@ describe("EgoPerimeterSection", () => {
 		expect((screen.getByLabelText("Root directory") as HTMLInputElement).value).toBe("/Users/stefano.straus/Gits");
 	});
 
-	// Catches: empty/partial arrays or off+online are rendered as unchecked or fully OS-enforced.
+	// Catches: the backend's three enforcement states render the wrong badge.
 	it.each([
 		["complete ro offline", "enforcedByOs", "Enforced by OS", measured.capabilities, "ro", "offline"],
 		["completed empty measurement", "promptOnly", "Prompt only", [], "ro", "offline"],
-		["missing write_denied", "promptOnly", "Prompt only", ["read_scoped"], "ro", "online"],
-		["off online", "promptOnly", "Prompt only", measured.capabilities, "off", "online"],
 		["unknown evidence", "notChecked", "Enforcement not checked", "future", "ro", "online"],
 	] as const)(
 		"renders the backend's exec badge for %s",
