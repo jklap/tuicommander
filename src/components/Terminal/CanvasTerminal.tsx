@@ -90,6 +90,7 @@ import {
 	type CellMetrics,
 	type CursorShape,
 	clampRowRangeToViewport,
+	createFrameStarvationWatchdog,
 	createHiddenAckThrottle,
 	createLeadingThrottle,
 	type DecodedFrame,
@@ -549,6 +550,51 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// The gate must reopen on this ack, not on the ticker deciding the frontend is
 	// stuck. The margin that buys is in HIDDEN_ACK_INTERVAL_MS — do not inline it.
 	const hiddenAck = createHiddenAckThrottle(ackFrame, HIDDEN_ACK_INTERVAL_MS);
+
+	/**
+	 * Rebuild this terminal's grid subscription. Shared by the reattach path
+	 * (`onRef.resubscribe`) and the starvation watchdog below.
+	 */
+	async function resubscribeGrid() {
+		// A pending hidden ack would report the old channel's receipt count
+		// against the fresh gate Rust installs on resubscribe.
+		hiddenAck.cancel();
+		framesReceived = 0;
+		awaitingFullFrame = false;
+		await transport?.resubscribe();
+		// A fresh (re)subscribe only carries new placements from here on —
+		// re-fetch the full set the same way the initial mount does.
+		imageLayer?.hydrate().then(() => {
+			const m = metrics();
+			if (!m) return;
+			switchToSplitCompositingIfNeeded(m);
+			if (currentFrame) repaintImages(currentFrame, m);
+		});
+	}
+
+	// A visible terminal that asked for a frame and got nothing back has a dead
+	// grid channel (Rust sends into a callback the webview no longer has, and
+	// nothing on either side reports it). Rebuild the subscription instead of
+	// sitting on a blank canvas forever. See createFrameStarvationWatchdog.
+	const frameWatchdog = createFrameStarvationWatchdog({
+		getReceived: () => framesReceived,
+		onStarved: () => {
+			if (!alive || hidden) return;
+			appLogger.warn("terminal", "No grid frame after a frame request — resubscribing", {
+				sessionId: props.sessionId,
+			});
+			return resubscribeGrid().catch((e) =>
+				appLogger.error("terminal", "Grid resubscribe after frame starvation failed", {
+					sessionId: props.sessionId,
+					error: String(e),
+				}),
+			);
+		},
+		onGiveUp: () =>
+			appLogger.error("terminal", "Grid channel still silent after resubscribing — giving up", {
+				sessionId: props.sessionId,
+			}),
+	});
 
 	function writePtyNoScroll(data: string) {
 		invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
@@ -3062,6 +3108,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					hidden = false;
 					recordWorkloadVisibility(props.sessionId, false);
 					transport?.setVisible?.(true);
+					// Either transport now owes this visible terminal a frame (desktop: the
+					// visibility publication requests it; WS: requestShowFrame below). Arm
+					// before that request can complete, so its reply is never the baseline.
+					frameWatchdog.arm();
 					awaitingFullFrame = false;
 					// Back to full rate: clear the gate now instead of waiting out the
 					// hidden interval, so the frame requested below is not queued behind it.
@@ -3103,6 +3153,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					hidden = true;
 					recordWorkloadVisibility(props.sessionId, true);
 					transport?.setVisible?.(false);
+					frameWatchdog.cancel();
 					stopBlink();
 					// Shrink to free the backing store while hidden.
 					canvasRef.width = 1;
@@ -4173,6 +4224,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				noteFrameRequest();
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 			}
+			// The observer's first visible entry (delivered on observe, before this
+			// subscribe) already armed against a channel that did not exist yet; restart
+			// the check against the live one. A frame that already arrived proves it
+			// alive; otherwise wait for one (desktop: subscribe published visibility and
+			// requested it itself).
+			frameWatchdog.cancel();
+			if (!hidden && framesReceived === 0) frameWatchdog.arm();
 			// Hydrate any placements that existed before this listener attached —
 			// the live "image-placement" event only carries new ones from here on.
 			imageLayer?.hydrate().then(() => {
@@ -4272,22 +4330,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				remeasure();
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 			},
-			resubscribe: async () => {
-				// A pending hidden ack would report the old channel's receipt count
-				// against the fresh gate Rust installs on resubscribe.
-				hiddenAck.cancel();
-				framesReceived = 0;
-				awaitingFullFrame = false;
-				await transport?.resubscribe();
-				// A fresh (re)subscribe only carries new placements from here on —
-				// re-fetch the full set the same way the initial mount does.
-				imageLayer?.hydrate().then(() => {
-					const m = metrics();
-					if (!m) return;
-					switchToSplitCompositingIfNeeded(m);
-					if (currentFrame) repaintImages(currentFrame, m);
-				});
-			},
+			resubscribe: resubscribeGrid,
 			searchFind: async (query: string, blockScope?: boolean) => {
 				if (!query || !invokeRef) {
 					clearSearchState();
@@ -4541,6 +4584,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		clearSettlePending();
 		hiddenAck.cancel();
+		frameWatchdog.cancel();
 		if (reconcileTimer) clearTimeout(reconcileTimer);
 		clearTimeout(resizeDebounce);
 		cancelSizeRetry?.();
