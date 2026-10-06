@@ -174,6 +174,12 @@ fn linux_glibc_session_payload_release_returns_scrollback_pages() {
 
     for tombstone in [false, true] {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut live_grid = VtLogBuffer::new(24, 80, 1);
+        live_grid.process(b"still-live");
+        state
+            .grid
+            .vt_log_buffers
+            .insert("live-session".into(), Mutex::new(live_grid));
         let ids: Vec<_> = (0..6).map(|n| format!("rss-owner-{n}")).collect();
         // Production grids are allocated by separate PTY reader threads. Use
         // real threads and real grids so this exercises glibc's thread arenas.
@@ -200,7 +206,17 @@ fn linux_glibc_session_payload_release_returns_scrollback_pages() {
                 cleanup_session(id, &state);
             }
         }
-        assert!(state.grid.vt_log_buffers.is_empty());
+        assert_eq!(state.grid.vt_log_buffers.len(), 1);
+        assert_eq!(
+            state
+                .grid
+                .vt_log_buffers
+                .get("live-session")
+                .unwrap()
+                .lock()
+                .grid_get_row_text(0),
+            "still-live"
+        );
         let after = resident_bytes();
         // Six 10000-row, 220-column grids hold over 300 MiB. A deliberately
         // loose OS-level bound tolerates metadata/caches without accepting the
