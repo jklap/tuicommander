@@ -4815,6 +4815,15 @@ mod tests {
                 "/repo/project".to_string(),
                 "550e8400-e29b-41d4-a716-446655440a01".to_string(),
             )]),
+            ai_chat_launches: HashMap::from([(
+                "observer-session".to_string(),
+                crate::acp_chat::ChatLaunch {
+                    executable: "/opt/observer/ego".to_string(),
+                    profile: "coordinator".to_string(),
+                    workspace: PathBuf::from("/srv/observer"),
+                    peer_id: "550e8400-e29b-41d4-a716-446655440a02".to_string(),
+                },
+            )]),
             default_font_size: 18,
             attachment_max_bytes: default_attachment_max_bytes(),
             attachment_retention_days: default_attachment_retention_days(),
@@ -4895,6 +4904,8 @@ mod tests {
             loaded.ai_chat_peer_ids.get("/repo/project"),
             Some(&"550e8400-e29b-41d4-a716-446655440a01".to_string())
         );
+        // Catches: conversation launch authority disappears in config serialization.
+        assert_eq!(loaded.ai_chat_launches, cfg.ai_chat_launches);
         assert_eq!(loaded.default_font_size, 18);
         assert!(loaded.mcp_server_enabled);
         assert_eq!(loaded.mcp_port, 4000);
