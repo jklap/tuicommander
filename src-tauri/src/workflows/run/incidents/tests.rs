@@ -16,6 +16,8 @@ fn run() -> RunSnapshot {
         status: RunStatus::Running,
         sequence: 1,
         started_ms: 0,
+        paused_since_ms: None,
+        paused_duration_ms: 0,
         limits: RunLimits::default(),
         loops: 0,
         story_creations: 0,
