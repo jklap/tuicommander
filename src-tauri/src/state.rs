@@ -1407,6 +1407,7 @@ pub use tuic_git::worktree::WorktreeInfo;
 pub type SharedPtyWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 
 pub struct PtySession {
+    pub(crate) launch_receipt: Option<crate::prompt_receipt::PromptReceipt>,
     /// Kept outside the session mutex so terminal-generated replies can wait
     /// for an in-flight user write without blocking the reader thread.
     pub writer: SharedPtyWriter,
@@ -1473,6 +1474,7 @@ impl SessionMetrics {
 /// Stored per session_id so tool handlers can check client identity at call time.
 #[derive(Debug, Clone)]
 pub struct McpSessionMeta {
+    pub(crate) prompt_instructions: Option<crate::prompt_receipt::PromptReceipt>,
     /// Last time the session was used (any request); reaper checks this.
     pub last_activity: Instant,
     /// Whether the client identified as Claude Code (or tuic-bridge) at initialize time
@@ -5236,6 +5238,7 @@ pub(crate) mod tests_support {
         state.session_maps.sessions.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: std::sync::Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,

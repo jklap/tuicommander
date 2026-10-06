@@ -20,6 +20,16 @@ use uuid::Uuid;
 use super::types::*;
 use super::ws_compression::{DEFLATE_SUBPROTOCOL, WsCompression, WsFrameSender};
 
+pub(super) async fn get_prompt_receipt(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match crate::prompt_receipt::read_receipt(&state, &id) {
+        Ok(receipt) => Json(receipt).into_response(),
+        Err(_) => session_not_found().into_response(),
+    }
+}
+
 /// Standard 404 response for missing sessions.
 fn session_not_found() -> (StatusCode, Json<serde_json::Value>) {
     (
@@ -812,6 +822,7 @@ pub(super) fn spawn_pty_session(
         &state,
         &session_id,
         PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,

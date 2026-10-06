@@ -6,6 +6,7 @@ import { createContextMenu } from "./components/ContextMenu";
 import { PanelOrchestrator } from "./components/PanelOrchestrator";
 import type { CleanupStep, StepId, StepStatus } from "./components/PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { PromptDrawer } from "./components/PromptDrawer";
+import { PromptInspector } from "./components/PromptInspector/PromptInspector";
 import { PromptOverlay } from "./components/PromptOverlay";
 import type { SettingsContext } from "./components/SettingsPanel";
 import { SETTINGS_SECTION_EGO } from "./components/SettingsPanel/sections";
@@ -491,7 +492,9 @@ const App: Component = () => {
 		if (isTauri()) getCurrentWindow().destroy();
 	};
 
+	const [promptInspectorSessionId, setPromptInspectorSessionId] = createSignal<string | null>(null);
 	const terminalContextMenus = useTerminalContextMenus({
+		openPromptInspector: setPromptInspectorSessionId,
 		agentDetection,
 		gitOps,
 		splitPanes,
@@ -1047,6 +1050,7 @@ const App: Component = () => {
 				onCheckoutRemote={gitOps.handleCheckoutRemoteBranch}
 			/>
 
+			<PromptInspector sessionId={promptInspectorSessionId()} onClose={() => setPromptInspectorSessionId(null)} />
 			{/* Activity dashboard — unmount when closed to release memos/subscriptions */}
 			<Show when={!uiStore.isDetached("activity") && activityDashboardStore.state.isOpen}>
 				<Suspense>

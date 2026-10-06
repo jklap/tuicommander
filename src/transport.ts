@@ -580,6 +580,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { state: string | null }).state ?? null,
 		}),
 	},
+	get_prompt_receipt: {
+		map: (args) => ({ method: "GET", path: `/sessions/${args.sessionId}/prompt-receipt` }),
+	},
 	get_last_prompt: {
 		map: (args) => ({
 			method: "GET",
