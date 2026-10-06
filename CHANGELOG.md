@@ -43,6 +43,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Keep backend memory census on demand, use cheap watchdog summaries, and identify census bytes as overlapping map accounting.
 - Preserve live AI Chat response chunks when reopening a configured conversation, including refused reopen requests.
+- Clear session-specific terminal stream notices after replay recovery; show reconnect progress through the existing ten-attempt budget.
 
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 

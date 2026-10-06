@@ -2664,3 +2664,5 @@ The owning daemon executes pinned plan coordinator and Create Stories visits thr
 
 - **Conversation launch options:** AI Chat can give one conversation its own ego profile, executable and workspace, persisted with a dedicated peer identity. Creation and reopen are also available over HTTP.
 - **Inbox read audit:** MCP agent inbox reads log caller, owner and message ids at INFO without mail bodies.
+
+Terminal stream reconnect notices identify the session and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice.
