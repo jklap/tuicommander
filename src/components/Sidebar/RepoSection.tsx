@@ -410,7 +410,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 		const activity = () => term()?.name ?? null;
 		const detail = () => {
 			const t = term();
-			return t ? (t.agentIntent ?? displayTask(t.currentTask, t.agentType) ?? t.lastPrompt) : null;
+			return t ? agentRow(t).line : null;
 		};
 		const accessibleLabel = () => {
 			const t = term();
@@ -447,7 +447,7 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 							class={cx(
 								s.branchTabItem,
 								isActive() && s.active,
-								rich() && s.branchTabItemRich,
+								rich() && agentRow(t()).state === "working" && s.branchTabItemRich,
 								nested && s.branchTabNested,
 							)}
 							onClick={() => navigateToTerminal(id)}
@@ -480,13 +480,20 @@ const BranchTabList: Component<{ terminalIds: string[]; repoPath: string }> = (p
 							</Show>
 							<span class={s.branchAgentTime}>{compactActivityAge(t().lastActivityAt, clock())}</span>
 							{/* Rich: what the agent is doing, in words, under the tab title. */}
-							<Show when={rich() ? agentRow(t()) : null}>
+							<Show when={rich() && agentRow(t()).state === "working" ? agentRow(t()) : null}>
 								{(facts) => (
 									<span class={s.branchTabDetail}>
 										<span class={cx(s.branchTabState, s[`branchTabState_${facts().state}`])}>
 											{AGENT_STATE_LABEL[facts().state]()}
 										</span>
-										<Show when={facts().line}>{(line) => <span class={s.branchTabLine}>{line()}</span>}</Show>
+										<Show
+											when={t().agentType}
+											fallback={
+												<Show when={facts().line}>{(line) => <span class={s.branchTabLine}>{line()}</span>}</Show>
+											}
+										>
+											<span class={cx(s.branchTabLine, s.branchTabIntent)}>{facts().line}</span>
+										</Show>
 									</span>
 								)}
 							</Show>

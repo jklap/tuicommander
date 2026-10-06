@@ -629,8 +629,47 @@ describe("Sidebar", () => {
 			expect(meta().textContent).not.toMatch(/open PR|worktree|[·|]/);
 		});
 
+		// Catches: idle agents keeping expanded intent rows, or blank intent hiding tooltip fallback.
+		it("rich_agent_intent_extends_only_while_working", () => {
+			const intent = "Review the full sidebar intent without losing any words ".repeat(5);
+			const [term, setTerm] = createSignal({
+				id: "t1",
+				name: "Agent",
+				agentType: "codex",
+				shellState: "busy",
+				awaitingInput: null,
+				unseen: false,
+				agentIntent: intent,
+				currentTask: null,
+				lastPrompt: "Fallback prompt" as string | null,
+			});
+			mockTerminalsGet.mockImplementation(() => term());
+			vi.mocked(terminalsStore.isBusy).mockImplementation(() => term().shellState === "busy");
+			settingsStore.setTabTreeEnabled(true);
+			withBranch(richBranch({ terminals: ["t1"] }));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const line = () => container.querySelector(".branchTabIntent");
+			expect(line()?.textContent).toBe(intent);
+			expect(container.querySelector(".branchTabItem")?.getAttribute("data-tooltip")).toBe(`Agent: ${intent}`);
+			setTerm({ ...term(), shellState: "idle" });
+			expect(line()).toBeNull();
+			setTerm({ ...term(), agentIntent: "", lastPrompt: "Fallback prompt" });
+			expect(line()).toBeNull();
+			expect(container.querySelector(".branchTabItem")?.getAttribute("data-tooltip")).toBe("Agent: Fallback prompt");
+			setTerm({ ...term(), shellState: "busy", lastPrompt: null });
+			expect(line()).not.toBeNull();
+			uiStore.cycleSidebarDensityMode();
+			try {
+				expect(line()).toBeNull();
+			} finally {
+				uiStore.cycleSidebarDensityMode();
+				uiStore.cycleSidebarDensityMode();
+				vi.mocked(terminalsStore.isBusy).mockImplementation(() => false);
+			}
+		});
+
 		// Catches: the agent row showing only a dot and a title, hiding what the agent is doing or asking.
-		it("prints the agent state and its intent under the tab title", () => {
+		it("keeps awaiting input intent in the one-line row tooltip", () => {
 			mockTerminalsGet.mockImplementation(() => ({
 				id: "t1",
 				name: "claude",
@@ -646,8 +685,9 @@ describe("Sidebar", () => {
 			withBranch(richBranch({ terminals: ["t1"] }));
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const detail = container.querySelector(".branchTabDetail")?.textContent ?? "";
-			expect(detail).toContain("Needs input");
-			expect(detail).toContain("Refactor the sidebar");
+			expect(detail).toBe("");
+			expect(container.querySelector(".branchTabDotQuestion")).not.toBeNull();
+			expect(container.querySelector(".branchTabItem")?.getAttribute("data-tooltip")).toContain("Refactor the sidebar");
 		});
 
 		const OLD_TS = () => Date.now() - 90 * 86_400_000;
