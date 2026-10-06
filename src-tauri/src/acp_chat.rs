@@ -214,6 +214,62 @@ pub(crate) async fn acp_chat_open(
     open(&state, request).await
 }
 
+/// Successor conversations must retain launch authority rather than fall into defaults.
+async fn inherit(state: &Arc<AppState>, source: &str, target: &str) -> Result<(), AcpClientError> {
+    let saved = state.config.read().ai_chat_launches.get(source).cloned();
+    if let Some(mut launch) = saved {
+        launch.peer_id = uuid::Uuid::new_v4().to_string();
+        persist(state, target, &launch).await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn fork(
+    state: &Arc<AppState>,
+    connection_id: crate::acp::AcpConnectionId,
+    session_id: agent_client_protocol::schema::v1::SessionId,
+    authority: AcpSessionAuthority,
+    at_message_id: Option<String>,
+) -> Result<crate::acp::AcpAttachmentSnapshot, AcpClientError> {
+    let source = session_id.to_string();
+    let attachment = state
+        .acp
+        .attach_at_message(
+            connection_id,
+            AcpAttachKind::Fork,
+            session_id,
+            authority,
+            at_message_id,
+        )
+        .await?;
+    inherit(state, &source, &attachment.session_id.to_string()).await?;
+    Ok(attachment)
+}
+
+pub(crate) async fn compact(
+    state: &Arc<AppState>,
+    connection_id: crate::acp::AcpConnectionId,
+    session_id: agent_client_protocol::schema::v1::SessionId,
+    request_id: uuid::Uuid,
+) -> Result<crate::acp::EgoCompactResponse, AcpClientError> {
+    let source = session_id.to_string();
+    let result = state
+        .acp
+        .compact(
+            connection_id,
+            crate::acp::EgoCompactRequest {
+                session_id,
+                request_id,
+            },
+        )
+        .await?;
+    // A failed publication produces no successor to persist.
+    if !result.publication.retry_safe() {
+        inherit(state, &source, &result.target_session_id.to_string()).await?;
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,60 +509,4 @@ mod tests {
         .unwrap_err();
         assert!(error.message.contains("cannot be replaced"));
     }
-}
-
-/// Successor conversations must retain launch authority rather than fall into defaults.
-async fn inherit(state: &Arc<AppState>, source: &str, target: &str) -> Result<(), AcpClientError> {
-    let saved = state.config.read().ai_chat_launches.get(source).cloned();
-    if let Some(mut launch) = saved {
-        launch.peer_id = uuid::Uuid::new_v4().to_string();
-        persist(state, target, &launch).await?;
-    }
-    Ok(())
-}
-
-pub(crate) async fn fork(
-    state: &Arc<AppState>,
-    connection_id: crate::acp::AcpConnectionId,
-    session_id: agent_client_protocol::schema::v1::SessionId,
-    authority: AcpSessionAuthority,
-    at_message_id: Option<String>,
-) -> Result<crate::acp::AcpAttachmentSnapshot, AcpClientError> {
-    let source = session_id.to_string();
-    let attachment = state
-        .acp
-        .attach_at_message(
-            connection_id,
-            AcpAttachKind::Fork,
-            session_id,
-            authority,
-            at_message_id,
-        )
-        .await?;
-    inherit(state, &source, &attachment.session_id.to_string()).await?;
-    Ok(attachment)
-}
-
-pub(crate) async fn compact(
-    state: &Arc<AppState>,
-    connection_id: crate::acp::AcpConnectionId,
-    session_id: agent_client_protocol::schema::v1::SessionId,
-    request_id: uuid::Uuid,
-) -> Result<crate::acp::EgoCompactResponse, AcpClientError> {
-    let source = session_id.to_string();
-    let result = state
-        .acp
-        .compact(
-            connection_id,
-            crate::acp::EgoCompactRequest {
-                session_id,
-                request_id,
-            },
-        )
-        .await?;
-    // A failed publication produces no successor to persist.
-    if !result.publication.retry_safe() {
-        inherit(state, &source, &result.target_session_id.to_string()).await?;
-    }
-    Ok(result)
 }

@@ -81,10 +81,10 @@ pub(super) fn project_incidents(run: &RunSnapshot, state: Option<&AppState>) -> 
         let Some((state, agent)) = state.zip(attempt.agent.as_ref()) else {
             continue;
         };
-        if let Some(pending) = state.pending_initial_prompts.get(&agent.session_id) {
-            if pending.notified {
-                incidents.push(incident(run, Some(attempt), "prompt_delivery_failed", "Initial prompt delivery timed out; the prompt is still queued".into(), "Inspect the session for a startup dialog. The existing queue may still deliver the prompt; check before sending it again."));
-            }
+        if let Some(pending) = state.pending_initial_prompts.get(&agent.session_id)
+            && pending.notified
+        {
+            incidents.push(incident(run, Some(attempt), "prompt_delivery_failed", "Initial prompt delivery timed out; the prompt is still queued".into(), "Inspect the session for a startup dialog. The existing queue may still deliver the prompt; check before sending it again."));
         }
         if let Some(code) = state.session_maps.exit_codes.get(&agent.session_id) {
             incidents.push(incident(run, Some(attempt), "session_exit", format!("Session exited with code {}; no workflow outcome is recorded", *code), "Inspect the session output and reconcile the attempt before starting replacement work manually."));

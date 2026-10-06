@@ -97,32 +97,31 @@ pub fn adopt_mcp_instructions(state: &AppState, session_id: &str) {
             .live_pty_by_tuic_session
             .get(peer)
             .map(|p| p.value().clone());
-        if peer == session_id || owner.as_deref() == Some(session_id) {
-            if let Some(meta) = state.mcp.sessions.get(entry.key()) {
-                if let Some(receipt) = &meta.prompt_instructions {
-                    sections.extend(receipt.sections.iter().cloned());
-                    limited |= receipt.capture_limited;
-                }
-            }
+        if (peer == session_id || owner.as_deref() == Some(session_id))
+            && let Some(meta) = state.mcp.sessions.get(entry.key())
+            && let Some(receipt) = &meta.prompt_instructions
+        {
+            sections.extend(receipt.sections.iter().cloned());
+            limited |= receipt.capture_limited;
         }
     }
     sections.sort_by(|a, b| a.source.cmp(&b.source));
-    if let Some(session) = state.session_maps.sessions.get(session_id) {
-        if !sections.is_empty() {
-            let mut session = session.lock();
-            let receipt = session.launch_receipt.get_or_insert_with(|| {
-                let mut receipt = PromptReceipt::default();
-                receipt.push(PromptSection::unavailable(
-                    "Launch receipt unavailable",
-                    "Session predates capture or was launched outside the managed spawn path",
-                ));
-                receipt
-            });
-            for section in sections {
-                receipt.push(section);
-            }
-            receipt.capture_limited |= limited;
+    if let Some(session) = state.session_maps.sessions.get(session_id)
+        && !sections.is_empty()
+    {
+        let mut session = session.lock();
+        let receipt = session.launch_receipt.get_or_insert_with(|| {
+            let mut receipt = PromptReceipt::default();
+            receipt.push(PromptSection::unavailable(
+                "Launch receipt unavailable",
+                "Session predates capture or was launched outside the managed spawn path",
+            ));
+            receipt
+        });
+        for section in sections {
+            receipt.push(section);
         }
+        receipt.capture_limited |= limited;
     }
 }
 

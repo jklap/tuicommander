@@ -2698,6 +2698,7 @@ describe("Sidebar", () => {
 		});
 
 		it("renders expanded terminal activity as one branch card", () => {
+			densityMode("auto");
 			vi.setSystemTime(new Date("2026-09-22T12:10:00Z"));
 			mockTerminalsGet.mockImplementation((id: string) => {
 				const terminals = {
@@ -3423,6 +3424,7 @@ describe("Sidebar", () => {
 	describe("group sections", () => {
 		// Catches: flattening groups, moving repos between groups, or orphan Idle headings after filtering.
 		it("grouped_repo_activity_split_preserves_membership", () => {
+			densityMode("auto");
 			const idle = makeRepo({ path: "/idle" });
 			const active = makeRepo({
 				path: "/active",

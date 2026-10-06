@@ -234,7 +234,7 @@ pub(super) async fn check(
             .get(header::ORIGIN)
             .and_then(|origin| origin.to_str().ok())
             .is_some_and(|origin| APP_ORIGINS.contains(&origin))
-        && !(is_document_navigation(&req) && !req.headers().contains_key(header::ORIGIN))
+        && (!is_document_navigation(&req) || req.headers().contains_key(header::ORIGIN))
     {
         Some("cross-site")
     } else {
