@@ -83,7 +83,6 @@ fn project(
         effective
             .roots
             .iter()
-            .filter(|root| root.source == "default")
             .map(|root| StoredRoot {
                 path: root.path.clone(),
                 access: root.access,

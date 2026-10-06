@@ -255,7 +255,8 @@ starts from. Everything here is ego's, read and written by running ego:
 - **Perimeter** — edit the first root, its read-only or read-write access, extra
   read roots and extra writable roots (one absolute or `~/` path per line).
   These roots extend the AI Chat workspace; they do not replace it. The absent
-  roots setting defaults to read-write `~/Gits` when present; saving all paths
+  roots setting uses ego's inherited effective roots, including user roots for
+  the selected profile, or read-write `~/Gits` by default when present. Saving all paths
   empty publishes explicit `roots=[]` for workspace-only roots. A read root
   does not revoke access from a containing writable root.
 - **Network enabled** — persist ego's `network="on"` or `network="off"` setting.
