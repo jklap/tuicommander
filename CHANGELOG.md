@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Tablet terminal input** — Touch taps use the main keyboard input instead of an offscreen textarea, avoiding a focus switch on subsequent mouse events and sharing soft-keyboard deletion handling.
+
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 
 - Return from captured Windows background launches before the command exits, and resolve Git in Windows worktree hooks.
