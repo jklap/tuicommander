@@ -28,6 +28,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add caller-bound MCP worktree declarations for agents using `git -C`, with same-repository validation and placement restored after restart.
 
 - Place only the same-repository MCP caller in its new worktree when no separate session is requested; preserve sibling tabs and inactive selection.
+- Separate active and idle ungrouped repositories in the rich sidebar and show working-agent counts.
+- Keep rich sidebar navigation dense at iPad width and fold returned subagent history.
+- Extend intent only for working rich sidebar agents; keep idle rows on one line and full intent in tooltips.
+- Fold old idle sessions in the rich sidebar without changing session order.
+- Hide zero PR and worktree counts in rich sidebar repository metadata.
 
 - **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
 
@@ -40,6 +45,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add ego Perimeter controls in Settings > AI Chat for root access, read allowlists, extra writable directories and network mode. Show ego's effective view and a measured or unverified exec-sandbox badge; writes use ego CLI.
 
 - Add terminal history back/forward (`Cmd+Alt+Left/Right`, toolbar arrows) over the last 10 activated terminals, and a Default/Recent sort on the mobile Sessions screen.
+- Navigate from parent agents to live children in other repositories.
+
+- Summarize merged idle worktrees with a guarded Clean up action.
+
+- Keep rich active/idle repository sections inside their existing groups.
+
 - Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
 
 ### Fixed

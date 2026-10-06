@@ -611,6 +611,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Split pane layout
 - [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged
 - [x] Multi-repository sidebar
+- [x] Rich parent-agent links reveal and select live children in other repositories without moving sessions
 - [x] Git diff panel
 - [x] Interactive agent prompts UI
 - [x] IDE launcher dropdown
