@@ -11312,6 +11312,46 @@ mod tests {
         );
     }
 
+    // Catches: claiming no MCP initialize was captured for an existing PTY
+    // solely because its launch brief is unavailable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prompt_receipt_does_not_hide_served_initialize_without_a_launch_brief() {
+        let state = test_state();
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
+        let mut headers = HeaderMap::new();
+        headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+        let response = mcp_post(
+            State(Arc::clone(&state)),
+            ConnectInfo("127.0.0.1:1".parse().unwrap()),
+            headers,
+            Json(serde_json::json!({
+                "jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+                    "protocolVersion":"2025-06-18",
+                    "clientInfo":{"name":"tuic-bridge","version":"test"}
+                }
+            })),
+        )
+        .await;
+        let body = axum::body::to_bytes(response.into_response().into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        let wire: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let served = wire["result"]["instructions"].as_str().unwrap();
+        let receipt = crate::prompt_receipt::read_receipt(&state, TEST_UUID_A).unwrap();
+        let section = receipt
+            .sections
+            .iter()
+            .find(|section| section.status == "served")
+            .expect("served MCP instructions must remain observable without a launch brief");
+        assert_eq!(section.text, crate::redaction::redact_secrets(served));
+        assert_eq!(section.bytes, Some(served.len() as u64));
+        assert!(receipt.sections.iter().any(|section| {
+            section.label == "Launch receipt unavailable" && section.status == "not_observable"
+        }));
+    }
+
     // Catches: persisting the pre-preamble workflow/user brief instead of the
     // final managed argv, or rebuilding system instructions from later settings.
     #[cfg(unix)]
