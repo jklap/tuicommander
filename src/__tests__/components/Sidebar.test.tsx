@@ -147,6 +147,7 @@ vi.mock("../../components/PrDetailPopover/PrDetailPopover", () => ({
 
 import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection";
 import { Sidebar } from "../../components/Sidebar/Sidebar";
+import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
@@ -973,48 +974,91 @@ describe("Sidebar", () => {
 			afterEach(() => vi.restoreAllMocks());
 
 			// Catches: opening a wrong child repository, cross-repo nesting, or stale links after children close.
-			it("cross_repo_child_link_navigates_without_reparenting", () => {
-				const [live, setLive] = createSignal(true);
-				const terms = () => ({
-					t1: term("t1"),
-					child: live() ? term("child", { parentSession: "tuic-t1" }) : null,
-					other: term("other", { parentSession: "s-t1" }),
-				});
-				mockTerminalsGet.mockImplementation((id: string) => terms()[id as keyof ReturnType<typeof terms>]);
-				vi.spyOn(progressStore, "sidebarFlow").mockReturnValue(flowOf([]) as never);
-				vi.spyOn(progressStore, "refreshSidebarFlow").mockResolvedValue();
-				settingsStore.setTabTreeEnabled(true);
-				const parentRepo = makeRepo({ workspaces: { feat: richBranch({ terminals: ["t1"] }) } });
-				const childRepo = makeRepo({
-					path: "/child",
-					displayName: "Child repo",
-					collapsed: true,
-					expanded: false,
-					workspaces: { work: richBranch({ workspaceId: "work", terminals: ["child", "other"], tabsCollapsed: true }) },
-				});
-				setRepos({ "/repo1": parentRepo, "/child": childRepo });
-				mockGetGroupForRepo.mockReturnValue({ id: "children", collapsed: true });
-				const { container } = render(() => <Sidebar {...defaultProps()} />);
-				const link = () => container.querySelector<HTMLButtonElement>("[data-testid='cross-repo-child-link']");
-				expect(link()?.textContent).toContain("2 agents in Child repo");
-				expect(container.querySelector("[data-sidebar-repo='/repo1'] .branchTabNested")).toBeNull();
-				const childLink = link();
-				expect(childLink).not.toBeNull();
-				if (!childLink) throw new Error("Missing child navigation link");
-				fireEvent.click(childLink);
-				expect(mockNavigateToTerminal).toHaveBeenCalledWith("child");
-				expect(mockToggleGroupCollapsed).toHaveBeenCalledWith("children");
-				expect(mockToggleCollapsed).toHaveBeenCalledWith("/child");
-				expect(mockToggleExpanded).toHaveBeenCalledWith("/child");
-				expect(mockToggleBranchTabsCollapsed).toHaveBeenCalledWith("/child", "work");
-				expect(repositoriesStore.state.repositories).toEqual({ "/repo1": parentRepo, "/child": childRepo });
-				expect(terms().child?.parentSession).toBe("tuic-t1");
-				setLive(false);
-				expect(link()?.textContent).toContain("1 agent in Child repo");
-				mockTerminalsGet.mockImplementation((id: string) => (id === "t1" ? terms().t1 : null));
-				// Invalidate the reactive child relationship after both children have closed.
-				setLive(true);
-				expect(link()).toBeNull();
+			it("cross_repo_child_link_navigates_without_reparenting", async () => {
+				const realRepos = (
+					await vi.importActual<typeof import("../../stores/repositories")>("../../stores/repositories")
+				).repositoriesStore;
+				const realTerms = (await vi.importActual<typeof import("../../stores/terminals")>("../../stores/terminals"))
+					.terminalsStore;
+				const { navigateToTerminal } = await vi.importActual<typeof import("../../utils/navigateToTerminal")>(
+					"../../utils/navigateToTerminal",
+				);
+				const savedRepos = { ...repositoriesStore };
+				const savedTerms = { ...terminalsStore };
+				Object.assign(repositoriesStore, realRepos);
+				Object.assign(terminalsStore, realTerms);
+				mockNavigateToTerminal.mockImplementation(navigateToTerminal);
+				let dispose: (() => void) | undefined;
+				try {
+					vi.spyOn(progressStore, "sidebarFlow").mockReturnValue(flowOf([]) as never);
+					vi.spyOn(progressStore, "refreshSidebarFlow").mockResolvedValue();
+					vi.spyOn(appLogger, "info").mockImplementation(() => {});
+					const persistenceErrors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+					settingsStore.setTabTreeEnabled(true);
+					expect(persistenceErrors.mock.calls).toEqual([
+						["config", "Refusing to persist settings: store not hydrated — would clobber config.json with defaults"],
+					]);
+					for (const [id, parentSession] of [
+						["t1", null],
+						["child", "tuic-t1"],
+						["other", "s-t1"],
+					] as const) {
+						realTerms.register(id, term(id, { parentSession }) as Parameters<typeof realTerms.register>[1]);
+					}
+					realRepos.add({ path: "/repo1", displayName: "Repo One" });
+					realRepos.setWorkspace("/repo1", "feat", richBranch({ terminals: [] }));
+					realRepos.addTerminalToWorkspace("/repo1", "feat", "t1");
+					realRepos.setActive("/repo1");
+					realRepos.setActiveWorkspace("/repo1", "feat");
+					realTerms.setActive("t1");
+					realRepos.add({ path: "/child", displayName: "Child repo" });
+					realRepos.setWorkspace(
+						"/child",
+						"work",
+						richBranch({ workspaceId: "work", terminals: [], tabsCollapsed: true }),
+					);
+					realRepos.addTerminalToWorkspace("/child", "work", "child");
+					realRepos.addTerminalToWorkspace("/child", "work", "other");
+					realRepos.toggleCollapsed("/child");
+					realRepos.toggleExpanded("/child");
+					const groupId = realRepos.createGroup("Children");
+					if (!groupId) throw new Error("Missing child repository group");
+					realRepos.addRepoToGroup("/child", groupId);
+					realRepos.toggleGroupCollapsed(groupId);
+					const { container, unmount } = render(() => <Sidebar {...defaultProps()} />);
+					dispose = unmount;
+					const link = () => container.querySelector<HTMLButtonElement>("[data-testid='cross-repo-child-link']");
+					const childRow = () => container.querySelector("[data-sidebar-repo='/child'] .branchTabItem.active");
+					expect(link()?.textContent).toContain("2 agents in Child repo");
+					expect(container.querySelector("[data-sidebar-repo='/repo1'] .branchTabNested")).toBeNull();
+					expect(childRow()).toBeNull();
+					const childLink = link();
+					if (!childLink) throw new Error("Missing child navigation link");
+					fireEvent.click(childLink);
+					expect(realRepos.state.activeRepoPath).toBe("/child");
+					expect(realRepos.state.repositories["/child"].activeWorkspaceId).toBe("work");
+					expect(realTerms.state.activeId).toBe("child");
+					expect(childRow()).toBeVisible();
+					expect(childRow()?.textContent).toContain("child");
+					expect(realRepos.state.groups[groupId].collapsed).toBe(false);
+					expect(realRepos.state.repositories["/repo1"].workspaces.feat.terminals).toEqual(["t1"]);
+					expect(realRepos.state.repositories["/child"].workspaces.work.terminals).toEqual(["child", "other"]);
+					expect(realTerms.get("child")?.parentSession).toBe("tuic-t1");
+					realTerms.remove("child");
+					expect(link()?.textContent).toContain("1 agent in Child repo");
+					realTerms.remove("other");
+					expect(link()).toBeNull();
+				} finally {
+					dispose?.();
+					for (const id of ["t1", "child", "other"]) realTerms.remove(id);
+					for (const path of ["/repo1", "/child"]) realRepos.remove(path);
+					for (const id of Object.keys(realRepos.state.groups)) realRepos.deleteGroup(id);
+					mockNavigateToTerminal.mockReset();
+					for (const key of Object.keys(repositoriesStore)) Reflect.deleteProperty(repositoriesStore, key);
+					for (const key of Object.keys(terminalsStore)) Reflect.deleteProperty(terminalsStore, key);
+					Object.assign(repositoriesStore, savedRepos);
+					Object.assign(terminalsStore, savedTerms);
+				}
 			});
 			// Catches: folding at the threshold, hiding attention/selection, or reordering restored rows.
 			it("idle_fold_preserves_attention_and_order", () => {
