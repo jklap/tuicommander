@@ -1602,6 +1602,12 @@ All data persisted to platform config directory via Rust:
 - Error classification with backoff calculation
 
 ### 14.6 MCP & HTTP Server
+
+MCP `session output` reports continuation instructions for retained output pages.
+Text pages use scrollback positions; raw pages use source-byte positions and mask
+secrets before slicing. Local HTTP and remote MCP retain the same paging contract.
+Buffer eviction is reported; it does not create another output store.
+
 - REST API on localhost for external tool integration
 - Exposes terminal sessions, git operations, agent spawning
 - WebSocket streaming, Streamable HTTP transport

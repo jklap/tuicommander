@@ -1,3 +1,9 @@
+# To Test
+
+## Paged MCP terminal output (1551-5fa4) — Rust restart required
+
+- [ ] After Boss's next planned `make dev` restart or `make build`, read a long terminal result with `session action=output`; follow `continuation`/`next_cursor` for text and `format=raw` byte pages. Confirm the existing command is not rerun and a connected rebuilt daemon returns the same metadata. Rust does not hot-reload; this lane does not restart the desktop.
+
 ## Progress blocked badge supersede (1537-6c4b) — Rust restart required
 
 - [ ] After Boss restarts `make dev` (or installs a rebuilt release), have an agent call `progress type=blocked` and confirm its tab shows the orange waiting dot; then have the same agent call `progress type=done` and confirm the dot clears while the agent keeps working. A real open dialog (for example a Claude AskUserQuestion) must stay orange after a `progress done`. Rust changes do not hot-reload; no desktop instance was launched by this lane.
@@ -101,7 +107,6 @@
      Read each comment, apply the feedback to the highlighted text,
      then remove the tweak markers. -->
 
-# To Test
 
 ## Stable macOS dev executable (1510-03ae) — next Boss launch
 

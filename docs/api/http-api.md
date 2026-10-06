@@ -2774,7 +2774,12 @@ Frames and outstanding requests are bounded; heartbeat loss closes the link.
 
 `GET /sessions/{id}/output?format=mcp|mcp_raw` returns the native MCP output object,
 including `exited`, cursor and truncation fields. It accepts `limit`, `from_line`
-and `since_cursor`. `POST /sessions/{id}/submit` also accepts `timeout_ms`.
+and `since_cursor`, plus `from_byte` for raw source-byte pages. Follow
+`next_cursor` while `has_more` is true; `continuation` names the next native
+request. Tail reads name how to fetch older output. `oldest_offset` and
+`missed_count` identify eviction gaps; evicted data cannot be recovered. Explicit
+raw pages mask secrets before slicing and keep original-byte cursor positions.
+`POST /sessions/{id}/submit` also accepts `timeout_ms`.
 These are the configured remote desktop MCP adapters, sharing native backend behavior.
 
 Peer handshakes serialize per configured connection, so a mute daemon cannot hold
