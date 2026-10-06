@@ -633,7 +633,9 @@ mod tests {
             loop {
                 if let Some(buffer) = state.grid.vt_log_buffers.get(&session_id) {
                     let text = buffer.lock().screen_rows().join("\n");
-                    if text.contains("ARGS=") {
+                    // PTY reads may split the two output lines. Wait for the identity
+                    // line before checking either assertion; the first line is not readiness.
+                    if text.contains(&format!("TUIC_SESSION={session_id}")) {
                         break text;
                     }
                 }

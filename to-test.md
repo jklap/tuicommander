@@ -4732,4 +4732,4 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss's next planned backend/daemon rebuild and restart, confirm exiting throwaway shells no longer leaves direct zombie children. Native targeted tests cover delayed exit after session removal and already-reaped exit status. Rust does not hot-reload; this lane does not restart mint or launch a desktop instance.
 
-- [ ] After the backend restart, confirm Settings > MCP shows a short dedicated summary for the native ego tool. Native catalog and HTTP status regressions cover the wire response.
+- [ ] After the backend restart, confirm Settings > MCP shows a short dedicated summary for the native workflow_run tool. Native catalog and HTTP status regressions cover the wire response.

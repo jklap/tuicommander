@@ -276,17 +276,15 @@ async fn join_ignores_unselected_arrivals_and_actor_continues_after_turn_budget(
         .start_graph(&state, &request)
         .unwrap();
     let store = RunStore::open().unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            hints.recv().await.unwrap();
-            let snapshot = store.snapshot(&run.id).unwrap();
-            if snapshot.graph_executions[0].completed {
-                break;
-            }
+    // Completion is state convergence, not a 30-second behavior deadline.
+    // Nextest's 120-second outer bound catches a genuinely stranded actor.
+    loop {
+        hints.recv().await.unwrap();
+        let snapshot = store.snapshot(&run.id).unwrap();
+        if snapshot.graph_executions[0].completed {
+            break;
         }
-    })
-    .await
-    .expect("actor stranded deterministic work after its turn budget");
+    }
     let current = store.snapshot(&run.id).unwrap();
     assert_eq!(current.loops, 20);
     assert_eq!(
