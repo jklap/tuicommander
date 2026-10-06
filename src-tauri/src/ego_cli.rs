@@ -13,8 +13,8 @@
 //!   caller over IPC or HTTP can choose what this host launches — the same rule
 //!   `acp_commands` keeps for the ACP spawn.
 //! * **There is no key parameter.** `ego config set` has a closed key set, and
-//!   of it the Providers tab writes exactly one, `model`. Spelling that as a
-//!   dedicated operation rather than a generic `set(key, value)` means a caller
+//!   the Settings tab writes only `model`, `roots`, and `network`. Spelling each
+//!   as a dedicated operation rather than a generic `set(key, value)` means a caller
 //!   cannot reach `sandbox` or `permissions.judge` at all, rather than being
 //!   refused by a list somebody has to remember to update.
 //! * **A value may not look like a flag.** The arguments never touch a shell, so
@@ -29,6 +29,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
+
+pub(crate) mod perimeter;
 
 /// How much of a child's output is kept when reporting a failure.
 ///
@@ -155,18 +157,27 @@ fn spell(program: &Path, args: &[String]) -> String {
 /// something a Providers tab can act on, and carrying it would invite a caller
 /// to render it as though the command had half-failed.
 pub(crate) async fn run(program: &Path, args: &[String]) -> Result<String, EgoCliError> {
-    let output = tokio::process::Command::new(program)
-        .args(args)
-        .output()
-        .await
-        .map_err(|err| EgoCliError {
-            code: EgoCliErrorCode::LaunchFailed,
-            message: format!("could not run the configured ego executable: {err}"),
-            command: spell(program, args),
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: None,
-        })?;
+    run_at(program, args, None).await
+}
+
+async fn run_at(
+    program: &Path,
+    args: &[String],
+    cwd: Option<&Path>,
+) -> Result<String, EgoCliError> {
+    let mut command = tokio::process::Command::new(program);
+    command.args(args);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd).env_remove("EGO_PROFILE");
+    }
+    let output = command.output().await.map_err(|err| EgoCliError {
+        code: EgoCliErrorCode::LaunchFailed,
+        message: format!("could not run the configured ego executable: {err}"),
+        command: spell(program, args),
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: None,
+    })?;
 
     if !output.status.success() {
         return Err(EgoCliError {

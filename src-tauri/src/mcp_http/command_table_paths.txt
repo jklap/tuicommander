@@ -130,6 +130,9 @@
 /dictation/start
 /dictation/status
 /dictation/stop
+/ego/perimeter
+/ego/perimeter/network
+/ego/perimeter/roots
 /ego/providers
 /ego/providers/model
 /exec/shell-script

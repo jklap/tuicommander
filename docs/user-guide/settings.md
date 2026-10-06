@@ -252,6 +252,30 @@ The ego binary itself is a TUICommander setting and is on the
 The page shows which providers and models `ego` can use, and which model it
 starts from. Everything here is ego's, read and written by running ego:
 
+- **Perimeter** — edit the first root, its read-only or read-write access, extra
+  read roots and extra writable roots (one absolute or `~/` path per line).
+  These roots extend the AI Chat workspace; they do not replace it. The absent
+  roots setting uses ego's inherited effective roots, including user roots for
+  the selected profile, or read-write `~/Gits` by default when present. Saving all paths
+  empty publishes explicit `roots=[]` for workspace-only roots. A read root
+  does not revoke access from a containing writable root.
+- **Network enabled** — persist ego's `network="on"` or `network="off"` setting.
+  Root saves and network writes are separate operations. A network change keeps
+  any unsaved root draft. **Reload from ego** replaces that draft.
+- **Effective perimeter** — `ego config ls --effective --json` in the configured
+  AI Chat workspace and ego profile. It shows canonical admitted roots, origin
+  layers, sandbox, backend, network and warnings. The form edits that profile's
+  user configuration (or user defaults if no profile is selected). Existing
+  conversations keep their admitted perimeter. **Enforcement not checked** is
+  ego's current capability evidence, not proof that the OS enforces these roots.
+  The badge is scoped to the **exec sandbox** for spawned processes. A measured
+  array gets **Enforced by OS** only when every selected guarantee is present;
+  partial or empty measured sets get **Prompt only** with an explanation.
+  `off` with online network never gets a vacuous OS badge. Unknown evidence
+  stays unverified. The raw capability array, reason and probe reference remain
+  in the preview. Root tool permissions also have their own policy checks. A failed write/readback retains the last successful preview; reload to
+  check the stored state. An older ego without the effective-view command reports
+  its CLI failure instead of showing an invented perimeter.
 - **Default model** — a picker over every model ego knows, grouped by provider.
   Choosing one runs `ego config set model="<slug>"` and then re-reads, so what
   you see afterwards is what ego persisted, not what was sent. It survives a

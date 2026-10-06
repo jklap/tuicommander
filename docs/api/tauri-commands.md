@@ -788,10 +788,10 @@ Four rules hold this surface down:
 
 - The binary is the configured `ego_executable`, read per call. No argument
   names a program.
-- There is no key parameter. `model` is the only writable key and it is spelled
-  as its own operation, so a caller cannot reach `sandbox` or
+- There is no key parameter. Dedicated operations write only `model`, `roots`
+  and `network`, so a caller cannot reach `sandbox` or
   `permissions.judge` at all.
-- A value may not look like a flag, carry whitespace or a control character, or
+- A model value may not look like a flag, carry whitespace or a control character, or
   contain `"` or `\` — the last two would break out of ego's TOML string.
 - A failure carries what ego printed.
 
@@ -799,6 +799,28 @@ Four rules hold this surface down:
 |---------|------|---------|-------------|
 | `ego_providers` | `refresh?` | `EgoProviders` | `config ls --json` + `models --json` + `doctor --json`, joined. `refresh: true` adds `--refresh`, the only call that reaches a provider |
 | `ego_set_default_model` | `model` | `EgoProviders` | `config set model="<slug>"`, then a fresh read — the answer is what ego persisted, not what was sent |
+| `ego_perimeter` | -- | `PerimeterView` | Stored `config ls --json` plus `config ls --effective --json` in the AI Chat workspace/profile |
+| `ego_set_perimeter_roots` | `roots: {rootDir, rootAccess, readAllowlist, writableDirs}` | `PerimeterView` | Encode a typed `roots=[...]` assignment, run `config set --`, then read back |
+| `ego_set_perimeter_network` | `enabled: bool` | `PerimeterView` | `config set -- network="on"` or `network="off"`, then read back |
+
+Perimeter operations select `--profile` from `ego_profile` and cwd from
+`ai_chat_workspace` (empty means host HOME); that directory must exist. They
+remove ambient `EGO_PROFILE` so the preview matches the configured ACP profile.
+Path strings are TOML-encoded in Rust, never written to the TOML file by TUIC.
+Each allowlist is newline-delimited; the primary root is one path. `rootAccess`
+is `read` or `read-write`. Paths must be absolute or start with `~/`; limits are
+128 entries and 64 KiB of path input. Empty fields encode explicit `roots=[]`.
+The response contains the edit fields, `networkEnabled`, selected `profile`,
+`effective` (ego's original snake_case JSON schema), `execEnforcement`
+(`enforcedByOs`, `promptOnly`, `notChecked`), and a display-ready `preview`.
+Capability evidence remains exactly what ego reports: a measured string array
+or `not_checked`, with optional `capabilities_reason` and `probe_evidence`.
+Rust classifies the exec badge: `ro` needs `read_scoped` + `write_denied`,
+`workspace` needs `read_scoped` + `write_scoped`, and offline adds `no_ip_network`.
+An empty/partial measured set is Prompt only; unknown evidence is unverified.
+The measured form needs its probe reference. `off` + online is Prompt only,
+never a vacuous OS-enforcement success. Headless inspection currently has no
+measurement, so it reports not checked and its reason.
 
 All three reads must succeed. A partial answer would render as a tab silently
 missing one of the three things it exists to show.

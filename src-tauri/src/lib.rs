@@ -2433,6 +2433,9 @@ pub fn run() {
             acp_commands::acp_respond_elicitation,
             acp_commands::acp_one_shot_prompt,
             ego_cli::ego_providers,
+            ego_cli::perimeter::ego_perimeter,
+            ego_cli::perimeter::ego_set_perimeter_roots,
+            ego_cli::perimeter::ego_set_perimeter_network,
             ego_cli::ego_set_default_model
         ])
         .build(tauri::generate_context!())
