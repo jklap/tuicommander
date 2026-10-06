@@ -290,7 +290,8 @@ their existing behavior.
 
 ## Repository profile ceiling
 
-Desktop `acp_session_new` and HTTP session creation call the same
+Desktop `acp_session_new`, HTTP session creation and new conversation-specific
+chat launches call the same
 `acp_commands::session_new` core. The manager reads `.tuic.json` at the canonical
 session cwd. If it contains `ego_profile`, the request includes
 `_meta.ego.profile` and the machine Settings selection as `ceilingProfile`.

@@ -153,10 +153,12 @@ pub(crate) async fn open(
         }
         session
     } else {
-        let attachment = match state
-            .acp
-            .new_session(connection.connection_id, authority)
-            .await
+        let attachment = match crate::acp_commands::session_new(
+            state,
+            connection.connection_id,
+            authority,
+        )
+        .await
         {
             Ok(attachment) => attachment,
             Err(error) => {
