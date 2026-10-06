@@ -1190,6 +1190,12 @@ reports how many ignored directories arrived warm. Parent tracked changes are
 not copied. See `docs/api/http-api.md` § Create Worktree; both transports call
 the same shared core.
 
+The lifecycle event includes `creator_session` resolved from the MCP binding,
+never from a caller-supplied session id, and the requested `spawn_session` flag.
+Without a spawn request, only the creator already placed in the same repository
+moves into the new workspace. Other tabs and an inactive tab selection stay in
+place. This changes placement only, without changing the agent process cwd.
+
 When the MCP client identifies as Claude Code (detected via `clientInfo.name` at initialize time), the `repo action=worktree_create` response includes an additional `cc_agent_hint` field:
 
 ```json

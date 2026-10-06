@@ -2212,7 +2212,7 @@ async fn dispatch_mcp_tool_call_with_context(
             let sid = mcp_session_id.map(str::to_owned);
             run_blocking_handler(move || handle_task(&state, addr, &args, sid.as_deref())).await
         }
-        "repo" => handle_repo(state, args, is_claude_code).await,
+        "repo" => handle_repo_with_caller(state, args, is_claude_code, mcp_session_id).await,
         "remote" => handle_remote_update(state, args).await,
         "story" => {
             let state = state.clone();
@@ -3919,10 +3919,20 @@ async fn remove_detached_checkout(
     }
 }
 
+#[cfg(test)]
 async fn handle_worktree(
     state: &Arc<AppState>,
     args: &serde_json::Value,
     is_claude_code: bool,
+) -> serde_json::Value {
+    handle_worktree_with_caller(state, args, is_claude_code, None).await
+}
+
+async fn handle_worktree_with_caller(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    is_claude_code: bool,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let action = match require_action(args, "repo", REPO_ACTIONS) {
         Ok(a) => a,
@@ -4062,6 +4072,8 @@ async fn handle_worktree(
                 path.clone(),
                 branch_name,
                 base_ref,
+                resolve_mcp_origin_pty(state, mcp_session_id),
+                args["spawn_session"].as_bool().unwrap_or(false),
             )
             .await
             {
@@ -8307,10 +8319,20 @@ pub(super) fn end_mcp_session(state: &AppState, sid: &str) {
 // ── Unified handlers (merged tools) ──────────────────────────────────────
 
 /// Merged repo tool: dispatches to workspace, github, or worktree handlers.
+#[cfg(test)]
 async fn handle_repo(
     state: &Arc<AppState>,
     args: &serde_json::Value,
     is_claude_code: bool,
+) -> serde_json::Value {
+    handle_repo_with_caller(state, args, is_claude_code, None).await
+}
+
+async fn handle_repo_with_caller(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    is_claude_code: bool,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let action = match require_action(args, "repo", REPO_ACTIONS) {
         Ok(a) => a,
@@ -8326,7 +8348,9 @@ async fn handle_repo(
         | "worktree_create"
         | "worktree_remove"
         | "orphan_cleanup_answer"
-        | "branch_delete" => handle_worktree(state, args, is_claude_code).await,
+        | "branch_delete" => {
+            handle_worktree_with_caller(state, args, is_claude_code, mcp_session_id).await
+        }
         "progress_list" => {
             let path = match require_path(args, action) {
                 Ok(path) => path,

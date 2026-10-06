@@ -12,6 +12,8 @@ interface WorktreeSwitchDeps {
 }
 
 interface WorktreeCreatedPayload {
+	creator_session?: string | null;
+	spawn_session?: boolean;
 	repo_path: string;
 	/** Which workspace was born — the store key. */
 	workspace_id: string;
@@ -152,6 +154,20 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 				worktreePath: worktree_path,
 				kind,
 				parentRepoPath: null,
+			});
+		}
+		// Placement changes the sidebar index, never the agent process or shell cwd.
+		const creatorId = event.payload.creator_session
+			? terminalsStore.findBySessionId(event.payload.creator_session)
+			: undefined;
+		const owner = creatorId ? repositoriesStore.findOwnerForTerminal(creatorId) : undefined;
+		if (creatorId && owner?.repoPath === repo_path && !event.payload.spawn_session) {
+			batch(() => {
+				repositoriesStore.removeTerminalFromWorkspace(repo_path, owner.workspaceId, creatorId);
+				repositoriesStore.addTerminalToWorkspace(repo_path, workspace_id, creatorId);
+				if (terminalsStore.state.activeId === creatorId) {
+					repositoriesStore.setActiveWorkspace(repo_path, workspace_id);
+				}
 			});
 		}
 		const label = worktreeLabel(worktree_path);

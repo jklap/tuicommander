@@ -1137,6 +1137,8 @@ pub(super) async fn create_session_with_worktree(
     let worktree_branch = worktree.branch.clone();
     let branch_name = worktree_branch.clone().unwrap_or_default();
     state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
+        creator_session: None,
+        spawn_session: true,
         repo_path: base_repo.clone(),
         workspace_id: crate::worktree::workspace_id_of_worktree(&branch_name),
         branch: branch_name.clone(),
