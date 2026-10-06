@@ -218,6 +218,137 @@ pub(crate) async fn acp_chat_open(
 mod tests {
     use super::*;
 
+    fn profile_fixture(scenario: &str) -> (tempfile::TempDir, Arc<AppState>) {
+        let dir = tempfile::TempDir::new_in(tuic_test_support::test_temp_root()).unwrap();
+        for (source, target) in [
+            (format!("{scenario}.jsonl"), "scenario.jsonl"),
+            ("ego-initialize.json".into(), "ego-initialize.json"),
+            (
+                "ego-profile-ceiling.json".into(),
+                "ego-profile-ceiling.json",
+            ),
+        ] {
+            std::fs::copy(
+                format!("tests/fixtures/acp/{source}"),
+                dir.path().join(target),
+            )
+            .unwrap();
+        }
+        std::fs::write(dir.path().join(".tuic.json"), r#"{"ego_profile":"wide"}"#).unwrap();
+        std::fs::write(
+            dir.path().join("expected-profile.txt"),
+            "conversation-profile",
+        )
+        .unwrap();
+        // Nextest's fixture-bins setup builds the same recorded-response agent
+        // used by the ACP integration tests before starting library tests.
+        let executable = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(format!(
+                "tuic-acp-fixture-agent{}",
+                std::env::consts::EXE_SUFFIX
+            ));
+        assert!(
+            executable.is_file(),
+            "fixture agent missing: {}",
+            executable.display()
+        );
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.config.write().ego_executable = executable.to_string_lossy().into_owned();
+        state.config.write().ego_profile = "machine".into();
+        state.config.write().ai_chat_workspace = dir.path().to_string_lossy().into_owned();
+        (dir, state)
+    }
+
+    /// Catches: custom or default chat creation bypasses the repo ceiling core,
+    /// or drops ego's recorded clamp warnings from the returned connection.
+    #[tokio::test]
+    async fn custom_chat_repo_profile_sends_machine_ceiling_and_keeps_warnings() {
+        for profile in [Some("conversation-profile".to_string()), None] {
+            let (dir, state) = profile_fixture("repo-profile-ceiling");
+            let _config = crate::config::set_config_dir_override(dir.path().join("config"));
+            std::fs::write(
+                dir.path().join("expected-profile.txt"),
+                profile.as_deref().unwrap_or("machine"),
+            )
+            .unwrap();
+            let opened = open(
+                &state,
+                ChatOpenRequest {
+                    profile: profile.clone(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                opened.launch.profile,
+                profile.as_deref().unwrap_or("machine")
+            );
+            assert_eq!(state.config.read().ego_profile, "machine");
+            assert_eq!(opened.session_id, "2293c32a-83b6-564b-967f-3c4534548885");
+            assert_eq!(
+                opened.connection.attachments[0].profile_warnings,
+                [
+                    "mode yolo exceeds profile ceiling default; using default",
+                    "sandbox off exceeds profile ceiling workspace; using workspace",
+                ]
+            );
+            assert_eq!(
+                crate::config::load_app_config().ai_chat_launches[&opened.session_id],
+                opened.launch
+            );
+            state
+                .acp
+                .disconnect(opened.connection.connection_id)
+                .await
+                .unwrap();
+        }
+    }
+
+    /// Catches: a conversation override is mistaken for an explicit machine ceiling.
+    #[tokio::test]
+    async fn custom_chat_repo_profile_without_machine_ceiling_is_refused() {
+        let (_dir, state) = profile_fixture("ready");
+        state.config.write().ego_profile.clear();
+        let result = open(
+            &state,
+            ChatOpenRequest {
+                profile: Some("conversation-profile".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let error = result
+            .err()
+            .expect("missing machine ceiling must refuse creation");
+        assert!(error.message.contains("explicit machine ego profile"));
+        assert!(state.config.read().ai_chat_launches.is_empty());
+    }
+
+    /// Catches: custom chat publishes a session from ego that ignores the ceiling extension.
+    #[tokio::test]
+    async fn custom_chat_ignored_repo_ceiling_is_not_persisted() {
+        let (_dir, state) = profile_fixture("repo-profile-ignored");
+        let result = open(
+            &state,
+            ChatOpenRequest {
+                profile: Some("conversation-profile".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+        let error = result
+            .err()
+            .expect("unacknowledged ceiling must refuse creation");
+        assert!(error.message.contains("did not acknowledge"));
+        assert!(state.config.read().ai_chat_launches.is_empty());
+    }
+
     /// Catches: a conversation profile changes global defaults or another chat's ACP launch args.
     #[tokio::test]
     async fn conversation_override_reaches_launch_args_without_changing_defaults() {
