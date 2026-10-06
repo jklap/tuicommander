@@ -4726,3 +4726,4 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] After Boss restarts the Rust build, call `session action=declare_worktree worktree_path=<existing linked worktree>` from an agent. Only its tab moves; retry creates no duplicate. Reconnect/restart preserves placement and real shell cwd. Unknown, main-checkout, cross-repository and foreign-session targets are rejected.
 - [ ] After Boss restarts `make dev` or rebuilds release: Settings > MCP > Native tools shows short English summaries, including secret and telegram; full descriptions remain in the ? tooltip (1521-b6e7). Isolated real-panel harness screenshot verifies row rendering before restart.
+- [ ] After Boss restarts the Rust backend, verify threshold memory logs contain only allocator counters and structure counts; `/diagnostics/memory` still returns the explicit census and its overlap warning (#977).
