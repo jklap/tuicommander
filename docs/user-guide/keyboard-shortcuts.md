@@ -258,6 +258,8 @@ While a context menu is open, pressing a menu item's shortcut chord (modifier + 
 | `prev-tab` | `Ctrl+Shift+Tab` | Previous tab |
 | `next-tab` | `Ctrl+Tab` | Next tab |
 | `focus-last-terminal` | `Cmd+Ctrl+Backspace` | Return to last terminal (toggle, across repos) |
+| `history-back` | `Cmd+Alt+ArrowLeft` | Back to the previous terminal in the activation history (last 10, across repos) |
+| `history-forward` | `Cmd+Alt+ArrowRight` | Forward to the next terminal in the activation history |
 | `jump-waiting-terminal` | `Cmd+U` | Jump to the next terminal awaiting input (cycles, across repos) |
 | `switch-tab-1..9` | `Cmd+1..9` | Switch to tab N |
 | `toggle-sidebar` | `Cmd+[` | Toggle sidebar |

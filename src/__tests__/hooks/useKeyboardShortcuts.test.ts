@@ -29,6 +29,8 @@ function createMockHandlers(): ShortcutHandlers {
 		reopenClosedTab: vi.fn(),
 		navigateTab: vi.fn(),
 		focusLastTerminal: vi.fn(),
+		historyBack: vi.fn(),
+		historyForward: vi.fn(),
 		jumpWaitingTerminal: vi.fn(),
 		clearTerminal: vi.fn(),
 		terminalIds: vi.fn().mockReturnValue([]),
