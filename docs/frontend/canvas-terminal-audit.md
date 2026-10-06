@@ -310,3 +310,5 @@ None. All tracked gaps have been resolved or marked wontfix.
 ### Stored terminal marker coordinates
 
 Stored command blocks and user prompt markers use all-time rows. Answers history consumes them directly. Gutter, scrollbar, search scope, navigation and buffer reads subtract the current frame history base at grid-relative boundaries. Evicted markers are omitted.
+
+Terminal stream reconnect notices identify the session and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice.
