@@ -1655,6 +1655,54 @@ fn default_idle_close_minutes() -> u32 {
     DEFAULT_IDLE_CLOSE_MINUTES
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum EgoPermissionMode {
+    Plan,
+    Default,
+    Edits,
+    Auto,
+    Yolo,
+}
+
+impl EgoPermissionMode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Default => "default",
+            Self::Edits => "edits",
+            Self::Auto => "auto",
+            Self::Yolo => "yolo",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum EgoSandbox {
+    Ro,
+    Workspace,
+}
+
+impl EgoSandbox {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ro => "ro",
+            Self::Workspace => "workspace",
+        }
+    }
+}
+
+/// Unknown saved ego choices leave that option to ego without resetting other settings.
+fn deserialize_ego_choice<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct AgentSettings {
     /// One-time migration marker: a removed bypass must stay removed.
@@ -1700,6 +1748,19 @@ pub(crate) struct AgentSettings {
     /// Missing means enabled; user-opened terminals retain the CLI's behavior.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) skip_trust_dialog: Option<bool>,
+    /// Launch-only ego permission overrides. Missing leaves ego configuration in control.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_ego_choice",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) ego_mode: Option<EgoPermissionMode>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_ego_choice",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) ego_sandbox: Option<EgoSandbox>,
 }
 
 impl Default for AgentSettings {
@@ -1718,6 +1779,8 @@ impl Default for AgentSettings {
             native_status_signals: None,
             prevent_alt_screen: None,
             skip_trust_dialog: None,
+            ego_mode: None,
+            ego_sandbox: None,
         }
     }
 }
@@ -5954,6 +6017,8 @@ mod tests {
                 native_status_signals: None,
                 prevent_alt_screen: None,
                 skip_trust_dialog: Some(false),
+                ego_mode: None,
+                ego_sandbox: None,
                 progress_tracking: Some(false),
             },
         );

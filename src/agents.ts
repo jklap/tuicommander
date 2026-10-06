@@ -380,6 +380,9 @@ export interface AgentRunConfig {
 }
 
 /** Per-agent settings (matches Rust AgentSettings) */
+export type EgoPermissionMode = "plan" | "default" | "edits" | "auto" | "yolo";
+export type EgoSandbox = "ro" | "workspace";
+
 export interface AgentSettingsConfig {
 	/** Persisted migration marker; removing bypass from args must remain effective. */
 	codex_bypass_migrated?: boolean;
@@ -406,6 +409,8 @@ export interface AgentSettingsConfig {
 	prevent_alt_screen?: boolean;
 	/** Accept the startup trust picker for managed MCP spawns. Undefined means enabled. */
 	skip_trust_dialog?: boolean;
+	ego_mode?: EgoPermissionMode;
+	ego_sandbox?: EgoSandbox;
 }
 
 /** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */
