@@ -633,3 +633,5 @@ Pending agent commands in `Terminal` drain once when both the command and an idl
 Closed refusal turns show one plain-text card with the agent’s existing ACP refusal text. A refusal without text shows a generic refusal message.
 
 Browser HTML and Markdown previews load local images only from open repositories and their linked worktrees, through the authenticated repository image route. Images outside those roots show “Image unavailable: outside open repositories.” Desktop asset loading is unchanged.
+
+`StoriesDialog` run history embeds `RunIncidents`. It renders backend-owned cause and recovery suggestion text with run/attempt/story/session/task identities. It refreshes on run cursor changes and explicit operator refresh, ignores stale responses after selection changes, and discloses unavailable evidence. It does not execute recovery.
