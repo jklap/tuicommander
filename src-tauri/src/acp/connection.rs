@@ -63,6 +63,7 @@ const EGO_STEER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10
 pub(super) enum Command {
     NewSession {
         authority: AcpSessionAuthority,
+        profiles: Option<serde_json::Value>,
         reply: Reply<AcpAttachmentSnapshot>,
     },
     ListSessions {
@@ -197,6 +198,7 @@ pub(super) enum Pending {
 pub(super) struct Attached {
     session_id: v1::SessionId,
     config_options: Option<Vec<v1::SessionConfigOption>>,
+    profile_warnings: Vec<String>,
 }
 
 /// The requests this connection is waiting on, in no particular order.
@@ -436,14 +438,18 @@ impl ConnectionActor {
         in_flight: &InFlight,
     ) {
         match command {
-            Command::NewSession { authority, reply } => {
+            Command::NewSession {
+                authority,
+                profiles,
+                reply,
+            } => {
                 tracing::info!(
                     source = "acp",
                     connection_id = %self.connection_id,
                     method = "session/new",
                     "ACP attach"
                 );
-                match self.start_new_session(&authority, connection) {
+                match self.start_new_session(&authority, profiles, connection) {
                     Ok(sent) => in_flight.push(Box::pin(async move {
                         Pending::Attach {
                             claimed: None,
@@ -1134,6 +1140,7 @@ impl ConnectionActor {
     fn start_new_session(
         &self,
         authority: &AcpSessionAuthority,
+        profiles: Option<serde_json::Value>,
         connection: &ConnectionTo<Agent>,
     ) -> Result<Sent<Attached>, AcpClientError> {
         self.require_authority(authority)?;
@@ -1142,11 +1149,40 @@ impl ConnectionActor {
             .additional_directories
             .clone_from(&authority.additional_directories);
         request.mcp_servers.clone_from(&authority.mcp_servers);
+        if let Some(profiles) = &profiles {
+            request.meta = Some(serde_json::Map::from_iter([(
+                "ego".to_owned(),
+                profiles.clone(),
+            )]));
+        }
         let sent = self.send(request, connection, None);
         Ok(Box::pin(async move {
-            sent.await.map(|response| Attached {
+            let response = sent.await?;
+            let mut profile_warnings = Vec::new();
+            if let Some(profiles) = profiles {
+                let meta = response.meta.as_ref().and_then(|meta| meta.get("ego"));
+                let refusal = || {
+                    AcpClientError::invalid_input(
+                        "ego did not acknowledge the repository profile ceiling; update ego before opening this session",
+                    )
+                };
+                let meta = meta.ok_or_else(refusal)?;
+                if meta.get("profile") != profiles.get("profile")
+                    || meta.get("ceilingProfile") != profiles.get("ceilingProfile")
+                    || !meta
+                        .get("effective")
+                        .is_some_and(serde_json::Value::is_object)
+                {
+                    return Err(refusal());
+                }
+                profile_warnings =
+                    serde_json::from_value(meta.get("warnings").cloned().ok_or_else(refusal)?)
+                        .map_err(|_| refusal())?;
+            }
+            Ok(Attached {
                 session_id: response.session_id,
                 config_options: response.config_options,
+                profile_warnings,
             })
         }))
     }
@@ -1217,6 +1253,7 @@ impl ConnectionActor {
                     sent.await.map(|response| Attached {
                         session_id,
                         config_options: response.config_options,
+                        profile_warnings: Vec::new(),
                     })
                 })
             }
@@ -1235,6 +1272,7 @@ impl ConnectionActor {
                     sent.await.map(|response| Attached {
                         session_id: response.session_id,
                         config_options: response.config_options,
+                        profile_warnings: Vec::new(),
                     })
                 })
             }
@@ -1247,6 +1285,7 @@ impl ConnectionActor {
                     sent.await.map(|response| Attached {
                         session_id,
                         config_options: response.config_options,
+                        profile_warnings: Vec::new(),
                     })
                 })
             }
@@ -1678,6 +1717,7 @@ impl ConnectionActor {
             cwd: authority.cwd,
             additional_directories: authority.additional_directories,
             config_options: attached.config_options.unwrap_or_default(),
+            profile_warnings: attached.profile_warnings,
             usage,
             active_turn: None,
             queued_prompts: Vec::new(),

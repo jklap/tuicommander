@@ -2558,7 +2558,11 @@ or remote — can choose what the host runs. An empty setting refuses every
 connect rather than failing later inside a spawn.
 The optional `ego_profile` setting selects one profile in ego's user
 configuration at ACP launch. Empty adds no `--profile` argument. TUIC sends no
-profile rules or allow/deny policy in `session/new`.
+profile rules or allow/deny policy in `session/new`. A workspace's `.tuic.json`
+may select `ego_profile`; TUIC passes that name and the explicit machine selection
+as `_meta.ego.{profile,ceilingProfile}`. Ego owns restrictive composition of mode,
+sandbox and perimeter. Its returned warnings appear as AI Chat warning notices.
+Missing machine selection or missing ego acknowledgement refuses attachment.
 
 ## 27. Terminal Progress
 

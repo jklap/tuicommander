@@ -787,6 +787,8 @@ pub struct AcpAttachmentSnapshot {
     pub cwd: PathBuf,
     pub additional_directories: Vec<PathBuf>,
     pub config_options: Vec<v1::SessionConfigOption>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile_warnings: Vec<String>,
     pub usage: Option<AcpUsageSnapshot>,
     pub active_turn: Option<AcpTurnSnapshot>,
     pub queued_prompts: Vec<AcpQueuedPrompt>,
