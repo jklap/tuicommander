@@ -180,6 +180,16 @@ describe("searchSettings", () => {
 		]);
 	});
 
+	it.each(["Permissions", "Filesystem sandbox"])("does not lose the ego %s control from Settings search", (label) => {
+		for (const client of ["desktop", "browser"] as const) {
+			expect(searchSettings(label, ALL_TABS, client)).toContainEqual({
+				tab: "agents",
+				section: "ego permissions",
+				label,
+			});
+		}
+	});
+
 	it("matches case-insensitively on any word order", () => {
 		const hits = searchSettings("THEME terminal", ALL_TABS, "desktop");
 		expect(hits).toEqual([expect.objectContaining({ tab: "terminal", section: "Theme", label: "Terminal Theme" })]);
