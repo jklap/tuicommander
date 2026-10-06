@@ -52,6 +52,10 @@ use super::{
 
 pub(super) type Reply<T> = oneshot::Sender<Result<T, AcpClientError>>;
 
+/// Ego normally acknowledges this durable append in milliseconds. A silent
+/// steer must release its FIFO reservation without retrying possibly accepted text.
+const EGO_STEER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// One request from the manager, with the channel its answer goes back on.
 ///
 /// A dropped receiver is not an error here: it means the caller went away, and
@@ -144,6 +148,14 @@ pub(super) enum Answer {
 /// Each variant carries everything needed to finish the job, so the actor holds
 /// nothing about a request it has already sent.
 pub(super) enum Pending {
+    Steer {
+        session_id: v1::SessionId,
+        turn_id: AcpTurnId,
+        queued_turn_id: AcpTurnId,
+        outcome: Result<ego_ext::EgoSteerResponse, AcpClientError>,
+        reply: Reply<AcpTurnId>,
+    },
+
     Attach {
         /// The session a load or resume holds in `attaching` until it settles.
         claimed: Option<v1::SessionId>,
@@ -189,6 +201,12 @@ pub(super) struct Attached {
 
 /// The requests this connection is waiting on, in no particular order.
 pub(super) type InFlight = FuturesUnordered<BoxFuture<'static, Pending>>;
+
+struct QueuedContent {
+    prompt: Vec<v1::ContentBlock>,
+    meta: Option<v1::Meta>,
+    steering_pending: bool,
+}
 
 type Sent<T> = BoxFuture<'static, Result<T, AcpClientError>>;
 
@@ -321,7 +339,7 @@ pub(super) struct ConnectionActor {
     /// Pending load/resume sessions and usage received before their reply.
     attaching: HashMap<v1::SessionId, Option<AcpUsageSnapshot>>,
     /// Queued wire payloads stay here; snapshots and the journal carry summaries.
-    queued_contents: HashMap<AcpTurnId, (Vec<v1::ContentBlock>, Option<v1::Meta>)>,
+    queued_contents: HashMap<AcpTurnId, QueuedContent>,
     /// Open seats in the order the agent asked, which is the order they are
     /// shown in and the order a cancel settles them in. A map keyed by id
     /// would have made that order depend on hashing.
@@ -485,21 +503,47 @@ impl ConnectionActor {
                 prompt,
                 meta,
                 reply,
-            } => match self.start_prompt(&session_id, prompt, meta, connection) {
-                Ok((turn_id, sent)) => {
-                    let _ = reply.send(Ok(turn_id));
-                    if let Some(sent) = sent {
-                        in_flight.push(Box::pin(async move {
-                            Pending::Turn {
-                                session_id,
-                                turn_id,
-                                outcome: sent.await,
-                            }
-                        }));
-                    }
+            } => {
+                if self.capabilities.ego_steer_version == Some(1)
+                    && !prompt.is_empty()
+                    && prompt.iter().all(|block| matches!(block, v1::ContentBlock::Text(text) if !text.text.trim().is_empty()))
+                    && self.attachments.get(&session_id).is_some_and(|attachment| {
+                        attachment.state == AcpAttachmentState::Prompting
+                            && attachment.queued_prompts.is_empty()
+                            && attachment.active_turn.as_ref().is_some_and(|turn| turn.state == AcpTurnState::Running)
+                    })
+                {
+                    let turn_id = self.turn_of(&session_id).expect("running turn checked above");
+                    // Reserve the same FIFO position used by normal prompts before awaiting ego.
+                    let queued_turn_id = match self.start_prompt(&session_id, prompt.clone(), meta, connection) {
+                        Ok((id, _)) => id,
+                        Err(error) => {
+                            let _ = reply.send(Err(error));
+                            return;
+                        }
+                    };
+                    self.queued_contents.get_mut(&queued_turn_id)
+                        .expect("prompt queued behind running turn").steering_pending = true;
+                    let sent = self.send(ego_ext::EgoSteerWire {
+                        v: ego_ext::EGO_EXTENSION_VERSION,
+                        session_id: session_id.to_string(),
+                        prompt,
+                    }, connection, None);
+                    let connection_id = self.connection_id;
+                    in_flight.push(Box::pin(async move {
+                        let outcome = tokio::time::timeout(EGO_STEER_TIMEOUT, sent)
+                            .await
+                            .unwrap_or_else(|_| Err(AcpClientError::agent_error(
+                                connection_id,
+                                None,
+                                "ego steering timed out; delivery is uncertain and the text was not resent",
+                            )));
+                        Pending::Steer { session_id, turn_id, queued_turn_id, outcome, reply }
+                    }));
+                } else {
+                    self.handle_prompt(session_id, prompt, meta, reply, connection, in_flight);
                 }
-                Err(error) => drop(reply.send(Err(error))),
-            },
+            }
             Command::Cancel { session_id, reply } => {
                 let _ = reply.send(self.cancel(&session_id, connection));
             }
@@ -918,6 +962,44 @@ impl ConnectionActor {
 
     fn settle(&mut self, pending: Pending, connection: &ConnectionTo<Agent>, in_flight: &InFlight) {
         match pending {
+            Pending::Steer {
+                session_id,
+                turn_id,
+                queued_turn_id,
+                outcome,
+                reply,
+            } => {
+                if let Some(content) = self.queued_contents.get_mut(&queued_turn_id) {
+                    content.steering_pending = false;
+                }
+                match outcome {
+                    Ok(response) if response.v == ego_ext::EGO_EXTENSION_VERSION => {
+                        match response.state {
+                            ego_ext::EgoSteerState::Accepted => {
+                                let _ = self.cancel_queued(&session_id, queued_turn_id);
+                                let _ = reply.send(Ok(turn_id));
+                            }
+                            ego_ext::EgoSteerState::NotBusy | ego_ext::EgoSteerState::Rejected => {
+                                let result = self.attachment(&session_id).map(|_| queued_turn_id);
+                                let _ = reply.send(result);
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        let _ = self.cancel_queued(&session_id, queued_turn_id);
+                        let _ = reply.send(Err(AcpClientError::invalid_input(
+                            "unsupported ego steering response version; acceptance is unknown",
+                        )));
+                    }
+                    // An uncertain transport outcome must never resend possibly accepted text.
+                    Err(error) => {
+                        let _ = self.cancel_queued(&session_id, queued_turn_id);
+                        let _ = reply.send(Err(error));
+                    }
+                }
+                self.drain_next(&session_id, connection, in_flight);
+            }
+
             Pending::Attach {
                 claimed,
                 outcome,
@@ -1195,6 +1277,32 @@ impl ConnectionActor {
         })
     }
 
+    fn handle_prompt(
+        &mut self,
+        session_id: v1::SessionId,
+        prompt: Vec<v1::ContentBlock>,
+        meta: Option<v1::Meta>,
+        reply: Reply<AcpTurnId>,
+        connection: &ConnectionTo<Agent>,
+        in_flight: &InFlight,
+    ) {
+        match self.start_prompt(&session_id, prompt, meta, connection) {
+            Ok((turn_id, sent)) => {
+                let _ = reply.send(Ok(turn_id));
+                if let Some(sent) = sent {
+                    in_flight.push(Box::pin(async move {
+                        Pending::Turn {
+                            session_id,
+                            turn_id,
+                            outcome: sent.await,
+                        }
+                    }));
+                }
+            }
+            Err(error) => drop(reply.send(Err(error))),
+        }
+    }
+
     /// Accept a turn, queueing it when the session already has one in flight.
     ///
     /// The turn that settled is still held, because a host that has just been
@@ -1234,7 +1342,14 @@ impl ConnectionActor {
                 turn_id,
                 summary: prompt_display(&prompt, 200),
             });
-            self.queued_contents.insert(turn_id, (prompt, meta));
+            self.queued_contents.insert(
+                turn_id,
+                QueuedContent {
+                    prompt,
+                    meta,
+                    steering_pending: false,
+                },
+            );
             let queued_prompts = attachment.queued_prompts.clone();
             self.publish();
             self.journal.append(
@@ -1304,6 +1419,13 @@ impl ConnectionActor {
             let Some(queued) = attachment.queued_prompts.first().cloned() else {
                 return;
             };
+            if self
+                .queued_contents
+                .get(&queued.turn_id)
+                .is_some_and(|content| content.steering_pending)
+            {
+                return;
+            }
             attachment.queued_prompts.remove(0);
             let queued_prompts = attachment.queued_prompts.clone();
             self.publish();
@@ -1312,11 +1434,17 @@ impl ConnectionActor {
                 Some(queued.turn_id),
                 AcpClientEvent::PromptQueueChanged { queued_prompts },
             );
-            let Some((prompt, meta)) = self.queued_contents.remove(&queued.turn_id) else {
+            let Some(content) = self.queued_contents.remove(&queued.turn_id) else {
                 tracing::warn!(turn_id = ?queued.turn_id, "ACP queued prompt payload missing");
                 continue;
             };
-            let sent = self.send_prompt(session_id, queued.turn_id, prompt, meta, connection);
+            let sent = self.send_prompt(
+                session_id,
+                queued.turn_id,
+                content.prompt,
+                content.meta,
+                connection,
+            );
             let session_id = session_id.clone();
             in_flight.push(Box::pin(async move {
                 Pending::Turn {
@@ -1401,6 +1529,15 @@ impl ConnectionActor {
             .iter()
             .position(|queued| queued.turn_id == turn_id)
             .ok_or_else(|| AcpClientError::invalid_input("queued prompt not found"))?;
+        if self
+            .queued_contents
+            .get(&turn_id)
+            .is_some_and(|content| content.steering_pending)
+        {
+            return Err(AcpClientError::invalid_input(
+                "steering acceptance is still pending",
+            ));
+        }
         attachment.queued_prompts.remove(index);
         self.queued_contents.remove(&turn_id);
         let queued_prompts = attachment.queued_prompts.clone();

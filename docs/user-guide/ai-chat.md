@@ -157,12 +157,15 @@ read its full command and output.
   advertised that extension, so a build without it shows no button rather than a
   button that fails. Resume remains available when a paused turn ends at its
   boundary; select it to continue the conversation.
-- **Queue** sends another message while a turn runs. TUICommander keeps it in
-  order and sends it only after the running turn ends. If ego pauses at a turn
-  boundary, the queue waits for Resume. The queued list appears
-  in every connected view; either view can remove an item before ego receives
-  it. Stop affects the running turn for every view. The conversation shows a
-  queued message as sent only when it actually reaches ego.
+- **Send during a turn** integrates text into the running query when ego
+  advertises steering. Ego consumes it at the next provider request and echoes
+  it into the conversation; TUICommander never sends accepted steering twice.
+  If the turn has already ended, the message follows the normal prompt path.
+  Attachments, agents without steering, and rejected steering use the **Queue**:
+  messages stay in order until the running turn ends. A paused queue waits for
+  Resume. Every connected view can remove a queued item before ego receives it.
+  Stop affects the running turn for every view. A queued message appears in the
+  conversation when it reaches ego; steering appears when ego echoes it.
 - **Session settings** are published by the current conversation. The control bar
   shows the model's short name and the current mode. Its summary shortens before
   the icon controls, so Pause, Resume, Compact and New stay on one row. Each

@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Start published story workflows from Plans and Stories; inspect pinned graph positions, decision evidence and full paged events. Add explicit graph resume, pause/cancel controls and the generated `workflow_run` MCP surface. Plan start remains visibly unavailable pending dispatch.
 
 - Execute pinned serial workflow Agent/Judge/Loop/Pause/Notify/Join nodes in the owning daemon with durable reports and effects; refuse unsupported node publication. Manual pause time no longer consumes active run duration. Full plan dispatch remains in development.
+- **AI Chat steering** — Text sent during a running turn joins the current query when ego advertises ACP steering, on desktop and mobile. Attachments and unsupported or rejected steering retain the queue. Delayed steering responses preserve submission order with later text and attachments.
 
 - **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
 
