@@ -4696,4 +4696,4 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] AI Chat message fork: after rebuilding/restarting Rust, fork the second of four ego replies and check the child cutoff while the parent retains all replies. The backend capability and metadata changes require a manual restart.
 
-- [ ] MCP delta paging (#1551-5fa4): after Boss rebuilds/restarts Rust, read a throwaway terminal containing a harmless PEM-shaped sample with `since_cursor` and `limit=1`; each body page must stay redacted. Rust does not hot-reload; no desktop test instance was launched.
+- [ ] MCP delta paging (#1551-5fa4): after Boss rebuilds/restarts Rust, read a throwaway terminal containing a harmless PEM-shaped sample with `since_cursor` and `limit=1`; each body page must stay redacted, including when the footer remains on screen and the header/body are in scrollback. Rust does not hot-reload; no desktop test instance was launched.
