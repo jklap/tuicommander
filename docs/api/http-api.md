@@ -2814,3 +2814,7 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 The ACP session fork route accepts optional `atMessageId` beside `authority`. It is forwarded as `_meta.ego.atMessageId` only when ego advertises `sessionCapabilities.fork._meta.ego.atMessage`; unsupported agents are refused.
 
 The host ACP session list gathers all ego pages before ordering ancestry. Each row retains `_meta.ego.lineage` and adds `_meta.tuicommander.lineageDepth`; placeholder rows for deleted parents add `_meta.tuicommander.deleted=true`. The response has no continuation cursor after collecting the pages.
+
+## Launch instruction receipts
+
+`GET /sessions/{id}/prompt-receipt` mirrors `get_prompt_receipt`. Missing sessions return 404. The response is `{sections, captureLimited}`. Each section has `label`, `source`, `bytes` (original UTF-8 payload size, or null when unknown), `text` (redacted bounded preview), `status` (`sent`, `queued`, `served`, `file_snapshot`, or `not_observable`) and `truncated`. The endpoint reads live PTY/MCP metadata and never rebuilds text from settings. Capture/retention limits and unobservable cases are documented in [AI Agents](../user-guide/ai-agents.md#inspect-launch-instructions).

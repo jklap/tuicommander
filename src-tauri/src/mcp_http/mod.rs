@@ -996,6 +996,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         )
         .route("/sessions/{id}/last-prompt", get(session::get_last_prompt))
         .route(
+            "/sessions/{id}/prompt-receipt",
+            get(session::get_prompt_receipt),
+        )
+        .route(
             "/sessions/{id}/input-buffer",
             get(session::get_input_buffer_content),
         )
@@ -4630,6 +4634,7 @@ mod tests {
             state.mcp.sessions.insert(
                 sid.into(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity,
                     is_claude_code: false,
                     requires_meta_tools: false,
@@ -5693,6 +5698,7 @@ mod tests {
         state.mcp.sessions.insert(
             "test-sid".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now,
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -5790,6 +5796,7 @@ mod tests {
         state.mcp.sessions.insert(
             "ping-session".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now() - std::time::Duration::from_secs(60),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -8411,6 +8418,7 @@ mod tests {
         state.mcp.sessions.insert(
             "test-sid-proxy".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now,
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -8450,6 +8458,7 @@ mod tests {
         state.mcp.sessions.insert(
             "test-sid-native".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now,
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -9319,6 +9328,7 @@ mod tests {
         state.mcp.sessions.insert(
             SID.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: now - std::time::Duration::from_secs(7200),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -9390,6 +9400,7 @@ mod tests {
             state.mcp.sessions.insert(
                 sid.to_string(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity,
                     is_claude_code: true,
                     requires_meta_tools: false,
@@ -9453,6 +9464,7 @@ mod tests {
         state.mcp.sessions.insert(
             SID.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now() - std::time::Duration::from_secs(7200),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -9507,6 +9519,7 @@ mod tests {
             state.mcp.sessions.insert(
                 sid.to_string(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity,
                     is_claude_code: true,
                     requires_meta_tools: false,

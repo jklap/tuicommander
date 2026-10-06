@@ -10,6 +10,12 @@ const mod = isMacOS() ? "Cmd" : "Ctrl";
 
 export const TIPS: Tip[] = [
 	{
+		feature: "Launch Instruction Inspector",
+		description:
+			"Right-click a terminal and choose Inspect Launch Instructions to read captured launch sections, sources and byte sizes.",
+		shortcut: null,
+	},
+	{
 		feature: "Touch Branch Actions",
 		description: "Swipe a sidebar branch left for More, Add Terminal, and worktree removal. Hold + to choose an agent.",
 		shortcut: null,

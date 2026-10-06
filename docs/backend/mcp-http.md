@@ -1987,3 +1987,7 @@ Native remote health, authentication, session-list, and SSE clients strip reques
 Workflow operator authority is selected by the host: verified HTTP credentials grant Human, unauthenticated loopback grants LocalApi. Request JSON cannot select the actor. Workflow policy writes and human decisions, plus administrative story transitions, require Human authority.
 
 The daemon executor now owns recovery and duration timers under an OS run-database lock. Reads never recover live work, and a non-owner daemon refuses run mutations. Graph resume uses `resume_graph {execution_id,activation_id,resolution}` with an explicit pending activation; status-only resume cannot bypass graph position. Graph start controls, Agent effects and delivery policy remain unavailable until their later slices.
+
+## Launch receipt read
+
+`GET /sessions/{id}/prompt-receipt` returns the same live receipt as desktop `get_prompt_receipt`. MCP initialize captures the served instructions after peer auto-binding. Protocol metadata retains bounded responses during PTY registration; PTY metadata retains its copy after protocol reaping. No additional store or settings reconstruction is used. See [HTTP API](../api/http-api.md#launch-instruction-receipts).

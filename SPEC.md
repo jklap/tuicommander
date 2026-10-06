@@ -759,3 +759,7 @@ Workflow safety: pinned checks own process trees and stop on timeout, run cancel
 Graph runtime slice A adds version-2 serial activation/predecessor/decision history and executable start validation with pinned Pause targets and deterministic final checks. History is bounded to 4096 activations per execution. Fork/all-Join schema and execution are deferred to slice G. Pre-contract runs support inspect/cancel only. Autonomous scheduling remains disabled pending slice B and authorization story 956-9745.
 
 Workflow graph slice B: AppState owns the serial daemon executor and OS database owner lock on desktop and headless boot. Initial graph position is atomic and start-key idempotent; per-run mailboxes and durable deadlines drive controls without a frontend. Graph roots reserve native stories, and manual claim/start shares the run writer lock. No Agent effects, delivery policy or new UI are enabled; unsupported graphs cannot start as executable workflows.
+
+## Managed launch instruction inspection
+
+Implemented: terminal context-menu inspector backed by prospectively captured live-session receipts. It displays final managed briefs, explicit system instruction arguments/file snapshots and MCP initialize responses with source and original UTF-8 byte size. Existing workflow preview/hash receipts are unchanged. Autonomous agent file reads and historical launches are explicitly unobservable. Redacted receipt text is limited to 64 KiB/16 sections, with a 32 KiB section cap; receipts are not restored after backend restart.
