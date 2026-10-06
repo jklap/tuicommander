@@ -240,12 +240,12 @@ describe("FilesScreen", () => {
 				initialLink={{ candidate: "src/abs.md" }}
 			/>
 		));
-		await waitFor(() => expect(view.container.querySelectorAll("#markdown-content img").length).toBe(2));
-		const [inside, outside] = view.container.querySelectorAll<HTMLImageElement>("#markdown-content img");
-		const url = new URL(inside.src);
+		await waitFor(() => expect(view.container.querySelectorAll("#markdown-content img").length).toBe(1));
+		const url = new URL(view.container.querySelector<HTMLImageElement>("#markdown-content img")!.src);
 		expect(url.pathname).toBe("/fs/markdown-image");
 		expect(url.searchParams.get("file")).toBe("src/images/in.png");
-		expect(outside.getAttribute("src")).toBe("/elsewhere/out.png");
+		// No route serves a path outside the repository: a visible placeholder replaces the broken img.
+		expect(view.getByRole("img", { name: "Image unavailable" })).toBeTruthy();
 	});
 
 	it("refuses large and binary files without offering an editor", async () => {
