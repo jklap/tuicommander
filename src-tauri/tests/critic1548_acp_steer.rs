@@ -278,7 +278,7 @@ async fn silent_steer_settles_uncertain_and_releases_fifo_after_turn_completion(
         result = &mut earlier => panic!("steer answered before scenario barrier: {result:?}"),
         _ = until(&mut events, |event| matches!(event, tuicommander_lib::acp::AcpClientEvent::SessionUpdate { .. })) => {}
     }
-    fixture
+    let later = fixture
         .manager
         .prompt(
             connection.connection_id,
@@ -294,8 +294,8 @@ async fn silent_steer_settles_uncertain_and_releases_fifo_after_turn_completion(
         .unwrap();
     acp_support::until_settled(&mut events).await;
     // Arm only after the real request arrived and the active turn settled.
-    // A whole minute is an observation bound, not a claim about an undocumented SLA.
-    let outcome = tokio::time::timeout(std::time::Duration::from_secs(60), &mut earlier).await;
+    // The harness bound exceeds the documented 10 s steer-only deadline.
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(20), &mut earlier).await;
     let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
     fixture
         .manager
@@ -306,9 +306,21 @@ async fn silent_steer_settles_uncertain_and_releases_fifo_after_turn_completion(
         outcome.is_ok(),
         "silent steering never settled: a live transport leaves the FIFO reservation non-cancellable and blocks all later prompts"
     );
+    let error = outcome
+        .unwrap()
+        .expect_err("unanswered steering cannot claim acceptance");
+    assert!(error.message.contains("delivery is uncertain"));
     assert!(
-        outcome.unwrap().is_err(),
-        "unanswered steering cannot claim acceptance"
+        !error.retryable,
+        "possibly accepted text must never be retried"
+    );
+    assert_eq!(
+        snapshot.attachments[0]
+            .active_turn
+            .as_ref()
+            .map(|turn| turn.turn_id),
+        Some(later),
+        "uncertain steering must allow the later prompt to start without resending the correction"
     );
     assert!(
         !snapshot.attachments[0]

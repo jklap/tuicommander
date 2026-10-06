@@ -277,3 +277,8 @@ past it. Accepted or uncertain outcomes consume the reservation. `not-busy` and
 `rejected` retain it for normal prompt serialization;
 attachments and absent or mismatched capabilities retain the queue. An uncertain
 transport outcome is reported without retry because acceptance may be durable.
+Only the `_ego/steer` request has a 10-second deadline (`EGO_STEER_TIMEOUT`):
+this is a durable append that ego normally acknowledges in milliseconds. A timeout
+reports that delivery is uncertain, releases the FIFO reservation through the
+existing error settlement, and never resends the text. Other ACP requests retain
+their existing behavior.
