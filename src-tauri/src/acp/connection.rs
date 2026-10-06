@@ -52,6 +52,10 @@ use super::{
 
 pub(super) type Reply<T> = oneshot::Sender<Result<T, AcpClientError>>;
 
+/// Ego normally acknowledges this durable append in milliseconds. A silent
+/// steer must release its FIFO reservation without retrying possibly accepted text.
+const EGO_STEER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// One request from the manager, with the channel its answer goes back on.
 ///
 /// A dropped receiver is not an error here: it means the caller went away, and
@@ -525,8 +529,16 @@ impl ConnectionActor {
                         session_id: session_id.to_string(),
                         prompt,
                     }, connection, None);
+                    let connection_id = self.connection_id;
                     in_flight.push(Box::pin(async move {
-                        Pending::Steer { session_id, turn_id, queued_turn_id, outcome: sent.await, reply }
+                        let outcome = tokio::time::timeout(EGO_STEER_TIMEOUT, sent)
+                            .await
+                            .unwrap_or_else(|_| Err(AcpClientError::agent_error(
+                                connection_id,
+                                None,
+                                "ego steering timed out; delivery is uncertain and the text was not resent",
+                            )));
+                        Pending::Steer { session_id, turn_id, queued_turn_id, outcome, reply }
                     }));
                 } else {
                     self.handle_prompt(session_id, prompt, meta, reply, connection, in_flight);
