@@ -244,3 +244,77 @@ async fn unresolved_steer_blocks_drain_after_active_turn_settles() {
     assert_eq!(first.last().unwrap().turn_id, Some(earlier));
     assert_eq!(second.last().unwrap().turn_id, Some(later));
 }
+
+// Catches: a live peer that never answers steer permanently locks the FIFO after turn completion.
+#[tokio::test]
+async fn silent_steer_settles_uncertain_and_releases_fifo_after_turn_completion() {
+    let fixture = capable("critic1548-silent-after-turn", "ego-steer-not-busy.json");
+    let connection = fixture.connect().await;
+    let session = fixture
+        .manager
+        .new_session(connection.connection_id, authority(fixture.root()))
+        .await
+        .unwrap();
+    let mut events = fixture
+        .manager
+        .subscribe(connection.connection_id, 0)
+        .unwrap();
+    fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session.session_id.clone(),
+            vec![text("active")],
+        )
+        .await
+        .unwrap();
+    let earlier = fixture.manager.prompt(
+        connection.connection_id,
+        session.session_id.clone(),
+        vec![text("earlier correction")],
+    );
+    tokio::pin!(earlier);
+    tokio::select! {
+        result = &mut earlier => panic!("steer answered before scenario barrier: {result:?}"),
+        _ = until(&mut events, |event| matches!(event, tuicommander_lib::acp::AcpClientEvent::SessionUpdate { .. })) => {}
+    }
+    fixture
+        .manager
+        .prompt(
+            connection.connection_id,
+            session.session_id.clone(),
+            vec![text("later text")],
+        )
+        .await
+        .unwrap();
+    fixture
+        .manager
+        .list_sessions(connection.connection_id, Default::default())
+        .await
+        .unwrap();
+    acp_support::until_settled(&mut events).await;
+    // Arm only after the real request arrived and the active turn settled.
+    // A whole minute is an observation bound, not a claim about an undocumented SLA.
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(60), &mut earlier).await;
+    let snapshot = fixture.manager.snapshot(connection.connection_id).unwrap();
+    fixture
+        .manager
+        .disconnect(connection.connection_id)
+        .await
+        .unwrap();
+    assert!(
+        outcome.is_ok(),
+        "silent steering never settled: a live transport leaves the FIFO reservation non-cancellable and blocks all later prompts"
+    );
+    assert!(
+        outcome.unwrap().is_err(),
+        "unanswered steering cannot claim acceptance"
+    );
+    assert!(
+        !snapshot.attachments[0]
+            .queued_prompts
+            .iter()
+            .any(|entry| entry.summary == "earlier correction"),
+        "uncertain steering must release its reservation without resending text"
+    );
+}
