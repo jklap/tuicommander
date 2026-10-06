@@ -18,7 +18,7 @@
 
 import { createEffect, createSignal, untrack } from "solid-js";
 import { invoke } from "../../invoke";
-import { type AcpListedSession, acpClient } from "../../services/acpClient";
+import { type AcpListedSession, acpClient, type ChatLaunch, type ChatOpenRequest } from "../../services/acpClient";
 import { acpStore } from "../../stores/acp";
 import { type AcpTranscriptEntry, acpTranscript } from "../../stores/acpTranscript";
 import { aiChatTabs } from "../../stores/aiChatTabs";
@@ -42,7 +42,10 @@ import { updateAppConfig } from "../../utils/updateAppConfig";
 
 /** The one connection this app uses and the tab it last showed. Module scope,
  *  so a panel that unmounts and comes back finds it rather than starting another. */
-let binding: { connectionId: AcpConnectionId; sessionId: AcpSessionId | null } | null = null;
+type Binding = { connectionId: AcpConnectionId; sessionId: AcpSessionId | null; launch?: ChatLaunch };
+let binding: Binding | null = null;
+let defaultBinding: Binding | null = null;
+const [launches, setLaunches] = createSignal<Record<string, ChatLaunch>>({});
 
 /** The start in flight, so a second send while ego launches waits for it. */
 let starting: Promise<Started | null> | null = null;
@@ -71,6 +74,8 @@ interface Started {
 /** Tests only: forget the connection and everything resolved for it. */
 export function resetAcpChatBindings(): void {
 	binding = null;
+	defaultBinding = null;
+	setLaunches({});
 	starting = null;
 	workspaceRoot = null;
 	replaying.clear();
@@ -94,6 +99,7 @@ export type AcpChatPhase = "unconfigured" | "ready" | "starting" | "failed" | "l
 /** The client surface this hook drives, named so a test can hand it another. */
 export type AcpChatClient = Pick<
 	typeof acpClient,
+	| "openConversation"
 	| "connect"
 	| "reconnect"
 	| "disconnect"
@@ -135,6 +141,25 @@ export function createAcpChat(
 	const [listedSessions, setListedSessions] = createSignal<AcpListedSession[]>([]);
 
 	aiChatTabs.refresh();
+	async function readLaunches(): Promise<void> {
+		const config = await invoke<{ ai_chat_launches?: Record<string, ChatLaunch> }>("load_config");
+		setLaunches(config?.ai_chat_launches ?? {});
+	}
+	void readLaunches().catch((failure: unknown) =>
+		appLogger.error("ai-chat", "reading conversation launches failed", failure),
+	);
+
+	async function openCustom(request: ChatOpenRequest): Promise<boolean> {
+		const opened = await guard("opening configured conversation", () => client.openConversation(request));
+		if (!opened) return false;
+		binding = { connectionId: opened.connection.connectionId, sessionId: opened.sessionId, launch: opened.launch };
+		setLaunches((current) => ({ ...current, [opened.sessionId]: opened.launch }));
+		aiChatTabs.add(TABS, opened.sessionId);
+		setRoot(opened.launch.workspace);
+		setConnectionId(binding.connectionId);
+		setSessionId(opened.sessionId);
+		return true;
+	}
 
 	async function remember(session: AcpSessionId): Promise<void> {
 		const target = await chatRoot();
@@ -157,7 +182,17 @@ export function createAcpChat(
 	/** Show a tab or listed session. Only one not already attached needs a
 	 *  replay, and only while ego runs: before that, the first message loads it. */
 	async function selectSession(session: AcpSessionId): Promise<void> {
-		if (session === sessionId()) return;
+		if (session === sessionId() && connectionId()) return;
+		if ((await guard("reading conversation launches", readLaunches)) === null) return;
+		if (launches()[session]) {
+			await openCustom({ sessionId: session });
+			return;
+		}
+		if (binding?.launch) {
+			binding = defaultBinding;
+			setConnectionId(binding?.connectionId ?? null);
+			setRoot(await chatRoot());
+		}
 		const id = connectionId();
 		const target = root();
 		if (id && target && !acpStore.attachment(id, session)) {
@@ -225,6 +260,15 @@ export function createAcpChat(
 	async function launch(): Promise<Started | null> {
 		setConnecting(true);
 		try {
+			if ((await guard("reading conversation launches", readLaunches)) === null) return null;
+			const selected = aiChatTabs.active(TABS);
+			if (selected && launches()[selected]) {
+				if (!(await openCustom({ sessionId: selected }))) return null;
+				const current = binding;
+				return current?.sessionId
+					? { connectionId: current.connectionId, sessionId: current.sessionId, fresh: false }
+					: null;
+			}
 			const target = await guard("finding the workspace", chatRoot);
 			if (!target) return null;
 			setRoot(target);
@@ -232,6 +276,7 @@ export function createAcpChat(
 				const snapshot = await guard("connecting to ego", () => client.connect(target));
 				if (!snapshot) return null;
 				binding = { connectionId: snapshot.connectionId, sessionId: null };
+				defaultBinding = binding;
 				setConnectionId(snapshot.connectionId);
 				if (snapshot.capabilities?.list)
 					await guard("listing conversations", () => refreshSessions(snapshot.connectionId, target));
@@ -249,7 +294,8 @@ export function createAcpChat(
 				setSessionId(saved);
 				const shown = await replay("replaying the conversation", current.connectionId, saved, target);
 				for (const tab of aiChatTabs.ids(TABS)) {
-					if (tab !== saved) await replay("replaying a chat tab", current.connectionId, tab, target);
+					if (tab !== saved && !launches()[tab])
+						await replay("replaying a chat tab", current.connectionId, tab, target);
 				}
 				return shown ? { connectionId: current.connectionId, sessionId: saved, fresh: false } : null;
 			}
@@ -271,7 +317,7 @@ export function createAcpChat(
 	// and waits for a message. The repository on screen is deliberately not read
 	// here: switching it must never start or load anything.
 	createEffect(() => {
-		if (!active() || !settingsStore.isAcpConfigured()) return;
+		if (!active()) return;
 		const current = binding;
 		const selected = untrack(() => aiChatTabs.active(TABS));
 		if (!current) {
@@ -279,13 +325,14 @@ export function createAcpChat(
 			setSessionId(selected);
 			return;
 		}
+		if (current.launch) setRoot(current.launch.workspace);
 		setConnectionId(current.connectionId);
 		setSessionId(selected ?? current.sessionId);
 		untrack(() => {
 			const target = root();
 			if (!target) return;
 			for (const tab of aiChatTabs.ids(TABS)) {
-				if (!acpStore.attachment(current.connectionId, tab))
+				if (!launches()[tab] && !current.launch && !acpStore.attachment(current.connectionId, tab))
 					void replay("replaying a chat tab", current.connectionId, tab, target);
 			}
 		});
@@ -317,7 +364,7 @@ export function createAcpChat(
 	};
 
 	const phase = (): AcpChatPhase => {
-		if (!settingsStore.isAcpConfigured()) return "unconfigured";
+		if (!settingsStore.isAcpConfigured() && !launches()[sessionId() ?? ""]?.executable) return "unconfigured";
 		if (connecting()) return "starting";
 		if (!connectionId() || !sessionId()) return error() ? "failed" : "ready";
 		return "live";
@@ -384,15 +431,23 @@ export function createAcpChat(
 			return id ? acpStore.isStreaming(id) : false;
 		},
 		/** Durable sessions published by ego, newest first. */
-		sessions: listedSessions,
+		launch: () => (sessionId() ? (launches()[sessionId() as string] ?? null) : null),
+		sessions: (): AcpListedSession[] => [
+			...listedSessions(),
+			...Object.entries(launches())
+				.filter(([id]) => !listedSessions().some((row) => row.sessionId === id))
+				.map(([sessionId, launch]) => ({
+					sessionId,
+					cwd: launch.workspace,
+					title: launch.profile || "Custom conversation",
+				})),
+		],
 		tabs: () => aiChatTabs.ids(TABS),
 
 		async closeTab(tab: AcpSessionId): Promise<void> {
 			const active = aiChatTabs.close(TABS, tab);
 			if (!active) return;
-			setSessionId(active);
-			if (binding) binding.sessionId = active;
-			await guard("saving conversation", () => remember(active));
+			await selectSession(active);
 		},
 
 		/** Send a turn, starting ego first when this is the first message. */
@@ -501,8 +556,32 @@ export function createAcpChat(
 		},
 
 		/** Open another conversation tab, starting ego when none is running. */
-		async startSession(): Promise<void> {
-			if (!pair()) {
+		async startSession(options?: ChatOpenRequest): Promise<void> {
+			if (options && Object.keys(options).length > 0) {
+				setConnecting(true);
+				try {
+					await openCustom(options);
+				} finally {
+					setConnecting(false);
+				}
+				return;
+			}
+			if (binding?.launch) {
+				binding = defaultBinding;
+				setConnectionId(binding?.connectionId ?? null);
+				setSessionId(binding?.sessionId ?? null);
+				setRoot(await chatRoot());
+				// A default new chat must not restore the currently selected custom chat.
+				if (!binding) {
+					const target = await chatRoot();
+					const snapshot = await guard("connecting to ego", () => client.connect(target));
+					if (!snapshot) return;
+					binding = { connectionId: snapshot.connectionId, sessionId: null };
+					defaultBinding = binding;
+					setConnectionId(snapshot.connectionId);
+				}
+			}
+			if (!pair() && !binding) {
 				const started = await start();
 				if (!started || started.fresh) return;
 			}
@@ -538,12 +617,18 @@ export function createAcpChat(
 				return;
 			}
 			const previous = sessionId();
+			if (previous && launches()[previous]) {
+				await guard("disconnecting configured conversation", () => client.disconnect(id));
+				await openCustom({ sessionId: previous });
+				return;
+			}
 			setConnecting(true);
 			try {
 				const snapshot = await guard("reconnecting to ego", () => client.reconnect(id, target));
 				if (!snapshot) return;
 				setConnectionId(snapshot.connectionId);
 				binding = { connectionId: snapshot.connectionId, sessionId: previous };
+				defaultBinding = binding;
 				if (snapshot.capabilities?.list)
 					await guard("listing conversations", () => refreshSessions(snapshot.connectionId, target));
 				let resumeId = previous;
@@ -559,7 +644,8 @@ export function createAcpChat(
 					setSessionId(resumeId);
 					await replay("replaying the conversation", snapshot.connectionId, resumeId, target, true);
 					for (const tab of aiChatTabs.ids(TABS)) {
-						if (tab !== resumeId) await replay("replaying a chat tab", snapshot.connectionId, tab, target, true);
+						if (tab !== resumeId && !launches()[tab])
+							await replay("replaying a chat tab", snapshot.connectionId, tab, target, true);
 					}
 					return;
 				}
@@ -581,6 +667,7 @@ export function createAcpChat(
 		async stop(): Promise<void> {
 			const id = connectionId();
 			if (!id) return;
+			if (!binding?.launch) defaultBinding = null;
 			binding = null;
 			setConnectionId(null);
 			setSessionId(null);

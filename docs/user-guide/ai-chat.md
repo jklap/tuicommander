@@ -241,3 +241,9 @@ AI Chat offers **Fork from here** beside a reply when ego advertises message-poi
 Forked AI Chat tabs label inherited history. A separator marks where the child’s own conversation begins, including after loading saved history.
 
 The AI Chat conversation picker groups fork and compaction descendants beneath their ancestors. Deleted immediate parents remain visible as disabled “Deleted conversation” rows.
+
+### Conversation launch options
+
+Use **New conversation with options** beside the `+` button to override the ego profile, workspace or executable for one conversation. Empty fields use Settings defaults. The header shows the resolved values. The conversation keeps these values and its peer identity after a restart; other chats keep their existing launch configuration. The plain `+` action creates a chat with the global defaults.
+
+A custom conversation runs its own ego ACP process. Its mail identity is separate from daily chats, even when both use the same workspace.

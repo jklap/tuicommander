@@ -2613,3 +2613,6 @@ AI Chat offers **Fork from here** beside a reply when ego advertises message-poi
 Forked AI Chat tabs label inherited history. A separator marks where the child’s own conversation begins, including after loading saved history.
 
 The AI Chat conversation picker groups fork and compaction descendants beneath their ancestors. Deleted immediate parents remain visible as disabled “Deleted conversation” rows.
+
+- **Conversation launch options:** AI Chat can give one conversation its own ego profile, executable and workspace, persisted with a dedicated peer identity. Creation and reopen are also available over HTTP.
+- **Inbox read audit:** MCP agent inbox reads log caller, owner and message ids at INFO without mail bodies.
