@@ -60,6 +60,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Clear session-specific terminal stream notices after replay recovery; show reconnect progress through the existing ten-attempt budget.
 - Keep Settings native MCP tool rows concise with dedicated English summaries; preserve full tool descriptions in their information tooltips.
 - Release the worktree removal lock when its confirmation dialog fails, so a later removal can proceed.
+- **Tablet terminal input** — Touch taps use the main keyboard input instead of an offscreen textarea, avoiding a focus switch on subsequent mouse events and sharing soft-keyboard deletion handling.
 
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 
