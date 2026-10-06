@@ -3482,9 +3482,10 @@ fn handle_session(
                     // Redaction applies to all three reads below — delta, absolute
                     // and raw ring. `format=raw` keeps ANSI; it is not an opt-out
                     // of redaction, and `data_length` reports what was returned.
+                    let known = terminal_secrets(&mut buf);
                     let data = crate::redaction::redact_wrapped_rows(
                         log_lines.iter().map(|ll| (ll.text(), ll.wrapped)),
-                        &[],
+                        &known,
                     );
                     let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
                     add_output_page_metadata(

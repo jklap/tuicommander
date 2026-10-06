@@ -1193,7 +1193,9 @@ accepts source-byte positions. Raw `cursor` is the returned page end and
 `total_written` is the total original byte count, independent of redaction.
 Explicit raw pages mask sensitive bytes with `*` using the complete retained
 ring and terminal context before slicing, so even one-byte pages cannot
-reconstruct a secret. Tail snapshots retain the existing `[REDACTED]` format.
+reconstruct a secret. Clean absolute and delta pages also discover secrets from the retained terminal
+context, so a page containing only a multiline private key body stays masked.
+Tail snapshots retain the existing `[REDACTED]` format.
 UTF-8 starts round down and ends extend to whole codepoints. Invalid PTY bytes
 use lossy decoding without changing source-byte cursors. `data_length` counts
 returned UTF-8 bytes, which can differ from the source range.
