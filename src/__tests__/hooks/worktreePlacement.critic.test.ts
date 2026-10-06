@@ -103,6 +103,8 @@ describe("worktree placement lifecycle regressions", () => {
 				getDefaultFontSize: () => 14,
 			});
 			await coordinator.handleBranchSelectInner(REPO, "feature");
+			// Let both scheduled focus frames finish before disposing the restored scope.
+			await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 			const id = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.tuicSession === "stable-peer");
 			if (!id) throw new Error("saved agent was not restored");
 			expect(repositoriesStore.findOwnerForTerminal(id)?.workspaceId).toBe("feature");
