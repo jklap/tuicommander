@@ -304,6 +304,7 @@ mod tests {
         state.session_maps.sessions.insert(
             session_id.into(),
             parking_lot::Mutex::new(crate::state::PtySession {
+                launch_receipt: None,
                 writer: Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,

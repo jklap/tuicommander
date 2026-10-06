@@ -316,6 +316,8 @@ pub(super) async fn spawn_agent_session(
         .agent_type
         .clone()
         .unwrap_or_else(|| "claude".to_string());
+    let launch_receipt = Arc::new(Mutex::new(None));
+    let captured_receipt = Arc::clone(&launch_receipt);
     let (pair, child) = match crate::pty::spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
@@ -345,12 +347,20 @@ pub(super) async fn spawn_agent_session(
                 launch_args.push(spawn_prompt.clone());
             }
             crate::pty::apply_agent_screen_env(&mut cmd, &spawn_env);
-            for arg in crate::agent_hook_launch::augment_args(
+            let final_args = crate::agent_hook_launch::augment_args(
                 &spawn_agent_type,
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
-            ) {
+            );
+            *captured_receipt.lock() = Some(crate::prompt_receipt::PromptReceipt::capture(
+                &spawn_prompt,
+                "TUIC HTTP agent spawn",
+                &final_args,
+                spawn_cwd.as_deref(),
+                false,
+            ));
+            for arg in final_args {
                 cmd.arg(arg);
             }
 
@@ -431,6 +441,7 @@ pub(super) async fn spawn_agent_session(
         &state,
         &session_id,
         PtySession {
+            launch_receipt: launch_receipt.lock().take(),
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
@@ -450,6 +461,7 @@ pub(super) async fn spawn_agent_session(
         None,
     );
 
+    crate::prompt_receipt::adopt_mcp_instructions(&state, &session_id);
     #[cfg(feature = "desktop")]
     let state_ref = state.clone();
     spawn_reader_thread(reader, paused, session_id.clone(), state, None);

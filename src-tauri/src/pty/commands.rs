@@ -86,6 +86,7 @@ pub(crate) async fn create_pty(
     state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
@@ -255,6 +256,7 @@ pub(crate) async fn create_pty_with_worktree(
     state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master,
             _child: child,

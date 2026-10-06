@@ -19,6 +19,7 @@ pub(crate) mod ai_agent;
 pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
+pub(crate) mod prompt_receipt;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
@@ -1973,6 +1974,7 @@ pub fn run() {
             pty::resume_pty,
             pty::get_kitty_flags,
             pty::get_last_prompt,
+            prompt_receipt::get_prompt_receipt,
             pty::get_shell_state,
             pty::get_session_shell_family,
             pty::close_pty,

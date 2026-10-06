@@ -2822,3 +2822,7 @@ The host ACP session list gathers all ego pages before ordering ancestry. Each r
 `GET /diagnostics/memory` performs payload accounting and the native large-malloc-block census on demand. The watchdog logs only cheap allocator counters and structure counts at footprint thresholds; it does not walk payloads or malloc zones.
 
 `accounted_bytes` sums the measured `maps` rows. `malloc_large_blocks` counts all large allocator blocks, including map-owned blocks. Its `may_overlap_accounted_bytes: true` field warns that its bytes must never be added to `accounted_bytes` as attributed memory. Model `holders` remain separate from heap accounting.
+
+## Launch instruction receipts
+
+`GET /sessions/{id}/prompt-receipt` mirrors `get_prompt_receipt`. Missing sessions return 404. The response is `{sections, captureLimited}`. Each section has `label`, `source`, `bytes` (original UTF-8 payload size, or null when unknown), `text` (redacted bounded preview), `status` (`sent`, `queued`, `served`, `file_snapshot`, or `not_observable`) and `truncated`. The endpoint reads live PTY/MCP metadata and never rebuilds text from settings. Capture/retention limits and unobservable cases are documented in [AI Agents](../user-guide/ai-agents.md#inspect-launch-instructions).

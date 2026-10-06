@@ -70,6 +70,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `list_worktrees` | -- | `Vec<JSON>` | List managed worktrees |
 | `get_session_foreground_process` | `session_id` | `JSON` | Get foreground process info |
 | `get_kitty_flags` | `session_id` | `u32` | Get Kitty keyboard protocol flags for session |
+| `get_prompt_receipt` | `session_id` | `PromptReceipt` | Read captured launch sections and observation gaps; async/blocking worker |
 | `get_last_prompt` | `session_id` | `Option<String>` | Get last user-typed prompt from input line buffer |
 | `get_shell_state` | `session_id` | `Option<String>` | Get current shell state ("busy", "idle", or null); agent-specific semantic Working markers can repair a transient false-idle state |
 | `has_foreground_process` | `session_id: String` | `bool` | Checks if a non-shell foreground process is running |

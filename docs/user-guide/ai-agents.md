@@ -280,3 +280,11 @@ This is useful for enabling feature flags (e.g., `CLAUDE_CODE_EXPERIMENTAL_AGENT
 ### ego launch permissions
 
 In **Settings > Agents > ego**, choose a permission mode and filesystem sandbox for new terminal launches and managed spawns. **Use ego configuration** leaves that option unchanged. Mode choices are Read-only (`plan`), Ask (`default`), Auto-edit (`edits`), Auto reviewed (`auto`), and Full access (`yolo`). Sandbox choices are Read-only (`ro`) and Workspace writes (`workspace`). The selected choices replace matching raw launch flags. AI Chat uses separate ACP settings.
+
+## Inspect launch instructions
+
+Right-click a terminal and select **Inspect Launch Instructions…**. Expand a section to read its captured text, source and original UTF-8 byte size. Secrets use the same redaction policy as logs. A queued brief is not yet sent; reopen the inspector after submission to read its updated state.
+
+Capture starts with new managed launches after the backend update. It includes the final brief with TUIC peer context, `--system-prompt`/`--append-system-prompt` values, snapshots of explicitly supplied `--system-prompt-file`/`--append-system-prompt-file` files, and TUIC MCP initialize responses. File snapshots show the bytes available to TUIC before spawn, not confirmation of what the agent read. Shell-launched agents, older sessions and independently loaded files such as AGENTS.md are **Not observable by TUIC**. TUIC does not reconstruct them from current settings.
+
+Redacted text is limited to 32 KiB per section and 64 KiB across 16 captured sections. Larger text is labeled truncated; missing, non-regular, non-UTF-8 or over-1-MiB instruction files are labeled unavailable. Byte counts describe the original payload, not the shorter redacted preview. Receipts survive a frontend reload, but not session closure or a backend restart.
