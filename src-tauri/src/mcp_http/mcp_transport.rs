@@ -1144,7 +1144,7 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
     super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait";
+const SESSION_ACTIONS: &str = "list, create, submit, input, output, resize, rename, keep_open, suspend, close, kill, pause, resume, status, wait, declare_worktree";
 const AGENT_ACTIONS: &str = "spawn, register, list_peers, send, inbox, wait";
 const REPO_ACTIONS: &str = "list, active, status, branch_integrations, branch_integration, worktree_list, worktree_lifecycle, worktree_create, worktree_remove, orphan_cleanup_answer, branch_delete, progress_list";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
@@ -1217,10 +1217,10 @@ fn native_tool_definitions() -> serde_json::Value {
         crate::telegram::tool_definition(),
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call, including local and connected remote sessions. Remote rows carry connection_id and address=connection/session_id. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call, including local and connected remote sessions. Remote rows carry connection_id and address=connection/session_id. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), tuic_session (the stable identity the tab persists), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null — background_work and standby appear only when true.\n\nEvery action that takes session_id accepts the PTY id, tuic_session, alias (e.g. tu-1), a unique short PTY-id prefix, or a unique display name.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- submit: Submit one non-empty command to a confirmed-idle managed agent and wait internally for a bounded receipt. Use one call; never split text and Enter; never poll after it. Returns submission_id, submitted, write_state, acknowledged, retry_safe, turn_epoch, composer_state (tracked InputLineBuffer, not application state), and acknowledgement or a precise reason. Acknowledgement means child terminal movement after Enter, not semantic application acceptance. Never queues; partial composers, dialogs, busy agents, and older queued commands reject before writing.\n- input: Raw text/key compatibility surface. Send text and/or special_key; ok confirms PTY write only.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. The tail read omits an empty input box and everything below it (status line, HUD); format=raw keeps them. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- declare_worktree: Declare an existing linked worktree for this authenticated live caller. Requires worktree_path; rejects foreign sessions and repositories. Persists sidebar placement without changing shell cwd. Caller-bound MCP-only request, available via POST /mcp.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- rename: Set the tab's display name. Requires name (non-empty). Sticky by default — protected from later OSC/intent title updates unless is_custom=false.\n- keep_open: Keep a managed child open by disabling idle closure with enabled=true; enabled=false restores automatic idle closure. Requires session_id.\n- suspend: End the tab's PTY and agent to free memory and CPU but keep the tab, restorable like after a TUIC restart; the user resumes it from the tab. Refused while the agent is working, a question awaits an answer, or a command runs. Not auto-standby, which only SIGSTOPs and keeps memory. Requires session_id.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
             "inputSchema": { "type": "object", "properties": {
                 "connection_id": { "type": "string", "description": "Configured remote connection qualifier (session list/output/submit; agent list_peers/send). Remote addresses also accept connection/id; local/id addresses the desktop hub." },
-                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, suspend, close, kill, pause, resume" },
+                "action": { "type": "string", "description": "One of: list, create, submit, input, output, status, wait, resize, rename, keep_open, suspend, close, kill, pause, resume, declare_worktree" },
                 "session_id": { "type": "string", "description": "Session address — PTY id, tuic_session, alias, unique short PTY-id prefix, or unique display name. Ambiguous prefixes or names return an error. Required for submit, input, output, status, resize, rename, keep_open, suspend, close, kill, pause, resume, wait" },
                 "name": { "type": "string", "description": "New tab display name, non-empty (action=rename, required)" },
                 "is_custom": { "type": "boolean", "description": "action=rename, default true. true protects the name from later OSC/intent title updates; false lets them refine it." },
@@ -1233,6 +1233,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "rows": { "type": "integer", "description": "Terminal rows (action=create or resize)" },
                 "cols": { "type": "integer", "description": "Terminal cols (action=create or resize)" },
                 "shell": { "type": "string", "description": "Shell binary path (action=create)" },
+                "worktree_path": { "type": "string", "description": "Absolute existing linked worktree path (action=declare_worktree, required). Caller only; omit session_id." },
                 "cwd": { "type": "string", "description": "Working directory (action=create)" },
                 "limit": { "type": "integer", "description": "Max lines to return (default 50). Use 50-100 for snapshots; delta reads (since_cursor) are already bounded by new content (action=output)" },
                 "from_line": { "type": "integer", "description": "Absolute line number to start reading from. Use oldest_offset from a previous response to read from the beginning of the buffer. Omit to read the tail (action=output)" },
@@ -1992,7 +1993,10 @@ where
 }
 
 fn session_action_requires_blocking_pool(action: &str) -> bool {
-    matches!(action, "create" | "input" | "kill" | "close" | "resize")
+    matches!(
+        action,
+        "create" | "input" | "kill" | "close" | "resize" | "declare_worktree"
+    )
 }
 
 fn agent_action_requires_blocking_pool(action: &str) -> bool {
@@ -3066,6 +3070,25 @@ fn handle_session(
         Err(e) => return e,
     };
     match action {
+        "declare_worktree" => {
+            let Some(peer) = resolve_mcp_origin_session(state, mcp_session_id) else {
+                return serde_json::json!({"error": "declare_worktree requires an authenticated managed caller"});
+            };
+            let Some(pty) = resolve_mcp_origin_pty(state, mcp_session_id) else {
+                return serde_json::json!({"error": "declare_worktree requires the caller's live terminal"});
+            };
+            if args.get("session_id").is_some() && args["session_id"].as_str() != Some(pty.as_str())
+            {
+                return serde_json::json!({"error": "declare_worktree cannot target another session"});
+            }
+            let Some(path) = args["worktree_path"].as_str() else {
+                return serde_json::json!({"error": "declare_worktree requires worktree_path"});
+            };
+            match super::session_placement::declare_worktree(state, &peer, &pty, path) {
+                Ok(payload) => to_json_or_error(payload),
+                Err(error) => serde_json::json!({"error": error}),
+            }
+        }
         "list" => {
             let caller_tuic = mcp_session_id
                 .and_then(|sid| state.mcp.to_session.get(sid))
@@ -4849,6 +4872,7 @@ fn handle_agent_with_parent_cwd(
                     _child: child,
                     paused: paused.clone(),
                     worktree: None,
+                    initial_cwd: effective_cwd.clone(),
                     cwd: effective_cwd.clone(),
                     display_name: requested_name.clone(),
                     display_name_is_custom: false,
@@ -11312,6 +11336,7 @@ mod tests {
                 _child: child,
                 paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: Some(cwd.to_string()),
                 cwd: Some(cwd.to_string()),
                 display_name: None,
                 display_name_is_custom: false,
@@ -16088,6 +16113,7 @@ mod tests {
                 _child: child,
                 paused: Arc::new(AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: None,
                 cwd: None,
                 display_name: Some("submission-probe".to_string()),
                 display_name_is_custom: false,
@@ -20256,6 +20282,7 @@ mod tests {
                 _child: child,
                 paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: Some(TEST_SPAWN_CWD.to_string()),
                 cwd: Some(TEST_SPAWN_CWD.to_string()),
                 display_name: None,
                 display_name_is_custom: false,
@@ -21754,6 +21781,7 @@ mod tests {
                 _child: child,
                 paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: Some("/Gits/personal/beta".to_string()),
                 cwd: Some("/Gits/personal/beta".to_string()),
                 display_name: None,
                 display_name_is_custom: false,
@@ -27284,5 +27312,261 @@ mod critic_story_tool_text {
             .clone();
         let description = definition["description"].as_str().unwrap_or_default();
         assert!(description.contains("receipt"), "{description}");
+    }
+}
+
+#[cfg(test)]
+mod session_placement_tests {
+    use super::super::tests::test_state;
+    use super::*;
+
+    // Catches: accepting another caller's target, cross-repo navigation, main/unknown
+    // checkouts, duplicate saved tabs, or an association lost when backend state restarts.
+    #[test]
+    #[serial_test::serial]
+    fn declared_worktree_is_caller_scoped_and_durable() {
+        fn insert_session(state: &AppState, id: &str) {
+            use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+            let pair = native_pty_system()
+                .openpty(PtySize {
+                    rows: 24,
+                    cols: 80,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .unwrap();
+            let (shell, script_arg) = crate::test_support::host_shell();
+            let mut command = CommandBuilder::new(shell);
+            command.args([script_arg, &tuic_test_support::wait_for_stdin_script()]);
+            let child = pair.slave.spawn_command(command).unwrap();
+            let writer = pair.master.take_writer().unwrap();
+            state.session_maps.sessions.insert(
+                id.into(),
+                parking_lot::Mutex::new(crate::state::PtySession {
+                    writer: Arc::new(parking_lot::Mutex::new(writer)),
+                    master: pair.master,
+                    _child: child,
+                    paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    worktree: None,
+                    initial_cwd: None,
+                    cwd: None,
+                    display_name: None,
+                    display_name_is_custom: false,
+                    display_name_from_spawn: false,
+                    is_remote: false,
+                    shell: shell.into(),
+                }),
+            );
+        }
+        fn git(dir: &std::path::Path, args: &[&str]) {
+            let output = std::process::Command::new("git")
+                .args([
+                    "-c",
+                    "user.name=Placement Test",
+                    "-c",
+                    "user.email=placement@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(dir.path().join("config"));
+        let root = dir.path().join("repo");
+        let foreign = dir.path().join("foreign");
+        let worktree = dir.path().join("feature");
+        let foreign_worktree = dir.path().join("foreign-feature");
+        for repo in [&root, &foreign] {
+            std::fs::create_dir(repo).unwrap();
+            git(repo, &["init", "-b", "main"]);
+            git(repo, &["commit", "--allow-empty", "-m", "initial"]);
+        }
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature",
+                worktree.to_str().unwrap(),
+            ],
+        );
+        git(
+            &foreign,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "foreign-feature",
+                foreign_worktree.to_str().unwrap(),
+            ],
+        );
+        let root_path = root.to_str().unwrap();
+        let foreign_path = foreign.to_str().unwrap();
+        crate::config::replace_repositories_for_test(serde_json::json!({
+            "repos": {
+                root_path: {"path":root_path,"workspaces":{"main":{"worktreePath":root_path,"savedTerminals":[
+                    {"tuicSession":"caller-peer","name":"Caller","cwd":root_path,"fontSize":14,"agentType":"codex"},
+                    {"tuicSession":"sibling-peer","name":"Sibling","cwd":root_path,"fontSize":14,"agentType":"codex"}
+                ]}}},
+                foreign_path: {"path":foreign_path,"workspaces":{}}
+            }, "repoOrder":[root_path,foreign_path]
+        })).unwrap();
+        let state = test_state();
+        insert_session(&state, "caller-pty");
+        {
+            let entry = state.session_maps.sessions.get("caller-pty").unwrap();
+            let mut session = entry.lock();
+            session.initial_cwd = Some(root_path.into());
+            // An OSC 7 navigation must not redefine which repo owns the caller.
+            session.cwd = Some(foreign_path.into());
+        }
+        state.bind_live_pty("caller-peer", "caller-pty");
+        state
+            .mcp
+            .to_session
+            .insert("placement-mcp".into(), "caller-peer".into());
+        let mut events = state.event_bus.subscribe();
+        let request = serde_json::json!({"action":"declare_worktree","worktree_path":worktree});
+        let before = crate::config::load_repositories();
+        for rejected in [
+            serde_json::json!({"action":"declare_worktree","worktree_path":worktree,"session_id":"sibling-pty"}),
+            serde_json::json!({"action":"declare_worktree","worktree_path":foreign_worktree}),
+            serde_json::json!({"action":"declare_worktree","worktree_path":root}),
+            serde_json::json!({"action":"declare_worktree","worktree_path":dir.path().join("missing")}),
+            serde_json::json!({"action":"declare_worktree"}),
+        ] {
+            assert!(handle_session(&state, &rejected, Some("placement-mcp"))["error"].is_string());
+            assert_eq!(crate::config::load_repositories(), before);
+            assert!(
+                events.try_recv().is_err(),
+                "rejection emitted a placement mutation"
+            );
+        }
+        assert!(handle_session(&state, &request, None)["error"].is_string());
+        let placed = handle_session(&state, &request, Some("placement-mcp"));
+        assert!(placed.get("error").is_none(), "{placed}");
+        assert_eq!(placed["creator_session"], "caller-pty");
+        assert_eq!(placed["workspace_id"], "feature");
+        let saved = crate::config::load_repositories();
+        assert_eq!(
+            saved["repos"][root_path]["workspaces"]["main"]["savedTerminals"][0]["tuicSession"],
+            "sibling-peer"
+        );
+        assert_eq!(
+            saved["repos"][root_path]["workspaces"]["feature"]["savedTerminals"][0]["tuicSession"],
+            "caller-peer"
+        );
+        assert_eq!(
+            handle_session(&state, &request, Some("placement-mcp")),
+            placed
+        );
+        assert_eq!(
+            crate::config::load_repositories(),
+            saved,
+            "a retry duplicated or reordered the saved caller"
+        );
+        let declared = std::iter::from_fn(|| events.try_recv().ok())
+            .find_map(|event| {
+                if let crate::state::AppEvent::SessionWorktreeDeclared(payload) = event {
+                    Some(payload)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(
+            crate::mcp_http::sse_routes::event_payload_for_test(
+                &crate::state::AppEvent::SessionWorktreeDeclared(declared.clone())
+            ),
+            serde_json::to_value(declared).unwrap()
+        );
+        let restarted = test_state();
+        insert_session(&restarted, "restored-pty");
+        restarted
+            .session_maps
+            .sessions
+            .get("restored-pty")
+            .unwrap()
+            .lock()
+            .cwd = Some(root_path.into());
+        restarted.bind_live_pty("caller-peer", "restored-pty");
+        let row = super::super::session::local_session_rows(&restarted)
+            .into_iter()
+            .find(|r| r.session_id == "restored-pty")
+            .unwrap();
+        assert_eq!(
+            row.worktree_path.as_deref(),
+            Some(worktree.to_str().unwrap())
+        );
+        assert_eq!(row.worktree_branch.as_deref(), Some("feature"));
+        assert_eq!(row.cwd.as_deref(), Some(root_path));
+        assert!(
+            restarted
+                .session_maps
+                .sessions
+                .get("restored-pty")
+                .unwrap()
+                .lock()
+                .worktree
+                .is_none(),
+            "declaration must not acquire automatic worktree cleanup ownership"
+        );
+        git(&root, &["worktree", "list", "--porcelain"]);
+        state
+            .session_maps
+            .sessions
+            .get("caller-pty")
+            .unwrap()
+            .lock()
+            ._child
+            .kill()
+            .unwrap();
+        restarted
+            .session_maps
+            .sessions
+            .get("restored-pty")
+            .unwrap()
+            .lock()
+            ._child
+            .kill()
+            .unwrap();
+    }
+
+    // Catches: an implemented declaration omitted from the discoverable request schema.
+    #[test]
+    fn declare_worktree_schema_documents_caller_binding_and_http_transport() {
+        let definitions = native_tool_definitions();
+        let session = definitions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "session")
+            .unwrap();
+        assert!(
+            session["description"]
+                .as_str()
+                .unwrap()
+                .contains("POST /mcp")
+        );
+        assert!(
+            session["inputSchema"]["properties"]["action"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("declare_worktree")
+        );
+        assert_eq!(
+            session["inputSchema"]["properties"]["worktree_path"]["type"],
+            "string"
+        );
+        assert!(session_action_requires_blocking_pool("declare_worktree"));
     }
 }

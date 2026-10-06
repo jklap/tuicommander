@@ -2821,3 +2821,45 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 The ACP session fork route accepts optional `atMessageId` beside `authority`. It is forwarded as `_meta.ego.atMessageId` only when ego advertises `sessionCapabilities.fork._meta.ego.atMessage`; unsupported agents are refused.
 
 The host ACP session list gathers all ego pages before ordering ancestry. Each row retains `_meta.ego.lineage` and adds `_meta.tuicommander.lineageDepth`; placeholder rows for deleted parents add `_meta.tuicommander.deleted=true`. The response has no continuation cursor after collecting the pages.
+
+### Caller-bound worktree declaration
+
+An agent that uses `git -C` or tools without changing shell cwd can declare an
+existing linked worktree with:
+
+```text
+session action=declare_worktree worktree_path=/absolute/path/to/worktree
+```
+
+The authenticated MCP binding identifies the caller's live PTY. Omit
+`session_id`; a foreign session target is rejected. The backend resolves the
+repository from the immutable launch directory and discovers current worktrees
+from Git. The main checkout, unknown paths and worktrees owned by another
+repository are rejected before any configuration or placement changes. External
+worktrees are discovered without recreating or deleting them.
+
+The response and `session-worktree-declared` event use the worktree lifecycle
+payload, with `creator_session` naming the caller and `spawn_session=false`.
+Only that tab moves. Its real cwd, sibling tabs and an inactive selection stay
+unchanged. Retrying the same declaration is idempotent.
+
+The stable `TUIC_SESSION` association is stored in the owning repository's
+`declaredWorktrees` map using the existing locked repository delta. Any saved
+caller snapshot moves to the target workspace; sibling snapshots are preserved.
+After a restart or WebView reconnect, HTTP `GET /sessions` and IPC
+`list_active_sessions` return the declared `worktree_path` and `worktree_branch`
+while `cwd` remains the actual shell directory. The frontend restores placement
+from that worktree path. Declaration does not acquire worktree cleanup ownership.
+A concurrent repository edit can return a configuration conflict; retry the
+declaration after refreshing rather than overwriting that edit.
+
+The explicit placement remains authoritative over later shell cwd notifications
+until another declaration changes it. The frontend retains the backend placement
+path separately from the observed cwd during reconciliation.
+
+**Intentional request transport exception:** `declare_worktree` is an MCP-only
+action, callable over the existing HTTP `POST /mcp` route with a bound caller.
+There is no Tauri command or `COMMAND_TABLE` entry: window IPC has no managed
+agent caller binding. Its push event is dual-emitted over Tauri and `/events` SSE,
+and session-list response fields are identical over IPC and HTTP. Schema and
+serialization regressions cover these shared contracts.

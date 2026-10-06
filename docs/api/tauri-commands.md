@@ -830,3 +830,9 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 `acp_session_fork` accepts optional `atMessageId`, with the same behavior as the ACP HTTP fork route. Capability snapshots expose `forkAtMessage` separately from tip fork support.
 
 `acp_session_list` uses the same complete ancestry projection as HTTP: original ego lineage plus `_meta.tuicommander.lineageDepth` and disabled deleted-parent placeholders.
+
+MCP `session action=declare_worktree` is intentionally not a Tauri command. It
+requires a bound managed caller, which window IPC does not supply. Call it via
+HTTP `POST /mcp`. Its `session-worktree-declared` push is also emitted to Tauri;
+`list_active_sessions` and HTTP `GET /sessions` report the persisted declaration
+in their existing worktree fields. See [MCP backend](../backend/mcp-http.md).

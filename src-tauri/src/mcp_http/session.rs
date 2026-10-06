@@ -87,6 +87,7 @@ pub(crate) fn live_tuic_sessions_by_pty(
 /// in both lists the same way.
 pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
     let tuic_by_pty = live_tuic_sessions_by_pty(state);
+    let repositories = crate::config::load_repositories();
     state
         .session_maps
         .sessions
@@ -94,13 +95,20 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
         .map(|entry| {
             let session_id = entry.key().clone();
             let session = entry.value().lock();
+            let declared = tuic_by_pty
+                .get(&session_id)
+                .and_then(|peer| super::session_placement::declared_worktree(&repositories, peer));
             SessionInfo {
                 cwd: session.cwd.clone(),
-                worktree_path: session
-                    .worktree
-                    .as_ref()
-                    .map(|w| w.path.to_string_lossy().to_string()),
-                worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
+                worktree_path: declared.as_ref().map(|(path, _)| path.clone()).or_else(|| {
+                    session
+                        .worktree
+                        .as_ref()
+                        .map(|w| w.path.to_string_lossy().to_string())
+                }),
+                worktree_branch: declared
+                    .map(|(_, branch)| branch)
+                    .or_else(|| session.worktree.as_ref().and_then(|w| w.branch.clone())),
                 display_name: session.display_name.clone(),
                 display_name_is_custom: session.display_name_is_custom,
                 display_name_from_spawn: session.display_name_from_spawn,
@@ -817,6 +825,7 @@ pub(super) fn spawn_pty_session(
             _child: child,
             paused: paused.clone(),
             worktree,
+            initial_cwd: cwd.clone(),
             cwd: cwd.clone(),
             display_name: None,
             display_name_is_custom: false,

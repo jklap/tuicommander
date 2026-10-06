@@ -1504,6 +1504,7 @@ pub(crate) async fn spawn_agent(
             _child: child,
             paused: paused.clone(),
             worktree: None,
+            initial_cwd: agent_config.cwd.clone(),
             cwd: agent_config.cwd.clone(),
             display_name: None,
             display_name_is_custom: false,

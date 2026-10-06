@@ -346,6 +346,9 @@ pub enum AppEvent {
     /// A worktree was created via MCP — frontend may offer to switch to it
     #[serde(rename = "worktree-created")]
     WorktreeCreated(WorktreeCreatedPayload),
+    /// Caller-only placement; the directory already exists.
+    #[serde(rename = "session-worktree-declared")]
+    SessionWorktreeDeclared(WorktreeCreatedPayload),
     /// A worktree was removed (UI, MCP, HTTP, or merge&archive) — frontend must
     /// drop its sidebar row and close any terminal still living in it.
     #[serde(rename = "worktree-removed")]
@@ -1418,6 +1421,8 @@ pub struct PtySession {
     pub(crate) _child: Box<dyn portable_pty::Child + Send + Sync>,
     pub(crate) paused: Arc<AtomicBool>,
     pub worktree: Option<WorktreeInfo>,
+    /// Immutable launch directory used for repository ownership, independent of OSC 7.
+    pub(crate) initial_cwd: Option<String>,
     pub cwd: Option<String>,
     /// Display name set by the desktop UI, agent launch, or intent title.
     pub display_name: Option<String>,
@@ -4204,6 +4209,18 @@ impl AppState {
         let _ = self.event_bus.send(AppEvent::WorktreeRemoved(payload));
     }
 
+    /// Announce persisted caller placement over both transports.
+    pub(crate) fn notify_session_worktree_declared(&self, payload: WorktreeCreatedPayload) {
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            use tauri::Emitter;
+            let _ = app.emit("session-worktree-declared", &payload);
+        }
+        let _ = self
+            .event_bus
+            .send(AppEvent::SessionWorktreeDeclared(payload));
+    }
+
     /// Announce a newly created workspace, so the frontend can offer to switch
     /// to it.
     ///
@@ -5108,6 +5125,7 @@ impl AppState {
             | AppEvent::McpConfirmResolved { .. }
             | AppEvent::RepositoriesChanged
             | AppEvent::DirChanged { .. }
+            | AppEvent::SessionWorktreeDeclared { .. }
             | AppEvent::WorktreeCreated { .. }
             | AppEvent::WorktreeRemoved { .. }
             | AppEvent::PeerRegistered { .. }
@@ -5245,6 +5263,7 @@ pub(crate) mod tests_support {
                 _child: child,
                 paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 worktree: None,
+                initial_cwd: None,
                 cwd: None,
                 display_name: None,
                 display_name_is_custom: false,

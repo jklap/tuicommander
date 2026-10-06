@@ -4692,3 +4692,5 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 - [ ] AI Chat message fork: after rebuilding/restarting Rust, fork the second of four ego replies and check the child cutoff while the parent retains all replies. The backend capability and metadata changes require a manual restart.
 
 - [ ] After Boss restarts the Rust build, create a worktree through MCP without spawning: only the creator in the same repository moves; inactive selection and sibling tabs stay in place. Explicit spawn and foreign callers must not move the creator.
+
+- [ ] After Boss restarts the Rust build, call `session action=declare_worktree worktree_path=<existing linked worktree>` from an agent. Only its tab moves; retry creates no duplicate. Reconnect/restart preserves placement and real shell cwd. Unknown, main-checkout, cross-repository and foreign-session targets are rejected.
