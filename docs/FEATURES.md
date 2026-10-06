@@ -1,5 +1,7 @@
 # TUICommander — Complete Feature Reference
 
+Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
+
 > Canonical capability inventory. Update this file when adding, changing, or removing user-visible features.
 > See [AGENTS.md](../AGENTS.md) for the maintenance requirement.
 >
@@ -8,6 +10,14 @@
 **Current version:** 1.7.7  
 **Last verified:** 2026-09-16  
 **Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.7](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#177---2026-09-16) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
+
+## ego Perimeter Settings
+
+- Settings > AI Chat edits ego roots, root access, read allowlists, writable
+  directories and network mode through the configured CLI.
+- Preview comes from ego's effective view for the AI Chat workspace/profile.
+  The exec-sandbox badge reports unverified enforcement when ego says `not_checked`
+  and renders measured capability arrays without inferring enforcement from backend names.
 
 ## How to use this reference
 
@@ -39,11 +49,13 @@ The Plans and Stories dialog provides a manual project view on desktop and in th
 
 Versioned workflow definitions are available through IPC and HTTP. The Plans and Stories Designer tab can select a seeded draft, add nodes by dragging or clicking, connect outcomes, edit node settings, save, and publish. Published revisions are immutable and validated before use. The two built-in templates are `Story delivery` and `Resolve plan`; automatic graph execution is still under development.
 
-Durable workflow run storage records event history, pinned graph revisions, node attempts, external effect intents, TUIC-run check receipts, and checked integration receipts. Desktop and HTTP clients can start and inspect a run, list a plan's runs, replay events, and send explicit run commands. The Plans and Stories dialog shows a run timeline with paged events. A managed MCP caller can explicitly launch a pinned attempt in a registered isolated worktree, create a plan story with an idempotent proposal key, and submit a typed outcome bound to the spawned session. Story attempts with overlapping or unknown file scope are serialized, and story worktree assignments are recorded before spawn. Dependents remain held until the accepted prerequisite has a current canonical integration receipt; an operator performs the merge explicitly in this slice. An unrelated canonical commit requires a fresh TUIC-computed recertification with pinned checks before release resumes. Reviewer reports can retain criterion-indexed findings and an artifact digest as advisory evidence. A worker input request pauses its run until an operator records an answer and resumes it; valid reports from other running workers remain durable during that pause. The daemon now owns run recovery, serial graph positioning, explicit graph resume, cancellation and idle duration timers under a database owner lock. Executable delivery, Agent effects and evaluation remain under development.
+Durable workflow run storage records event history, pinned graph revisions, node attempts, external effect intents, TUIC-run check receipts, and checked integration receipts. Desktop and HTTP clients can start and inspect a run, list a plan's runs, replay events, and send explicit run commands. The Plans and Stories dialog shows a run timeline with paged events. A managed MCP caller can explicitly launch a pinned attempt in a registered isolated worktree, create a plan story with an idempotent proposal key, and submit a typed outcome bound to the spawned session. Story attempts with overlapping or unknown file scope are serialized, and story worktree assignments are recorded before spawn. Dependents remain held until the accepted prerequisite has a current canonical integration receipt; an operator performs the merge explicitly in this slice. An unrelated canonical commit requires a fresh TUIC-computed recertification with pinned checks before release resumes. Reviewer reports can retain criterion-indexed findings and an artifact digest as advisory evidence. A worker input request pauses its run until an operator records an answer and resumes it; valid reports from other running workers remain durable during that pause. The daemon now owns run recovery, serial graph positioning, explicit graph resume, cancellation and idle duration timers under a database owner lock. Serial Agent effects, independent story policy and plan dispatch execute in the owning daemon; public story graph starts and history controls are available. Public API plan starts use slice E dispatch; the plan UI control remains visibly unavailable. E2E evaluation remains pending.
 
 ---
 
 ## 1. Terminal Management
+
+- **Tablet keyboard input** — Touch taps and mouse presses focus the same terminal input. Soft-keyboard text and deletion use the shared input handler.
 
 Terminal text retains stored combining marks through rendering, scrolling,
 copy and exact-codepoint search, including marks arriving in a later output
@@ -156,6 +168,14 @@ per cell and the configured history limit still apply.
 - Rate-limit false positives reduced for non-ASCII input
 
 ### 1.10 Move Terminal to Worktree
+
+MCP worktree creation without an explicit session spawn places only its
+same-repository caller in the new workspace. Agents working through `git -C`
+can declare an existing worktree with `session action=declare_worktree
+worktree_path=/absolute/path`. The backend validates ownership, moves only the
+caller and persists the association through restart. Shell cwd and other tabs
+remain unchanged. See [MCP backend](backend/mcp-http.md).
+
 - Right-click a terminal tab → "Move to Worktree" submenu lists available worktrees (excluding the current one)
 - Selecting a worktree sends `cd` to the PTY; OSC 7 auto-reassigns the terminal to the target branch
 - Also available via Command Palette: dynamic "Move to worktree: \<branch\>" entries appear when the active terminal belongs to a repo with multiple worktrees
@@ -337,8 +357,9 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Unpark a repo from the popover to restore it to the main list
 
 ### 2.7a Sidebar Layout (compact / rich)
+- Rich repository metadata hides zero PR and worktree counts; positive counts update live
 - Toolbar button (left of the filter icon) cycles auto, compact and rich and prints the mode (A, C, R); the mode is saved in UI prefs (`sidebar_density`)
-- Compact: the one-line rows. Rich: detail lines under every row. Auto: rich when the list fits the window (rich row about 52 px; 12 rows at 768 px, 15 at 900 px) or the primary pointer is a finger, compact otherwise
+- Compact: one-line rows. Rich: compact-sized navigation with inline branch facts and expanded intent only for working agents. Auto: rich when the conservative expanded-row budget fits the window or the primary pointer is a finger, compact otherwise
 - Rich branch row: PR state word and title; last-commit age, ahead/behind the upstream, diff stats, dirty-file count (opens Changes), merged, stale (no commit for 30 days), unknown (removal blocked), unmerged; never stale, merged, dirty or unknown on a main checkout. Compact carries the age, ahead/behind and stale rule on the branch name tooltip
 - Rich agent row: state (working, idle, needs input, error) and the agent's intent, task or last prompt; in-session subagents (state, title, tool calls, age; more than 3 fold into a count); TUIC child sessions nested under the parent. Compact carries state and line on the row tooltip
 - Rich repo header: current branch, open PR count, worktree count, age of the last remote poll
@@ -687,6 +708,10 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 
 ## 6. AI Agent Support
 
+### Launch instruction inspector
+
+The terminal context menu offers **Inspect Launch Instructions…**. Collapsible sections show the prospectively captured final launch brief, explicit system instruction arguments/file snapshots and served MCP initialize responses, with recorded source and original UTF-8 byte count. Redacted text is bounded to 32 KiB per section, 64 KiB per receipt and 16 captured sections. Queued briefs are labeled until submission succeeds. Historical launches, shell-launched agents and files the agent reads independently show **Not observable by TUIC**. Receipts belong to live PTY/MCP metadata, survive frontend reloads and end with the backend/session lifetime; workflow preview/hash receipts remain unchanged.
+
 ### 6.1 Supported Agents
 | Agent | Binary | Resume Command |
 |-------|--------|----------------|
@@ -817,6 +842,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Triggers error notification sound and logs to the Error Log Panel
 
 ### 6.9 Agent Configuration (Settings > Agents)
+- **ego permissions:** Select `plan`, `default`, `edits`, `auto`, or `yolo` and filesystem sandbox `ro` or `workspace`. Each choice can remain unset to use ego configuration. One backend translator applies these overrides to terminal launches, MCP spawns, and resumes, replacing matching raw flags. AI Chat over ACP uses separate settings.
 
 - Claude and Codex receive process-scoped native status signals at launch by default (`--settings` / `-c notify`), independently switchable per agent. Existing user overrides take precedence and no global settings are changed.
 - **Managed workspace trust:** Claude and Codex agent-to-agent spawns accept their new working directory by default, controlled by **Accept workspace trust for managed spawns** for each agent. Codex receives a launch-only project trust override, including through custom launchers that forward arguments; Claude's startup picker is answered from its own PTY after the exact question and default **No, exit** selection appear. Normal user-opened terminals retain each CLI's trust behavior. No agent config file is rewritten.
@@ -1602,6 +1628,12 @@ All data persisted to platform config directory via Rust:
 - Error classification with backoff calculation
 
 ### 14.6 MCP & HTTP Server
+
+MCP `session output` reports continuation instructions for retained output pages.
+Text pages use scrollback positions; raw pages use source-byte positions and mask
+secrets before slicing. Local HTTP and remote MCP retain the same paging contract.
+Buffer eviction is reported; it does not create another output store.
+
 - REST API on localhost for external tool integration
 - Exposes terminal sessions, git operations, agent spawning
 - WebSocket streaming, Streamable HTTP transport
@@ -1654,6 +1686,7 @@ All data persisted to platform config directory via Rust:
 | `Cmd+1`–`Cmd+9` | Switch to tab by number |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
 | `Cmd+Ctrl+Backspace` | Return to last terminal — toggles back to the previously focused terminal, switching repo/branch if needed (`focus-last-terminal`) |
+| `Cmd+Alt+←` / `Cmd+Alt+→` | Terminal history back / forward — walks the last 10 activated terminals across repos/branches, browser-style: stepping does not reorder the history and activating another terminal drops the forward part; closed terminals leave it. The toolbar has matching arrow buttons (disabled at the ends, tooltip names the target). The Mobile Sessions screen has a sort button (Default / Recent) next to the search lens; Recent orders by the sessions last opened on that device (`history-back`, `history-forward`) |
 | `Cmd+U` | Jump to next waiting terminal — cycles to the next terminal awaiting input (agent question/error) across all repos/branches, switching context as needed; does nothing if none are waiting (`jump-waiting-terminal`) |
 | `Cmd+L` | Clear terminal |
 | `Cmd+Shift+L` | Refresh terminal (fix glyphs) |
@@ -2529,7 +2562,12 @@ agent over the Agent Client Protocol (v1). No frontend surface yet.
 - The turn stream is a dedicated Channel on the desktop and a dedicated
   WebSocket in the browser; `/events` carries only the low-frequency
   `acp-notice` wake signal
-- Prompt submissions share one FIFO per ACP session across desktop and phone;
+- Text sent during a running turn uses advertised ego v1 ACP steering and enters
+  the current query at the next provider request. Accepted steering is shown only
+  through ego’s user-message echo and is never resent. A not-busy response uses
+  the normal prompt path. Attachments, unavailable steering, and rejections
+  retain the shared queue.
+- Queued prompt submissions share one FIFO per ACP session across desktop and phone;
   queued entries are visible and removable from either view, and active-turn
   cancellation is shared. Queue snapshots and events omit image bytes.
 
@@ -2540,7 +2578,11 @@ or remote — can choose what the host runs. An empty setting refuses every
 connect rather than failing later inside a spawn.
 The optional `ego_profile` setting selects one profile in ego's user
 configuration at ACP launch. Empty adds no `--profile` argument. TUIC sends no
-profile rules or allow/deny policy in `session/new`.
+profile rules or allow/deny policy in `session/new`. A workspace's `.tuic.json`
+may select `ego_profile`; TUIC passes that name and the explicit machine selection
+as `_meta.ego.{profile,ceilingProfile}`. Ego owns restrictive composition of mode,
+sandbox and perimeter. Its returned warnings appear as AI Chat warning notices.
+Missing machine selection or missing ego acknowledgement refuses attachment.
 
 ## 27. Terminal Progress
 
@@ -2613,3 +2655,39 @@ AI Chat offers **Fork from here** beside a reply when ego advertises message-poi
 Forked AI Chat tabs label inherited history. A separator marks where the child’s own conversation begins, including after loading saved history.
 
 The AI Chat conversation picker groups fork and compaction descendants beneath their ancestors. Deleted immediate parents remain visible as disabled “Deleted conversation” rows.
+
+Closed refusal turns show one plain-text card with the agent’s existing ACP refusal text. A refusal without text shows a generic refusal message.
+
+Browser HTML and Markdown previews load local images only from open repositories and their linked worktrees, through the authenticated repository image route. Images outside those roots show “Image unavailable: outside open repositories.” Desktop asset loading is unchanged.
+Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Slice F supplies public story graph starts and history controls; D/E add independent approval and plan dispatch; graph completion alone never closes a native story.
+
+
+### Workflow story policy (slice D)
+
+The daemon runs pinned deterministic checks before accepting an independent reviewer approval. Native approval history preserves the reviewer actor and revision; the run retains the reviewed artifact and check receipts. A workflow implementer cannot approve its story after exit or claim release. Integration remains an explicit operator action.
+
+
+### Workflow plan dispatch (slice E)
+
+The owning daemon executes pinned plan coordinator and Create Stories visits through the existing proposal effects. Disjoint story children share a bounded project wave; overlapping or unknown scopes wait. A dependency starts only after its accepted revision has a current explicit Git integration receipt. Done alone and WontFix never release it. Approved children wait for an operator merge. The final plan Judge runs the pinned canonical checks and binds verification to the current plan fingerprint. Failed checks route through a bounded replan with a fresh coordinator attempt. Public start/history controls use the same graph entry point; parallel graph branches follow in slice G.
+
+- **Run incidents and next steps:** Plans and Stories run history connects recorded workflow and bound-agent failure/input outcomes to their cause, identifiers and manual next action. Session/task evidence is transient; no automatic incident retry.
+
+- **Conversation launch options:** AI Chat can give one conversation its own ego profile, executable and workspace, persisted with a dedicated peer identity. Creation and reopen are also available over HTTP.
+- **Inbox read audit:** MCP agent inbox reads log caller, owner and message ids at INFO without mail bodies.
+
+Terminal stream reconnect notices identify the session and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice.
+
+In rich mode, sessions idle for more than two hours fold into an expandable count. Backend activity timestamps determine age; busy sessions, awaiting input, unread output, selected rows and parents of visible children stay visible. Expanding preserves row order. Compact mode does not fold idle sessions.
+
+Rich working agent rows reserve two clamped intent lines. Idle, awaiting-input and error rows stay on one line with status dots; their full intent, task or prompt remains in the tooltip. Compact rows keep their one-line layout.
+
+Rich navigation keeps compact typography and padding. Branch identity and facts share one line, with names truncated and full PR/lifecycle facts in tooltips. Repository metadata disappears when PR and worktree counts are both zero. Header controls use compact sizing to protect repo names. Returned subagents fold into an expandable count independently of running work.
+
+In rich mode, ungrouped repositories with open terminals appear first, followed by an Idle section. Manual order is preserved inside each section. Idle headers start on one line; disclosure reveals their branches without changing activity or saved order. Headers count agents in the backend working state, independently of open-terminal membership.
+
+Rich active/idle sections also apply independently inside each existing repository group. Group membership and group ordering remain intact; active-only filtering hides idle-only groups and empty Idle headings.
+
+Rich merged linked worktrees with no sessions and verified lifecycle facts use a one-line summary: Merged, N uncommitted, Clean up. Live, unmerged, or unknown worktrees retain full rows. Clean up enters the existing lifecycle preflight and confirmation workflow; cancellation preserves the worktree.
+
+Rich parent terminal rows show N agents in each other repository containing live children. Clicking reveals the child group, repository and workspace, then selects a child through existing terminal navigation. Session placement and same-branch nesting stay intact; closed children disappear from summaries.

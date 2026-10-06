@@ -26,11 +26,11 @@ describe("SlashMenuOverlay", () => {
 		expect(container.querySelectorAll("button.item").length).toBe(3);
 	});
 
-	it("displays command and description text", () => {
+	it("shows the command as chip text and the description as its tooltip", () => {
 		const { container } = render(() => <SlashMenuOverlay items={ITEMS} sessionId={SESSION_ID} onSelect={() => {}} />);
 		const itemBtns = container.querySelectorAll("button.item");
 		expect(itemBtns[0].textContent).toContain("/help");
-		expect(itemBtns[0].textContent).toContain("Get help with using Claude Code");
+		expect(itemBtns[0].getAttribute("title")).toBe("Get help with using Claude Code");
 		expect(itemBtns[1].textContent).toContain("/review");
 	});
 

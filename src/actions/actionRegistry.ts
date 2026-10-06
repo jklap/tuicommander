@@ -44,6 +44,8 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
 	"prev-tab": { label: "Previous tab", category: "Terminal" },
 	"next-tab": { label: "Next tab", category: "Terminal" },
 	"focus-last-terminal": { label: "Return to last terminal", category: "Navigation" },
+	"history-back": { label: "Back to previous terminal in history", category: "Navigation" },
+	"history-forward": { label: "Forward to next terminal in history", category: "Navigation" },
 	"jump-waiting-terminal": { label: "Jump to waiting terminal", category: "Navigation" },
 
 	"zoom-in": { label: "Zoom in", category: "Zoom" },
@@ -130,6 +132,8 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"prev-tab": () => handlers.navigateTab("prev"),
 		"next-tab": () => handlers.navigateTab("next"),
 		"focus-last-terminal": handlers.focusLastTerminal,
+		"history-back": handlers.historyBack,
+		"history-forward": handlers.historyForward,
 		"jump-waiting-terminal": handlers.jumpWaitingTerminal,
 		"zoom-in": handlers.zoomIn,
 		"zoom-out": handlers.zoomOut,

@@ -23,8 +23,10 @@ describe("MarkdownTab link wire nulls (story 1352 critic)", () => {
 		mockInvoke.mockReset();
 		mdTabsStore.clearAll();
 	});
-	afterEach(() => {
+	afterEach(async () => {
 		cleanup();
+		// Let the queued focus animation frame settle before async-leak detection.
+		await new Promise((resolve) => setTimeout(resolve, 25));
 		vi.restoreAllMocks();
 		mdTabsStore.clearAll();
 	});

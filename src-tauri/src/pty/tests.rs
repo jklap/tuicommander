@@ -13480,11 +13480,13 @@ fn spawn_real_pty_session(state: &crate::state::AppState, sid: &str, rows: u16, 
     state.session_maps.sessions.insert(
         sid.to_string(),
         Mutex::new(PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master,
             _child: child,
             paused: Arc::new(AtomicBool::new(false)),
             worktree: None,
+            initial_cwd: None,
             cwd: None,
             display_name: None,
             display_name_is_custom: false,
@@ -18379,11 +18381,13 @@ fn close_pty_core_kills_agent_grandchild() {
     state.session_maps.sessions.insert(
         sid.to_string(),
         Mutex::new(PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master,
             _child: child,
             paused: Arc::new(AtomicBool::new(false)),
             worktree: None,
+            initial_cwd: None,
             cwd: None,
             display_name: None,
             display_name_is_custom: false,
@@ -18807,11 +18811,13 @@ fn spawn_short_session(state: &crate::state::AppState, sid: &str) {
     state.session_maps.sessions.insert(
         sid.to_string(),
         Mutex::new(PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master,
             _child: child,
             paused: Arc::new(AtomicBool::new(false)),
             worktree: None,
+            initial_cwd: None,
             cwd: None,
             display_name: None,
             display_name_is_custom: false,

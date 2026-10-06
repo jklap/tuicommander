@@ -177,6 +177,107 @@ describe("useWorktreeSwitchPrompt — worktree-created", () => {
 		return handleBranchSelect;
 	}
 
+	// Catches: moving siblings, a foreign caller, or the creator of an explicit spawn.
+	it.each([
+		["eligible", REPO, false, "creator"],
+		["active", REPO, false, "creator"],
+		["spawned", REPO, true, "creator"],
+		["foreign", "/other", false, "creator"],
+		["missing", REPO, false, null],
+	] as const)("worktree_creation_moves_only_eligible_creator (%s)", async (_case, ownerRepo, spawn, caller) => {
+		await testInScopeAsync(async () => {
+			repositoriesStore.add({ path: REPO, displayName: "repo" });
+			repositoriesStore.setWorkspace(REPO, "main", { worktreePath: REPO, isMain: true });
+			if (ownerRepo !== REPO) {
+				repositoriesStore.add({ path: ownerRepo, displayName: "other" });
+				repositoriesStore.setWorkspace(ownerRepo, "main", { worktreePath: ownerRepo, isMain: true });
+			}
+			const creator = terminalsStore.add(makeTerminal({ sessionId: "creator", cwd: ownerRepo }));
+			const sibling = terminalsStore.add(makeTerminal({ sessionId: "sibling", cwd: REPO }));
+			terminalsStore.setRepoPath(creator, ownerRepo);
+			terminalsStore.setRepoPath(sibling, REPO);
+			repositoriesStore.addTerminalToWorkspace(ownerRepo, "main", creator);
+			repositoriesStore.addTerminalToWorkspace(REPO, "main", sibling);
+			terminalsStore.setActive(_case === "active" ? creator : sibling);
+			repositoriesStore.setActive(REPO);
+			repositoriesStore.setActiveWorkspace(REPO, "main");
+			useWorktreeSwitchPrompt({ handleBranchSelect: vi.fn(), closeTerminalsForBranch: vi.fn() });
+			await Promise.resolve();
+			handlers.get("worktree-created")?.({
+				payload: {
+					repo_path: REPO,
+					workspace_id: BRANCH,
+					branch: BRANCH,
+					worktree_path: WORKTREE,
+					kind: "worktree",
+					creator_session: caller,
+					spawn_session: spawn,
+				},
+			});
+			const eligible = ownerRepo === REPO && !spawn && caller !== null;
+			expect(repositoriesStore.findOwnerForTerminal(creator)?.workspaceId).toBe(eligible ? BRANCH : "main");
+			expect(repositoriesStore.findOwnerForTerminal(creator)?.repoPath).toBe(ownerRepo);
+			expect(repositoriesStore.findOwnerForTerminal(sibling)?.workspaceId).toBe("main");
+			expect(terminalsStore.state.activeId).toBe(_case === "active" ? creator : sibling);
+			expect(repositoriesStore.get(REPO)?.activeWorkspaceId).toBe(_case === "active" ? BRANCH : "main");
+			expect(terminalsStore.get(creator)?.cwd).toBe(ownerRepo);
+			expect(mockInvoke).not.toHaveBeenCalledWith("write_pty", expect.anything());
+		});
+	});
+
+	// Catches: a declaration shown as a new-worktree offer, duplicated placement on
+	// retries, a removed saved snapshot, or cwd reconciliation undoing the declaration.
+	it("declared_worktree_moves_only_the_caller_without_a_creation_offer", async () => {
+		await testInScopeAsync(async () => {
+			repositoriesStore.add({ path: REPO, displayName: "repo" });
+			repositoriesStore.setWorkspace(REPO, "main", { worktreePath: REPO, isMain: true });
+			const creator = terminalsStore.add(makeTerminal({ sessionId: "declaring-caller", cwd: REPO }));
+			const sibling = terminalsStore.add(makeTerminal({ sessionId: "sibling", cwd: REPO }));
+			terminalsStore.setRepoPath(creator, REPO);
+			terminalsStore.setRepoPath(sibling, REPO);
+			repositoriesStore.addTerminalToWorkspace(REPO, "main", creator);
+			repositoriesStore.addTerminalToWorkspace(REPO, "main", sibling);
+			terminalsStore.setActive(sibling);
+			repositoriesStore.setActiveWorkspace(REPO, "main");
+			useWorktreeSwitchPrompt({ handleBranchSelect: vi.fn(), closeTerminalsForBranch: vi.fn() });
+			await Promise.resolve();
+			const event = {
+				payload: {
+					repo_path: REPO,
+					workspace_id: BRANCH,
+					branch: BRANCH,
+					worktree_path: WORKTREE,
+					kind: "worktree",
+					creator_session: "declaring-caller",
+					spawn_session: false,
+				},
+			};
+			handlers.get("session-worktree-declared")?.(event);
+			repositoriesStore.setWorkspace(REPO, BRANCH, {
+				savedTerminals: [{ name: "Caller", cwd: REPO, fontSize: 14, agentType: "codex", tuicSession: "stable-caller" }],
+			});
+			handlers.get("session-worktree-declared")?.(event);
+			const { reconcileTerminalOwnership } = await import("../../stores/terminalOwnership");
+			const { createTerminalWorktreeCoordinator } = await import("../../hooks/git/createTerminalWorktreeCoordinator");
+			reconcileTerminalOwnership();
+			const coordinator = createTerminalWorktreeCoordinator({
+				refreshBranches: vi.fn().mockResolvedValue(undefined),
+				writePty: vi.fn().mockResolvedValue(undefined),
+			});
+			vi.useFakeTimers();
+			coordinator.handleTerminalCwdChange(creator, REPO);
+			await vi.advanceTimersByTimeAsync(300);
+			coordinator.cancelCwdTracking(creator);
+			vi.useRealTimers();
+			expect(terminalsStore.get(creator)?.cwd).toBe(REPO);
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH].terminals).toEqual([creator]);
+			expect(repositoriesStore.get(REPO)?.workspaces[BRANCH].savedTerminals).toHaveLength(1);
+			expect(repositoriesStore.findOwnerForTerminal(sibling)?.workspaceId).toBe("main");
+			expect(repositoriesStore.get(REPO)?.activeWorkspaceId).toBe("main");
+			expect(activityStore.getForSection("worktrees")).toHaveLength(0);
+			expect(mockInvoke).not.toHaveBeenCalledWith("write_pty", expect.anything());
+		});
+	});
 	// Catches: an MCP/HTTP worktree event covering the input with an unsolicited toast.
 	it("1397 keeps backend-created worktrees in the bell without a toast", async () => {
 		await testInScopeAsync(async () => {

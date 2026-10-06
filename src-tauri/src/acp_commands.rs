@@ -8,8 +8,8 @@
 //!
 //! The one thing this layer does own is process authority. `connect` and
 //! `reconnect` read the ego executable from configuration and pass it down; no
-//! argument can name a binary, so no caller over IPC or HTTP can choose what
-//! this host launches.
+//! argument on these shared connections names a binary. Conversation-specific
+//! launch authority lives in `acp_chat` and uses a dedicated peer.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,8 +23,8 @@ use crate::acp::{
     AcpAttachKind, AcpAttachmentSnapshot, AcpClientError, AcpConnectRequest, AcpConnectionId,
     AcpConnectionSettlement, AcpConnectionSnapshot, AcpDetachKind, AcpEventStream,
     AcpHostRequestId, AcpInteractionSettlement, AcpPendingInteraction, AcpReconnectRequest,
-    AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoAcpConfig, EgoCompactRequest,
-    EgoCompactResponse, EgoHoldRequest, EgoHoldResponse,
+    AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoAcpConfig, EgoCompactResponse,
+    EgoHoldRequest, EgoHoldResponse,
 };
 
 /// The one executable this host may launch for ACP, as configured right now.
@@ -295,6 +295,18 @@ pub(crate) fn acp_subscribe(
     Ok(())
 }
 
+pub(crate) async fn session_new(
+    state: &AppState,
+    connection_id: AcpConnectionId,
+    authority: AcpSessionAuthority,
+) -> Result<AcpAttachmentSnapshot, AcpClientError> {
+    let machine_profile = state.config.read().ego_profile.clone();
+    state
+        .acp
+        .new_session_for_repo(connection_id, authority, &machine_profile)
+        .await
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn acp_session_new(
@@ -302,7 +314,7 @@ pub(crate) async fn acp_session_new(
     connection_id: AcpConnectionId,
     authority: AcpSessionAuthority,
 ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-    state.acp.new_session(connection_id, authority).await
+    session_new(&state, connection_id, authority).await
 }
 
 #[cfg(feature = "desktop")]
@@ -359,16 +371,7 @@ pub(crate) async fn acp_session_fork(
     authority: AcpSessionAuthority,
     at_message_id: Option<String>,
 ) -> Result<AcpAttachmentSnapshot, AcpClientError> {
-    state
-        .acp
-        .attach_at_message(
-            connection_id,
-            AcpAttachKind::Fork,
-            session_id,
-            authority,
-            at_message_id,
-        )
-        .await
+    crate::acp_chat::fork(&state, connection_id, session_id, authority, at_message_id).await
 }
 
 #[cfg(feature = "desktop")]
@@ -502,16 +505,7 @@ pub(crate) async fn acp_session_compact(
     session_id: v1::SessionId,
     request_id: uuid::Uuid,
 ) -> Result<EgoCompactResponse, AcpClientError> {
-    state
-        .acp
-        .compact(
-            connection_id,
-            EgoCompactRequest {
-                session_id,
-                request_id,
-            },
-        )
-        .await
+    crate::acp_chat::compact(&state, connection_id, session_id, request_id).await
 }
 
 #[cfg(feature = "desktop")]

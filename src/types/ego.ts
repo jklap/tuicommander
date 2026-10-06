@@ -38,6 +38,37 @@ export interface EgoProviders {
 	providers: EgoProvider[];
 }
 
+export type EgoRootAccess = "read" | "read-write";
+
+export interface EgoRootsEdit {
+	rootDir: string;
+	rootAccess: EgoRootAccess;
+	readAllowlist: string;
+	writableDirs: string;
+}
+
+export interface EgoEffectivePerimeter {
+	workspace: string;
+	roots: { path: string; access: EgoRootAccess; source: string }[];
+	sandbox: string;
+	sandbox_source: string;
+	backend: string;
+	capabilities: unknown;
+	capabilities_reason?: string;
+	probe_evidence?: string;
+	network: string;
+	warnings: string[];
+}
+
+export interface EgoPerimeterView {
+	profile: string | null;
+	roots: EgoRootsEdit;
+	networkEnabled: boolean;
+	execEnforcement: "enforcedByOs" | "promptOnly" | "notChecked";
+	effective: EgoEffectivePerimeter;
+	preview: string;
+}
+
 export type EgoCliErrorCode = "notConfigured" | "invalidInput" | "launchFailed" | "commandFailed" | "unreadableOutput";
 
 /** A failure of the ego command line, carrying what it printed. */

@@ -1412,6 +1412,34 @@ describe("initApp", () => {
 		expect(branch?.terminals.length).toBe(1);
 	});
 
+	// Catches: reconnect filing a declared worktree agent under its unchanged shell cwd.
+	it("restores declared worktree placement without changing shell cwd", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo__wt/feature" });
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{
+						session_id: "declared-survivor",
+						cwd: "/repo",
+						worktree_path: "/repo__wt/feature",
+						tuic_session: "stable-caller",
+					},
+					{ session_id: "sibling-survivor", cwd: "/repo" },
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+		await initApp(deps);
+		const declared = terminalsStore.findBySessionId("declared-survivor")!;
+		const sibling = terminalsStore.findBySessionId("sibling-survivor")!;
+		expect(repositoriesStore.findOwnerForTerminal(declared)?.workspaceId).toBe("feature");
+		expect(repositoriesStore.findOwnerForTerminal(sibling)?.workspaceId).toBe("main");
+		expect(terminalsStore.get(declared)?.cwd).toBe("/repo");
+		expect(terminalsStore.get(declared)?.tuicSession).toBe("stable-caller");
+	});
+
 	it("restores active branch with surviving sessions", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });

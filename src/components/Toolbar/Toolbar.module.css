@@ -137,6 +137,14 @@
   color: var(--fg-primary);
 }
 
+.filterToggle:disabled,
+.filterToggle:disabled:hover {
+  background: transparent;
+  color: var(--fg-secondary);
+  opacity: 0.35;
+  cursor: default;
+}
+
 /* Repo filter icon — loud accent state when "active only" is engaged so it is
    obvious repos are being filtered. */
 .filterToggleActive,

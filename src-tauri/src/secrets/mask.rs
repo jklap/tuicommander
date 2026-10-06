@@ -70,7 +70,7 @@ pub(crate) fn mask(text: &str, needles: &[Zeroizing<String>]) -> String {
     mask_bytes(text.as_bytes(), needles)
 }
 
-pub(crate) fn mask_bytes(bytes: &[u8], needles: &[Zeroizing<String>]) -> String {
+fn marked_bytes(bytes: &[u8], needles: &[Zeroizing<String>]) -> Vec<bool> {
     let mut marked = vec![false; bytes.len()];
     let (flat, starts, ends) = flatten(bytes);
     let (decoded, decoded_starts, decoded_ends) = url_decode(&flat, &starts, &ends);
@@ -98,6 +98,26 @@ pub(crate) fn mask_bytes(bytes: &[u8], needles: &[Zeroizing<String>]) -> String 
         );
         mark_matches(&base64, &base64_starts, &base64_ends, &clean, &mut marked);
     }
+    marked
+}
+
+/// Full-context matching with stable source-byte positions for terminal pages.
+pub(crate) fn mask_preserving_offsets(
+    bytes: &[u8],
+    needles: &[Zeroizing<String>],
+) -> Zeroizing<Vec<u8>> {
+    let marked = marked_bytes(bytes, needles);
+    Zeroizing::new(
+        bytes
+            .iter()
+            .zip(marked)
+            .map(|(byte, hidden)| if hidden { b'*' } else { *byte })
+            .collect(),
+    )
+}
+
+pub(crate) fn mask_bytes(bytes: &[u8], needles: &[Zeroizing<String>]) -> String {
+    let marked = marked_bytes(bytes, needles);
     let mut result = Zeroizing::new(Vec::with_capacity(bytes.len()));
     let mut redacted = false;
     for (i, byte) in bytes.iter().enumerate() {

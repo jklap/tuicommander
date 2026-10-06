@@ -1,4 +1,3 @@
-import { convertFileSrc } from "@tauri-apps/api/core";
 import AnsiToHtml from "ansi-to-html";
 // DOMPurify's template scrubbing relies on a complete NodeIterator implementation.
 // The component tests therefore use jsdom instead of the suite-wide happy-dom
@@ -10,7 +9,7 @@ import { type Component, createEffect, createMemo, Index, onCleanup, Show } from
 import { appLogger } from "../../stores/appLogger";
 import { type MarkdownSegment, type StreamSplit, splitStream } from "../../utils/incrementalMarkdown";
 import { handleOpenUrl } from "../../utils/openUrl";
-import { isAbsolutePath } from "../../utils/pathUtils";
+import { rewriteLocalImages } from "../../utils/repoImageUrl";
 import { stripAnsi } from "../../utils/stripAnsi";
 import {
 	findTweakCommentBlocks,
@@ -323,18 +322,8 @@ function renderMarkdownSegment(
 		const withSentinels = injectTweakSentinels(cleaned);
 		let html = marked.parse(withSentinels, { async: false }) as string;
 
-		// 4. Rewrite relative image src attributes to loadable asset:// URLs.
-		const baseDir = opts.baseDir;
-		if (baseDir || opts.imageSrc) {
-			html = html.replace(
-				/(<img\b[^>]*\ssrc=")(?!https?:\/\/|\/\/|data:|asset:\/\/)([^"]+)"/gi,
-				(_, prefix, relativePath) => {
-					if (opts.imageSrc) return `${prefix}${opts.imageSrc(relativePath)}"`;
-					const local = isAbsolutePath(relativePath) ? relativePath : `${baseDir}/${relativePath}`;
-					return `${prefix}${convertFileSrc(local)}"`;
-				},
-			);
-		}
+		// 4. Resolve local images through the active transport and repository boundary.
+		html = rewriteLocalImages(html, opts.baseDir, opts.imageSrc);
 
 		// 5. Make GFM task-list checkboxes interactive and inject source-line metadata.
 		//    Sequential checkbox index in the HTML maps to lineMap[domIndex]. Both

@@ -636,6 +636,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	// The idle-close control is inside collapsed per-agent cards. A search result
 	// cannot choose and expand a card, so it has no stable scroll target here.
 	{ tab: "agents", section: "Agents" },
+	{ tab: "agents", section: "ego permissions" },
 	{ tab: "agents", section: "Agents", label: "Show agent intent as tab title" },
 	{ tab: "agents", section: "Agents", label: "Show suggested follow-up actions" },
 	{
@@ -645,9 +646,22 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		expert: true,
 		configKey: "app.progress_tracking",
 	},
+	{ tab: "agents", section: "ego permissions", label: "Permissions" },
+	{ tab: "agents", section: "ego permissions", label: "Filesystem sandbox" },
 	// tabs/AiChatTab.tsx — the inlined former ProvidersTab content, in file order.
+	{ tab: "ai-chat", section: "Perimeter", sectionKey: "perimeter.heading" },
 	{ tab: "ai-chat", section: "Default Model", sectionKey: "providers.heading.defaultModel" },
 	{ tab: "ai-chat", section: "Providers", sectionKey: "providers.heading.providers" },
+	{ tab: "ai-chat", section: "Perimeter", label: "Root directory", labelKey: "perimeter.label.rootDir" },
+	{ tab: "ai-chat", section: "Perimeter", label: "Root access", labelKey: "perimeter.label.rootAccess" },
+	{ tab: "ai-chat", section: "Perimeter", label: "Read allowlist", labelKey: "perimeter.label.readAllowlist" },
+	{
+		tab: "ai-chat",
+		section: "Perimeter",
+		label: "Extra writable directories",
+		labelKey: "perimeter.label.writableDirs",
+	},
+	{ tab: "ai-chat", section: "Perimeter", label: "Network enabled", labelKey: "perimeter.label.network" },
 	{ tab: "ai-chat", section: "Default Model", label: "Default model", labelKey: "providers.label.defaultModel" },
 ];
 

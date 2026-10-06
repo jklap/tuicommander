@@ -19,6 +19,8 @@ use crate::worktree::{
     WorktreeConfig, WorktreeResult, create_worktree_with_stale_recovery, remove_worktree_internal,
 };
 
+#[cfg(all(test, unix))]
+mod child_reaping_tests;
 #[cfg(feature = "desktop")]
 mod commands;
 #[cfg(all(test, unix))]
@@ -8116,6 +8118,52 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
 // They need an owner-scoped lifetime, not a session-scoped one: tie them to a
 // running residency bound.
 
+/// Remove the live session and transfer any pending child wait out of its maps.
+fn remove_pty_session(session_id: &str, state: &AppState) {
+    let Some((_, session)) = state.session_maps.sessions.remove(session_id) else {
+        return;
+    };
+    state
+        .metrics
+        .active_sessions
+        .fetch_sub(1, Ordering::Relaxed);
+    release_pty_session(session_id, session.into_inner());
+}
+
+/// Release terminal resources without abandoning an unreaped child.
+fn release_pty_session(session_id: &str, session: PtySession) {
+    // Moving only the child drops the master, writer and session metadata here.
+    // EOF can precede process exit: dropping a std::process::Child does not wait
+    // for it, and one try_wait(None) must not abandon its eventual zombie.
+    let mut child = session._child;
+    // Drop terminal handles before spawning the waiter.
+    drop(session.master);
+    drop(session.writer);
+    match child.try_wait() {
+        Ok(Some(_)) => return,
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(source = "pty", session_id, %error, "Poll removed PTY child failed; waiting for it");
+        }
+    }
+    let session_id = session_id.to_string();
+    std::thread::spawn(move || {
+        // No AppState, map guard, session lock or PTY handle survives here. A
+        // process that closed its terminal but is still alive cannot stall other
+        // sessions or keep its terminal buffers resident while we wait for it.
+        loop {
+            match child.wait() {
+                Ok(_) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    tracing::warn!(source = "pty", session_id, %error, "Wait for removed PTY child failed");
+                    break;
+                }
+            }
+        }
+    });
+}
+
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
@@ -8131,12 +8179,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
         );
     }
     flush_open_intent_before_session_removal(session_id, state);
-    if state.session_maps.sessions.remove(session_id).is_some() {
-        state
-            .metrics
-            .active_sessions
-            .fetch_sub(1, Ordering::Relaxed);
-    }
+    remove_pty_session(session_id, state);
     remove_live_session_state(session_id, state);
     remove_post_mortem_session_state(session_id, state);
 }
@@ -9730,6 +9773,11 @@ fn apply_claimed_injection_outcome(
                     .pending_initial_prompts
                     .remove(session_id)
                     .is_some_and(|(_, pending)| pending.notified);
+                if let Some(session) = state.session_maps.sessions.get(session_id)
+                    && let Some(receipt) = &mut session.lock().launch_receipt
+                {
+                    receipt.mark_brief_sent();
+                }
                 if notified {
                     notify_initial_prompt_delivered(state, session_id);
                 }
@@ -10587,12 +10635,7 @@ pub(crate) fn mark_session_exited(session_id: &str, state: &Arc<AppState>) {
             .insert(session_id.to_string(), code);
     }
     flush_open_intent_before_session_removal(session_id, state);
-    if state.session_maps.sessions.remove(session_id).is_some() {
-        state
-            .metrics
-            .active_sessions
-            .fetch_sub(1, Ordering::Relaxed);
-    }
+    remove_pty_session(session_id, state);
 
     // Notify orchestrator (if any) that this agent has exited.
     let exit_code = state
@@ -12276,8 +12319,7 @@ pub(crate) fn close_pty_core_with_reason(
         None
     };
 
-    // Drop session to release file handles (forcibly kills if still running)
-    drop(session);
+    release_pty_session(session_id, session);
 
     worktree_to_cleanup
 }
@@ -12332,7 +12374,7 @@ pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
     }
 
     tombstone_transient_cleanup(session_id, state);
-    drop(session);
+    release_pty_session(session_id, session);
     true
 }
 

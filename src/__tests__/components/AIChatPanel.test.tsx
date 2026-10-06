@@ -91,6 +91,7 @@ vi.mock("../../stores/settings", async () => {
 // the transcript projection and every reducer between them are the real ones,
 // so a test that passes proves the panel reads what the wire actually carries.
 const client = vi.hoisted(() => ({
+	openConversation: vi.fn(),
 	connect: vi.fn(),
 	reconnect: vi.fn(),
 	disconnect: vi.fn(),
@@ -322,6 +323,58 @@ beforeEach(() => {
 afterEach(() => {
 	cleanup();
 	cleanupToasts();
+});
+
+describe("AIChatPanel: repository profile warnings", () => {
+	// Catches an authoritative ego clamp silently discarded by the chat host.
+	it("shows recorded ego clamp warnings once for the attached conversation", async () => {
+		const recorded = JSON.parse(
+			readFileSync(resolve(process.cwd(), "src-tauri/tests/fixtures/acp/ego-profile-ceiling.json"), "utf8"),
+		);
+		client.newSession.mockImplementation(async () => {
+			acpStore.applySnapshot(
+				snapshot({
+					attachments: [
+						attachment({
+							profileWarnings: recorded._meta.ego.warnings,
+						}),
+					],
+				}),
+			);
+			return SESSION;
+		});
+		await renderPanel();
+		await settle();
+		expect(
+			toastsStore.toasts
+				.filter((toast) => toast.title === "Repository ego profile")
+				.map((toast) => ({ message: toast.message, level: toast.level })),
+		).toEqual([
+			{
+				message:
+					"mode yolo exceeds profile ceiling default; using default\nsandbox off exceeds profile ceiling workspace; using workspace",
+				level: "warn",
+			},
+		]);
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						profileWarnings: recorded._meta.ego.warnings,
+					}),
+				],
+			}),
+		);
+		await settle();
+		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(1);
+	});
+
+	// Catches ordinary sessions getting a spurious profile warning.
+	it("keeps sessions without repository profile warnings quiet", async () => {
+		await renderPanel();
+		await settle();
+		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(0);
+	});
 });
 
 describe("AIChatPanel: the frame it keeps", () => {
@@ -3180,5 +3233,91 @@ describe("AIChatPanel: lineage picker", () => {
 		expect(rows[1].disabled).toBe(true);
 		expect(rows[2].textContent).toContain("    ");
 		expect(rows[2].textContent).toContain("Grandchild");
+	});
+});
+
+describe("conversation launch overrides", () => {
+	// Catches: creating a coordinator chat changes settings or sends its next turn through the daily connection.
+	it("opens options on a dedicated conversation and returns default chats to their connection", async () => {
+		const view = await renderPanel();
+		const customConnection = "01932d5e-0000-7000-8000-0000000000c2";
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {}, ai_chat_launches: { [SECOND_SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		client.openConversation.mockImplementation(async () => {
+			const connection = snapshot({
+				connectionId: customConnection,
+				attachments: [attachment({ sessionId: SECOND_SESSION })],
+			});
+			acpStore.applySnapshot(connection);
+			acpStore.markStreaming(customConnection);
+			return { connection, sessionId: SECOND_SESSION, launch };
+		});
+		(view.container.querySelector('button[aria-label="New conversation with options"]') as HTMLButtonElement).click();
+		await settle();
+		for (const [label, value] of [
+			["Ego profile", "coordinator"],
+			["Workspace", "/srv/observer"],
+			["Ego executable", "/opt/observer/ego"],
+		]) {
+			const input = view.container.querySelector(`input[aria-label="${label}"]`) as HTMLInputElement;
+			input.value = value;
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		}
+		(
+			[...view.container.querySelectorAll("button")].find(
+				(button) => button.textContent === "Create",
+			) as HTMLButtonElement
+		).click();
+		await settle();
+		expect(client.openConversation).toHaveBeenCalledWith({
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			executable: "/opt/observer/ego",
+		});
+		expect(view.container.textContent).toContain("coordinator · /srv/observer · /opt/observer/ego");
+		await typeAndSend(view.container, "observe");
+		expect(client.prompt).toHaveBeenLastCalledWith(customConnection, SECOND_SESSION, "observe", [], ROOT);
+		(view.container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		await typeAndSend(view.container, "daily");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "daily", [], ROOT);
+		expect(settings.egoExecutable).toBe("/usr/local/bin/ego");
+	});
+
+	// Catches: a webview reload restores a custom tab on the global connection and loses its launch options.
+	it("reopens a persisted custom tab without starting the default ego", async () => {
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		aiChatTabs.add("global", SECOND_SESSION);
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_launches: { [SECOND_SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		client.openConversation.mockImplementation(async () => {
+			const connection = snapshot({ attachments: [attachment({ sessionId: SECOND_SESSION })] });
+			acpStore.applySnapshot(connection);
+			acpStore.markStreaming(CONNECTION);
+			return { connection, sessionId: SECOND_SESSION, launch };
+		});
+		const view = renderIdlePanel();
+		await settle();
+		await typeAndSend(view.container, "resume observation");
+		expect(client.openConversation).toHaveBeenCalledWith({ sessionId: SECOND_SESSION });
+		expect(client.connect).not.toHaveBeenCalled();
+		expect(view.container.textContent).toContain("coordinator · /srv/observer · /opt/observer/ego");
 	});
 });

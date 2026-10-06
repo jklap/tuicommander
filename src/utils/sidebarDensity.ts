@@ -61,8 +61,8 @@ export function countSidebarRows(
 }
 
 /**
- * A finger always gets the rich layout (its rows carry the 44px targets, see the
- * pointer media query in Sidebar.module.css), however many repos there are.
+ * A finger always gets the rich layout, however many repos there are.
+ * Rich navigation uses compact-sized rows; working agents retain intent details.
  * Otherwise a short list is shown rich and a long one compact. A forced mode wins.
  */
 export function sidebarDensity(

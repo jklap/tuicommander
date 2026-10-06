@@ -8,6 +8,7 @@ use serde_json::Value;
 const EGO_PAUSE_METHOD: &str = "_ego/pause";
 const EGO_RESUME_METHOD: &str = "_ego/resume";
 const EGO_COMPACT_METHOD: &str = "_ego/compact";
+const EGO_STEER_METHOD: &str = "_ego/steer";
 
 /// The extension metadata ego attaches to its advertised capabilities.
 ///
@@ -786,6 +787,8 @@ pub struct AcpAttachmentSnapshot {
     pub cwd: PathBuf,
     pub additional_directories: Vec<PathBuf>,
     pub config_options: Vec<v1::SessionConfigOption>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile_warnings: Vec<String>,
     pub usage: Option<AcpUsageSnapshot>,
     pub active_turn: Option<AcpTurnSnapshot>,
     pub queued_prompts: Vec<AcpQueuedPrompt>,
@@ -1211,6 +1214,7 @@ pub struct AcpCapabilitySnapshot {
     /// One version for `_ego/pause` and `_ego/resume`, which arrive together.
     pub ego_hold_version: Option<u32>,
     pub ego_compact_version: Option<u32>,
+    pub ego_steer_version: Option<u32>,
     hold_availability: ExtensionAvailability,
     compact_availability: ExtensionAvailability,
 }
@@ -1304,6 +1308,17 @@ pub fn capability_snapshot(
         client_boolean_config: false,
         ego_hold_version: exact_extension_version(hold),
         ego_compact_version: exact_extension_version(compact),
+        ego_steer_version: ego_extensions(agent)
+            .and_then(|ego| ego.get("steer"))
+            .filter(|steer| {
+                steer.get("version").and_then(Value::as_u64) == Some(1)
+                    && steer.get("method").and_then(Value::as_str) == Some(EGO_STEER_METHOD)
+                    && steer
+                        .get("contentTypes")
+                        .and_then(Value::as_array)
+                        .is_some_and(|types| types.iter().any(|kind| kind.as_str() == Some("text")))
+            })
+            .map(|_| 1),
         hold_availability: hold,
         compact_availability: compact,
     })

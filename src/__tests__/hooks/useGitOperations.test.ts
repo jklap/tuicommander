@@ -779,6 +779,81 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.worktreePath).toBe("/repo/wt");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("unmerged commits"));
 		});
+		// Catches: a rejected confirmation retaining the lock and suppressing a later removal.
+		it("rejected_confirmation_then_second_removal_proceeds", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
+			const dialogError = new Error("confirmation failed");
+			mockDialogs.confirmRemoveWorktree.mockRejectedValueOnce(dialogError);
+
+			await expect(gitOps.handleRemoveWorkspace("/repo", "feature")).rejects.toBe(dialogError);
+
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.terminals).toEqual([id]);
+			expect(terminalsStore.get(id)).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.isRemoving).toBeFalsy();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledTimes(2);
+			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
+		// Catches: synchronous dialog failures after successful preflight leaking the removal lock.
+		it("throwing_confirmation_after_preflight_preserves_workspace_and_permits_retry", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
+			const dialogError = new Error("dialog threw");
+			mockDialogs.confirmRemoveWorktree.mockImplementationOnce(() => {
+				expect(mockRepo.getWorkspaceLifecycle).toHaveBeenCalledWith("/repo", "feature");
+				throw dialogError;
+			});
+
+			await expect(gitOps.handleRemoveWorkspace("/repo", "feature")).rejects.toBe(dialogError);
+
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.terminals).toEqual([id]);
+			expect(terminalsStore.get(id)).toBeDefined();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledTimes(2);
+			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
+		// Catches: cancellation closing terminals or retaining the lock so a later removal is ignored.
+		it("false_confirmation_preserves_workspace_and_terminals_and_permits_retry", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
+			mockDialogs.confirmRemoveWorktree.mockResolvedValueOnce(false);
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.terminals).toEqual([id]);
+			expect(terminalsStore.get(id)).toBeDefined();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledTimes(2);
+			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
 		it("removes worktree branch after confirmation, passing deleteBranchOnRemove setting", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
@@ -2572,14 +2647,25 @@ describe("useGitOperations", () => {
 			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
 		});
 
-		it("does not remove when user cancels worktree confirmation", async () => {
+		// Catches: destructive cleanup deleting dirty files or closing sessions after cancellation.
+		it("dirty_worktree_cleanup_cancellation_preserves_files_and_sessions", async () => {
 			mockDialogs.confirmRemoveWorktree.mockResolvedValue(false);
+			const lifecycle = {
+				dirtyFiles: 35,
+				dirtyFingerprint: "dirty-worktree",
+				commitStatus: "merged",
+				removalSafety: "destructive",
+			};
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce(lifecycle);
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", lifecycle, true);
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
 		});
 	});
 
