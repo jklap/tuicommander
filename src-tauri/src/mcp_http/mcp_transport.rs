@@ -1247,8 +1247,8 @@ const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
         "Read the guide for developing TUICommander plugins.",
     ),
     (
-        "ego",
-        "Inspect and configure ego launch permissions and workspace access.",
+        "workflow_run",
+        "Start workflow graphs and inspect their execution history.",
     ),
     ("config", "Read and update application settings."),
     ("debug", "Inspect application logs and runtime state."),
