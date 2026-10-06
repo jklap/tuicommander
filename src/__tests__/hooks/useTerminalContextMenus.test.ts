@@ -66,6 +66,7 @@ function createOptions(available: Array<{ type: string }> = []) {
 		splitPanes: { handleSplit: vi.fn() },
 		terminalLifecycle: { copyFromTerminal: vi.fn(), pasteToTerminal: vi.fn(), clearTerminal: vi.fn() },
 		closeActiveTabOrPane: vi.fn(),
+		openPromptInspector: vi.fn(),
 		setTermRenameDefault: vi.fn(),
 		setTermRenamePromptVisible: vi.fn(),
 	};

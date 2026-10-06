@@ -872,6 +872,7 @@ pub(super) fn refresh_mcp_session(
             state.mcp.sessions.insert(
                 mcp_sid.to_string(),
                 crate::state::McpSessionMeta {
+                    prompt_instructions: None,
                     last_activity: std::time::Instant::now(),
                     is_claude_code,
                     requires_meta_tools: false,
@@ -4747,6 +4748,13 @@ fn handle_agent_with_parent_cwd(
                     ),
                 );
             }
+            let launch_receipt = crate::prompt_receipt::PromptReceipt::capture(
+                &effective_prompt,
+                "TUIC managed spawn / build_spawn_prompt",
+                &launch_args,
+                effective_cwd.as_deref(),
+                deferred_initial_prompt.is_some(),
+            );
             for arg in launch_args {
                 cmd.arg(arg);
             }
@@ -4845,6 +4853,7 @@ fn handle_agent_with_parent_cwd(
                 state,
                 &session_id,
                 PtySession {
+                    launch_receipt: Some(launch_receipt),
                     writer: Arc::new(Mutex::new(writer)),
                     master: pair.master,
                     _child: child,
@@ -4863,6 +4872,7 @@ fn handle_agent_with_parent_cwd(
                 None,
                 published_parent.clone(),
             );
+            crate::prompt_receipt::adopt_mcp_instructions(state, &session_id);
             let cwd_str = effective_cwd.clone();
 
             #[cfg(feature = "desktop")]
@@ -7810,6 +7820,7 @@ pub(super) async fn mcp_post(
                 state.mcp.sessions.insert(
                     session_id.clone(),
                     crate::state::McpSessionMeta {
+                        prompt_instructions: None,
                         last_activity: now,
                         is_claude_code,
                         requires_meta_tools,
@@ -7853,6 +7864,7 @@ pub(super) async fn mcp_post(
             let instructions =
                 build_mcp_instructions_for_mode(&state, client_name, effective_collapse);
 
+            crate::prompt_receipt::record_mcp_instructions(&state, &session_id, &instructions);
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -8209,6 +8221,7 @@ pub(super) async fn mcp_get(
         state.mcp.sessions.insert(
             sid.clone(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: is_cc_ua,
                 requires_meta_tools: false,
@@ -11363,6 +11376,7 @@ mod tests {
         state.session_maps.sessions.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
@@ -11376,6 +11390,175 @@ mod tests {
                 shell: "true".to_string(),
             }),
         );
+    }
+
+    // Catches: claiming no MCP initialize was captured for an existing PTY
+    // solely because its launch brief is unavailable.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prompt_receipt_does_not_hide_served_initialize_without_a_launch_brief() {
+        let state = test_state();
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
+        let mut headers = HeaderMap::new();
+        headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+        let response = mcp_post(
+            State(Arc::clone(&state)),
+            ConnectInfo("127.0.0.1:1".parse().unwrap()),
+            headers,
+            Json(serde_json::json!({
+                "jsonrpc":"2.0", "id":1, "method":"initialize", "params":{
+                    "protocolVersion":"2025-06-18",
+                    "clientInfo":{"name":"tuic-bridge","version":"test"}
+                }
+            })),
+        )
+        .await;
+        let body = axum::body::to_bytes(response.into_response().into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        let wire: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let served = wire["result"]["instructions"].as_str().unwrap();
+        let receipt = crate::prompt_receipt::read_receipt(&state, TEST_UUID_A).unwrap();
+        let section = receipt
+            .sections
+            .iter()
+            .find(|section| section.status == "served")
+            .expect("served MCP instructions must remain observable without a launch brief");
+        assert_eq!(section.text, crate::redaction::redact_secrets(served));
+        assert_eq!(section.bytes, Some(served.len() as u64));
+        assert!(receipt.sections.iter().any(|section| {
+            section.label == "Launch receipt unavailable" && section.status == "not_observable"
+        }));
+    }
+
+    // Catches: persisting the pre-preamble workflow/user brief instead of the
+    // final managed argv, or rebuilding system instructions from later settings.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prompt_receipt_records_final_managed_preamble_and_explicit_instruction_args() {
+        let state = test_state();
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        state
+            .mcp
+            .to_session
+            .insert("receipt-parent-protocol".into(), TEST_UUID_B.into());
+        // A real OS shell waits on input. This probes TUIC's spawn argv/metadata,
+        // not the behavior of any third-party model CLI.
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action":"spawn", "agent_type":"claude", "binary_path":"/bin/sh",
+                "name":"receipt probe", "prompt":"Inspect this launch receipt",
+                "cwd":root.path(), "args":["-c", "read receipt_input", "{prompt}", "--append-system-prompt", "é🦀"]
+            }),
+            Some("receipt-parent-protocol"),
+        );
+        let session_id = spawned["session_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("spawn failed: {spawned}"));
+        let captured = crate::prompt_receipt::read_receipt(&state, session_id);
+        let stopped = handle_session(
+            &state,
+            &serde_json::json!({"action":"kill", "session_id":session_id}),
+            None,
+        );
+        assert!(
+            stopped.get("error").is_none(),
+            "probe cleanup failed: {stopped}"
+        );
+        let receipt = captured.unwrap();
+        assert!(
+            receipt.sections[0]
+                .text
+                .starts_with("## TUICommander Multi-Agent Context")
+        );
+        assert!(receipt.sections[0].text.contains(TEST_UUID_B));
+        assert!(
+            receipt.sections[0]
+                .text
+                .ends_with("Inspect this launch receipt")
+        );
+        assert_eq!(
+            receipt.sections[0].source,
+            "TUIC managed spawn / build_spawn_prompt"
+        );
+        assert_eq!(receipt.sections[1].text, "é🦀");
+        assert_eq!(receipt.sections[1].bytes, Some(6));
+    }
+
+    // Catches: rebuilding MCP instructions from current settings, losing early
+    // initialize observations, or dropping the PTY copy when the protocol is reaped.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn prompt_receipt_keeps_the_served_initialize_payload_after_settings_change_and_reaping()
+    {
+        for late_registration in [false, true] {
+            let state = test_state();
+            let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let attach = || {
+                insert_managed_test_session(&state, TEST_UUID_A, root.path().to_str().unwrap());
+                let historical = crate::prompt_receipt::read_receipt(&state, TEST_UUID_A).unwrap();
+                assert_eq!(historical.sections[0].status, "not_observable");
+                assert_eq!(historical.sections[0].text, "Not observable by TUIC");
+                state
+                    .session_maps
+                    .sessions
+                    .get(TEST_UUID_A)
+                    .unwrap()
+                    .lock()
+                    .launch_receipt = Some(crate::prompt_receipt::PromptReceipt::capture(
+                    "é🦀",
+                    "stored generator",
+                    &["é🦀".into()],
+                    None,
+                    false,
+                ));
+            };
+            if !late_registration {
+                attach();
+            }
+            let mut headers = HeaderMap::new();
+            headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+            let response = mcp_post(
+            State(Arc::clone(&state)), ConnectInfo("127.0.0.1:1".parse().unwrap()), headers,
+            Json(serde_json::json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                "protocolVersion":"2025-06-18","clientInfo":{"name":"tuic-bridge","version":"test"}
+            }})),
+        ).await;
+            let bytes = axum::body::to_bytes(response.into_response().into_body(), 128 * 1024)
+                .await
+                .unwrap();
+            let wire: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let served = wire["result"]["instructions"].as_str().unwrap();
+            assert!(
+                served.len() <= 32_768,
+                "test handshake must fit the section cap"
+            );
+            if late_registration {
+                attach();
+            }
+            crate::prompt_receipt::adopt_mcp_instructions(&state, TEST_UUID_A);
+            let old_collapse = state.config.read().collapse_tools;
+            state.config.write().collapse_tools = !old_collapse;
+            // The live PTY must own its copy, independent of MCP protocol lifetime.
+            state.mcp.sessions.clear();
+            let receipt = crate::prompt_receipt::read_receipt(&state, TEST_UUID_A).unwrap();
+            let section = receipt
+                .sections
+                .iter()
+                .find(|s| s.status == "served")
+                .expect("stored initialize receipt");
+            assert_eq!(section.text, crate::redaction::redact_secrets(served));
+            assert_eq!(section.bytes, Some(served.len() as u64));
+            assert!(section.source.starts_with("TUIC MCP initialize ("));
+            assert_eq!(receipt.sections[0].source, "stored generator");
+            assert_eq!(receipt.sections[0].bytes, Some(6));
+            assert_eq!(receipt.sections.last().unwrap().status, "not_observable");
+            assert!(crate::prompt_receipt::read_receipt(&state, "missing-session").is_err());
+        }
     }
 
     #[cfg(unix)]
@@ -11477,6 +11660,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -12470,6 +12654,7 @@ mod tests {
         state.mcp.sessions.insert(
             live.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -13023,6 +13208,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-old".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now()
                     - MCP_OWNER_ACTIVITY_GRACE
                     - std::time::Duration::from_secs(1),
@@ -13221,6 +13407,7 @@ mod tests {
         state.mcp.sessions.insert(
             eager_mcp_session.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -14095,6 +14282,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-stale".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -14612,6 +14800,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-self".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -15915,6 +16104,7 @@ mod tests {
         state.mcp.sessions.insert(
             sid.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -16040,6 +16230,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-old".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now()
                     - MCP_OWNER_ACTIVITY_GRACE
                     - std::time::Duration::from_secs(1),
@@ -16139,6 +16330,7 @@ mod tests {
         state.session_maps.sessions.insert(
             session_id.to_string(),
             Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: Arc::new(Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
@@ -16312,6 +16504,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -16387,6 +16580,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -16444,6 +16638,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -16514,6 +16709,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17222,6 +17418,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17291,6 +17488,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17498,6 +17696,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17692,6 +17891,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -17939,6 +18139,7 @@ mod tests {
         state.mcp.sessions.insert(
             "mcp-recipient".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 // A bridge-owned SSE stream can look Claude-capable even when
                 // its managed terminal is actually Codex. The PTY type is the
@@ -19816,6 +20017,7 @@ mod tests {
         state.mcp.sessions.insert(
             "grok-session".to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: true,
@@ -20427,6 +20629,7 @@ mod tests {
         state.session_maps.sessions.insert(
             TEST_UUID_A.to_string(),
             parking_lot::Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: Arc::new(parking_lot::Mutex::new(writer)),
                 master: Box::new(FailingResizeMaster(pair.master)),
                 _child: child,
@@ -21925,6 +22128,7 @@ mod tests {
         state.session_maps.sessions.insert(
             tuic.clone(),
             parking_lot::Mutex::new(PtySession {
+                launch_receipt: None,
                 writer: Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
@@ -22044,6 +22248,7 @@ mod tests {
         state.mcp.sessions.insert(
             mcp_sid.clone(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
                 requires_meta_tools: false,
@@ -24278,6 +24483,7 @@ mod tests {
         state.mcp.sessions.insert(
             parent_mcp.to_string(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -26489,6 +26695,7 @@ mod tests {
         state.mcp.sessions.insert(
             sid.clone(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,
@@ -26782,6 +26989,7 @@ mod tests {
         state.mcp.sessions.insert(
             sid.clone(),
             crate::state::McpSessionMeta {
+                prompt_instructions: None,
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
                 requires_meta_tools: false,

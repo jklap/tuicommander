@@ -689,6 +689,10 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 
 ## 6. AI Agent Support
 
+### Launch instruction inspector
+
+The terminal context menu offers **Inspect Launch Instructions…**. Collapsible sections show the prospectively captured final launch brief, explicit system instruction arguments/file snapshots and served MCP initialize responses, with recorded source and original UTF-8 byte count. Redacted text is bounded to 32 KiB per section, 64 KiB per receipt and 16 captured sections. Queued briefs are labeled until submission succeeds. Historical launches, shell-launched agents and files the agent reads independently show **Not observable by TUIC**. Receipts belong to live PTY/MCP metadata, survive frontend reloads and end with the backend/session lifetime; workflow preview/hash receipts remain unchanged.
+
 ### 6.1 Supported Agents
 | Agent | Binary | Resume Command |
 |-------|--------|----------------|

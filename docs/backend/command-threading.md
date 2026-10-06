@@ -231,3 +231,5 @@ worse than no comment — each one had already talked a reader out of checking:
 Private secret entry: `secret_form_bootstrap` is a short synchronous identity
 check; `secret_form_submit` is async. MCP request/consent waits on a oneshot
 without holding the blocking pool. Run uses Tokio child pipes; no PTY or shell.
+
+`get_prompt_receipt` is async and uses `spawn_blocking` for the metadata read and MCP receipt adoption. It performs no file reads on the IPC path; explicit instruction file snapshots happen at launch.

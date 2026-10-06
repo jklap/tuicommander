@@ -292,6 +292,7 @@
 /sessions/x/leaf-pid
 /sessions/x/name
 /sessions/x/pause
+/sessions/x/prompt-receipt
 /sessions/x/queue
 /sessions/x/queue/x
 /sessions/x/resize

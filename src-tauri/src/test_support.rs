@@ -296,6 +296,7 @@ pub(crate) fn insert_session_with_writer(
     state.session_maps.sessions.insert(
         session_id.to_string(),
         parking_lot::Mutex::new(crate::state::PtySession {
+            launch_receipt: None,
             writer: Arc::new(parking_lot::Mutex::new(writer)),
             master: pair.master,
             _child: child,
@@ -523,6 +524,7 @@ impl ForegroundIdentityProbe {
         state.session_maps.sessions.insert(
             sid.into(),
             Mutex::new(crate::state::PtySession {
+                launch_receipt: None,
                 writer: Arc::new(Mutex::new(Box::new(RecordingWriter {
                     bytes: bytes.clone(),
                 }))),

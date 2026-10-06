@@ -1222,6 +1222,13 @@ describe("transport", () => {
 			expect(result.transform?.({ state: null })).toBeNull();
 		});
 
+		// Catches: inspector RPC routed to the latest typed prompt or wrong PTY.
+		it("maps get_prompt_receipt to the stored session receipt", () => {
+			const result = mapCommandToHttp("get_prompt_receipt", { sessionId: "launch-1" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/sessions/launch-1/prompt-receipt");
+		});
+
 		it("maps get_last_prompt to GET with {prompt} unwrap transform", () => {
 			const result = mapCommandToHttp("get_last_prompt", { sessionId: "s1" });
 			expect(result.method).toBe("GET");

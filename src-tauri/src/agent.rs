@@ -1404,6 +1404,8 @@ pub(crate) async fn spawn_agent(
     let state_for_env = state.inner().clone();
     let session_id_for_env = session_id.clone();
     let spawn_tuic_session = pty_config.tuic_session.clone();
+    let launch_receipt = Arc::new(Mutex::new(None));
+    let captured_receipt = Arc::clone(&launch_receipt);
     let (pair, child) = crate::pty::spawn_pty_pair_with_retry_async(
         PtySize {
             rows: pty_config.rows,
@@ -1439,12 +1441,23 @@ pub(crate) async fn spawn_agent(
                 launch_args.push(spawn_agent_config.prompt.clone());
             }
             let agent_type = spawn_agent_config.agent_type.as_deref().unwrap_or("claude");
-            for arg in crate::agent_hook_launch::augment_args(
+            let final_args = crate::agent_hook_launch::augment_args(
                 agent_type,
                 &spawn_binary_path,
                 &launch_args,
                 &crate::config::config_dir(),
-            ) {
+            );
+            *captured_receipt.lock() = Some(crate::prompt_receipt::PromptReceipt::capture(
+                &spawn_agent_config.prompt,
+                "TUIC spawn_agent",
+                &final_args,
+                spawn_agent_config
+                    .cwd
+                    .as_deref()
+                    .or(spawn_pty_config.cwd.as_deref()),
+                false,
+            ));
+            for arg in final_args {
                 cmd.arg(arg);
             }
 
@@ -1499,6 +1512,7 @@ pub(crate) async fn spawn_agent(
     state.session_maps.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
+            launch_receipt: launch_receipt.lock().take(),
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
@@ -1512,6 +1526,7 @@ pub(crate) async fn spawn_agent(
             shell: binary_path.clone(),
         }),
     );
+    crate::prompt_receipt::adopt_mcp_instructions(&state, &session_id);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
