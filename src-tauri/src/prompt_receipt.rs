@@ -108,7 +108,16 @@ pub fn adopt_mcp_instructions(state: &AppState, session_id: &str) {
     }
     sections.sort_by(|a, b| a.source.cmp(&b.source));
     if let Some(session) = state.session_maps.sessions.get(session_id) {
-        if let Some(receipt) = &mut session.lock().launch_receipt {
+        if !sections.is_empty() {
+            let mut session = session.lock();
+            let receipt = session.launch_receipt.get_or_insert_with(|| {
+                let mut receipt = PromptReceipt::default();
+                receipt.push(PromptSection::unavailable(
+                    "Launch receipt unavailable",
+                    "Session predates capture or was launched outside the managed spawn path",
+                ));
+                receipt
+            });
             for section in sections {
                 receipt.push(section);
             }

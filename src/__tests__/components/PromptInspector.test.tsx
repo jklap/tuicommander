@@ -7,7 +7,7 @@ import { invoke } from "../../invoke";
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 const receipt: PromptReceipt = {
 	sections: [
-		{ label: "Launch brief", source: "stored generator", bytes: 6, text: "é🦀", status: "sent", truncated: false },
+		{ label: "Launch brief", source: "stored generator", bytes: 42, text: "é🦀", status: "sent", truncated: false },
 		{
 			label: "Agent-loaded instructions",
 			source: "not observable by TUIC",
@@ -27,7 +27,7 @@ describe("PromptInspector", () => {
 		vi.mocked(invoke).mockResolvedValue(receipt);
 		const close = vi.fn();
 		const view = render(() => <PromptInspector sessionId="launch-1" onClose={close} />);
-		await waitFor(() => expect(view.getByText("6 bytes")).toBeTruthy());
+		await waitFor(() => expect(view.getByText("42 bytes")).toBeTruthy());
 		expect(invoke).toHaveBeenCalledWith("get_prompt_receipt", { sessionId: "launch-1" });
 		expect(view.container.querySelectorAll("details")).toHaveLength(2);
 		expect(view.getByText("stored generator")).toBeTruthy();
@@ -41,7 +41,7 @@ describe("PromptInspector", () => {
 		vi.mocked(invoke).mockResolvedValueOnce(receipt).mockRejectedValueOnce(new Error("Session not found"));
 		const [id, setId] = createSignal<string | null>("launch-1");
 		const view = render(() => <PromptInspector sessionId={id()} onClose={() => setId(null)} />);
-		await waitFor(() => expect(view.getByText("6 bytes")).toBeTruthy());
+		await waitFor(() => expect(view.getByText("42 bytes")).toBeTruthy());
 		setId("launch-2");
 		await waitFor(() => expect(view.getByRole("alert")).toBeTruthy());
 		expect(view.queryByText("é🦀")).toBeNull();

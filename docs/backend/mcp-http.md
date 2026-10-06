@@ -1990,4 +1990,4 @@ The daemon executor now owns recovery and duration timers under an OS run-databa
 
 ## Launch receipt read
 
-`GET /sessions/{id}/prompt-receipt` returns the same live receipt as desktop `get_prompt_receipt`. MCP initialize captures the served instructions after peer auto-binding. Protocol metadata retains bounded responses during PTY registration; PTY metadata retains its copy after protocol reaping. No additional store or settings reconstruction is used. See [HTTP API](../api/http-api.md#launch-instruction-receipts).
+`GET /sessions/{id}/prompt-receipt` returns the same live receipt as desktop `get_prompt_receipt`. MCP initialize captures the served instructions after peer auto-binding. Protocol metadata retains bounded responses during PTY registration; PTY metadata retains its copy after protocol reaping. Sessions without a captured launch brief still retain served MCP instructions and show an explicit launch-unavailable section. No additional store or settings reconstruction is used. See [HTTP API](../api/http-api.md#launch-instruction-receipts).
