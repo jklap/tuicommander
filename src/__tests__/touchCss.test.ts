@@ -55,13 +55,21 @@ describe("touch stylesheet contract (#1329-a31a)", () => {
 		expect(value).toBe("pan-x pan-y pinch-zoom");
 	});
 
-	// Catches: the branch + (and its long-press agent list) hidden behind :hover
-	// and therefore unreachable on a tablet.
-	it("sidebar branch actions are visible and hit-testable on a touch device", () => {
+	// Catches: the swipe-revealed tray (replaces the always-visible touch actions)
+	// staying hidden or non-interactive once the row is swiped open, and the legacy
+	// hover actions leaking into the touch row next to it.
+	it("sidebar branch actions are visible and hit-testable once the row is swiped open on a touch device", () => {
 		addCss(css("components/Sidebar/Sidebar.module.css"));
-		document.body.innerHTML = '<div class="branchActions"></div>';
-		const style = getComputedStyle(document.querySelector(".branchActions") as HTMLElement);
-		expect(style.opacity).toBe("1");
-		expect(style.pointerEvents).toBe("auto");
+		document.body.innerHTML =
+			'<div class="sidebar" data-density="compact"><div class="branchSwipeRow branchSwipeOpen" data-touch="true">' +
+			'<div class="branchActions"></div><div class="branchSwipeActions"><button class="branchMoreBtn"></button></div>' +
+			"</div></div>";
+		const tray = getComputedStyle(document.querySelector(".branchSwipeActions") as HTMLElement);
+		expect(tray.display).toBe("flex");
+		expect(["", "1"]).toContain(tray.opacity);
+		expect(["", "auto"]).toContain(tray.pointerEvents);
+		const button = getComputedStyle(document.querySelector(".branchMoreBtn") as HTMLElement);
+		expect(button.display).toBe("flex");
+		expect(getComputedStyle(document.querySelector(".branchActions") as HTMLElement).display).toBe("none");
 	});
 });

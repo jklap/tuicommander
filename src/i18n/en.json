@@ -868,6 +868,7 @@
 	"sidebar.closePrConfirm": "Close PR #{number} without merging?",
 	"sidebar.copyRef": "Copy ref",
 	"sidebar.copyReference": "Copy owner/repo#number",
+	"sidebar.more": "More",
 	"sidebar.openPrOne": "open PR",
 	"sidebar.prAge": "Open for {age} or more",
 	"sidebar.updateBranch": "Update branch",
