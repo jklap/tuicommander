@@ -7640,3 +7640,5 @@ echo was only a redundant round trip. Unit-tested (`terminals.renameEchoGuard.te
   tab, run a real agent (or `printf '\033]0;test title\007'` at a plain shell prompt) so its
   title changes and then reverts, and confirm the tab title/accent border settle immediately
   with no flicker.
+
+- [ ] **Frame-starvation watchdog (blank-tab self-heal)** — the dead-channel state has no known on-demand trigger, so the heal itself is covered by `frameStarvationWatchdog.test.ts` (12 unit tests, incl. the baseline-after-reset case) and `canvasTerminalFrameStarvation.mount.test.ts` (13 tests mounting the real component: arm on subscribe/show, cancel on hide/unmount, bounded retries, shared reattach `resubscribe`), each wiring point mutation-verified red. What still needs a live check is the no-regression half: switch repeatedly between several terminals, then `GET /logs?limit=100` and confirm there are no `No grid frame after a frame request — resubscribing` warnings on healthy tabs. _(NOTE: if that warning shows up on a healthy tab, `FRAME_STARVATION_MS` is too tight.)_

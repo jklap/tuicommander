@@ -184,6 +184,68 @@ describe("canvasTerminalTransport", () => {
 			expect(invoke).toHaveBeenCalledWith("ack_terminal_frame", { sessionId: "session-1", epoch: 43, received: 3 });
 		});
 
+		// The frame-starvation watchdog heals a dead grid channel by calling
+		// `resubscribe()`. These pin what that heal depends on: handing Rust a Channel
+		// that is NOT the dead one, getting a frame back (a fresh gate starts at
+		// zero and nothing else repaints an idle terminal), and routing it on.
+		describe("resubscribe as the repair for a dead grid channel", () => {
+			function subscribeCalls(invoke: ReturnType<typeof vi.fn>) {
+				return invoke.mock.calls.filter((c) => c[0] === "subscribe_terminal_grid");
+			}
+
+			it("hands Rust a brand-new Channel, never the one it already had", async () => {
+				const { invoke } = await import("@tauri-apps/api/core");
+				await mockEpochs(1, 2);
+				const transport = new TauriTransport("session-1");
+				await transport.subscribe(vi.fn());
+				await transport.resubscribe();
+
+				const [first, second] = subscribeCalls(invoke as ReturnType<typeof vi.fn>).map((c) => c[1].channel);
+				expect(first).toBeDefined();
+				expect(second).toBeDefined();
+				expect(second).not.toBe(first);
+			});
+
+			it("asks for a full frame again after resubscribing", async () => {
+				const { invoke } = await import("@tauri-apps/api/core");
+				await mockEpochs(1, 2);
+				const transport = new TauriTransport("session-1");
+				await transport.subscribe(vi.fn());
+				(invoke as ReturnType<typeof vi.fn>).mockClear();
+				await mockEpochs(2);
+
+				await transport.resubscribe();
+
+				expect(invoke).toHaveBeenCalledWith("terminal_request_frame", { sessionId: "session-1" });
+			});
+
+			it("delivers frames from the new channel to the original handler", async () => {
+				const { invoke } = await import("@tauri-apps/api/core");
+				await mockEpochs(1, 2);
+				const onFrame = vi.fn();
+				const transport = new TauriTransport("session-1");
+				await transport.subscribe(onFrame);
+				await transport.resubscribe();
+
+				const newChannel = subscribeCalls(invoke as ReturnType<typeof vi.fn>)[1][1].channel;
+				const bytes = new Uint8Array([1, 2, 3]).buffer;
+				newChannel.onmessage(bytes);
+
+				expect(onFrame).toHaveBeenCalledTimes(1);
+				expect(onFrame).toHaveBeenCalledWith(bytes);
+			});
+
+			it("is a no-op before the first subscribe — there is no handler to route frames to", async () => {
+				const { invoke } = await import("@tauri-apps/api/core");
+				(invoke as ReturnType<typeof vi.fn>).mockClear();
+				const transport = new TauriTransport("session-1");
+
+				await transport.resubscribe();
+
+				expect(invoke).not.toHaveBeenCalled();
+			});
+		});
+
 		it("does not ack before it knows its epoch", async () => {
 			const { invoke } = await import("@tauri-apps/api/core");
 			await mockEpochs(42);

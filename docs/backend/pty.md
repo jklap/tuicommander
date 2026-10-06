@@ -244,6 +244,15 @@ than flag:
   (`GridWatchFrame`); when the reader sees a gap it re-serializes the whole grid
   instead of forwarding a delta onto a row map with holes in it. The sequence
   never reaches the wire — the frame format is unchanged.
+- **A dead desktop channel is invisible to Rust.** `Channel::send` does not fail
+  when the JS callback it targets no longer exists in the webview (found
+  2026-10-06: Tauri logged `Couldn't find callback id N` every ~540 ms and one tab
+  stayed blank for good — the ticker kept sending, the gate timed out after 500 ms
+  and was abandoned, repeat). Only the receiver can notice, so
+  `CanvasTerminal`'s frame-starvation watchdog (`createFrameStarvationWatchdog`)
+  resubscribes a visible terminal that got no frame within 2 s of requesting one.
+  A fresh `subscribe_terminal_grid` installs a new gate and channel, which is what
+  heals it.
 - **Hidden terminals** decode each frame (the bell rides in the header) but ack
   on a 400 ms trailing timer, below the ticker's deadline: a background tab drops
   to ~2 frames/s without making the ticker's stuck-frontend warning fire.
