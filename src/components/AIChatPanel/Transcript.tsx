@@ -143,9 +143,11 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 function activityRows(entries: AcpTranscriptEntry[]): {
 	visible: AcpTranscriptEntry[];
 	calls: Map<string, AcpToolCall[]>;
+	refusals: Map<string, string>;
 } {
 	const visible: AcpTranscriptEntry[] = [];
 	const calls = new Map<string, AcpToolCall[]>();
+	const refusals = new Map<string, string>();
 	let current: AcpToolCall[] | undefined;
 	for (const entry of entries) {
 		if (
@@ -155,6 +157,18 @@ function activityRows(entries: AcpTranscriptEntry[]): {
 			visible.at(-1)?.inherited !== entry.inherited
 		)
 			current = undefined;
+		if (entry.kind === "settled" && entry.stopReason === "refusal") {
+			const reply: string[] = [];
+			for (let i = visible.length - 1; i >= 0; i--) {
+				const previous = visible[i];
+				if (previous.kind === "user" || previous.kind === "settled" || previous.kind === "failed") break;
+				if (previous.kind === "agent") {
+					reply.unshift(previous.text);
+					visible.splice(i, 1);
+				}
+			}
+			refusals.set(entry.id, reply.join(" ").replace(/\s+/g, " ").trim());
+		}
 		if (entry.kind === "tool") {
 			if (!current) {
 				current = [];
@@ -166,7 +180,7 @@ function activityRows(entries: AcpTranscriptEntry[]): {
 			visible.push(entry);
 		}
 	}
-	return { visible, calls };
+	return { visible, calls, refusals };
 }
 
 export interface TranscriptProps {
@@ -504,7 +518,16 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 									)}
 								</Match>
 								<Match when={entry.kind === "settled" && entry}>
-									{(ended) => <div class={s.settledNote}>{settlement(ended().stopReason)}</div>}
+									{(ended) => (
+										<Show
+											when={ended().stopReason === "refusal"}
+											fallback={<div class={s.settledNote}>{settlement(ended().stopReason)}</div>}
+										>
+											<div class={s.noticeCard} role="group" aria-label="Agent refusal">
+												{activity().refusals.get(ended().id) || settlement("refusal")}
+											</div>
+										</Show>
+									)}
 								</Match>
 								<Match when={entry.kind === "failed" && entry}>
 									{(failed) => <div class={s.settledNote}>{failed().message}</div>}
