@@ -40,7 +40,7 @@ vi.mock("../../../../plugins/pluginLoader", () => ({
 	setPluginEnabled: vi.fn(),
 }));
 
-import { AGENTS } from "../../../../agents";
+import { AGENTS, type AgentsConfig } from "../../../../agents";
 import { agentConfigsStore } from "../../../../stores/agentConfigs";
 import { settingsExpertStore } from "../../../../stores/settingsExpert";
 import { uiStore } from "../../../../stores/ui";
@@ -108,8 +108,12 @@ describe("AgentsTab expert controls", () => {
 		vi.clearAllMocks();
 		settingsState.progressTracking = true;
 		uiStore.setSettingsExpertMode(false);
-		mockInvoke.mockImplementation((cmd: string) => {
+		mockInvoke.mockImplementation((cmd: string, payload?: { config: AgentsConfig }) => {
 			if (cmd === "get_config_defaults") return Promise.resolve(DEFAULTS);
+			if (cmd === "save_agents_config" && payload) {
+				agentsConfig = JSON.parse(JSON.stringify(payload.config.agents));
+				return Promise.resolve(undefined);
+			}
 			if (cmd === "load_agents_config") return Promise.resolve({ agents: agentsConfig });
 			// The intent/progress/follow-up overrides render only with the bridge installed.
 			if (cmd === "get_agent_mcp_status")
@@ -148,7 +152,7 @@ describe("AgentsTab expert controls", () => {
 				}),
 			),
 		);
-		agentsConfig = { ego: { run_configs: [], ego_mode: "edits", ego_sandbox: "ro" } };
+		// Hydration must recover the actual IO save, not a hand-set oracle.
 		await agentConfigsStore.hydrate();
 		expect((container.querySelector("#ego-permission-mode") as HTMLSelectElement).value).toBe("edits");
 		expect((container.querySelector("#ego-permission-sandbox") as HTMLSelectElement).value).toBe("ro");

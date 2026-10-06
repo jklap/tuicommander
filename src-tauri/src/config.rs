@@ -1693,6 +1693,16 @@ impl EgoSandbox {
     }
 }
 
+/// Unknown saved ego choices leave that option to ego without resetting other settings.
+fn deserialize_ego_choice<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct AgentSettings {
     /// One-time migration marker: a removed bypass must stay removed.
@@ -1739,9 +1749,17 @@ pub(crate) struct AgentSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) skip_trust_dialog: Option<bool>,
     /// Launch-only ego permission overrides. Missing leaves ego configuration in control.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_ego_choice",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) ego_mode: Option<EgoPermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_ego_choice",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) ego_sandbox: Option<EgoSandbox>,
 }
 
