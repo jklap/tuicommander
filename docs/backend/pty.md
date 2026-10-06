@@ -67,6 +67,13 @@ returns `400` and does not enter the session map.
 
 ### Session Control
 
+Session removal polls the child once and releases the PTY handles immediately.
+If the child has not terminated yet, a separate waiter owns only its child handle
+until `wait()` reaps it. This covers reader EOF arriving before process exit and
+explicit close/kill racing termination, without holding session or map locks.
+The existing post-mortem buffers still expire through the five-minute tombstone
+sweeper; explicit close removes them immediately.
+
 | Command | Description |
 |---------|-------------|
 | `write_pty(session_id, data)` | Write data (user input) to the PTY. Raises the calling thread to `QOS_CLASS_USER_INTERACTIVE` on macOS for the duration of the write and restores the previous class on the way out, so a keystroke is not scheduled behind background work on a pool thread TUIC only borrowed. |
