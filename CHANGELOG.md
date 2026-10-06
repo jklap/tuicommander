@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- Separate active and idle ungrouped repositories in the rich sidebar and show working-agent counts.
 - Keep rich sidebar navigation dense at iPad width and fold returned subagent history.
 - Extend intent only for working rich sidebar agents; keep idle rows on one line and full intent in tooltips.
 - Fold old idle sessions in the rich sidebar without changing session order.

@@ -2410,3 +2410,11 @@
   white-space: nowrap;
 }
 .sidebar[data-density="rich"] .branchContent { min-width: 30px; }
+
+.idleReposHeading {
+  padding: 4px var(--row-pad-x);
+  color: var(--fg-muted);
+  font-size: var(--font-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
