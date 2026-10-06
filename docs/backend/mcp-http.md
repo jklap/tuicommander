@@ -1194,7 +1194,8 @@ accepts source-byte positions. Raw `cursor` is the returned page end and
 Explicit raw pages mask sensitive bytes with `*` using the complete retained
 ring and terminal context before slicing, so even one-byte pages cannot
 reconstruct a secret. Clean absolute and delta pages also discover secrets from the retained terminal
-context, so a page containing only a multiline private key body stays masked.
+context, so a page containing only a multiline private key body stays masked,
+including when its footer is still on screen and its header is in scrollback.
 Tail snapshots retain the existing `[REDACTED]` format.
 UTF-8 starts round down and ends extend to whole codepoints. Invalid PTY bytes
 use lossy decoding without changing source-byte cursors. `data_length` counts

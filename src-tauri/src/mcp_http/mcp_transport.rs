@@ -3028,10 +3028,21 @@ fn terminal_secrets(buf: &mut crate::state::VtLogBuffer) -> Vec<String> {
     let screen = crate::redaction::join_wrapped_rows(
         buf.screen_rows().into_iter().zip(buf.screen_row_wraps()),
     );
-    secrets.extend(crate::redaction::secrets_in(&format!(
-        "{}{screen}",
-        buf.screen_head_context()
-    )));
+    let screen_context = format!("{}{screen}", buf.screen_head_context());
+    secrets.extend(crate::redaction::secrets_in(&screen_context));
+    // A PEM footer can still be on screen while its header/body are in history.
+    // Join both only for that boundary; ordinary polling keeps the log cache.
+    if screen_context.contains("-----END ") && screen_context.contains("PRIVATE KEY-----") {
+        let (log_lines, _) = buf.lines_since_owned(buf.oldest_offset(), usize::MAX);
+        secrets.extend(crate::redaction::secrets_in(
+            &crate::redaction::join_wrapped_rows(
+                log_lines
+                    .iter()
+                    .map(|ll| (ll.text(), ll.wrapped))
+                    .chain(buf.screen_rows().into_iter().zip(buf.screen_row_wraps())),
+            ),
+        ));
+    }
     secrets
 }
 
