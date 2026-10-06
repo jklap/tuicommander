@@ -271,6 +271,9 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 							fontSize: terminal.fontSize,
 							name: terminal.name,
 							cwd: terminal.cwd,
+							placementPath: terminal.tuicSession
+								? repositoriesStore.get(repoPath)?.declaredWorktrees?.[terminal.tuicSession]?.worktreePath
+								: undefined,
 							awaitingInput: null,
 							tuicSession: terminal.tuicSession ?? crypto.randomUUID(),
 							agentType: terminal.agentType ?? null,

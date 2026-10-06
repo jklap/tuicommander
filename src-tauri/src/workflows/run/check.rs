@@ -80,7 +80,7 @@ fn require_merge_tree_git_version(major: u32, minor: u32) -> Result<(), String> 
     }
 }
 
-pub(super) fn clean_artifact(path: &Path) -> Result<(String, String), String> {
+pub(in crate::workflows) fn clean_artifact(path: &Path) -> Result<(String, String), String> {
     if !git_output(path, &["status", "--porcelain", "--untracked-files=all"])?.is_empty() {
         return Err("workflow check requires a clean worktree".into());
     }

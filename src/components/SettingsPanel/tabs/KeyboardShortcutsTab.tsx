@@ -279,6 +279,16 @@ export function getShortcutSections(): ShortcutSection[] {
 					description: "Return to last terminal",
 				},
 				{
+					action: "history-back",
+					keys: keyFor("history-back"),
+					description: "Back in terminal history",
+				},
+				{
+					action: "history-forward",
+					keys: keyFor("history-forward"),
+					description: "Forward in terminal history",
+				},
+				{
 					action: "jump-waiting-terminal",
 					keys: keyFor("jump-waiting-terminal"),
 					description: "Jump to waiting terminal",

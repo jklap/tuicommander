@@ -4,7 +4,7 @@
 //! desktop and a browser cannot get different answers about which model is the
 //! default or which provider has a credential.
 //!
-//! Both routes take the spawn guard, and this is the one place the ego surface
+//! All routes take the spawn guard, and this is the one place the ego surface
 //! differs from `/acp/*` on purpose. There, only `connect` and `reconnect` are
 //! guarded, because only they start a process and every other route needs a
 //! connection id one of those two handed out. Here **every** route starts a
@@ -24,13 +24,16 @@ use std::net::SocketAddr;
 
 use super::guards::{Authenticated, require_local_or_auth};
 use crate::AppState;
-use crate::ego_cli::{self, EgoCliError, EgoCliErrorCode, EgoProviders};
+use crate::ego_cli::{self, EgoCliError, EgoCliErrorCode};
 
 /// Sub-router mounted at `/ego`.
 pub(super) fn ego_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/providers", get(providers))
         .route("/providers/model", post(set_default_model))
+        .route("/perimeter", get(perimeter))
+        .route("/perimeter/roots", post(set_perimeter_roots))
+        .route("/perimeter/network", post(set_perimeter_network))
 }
 
 /// The HTTP status that carries an ego CLI error code.
@@ -60,7 +63,7 @@ fn status_for(code: EgoCliErrorCode) -> StatusCode {
 /// The body is the `EgoCliError` rather than this module's own shape, so a
 /// browser reading `stderr` reads exactly what the desktop reads — including
 /// the words ego printed, which is the whole point of the type.
-fn answer(result: Result<EgoProviders, EgoCliError>) -> Response {
+fn answer<T: serde::Serialize>(result: Result<T, EgoCliError>) -> Response {
     match result {
         Ok(value) => Json(value).into_response(),
         Err(error) => (status_for(error.code), Json(error)).into_response(),
@@ -103,6 +106,53 @@ async fn set_default_model(
     answer(ego_cli::set_default_model(&state, body.model).await)
 }
 
+async fn perimeter(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    answer(ego_cli::perimeter::read(&state).await)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RootsBody {
+    roots: ego_cli::perimeter::RootsEdit,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetworkBody {
+    enabled: bool,
+}
+
+async fn set_perimeter_roots(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RootsBody>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    answer(ego_cli::perimeter::set_roots(&state, body.roots).await)
+}
+
+async fn set_perimeter_network(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<NetworkBody>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    answer(ego_cli::perimeter::set_network(&state, body.enabled).await)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +160,45 @@ mod tests {
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::Request;
     use tower::ServiceExt;
+
+    // Catches: a new perimeter route bypasses authentication or is never mounted.
+    #[tokio::test]
+    async fn perimeter_routes_guard_remote_callers_and_reach_the_same_cli_core() {
+        let app = super::super::shared_routes().with_state(super::super::tests::test_state());
+        for (method, path, body) in [
+            ("GET", "/ego/perimeter", None),
+            (
+                "POST",
+                "/ego/perimeter/network",
+                Some(serde_json::json!({"enabled": false})),
+            ),
+            (
+                "POST",
+                "/ego/perimeter/roots",
+                Some(serde_json::json!({"roots": {
+                    "rootDir": "", "rootAccess": "read-write", "readAllowlist": "", "writableDirs": ""
+                }})),
+            ),
+        ] {
+            let refused = app
+                .clone()
+                .oneshot(request(method, path, [203, 0, 113, 7], body.clone()))
+                .await
+                .unwrap();
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{path}");
+            let local = app
+                .clone()
+                .oneshot(request(method, path, [127, 0, 0, 1], body))
+                .await
+                .unwrap();
+            assert_eq!(local.status(), StatusCode::CONFLICT, "{path}");
+            let bytes = axum::body::to_bytes(local.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let error: EgoCliError = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(error.code, EgoCliErrorCode::NotConfigured);
+        }
+    }
 
     /// What a plain HTTP client is told, for every code there is.
     ///

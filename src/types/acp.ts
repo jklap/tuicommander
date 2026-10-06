@@ -123,6 +123,7 @@ export interface AcpCapabilitySnapshot {
 	clientBooleanConfig: boolean;
 	/** Present only when ego advertised `_ego/pause` and `_ego/resume` as one pair. */
 	egoHoldVersion: number | null;
+	egoSteerVersion?: number | null;
 	/** Present only when ego advertised `_ego/compact`. */
 	egoCompactVersion: number | null;
 }
@@ -161,6 +162,8 @@ export interface AcpAttachmentSnapshot {
 	cwd: string;
 	additionalDirectories: string[];
 	configOptions: AcpSessionConfigOption[];
+	/** Authoritative ego clamp notices returned when a repo selects a profile. */
+	profileWarnings?: string[];
 	usage: AcpUsageSnapshot | null;
 	activeTurn: AcpTurnSnapshot | null;
 	queuedPrompts: AcpQueuedPrompt[];

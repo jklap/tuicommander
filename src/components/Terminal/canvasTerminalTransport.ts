@@ -21,6 +21,9 @@ export interface TerminalTransport {
 	onEvent(type: string, handler: (payload: unknown) => void): Promise<void>;
 	/** WS lifecycle errors are local notifications, not backend PTY events. */
 	onStreamError?(handler: (error: unknown) => void): void;
+	onStreamReconnecting?(handler: (attempt: number, maxAttempts: number) => void): void;
+	onStreamRecovered?(handler: () => void): void;
+	onStreamExhausted?(handler: (maxAttempts: number) => void): void;
 }
 
 /**
@@ -174,6 +177,9 @@ export class WsTransport implements TerminalTransport {
 	private reconnectAttempts = 0;
 	private initialFrameTimer: ReturnType<typeof setTimeout> | null = null;
 	private failureReported = false;
+	private reconnectingHandler?: (attempt: number, maxAttempts: number) => void;
+	private recoveredHandler?: () => void;
+	private exhaustedHandler?: (maxAttempts: number) => void;
 
 	constructor(sessionId: string, connectionId?: string) {
 		this.sessionId = sessionId;
@@ -222,9 +228,11 @@ export class WsTransport implements TerminalTransport {
 	private replayReady(): void {
 		// Opening a socket is not replay. An accepted viewport or the server
 		// explicitly finishing an empty replay proves the stream recovered; a healthy idle PTY owes no more output.
+		const recovering = this.failureReported || this.reconnectAttempts > 0;
 		this.clearInitialFrameTimer();
 		this.reconnectAttempts = 0;
 		this.failureReported = false;
+		if (recovering) this.recoveredHandler?.();
 	}
 
 	/**
@@ -252,6 +260,7 @@ export class WsTransport implements TerminalTransport {
 
 	private scheduleReconnect(): void {
 		if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+			this.exhaustedHandler?.(MAX_RECONNECT_ATTEMPTS);
 			appLogger.warn("terminal", `Terminal stream disconnected after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`, {
 				sessionId: this.sessionId,
 			});
@@ -259,6 +268,7 @@ export class WsTransport implements TerminalTransport {
 		}
 		const delay = INITIAL_RECONNECT_MS * 2 ** Math.min(this.reconnectAttempts, 5);
 		this.reconnectAttempts++;
+		this.reconnectingHandler?.(this.reconnectAttempts, MAX_RECONNECT_ATTEMPTS);
 		this.reconnectTimer = setTimeout(() => {
 			this.reconnectTimer = null;
 			this.connect().catch((err) => {
@@ -409,6 +419,9 @@ export class WsTransport implements TerminalTransport {
 		this.ws?.close();
 		this.ws = null;
 		this.eventHandlers.clear();
+		this.reconnectingHandler = undefined;
+		this.recoveredHandler = undefined;
+		this.exhaustedHandler = undefined;
 	}
 
 	async invoke(cmd: string, args: Record<string, unknown>): Promise<unknown> {
@@ -422,6 +435,18 @@ export class WsTransport implements TerminalTransport {
 		// No-op by design. `ack_terminal_frame` is desktop-only; this socket's
 		// backend detects a dropped frame from the sequence number it stamps on
 		// each one and resends the full grid, so there is nothing to acknowledge.
+	}
+
+	onStreamReconnecting(handler: (attempt: number, maxAttempts: number) => void): void {
+		this.reconnectingHandler = handler;
+	}
+
+	onStreamRecovered(handler: () => void): void {
+		this.recoveredHandler = handler;
+	}
+
+	onStreamExhausted(handler: (maxAttempts: number) => void): void {
+		this.exhaustedHandler = handler;
 	}
 
 	onStreamError(handler: (error: unknown) => void): void {

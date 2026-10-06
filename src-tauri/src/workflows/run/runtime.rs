@@ -1,5 +1,9 @@
 //! Daemon-owned serial scheduling. Mailboxes wake actors; SQLite owns the work.
 use super::graph::{ActivationState, DecisionEvidence, GraphTransition};
+pub(super) mod effects;
+pub(super) mod judge;
+pub(super) mod plan;
+pub(super) mod policy;
 use super::store::{GraphStartRequest, now_ms};
 use super::{RunCommand, RunSnapshot, RunStatus, RunStore, emit_run_changed};
 use crate::state::AppState;
@@ -108,14 +112,10 @@ impl WorkflowRuntime {
         })
     }
 
-    /// Internal root-start boundary; public start controls arrive in slice F.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "graph start transport is delivered in slice F")
-    )]
+    /// Root-start boundary shared by public run transports.
     pub(crate) fn start_graph(
         &self,
-        state: &Arc<AppState>,
+        state: &AppState,
         request: &GraphStartRequest,
     ) -> Result<RunSnapshot, String> {
         let owner = self
@@ -152,18 +152,7 @@ impl WorkflowRuntime {
 }
 
 fn require_supported_nodes(definition: &crate::workflows::PublishedWorkflow) -> Result<(), String> {
-    if let Some(node) = definition.graph.nodes.iter().find(|node| {
-        !matches!(
-            node.kind,
-            NodeKind::Start | NodeKind::Pause { .. } | NodeKind::End
-        )
-    }) {
-        return Err(format!(
-            "workflow node '{}' is not executable in daemon slice B",
-            node.id
-        ));
-    }
-    Ok(())
+    crate::workflows::definition::validate_runtime_nodes(&definition.graph, definition.kind)
 }
 
 async fn run_actor(
@@ -187,8 +176,14 @@ async fn run_actor(
         let snapshot = match result {
             Ok(Ok(snapshot)) => snapshot,
             Ok(Err(error)) => {
-                // Sequence races are repaired by the committing producer's wake.
                 tracing::warn!(source = "workflows", %run_id, %error, "Workflow scheduling turn failed");
+                if error.contains("sequence") || error.contains("preflight; retry") {
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+                if let (Some(state), Some(owner)) = (state.upgrade(), owner.upgrade()) {
+                    pause_failure(&state, &owner.store, &run_id, &error);
+                }
                 notify.notified().await;
                 continue;
             }
@@ -207,6 +202,36 @@ async fn run_actor(
             break;
         }
         if snapshot.status == RunStatus::Running {
+            let Some(state) = state.upgrade() else {
+                break;
+            };
+            let Some(current) = owner.upgrade() else {
+                break;
+            };
+            let remaining = deadline_ms(&snapshot).saturating_sub(now_ms()).max(0) as u64;
+            let result = tokio::select! {
+                result = effects::drive_effect(&state, &current.store, &snapshot) => result,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(remaining)) => {
+                    current.store.command(&run_id, &format!("daemon:effect-deadline:{}", snapshot.sequence), RunCommand::ExpireDeadline).map(|_| true)
+                }
+            };
+            match result {
+                Ok(true) => {
+                    tokio::task::yield_now().await;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(source = "workflows", %run_id, %error, "Workflow effect paused");
+                    pause_failure(&state, &current.store, &run_id, &error);
+                    continue;
+                }
+            }
+            // Yielding the deterministic turn never strands remaining runnable nodes.
+            if deterministic_work_pending(&snapshot) {
+                tokio::task::yield_now().await;
+                continue;
+            }
             let remaining = deadline_ms(&snapshot).saturating_sub(now_ms()).max(0) as u64;
             tokio::select! {
                 _ = notify.notified() => {},
@@ -222,17 +247,35 @@ async fn run_actor(
 }
 
 pub(super) fn deadline_ms(snapshot: &RunSnapshot) -> i64 {
+    deadline_at(snapshot, now_ms())
+}
+
+pub(super) fn deadline_at(snapshot: &RunSnapshot, at_ms: i64) -> i64 {
+    let pending = snapshot
+        .paused_since_ms
+        .map_or(0, |since| at_ms.saturating_sub(since).max(0));
     snapshot
         .started_ms
         .saturating_add(i64::from(snapshot.limits.max_duration_secs) * 1000)
+        .saturating_add(snapshot.paused_duration_ms)
+        .saturating_add(pending)
 }
 
-/// Re-read after each expected-sequence commit; no external effects run here.
-// DEFERRED (2026-10-05) — self-wake after TRANSITIONS_PER_TURN: the turn yields after 32
-// transitions and the actor then waits for the deadline instead of re-waking itself;
-// unreachable with Start/Pause/End only, must wake itself before slice C adds Agent nodes.
+fn deterministic_work_pending(snapshot: &RunSnapshot) -> bool {
+    snapshot
+        .graph_executions
+        .iter()
+        .filter(|g| !g.completed)
+        .any(|g| {
+            g.activations
+                .iter()
+                .any(|a| a.state == ActivationState::Ready)
+        })
+}
+
+/// Re-read after each expected-sequence commit; external effects stay outside transactions.
 pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, String> {
-    for _ in 0..TRANSITIONS_PER_TURN {
+    'turn: for _ in 0..TRANSITIONS_PER_TURN {
         let snapshot = store.snapshot(run_id)?;
         if snapshot.status != RunStatus::Running {
             return Ok(snapshot);
@@ -247,65 +290,233 @@ pub(super) fn drive_turn(store: &RunStore, run_id: &str) -> Result<RunSnapshot, 
                 )?
                 .snapshot);
         }
-        let next = snapshot
-            .graph_executions
-            .iter()
-            .filter(|graph| !graph.completed)
-            .find_map(|graph| {
-                graph
-                    .activations
-                    .iter()
-                    .find(|activation| {
-                        matches!(
-                            activation.state,
-                            ActivationState::Ready | ActivationState::Running
-                        )
-                    })
-                    .map(|activation| (graph, activation))
-            });
-        let Some((graph, activation)) = next else {
-            return Ok(snapshot);
-        };
-        let node = graph
-            .definition
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.id == activation.node_id)
-            .ok_or("activation node missing")?;
-        // DEFERRED (2026-10-05): C supplies Agent effects; D/E supply policy and
-        // terminal delivery gates. Reached work is retained, never called successful.
-        if !matches!(node.kind, NodeKind::Start | NodeKind::Pause { .. }) {
-            return Ok(snapshot);
+        if matches!(snapshot.root_target, Some(super::RunTarget::Plan(_)))
+            && snapshot.graph_executions.iter().all(|g| g.completed)
+        {
+            return Ok(store
+                .command_expected(
+                    run_id,
+                    "daemon:complete-plan",
+                    snapshot.sequence,
+                    RunCommand::Complete,
+                )?
+                .snapshot);
         }
-        let transition = if activation.state == ActivationState::Ready {
-            GraphTransition::Activate {
-                execution_id: graph.id.clone(),
-                activation_id: activation.id.clone(),
-            }
-        } else {
-            GraphTransition::Complete {
-                execution_id: graph.id.clone(),
-                activation_id: activation.id.clone(),
-                outcome: None,
-                evidence: matches!(node.kind, NodeKind::Pause { .. }).then(|| DecisionEvidence {
-                    actor: "daemon".into(),
-                    reason: "Published graph pause requires an explicit resolution".into(),
-                    references: vec![format!("activation:{}:{}", graph.id, activation.id)],
-                }),
-            }
-        };
-        let key = format!(
-            "daemon:{}:{}:{:?}",
-            graph.id, activation.id, activation.state
-        );
-        store.command_expected(
-            run_id,
-            &key,
-            snapshot.sequence,
-            RunCommand::Graph { transition },
-        )?;
+        'graphs: for graph in snapshot.graph_executions.iter().filter(|g| !g.completed) {
+            let Some(activation) = graph
+                .activations
+                .iter()
+                .find(|a| matches!(a.state, ActivationState::Ready | ActivationState::Running))
+            else {
+                continue;
+            };
+            let node = graph
+                .definition
+                .graph
+                .nodes
+                .iter()
+                .find(|node| node.id == activation.node_id)
+                .ok_or("activation node missing")?;
+            let transition = if activation.state == ActivationState::Ready {
+                GraphTransition::Activate {
+                    execution_id: graph.id.clone(),
+                    activation_id: activation.id.clone(),
+                }
+            } else {
+                let mut outcome = None;
+                let mut evidence = None;
+                match &node.kind {
+                    NodeKind::Agent { .. } | NodeKind::CreateStories => {
+                        let Some(attempt) =
+                            effects::activation_attempt(&snapshot, graph, activation)
+                        else {
+                            store.command_expected(
+                                run_id,
+                                &format!(
+                                    "daemon:{}:{}:attempt:{}",
+                                    graph.id, activation.id, snapshot.sequence
+                                ),
+                                snapshot.sequence,
+                                RunCommand::StartGraphAgent {
+                                    execution_id: graph.id.clone(),
+                                    activation_id: activation.id.clone(),
+                                },
+                            )?;
+                            continue 'turn;
+                        };
+                        if attempt.state == super::AttemptState::Running {
+                            continue 'graphs;
+                        }
+                        if attempt.report.is_none()
+                            || attempt.outcome != Some(super::AttemptOutcome::Completed)
+                        {
+                            return Ok(store
+                                .command_expected(
+                                    run_id,
+                                    &format!(
+                                        "daemon:{}:{}:incomplete-report:{}",
+                                        graph.id, activation.id, snapshot.sequence
+                                    ),
+                                    snapshot.sequence,
+                                    RunCommand::Pause,
+                                )?
+                                .snapshot);
+                        }
+                        if matches!(node.kind, NodeKind::CreateStories)
+                            && snapshot.planning_fingerprint.is_none()
+                        {
+                            store.command_expected(
+                                run_id,
+                                &format!(
+                                    "daemon:close-plan:{}:{}",
+                                    activation.id, snapshot.sequence
+                                ),
+                                snapshot.sequence,
+                                RunCommand::ClosePlanning,
+                            )?;
+                            continue 'turn;
+                        }
+                    }
+                    NodeKind::Judge | NodeKind::Gate
+                        if graph.definition.kind == crate::workflows::WorkflowKind::Plan =>
+                    {
+                        let decision = plan::judge(&snapshot, graph)?;
+                        let Some(decision) = decision else {
+                            continue 'graphs;
+                        };
+                        outcome = Some(if matches!(node.kind, NodeKind::Gate) {
+                            if decision.0 == super::graph::EdgeOutcome::Yes {
+                                super::graph::EdgeOutcome::Pass
+                            } else {
+                                super::graph::EdgeOutcome::Fail
+                            }
+                        } else {
+                            decision.0
+                        });
+                        evidence = Some(decision.1);
+                    }
+                    NodeKind::StoryDispatch { .. } => {
+                        match plan::dispatch(store, &snapshot, graph, activation)? {
+                            plan::Dispatch::Advanced => continue 'turn,
+                            plan::Dispatch::Waiting => continue 'graphs,
+                            plan::Dispatch::Decided(decision) => {
+                                outcome = Some(decision.0);
+                                evidence = Some(decision.1);
+                            }
+                        }
+                    }
+                    NodeKind::Judge => {
+                        let decision = judge::judge(&snapshot, graph, activation)?;
+                        if decision.0 == super::graph::EdgeOutcome::Yes
+                            && !policy::approved(&snapshot, graph)?
+                        {
+                            if policy::gate(&snapshot, graph)?
+                                .is_some_and(|d| d.0 == super::graph::EdgeOutcome::Fail)
+                            {
+                                outcome = Some(super::graph::EdgeOutcome::Uncertain);
+                                evidence = Some(DecisionEvidence {
+                                    actor: "daemon".into(),
+                                    reason: "Pre-approval checks failed".into(),
+                                    references: decision.1.references,
+                                });
+                            } else {
+                                continue 'graphs;
+                            }
+                        } else {
+                            outcome = Some(decision.0);
+                            evidence = Some(decision.1);
+                        }
+                    }
+                    NodeKind::Gate => {
+                        let Some(decision) = policy::gate(&snapshot, graph)? else {
+                            continue 'graphs;
+                        };
+                        outcome = Some(decision.0);
+                        evidence = Some(decision.1);
+                    }
+                    NodeKind::Pause { .. } => {
+                        evidence = Some(DecisionEvidence {
+                            actor: "daemon".into(),
+                            reason: graph
+                                .decisions
+                                .last()
+                                .map(|d| d.evidence.reason.clone())
+                                .unwrap_or_else(|| {
+                                    "Published graph pause requires an explicit resolution".into()
+                                }),
+                            references: vec![format!("activation:{}:{}", graph.id, activation.id)],
+                        });
+                    }
+                    NodeKind::Notify => {
+                        let key = format!("notify:{}:{}", graph.id, activation.id);
+                        let Some(effect) = snapshot.effects.iter().find(|e| e.key == key) else {
+                            continue 'graphs;
+                        };
+                        if effect.state != super::EffectState::Succeeded {
+                            continue 'graphs;
+                        }
+                    }
+                    // End marks graph completion only; approval/integration policy still owns story delivery.
+                    NodeKind::Start | NodeKind::Loop { .. } | NodeKind::Join {} | NodeKind::End => {
+                    }
+                }
+                GraphTransition::Complete {
+                    execution_id: graph.id.clone(),
+                    activation_id: activation.id.clone(),
+                    outcome,
+                    evidence,
+                }
+            };
+            let key = format!(
+                "daemon:{}:{}:{:?}:{}",
+                graph.id, activation.id, activation.state, snapshot.sequence
+            );
+            store.command_expected(
+                run_id,
+                &key,
+                snapshot.sequence,
+                RunCommand::Graph { transition },
+            )?;
+            continue 'turn;
+        }
+        return Ok(snapshot);
     }
     // Yield with a durable pending activation; the next turn is explicitly woken.
     store.snapshot(run_id)
+}
+
+fn pause_failure(state: &Arc<AppState>, store: &RunStore, run_id: &str, error: &str) {
+    let Ok(snapshot) = store.snapshot(run_id) else {
+        return;
+    };
+    if snapshot.status != RunStatus::Running {
+        return;
+    }
+    match store.command(
+        run_id,
+        &format!("daemon:failure:{}", snapshot.sequence),
+        RunCommand::Pause,
+    ) {
+        Ok(receipt) => {
+            emit_run_changed(state, &snapshot.project, run_id, receipt.sequence);
+            if let Err(notice_error) = crate::mcp_http::mcp_transport::report_progress(
+                state,
+                Some(&snapshot.project),
+                crate::progress::ProgressReportInput {
+                    kind: crate::progress::ProgressKind::Blocked,
+                    text: format!("Workflow {run_id} paused: {error}"),
+                    step: Some("Workflow execution".into()),
+                },
+                Some("Workflow daemon".into()),
+                None,
+                None,
+                None,
+            ) {
+                tracing::warn!(source = "workflows", %notice_error, "Workflow pause notice failed");
+            }
+        }
+        Err(pause_error) => {
+            tracing::warn!(source = "workflows", %pause_error, "Workflow failure pause failed")
+        }
+    }
 }
