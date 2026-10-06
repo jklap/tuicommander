@@ -633,6 +633,15 @@ export const BranchItem: Component<{
 			})
 		];
 	const lifecycle = () => props.branch.lifecycleStatus;
+	const mergedSummary = () =>
+		rich() &&
+		!props.branch.isMain &&
+		!!props.branch.worktreePath &&
+		props.branch.worktreePath.replace(/\/$/, "") !== props.repoPath.replace(/\/$/, "") &&
+		props.branch.terminals.length === 0 &&
+		lifecycle()?.commitStatus === "merged" &&
+		lifecycle()?.dirtyFiles != null;
+
 	const tipFor = (part: "dirty" | "commit") => {
 		const status = lifecycle();
 		return status ? lifecycleTooltip(status, part) : undefined;
@@ -1020,7 +1029,7 @@ export const BranchItem: Component<{
 						</span>
 						{/* When a custom label replaces the main line, retain the branch
 					    underneath it so Git-facing identity remains visible. */}
-						<Show when={branchLabel()}>
+						<Show when={branchLabel() && !mergedSummary()}>
 							<span class={b.subLabel} data-tooltip={rowTitle()} data-tooltip-pos="bottom">
 								{props.branch.branchName}
 							</span>
@@ -1122,13 +1131,37 @@ export const BranchItem: Component<{
 							</Show>
 						</div>
 					</Show>
-					{renderActions(false)}
+					<Show when={!mergedSummary()}>{renderActions(false)}</Show>
 					<span class={s.branchShortcut} style={{ display: props.shortcutIndex !== undefined ? undefined : "none" }}>
 						{props.shortcutIndex !== undefined ? keyFor(`switch-branch-${props.shortcutIndex}`) : ""}
 					</span>
 					{/* Rich: a full-width block under the name line, spending the spare room on what
 				    the compact row leaves to tooltips. */}
-					<Show when={rich() && !props.branch.isShell}>
+					<Show when={mergedSummary()}>
+						<span class={s.mergedSummary} data-testid="merged-worktree-summary">
+							<span class={cx(s.richChip, s.richChipMerged)}>{t("sidebar.merged", "Merged")}</span>
+							<span
+								class={cx(s.richChip, facts().dirtyFiles > 0 && s.richChipWarn)}
+								data-tooltip={tipFor("dirty")}
+								data-tooltip-pos="bottom"
+							>
+								{t("sidebar.uncommittedCount", "{count} uncommitted", { count: String(lifecycle()?.dirtyFiles) })}
+							</span>
+							<Show when={props.canRemove}>
+								<button
+									class={s.mergedCleanup}
+									disabled={props.isRemoving}
+									onClick={(e) => {
+										e.stopPropagation();
+										props.onRemove();
+									}}
+								>
+									{props.isRemoving ? t("sidebar.removingWorktree", "Removing…") : t("sidebar.cleanUp", "Clean up")}
+								</button>
+							</Show>
+						</span>
+					</Show>
+					<Show when={rich() && !props.branch.isShell && !mergedSummary()}>
 						<span class={s.branchBreak} aria-hidden="true" />
 						<div class={s.branchRichDetail}>
 							<Show when={pr()}>
