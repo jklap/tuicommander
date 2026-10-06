@@ -7,6 +7,7 @@ import { workflowRunSignals } from "../../stores/workflowRunSignals";
 import { HttpRpcError, isTauri } from "../../transport";
 import d from "../shared/dialog.module.css";
 import { WorkflowDesigner } from "../WorkflowDesigner/WorkflowDesigner";
+import { RunIncidents } from "./RunIncidents";
 import s from "./StoriesDialog.module.css";
 
 interface Plan {
@@ -791,6 +792,7 @@ export const StoriesDialog: Component<StoriesDialogProps> = (props) => {
 											{selected().attempts.length} {selected().attempts.length === 1 ? "attempt" : "attempts"} ·
 											sequence {selected().sequence}
 										</p>
+										<RunIncidents project={props.project} runId={selected().id} sequence={selected().sequence} />
 										<Show when={pendingInput()}>
 											{(attempt) => (
 												<form class={s.form} onSubmit={(event) => void answerRunInput(event)}>

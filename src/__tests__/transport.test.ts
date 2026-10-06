@@ -358,8 +358,10 @@ describe("transport", () => {
 				body: action,
 			});
 		});
-		it("routes workflow run actions to their owning project", () => {
-			const action = { action: "events", run_id: "run-1", after_sequence: 4, limit: 20 };
+		it.each([
+			{ action: "events", run_id: "run-1", after_sequence: 4, limit: 20 },
+			{ action: "incidents", run_id: "run-1" },
+		])("routes workflow run actions to their owning project: $action", (action) => {
 			expect(mapCommandToHttp("workflow_run_action", { project: "/repo a", action })).toEqual({
 				method: "POST",
 				path: "/workflows/run/action?path=%2Frepo%20a",

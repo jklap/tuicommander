@@ -2640,3 +2640,5 @@ The daemon runs pinned deterministic checks before accepting an independent revi
 ### Workflow plan dispatch (slice E)
 
 The owning daemon executes pinned plan coordinator and Create Stories visits through the existing proposal effects. Disjoint story children share a bounded project wave; overlapping or unknown scopes wait. A dependency starts only after its accepted revision has a current explicit Git integration receipt. Done alone and WontFix never release it. Approved children wait for an operator merge. The final plan Judge runs the pinned canonical checks and binds verification to the current plan fingerprint. Failed checks route through a bounded replan with a fresh coordinator attempt. Public start/history controls use the same graph entry point; parallel graph branches follow in slice G.
+
+- **Run incidents and next steps:** Plans and Stories run history connects recorded workflow and bound-agent failure/input outcomes to their cause, identifiers and manual next action. Session/task evidence is transient; no automatic incident retry.

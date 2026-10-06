@@ -778,3 +778,7 @@ The owning daemon executes pinned plan coordinator and Create Stories visits thr
 ## Managed launch instruction inspection
 
 Implemented: terminal context-menu inspector backed by prospectively captured live-session receipts. It displays final managed briefs, explicit system instruction arguments/file snapshots and MCP initialize responses with source and original UTF-8 byte size. Existing workflow preview/hash receipts are unchanged. Autonomous agent file reads and historical launches are explicitly unobservable. Redacted receipt text is limited to 64 KiB/16 sections, with a 32 KiB section cap; receipts are not restored after backend restart.
+
+### Run incidents
+
+Plans and Stories run history contains a read-only incident projection owned by Rust. Workflow reports, interrupted attempts, bound-session exit/state and pending prompt-delivery failure markers, and bound task records supply evidence. No elapsed-time stuck inference, new persistence or automatic recovery is introduced. Suggestions require operator action. Only agents explicitly bound to the selected run participate; unavailable causes are disclosed. IPC and HTTP use the existing workflow run action contract.
