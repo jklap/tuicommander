@@ -28341,6 +28341,7 @@ pub(crate) async fn create_daemon_workflow_worktree(
             }
             Ok(created.path)
         })
+}
 
 #[cfg(test)]
 mod session_placement_tests {
