@@ -77,3 +77,52 @@ fn replay_oracle_reports_first_changed_missing_or_extra_event() {
         );
     }
 }
+
+/// Scenario states are independent expectations, never regenerated from the replay.
+pub(crate) fn assert_expected_states(fixture: &str, expected: &[Value], trace: &[Value]) {
+    assert!(
+        !expected.is_empty(),
+        "{fixture}: empty scenario expectations"
+    );
+    let mut snapshots = trace.iter().filter_map(|event| event.get("state"));
+    for state in expected {
+        let fields = state.as_object().expect("expected state must be an object");
+        assert!(!fields.is_empty(), "{fixture}: empty state expectation");
+        assert!(
+            fields
+                .keys()
+                .all(|key| matches!(key.as_str(), "agent" | "awaiting")),
+            "{fixture}: unsupported state expectation"
+        );
+        assert!(
+            snapshots.any(|snapshot| fields
+                .iter()
+                .all(|(key, value)| snapshot.get(key) == Some(value))),
+            "{fixture}: replay never reached expected state {state} in scenario order"
+        );
+    }
+}
+
+// Catches: promotion accepts missing or reordered scenario states despite a stable golden.
+#[test]
+fn replay_oracle_scenario_rejects_missing_or_reordered_states() {
+    use serde_json::json;
+    let trace = vec![
+        json!({"state":{"agent":"working","awaiting":false}}),
+        json!({"state":{"agent":"awaiting_input","awaiting":true}}),
+    ];
+    assert_expected_states(
+        "scenario",
+        &[json!({"agent":"working"}), json!({"awaiting":true})],
+        &trace,
+    );
+    for expected in [
+        vec![json!({"agent":"completed"})],
+        vec![json!({"awaiting":true}), json!({"agent":"working"})],
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| assert_expected_states("scenario", &expected, &trace))
+                .is_err()
+        );
+    }
+}

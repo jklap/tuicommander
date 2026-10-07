@@ -21852,19 +21852,20 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
     assert!(!fixtures.is_empty(), "empty corpus cannot establish parity");
     let mut manifest = Vec::new();
     for fixture in fixtures {
-        let agent = ["claude", "codex", "grok", "goose", "opencode"]
-            .into_iter()
-            .find(|agent| {
-                std::path::Path::new(&fixture)
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with(agent)
-                    || fixture.contains(&format!("/{agent}-"))
-            })
-            .unwrap_or_else(|| {
-                panic!("{fixture}: declare capture's agent before recording a golden")
-            });
+        let agent = [
+            "claude", "codex", "grok", "goose", "opencode", "gemini", "aider", "pi", "amp",
+            "cursor", "droid",
+        ]
+        .into_iter()
+        .find(|agent| {
+            std::path::Path::new(&fixture)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(agent)
+                || fixture.contains(&format!("/{agent}-"))
+        })
+        .unwrap_or_else(|| panic!("{fixture}: declare capture's agent before recording a golden"));
         let capture =
             crate::pty_capture::decode_capture(&std::fs::read(root.join(&fixture)).unwrap())
                 .unwrap();
@@ -21921,6 +21922,21 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
         trace.push(
             json!({"ring_len":state.session_maps.output_buffers.get(sid).unwrap().lock().len()}),
         );
+        let scenario_path = root.join(&fixture).with_extension("scenario.json");
+        if scenario_path.exists() {
+            let scenario: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&scenario_path).expect("read capture scenario"),
+            )
+            .expect("valid capture scenario");
+            assert_eq!(
+                scenario["agent"], agent,
+                "{fixture}: scenario agent mismatch"
+            );
+            let expected = scenario["expected_states"]
+                .as_array()
+                .expect("scenario expected_states must be an array");
+            crate::replay_oracle::assert_expected_states(&fixture, expected, &trace);
+        }
         manifest.push(json!({"fixture":fixture,"events":trace.len()}));
         crate::replay_oracle::assert_golden(
             &std::path::Path::new("captures").join(format!("{fixture}.jsonl")),
