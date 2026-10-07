@@ -291,20 +291,23 @@ need a separate decision; neither is included in this patch.
 
 ### Resize repaint reconciliation
 
-At synchronized-frame completion after a resize, TUIC reconciles the duplicated
-history tail with Ink's replacement screen. Physical-row equality remains the
-default proof. A recorded Claude Code resize can instead erase the complete
-viewport with top-to-bottom whole-row EL operations, then repaint more than a
-screenful at a different width (#1407-1ab2). The terminal exposes that explicit
-erase generation and its scroll position. TUIC compares logical text across soft
-wraps in the old history suffix and the fresh repaint, retaining the newly
-scrolled rows and removing only the matching old suffix. The comparison preserves intra-line whitespace and joins VT soft wraps.
-Recorded Ink hard-line word wrapping uses the existing copy-path greedy-width
-evidence per paragraph, including exact-fit wraps during repaint, measured in
-display columns. It requires at least two nonempty rows and examines
-at most twice the fresh repaint height (including its newly scrolled rows)
-of old history. Partial boundary rows and unmatched tail fragments remain intact. Only
-complete matching row blocks are removed; intra-row suffixes are never trimmed. Partial edits, idle frames, alternate
-screens and output without an explicit viewport erase retain their content.
+Every primary-screen resize records the source/target column widths, grid
+sequence, original viewport-top row index and the viewport's own row snapshot
+(#1407-1ab2). Live VtLogBuffer width changes reflow history only; the visible
+cursor-addressed Ink screen remains a separate replacement domain.
+
+The first explicit full viewport erase after the resize can replace rows from
+that recorded viewport. An anchor is sought only in the viewport snapshot,
+never in older scrollback. Newly redrawn overflow preceding that owned anchor
+is discarded, and its visible prefix is blanked without shifting child coordinates.
+Height growth records the exact history coordinates pulled into the new viewport,
+so their new redraw is retained; only unambiguously displaced old viewport rows may also be
+removed. Matching preserves intra-line whitespace and uses the shared
+greedy-width rule for Ink's hard-line word wrapping. Ambiguous partial boundary
+rows remain intact. Missing, repeated or stale anchors preserve all rows.
+
+Older scrollback is never deleted by text similarity. The physical-row
+reconciliation fallback is bounded by rows actually displaced from the recorded
+viewport. Alternate screens and ordinary edits provide no replacement authority.
 The recorded streaming and idle PTY captures and resize byte timelines live in
 `crates/tuic-terminal/src/fixtures/claude-resize-1407/`.
