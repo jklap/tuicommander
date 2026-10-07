@@ -343,3 +343,25 @@ describe("RemoteRepoPicker", () => {
 		expect(onConfirm).toHaveBeenCalledWith("/home/stefano/Gits");
 	});
 });
+
+// Catches: a browser picker routes the serving machine through a nonexistent remote connection.
+describe("current-server repository picker", () => {
+	it("browses server home, confirms a directory and cancels without registering", async () => {
+		serveTree({ "/server-home": [dir("projects"), file("notes.txt")], "/server-home/projects": [] }, "/server-home");
+		const onConfirm = vi.fn();
+		const onClose = vi.fn();
+		const view = render(() => (
+			<RemoteRepoPicker visible connectionName="tuic.test:9876" onConfirm={onConfirm} onClose={onClose} />
+		));
+		await view.findByText("projects");
+		expect(view.queryByText("notes.txt")).toBeNull();
+		expect(mockRpc).toHaveBeenCalledWith("get_home_directory", {}, "");
+		expect(mockRpc).toHaveBeenCalledWith("list_directory", { repoPath: "/server-home", subdir: "" }, "");
+		fireEvent.click(view.getByText("projects"));
+		await waitFor(() => expect(view.getByRole("textbox")).toHaveValue("/server-home/projects"));
+		fireEvent.click(view.getByText("Add This Folder"));
+		expect(onConfirm).toHaveBeenCalledWith("/server-home/projects");
+		fireEvent.click(view.getByText("Cancel"));
+		expect(onConfirm).toHaveBeenCalledTimes(1);
+	});
+});

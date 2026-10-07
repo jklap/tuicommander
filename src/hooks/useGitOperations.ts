@@ -165,7 +165,7 @@ export interface GitOperationsDeps {
 		) => Promise<boolean>;
 		/** Surface a git failure in a dialog with the full output; returns true if the user chose Retry. */
 		reportGitError?: (title: string, detail: string, offerRetry?: boolean) => Promise<boolean>;
-		/** Browser mode only: show an in-app text-input dialog to enter a repo path */
+		/** Browser mode only: browse the serving machine for a repo path */
 		promptRepoPath?: () => Promise<string | null>;
 		/**
 		 * Browse a connected machine's filesystem and return an absolute path on it.
@@ -438,7 +438,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			if (!selected) return;
 			path = typeof selected === "string" ? selected : selected[0];
 		} else {
-			// Browser mode: no native file picker — use in-app text input dialog
+			// Browser mode: browse the server through the in-app directory picker
 			const input = await deps.dialogs.promptRepoPath?.();
 			if (!input?.trim()) return;
 			path = input.trim();

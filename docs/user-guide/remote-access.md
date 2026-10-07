@@ -84,6 +84,8 @@ TUICommander includes a phone-optimized interface for monitoring agents from you
 2. Navigate to `http://<your-ip>:<port>/mobile` from your phone
 3. Log in with your credentials
 
+Opening `/` also offers the form login. iPad Safari selects the touch interface, including when it requests the desktop website with a Mac user agent. Desktop browsers keep the full interface. In that interface, **Add Repository** browses folders on the computer running TUICommander, starting at its home directory; it does not browse the device opening Safari.
+
 ### Add to Home Screen
 
 The mobile UI supports PWA (Progressive Web App) installation:
