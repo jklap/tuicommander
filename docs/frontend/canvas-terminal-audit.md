@@ -30,7 +30,7 @@ Terminal.tsx (outer shell)
         +-- Suggest/intent overlay (DOM divs over canvas)
         +-- Link detection (hover: file paths, web URLs, OSC 8)
         +-- Keyboard input (VT100 + Kitty protocol)
-        +-- Touch input (tap/swipe/pinch for mobile/tablet via offscreen textarea)
+        +-- Touch input (tap/swipe/pinch for mobile/tablet via shared input)
         +-- IntersectionObserver flow control (skip paint when hidden)
         +-- Plugin watcher lines from Rust (pluginRegistry.handleWatcherLines)
         +-- OSC 7 CWD + OSC 133 shell integration
@@ -202,7 +202,7 @@ cell's full text span, since native search points have no subcell index.
 | MCP atomic agent submission | OK | Backend-only `session action=submit`; the shared PTY writer lock spans payload, raw-mode gap, and Enter, so CanvasTerminal input cannot splice the submitted command. No renderer state or new frontend transport exists. |
 | Image paste detection | OK | Checks `items[i].type.startsWith("image/")` |
 | Resume banner keyboard | OK | Space/Enter/Escape/printable |
-| Touch tap/swipe/pinch (mobile) | OK | `installTouchHandlers` focuses the shared keyboard input; touch and compatibility mouse events retain one focus target |
+| Touch tap/swipe/pinch (mobile) | OK | `installTouchHandlers` focuses the shared keyboard input; primary compatibility mouse presses cancel the browser default canvas focus action; native keyboard animation still needs iPad verification |
 
 ### Selection & Clipboard
 

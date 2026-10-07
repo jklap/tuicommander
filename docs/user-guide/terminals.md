@@ -4,7 +4,7 @@ Remote terminals replay their current viewport when attached or reconnected. A s
 
 ## Tablet Keyboard
 
-Tap the terminal to focus its keyboard input. Touch and mouse input use the same field, including soft-keyboard text entry and repeated deletion.
+Tap the terminal to focus its keyboard input. Touch and mouse input use the same field, including soft-keyboard text entry and repeated deletion. Primary mouse presses keep focus on that input without a temporary canvas focus change.
 
 ## Terminal Sessions
 

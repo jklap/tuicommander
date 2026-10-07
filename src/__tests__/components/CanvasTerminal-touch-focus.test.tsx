@@ -17,6 +17,7 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 }));
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
+import { resetPlatformCache } from "../../platform";
 
 function touch(canvas: Element, type: string, y: number) {
 	const point: Touch = {
@@ -102,6 +103,7 @@ describe("CanvasTerminal touch input focus", () => {
 	afterEach(() => {
 		unmount?.();
 		vi.restoreAllMocks();
+		resetPlatformCache();
 		vi.unstubAllGlobals();
 	});
 
@@ -113,6 +115,38 @@ describe("CanvasTerminal touch input focus", () => {
 		expect(input).toBeInstanceOf(HTMLInputElement);
 		canvas.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
 		expect(document.activeElement).toBe(input);
+	});
+
+	// Catches: compatibility mousedown blurs the input through the canvas's default focus action.
+	it.each([100, 700])("cancels default canvas focus after a terminal tap at y=%i", (y) => {
+		touch(canvas, "touchstart", y);
+		touch(canvas, "touchend", y);
+		const input = document.activeElement;
+		const focusChanges: string[] = [];
+		const record = (event: Event) => focusChanges.push(event.type);
+		input?.addEventListener("blur", record);
+		const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, clientY: y });
+		canvas.dispatchEvent(press);
+		expect(press.defaultPrevented).toBe(true);
+		expect(document.activeElement).toBe(input);
+		expect(focusChanges).toEqual([]);
+		input?.removeEventListener("blur", record);
+	});
+
+	// Catches: an unconditional preventDefault suppresses the native secondary-button context menu.
+	it("leaves the secondary mouse press default available for context menus", () => {
+		const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 2 });
+		canvas.dispatchEvent(press);
+		expect(press.defaultPrevented).toBe(false);
+	});
+
+	// Catches: canceling primary focus also suppresses macOS Ctrl-click's native context menu.
+	it("leaves macOS Ctrl-click default available for context menus", () => {
+		vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+		resetPlatformCache();
+		const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0, ctrlKey: true });
+		canvas.dispatchEvent(press);
+		expect(press.defaultPrevented).toBe(false);
 	});
 
 	// Catches: touch input bypasses the shared iOS input handler or forwards text twice.
