@@ -293,12 +293,27 @@ need a separate decision; neither is included in this patch.
 
 Every primary-screen resize records the source/target column widths, grid
 sequence, original viewport-top row index and the viewport's own row snapshot
-(#1407-1ab2). Live VtLogBuffer width changes reflow history only; the visible
-cursor-addressed Ink screen remains a separate replacement domain.
+(#1407-1ab2). Live VtLogBuffer width changes use full reflow so visible
+logical lines retain their complete content and soft-wrap continuity.
+History-only reflow truncates visible cells on shrink and leaves natural wrap
+flags at the old column on growth, breaking session-output redaction. The
+cursor-addressed Ink redraw remains a separate replacement domain for the
+reconciliation below.
 
 The first explicit full viewport erase can replace an old displaced row only
 when that complete physical row occurs in the new replacement. A two-row
 viewport anchor does not license removing other old rows.
+
+Full reflow can move the original viewport prefix into history even when the
+height is unchanged. A unique complete two-row source prefix locates that
+owned range in the reflowed coordinates; incomplete or ambiguous matches
+retain the rows. Each old row still needs complete replacement proof.
+
+Blank screen-prefix rows created by proven suppression retain explicit
+provenance. A write, erase, scroll or alternate-screen switch touching them
+invalidates that provenance, even if the visible text remains blank. Before
+the next full reflow, only still-owned synthetic blanks are removed without
+adding history. Program-authored separators are never included.
 
 A fresh redraw prefix is suppressed only when its entire text equals a contiguous
 suffix of an immutable history snapshot ending immediately above the owned
@@ -324,3 +339,8 @@ visible duplicates are blanked without shifting child row coordinates.
 Alternate screens and ordinary edits provide no replacement authority.
 The recorded streaming and idle PTY captures and resize byte timelines live in
 `crates/tuic-terminal/src/fixtures/claude-resize-1407/`.
+
+Resize-owned physical fragments retain their complete logical-record identity from
+the post-resize WRAPLINE boundaries, before a redraw can erase a continuation still
+on screen. Replacement proof must match that complete record; a substring in a
+different replaced record never licenses deleting an omitted history record.

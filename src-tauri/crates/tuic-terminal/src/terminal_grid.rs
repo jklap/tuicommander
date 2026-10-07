@@ -1,6 +1,6 @@
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::grid::{Dimensions, ReflowMode};
+use alacritty_terminal::grid::{Dimensions, ReflowMode, ScrollSource};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::{Colors, named_color_to_index};
@@ -649,6 +649,8 @@ struct ResizeViewport {
     preceding_logical: String,
     /// Only these newest old history rows came from this viewport.
     displaced_rows: usize,
+    /// Exclusive owned-row end and complete WRAPLINE record before the redraw.
+    displaced_records: Vec<(usize, String)>,
     scrolled_after_resize: usize,
 }
 
@@ -699,6 +701,9 @@ pub struct TerminalGrid {
     reprint_clear_generation: usize,
     grid_sequence: u64,
     resize_viewport: Option<ResizeViewport>,
+    /// Only blank screen rows created by proven prefix suppression, starting
+    /// at row zero. Any parser damage touching them relinquishes ownership.
+    suppressed_screen_prefix: usize,
     history_source_widths: std::collections::HashMap<String, usize>,
 }
 
@@ -754,6 +759,7 @@ impl TerminalGrid {
             reprint_clear_generation: 0,
             grid_sequence: 0,
             resize_viewport: None,
+            suppressed_screen_prefix: 0,
             history_source_widths: std::collections::HashMap::new(),
         }
     }
@@ -771,6 +777,7 @@ impl TerminalGrid {
             }
         } else {
             self.processor.advance(&mut self.term, data);
+            self.invalidate_suppressed_screen_prefix();
         }
 
         // Prefer the alacritty parse-damage set: read+diff ONLY the lines whose
@@ -864,6 +871,7 @@ impl TerminalGrid {
             return false;
         }
         self.processor.stop_sync(&mut self.term);
+        self.invalidate_suppressed_screen_prefix();
         self.refresh_rows_after_sync_flush();
         true
     }
@@ -877,6 +885,7 @@ impl TerminalGrid {
             return false;
         }
         self.processor.stop_sync(&mut self.term);
+        self.invalidate_suppressed_screen_prefix();
         self.refresh_rows_after_sync_flush();
         true
     }
@@ -1233,6 +1242,24 @@ impl TerminalGrid {
     }
 
     pub fn resize_with_mode(&mut self, rows: u16, cols: u16, mode: ReflowMode) {
+        self.invalidate_suppressed_screen_prefix();
+        let suppressed = std::mem::take(&mut self.suppressed_screen_prefix);
+        if mode == ReflowMode::All && suppressed != 0 {
+            // These blanks are our deleted replay, not program output. Remove
+            // them before full reflow can migrate them into immutable history.
+            let grid = self.term.grid_mut();
+            let lines = grid.screen_lines();
+            grid.scroll_up_with(
+                &(Line(0)..Line(lines as i32)),
+                suppressed,
+                ScrollSource::Control,
+            );
+            grid.cursor.point.line = Line((grid.cursor.point.line.0 - suppressed as i32).max(0));
+            grid.saved_cursor.point.line =
+                Line((grid.saved_cursor.point.line.0 - suppressed as i32).max(0));
+            self.prev_rows.clear();
+            self.term.mark_fully_damaged();
+        }
         let size = GridSize {
             cols: cols as usize,
             lines: rows as usize,
@@ -1306,7 +1333,7 @@ impl TerminalGrid {
             !self.row_wrapped(Line(row as i32))
                 && viewport_rows[pulled_rows + row].width() <= cols as usize
         });
-        let displaced_rows = if before_columns == cols as usize
+        let mut displaced_rows = if before_columns == cols as usize
             || mode == ReflowMode::HistoryOnly
             || (cols as usize <= before_columns && simple_rows)
         {
@@ -1314,7 +1341,57 @@ impl TerminalGrid {
         } else {
             0
         };
+        // Reflow can move visible content into history even without a height
+        // change. Locate the complete original viewport prefix in its new
+        // coordinates; ambiguous or incomplete matches own no history rows.
+        let source_logical = self.logical_text_rows(-(pulled_rows as i32), before_lines as i32);
         self.term.resize_reflow(size, mode);
+        if mode == ReflowMode::All && (cols as usize) < before_columns {
+            let first = source_logical.iter().position(|row| !row.trim().is_empty());
+            if let Some(first) = first
+                && let Some(next) = source_logical.get(first + 1)
+                && !next.trim().is_empty()
+            {
+                let prefix = format!("{}\n{}", source_logical[first], next);
+                let count = self
+                    .term
+                    .grid()
+                    .history_size()
+                    .min(before_lines.saturating_mul(4).min(256));
+                let candidates: Vec<i32> = (-(count as i32)..0)
+                    .filter(|&row| {
+                        self.term
+                            .bounds_to_string(
+                                Point::new(Line(row), Column(0)),
+                                Point::new(Line(-1), Column(self.term.grid().columns() - 1)),
+                            )
+                            .starts_with(&prefix)
+                    })
+                    .collect();
+                if let [start] = candidates.as_slice() {
+                    displaced_rows = (-start) as usize;
+                }
+            }
+        }
+        // Record identity follows WRAPLINE boundaries, never substring matches.
+        // Include a continuation still on screen before the repaint erases it.
+        displaced_rows = displaced_rows.min(self.term.grid().history_size());
+        let mut displaced_records = Vec::new();
+        let mut first = -(displaced_rows as i32);
+        while displaced_rows != 0 && first < self.term.grid().screen_lines() as i32 {
+            let mut last = first;
+            while last + 1 < self.term.grid().screen_lines() as i32 && self.row_wrapped(Line(last))
+            {
+                last += 1;
+            }
+            let text = self.term.bounds_to_string(
+                Point::new(Line(first), Column(0)),
+                Point::new(Line(last), Column(self.term.grid().columns() - 1)),
+            );
+            let end = (last + 1).min(0) + displaced_rows as i32;
+            displaced_records.push((end as usize, text));
+            first = last + 1;
+        }
         self.reprint_merge_armed_at = (!was_alt).then(|| self.term.grid().total_scrolled());
         self.frame_end_carry.clear();
         self.reprint_head_snapshot = self.armed_screen_rows();
@@ -1328,6 +1405,7 @@ impl TerminalGrid {
             rows: viewport_rows,
             preceding_logical,
             displaced_rows,
+            displaced_records,
             scrolled_after_resize: self.term.grid().total_scrolled(),
         });
         self.prev_rows.clear();
@@ -1359,18 +1437,35 @@ impl TerminalGrid {
             self.processor
                 .advance(&mut self.term, &data[fed..end_in_data]);
             fed = end_in_data;
+            self.invalidate_suppressed_screen_prefix();
             merged |= self.merge_reprinted_history_tail();
             if self.reprint_merge_armed_at.is_none() {
                 break;
             }
         }
         self.processor.advance(&mut self.term, &data[fed..]);
+        self.invalidate_suppressed_screen_prefix();
         self.frame_end_carry = if self.reprint_merge_armed_at.is_some() {
             window[window.len().saturating_sub(FRAME_END.len() - 1)..].to_vec()
         } else {
             Vec::new()
         };
         merged
+    }
+
+    fn invalidate_suppressed_screen_prefix(&mut self) {
+        if self.suppressed_screen_prefix == 0 {
+            return;
+        }
+        let touched = match self.term.parse_damage() {
+            TermParseDamage::Full => true,
+            TermParseDamage::Partial(rows) => {
+                rows.iter().any(|&row| row < self.suppressed_screen_prefix)
+            }
+        };
+        if touched || self.is_alternate_screen() {
+            self.suppressed_screen_prefix = 0;
+        }
     }
 
     fn logical_text_rows(&self, mut start: i32, end: i32) -> Vec<String> {
@@ -1602,12 +1697,69 @@ impl TerminalGrid {
         let owned = resize
             .displaced_rows
             .min(grid.history_size().saturating_sub(newer));
+        let source = normalize(
+            &resize.rows.iter().map(String::as_str).collect::<Vec<_>>(),
+            resize.before_columns,
+        );
+        // A physical fragment of a fully reflowed row is replaceable only
+        // inside a complete source logical record present in the redraw.
+        // Matching an arbitrary substring ("beta" in "betaX") proves nothing.
+        let replaced_source: Vec<&str> = source
+            .lines()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let text = row.trim_start();
+                (!text.is_empty()
+                    && fresh.lines().any(|line| {
+                        line.trim_start() == text
+                            || (index == 0 && text.width() >= 16 && line.ends_with(text))
+                    }))
+                .then_some(text)
+            })
+            .collect();
+        // Ink's hard-wrapped rows use the same existing normalization as the
+        // source proof. Associate each normalized record with its contiguous
+        // physical span, rather than searching another record for a fragment.
+        let owned_text = normalize(
+            &resize
+                .displaced_records
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>(),
+            resize.before_columns,
+        );
+        let mut physical = resize.displaced_records.iter();
+        let owned_records: Vec<(usize, &str)> = owned_text
+            .lines()
+            .filter_map(|record| {
+                let (first_end, first) = physical.next()?;
+                let mut end = *first_end;
+                let mut length = first.len();
+                while length < record.len() {
+                    let (next_end, next) = physical.next()?;
+                    end = *next_end;
+                    length += 1 + next.trim_start().len();
+                }
+                (length == record.len()).then_some((end, record))
+            })
+            .collect();
         let old_replaced: Vec<bool> = (0..owned)
             .map(|row| {
                 let old = self
                     .row_to_text(Line(row as i32 - newer as i32 - owned as i32))
                     .unwrap_or_default();
-                !old.trim().is_empty() && fresh_rows.iter().any(|fresh| fresh == &old)
+                if old.trim().is_empty() {
+                    resize.before_columns != resize.after_columns
+                        && fresh_rows.iter().any(|fresh| fresh == &old)
+                } else {
+                    fresh_rows.iter().any(|fresh| fresh == &old)
+                        || owned_records
+                            .iter()
+                            .find(|(end, _)| row + resize.displaced_rows - owned < *end)
+                            .is_some_and(|(_, record)| {
+                                replaced_source.contains(&record.trim_start())
+                            })
+                }
             })
             .collect();
         let remaining = newer - history_prefix;
@@ -1631,7 +1783,13 @@ impl TerminalGrid {
             }
         }
         if screen_prefix != 0 {
+            self.suppressed_screen_prefix = screen_prefix;
+            // The erase/repaint preceding this suppression already dirtied
+            // these rows. Start fresh damage evidence for subsequent bytes,
+            // including a blank write over an already blank coordinate.
+            self.prev_rows.clear();
             self.term.mark_fully_damaged();
+            self.term.reset_parse_damage();
         }
         removed + screen_prefix != 0
     }
