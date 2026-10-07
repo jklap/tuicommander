@@ -159,6 +159,7 @@
 /fs/warm-index
 /fs/write
 /fs/write-external
+/fs/write-if-unchanged
 /generators/generate
 /github/accounts
 /github/accounts/remove
