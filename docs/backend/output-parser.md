@@ -583,3 +583,13 @@ missing or extra events. To accept an intentional change, explicitly run
 `scripts/replay-oracle.sh regenerate`, review the JSONL diff, and commit it with
 the change. Add/stage a capture before regeneration so Git includes it in the
 corpus; an unknown agent filename requires an explicit replay mapping.
+
+## Real agent scenario captures
+
+Use `scripts/agent_capture/run.py` to record installed CLI scenarios in an isolated
+headless debug daemon. See [the driver guide](../../scripts/agent_capture/README.md)
+for prompt/question/approval/wait/interrupt steps, authentication prerequisites,
+and promotion. `.scenario.json` companions specify ordered expected states;
+`replay_oracle_all_committed_tcap_preserves_chunk_decisions` enforces them in
+addition to the 1342 golden trace. Failed or absent agents remain unverified;
+no synthetic external transcripts substitute for captures.
