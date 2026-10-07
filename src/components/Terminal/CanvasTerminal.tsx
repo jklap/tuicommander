@@ -2976,6 +2976,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		let pressSeq = 0;
 
 		bindings.listen(canvasRef, "mousedown", (e: MouseEvent) => {
+			// Keep the shared input focused: the default canvas focus runs AFTER this
+			// handler and briefly blurs it, which can dismiss the soft keyboard. Cancel before
+			// any grid/link early return, while preserving native context-menu presses.
+			if (e.button === 0 && !(isMacOS() && e.ctrlKey)) e.preventDefault();
 			pressSeq++;
 			keyInputRef.focus({ preventScroll: true });
 			{
