@@ -26,8 +26,6 @@ const MAX_TOOL_OUTPUT_CHARS: usize = 4_000;
 const MAX_INPUT_STRING_CHARS: usize = 1_000;
 /// Characters of a tool's argument shown in its title.
 const MAX_TITLE_ARG_CHARS: usize = 120;
-/// Tool ids remembered so a result is not shown for a call outside the window.
-const MAX_KNOWN_TOOLS: usize = 10_000;
 
 /// Row types that carry no conversation. Skipped without decoding the body.
 const PLUMBING_ROWS: &[&str] = &[
@@ -115,20 +113,14 @@ impl ClaudeAdapter {
                 if row.get("isCompactSummary").and_then(Value::as_bool) == Some(true) {
                     return vec![notice("Conversation compacted")];
                 }
-                // DEFERRED (2026-10-07) — transcripts older than `origin` carry
-                // no marker; their prompts are not shown rather than guessed at
-                // (slash-command echoes are string rows too).
-                let human = row.pointer("/origin/kind").and_then(Value::as_str) == Some("human");
-                if !human || text.trim().is_empty() {
-                    return Vec::new();
-                }
-                vec![json!({
-                    "sessionUpdate": "user_message_chunk",
-                    "messageId": row.get("uuid").and_then(Value::as_str),
-                    "content": { "type": "text", "text": clean(text, MAX_TEXT_CHARS).0 },
-                })]
+                human_prompt(row, text).into_iter().collect()
             }
-            Value::Array(blocks) => blocks.iter().filter_map(|b| self.tool_result(b)).collect(),
+            Value::Array(blocks) => {
+                let mut out: Vec<Value> =
+                    blocks.iter().filter_map(|b| self.tool_result(b)).collect();
+                out.extend(human_prompt(row, &blocks_text(blocks)));
+                out
+            }
             _ => Vec::new(),
         }
     }
@@ -140,11 +132,11 @@ impl ClaudeAdapter {
         let id = block.get("tool_use_id").and_then(Value::as_str)?;
         // The call opened before the window: a card for it would be an empty
         // one titled with the raw id.
-        if !self.known_tools.contains(id) {
+        if !self.known_tools.remove(id) {
             return None;
         }
         let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
-        let (text, truncated) = clean(
+        let text = clean(
             &tool_result_text(block.get("content")),
             MAX_TOOL_OUTPUT_CHARS,
         );
@@ -156,9 +148,6 @@ impl ClaudeAdapter {
         if !text.is_empty() {
             update["content"] =
                 json!([{ "type": "content", "content": { "type": "text", "text": text } }]);
-        }
-        if truncated {
-            update["_meta"] = json!({ "tuic": { "truncated": true } });
         }
         Some(update)
     }
@@ -186,7 +175,7 @@ impl ClaudeAdapter {
                     if raw.trim().is_empty() {
                         continue;
                     }
-                    let (mut text, _) = clean(raw, MAX_TEXT_CHARS);
+                    let mut text = clean(raw, MAX_TEXT_CHARS);
                     if self.last_agent_text_of.is_some() && self.last_agent_text_of == message_id {
                         text.insert_str(0, "\n\n");
                     }
@@ -208,7 +197,7 @@ impl ClaudeAdapter {
                     out.push(json!({
                         "sessionUpdate": "agent_thought_chunk",
                         "messageId": message_id,
-                        "content": { "type": "text", "text": clean(raw, MAX_TEXT_CHARS).0 },
+                        "content": { "type": "text", "text": clean(raw, MAX_TEXT_CHARS) },
                     }));
                 }
                 Some("tool_use") => out.extend(self.tool_use(block)),
@@ -222,9 +211,6 @@ impl ClaudeAdapter {
         let id = block.get("id").and_then(Value::as_str)?;
         let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
         let input = block.get("input").cloned().unwrap_or(Value::Null);
-        if self.known_tools.len() >= MAX_KNOWN_TOOLS {
-            self.known_tools.clear();
-        }
         self.known_tools.insert(id.to_owned());
         Some(json!({
             "sessionUpdate": "tool_call",
@@ -235,6 +221,36 @@ impl ClaudeAdapter {
             "rawInput": cap_strings(&input),
         }))
     }
+}
+
+/// A prompt the user typed, as a user entry. `None` for harness text.
+fn human_prompt(row: &Value, text: &str) -> Option<Value> {
+    // DEFERRED (2026-10-07) — transcripts older than `origin` carry
+    // no marker; their prompts are not shown rather than guessed at
+    // (slash-command echoes are string rows too).
+    let human = row.pointer("/origin/kind").and_then(Value::as_str) == Some("human");
+    if !human || text.trim().is_empty() {
+        return None;
+    }
+    Some(json!({
+        "sessionUpdate": "user_message_chunk",
+        "messageId": row.get("uuid").and_then(Value::as_str),
+        "content": { "type": "text", "text": clean(text, MAX_TEXT_CHARS) },
+    }))
+}
+
+/// The text of a prompt made of blocks: text joined, each image a short
+/// placeholder. Tool results are not part of the prompt.
+fn blocks_text(blocks: &[Value]) -> String {
+    blocks
+        .iter()
+        .filter_map(|b| match b.get("type").and_then(Value::as_str) {
+            Some("text") => b.get("text").and_then(Value::as_str).map(str::to_owned),
+            Some("image") => Some("[image]".to_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn is_agent_text(update: &Value) -> bool {
@@ -251,14 +267,13 @@ fn notice(text: &str) -> Value {
 }
 
 /// Redacted first, then cut: a secret split by the cut would no longer match
-/// its pattern. The flag says the text was cut.
-fn clean(text: &str, max: usize) -> (String, bool) {
+/// its pattern.
+fn clean(text: &str, max: usize) -> String {
     let redacted = redact_secrets(text);
     if redacted.chars().count() <= max {
-        return (redacted, false);
+        return redacted;
     }
-    let cut: String = redacted.chars().take(max - 1).chain(['…']).collect();
-    (cut, true)
+    redacted.chars().take(max - 1).chain(['…']).collect()
 }
 
 fn tool_result_text(content: Option<&Value>) -> String {
@@ -303,7 +318,7 @@ fn tool_title(name: &str, input: &Value) -> String {
     if first_line.is_empty() {
         return name.to_owned();
     }
-    let (arg, _) = clean(first_line, MAX_TITLE_ARG_CHARS);
+    let arg = clean(first_line, MAX_TITLE_ARG_CHARS);
     format!("{name}: {arg}")
 }
 
@@ -311,7 +326,7 @@ fn tool_title(name: &str, input: &Value) -> String {
 /// file does not ride the log.
 fn cap_strings(value: &Value) -> Value {
     match value {
-        Value::String(s) => Value::String(clean(s, MAX_INPUT_STRING_CHARS).0),
+        Value::String(s) => Value::String(clean(s, MAX_INPUT_STRING_CHARS)),
         Value::Array(items) => Value::Array(items.iter().map(cap_strings).collect()),
         Value::Object(map) => Value::Object(
             map.iter()
