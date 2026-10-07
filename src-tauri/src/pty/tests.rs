@@ -21818,47 +21818,53 @@ fn queue_idempotency_validates_keys_and_bounds_recent_acceptance() {
 }
 
 /// Catches: a newly committed capture or a changed state/question decision escapes
-/// the small hand-picked baseline. Git is authoritative, including crate fixtures.
+/// the small hand-picked baseline. The filesystem walk of `src-tauri/` is authoritative,
+/// including crate fixtures; it needs no Git index, so replicas without one run it too.
 #[test]
 fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
     use serde_json::json;
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
-    let tracked = std::process::Command::new("git")
-        .args(["ls-files", "-z", "--", "*.tcap"])
-        .current_dir(root)
-        .output()
-        .expect("enumerate tracked captures");
-    assert!(tracked.status.success(), "git ls-files failed");
-    let mut fixtures: Vec<_> = tracked
-        .stdout
-        .split(|b| *b == 0)
-        .filter(|p| !p.is_empty())
-        .map(|p| {
-            std::str::from_utf8(p)
-                .expect("UTF-8 fixture path")
-                .to_owned()
-        })
-        .collect();
+    fn collect_captures(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                let name = path.file_name().unwrap().to_string_lossy();
+                if !matches!(name.as_ref(), "target" | ".tmp" | "node_modules") {
+                    collect_captures(&path, root, out);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "tcap") {
+                let relative = path.strip_prefix(root).unwrap();
+                out.push(
+                    relative
+                        .components()
+                        .map(|c| c.as_os_str().to_str().expect("UTF-8 fixture path"))
+                        .collect::<Vec<_>>()
+                        .join("/"),
+                );
+            }
+        }
+    }
+    let mut fixtures = Vec::new();
+    collect_captures(&root.join("src-tauri"), root, &mut fixtures);
     fixtures.sort();
     assert!(!fixtures.is_empty(), "empty corpus cannot establish parity");
     let mut manifest = Vec::new();
     for fixture in fixtures {
-        let agent = [
-            "claude", "codex", "grok", "goose", "opencode", "gemini", "aider", "amp", "cursor",
-            "droid", "pi",
-        ]
-        .into_iter()
-        .find(|agent| {
-            std::path::Path::new(&fixture)
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with(agent)
-                || fixture.contains(&format!("/{agent}-"))
-        })
-        .unwrap_or_else(|| panic!("{fixture}: declare capture's agent before recording a golden"));
+        let agent = ["claude", "codex", "grok", "goose", "opencode"]
+            .into_iter()
+            .find(|agent| {
+                std::path::Path::new(&fixture)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with(agent)
+                    || fixture.contains(&format!("/{agent}-"))
+            })
+            .unwrap_or_else(|| {
+                panic!("{fixture}: declare capture's agent before recording a golden")
+            });
         let capture =
             crate::pty_capture::decode_capture(&std::fs::read(root.join(&fixture)).unwrap())
                 .unwrap();
