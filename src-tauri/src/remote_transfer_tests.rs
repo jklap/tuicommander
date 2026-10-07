@@ -30,14 +30,25 @@ async fn daemon_router_upload_requires_existing_auth_and_registered_destination(
         "/fs/upload-copy?destDir={}&name=file&directory=false",
         repo.path().display()
     );
-    for (suffix, expected) in [
-        ("", axum::http::StatusCode::UNAUTHORIZED),
-        ("&token=existing-token", axum::http::StatusCode::OK),
+    // A query-only token no longer authorizes uploads; the cookie does.
+    for (suffix, cookie, expected) in [
+        ("", None, axum::http::StatusCode::UNAUTHORIZED),
+        (
+            "&token=existing-token",
+            None,
+            axum::http::StatusCode::UNAUTHORIZED,
+        ),
+        ("", Some("tui-session=existing-token"), axum::http::StatusCode::OK),
     ] {
         let mut request = axum::http::Request::post(format!("{query}{suffix}"))
             .header("host", "localhost")
             .body(Body::from(archive("file", b"remote bytes")))
             .unwrap();
+        if let Some(cookie) = cookie {
+            request
+                .headers_mut()
+                .insert("cookie", cookie.parse().unwrap());
+        }
         request
             .extensions_mut()
             .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
@@ -46,7 +57,7 @@ async fn daemon_router_upload_requires_existing_auth_and_registered_destination(
             ))));
         let response = app.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), expected);
-        if suffix.is_empty() {
+        if expected == axum::http::StatusCode::UNAUTHORIZED {
             assert!(!repo.path().join("file").exists());
         }
     }
