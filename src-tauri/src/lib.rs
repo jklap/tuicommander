@@ -123,6 +123,7 @@ pub(crate) mod pty;
 pub(crate) mod pty_capture;
 pub(crate) mod push;
 pub(crate) use tuic_core::redaction;
+pub(crate) mod chat_view;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
@@ -141,8 +142,6 @@ pub(crate) mod smart_prompt;
 pub(crate) mod state;
 pub(crate) mod stories;
 pub(crate) mod subagent_map;
-pub(crate) mod transcript_tail;
-pub(crate) mod chat_view;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
 #[expect(
@@ -150,6 +149,7 @@ pub(crate) mod tasks;
     reason = "Telegram offline ports await native integration after 1419/1420"
 )]
 pub(crate) mod telegram;
+pub(crate) mod transcript_tail;
 pub(crate) use tuic_terminal::terminal_grid;
 #[cfg(test)]
 mod build_graph_tests;

@@ -43,7 +43,7 @@ import { handleIntentEvent, shouldApplyOscTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
 import { trackQuestionReminder } from "./questionReminder";
 import s from "./Terminal.module.css";
-import { TerminalChatView, ChatViewFallbackBanner, ViewModeToggle } from "./TerminalChatView";
+import { ChatViewFallbackBanner, TerminalChatView, ViewModeToggle } from "./TerminalChatView";
 import { TerminalSearch } from "./TerminalSearch";
 import {
 	REATTACH_PHASE_INITIAL,

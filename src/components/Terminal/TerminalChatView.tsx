@@ -108,9 +108,5 @@ export const ChatViewFallbackBanner: Component<{ terminalId: string }> = (props)
 		const sessionId = term()?.sessionId;
 		return sessionId && term()?.viewMode === "cli" ? chatViewStore.unavailableReason(sessionId) : null;
 	};
-	return (
-		<Show when={reason()}>
-			{(text) => <div class={s.fallbackBanner}>Chat view closed: {text()}</div>}
-		</Show>
-	);
+	return <Show when={reason()}>{(text) => <div class={s.fallbackBanner}>Chat view closed: {text()}</div>}</Show>;
 };
