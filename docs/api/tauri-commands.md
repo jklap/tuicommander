@@ -556,6 +556,7 @@ size }` receipt, and uses the same destination, cap, and cleanup rules.
 | `get_home_directory` | — | `String` | Return this machine's home directory for local or remote browsing |
 | `fs_read_file` | `path` | `String` | Read file contents |
 | `write_file` | `path, content` | `()` | Write file |
+| `write_file_if_unchanged` | `repo_path, file, expected, content` | `bool` | Write only when the file still equals `expected`; `false` = changed on disk, nothing written (mobile Markdown review) |
 | `create_directory` | `path` | `()` | Create directory |
 | `delete_path` | `path` | `()` | Delete file or directory |
 | `rename_path` | `src, dest` | `()` | Rename/move path |

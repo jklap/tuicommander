@@ -70,7 +70,7 @@ unnoticed.
 
 ### Moved off the UI thread in this story
 
-`fs.rs`: `write_file`, `create_directory`, `delete_path`, `rename_path`,
+`fs.rs`: `write_file`, `write_file_if_unchanged`, `create_directory`, `delete_path`, `rename_path`,
 `copy_path`, `copy_path_abs`, `move_path_abs`, `add_to_gitignore`,
 `fs_read_file`, `list_directory`, `search_files`.
 `lib.rs`: `read_file`, `read_editor_file`, `read_external_file`,
