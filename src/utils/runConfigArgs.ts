@@ -80,11 +80,12 @@ export function findArgConflicts(agentType: string, rawArgs: readonly string[], 
 			});
 		}
 		const fromProfile = profileValues.get(option.flag);
-		if (fromProfile !== undefined && distinct.some((v) => v !== fromProfile)) {
+		const replaced = distinct.filter((v) => v !== fromProfile);
+		if (fromProfile !== undefined && replaced.length > 0) {
 			conflicts.push({
 				kind: "overridden",
 				flag: option.flag,
-				message: `${option.flag} ${distinct.join(", ")} in raw args is replaced by the permissions profile (${fromProfile})`,
+				message: `${option.flag} ${replaced.join(", ")} in raw args is replaced by the permissions profile (${fromProfile})`,
 			});
 		}
 	}
