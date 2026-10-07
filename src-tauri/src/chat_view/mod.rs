@@ -16,6 +16,7 @@ pub(crate) mod claude;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
@@ -38,6 +39,11 @@ const VIEWER_IDLE: Duration = Duration::from_secs(20);
 /// a new session file, and Claude exits.
 const REBIND_EVERY: Duration = Duration::from_secs(10);
 
+/// Source of epochs. A view dropped by the idle ticker and created again for
+/// the same terminal must not share an epoch with the dropped one, or a client
+/// holding the old cursor would read a slice of a different window.
+static NEXT_EPOCH: AtomicU64 = AtomicU64::new(0);
+
 /// Bounded log of ACP updates with a monotonic sequence.
 struct ViewLog {
     /// Bumped when the conversation changes (new file, shrunk file), so a
@@ -55,7 +61,7 @@ struct ViewLog {
 impl ViewLog {
     fn new(max_entries: usize, max_bytes: usize) -> Self {
         Self {
-            epoch: 0,
+            epoch: NEXT_EPOCH.fetch_add(1, Ordering::Relaxed),
             first_seq: 0,
             next_seq: 0,
             entries: VecDeque::new(),
@@ -83,7 +89,7 @@ impl ViewLog {
     /// A different conversation. Sequences keep counting: they are only
     /// comparable within an epoch, and never reused.
     fn reset(&mut self) {
-        self.epoch += 1;
+        self.epoch = NEXT_EPOCH.fetch_add(1, Ordering::Relaxed);
         self.entries.clear();
         self.bytes = 0;
         self.first_seq = self.next_seq;

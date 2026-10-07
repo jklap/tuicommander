@@ -84,7 +84,7 @@ fn view_log_new_session_id_bumps_epoch_and_clears() {
 
     view.rebind(b);
     view.advance(1 << 20).expect("advance");
-    assert_eq!(view.log.epoch, old_epoch + 1);
+    assert_ne!(view.log.epoch, old_epoch);
     let (reset, updates) = view.log.since(Some(old_epoch), seen);
     assert!(reset, "a client on the old epoch must start over");
     assert_eq!(texts(&updates), ["from b"], "nothing of file a remains");
@@ -152,7 +152,7 @@ fn view_restarts_when_the_file_shrinks() {
 
     std::fs::write(&a, format!("{}\n", assistant_row("3", "new"))).expect("truncate");
     assert!(view.advance(1 << 20).expect("advance"));
-    assert_eq!(view.log.epoch, epoch + 1);
+    assert_ne!(view.log.epoch, epoch);
     let (_, updates) = view.log.since(Some(view.log.epoch), 0);
     assert_eq!(texts(&updates), ["new"]);
 }
