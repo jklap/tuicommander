@@ -1521,6 +1521,7 @@ The optional `env` map uses the same field name and string values as HTTP
 environment values. TUIC applies `TUIC_SESSION` and `TUIC_PARENT` afterward,
 so callers cannot replace peer identity. Environment values are redacted from
 spawn logs.
+Managed Claude peers default to `CLAUDE_CODE_TMPDIR=$HOME/Gits/.tmp/claude/`; TUIC creates this directory before spawn and preserves an explicit inherited, run-config or caller value.
 
 `name` optionally assigns a non-empty peer and PTY display name at spawn time.
 The parent-assigned name is stored before prompt delivery, returned in the spawn
