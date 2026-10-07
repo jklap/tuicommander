@@ -44,6 +44,12 @@ self.addEventListener("fetch", (event) => {
     })());
     return;
   }
+  // Built assets: without them an offline cold start gets the cached shell but
+  // no JS, and the page stays blank.
+  if (event.request.method === "GET" && url.pathname.startsWith("/assets/") && url.origin === self.location.origin) {
+    event.respondWith(cacheFirstAsset(event.request));
+    return;
+  }
   // Only intercept navigation requests (HTML page loads)
   if (event.request.mode !== "navigate") return;
 
@@ -75,6 +81,28 @@ self.addEventListener("fetch", (event) => {
       ),
   );
 });
+
+// --- Built asset cache (hashed, immutable) ---
+
+const MAX_CACHED_ASSETS = 200;
+
+async function cacheFirstAsset(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const hit = await cache.match(request);
+  if (hit) return hit;
+  const response = await fetch(request);
+  if (response.ok) {
+    await cache.put(request, response.clone());
+    await trimAssets(cache);
+  }
+  return response;
+}
+
+// Every rebuild adds new hashed names; drop the oldest assets (keys() is in insertion order).
+async function trimAssets(cache) {
+  const keys = (await cache.keys()).filter((k) => new URL(k.url).pathname.startsWith("/assets/"));
+  await Promise.all(keys.slice(0, Math.max(0, keys.length - MAX_CACHED_ASSETS)).map((k) => cache.delete(k)));
+}
 
 // --- Push notifications ---
 
