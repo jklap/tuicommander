@@ -762,6 +762,6 @@ The opt-in `view_real_transcript_throughput` measurement reads an authorized loc
 file at runtime through the same path, reporting both the 2 MiB attach and full
 parse times plus process peak RSS. Raw transcripts are never committed.
 
-The recorded chunk-path parity gate covers all Git-tracked `.tcap` captures,
+The recorded chunk-path parity gate covers all `.tcap` captures under `src-tauri/`,
 including captures in terminal crates. See [Recorded replay oracle](output-parser.md#recorded-replay-oracle)
 for scope, first-difference diagnostics and the explicit regeneration command.

@@ -564,7 +564,7 @@ AI Chat also preserves reply text that immediately follows a parenthesized inten
 
 ### Recorded replay oracle
 
-Run `scripts/replay-oracle.sh verify` to compare every Git-tracked `.tcap`
+Run `scripts/replay-oracle.sh verify` to compare every `.tcap` under `src-tauri/`
 (including terminal-crate captures) with `src-tauri/src/fixtures/replay_oracle/`.
 The replay uses the production chunk processor, UTF-8 and escape buffers,
 Kitty stripping, recorded initial geometry, and the production session-state
