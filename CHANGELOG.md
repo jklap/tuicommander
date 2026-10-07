@@ -60,6 +60,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add an opt-in Telegram channel to the headless daemon with native peer mail, correlated Thinking/activity drafts, exact final replies, authored progress notices and opaque-button choices. Agents opt in with `telegram register`; registration ends with the agent or MCP session and is not persisted. With no agent, authorized chats receive "Nessun agent registrato". Live mint deployment remains pending.
 
 ### Fixed
+- Prevent primary terminal presses from temporarily blurring the shared keyboard input through native canvas focus. Physical iPad keyboard retention remains to be verified.
 
 - Keep backend memory census on demand, use cheap watchdog summaries, and identify census bytes as overlapping map accounting.
 - Preserve live AI Chat response chunks when reopening a configured conversation, including refused reopen requests.
