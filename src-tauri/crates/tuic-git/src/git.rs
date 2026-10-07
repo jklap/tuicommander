@@ -867,7 +867,6 @@ pub fn get_merged_branches_impl(repo_path: &Path) -> Result<Vec<String>, String>
         return Ok(vec![]);
     };
     use gix::bstr::ByteSlice;
-    let ref_key = crate::worktree::monitoring_ref_key(repo_path)?;
     let grepo = gix::open(repo_path).map_err(|e| e.to_string())?;
     let main_tip = grepo
         .find_reference(&format!("refs/heads/{default_branch}"))
@@ -888,7 +887,7 @@ pub fn get_merged_branches_impl(repo_path: &Path) -> Result<Vec<String>, String>
         let (status, _) = crate::worktree::monitoring_branch_merge(
             repo_path,
             &branch,
-            &ref_key,
+            &crate::worktree::monitoring_ref_key(repo_path, &branch)?,
             false,
             |_, _, _| false,
         )?;
