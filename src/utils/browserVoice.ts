@@ -53,23 +53,46 @@ export interface BrowserVoiceDeps {
 	getUserMedia(): Promise<MediaStream>;
 	/** Build the capture context, at the rate the socket carries. */
 	createContext(sampleRate: number): AudioContext;
+	/** The page's audio session where the browser has one (Safari 16.4+), else undefined. */
+	audioSession(): { type: string } | undefined;
+}
+
+/**
+ * The microphone, or a readable reason there is none.
+ *
+ * Over plain `http://` the browser hides `navigator.mediaDevices` entirely, so
+ * calling through it raises a bare `TypeError` that the arming error shows as
+ * is. The usual cause on a phone is the page being opened by IP or an HTTP
+ * Tailscale URL, and that is the one thing the user can fix.
+ */
+export function openMicrophone(): Promise<MediaStream> {
+	if (!navigator.mediaDevices?.getUserMedia) {
+		return Promise.reject(
+			new Error(
+				window.isSecureContext
+					? "This browser cannot open the microphone."
+					: "Voice needs a secure page: open TUICommander over https:// (the browser blocks the microphone on plain http).",
+			),
+		);
+	}
+	return navigator.mediaDevices.getUserMedia({
+		audio: {
+			// The browser's own cancellation, on top of the server's. They
+			// are solving the same problem at different distances: this one
+			// knows the device, and AEC3 in Rust knows what was sent to be
+			// played. Neither is sufficient alone on a laptop speaker.
+			echoCancellation: true,
+			noiseSuppression: true,
+			autoGainControl: true,
+		},
+	});
 }
 
 const browserDeps: BrowserVoiceDeps = {
 	openSocket: (url) => new WebSocket(url),
-	getUserMedia: () =>
-		navigator.mediaDevices.getUserMedia({
-			audio: {
-				// The browser's own cancellation, on top of the server's. They
-				// are solving the same problem at different distances: this one
-				// knows the device, and AEC3 in Rust knows what was sent to be
-				// played. Neither is sufficient alone on a laptop speaker.
-				echoCancellation: true,
-				noiseSuppression: true,
-				autoGainControl: true,
-			},
-		}),
+	getUserMedia: openMicrophone,
 	createContext: (sampleRate) => new AudioContext({ sampleRate }),
+	audioSession: () => (navigator as Navigator & { audioSession?: { type: string } }).audioSession,
 };
 
 /** The `ws://`/`wss://` audio socket for this origin. */
@@ -116,11 +139,35 @@ export async function connectBrowserVoice(
 	owner: string,
 	deps: BrowserVoiceDeps = browserDeps,
 ): Promise<BrowserVoiceSession> {
+	// Everything up to the first `await` runs inside the arming gesture, which
+	// is the only place iOS lets a context leave `suspended` (and the only place
+	// it lets the audio category change). `getUserMedia` resolves later, after
+	// the prompt, by when the gesture no longer counts.
 	const socket = deps.openSocket(audioSocketUrl(owner));
 	socket.binaryType = "arraybuffer";
-
-	const stream = await deps.getUserMedia();
+	const session = deps.audioSession();
+	// The default category is `auto`, which on iOS plays the reply at ringer
+	// volume or not at all once the microphone is open.
+	if (session) session.type = "play-and-record";
 	const context = deps.createContext(CAPTURE_SAMPLE_RATE);
+	const resumed = context.resume();
+	// Observed below; this keeps a rejection during the mic prompt from being reported as unhandled.
+	resumed.catch(() => {});
+
+	let stream: MediaStream | undefined;
+	try {
+		stream = await deps.getUserMedia();
+		await resumed;
+		if (context.state === "suspended") await context.resume();
+	} catch (err) {
+		// The socket is the conversation's claim on the owner name: a failed
+		// start must not leave it open, nor a context alive, nor a granted
+		// microphone running.
+		stream?.getTracks().forEach((track) => track.stop());
+		socket.close();
+		void context.close();
+		throw err;
+	}
 	const source = context.createMediaStreamSource(stream);
 	// `ScriptProcessorNode` rather than an `AudioWorklet`: a worklet needs a
 	// separate module URL, which the packaged frontend serves from a path the

@@ -113,6 +113,10 @@
   cursor: pointer;
 }
 
+.voiceActive {
+  color: var(--accent-red, #f44747);
+}
+
 .taskCount {
   position: absolute;
   top: 2px;
