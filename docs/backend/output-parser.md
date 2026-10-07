@@ -561,3 +561,25 @@ linefeeds, and discards other executed controls, matching the previous
 A hook-generated `UserInput.line` is an all-time terminal row captured by the OSC 7770 handler. Keystroke-reconstructed events keep `line = -1`. Consumers discard evicted hook rows instead of rebasing stored rows with a newer origin.
 
 AI Chat also preserves reply text that immediately follows a parenthesized intent title on the same line. Untitled intent lines keep their existing status behavior; code examples are left intact.
+
+### Recorded replay oracle
+
+Run `scripts/replay-oracle.sh verify` to compare every `.tcap` under `src-tauri/`
+(including terminal-crate captures) with `src-tauri/src/fixtures/replay_oracle/`.
+The replay uses the production chunk processor, UTF-8 and escape buffers,
+Kitty stripping, recorded initial geometry, and the production session-state
+accumulator. It records ordered parsed payloads and state/awaiting/question
+snapshots after each output record, plus final ring length. Input records and
+capture elapsed times are not executed: this is a chunk-path parity oracle,
+not an end-to-end agent or silence-timer simulation. Legacy captures without
+geometry use the existing replay default of 41 rows and 128 columns.
+
+`mail.jsonl` records a scripted scenario using the production send/inbox handler
+and wake gate: paginated reads, wake coalescing and rearming after consumption.
+Its callback records transport acceptance; it does not claim native PTY delivery.
+Random message IDs and wall-clock cursors are projected to message positions.
+Normal tests are read-only and report the first differing event, including
+missing or extra events. To accept an intentional change, explicitly run
+`scripts/replay-oracle.sh regenerate`, review the JSONL diff, and commit it with
+the change. Add/stage a capture before regeneration so Git includes it in the
+corpus; an unknown agent filename requires an explicit replay mapping.
