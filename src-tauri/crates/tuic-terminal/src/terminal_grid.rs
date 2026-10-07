@@ -680,6 +680,8 @@ pub struct TerminalGrid {
     reprint_head_snapshot: Vec<String>,
     /// `total_scrolled` when `reprint_head_snapshot` was taken.
     reprint_snapshot_scrolled: usize,
+    /// Full viewport erase generation at the resize/last examined repaint.
+    reprint_clear_generation: usize,
 }
 
 impl TerminalGrid {
@@ -731,6 +733,7 @@ impl TerminalGrid {
             frame_end_carry: Vec::new(),
             reprint_head_snapshot: Vec::new(),
             reprint_snapshot_scrolled: 0,
+            reprint_clear_generation: 0,
         }
     }
 
@@ -1218,6 +1221,7 @@ impl TerminalGrid {
         self.frame_end_carry.clear();
         self.reprint_head_snapshot = self.armed_screen_rows();
         self.reprint_snapshot_scrolled = self.term.grid().total_scrolled();
+        self.reprint_clear_generation = self.term.viewport_clear().0;
         self.prev_rows.clear();
         self.term.mark_fully_damaged();
     }
@@ -1293,6 +1297,10 @@ impl TerminalGrid {
                 grid.total_scrolled(),
             )
         };
+        if !self.is_alternate_screen() && self.merge_cleared_viewport_reprint() {
+            self.reprint_merge_armed_at = None;
+            return true;
+        }
         if self.is_alternate_screen() || scrolled.saturating_sub(armed_at) > lines {
             self.reprint_merge_armed_at = None;
             return false;
@@ -1321,6 +1329,115 @@ impl TerminalGrid {
         }
         self.term.grid_mut().drop_newest_history(overlap);
         self.reprint_merge_armed_at = None;
+        true
+    }
+
+    /// A real Ink resize redraw erases every visible row before reprinting its
+    /// tail. That tail can be taller than the screen and have different physical
+    /// wraps; compare logical text and remove the OLD overlap behind the newly
+    /// scrolled repaint rows. An idle frame or partial edit supplies no erase proof.
+    fn merge_cleared_viewport_reprint(&mut self) -> bool {
+        let (generation, cleared_at) = self.term.viewport_clear();
+        if generation == self.reprint_clear_generation {
+            return false;
+        }
+        self.reprint_clear_generation = generation;
+        let grid = self.term.grid();
+        let newer = grid.total_scrolled().saturating_sub(cleared_at);
+        if newer > grid.history_size() {
+            return false;
+        }
+        let available = (grid.history_size() - newer).min((newer + grid.screen_lines()) * 2);
+        if available < 2 {
+            return false;
+        }
+        let logical_text = |start: i32, end: i32| {
+            self.term
+                .bounds_to_string(
+                    Point::new(Line(start), Column(0)),
+                    Point::new(Line(end), Column(grid.columns() - 1)),
+                )
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let repaint = logical_text(-(newer as i32), grid.screen_lines() as i32 - 1);
+        let overlap = (2..=available).rev().find_map(|count| {
+            let start = -((newer + count) as i32);
+            let end = -(newer as i32) - 1;
+            let nonempty = (start..=end)
+                .filter(|&row| {
+                    self.row_to_text(Line(row))
+                        .is_some_and(|text| !text.trim().is_empty())
+                })
+                .count();
+            if nonempty < 2 {
+                return None;
+            }
+            let old = logical_text(start, end);
+            let first = logical_text(start, start);
+            // Reflow can put the redraw origin inside the first old row.
+            // Keep that row's unmatched prefix rather than deleting real text.
+            old.char_indices()
+                .take_while(|&(at, _)| at <= first.len())
+                .find_map(|(at, _)| {
+                    let suffix = &old[at..];
+                    if suffix.is_empty() {
+                        return None;
+                    }
+                    let rest = repaint.strip_prefix(suffix)?;
+                    if !rest.is_empty()
+                        && !rest.starts_with(char::is_whitespace)
+                        && !grid[Line(end)][Column(grid.columns() - 1)]
+                            .flags
+                            .contains(Flags::WRAPLINE)
+                    {
+                        return None;
+                    }
+                    if at == 0 {
+                        return Some((count, None));
+                    }
+                    let row = &grid[Line(start)];
+                    let mut normalized = String::new();
+                    let mut whitespace = false;
+                    for column in 0..grid.columns() {
+                        let cell = &row[Column(column)];
+                        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                            continue;
+                        }
+                        let mut text = String::new();
+                        push_cell_text(&mut text, cell);
+                        for ch in text.chars() {
+                            if ch.is_whitespace() {
+                                whitespace = !normalized.is_empty();
+                                continue;
+                            }
+                            if whitespace {
+                                normalized.push(' ');
+                                whitespace = false;
+                            }
+                            if normalized.len() == at {
+                                return Some((count - 1, Some((start, column))));
+                            }
+                            normalized.push(ch);
+                        }
+                    }
+                    None
+                })
+        });
+        let Some((count, partial)) = overlap else {
+            return false;
+        };
+        if let Some((line, column)) = partial {
+            let columns = self.term.grid().columns();
+            let row = &mut self.term.grid_mut()[Line(line)];
+            for col in column..columns {
+                row[Column(col)] = Cell::default();
+            }
+            // The retained prefix continues in the first repainted row.
+            row[Column(columns - 1)].flags.insert(Flags::WRAPLINE);
+        }
+        self.term.grid_mut().drop_history_before(newer, count);
         true
     }
 

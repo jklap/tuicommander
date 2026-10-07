@@ -288,3 +288,21 @@ The largest remaining payload is the retained terminal grid: `(10,000 + 24) ×
 220 × 24 = 52,926,720` nominal cell bytes per session, before inactive-screen
 rows, spare rows and allocator rounding. Compact cells or file-backed history
 need a separate decision; neither is included in this patch.
+
+### Resize repaint reconciliation
+
+At synchronized-frame completion after a resize, TUIC reconciles the duplicated
+history tail with Ink's replacement screen. Physical-row equality remains the
+default proof. A recorded Claude Code resize can instead erase the complete
+viewport with top-to-bottom whole-row EL operations, then repaint more than a
+screenful at a different width (#1407-1ab2). The terminal exposes that explicit
+erase generation and its scroll position. TUIC compares logical text across soft
+wraps in the old history suffix and the fresh repaint, retaining the newly
+scrolled rows and removing only the matching old suffix. The comparison ignores
+terminal layout whitespace, requires at least two nonempty rows, and examines
+at most twice the fresh repaint height (including its newly scrolled rows)
+of old history. A redraw that starts inside a reflowed row keeps that row's
+unmatched prefix and joins it to the replacement tail. Partial edits, idle frames, alternate
+screens and output without an explicit viewport erase retain their content.
+The recorded streaming and idle PTY captures and resize byte timelines live in
+`crates/tuic-terminal/src/fixtures/claude-resize-1407/`.

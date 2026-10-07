@@ -334,6 +334,10 @@ impl TermDamageState {
 }
 
 pub struct Term<T> {
+    // Consecutive whole-row erases, in top-to-bottom viewport order.
+    viewport_erased_rows: usize,
+    // Generation and history position of the last explicit full viewport erase.
+    viewport_clear: (usize, usize),
     /// Terminal focus controlling the cursor shape.
     pub is_focused: bool,
 
@@ -471,9 +475,36 @@ pub enum Osc52 {
 }
 
 impl<T> Term<T> {
+    /// Generation and total-scrolled position at the last explicit viewport wipe.
+    /// A resize or an unrelated in-place edit never advances this generation.
+    pub fn viewport_clear(&self) -> (usize, usize) {
+        self.viewport_clear
+    }
+
     /// Erase a cell range, resetting row provenance only for a complete replacement.
     fn erase_row_cells(&mut self, line: Line, start: Column, end: Column) {
         let columns = self.columns();
+        if start == Column(0) && end == Column(columns) {
+            let next = line.0 as usize;
+            self.viewport_erased_rows = if next == 0 {
+                1
+            } else if next == self.viewport_erased_rows {
+                next + 1
+            } else {
+                0
+            };
+            if self.viewport_erased_rows == self.screen_lines()
+                && !self.mode.contains(TermMode::ALT_SCREEN)
+            {
+                self.viewport_clear = (
+                    self.viewport_clear.0.wrapping_add(1),
+                    self.grid.total_scrolled(),
+                );
+                self.viewport_erased_rows = 0;
+            }
+        } else {
+            self.viewport_erased_rows = 0;
+        }
         let template: Cell = self.grid.cursor.template.bg.into();
         let row = &mut self.grid[line];
         if start == Column(0) && end == Column(columns) {
@@ -523,6 +554,8 @@ impl<T> Term<T> {
         let damage = TermDamageState::new(num_cols, num_lines);
 
         Term {
+            viewport_erased_rows: 0,
+            viewport_clear: (0, 0),
             inactive_grid,
             scroll_region,
             event_proxy,
@@ -830,6 +863,7 @@ impl<T> Term<T> {
     /// `ReflowMode::HistoryOnly` — reflow scrollback but leave visible screen
     /// untouched, preserving cursor-addressed TUI positioning.
     pub fn resize_reflow<S: Dimensions>(&mut self, size: S, reflow: crate::grid::ReflowMode) {
+        self.viewport_erased_rows = 0;
         let old_cols = self.columns();
         let old_lines = self.screen_lines();
 
@@ -1357,6 +1391,7 @@ impl<T: EventListener> Handler for Term<T> {
     /// A character to be displayed.
     #[inline(never)]
     fn input(&mut self, c: char) {
+        self.viewport_erased_rows = 0;
         // Number of cells the char will occupy.
         let width = match c.width() {
             Some(width) => width,
