@@ -8,6 +8,7 @@ use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode, TermParseDamage};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
+use unicode_width::UnicodeWidthStr;
 // `parking_lot::Mutex` has no poison state. A panic taken anywhere near this
 // queue used to poison a `std::sync::Mutex` permanently: `send_event` then
 // panicked on `.lock().unwrap()` for the rest of the terminal's life, and
@@ -682,6 +683,8 @@ pub struct TerminalGrid {
     reprint_snapshot_scrolled: usize,
     /// Full viewport erase generation at the resize/last examined repaint.
     reprint_clear_generation: usize,
+    /// Source width used to prove Ink hard-line word wrapping after resize.
+    reprint_source_columns: usize,
 }
 
 impl TerminalGrid {
@@ -734,6 +737,7 @@ impl TerminalGrid {
             reprint_head_snapshot: Vec::new(),
             reprint_snapshot_scrolled: 0,
             reprint_clear_generation: 0,
+            reprint_source_columns: cols as usize,
         }
     }
 
@@ -1216,6 +1220,7 @@ impl TerminalGrid {
             lines: rows as usize,
         };
         let was_alt = self.is_alternate_screen();
+        self.reprint_source_columns = self.term.grid().columns();
         self.term.resize_reflow(size, mode);
         self.reprint_merge_armed_at = (!was_alt).then(|| self.term.grid().total_scrolled());
         self.frame_end_carry.clear();
@@ -1334,8 +1339,8 @@ impl TerminalGrid {
 
     /// A real Ink resize redraw erases every visible row before reprinting its
     /// tail. That tail can be taller than the screen and have different physical
-    /// wraps; compare logical text and remove the OLD overlap behind the newly
-    /// scrolled repaint rows. An idle frame or partial edit supplies no erase proof.
+    /// wraps. Compare complete old row blocks with the freshly repainted text;
+    /// ambiguous boundary fragments remain untouched.
     fn merge_cleared_viewport_reprint(&mut self) -> bool {
         let (generation, cleared_at) = self.term.viewport_clear();
         if generation == self.reprint_clear_generation {
@@ -1351,93 +1356,74 @@ impl TerminalGrid {
         if available < 2 {
             return false;
         }
-        let logical_text = |start: i32, end: i32| {
-            self.term
-                .bounds_to_string(
-                    Point::new(Line(start), Column(0)),
-                    Point::new(Line(end), Column(grid.columns() - 1)),
-                )
-                .split_whitespace()
+        let logical_text = |start: i32, end: i32, source_columns: usize| {
+            let text = self.term.bounds_to_string(
+                Point::new(Line(start), Column(0)),
+                Point::new(Line(end), Column(grid.columns() - 1)),
+            );
+            // VT soft wraps are already joined by bounds_to_string. Ink emits
+            // hard newlines for its own greedy word wrapping; reuse the copy
+            // path's width evidence, preserving all intra-line whitespace.
+            let rows: Vec<&str> = text.lines().collect();
+            rows.split(|row| row.trim().is_empty())
+                .map(|paragraph| reflow_copied_run(paragraph, source_columns, 2, true).join("\n"))
                 .collect::<Vec<_>>()
-                .join(" ")
+                .join("\n\n")
         };
-        let repaint = logical_text(-(newer as i32), grid.screen_lines() as i32 - 1);
-        let overlap = (2..=available).rev().find_map(|count| {
-            let start = -((newer + count) as i32);
-            let end = -(newer as i32) - 1;
-            let nonempty = (start..=end)
-                .filter(|&row| {
-                    self.row_to_text(Line(row))
-                        .is_some_and(|text| !text.trim().is_empty())
-                })
-                .count();
-            if nonempty < 2 {
-                return None;
-            }
-            let old = logical_text(start, end);
-            let first = logical_text(start, start);
-            // Reflow can put the redraw origin inside the first old row.
-            // Keep that row's unmatched prefix rather than deleting real text.
-            old.char_indices()
-                .take_while(|&(at, _)| at <= first.len())
-                .find_map(|(at, _)| {
-                    let suffix = &old[at..];
-                    if suffix.is_empty() {
-                        return None;
-                    }
-                    let rest = repaint.strip_prefix(suffix)?;
-                    if !rest.is_empty()
-                        && !rest.starts_with(char::is_whitespace)
-                        && !grid[Line(end)][Column(grid.columns() - 1)]
-                            .flags
-                            .contains(Flags::WRAPLINE)
-                    {
-                        return None;
-                    }
-                    if at == 0 {
-                        return Some((count, None));
-                    }
-                    let row = &grid[Line(start)];
-                    let mut normalized = String::new();
-                    let mut whitespace = false;
-                    for column in 0..grid.columns() {
-                        let cell = &row[Column(column)];
-                        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                            continue;
-                        }
-                        let mut text = String::new();
-                        push_cell_text(&mut text, cell);
-                        for ch in text.chars() {
-                            if ch.is_whitespace() {
-                                whitespace = !normalized.is_empty();
-                                continue;
-                            }
-                            if whitespace {
-                                normalized.push(' ');
-                                whitespace = false;
-                            }
-                            if normalized.len() == at {
-                                return Some((count - 1, Some((start, column))));
-                            }
-                            normalized.push(ch);
-                        }
-                    }
-                    None
-                })
-        });
-        let Some((count, partial)) = overlap else {
+        let repaint = logical_text(
+            -(newer as i32),
+            grid.screen_lines() as i32 - 1,
+            grid.columns(),
+        );
+        let overlap = (0..=grid.screen_lines().min(available - 2))
+            .flat_map(|retained_tail| {
+                (2..=available - retained_tail)
+                    .rev()
+                    .map(move |count| (retained_tail, count))
+            })
+            .find_map(|(retained_tail, count)| {
+                let start = -((newer + retained_tail + count) as i32);
+                let end = -((newer + retained_tail) as i32) - 1;
+                let nonempty = (start..=end)
+                    .filter(|&row| {
+                        self.row_to_text(Line(row))
+                            .is_some_and(|text| !text.trim().is_empty())
+                    })
+                    .count();
+                if nonempty < 2 {
+                    return None;
+                }
+                let old = logical_text(start, end, self.reprint_source_columns);
+                if old.is_empty() {
+                    return None;
+                }
+                // Only whole rows are removed. The old block may start after a
+                // preserved ambiguous fragment in the fresh redraw.
+                let mut matches = repaint.match_indices(&old);
+                let (at, _) = matches.next()?;
+                if matches.next().is_some() {
+                    return None;
+                }
+                let rest = &repaint[at + old.len()..];
+                if !rest.is_empty()
+                    && !rest.starts_with(char::is_whitespace)
+                    && !grid[Line(end)][Column(grid.columns() - 1)]
+                        .flags
+                        .contains(Flags::WRAPLINE)
+                {
+                    return None;
+                }
+                Some((count, retained_tail))
+            });
+        let Some((count, retained_tail)) = overlap else {
             return false;
         };
-        if let Some((line, column)) = partial {
-            let columns = self.term.grid().columns();
-            let row = &mut self.term.grid_mut()[Line(line)];
-            for col in column..columns {
-                row[Column(col)] = Cell::default();
-            }
-            // The retained prefix continues in the first repainted row.
-            row[Column(columns - 1)].flags.insert(Flags::WRAPLINE);
-        }
-        self.term.grid_mut().drop_history_before(newer, count);
+        // A partial first-row overlap does not prove where the original
+        // byte stream broke the line. Keep that row intact: an occasional
+        // duplicated fragment is preferable to corrupting retained history.
+        self.term
+            .grid_mut()
+            .drop_history_before(newer + retained_tail, count);
         true
     }
 
@@ -2048,7 +2034,7 @@ impl TerminalGrid {
                 >= 2;
 
             if should_strip {
-                out.extend(reflow_copied_run(&contents, num_cols, 4));
+                out.extend(reflow_copied_run(&contents, num_cols, 4, false));
             } else {
                 out.extend(lines[run_start..index].iter().map(|line| line.to_string()));
             }
@@ -2076,7 +2062,7 @@ impl TerminalGrid {
             contents.push(content);
             index += 1;
         }
-        let mut out = reflow_copied_run(&contents, num_cols, 2);
+        let mut out = reflow_copied_run(&contents, num_cols, 2, false);
         if index < lines.len() {
             out.push(Self::normalize_copied_selection(
                 &lines[index..].join("\n"),
@@ -2684,7 +2670,12 @@ fn gutter_content(line: &str) -> Option<&str> {
 ///
 /// Blank rows, list markers and deeper indents always start a new line: they
 /// mark structure the author chose, which the width rule alone cannot see.
-fn reflow_copied_run(contents: &[&str], num_cols: usize, margin_cols: usize) -> Vec<String> {
+fn reflow_copied_run(
+    contents: &[&str],
+    num_cols: usize,
+    margin_cols: usize,
+    exact_fit_wrap: bool,
+) -> Vec<String> {
     // Room for an agent's own right margin plus the ragged edge a greedy
     // wrapper leaves when the overflowing word is long.
     const WRAP_EVIDENCE_SLACK: usize = 24;
@@ -2692,11 +2683,9 @@ fn reflow_copied_run(contents: &[&str], num_cols: usize, margin_cols: usize) -> 
     // every run through. Prose quotes do not happen at such widths anyway.
     const MIN_REFLOW_COLS: usize = 48;
 
-    let width = contents
-        .iter()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(0);
+    // Recorded Ink repaints can wrap an exact-fit word; clipboard cleanup
+    // retains its stricter rule for an ambiguous typed newline.
+    let width = contents.iter().map(|line| line.width()).max().unwrap_or(0);
     let wrap_threshold = num_cols.saturating_sub(margin_cols + WRAP_EVIDENCE_SLACK);
     if num_cols < MIN_REFLOW_COLS || width < wrap_threshold {
         return contents.iter().map(|line| (*line).to_string()).collect();
@@ -2711,8 +2700,8 @@ fn reflow_copied_run(contents: &[&str], num_cols: usize, margin_cols: usize) -> 
 
     for line in contents {
         let trimmed = line.trim_start();
-        let length = line.chars().count();
-        let indent = length - trimmed.chars().count();
+        let length = line.width();
+        let indent = length - trimmed.width();
 
         let joinable = match previous_row {
             Some((previous_length, previous_indent)) => {
@@ -2720,8 +2709,8 @@ fn reflow_copied_run(contents: &[&str], num_cols: usize, margin_cols: usize) -> 
                     && previous_length > previous_indent
                     && indent <= previous_indent
                     && !starts_list_item(trimmed)
-                    && previous_length + 1 + trimmed.split(' ').next().unwrap_or("").chars().count()
-                        > width
+                    && previous_length + 1 + trimmed.split(' ').next().unwrap_or("").width()
+                        > width.saturating_sub(usize::from(exact_fit_wrap))
             }
             None => false,
         };
