@@ -339,3 +339,8 @@ visible duplicates are blanked without shifting child row coordinates.
 Alternate screens and ordinary edits provide no replacement authority.
 The recorded streaming and idle PTY captures and resize byte timelines live in
 `crates/tuic-terminal/src/fixtures/claude-resize-1407/`.
+
+Resize-owned physical fragments retain their complete logical-record identity from
+the post-resize WRAPLINE boundaries, before a redraw can erase a continuation still
+on screen. Replacement proof must match that complete record; a substring in a
+different replaced record never licenses deleting an omitted history record.

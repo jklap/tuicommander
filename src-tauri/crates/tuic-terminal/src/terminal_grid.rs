@@ -649,6 +649,8 @@ struct ResizeViewport {
     preceding_logical: String,
     /// Only these newest old history rows came from this viewport.
     displaced_rows: usize,
+    /// Exclusive owned-row end and complete WRAPLINE record before the redraw.
+    displaced_records: Vec<(usize, String)>,
     scrolled_after_resize: usize,
 }
 
@@ -1371,6 +1373,25 @@ impl TerminalGrid {
                 }
             }
         }
+        // Record identity follows WRAPLINE boundaries, never substring matches.
+        // Include a continuation still on screen before the repaint erases it.
+        displaced_rows = displaced_rows.min(self.term.grid().history_size());
+        let mut displaced_records = Vec::new();
+        let mut first = -(displaced_rows as i32);
+        while displaced_rows != 0 && first < self.term.grid().screen_lines() as i32 {
+            let mut last = first;
+            while last + 1 < self.term.grid().screen_lines() as i32 && self.row_wrapped(Line(last))
+            {
+                last += 1;
+            }
+            let text = self.term.bounds_to_string(
+                Point::new(Line(first), Column(0)),
+                Point::new(Line(last), Column(self.term.grid().columns() - 1)),
+            );
+            let end = (last + 1).min(0) + displaced_rows as i32;
+            displaced_records.push((end as usize, text));
+            first = last + 1;
+        }
         self.reprint_merge_armed_at = (!was_alt).then(|| self.term.grid().total_scrolled());
         self.frame_end_carry.clear();
         self.reprint_head_snapshot = self.armed_screen_rows();
@@ -1384,6 +1405,7 @@ impl TerminalGrid {
             rows: viewport_rows,
             preceding_logical,
             displaced_rows,
+            displaced_records,
             scrolled_after_resize: self.term.grid().total_scrolled(),
         });
         self.prev_rows.clear();
@@ -1695,6 +1717,32 @@ impl TerminalGrid {
                 .then_some(text)
             })
             .collect();
+        // Ink's hard-wrapped rows use the same existing normalization as the
+        // source proof. Associate each normalized record with its contiguous
+        // physical span, rather than searching another record for a fragment.
+        let owned_text = normalize(
+            &resize
+                .displaced_records
+                .iter()
+                .map(|(_, text)| text.as_str())
+                .collect::<Vec<_>>(),
+            resize.before_columns,
+        );
+        let mut physical = resize.displaced_records.iter();
+        let owned_records: Vec<(usize, &str)> = owned_text
+            .lines()
+            .filter_map(|record| {
+                let (first_end, first) = physical.next()?;
+                let mut end = *first_end;
+                let mut length = first.len();
+                while length < record.len() {
+                    let (next_end, next) = physical.next()?;
+                    end = *next_end;
+                    length += 1 + next.trim_start().len();
+                }
+                (length == record.len()).then_some((end, record))
+            })
+            .collect();
         let old_replaced: Vec<bool> = (0..owned)
             .map(|row| {
                 let old = self
@@ -1705,9 +1753,12 @@ impl TerminalGrid {
                         && fresh_rows.iter().any(|fresh| fresh == &old)
                 } else {
                     fresh_rows.iter().any(|fresh| fresh == &old)
-                        || replaced_source
+                        || owned_records
                             .iter()
-                            .any(|source| source.contains(old.trim_start()))
+                            .find(|(end, _)| row + resize.displaced_rows - owned < *end)
+                            .is_some_and(|(_, record)| {
+                                replaced_source.contains(&record.trim_start())
+                            })
                 }
             })
             .collect();
