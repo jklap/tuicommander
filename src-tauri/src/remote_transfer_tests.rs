@@ -38,7 +38,11 @@ async fn daemon_router_upload_requires_existing_auth_and_registered_destination(
             None,
             axum::http::StatusCode::UNAUTHORIZED,
         ),
-        ("", Some("tui-session=existing-token"), axum::http::StatusCode::OK),
+        (
+            "",
+            Some("tui-session=existing-token"),
+            axum::http::StatusCode::OK,
+        ),
     ] {
         let mut request = axum::http::Request::post(format!("{query}{suffix}"))
             .header("host", "localhost")
