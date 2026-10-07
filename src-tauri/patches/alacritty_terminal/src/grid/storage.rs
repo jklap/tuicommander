@@ -127,11 +127,15 @@ impl<T> Storage<T> {
     ///
     /// [`shrink_lines`]: #method.shrink_lines
     pub fn remove_newest_history(&mut self, count: usize) {
-        debug_assert!(count <= self.len - self.visible_lines);
+        self.remove_history_range(0, count);
+    }
 
+    /// Remove a history segment while retaining `newer` rows next to the screen.
+    pub fn remove_history_range(&mut self, newer: usize, count: usize) {
+        debug_assert!(newer + count <= self.len - self.visible_lines);
         self.truncate();
-        self.inner
-            .drain(self.visible_lines..self.visible_lines + count);
+        let start = self.visible_lines + newer;
+        self.inner.drain(start..start + count);
         self.len -= count;
     }
 

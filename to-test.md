@@ -4775,3 +4775,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Managed Claude background output (1012-f12e) — backend rebuild required
 
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, spawn a disposable managed Claude peer and confirm background-task output goes under `~/Gits/.tmp/claude`. Repeat with an explicit run-config or caller `CLAUDE_CODE_TMPDIR` and confirm it wins. Rust environment defaults do not hot-reload; no desktop instance was started by this lane.
+
+- [ ] #1407-1ab2: after Boss rebuilds/restarts, resize a real streaming Claude terminal 120 → 160 → 60 columns and scroll its answer; confirm each bullet appears once and selection/search follow the retained text. Rust changes require a manual restart; desktop visual verification is pending.
