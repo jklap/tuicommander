@@ -66,7 +66,7 @@
       "target": "aarch64-apple-darwin",
       "sha256": "0fece3d5e06bb87845d765695ecef7148f87a1326f8fb033f0aaa2ee1556bbdb"
     },
-    "socket_path": "/Users/stefano.straus/Gits/.tmp/agent-capture-1343/pi-short-1/tuic-mcp-751227f9f735b343.sock",
+    "socket_path": "<output>/tuic-mcp-751227f9f735b343.sock",
     "instance_id": "54c83678-969a-42fd-b93a-75cf86fe8453"
   },
   "observed_states": [
@@ -80,5 +80,5 @@
     }
   ],
   "sha256": "4039e0257bc8748ac01aa68fd65974dc72fb05a6c6b54a1cec4c899e72518536",
-  "capture": "/Users/stefano.straus/Gits/.tmp/agent-capture-1343/pi-short-1/raw/61d00ed1-20e3-4f36-9f74-03da44ce0373.tcap"
+  "capture": "<output>/raw/61d00ed1-20e3-4f36-9f74-03da44ce0373.tcap"
 }
