@@ -34,3 +34,8 @@ render(
 	),
 	root,
 );
+
+// The shell in mobile.html shows a preloader until now; see its boot watchdog.
+(window as unknown as { __tuicMobileReady?: boolean }).__tuicMobileReady = true;
+document.getElementById("mobile-preloader")?.remove();
+sessionStorage.removeItem("tuic-boot-delay");

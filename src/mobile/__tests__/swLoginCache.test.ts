@@ -63,3 +63,59 @@ describe("service worker and the login flow", () => {
 		expect(respondWith).not.toHaveBeenCalled();
 	});
 });
+
+describe("service worker asset cache", () => {
+	/** Plausible bug: hashed /assets files are never cached, so an offline cold start has a shell with no JS. */
+	it("serves a cached asset when the network is down", async () => {
+		const listeners: Record<string, Listener> = {};
+		const stored = new Map<string, unknown>();
+		const cache = {
+			put: async (req: { url: string }, res: unknown) => void stored.set(req.url, res),
+			match: async (req: { url: string }) => stored.get(req.url),
+			keys: async () => [...stored.keys()].map((url) => ({ url })),
+			delete: async () => true,
+		};
+		const caches = { open: async () => cache, match: async () => undefined, keys: async () => [] };
+		const self = { location: { origin: "http://tuic.test:9876" }, addEventListener: (n: string, f: Listener) => void (listeners[n] = f) };
+		let online = true;
+		const fetchStub = vi.fn(async () => {
+			if (!online) throw new TypeError("offline");
+			return { ok: true, clone: () => ({ cloned: true }), body: "js" };
+		});
+		new Function("self", "caches", "fetch", "clients", "crypto", source)(self, caches, fetchStub, {}, {});
+		const request = { method: "GET", url: "http://tuic.test:9876/assets/mobile-abc.js", mode: "cors" };
+		const run = async () => {
+			let pending: Promise<unknown> | undefined;
+			listeners.fetch({ request, respondWith: (p: Promise<unknown>) => void (pending = p) });
+			return pending;
+		};
+		await run();
+		online = false;
+		await expect(run()).resolves.toMatchObject({ cloned: true });
+	});
+
+	// Plausible bug: unbounded growth, every rebuild leaves its old hashed files behind.
+	it("keeps at most 200 assets", async () => {
+		const listeners: Record<string, Listener> = {};
+		const stored = new Map<string, unknown>();
+		for (let i = 0; i < 205; i++) stored.set(`http://tuic.test:9876/assets/old-${i}.js`, {});
+		const cache = {
+			put: async (req: { url: string }, res: unknown) => void stored.set(req.url, res),
+			match: async () => undefined,
+			keys: async () => [...stored.keys()].map((url) => ({ url })),
+			delete: async (req: { url: string }) => stored.delete(req.url),
+		};
+		const caches = { open: async () => cache, match: async () => undefined, keys: async () => [] };
+		const self = { location: { origin: "http://tuic.test:9876" }, addEventListener: (n: string, f: Listener) => void (listeners[n] = f) };
+		const fetchStub = vi.fn(async () => ({ ok: true, clone: () => ({}) }));
+		new Function("self", "caches", "fetch", "clients", "crypto", source)(self, caches, fetchStub, {}, {});
+		let pending: Promise<unknown> | undefined;
+		listeners.fetch({
+			request: { method: "GET", url: "http://tuic.test:9876/assets/new.js", mode: "cors" },
+			respondWith: (p: Promise<unknown>) => void (pending = p),
+		});
+		await pending;
+		expect(stored.size).toBe(200);
+		expect(stored.has("http://tuic.test:9876/assets/new.js")).toBe(true);
+	});
+});
