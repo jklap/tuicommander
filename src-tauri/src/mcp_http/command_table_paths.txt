@@ -159,6 +159,7 @@
 /fs/warm-index
 /fs/write
 /fs/write-external
+/fs/write-if-unchanged
 /generators/generate
 /github/accounts
 /github/accounts/remove
@@ -288,6 +289,7 @@
 /sessions/agent
 /sessions/worktree
 /sessions/x
+/sessions/x/chat-view
 /sessions/x/foreground
 /sessions/x/has-foreground
 /sessions/x/input-buffer

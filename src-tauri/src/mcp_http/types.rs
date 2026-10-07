@@ -431,6 +431,15 @@ pub(super) struct FsWriteFileRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct FsWriteIfUnchangedRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub file: String,
+    pub expected: String,
+    pub content: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct FsDirCreateRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
@@ -970,6 +979,12 @@ pub(super) struct TerminalRowQuery {
 pub(super) struct TerminalLinesQuery {
     pub start: usize,
     pub end: usize,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ChatViewQuery {
+    pub epoch: Option<u64>,
+    pub from_seq: Option<u64>,
 }
 
 #[derive(Deserialize)]

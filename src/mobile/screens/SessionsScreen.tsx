@@ -13,6 +13,7 @@ import {
 	writeSessionSort,
 } from "../utils/recentSessions";
 import { ptysLast } from "../utils/sessionKind";
+import { nestUnderParents, parentLabel } from "../utils/sessionTree";
 import styles from "./SessionsScreen.module.css";
 
 interface SessionsScreenProps {
@@ -56,6 +57,8 @@ export function SessionsScreen(props: SessionsScreenProps) {
 			].some((value) => value?.toLowerCase().includes(query)),
 		);
 	});
+	// Nest after filtering: a child whose parent was filtered out stays a visible top-level row.
+	const rows = createMemo(() => nestUnderParents(visibleSessions()));
 	let startY = 0;
 	let listEl: HTMLDivElement | undefined;
 
@@ -279,8 +282,17 @@ export function SessionsScreen(props: SessionsScreenProps) {
 				</div>
 			</Show>
 
-			<For each={visibleSessions()}>
-				{(session) => <SessionCard session={session} onSelect={props.onSelectSession} onKill={handleKill} />}
+			<For each={rows()}>
+				{(row) => (
+					<SessionCard
+						session={row.session}
+						depth={row.depth}
+						lastInGroup={row.last}
+						spawnedBy={row.session.parent_session ? parentLabel(rows(), row.session) : undefined}
+						onSelect={props.onSelectSession}
+						onKill={handleKill}
+					/>
+				)}
 			</For>
 
 			<button class={styles.fab} aria-label="New session" onClick={openNewSessionSheet} data-testid="new-session-fab">
