@@ -80,7 +80,7 @@
       (function () {
         var KEY = "tuic-boot-delay";
         var timer;
-        function reload() { location.reload(); }
+        function reload() { if (!window.__tuicMobileReady) location.reload(); }
         window.__tuicBootFail = function () {
           var box = document.getElementById("mobile-preloader");
           if (window.__tuicMobileReady || !box || box.className === "failed") return;
@@ -94,6 +94,7 @@
           window.addEventListener("online", reload);
           var left = delay;
           function tick() {
+            if (window.__tuicMobileReady) { clearInterval(timer); return; }
             text.textContent = "Cannot reach TUICommander. Retrying in " + left + "s";
             if (left-- <= 0) { clearInterval(timer); reload(); }
           }
