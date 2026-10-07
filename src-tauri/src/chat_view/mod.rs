@@ -346,4 +346,6 @@ fn tick(state: &AppState, session_id: &str, view: &Arc<Mutex<View>>) -> Tick {
 }
 
 #[cfg(test)]
+mod critic_tests;
+#[cfg(test)]
 mod tests;
