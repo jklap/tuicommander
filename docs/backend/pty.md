@@ -74,6 +74,13 @@ explicit close/kill racing termination, without holding session or map locks.
 The existing post-mortem buffers still expire through the five-minute tombstone
 sweeper; explicit close removes them immediately.
 
+On Linux with glibc, releasing terminal payloads also calls `malloc_trim(0)`
+after the owners and map guards are dropped. The expiry sweeper trims once per
+batch that actually releases payloads. This returns unused scrollback pages
+that glibc thread arenas otherwise keep resident, without changing live grids
+or the process-wide arena limit. Other platforms and libcs keep their allocator
+behavior.
+
 | Command | Description |
 |---------|-------------|
 | `write_pty(session_id, data)` | Write data (user input) to the PTY. Raises the calling thread to `QOS_CLASS_USER_INTERACTIVE` on macOS for the duration of the write and restores the previous class on the way out, so a keystroke is not scheduled behind background work on a pool thread TUIC only borrowed. |
