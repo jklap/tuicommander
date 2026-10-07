@@ -62,11 +62,26 @@ export interface SessionInfo {
 	worktree_path: string | null;
 	worktree_branch: string | null;
 	display_name?: string | null;
+	/** Live agent identity bound to this PTY; a child's parent_session may name it. */
+	tuic_session?: string | null;
+	/** Session (or $TUIC_SESSION) of the agent that spawned this one. */
 	parent_session?: string | null;
 	state?: SessionState;
 }
 
 const POLL_INTERVAL_MS = 3_000;
+const MAX_BACKOFF_MS = 30_000;
+
+/** Delay before the next poll after `failures` consecutive failures: 3s doubling up to 30s. */
+export function pollDelayMs(failures: number): number {
+	return Math.min(POLL_INTERVAL_MS * 2 ** failures, MAX_BACKOFF_MS);
+}
+
+/** The server answered but refused this client (`HttpRpcError.status`): sign in again, retrying is pointless. */
+export function isAuthError(err: unknown): boolean {
+	const status = err instanceof Error ? (err as { status?: number }).status : undefined;
+	return status === 401 || status === 403;
+}
 
 /**
  * Merge a freshly polled list into the previous one, reusing the previous object
@@ -111,11 +126,16 @@ export function useSessions() {
 	const [loading, setLoading] = createSignal(true);
 	const [refreshing, setRefreshing] = createSignal(false);
 	const [error, setError] = createSignal<string | null>(null);
+	const [authError, setAuthError] = createSignal(false);
 	const seenCompletions = new Set<string>();
 
 	let refreshToken = 0;
+	let failures = 0;
+	let nextAttemptAt = 0;
 
-	async function fetchSessions() {
+	/** `force` skips the backoff wait: first load, SSE events, manual retry, back online. */
+	async function fetchSessions(force = true) {
+		if (!force && Date.now() < nextAttemptAt) return;
 		try {
 			const result = await rpc<SessionInfo[]>("list_active_sessions");
 			for (const session of result) {
@@ -124,9 +144,13 @@ export function useSessions() {
 			}
 			setSessions((prev) => reconcileSessions(prev, result));
 			setError(null);
+			setAuthError(false);
+			failures = 0;
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			setError(msg);
+			setAuthError(isAuthError(err));
+			nextAttemptAt = Date.now() + pollDelayMs(failures++);
 			appLogger.warn("network", `Failed to fetch sessions: ${msg}`);
 		} finally {
 			setLoading(false);
@@ -139,7 +163,12 @@ export function useSessions() {
 	fetchSessions();
 
 	// Poll every 3s, but only while the page is visible
-	createVisibilityInterval(fetchSessions, POLL_INTERVAL_MS);
+	createVisibilityInterval(() => void fetchSessions(false), POLL_INTERVAL_MS);
+
+	// A returning connection should not wait out the backoff.
+	const onOnline = () => void fetchSessions();
+	window.addEventListener("online", onOnline);
+	onCleanup(() => window.removeEventListener("online", onOnline));
 
 	// One SSE subscription for the three event kinds this hook reacts to:
 	// create/close trigger an immediate refetch so the UI beats the poll
@@ -193,5 +222,5 @@ export function useSessions() {
 		return sessions().filter((s) => s.state?.awaiting_input).length;
 	}
 
-	return { sessions, loading, refreshing, error, refresh, questionCount, markSeen };
+	return { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen };
 }

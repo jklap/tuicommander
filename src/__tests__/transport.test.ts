@@ -1000,6 +1000,14 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/s1/terminal/scroll-info");
 		});
 
+		it("maps chat_view_snapshot to GET /sessions/{id}/chat-view with the cursor", () => {
+			const first = mapCommandToHttp("chat_view_snapshot", { sessionId: "s1", epoch: null, fromSeq: 0 });
+			expect(first.method).toBe("GET");
+			expect(first.path).toBe("/sessions/s1/chat-view?from_seq=0");
+			const next = mapCommandToHttp("chat_view_snapshot", { sessionId: "s1", epoch: 2, fromSeq: 17 });
+			expect(next.path).toBe("/sessions/s1/chat-view?from_seq=17&epoch=2");
+		});
+
 		it("maps terminal_search to POST with transform", () => {
 			const result = mapCommandToHttp("terminal_search", { sessionId: "s1", query: "foo" });
 			expect(result.method).toBe("POST");
@@ -1169,6 +1177,18 @@ describe("transport", () => {
 			expect(result.method).toBe("POST");
 			expect(result.path).toBe("/fs/write-external");
 			expect(result.body).toEqual({ path: "/repo/a.md", content: "hi" });
+		});
+
+		it("maps write_file_if_unchanged to POST /fs/write-if-unchanged with the expected text", () => {
+			const result = mapCommandToHttp("write_file_if_unchanged", {
+				repoPath: "/repo",
+				file: "a.md",
+				expected: "- [ ] a",
+				content: "- [x] a",
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/fs/write-if-unchanged");
+			expect(result.body).toEqual({ repoPath: "/repo", file: "a.md", expected: "- [ ] a", content: "- [x] a" });
 		});
 
 		it("maps copy_path_abs to POST /fs/copy-abs", () => {

@@ -1505,6 +1505,37 @@ fn write_file_impl(repo_path: String, file: String, content: String) -> Result<(
         .map_err(|e| format!("Failed to write file: {e}"))
 }
 
+/// Write `content` only when the file on disk still equals `expected`, the text
+/// the caller rendered its edit from. `Ok(false)` means the file changed in the
+/// meantime and nothing was written, so a stale view never overwrites newer bytes.
+/// The compare and the atomic rename are not one critical section: a writer that
+/// lands between them still loses, but the window is that of a local read.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn write_file_if_unchanged(
+    repo_path: String,
+    file: String,
+    expected: String,
+    content: String,
+) -> Result<bool, String> {
+    spawn_blocking_fs(move || write_file_if_unchanged_impl(repo_path, file, expected, content))
+        .await
+}
+
+fn write_file_if_unchanged_impl(
+    repo_path: String,
+    file: String,
+    expected: String,
+    content: String,
+) -> Result<bool, String> {
+    let (_canonical_repo, canonical_target) = validate_path(&repo_path, &file)?;
+    if crate::read_file_impl(repo_path, file)? != expected {
+        return Ok(false);
+    }
+    atomic_write(&canonical_target, content.as_bytes())
+        .map_err(|e| format!("Failed to write file: {e}"))?;
+    Ok(true)
+}
+
 /// Create a directory (and parents) within a repository.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn create_directory(repo_path: String, dir: String) -> Result<(), String> {
@@ -2655,6 +2686,73 @@ mod tests {
             fs::read_to_string(dir.path().join("new.txt")).unwrap(),
             "world"
         );
+    }
+
+    #[test]
+    fn write_file_if_unchanged_refuses_when_disk_content_differs() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+        let target = dir.path().join("note.md");
+        fs::write(&target, "- [ ] a\n").unwrap();
+
+        // Matching expectation: written.
+        assert!(
+            write_file_if_unchanged_impl(
+                repo_path.clone(),
+                "note.md".to_string(),
+                "- [ ] a\n".to_string(),
+                "- [x] a\n".to_string(),
+            )
+            .unwrap()
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "- [x] a\n");
+
+        // Another writer edited the file after the caller read it: nothing is written.
+        fs::write(&target, "- [x] a\nnew line from desktop\n").unwrap();
+        assert!(
+            !write_file_if_unchanged_impl(
+                repo_path,
+                "note.md".to_string(),
+                "- [x] a\n".to_string(),
+                "- [ ] a\n".to_string(),
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "- [x] a\nnew line from desktop\n"
+        );
+    }
+
+    #[test]
+    fn write_file_if_unchanged_rejects_traversal_and_missing_file() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+        let outside = dir
+            .path()
+            .parent()
+            .unwrap()
+            .join("outside-if-unchanged.txt");
+        fs::write(&outside, "x").unwrap();
+
+        let traversal = write_file_if_unchanged_impl(
+            repo_path.clone(),
+            "../outside-if-unchanged.txt".to_string(),
+            "x".to_string(),
+            "bad".to_string(),
+        );
+        assert!(traversal.is_err());
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "x");
+        fs::remove_file(&outside).unwrap();
+
+        let missing = write_file_if_unchanged_impl(
+            repo_path,
+            "gone.md".to_string(),
+            String::new(),
+            "created".to_string(),
+        );
+        assert!(missing.is_err());
+        assert!(!dir.path().join("gone.md").exists());
     }
 
     #[test]

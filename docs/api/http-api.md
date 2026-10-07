@@ -516,6 +516,7 @@ GET  /sessions/:id/shell-family                        -> "posix"|"windows-nativ
 GET  /sessions/:id/last-prompt                         -> { "prompt": string|null }
 GET  /sessions/:id/input-buffer                        -> { "content": string }
 GET  /sessions/:id/leaf-pid                            -> { "pid": number|null }
+GET  /sessions/:id/chat-view?from_seq=N&epoch=E        -> { epoch, nextSeq, reset, updates[], unknownRows, malformedRows }
 GET  /sessions/:id/has-foreground                      -> { "process": string|null }
 POST /sessions/:id/visible              { "visible": bool }   -> { "ok": true }
 GET  /sessions/:id/terminal/selection-text?startRow=&startCol=&endRow=&endCol=&historyBase=  -> { "text": string }
@@ -524,6 +525,8 @@ GET  /sessions/:id/terminal/hyperlink-span?row=R&col=C -> [startCol, endCol, url
 GET  /sessions/:id/terminal/styled-rows?start=N&count=N -> application/octet-stream (packed rows)
 GET  /process/stats                                    -> ProcessStats[]
 ```
+
+`chat-view` is the transcript of a Claude terminal as ACP `SessionUpdate`s, tailed from the agent's own session file (never the grid). `updates` are the entries from `from_seq` in the `epoch` the client last saw; `reset: true` means the client holds a different conversation (`/clear`, new session, file truncated) or fell behind the bounded log, and must drop what it has and apply `updates` from scratch. A terminal with no bound Claude agent answers 500 `{"error":"not_bound: <reason>"}`. A read keeps the tail alive for 20 s; the server wakes clients with the `chat-view-changed` event while one reads.
 
 The `/agents/map`, `/agents/map/data` and `/agents/map/prompt` routes were
 removed on 2026-09-23. The Progress Flow view (`/progress/flow`, see Project
@@ -822,6 +825,7 @@ the server is back to the filter the connection was opened with.
 |-------|---------|-------------|
 | `session-created` | `{session_id, cwd, agent_type, display_name, parent_session}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise) |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
+| `chat-view-changed` | `{session_id, seq}` | The chat view of a Claude terminal has entries past `seq`; read them with `GET /sessions/:id/chat-view` |
 | `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
 | `session-suspend-requested` | `{session_id, request_id}` | An MCP `session action=suspend` asked the UI to suspend that tab |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
@@ -1628,6 +1632,7 @@ GET  /fs/read?repoPath=/path/to/repo&file=src/main.rs
 GET  /fs/markdown-image?repoPath=/path/to/repo&file=docs/images/chart.png -> image bytes
 GET  /fs/read-external?path=/absolute/path/to/file
 POST /fs/write         { "repoPath": "...", "file": "...", "content": "..." }
+POST /fs/write-if-unchanged { "repoPath": "...", "file": "...", "expected": "...", "content": "..." } -> true | false (false: disk text differs from `expected`, nothing written)
 POST /fs/mkdir         { "repoPath": "...", "dir": "..." }
 POST /fs/delete        { "repoPath": "...", "path": "..." }
 POST /fs/rename        { "repoPath": "...", "from": "...", "to": "..." }

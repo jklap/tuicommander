@@ -84,6 +84,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `subscribe_terminal_grid` | `session_id, channel: Channel<Response>` | `u64` (epoch) | Register the grid-frame channel for the calling WebView and install a fresh delivery gate (counting from zero). Navigation or destruction releases only that WebView's subscriptions. Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
 | `ack_terminal_frame` | `session_id, epoch: u64, received: u64` | `()` | Report the total number of frames this client has received. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
 | `unsubscribe_terminal_grid` | `session_id, epoch: u64` | `()` | Tear down the grid channel and its gate. The pending scroll target is NOT torn down — it belongs to the session, so an attached browser keeps scrolling after the desktop terminal closes. A non-matching epoch is ignored: a remount subscribes before the outgoing instance unsubscribes, and honouring the stale call would blank a mounted terminal. Browser parity: closing the WS |
+| `chat_view_snapshot` | `session_id, epoch: Option<u64>, from_seq: Option<u64>` | `ChatViewSnapshot` | Chat view of a Claude terminal: transcript entries from the bound session file as ACP updates, with a bounded log, epoch and `reset` flag. Errors `not_bound: <reason>` for a terminal with no bound Claude agent. Browser parity: `GET /sessions/:id/chat-view` |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
 
 Every terminal grid **read** — the two rows above plus `terminal_get_block_rows`,
@@ -556,6 +557,7 @@ size }` receipt, and uses the same destination, cap, and cleanup rules.
 | `get_home_directory` | — | `String` | Return this machine's home directory for local or remote browsing |
 | `fs_read_file` | `path` | `String` | Read file contents |
 | `write_file` | `path, content` | `()` | Write file |
+| `write_file_if_unchanged` | `repo_path, file, expected, content` | `bool` | Write only when the file still equals `expected`; `false` = changed on disk, nothing written (mobile Markdown review) |
 | `create_directory` | `path` | `()` | Create directory |
 | `delete_path` | `path` | `()` | Delete file or directory |
 | `rename_path` | `src, dest` | `()` | Rename/move path |

@@ -101,6 +101,41 @@ describe("useAgentPolling", () => {
 		expect(store.get(id)?.queuedCommands).toBe(0);
 	});
 
+	// Catches: a missed queue-drained push leaves a stale queue badge after reconnect or SSE lag.
+	it.each(["reconnect", "lagged"] as const)("clears stale queued commands after %s catch-up", async (reason) => {
+		const transport = await import("../../transport");
+		let resync: ((reason: import("../../transport").ResyncReason) => void) | undefined;
+		const subscription = vi.spyOn(transport, "subscribeEvents").mockImplementation(async (_handlers, options) => {
+			resync = options?.onResync;
+			return () => {};
+		});
+		try {
+			mockInvoke.mockResolvedValue([
+				{ session_id: "sess-1", state: { shell_state: "busy", agent_state: "working", queued_commands: 1 } },
+			]);
+			const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "Codex", sessionId: "sess-1" }));
+				useAgentPolling();
+				await tick(0);
+				expect(store.get(id)?.queuedCommands).toBe(1);
+				// No queue-drained push arrives; only the transport recovery hint does.
+				mockInvoke.mockClear();
+				mockInvoke.mockResolvedValue([
+					{ session_id: "sess-1", state: { shell_state: "busy", agent_state: "working" } },
+				]);
+				expect(resync).toBeDefined();
+				resync?.(reason);
+				await tick(0);
+				expect(mockInvoke).toHaveBeenCalledWith("list_active_sessions");
+				expect(store.get(id)?.queuedCommands).toBe(0);
+				expect(store.get(id)?.agentState).toBe("working");
+			});
+		} finally {
+			subscription.mockRestore();
+		}
+	});
+
 	it("reconciles awaiting state from the authoritative backend snapshot", async () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 		mockInvoke.mockResolvedValueOnce([

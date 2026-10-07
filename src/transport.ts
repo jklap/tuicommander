@@ -696,6 +696,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { lines: string[] }).lines,
 		}),
 	},
+	chat_view_snapshot: {
+		map: (args) => ({
+			method: "GET",
+			path: `/sessions/${args.sessionId}/chat-view?from_seq=${args.fromSeq ?? 0}${args.epoch != null ? `&epoch=${args.epoch}` : ""}`,
+		}),
+	},
 	terminal_styled_rows: {
 		map: (args) => ({
 			method: "GET",
@@ -1906,6 +1912,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: "/fs/write",
 			body: { repoPath: args.repoPath, file: args.file, content: args.content },
+		}),
+	},
+	write_file_if_unchanged: {
+		map: (args) => ({
+			method: "POST",
+			path: "/fs/write-if-unchanged",
+			body: { repoPath: args.repoPath, file: args.file, expected: args.expected, content: args.content },
 		}),
 	},
 	create_directory: {

@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import { AGENT_DISPLAY, type AgentType } from "../../agents";
 import { AgentIcon } from "../../components/ui/AgentIcon";
+import { SubAgentIcon } from "../../components/ui/SubAgentIcon";
 import { displayTask } from "../../utils/activitySnapshot";
 import type { SessionInfo } from "../useSessions";
 import { isKnownAgentType } from "../utils/sessionKind";
@@ -10,6 +11,12 @@ import { StatusBadge } from "./StatusBadge";
 
 interface SessionCardProps {
 	session: SessionInfo;
+	/** Nesting level under the spawning agent; 0 or absent for a top-level row. */
+	depth?: number;
+	/** Last row of its sibling group: the left guide line ends here. */
+	lastInGroup?: boolean;
+	/** Parent label for the sub-agent marker; set when the session was spawned by another agent. */
+	spawnedBy?: string;
 	onSelect: (sessionId: string) => void;
 	onKill?: (sessionId: string) => void;
 }
@@ -61,7 +68,16 @@ export function SessionCard(props: SessionCardProps) {
 	};
 
 	return (
-		<div class={styles.card} classList={{ [styles.question]: status() === "question" }}>
+		<div
+			class={styles.card}
+			classList={{
+				[styles.question]: status() === "question",
+				[styles.child]: (props.depth ?? 0) > 0,
+				[styles.childLast]: (props.depth ?? 0) > 0 && !!props.lastInGroup,
+				[styles.childDeep]: (props.depth ?? 0) > 1,
+			}}
+			data-testid={(props.depth ?? 0) > 0 ? "subagent-row" : undefined}
+		>
 			<button
 				class={styles.cardMain}
 				aria-label={`Open session ${props.session.display_name || agentType() || "Terminal"}`}
@@ -75,6 +91,9 @@ export function SessionCard(props: SessionCardProps) {
 
 				<div class={styles.body}>
 					<div class={styles.topRow}>
+						<Show when={props.spawnedBy}>
+							<SubAgentIcon parent={props.spawnedBy!} class={styles.subAgentTag} iconClass={styles.subAgentIcon} />
+						</Show>
 						<span class={styles.name}>{props.session.display_name || agentType() || "Terminal"}</span>
 						<StatusBadge status={status()} />
 					</div>

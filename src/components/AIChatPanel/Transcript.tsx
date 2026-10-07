@@ -196,7 +196,8 @@ export interface TranscriptProps {
 	onFork?: (messageId: string) => void;
 	/** `open_result` opens its file. `answer` and `approve` have nothing to open: the open interaction is drawn at the end, and the transcript scrolls there. */
 	onNoticeAction?: (action: AcpNoticeAction) => void;
-	onSuggestion: (text: string) => void;
+	/** Absent for a read-only transcript: suggested replies are then not drawn. */
+	onSuggestion?: (text: string) => void;
 	/** Open questions, drawn at the end of the conversation they belong to. */
 	children?: JSX.Element;
 }
@@ -449,11 +450,11 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 														</button>
 													</Show>
 												</div>
-												<Show when={projected().suggestions.length > 0}>
+												<Show when={props.onSuggestion && projected().suggestions.length > 0}>
 													<div class={s.suggestedReplies} aria-label="Suggested replies">
 														<For each={projected().suggestions}>
 															{(item) => (
-																<button type="button" onClick={() => props.onSuggestion(item)}>
+																<button type="button" onClick={() => props.onSuggestion?.(item)}>
 																	{item}
 																</button>
 															)}

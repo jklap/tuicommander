@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Mobile Markdown review** — In the mobile Files view, tapping a task-list checkbox toggles it in the file, and a block comment can be added to a paragraph, heading or list item in the desktop's `<!--tweak:...-->` format. Saves refuse to overwrite a file that changed on disk meanwhile (new `write_file_if_unchanged` command, `POST /fs/write-if-unchanged`).
+- Add a CLI | Chat switch to Claude terminals: a read-only conversation view built from the agent's session file, with prompts apart from replies and tool calls folded into compact cards. The grid is hidden while Chat is open and never unmounted.
+
 ### Changed
 - Resolve browser HTML and Markdown images through open repositories; show a clear placeholder for external images.
 - Show the existing ACP refusal text once in a plain-text AI Chat card.

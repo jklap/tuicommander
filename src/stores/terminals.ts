@@ -33,6 +33,8 @@ export interface CommandBlock {
 /** Shell activity state: null=never had output, busy=producing output, idle=waiting for input, exited=process terminated */
 export type ShellState = "busy" | "idle" | "exited" | null;
 /** Authoritative task lifecycle from the backend; distinct from PTY activity. */
+export type TerminalViewMode = "cli" | "chat";
+
 export type AgentLifecycleState = "starting" | "working" | "awaiting_input" | "idle" | "completed" | null;
 
 const VALID_SHELL_STATES = new Set<string>(["busy", "idle", "exited"]);
@@ -110,6 +112,8 @@ export interface TerminalData {
 	foldedBlocks: Set<number>; // promptLine values of folded blocks
 	userPromptLines: number[]; // Absolute lines where the user submitted a prompt (UserInput.line), for the green scrollbar marker
 	answersOnly: boolean; // Answers-only view: output of the last turn is collapsed except 💬 answer lines. Never automatic.
+	/** Which view of an agent terminal is shown. "chat" hides the grid, it never unmounts it. Never persisted. */
+	viewMode: TerminalViewMode;
 	alias: string | null; // Human-friendly alias from Rust (e.g. "tc-1")
 	standby: boolean; // Session is SIGSTOP'd (auto-standby)
 	/** PTY and agent were ended on purpose (Suspend); the tab is kept and resumes like a restored one. */
@@ -158,6 +162,7 @@ type TerminalCreateData = Omit<
 	| "foldedBlocks"
 	| "userPromptLines"
 	| "answersOnly"
+	| "viewMode"
 	| "alias"
 	| "standby"
 	| "suspended"
@@ -481,6 +486,7 @@ function createTerminalsStore() {
 				foldedBlocks: new Set<number>(),
 				userPromptLines: [],
 				answersOnly: false,
+				viewMode: "cli",
 				alias: null,
 				standby: false,
 				suspended: false,
@@ -537,6 +543,7 @@ function createTerminalsStore() {
 				foldedBlocks: new Set<number>(),
 				userPromptLines: [],
 				answersOnly: false,
+				viewMode: "cli",
 				alias: null,
 				standby: false,
 				suspended: false,
@@ -858,6 +865,12 @@ function createTerminalsStore() {
 			const term = id ? state.terminals[id] : undefined;
 			if (!id || !term) return;
 			setState("terminals", id, "answersOnly", !term.answersOnly);
+		},
+
+		/** Switch one terminal between its grid ("cli") and the transcript view ("chat"). */
+		setViewMode(id: string, mode: TerminalViewMode): void {
+			if (!has(id)) return;
+			setState("terminals", id, "viewMode", mode);
 		},
 
 		/** Update agent-declared intent (via intent: token) */

@@ -1054,6 +1054,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/sessions/{id}/terminal/lines",
             get(session::terminal_get_lines),
         )
+        .route("/sessions/{id}/chat-view", get(session::chat_view))
         .route(
             "/sessions/{id}/terminal/styled-rows",
             get(session::terminal_styled_rows),
@@ -1268,6 +1269,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/fs/markdown-image", get(fs_routes::markdown_image_http))
         .route("/fs/read-external", get(fs_routes::read_external_file_http))
         .route("/fs/write", post(fs_routes::write_file_http))
+        .route(
+            "/fs/write-if-unchanged",
+            post(fs_routes::write_file_if_unchanged_http),
+        )
         .route("/fs/mkdir", post(fs_routes::create_directory_http))
         .route("/fs/delete", post(fs_routes::delete_path_http))
         .route("/fs/rename", post(fs_routes::rename_path_http))
@@ -3993,6 +3998,7 @@ mod tests {
             "/sessions/x/output",
             "/sessions/x/terminal/scroll",
             "/sessions/x/terminal/lines",
+            "/sessions/x/chat-view",
             "/sessions/agent",
             "/sessions/worktree",
             "/stats",
@@ -4019,6 +4025,7 @@ mod tests {
             "/fs/read",
             "/fs/markdown-image",
             "/fs/write",
+            "/fs/write-if-unchanged",
             "/fs/stat",
             "/claude/usage",
             "/claude/projects",
