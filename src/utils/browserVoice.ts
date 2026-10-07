@@ -154,14 +154,16 @@ export async function connectBrowserVoice(
 	// Observed below; this keeps a rejection during the mic prompt from being reported as unhandled.
 	resumed.catch(() => {});
 
-	let stream: MediaStream;
+	let stream: MediaStream | undefined;
 	try {
 		stream = await deps.getUserMedia();
 		await resumed;
 		if (context.state === "suspended") await context.resume();
 	} catch (err) {
 		// The socket is the conversation's claim on the owner name: a failed
-		// start must not leave it open, nor a context alive.
+		// start must not leave it open, nor a context alive, nor a granted
+		// microphone running.
+		stream?.getTracks().forEach((track) => track.stop());
 		socket.close();
 		void context.close();
 		throw err;
