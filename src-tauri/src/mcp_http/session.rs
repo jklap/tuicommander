@@ -2258,6 +2258,24 @@ pub(super) async fn terminal_get_lines(
     }
 }
 
+/// The chat view of a Claude terminal from `from_seq`. A terminal with no bound
+/// Claude agent answers `not_bound: <reason>`.
+pub(super) async fn chat_view(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<ChatViewQuery>,
+) -> Response {
+    super::json_result(
+        crate::chat_view::chat_view_snapshot_blocking(
+            state,
+            session_id,
+            query.epoch,
+            query.from_seq.unwrap_or(0),
+        )
+        .await,
+    )
+}
+
 /// Serialize the whole grid for ONE client, without touching what the other
 /// clients are about to receive.
 ///

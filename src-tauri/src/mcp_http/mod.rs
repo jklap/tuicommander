@@ -1054,6 +1054,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/sessions/{id}/terminal/lines",
             get(session::terminal_get_lines),
         )
+        .route("/sessions/{id}/chat-view", get(session::chat_view))
         .route(
             "/sessions/{id}/terminal/styled-rows",
             get(session::terminal_styled_rows),
@@ -3997,6 +3998,7 @@ mod tests {
             "/sessions/x/output",
             "/sessions/x/terminal/scroll",
             "/sessions/x/terminal/lines",
+            "/sessions/x/chat-view",
             "/sessions/agent",
             "/sessions/worktree",
             "/stats",
