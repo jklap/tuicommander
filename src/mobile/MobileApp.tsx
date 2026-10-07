@@ -4,6 +4,7 @@ import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { ideasStore } from "../stores/ideas";
 import { BottomTabs, type TabId } from "./components/BottomTabs";
+import { ConnectionBanner } from "./components/ConnectionBanner";
 import { MobileToastContainer } from "./components/MobileToastContainer";
 import { QuestionBanner } from "./components/QuestionBanner";
 import { TopBar } from "./components/TopBar";
@@ -105,7 +106,7 @@ export default function MobileApp() {
 	const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(sessionIdFromUrl());
 	const [sessionFilesOpen, setSessionFilesOpen] = createSignal(false);
 	const [sessionFileLink, setSessionFileLink] = createSignal<{ candidate: string; line?: number } | null>(null);
-	const { sessions, loading, refreshing, error, refresh, questionCount, markSeen } = useSessions();
+	const { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen } = useSessions();
 	useMobileNotifications(sessions);
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
@@ -161,16 +162,10 @@ export default function MobileApp() {
 		</Show>
 	);
 
-	const reconnectBanner = () => (
-		<Show when={serverDown()}>
-			<div class={styles.reconnectBanner}>Server unreachable — reconnecting...</div>
-		</Show>
-	);
-
 	return (
 		<div class={styles.shell}>
 			{updateBanner()}
-			{reconnectBanner()}
+			<ConnectionBanner offline={serverDown() || error() !== null} authError={authError()} onRetry={refresh} />
 			<Show
 				when={showDetail()}
 				fallback={
