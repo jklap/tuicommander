@@ -43,6 +43,7 @@ import { handleIntentEvent, shouldApplyOscTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
 import { trackQuestionReminder } from "./questionReminder";
 import s from "./Terminal.module.css";
+import { TerminalChatView, ChatViewFallbackBanner, ViewModeToggle } from "./TerminalChatView";
 import { TerminalSearch } from "./TerminalSearch";
 import {
 	REATTACH_PHASE_INITIAL,
@@ -193,6 +194,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	let containerRef: HTMLDivElement | undefined;
 	let sessionId: string | null = null;
 	const [_currentSessionId, setCurrentSessionId] = createSignal<string | null>(null);
+	// Without a session there is nothing to read, so the grid (and its exit notice) stays on screen.
+	const chatActive = () => terminalsStore.get(props.id)?.viewMode === "chat" && _currentSessionId() !== null;
 	const [spawnError, setSpawnError] = createSignal<string | null>(null);
 
 	const [canvasTerminalRef, setCanvasTerminalRef] = createSignal<CanvasTerminalRef | undefined>();
@@ -1286,6 +1289,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					canvasTerminalRef()?.focus();
 				}}
 			/>
+			<ViewModeToggle terminalId={props.id} />
+			<ChatViewFallbackBanner terminalId={props.id} />
 			<Show
 				when={
 					settingsStore.state.showLastPrompt &&
@@ -1329,7 +1334,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					</button>
 				</div>
 			</Show>
-			<div ref={containerRef} class={s.content}>
+			{/* Chat mode HIDES the grid (display:none, the background-tab path) and never
+			    unmounts it: a disposed CanvasTerminal under a queued frame event froze the UI. */}
+			<div ref={containerRef} class={s.content} classList={{ [s.contentHidden]: chatActive() }}>
 				{/* keyed: pass sessionId as a stable string value, NOT the Show's reactive
 				    accessor. CanvasTerminal's onFrame (and ~35 other async IPC handlers) re-read
 				    props.sessionId on every backend frame. With a non-keyed Show, props.sessionId
@@ -1423,6 +1430,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					)}
 				</Show>
 			</div>
+			<Show keyed when={chatActive() ? _currentSessionId() : null}>
+				{(sid) => <TerminalChatView terminalId={props.id} sessionId={sid} />}
+			</Show>
 			<Show when={!composeOpen()}>
 				<div
 					class={s.composeHint}

@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Add a CLI | Chat switch to Claude terminals: a read-only conversation view built from the agent's session file, with prompts apart from replies and tool calls folded into compact cards. The grid is hidden while Chat is open and never unmounted.
+
 ### Changed
 - Resolve browser HTML and Markdown images through open repositories; show a clear placeholder for external images.
 - Show the existing ACP refusal text once in a plain-text AI Chat card.

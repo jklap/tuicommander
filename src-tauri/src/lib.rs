@@ -141,6 +141,8 @@ pub(crate) mod smart_prompt;
 pub(crate) mod state;
 pub(crate) mod stories;
 pub(crate) mod subagent_map;
+pub(crate) mod transcript_tail;
+pub(crate) mod chat_view;
 pub(crate) mod tailscale;
 pub(crate) mod tasks;
 #[expect(
@@ -474,6 +476,22 @@ async fn progress_flow(
     input: progress::ProgressFlowInput,
 ) -> Result<progress::ProgressFlow, String> {
     progress::progress_flow_blocking(state.inner().clone(), project, input).await
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn chat_view_snapshot(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    epoch: Option<u64>,
+    from_seq: Option<u64>,
+) -> Result<chat_view::ChatViewSnapshot, String> {
+    chat_view::chat_view_snapshot_blocking(
+        state.inner().clone(),
+        session_id,
+        epoch,
+        from_seq.unwrap_or(0),
+    )
+    .await
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -2165,6 +2183,7 @@ pub fn run() {
             progress_mark_viewed,
             progress_flow,
             progress_flow_detail,
+            chat_view_snapshot,
             story_action_command,
             story_capabilities,
             workflow_definition_action,
