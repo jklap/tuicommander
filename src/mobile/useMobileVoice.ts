@@ -20,6 +20,7 @@ export function useMobileVoice(sessionId: Accessor<string>, enabled: Accessor<bo
 	const [available, setAvailable] = createSignal(false);
 	let module: DictationModule | null = null;
 	let arming = false;
+	let disposed = false;
 
 	createEffect(() => {
 		if (!enabled() || available()) return;
@@ -64,6 +65,11 @@ export function useMobileVoice(sessionId: Accessor<string>, enabled: Accessor<bo
 		} finally {
 			arming = false;
 		}
+		// The screen was left while the permission prompt was open.
+		if (ok && disposed) {
+			await current.disarmHandsFree();
+			return;
+		}
 		if (!ok) {
 			const message = (current.state.handsFreeError ?? "Voice could not start").replace(/^Error: /, "");
 			toastsStore.add("Voice not started", message, "error", true);
@@ -73,6 +79,7 @@ export function useMobileVoice(sessionId: Accessor<string>, enabled: Accessor<bo
 	// Leaving the screen ends the conversation: the mic must not stay open on
 	// a page the user cannot see.
 	onCleanup(() => {
+		disposed = true;
 		if (armed()) void store()?.disarmHandsFree();
 	});
 
