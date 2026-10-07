@@ -296,18 +296,23 @@ sequence, original viewport-top row index and the viewport's own row snapshot
 (#1407-1ab2). Live VtLogBuffer width changes reflow history only; the visible
 cursor-addressed Ink screen remains a separate replacement domain.
 
-The first explicit full viewport erase after the resize can replace rows from
-that recorded viewport. An anchor is sought only in the viewport snapshot,
-never in older scrollback. Newly redrawn overflow preceding that owned anchor
-is discarded, and its visible prefix is blanked without shifting child coordinates.
-Height growth records the exact history coordinates pulled into the new viewport,
-so their new redraw is retained; only unambiguously displaced old viewport rows may also be
-removed. Matching preserves intra-line whitespace and uses the shared
-greedy-width rule for Ink's hard-line word wrapping. Ambiguous partial boundary
-rows remain intact. Missing, repeated or stale anchors preserve all rows.
+The first explicit full viewport erase can replace an old displaced row only
+when that complete physical row occurs in the new replacement. A two-row
+viewport anchor does not license removing other old rows.
 
-Older scrollback is never deleted by text similarity. The physical-row
-reconciliation fallback is bounded by rows actually displaced from the recorded
-viewport. Alternate screens and ordinary edits provide no replacement authority.
+A fresh redraw prefix is suppressed only when its entire text equals a contiguous
+suffix of an immutable history snapshot ending immediately above the owned
+viewport. The snapshot includes at most four original viewport heights, capped
+at 256 rows. A mismatch, gap, partial boundary or missing anchor preserves the
+entire prefix. This path never deletes old history. A genuinely new prefix
+identical to that complete retained suffix is indistinguishable from a replay:
+its older copy remains, but event multiplicity is lost. This bounded residual
+is explicit and regression-tested.
+
+Height growth records the exact history coordinates pulled into the new viewport,
+so their new redraw is retained. Matching preserves intra-line whitespace and
+uses the shared greedy-width rule for Ink's hard-line word wrapping. Fresh
+visible duplicates are blanked without shifting child row coordinates.
+Alternate screens and ordinary edits provide no replacement authority.
 The recorded streaming and idle PTY captures and resize byte timelines live in
 `crates/tuic-terminal/src/fixtures/claude-resize-1407/`.

@@ -645,6 +645,8 @@ struct ResizeViewport {
     grid_sequence: u64,
     viewport_top: usize,
     rows: Vec<String>,
+    /// Immutable contiguous history immediately above the owned viewport.
+    preceding_rows: Vec<String>,
     /// Only these newest old history rows came from this viewport.
     displaced_rows: usize,
     scrolled_after_resize: usize,
@@ -1246,6 +1248,16 @@ impl TerminalGrid {
         let viewport_rows: Vec<String> = (-(pulled_rows as i32)..before_lines as i32)
             .map(|row| self.row_to_text(Line(row)).unwrap_or_default())
             .collect();
+        let preceding_count = self
+            .term
+            .grid()
+            .history_size()
+            .saturating_sub(pulled_rows)
+            .min(before_lines.saturating_mul(4).min(256));
+        let preceding_rows = (-(pulled_rows as i32 + preceding_count as i32)
+            ..-(pulled_rows as i32))
+            .map(|row| self.row_to_text(Line(row)).unwrap_or_default())
+            .collect();
         // All-mode width reflow can intermingle viewport and older history.
         // Only short, unwrapped viewport rows have an unambiguous height map.
         let simple_rows = (0..before_lines.saturating_sub(rows as usize)).all(|row| {
@@ -1272,6 +1284,7 @@ impl TerminalGrid {
             grid_sequence: self.grid_sequence,
             viewport_top,
             rows: viewport_rows,
+            preceding_rows,
             displaced_rows,
             scrolled_after_resize: self.term.grid().total_scrolled(),
         });
@@ -1454,49 +1467,79 @@ impl TerminalGrid {
                 .find(|&prefix| fresh_text(prefix as i32 - newer as i32).contains(anchor))?;
             Some((source_row, prefix))
         });
-        let Some((source_row, prefix)) = anchor else {
+        let Some((_source_row, prefix)) = anchor else {
             return false;
         };
-        let history_prefix = prefix.min(newer);
-        let screen_prefix = prefix.saturating_sub(newer);
+        // Prove the ENTIRE fresh prefix against a contiguous snapshot suffix
+        // ending at the old viewport boundary. A new line or a gap keeps it all.
+        let prefix_text = if prefix == 0 {
+            String::new()
+        } else {
+            let raw = self.term.bounds_to_string(
+                Point::new(Line(-(newer as i32)), Column(0)),
+                Point::new(
+                    Line(prefix as i32 - newer as i32 - 1),
+                    Column(grid.columns() - 1),
+                ),
+            );
+            normalize(&raw.lines().collect::<Vec<_>>(), grid.columns())
+        };
+        let prefix_proven = prefix != 0
+            && (0..resize.preceding_rows.len()).any(|start| {
+                let old = normalize(
+                    &resize.preceding_rows[start..]
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    resize.before_columns,
+                );
+                old == prefix_text
+            });
+        let history_prefix = if prefix_proven { prefix.min(newer) } else { 0 };
+        let screen_prefix = if prefix_proven {
+            prefix.saturating_sub(newer)
+        } else {
+            0
+        };
+        // Collect proof before mutating any history coordinates.
+        let fresh_rows: Vec<String> = (-(newer as i32)..grid.screen_lines() as i32)
+            .map(|row| self.row_to_text(Line(row)).unwrap_or_default())
+            .collect();
+        let owned = resize
+            .displaced_rows
+            .min(grid.history_size().saturating_sub(newer));
+        let old_replaced: Vec<bool> = (0..owned)
+            .map(|row| {
+                let old = self
+                    .row_to_text(Line(row as i32 - newer as i32 - owned as i32))
+                    .unwrap_or_default();
+                !old.trim().is_empty() && fresh_rows.iter().any(|fresh| fresh == &old)
+            })
+            .collect();
         let remaining = newer - history_prefix;
-        let removed_new = self
+        let mut removed = self
             .term
             .grid_mut()
             .drop_history_before(remaining, history_prefix);
-        // Blank the new redraw prefix without shifting coordinates: the child
-        // still addresses its original screen rows in subsequent frames.
         for row in 0..screen_prefix {
             for col in 0..self.term.grid().columns() {
                 self.term.grid_mut()[Line(row as i32)][Column(col)] = Cell::default();
             }
         }
-        // Height-only changes map the source row directly into old history.
-        // Width reflow can move more viewport rows: use complete physical rows
-        // within the proven newest owned range, never older history.
-        let owned = if resize.before_columns == resize.after_columns {
-            resize.displaced_rows.saturating_sub(source_row)
-        } else {
-            let limit = resize
-                .displaced_rows
-                .min(self.term.grid().history_size().saturating_sub(remaining));
-            (2..=limit)
-                .rev()
-                .find(|&count| {
-                    (0..count).all(|row| {
-                        self.row_to_text(Line(row as i32)).unwrap_or_default()
-                            == self
-                                .row_to_text(Line(row as i32 - count as i32 - remaining as i32))
-                                .unwrap_or_default()
-                    })
-                })
-                .unwrap_or(0)
-        };
-        let removed_old = self.term.grid_mut().drop_history_before(remaining, owned);
+        // Old rows are independent replacements, never an anchor-licensed block.
+        // Iterate oldest to newest so newer row offsets remain stable.
+        for (row, replaced) in old_replaced.into_iter().enumerate() {
+            if replaced {
+                removed += self
+                    .term
+                    .grid_mut()
+                    .drop_history_before(remaining + owned - row - 1, 1);
+            }
+        }
         if screen_prefix != 0 {
             self.term.mark_fully_damaged();
         }
-        removed_new + removed_old + screen_prefix != 0
+        removed + screen_prefix != 0
     }
 
     /// Override ANSI colors 0-15 with theme values.
