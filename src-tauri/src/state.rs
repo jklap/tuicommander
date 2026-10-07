@@ -689,6 +689,9 @@ pub(crate) struct SessionState {
     /// One draft may interrupt this turn until the next native input write.
     #[serde(skip)]
     pub(crate) turn_interrupt: Option<Arc<()>>,
+    /// Native input retired this epoch; late drafts cannot rearm it.
+    #[serde(skip)]
+    pub(crate) turn_interrupt_retired_epoch: Option<u64>,
     /// Slash command menu items (from slash-menu parsed events)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slash_menu_items: Option<Vec<crate::output_parser::SlashMenuItem>>,
@@ -2333,6 +2336,7 @@ impl AppState {
     pub(crate) fn retire_turn_interrupt(&self, session_id: &str) {
         if let Some(mut session) = self.session_maps.session_states.get_mut(session_id) {
             session.turn_interrupt = None;
+            session.turn_interrupt_retired_epoch = Some(session.turn_epoch);
         }
     }
 

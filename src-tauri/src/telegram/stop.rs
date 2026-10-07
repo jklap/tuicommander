@@ -10,13 +10,16 @@ pub(super) fn arm(state: &AppState, peer: &str, pty: &str, epoch: u64) -> Result
     if !super::runtime::live(state, peer, pty, epoch) {
         return Err(Error::State);
     }
-    let token = Arc::new(());
-    state
+    let mut session = state
         .session_maps
         .session_states
         .get_mut(pty)
-        .ok_or(Error::State)?
-        .turn_interrupt = Some(token.clone());
+        .ok_or(Error::State)?;
+    if session.turn_epoch != epoch || session.turn_interrupt_retired_epoch == Some(epoch) {
+        return Err(Error::State);
+    }
+    let token = Arc::new(());
+    session.turn_interrupt = Some(token.clone());
     Ok(token)
 }
 

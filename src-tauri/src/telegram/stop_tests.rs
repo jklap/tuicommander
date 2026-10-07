@@ -260,15 +260,36 @@ async fn stop_rejects_changed_native_ownership_and_revoked_authorization() {
     }
 }
 
-// Catches: paired HTTP input and the managed submit writer bypass the raw-input
-// fence, allowing an old draft to append Escape to the replacement command.
+// Catches: paired HTTP input or managed submission omits writer retirement,
+// so Stop appends old-turn Escape before replacement bookkeeping advances epoch.
 #[tokio::test]
-async fn stop_is_retired_by_atomic_pair_and_managed_submission() {
+async fn stop_cannot_cross_pair_or_managed_write_before_bookkeeping() {
+    struct EnterWriter {
+        bytes: Arc<Mutex<Vec<u8>>>,
+        entered: std::sync::mpsc::Sender<()>,
+    }
+    impl std::io::Write for EnterWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.bytes.lock().unwrap().extend_from_slice(bytes);
+            if bytes == b"\r" {
+                self.entered.send(()).unwrap();
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
     for managed in [false, true] {
         let (_dir, paths) = setup();
         let server =
             FakeServer::start(vec![(StatusCode::OK, json!({"ok":true,"result":true}))]).await;
         let (mut runtime, _session, bytes, draft) = bound(paths, &server).await;
+        let epoch = runtime
+            .state
+            .session_state_with_shell(PEER)
+            .unwrap()
+            .turn_epoch;
         if managed {
             runtime
                 .state
@@ -289,29 +310,78 @@ async fn stop_is_retired_by_atomic_pair_and_managed_submission() {
                 crate::pty::write_agent_submission_to_pty(&runtime.state, PEER, "replacement"),
                 crate::pty::AgentSubmissionWrite::Complete { .. }
             ));
-            // Native managed submit applies bookkeeping after its complete write.
+            // Ensure Stop cannot be rejected merely because submission started idle.
+            runtime
+                .state
+                .session_maps
+                .shell_states
+                .get(PEER)
+                .unwrap()
+                .store(crate::pty::SHELL_BUSY, std::sync::atomic::Ordering::Release);
+            runtime.update(stop(1111111, draft)).await.unwrap();
+            assert_eq!(*bytes.lock().unwrap(), b"\x15replacement\r");
             crate::mcp_http::session::apply_input_bookkeeping(
                 &runtime.state,
                 PEER,
                 "replacement\r",
             );
         } else {
-            crate::mcp_http::session::write_pty_input_pair(
-                &runtime.state,
-                PEER,
-                "replacement",
-                "\r",
-                Some("claude"),
-            )
-            .unwrap();
+            let (entered, observe) = std::sync::mpsc::channel();
+            runtime
+                .state
+                .session_maps
+                .sessions
+                .get(PEER)
+                .unwrap()
+                .lock()
+                .writer = Arc::new(parking_lot::Mutex::new(Box::new(EnterWriter {
+                bytes: bytes.clone(),
+                entered,
+            })));
+            let state = runtime.state.clone();
+            // Hold the existing line buffer to pause the real pair caller after
+            // its writer unlock, before either request can advance the epoch.
+            let input = state
+                .session_maps
+                .input_buffers
+                .entry(PEER.into())
+                .or_insert_with(|| {
+                    parking_lot::Mutex::new(crate::input_line_buffer::InputLineBuffer::new())
+                });
+            let buffer = input.lock();
+            let replacement_state = state.clone();
+            let replacement = std::thread::spawn(move || {
+                crate::mcp_http::session::write_pty_input_pair(
+                    &replacement_state,
+                    PEER,
+                    "replacement",
+                    "\r",
+                    Some("claude"),
+                )
+                .unwrap();
+            });
+            observe.recv().unwrap();
+            // Enter has escaped; acquiring the same mutex proves the pair has
+            // released its writer while bookkeeping is still blocked above.
+            drop(state.pty_writer(PEER).unwrap().lock());
+            assert_eq!(
+                state.session_state_with_shell(PEER).unwrap().turn_epoch,
+                epoch
+            );
+            assert!(!runtime.stop(&stop(1111111, draft)).unwrap());
+            assert_eq!(*bytes.lock().unwrap(), b"replacement\r");
+            drop(buffer);
+            drop(input);
+            replacement.join().unwrap();
         }
-        runtime.update(stop(1111111, draft)).await.unwrap();
-        let expected: &[u8] = if managed {
-            b"\x15replacement\r"
-        } else {
-            b"replacement\r"
-        };
-        assert_eq!(*bytes.lock().unwrap(), expected);
+        assert_eq!(
+            runtime
+                .state
+                .session_state_with_shell(PEER)
+                .unwrap()
+                .turn_epoch,
+            epoch + 1
+        );
     }
 }
 
