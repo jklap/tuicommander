@@ -973,6 +973,12 @@ pub(super) struct TerminalLinesQuery {
 }
 
 #[derive(Deserialize)]
+pub(super) struct ChatViewQuery {
+    pub epoch: Option<u64>,
+    pub from_seq: Option<u64>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct TerminalStyledRowsQuery {
     pub start: usize,
     pub count: usize,

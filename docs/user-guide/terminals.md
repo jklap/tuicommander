@@ -49,6 +49,12 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 - Last 10 closed tabs are remembered with their name, font size, and working directory
 - Reopened tabs start a fresh shell session in the original directory
 
+### CLI / Chat view
+
+A terminal that runs Claude Code shows a **CLI | Chat** switch in its top-right corner. **Chat** replaces the grid with the conversation read from Claude's own session file: your prompts as bubbles, Claude's replies as text, and tool calls folded into one compact card each. Plumbing (hook output, system reminders) and empty thinking blocks are left out. The view is read-only: switch back to **CLI** to reply or answer a permission prompt. The grid keeps running while hidden, so scrollback and selection are unchanged.
+
+**Chat** is disabled, with the reason as its tooltip, when the terminal has no agent, the agent is not Claude, or TUICommander has not bound the agent to a session file yet. If the agent exits or the binding is lost while Chat is open, the terminal returns to CLI with a one-line notice.
+
 ### Suspending a Tab
 
 **Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby only pauses an idle process, which keeps its memory, and wakes it when you focus the tab. A suspended tab holds no process at all.

@@ -4736,3 +4736,11 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] On Boss's next planned Linux daemon rebuild/restart, confirm closing filled throwaway terminals reduces resident memory while other terminals remain readable. The isolated mint comparison proves freed grid pages can remain resident until trim. This lane does not restart or signal the live mint daemon.
 - [ ] After the backend restart, confirm Settings > MCP shows a short dedicated summary for the native workflow_run tool. Native catalog and HTTP status regressions cover the wire response.
+
+## CLI / Chat view for Claude terminals (1568-7b55) — backend restart required
+
+- [ ] After `make dev` restart, open a Claude terminal with a bound session: **CLI | Chat** appears top-right, Chat shows your prompts as bubbles and replies as text with tool calls folded, and a new reply appears within ~2 s without switching back.
+- [ ] Switch Chat → CLI → Chat: the grid scrollback and selection are intact, and Chat resumes without a visible reload.
+- [ ] In a plain shell tab the switch is absent; in a Codex tab Chat is disabled with the reason in its tooltip.
+- [ ] Run `/clear` in Claude while Chat is open: the old conversation disappears and only the new one shows. Exit Claude while Chat is open: the tab returns to the grid with a one-line notice.
+- [ ] Visual check of the switch position (top-right) against the grid scrollbar and the last-prompt bar.
