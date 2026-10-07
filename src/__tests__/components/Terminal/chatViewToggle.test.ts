@@ -16,7 +16,9 @@ describe("chat view toggle", () => {
 	// Catches: the Show-keyed disposal freeze / lost scroll when switching to chat.
 	it("toggle_hides_canvas_without_unmounting_it", () => {
 		// The mode toggles a class on the container...
-		expect(source).toMatch(/<div ref=\{containerRef\} class=\{s\.content\} classList=\{\{ \[s\.contentHidden\]: chatActive\(\) \}\}>/);
+		expect(source).toMatch(
+			/<div ref=\{containerRef\} class=\{s\.content\} classList=\{\{ \[s\.contentHidden\]: chatActive\(\) \}\}>/,
+		);
 		expect(css).toMatch(/\.contentHidden\s*\{\s*display:\s*none;\s*\}/);
 		// ...and the Show that owns CanvasTerminal still depends on the session alone.
 		const start = source.indexOf("when={_currentSessionId()}");

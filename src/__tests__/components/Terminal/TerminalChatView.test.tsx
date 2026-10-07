@@ -13,9 +13,9 @@ vi.mock("../../../invoke", () => ({
 	listen: vi.fn(async () => () => {}),
 }));
 
+import { TerminalChatView, ViewModeToggle } from "../../../components/Terminal/TerminalChatView";
 import { chatViewStore } from "../../../stores/chatView";
 import { terminalsStore } from "../../../stores/terminals";
-import { TerminalChatView, ViewModeToggle } from "../../../components/Terminal/TerminalChatView";
 
 function addTerminal(agentType: "claude" | null, agentSessionId: string | null) {
 	return terminalsStore.add({

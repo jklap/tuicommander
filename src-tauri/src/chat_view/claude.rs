@@ -144,14 +144,18 @@ impl ClaudeAdapter {
             return None;
         }
         let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
-        let (text, truncated) = clean(&tool_result_text(block.get("content")), MAX_TOOL_OUTPUT_CHARS);
+        let (text, truncated) = clean(
+            &tool_result_text(block.get("content")),
+            MAX_TOOL_OUTPUT_CHARS,
+        );
         let mut update = json!({
             "sessionUpdate": "tool_call_update",
             "toolCallId": id,
             "status": if failed { "failed" } else { "completed" },
         });
         if !text.is_empty() {
-            update["content"] = json!([{ "type": "content", "content": { "type": "text", "text": text } }]);
+            update["content"] =
+                json!([{ "type": "content", "content": { "type": "text", "text": text } }]);
         }
         if truncated {
             update["_meta"] = json!({ "tuic": { "truncated": true } });
@@ -175,7 +179,10 @@ impl ClaudeAdapter {
         for block in blocks {
             match block.get("type").and_then(Value::as_str) {
                 Some("text") => {
-                    let raw = block.get("text").and_then(Value::as_str).unwrap_or_default();
+                    let raw = block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
                     if raw.trim().is_empty() {
                         continue;
                     }
@@ -191,7 +198,10 @@ impl ClaudeAdapter {
                     }));
                 }
                 Some("thinking") => {
-                    let raw = block.get("thinking").and_then(Value::as_str).unwrap_or_default();
+                    let raw = block
+                        .get("thinking")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
                     if raw.trim().is_empty() {
                         continue;
                     }
