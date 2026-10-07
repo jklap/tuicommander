@@ -219,11 +219,6 @@
   font-size: var(--font-xs);
 }
 
-.assistantMsg .copyAction {
-  min-height: 18px;
-  margin-top: 4px;
-}
-
 /* The bubble is only as tall as its text. Copy sits in the gutter to its left
    (the bubble is capped at 85% of the row) instead of holding a hidden row. */
 .userMsg .copyAction {
@@ -285,10 +280,36 @@
 }
 
 .assistantMsg {
+  position: relative;
+  /* Hover actions occupy the existing inter-message gutter, never a blank row. */
+  margin-bottom: 8px;
   align-self: flex-start;
   width: 100%;
   font-size: var(--font-base);
   line-height: 1.5;
+}
+
+.systemNotice {
+  color: var(--fg-muted);
+  font-size: var(--font-xs);
+  overflow-wrap: anywhere;
+}
+
+.attachmentChip {
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  font-size: var(--font-xs);
+  white-space: normal;
+}
+
+/* Same answer tint and left rule as Terminal/suggestOverlay and AnswersPanel. */
+.assistantMsg :global(p[data-tuic-answer]) {
+  padding: 2px 0 2px 8px;
+  border-left: 3px solid rgba(94,190,140,0.9);
+  background: rgba(94,190,140,0.14);
 }
 
 .agentIntent {
@@ -1356,8 +1377,11 @@
 }
 
 .replyActions {
+  position: absolute;
+  top: 100%;
+  left: 0;
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
 }
 

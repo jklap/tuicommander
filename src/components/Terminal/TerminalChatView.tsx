@@ -55,6 +55,7 @@ export const TerminalChatView: Component<{ terminalId: string; sessionId: string
 			<Transcript
 				entries={() => acpTranscript.entries(chatViewKey(props.sessionId))}
 				busy={() => false}
+				observeToolDuration={false}
 				emptyMessage="No messages in this conversation yet."
 			/>
 			<div class={s.hint}>Read-only view. Switch to CLI to reply or answer prompts.</div>

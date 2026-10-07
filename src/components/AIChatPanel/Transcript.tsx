@@ -15,6 +15,7 @@ import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { filePathRegex, matchWebUrls } from "../Terminal/linkProvider";
+import { ANSWER_MARKER_RE } from "../Terminal/suggestOverlay";
 import { ContentRenderer } from "../ui/ContentRenderer";
 import s from "./AIChatPanel.module.css";
 import { projectChatProtocolText } from "./protocolText";
@@ -62,7 +63,7 @@ function toolName(title: string): string {
 	return title.split(/\s+-lc\s+|\s+-c\s+/, 1)[0];
 }
 
-const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
+const ToolActivity: Component<{ calls: () => AcpToolCall[]; observeDuration?: boolean }> = (props) => {
 	const startedAt = performance.now();
 	let finishedAt: number | undefined;
 	let observedCount = 0;
@@ -105,7 +106,8 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 					{props.calls().length > 2 ? " · …" : ""}
 				</span>
 				<span class={s.toolCallDuration}>
-					{duration()} observed · {status()}
+					<Show when={props.observeDuration !== false}>{duration()} observed · </Show>
+					{status()}
 				</span>
 			</summary>
 			<div class={s.toolActivityCalls}>
@@ -140,16 +142,34 @@ const ToolActivity: Component<{ calls: () => AcpToolCall[] }> = (props) => {
 };
 
 /** Keep the first call as the stable row anchor; later calls belong to it. */
-function activityRows(entries: AcpTranscriptEntry[]): {
+function activityRows(
+	entries: AcpTranscriptEntry[],
+	showSuggestions: boolean,
+): {
 	visible: AcpTranscriptEntry[];
 	calls: Map<string, AcpToolCall[]>;
 	refusals: Map<string, string>;
+	thoughts: Map<string, string>;
 } {
 	const visible: AcpTranscriptEntry[] = [];
 	const calls = new Map<string, AcpToolCall[]>();
 	const refusals = new Map<string, string>();
+	const thoughts = new Map<string, string>();
 	let current: AcpToolCall[] | undefined;
 	for (const entry of entries) {
+		if (entry.kind === "agent") {
+			const projected = projectChatProtocolText(entry.text);
+			if (!projected.body.trim() && !projected.intent && !(showSuggestions && projected.suggestions.length)) continue;
+		}
+		if (entry.kind === "thought") {
+			if (!entry.text.trim()) continue;
+			const previous = visible.at(-1);
+			if (previous?.kind === "thought" && previous.inherited === entry.inherited) {
+				thoughts.set(previous.id, `${thoughts.get(previous.id)}\n\n${entry.text}`);
+				continue;
+			}
+			thoughts.set(entry.id, entry.text);
+		}
 		if (
 			entry.kind === "user" ||
 			entry.kind === "settled" ||
@@ -180,13 +200,15 @@ function activityRows(entries: AcpTranscriptEntry[]): {
 			visible.push(entry);
 		}
 	}
-	return { visible, calls, refusals };
+	return { visible, calls, refusals, thoughts };
 }
 
 export interface TranscriptProps {
 	entries: () => AcpTranscriptEntry[];
 	/** Shown while a turn is running and nothing has streamed back yet. */
 	busy: () => boolean;
+	/** History has no execution timestamps: never time it from the view's mount. */
+	observeToolDuration?: boolean;
 	/** ego's provider-retry line ("… retrying in 2s (attempt 2/6)"), shown instead of the pulse. */
 	retry?: () => string | null;
 	emptyMessage: string;
@@ -264,11 +286,67 @@ const LinkedPlainText: Component<{ text: string; onOpenFile?: (href: string) => 
 	);
 };
 
+/** These exact harness turns are not words typed by the person reading the chat. */
+function isHarnessNotice(text: string): boolean {
+	return (
+		/^\[TUIC\] message available — read it with: agent action=inbox\s*$/.test(text.trim()) ||
+		text.trim() === "[Request interrupted by user for tool use]" ||
+		text.trim() === "[Request interrupted by user]"
+	);
+}
+
+const UserText: Component<{ text: string; onOpenFile?: (href: string) => void }> = (props) => {
+	const parts = createMemo(() => {
+		const parts: { text: string; image?: string }[] = [];
+		let end = 0;
+		for (const match of props.text.matchAll(/\[Image #(\d+)\](?:\s*\[image\])?|\[image\]/g)) {
+			parts.push({ text: props.text.slice(end, match.index) });
+			parts.push({
+				text: match[1] ? `Image ${match[1]}` : "Image",
+				image: match[1] ? `Image attachment ${match[1]}` : "Image attachment",
+			});
+			end = match.index + match[0].length;
+		}
+		parts.push({ text: props.text.slice(end) });
+		return parts;
+	});
+	return (
+		<For each={parts()}>
+			{(part) =>
+				part.image ? (
+					<span class={s.attachmentChip} role="img" aria-label={part.image}>
+						{part.text}
+					</span>
+				) : (
+					<LinkedPlainText text={part.text} onOpenFile={props.onOpenFile} />
+				)
+			}
+		</For>
+	);
+};
+
+/** Reuse the terminal's answer marker and tint, after Markdown has rendered.
+ * Code examples and quotations retain their literal marker. Stored/copy text stays intact. */
+function highlightAnswers(container: HTMLDivElement | undefined): void {
+	for (const paragraph of container?.querySelectorAll("p") ?? []) {
+		if (paragraph.closest("pre, code, blockquote") || !ANSWER_MARKER_RE.test(paragraph.textContent ?? "")) continue;
+		paragraph.setAttribute("data-tuic-answer", "");
+		let remaining = /^[\s●⏺]*💬[\t ]*/.exec(paragraph.textContent ?? "")?.[0].length ?? 0;
+		const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+		while (remaining > 0 && walker.nextNode()) {
+			const node = walker.currentNode;
+			const text = node.textContent ?? "";
+			node.textContent = text.slice(remaining);
+			remaining -= Math.min(remaining, text.length);
+		}
+	}
+}
+
 export const Transcript: Component<TranscriptProps> = (props) => {
-	const activity = createMemo(() => activityRows(props.entries()));
+	const activity = createMemo(() => activityRows(props.entries(), !!props.onSuggestion));
 	const firstLocalId = createMemo(() =>
-		props.entries().some((entry) => entry.inherited)
-			? props.entries().find((entry) => !entry.inherited)?.id
+		activity().visible.some((entry) => entry.inherited)
+			? activity().visible.find((entry) => !entry.inherited)?.id
 			: undefined,
 	);
 	const [finding, setFinding] = createSignal(false);
@@ -401,67 +479,92 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 							<Switch>
 								<Match when={entry.kind === "user" && entry}>
 									{(user) => (
-										<div class={s.userMsg}>
-											<LinkedPlainText text={user().text} onOpenFile={props.onOpenFile} />
-											<CopyButton label="Copy user message" text={user().text} />
-										</div>
+										<Show
+											when={!isHarnessNotice(user().text)}
+											fallback={
+												<div class={s.systemNotice} role="note">
+													{user().text}
+												</div>
+											}
+										>
+											<div class={s.userMsg}>
+												<UserText text={user().text} onOpenFile={props.onOpenFile} />
+												<CopyButton label="Copy user message" text={user().text} />
+											</div>
+										</Show>
 									)}
 								</Match>
 								<Match when={entry.kind === "agent" && entry}>
 									{(agent) => {
 										const projected = createMemo(() => projectChatProtocolText(agent().text));
+										let content: HTMLDivElement | undefined;
+										createEffect(() => {
+											projected().body;
+											queueMicrotask(() => highlightAnswers(content));
+										});
 										return (
-											<div class={s.assistantMsg}>
-												<Show when={projected().intent}>
-													{(intent) => (
-														<div class={s.agentIntent} aria-label="Agent intent">
-															<span>{intent().title ?? "Status"}</span>
-															{intent().text}
-														</div>
-													)}
-												</Show>
-												<Show when={projected().body}>
-													<ContentRenderer
-														content={projected().body}
-														incremental={true}
-														onLinkClick={props.onOpenFile}
-														autoLinkFiles={true}
-														onCodeCopy={(text) =>
-															void writeClipboard(text).catch((error) =>
-																appLogger.error("ai-chat", "Copy failed", error),
-															)
-														}
-													/>
-												</Show>
-												<div class={s.replyActions}>
-													<CopyButton label="Copy assistant message" text={agent().text} />
-													<Show when={props.canForkAtMessage?.() && agent().messageId}>
-														<button
-															type="button"
-															class={s.copyAction}
-															aria-label="Fork from here"
-															disabled={props.busy()}
-															onClick={() => {
-																const id = agent().messageId;
-																if (id) props.onFork?.(id);
+											<Show
+												when={
+													projected().body.trim() ||
+													projected().intent ||
+													(props.onSuggestion && projected().suggestions.length > 0)
+												}
+											>
+												<div class={s.assistantMsg}>
+													<Show when={projected().intent}>
+														{(intent) => (
+															<div class={s.agentIntent} aria-label="Agent intent">
+																<span>{intent().title ?? "Status"}</span>
+																{intent().text}
+															</div>
+														)}
+													</Show>
+													<Show when={projected().body}>
+														<ContentRenderer
+															contentRef={(element) => {
+																content = element;
 															}}
-														>
-															Fork from here
-														</button>
+															content={projected().body}
+															incremental={true}
+															onLinkClick={props.onOpenFile}
+															autoLinkFiles={true}
+															onCodeCopy={(text) =>
+																void writeClipboard(text).catch((error) =>
+																	appLogger.error("ai-chat", "Copy failed", error),
+																)
+															}
+														/>
+													</Show>
+													<div class={s.replyActions}>
+														<CopyButton label="Copy assistant message" text={agent().text} />
+														<Show when={props.canForkAtMessage?.() && agent().messageId}>
+															<button
+																type="button"
+																class={s.copyAction}
+																aria-label="Fork from here"
+																disabled={props.busy()}
+																onClick={() => {
+																	const id = agent().messageId;
+																	if (id) props.onFork?.(id);
+																}}
+															>
+																Fork from here
+															</button>
+														</Show>
+													</div>
+													<Show when={props.onSuggestion && projected().suggestions.length > 0}>
+														<div class={s.suggestedReplies} aria-label="Suggested replies">
+															<For each={projected().suggestions}>
+																{(item) => (
+																	<button type="button" onClick={() => props.onSuggestion?.(item)}>
+																		{item}
+																	</button>
+																)}
+															</For>
+														</div>
 													</Show>
 												</div>
-												<Show when={props.onSuggestion && projected().suggestions.length > 0}>
-													<div class={s.suggestedReplies} aria-label="Suggested replies">
-														<For each={projected().suggestions}>
-															{(item) => (
-																<button type="button" onClick={() => props.onSuggestion?.(item)}>
-																	{item}
-																</button>
-															)}
-														</For>
-													</div>
-												</Show>
-											</div>
+											</Show>
 										);
 									}}
 								</Match>
@@ -486,12 +589,17 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 									{(thought) => (
 										<details class={s.reasoningDisclosure}>
 											<summary class={s.reasoningSummary}>Thinking</summary>
-											<div class={s.reasoningBody}>{thought().text}</div>
+											<div class={s.reasoningBody}>{activity().thoughts.get(thought().id)}</div>
 										</details>
 									)}
 								</Match>
 								<Match when={entry.kind === "tool" && entry}>
-									{(tool) => <ToolActivity calls={() => activity().calls.get(tool().id) ?? []} />}
+									{(tool) => (
+										<ToolActivity
+											calls={() => activity().calls.get(tool().id) ?? []}
+											observeDuration={props.observeToolDuration}
+										/>
+									)}
 								</Match>
 								<Match when={entry.kind === "plan" && entry}>
 									{(plan) => (
