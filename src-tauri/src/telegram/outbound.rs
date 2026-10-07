@@ -30,6 +30,7 @@ pub(super) struct Active {
     pub epoch: u64,
     pub chat: i64,
     pub draft: i64,
+    pub interrupt: Option<std::sync::Arc<()>>,
     text: String,
     sent: Instant,
     dirty: bool,
@@ -98,13 +99,11 @@ impl Outbound {
         let draft = (i64::from_be_bytes(bytes[..8].try_into().map_err(|_| Error::State)?)
             & i64::MAX)
             .max(1);
-        // DEFERRED (2026-10-04): phone Stop awaits safe bound-turn input
-        // ordering after 1342; follow-up story 1521-52cd.
         let accepted = self
             .call(
                 chat,
                 "sendMessageDraft",
-                json!({"chat_id":chat,"draft_id":draft,"text":""}),
+                json!({"chat_id":chat,"draft_id":draft,"text":"","can_stop":true,"keep_on_stop":false}),
             )
             .await?;
         if accepted != Value::Bool(true) {
@@ -117,6 +116,7 @@ impl Outbound {
             epoch,
             chat,
             draft,
+            interrupt: None,
             text: String::new(),
             sent: Instant::now(),
             dirty: false,
@@ -147,7 +147,7 @@ impl Outbound {
             return Ok(());
         }
         let chat = active.chat;
-        let body = json!({"chat_id":chat,"draft_id":active.draft,"text":active.text});
+        let body = json!({"chat_id":chat,"draft_id":active.draft,"text":active.text,"can_stop":true,"keep_on_stop":false});
         if self.call(chat, "sendMessageDraft", body).await? != Value::Bool(true) {
             return Err(Error::Protocol);
         }

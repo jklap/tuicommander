@@ -302,6 +302,7 @@ pub(crate) fn write_pty_input_pair(
         .pty_writer(session_id)
         .ok_or_else(|| "Session not found".to_string())?;
     let mut writer = writer.lock();
+    state.retire_turn_interrupt(session_id);
     writer
         .write_all(text.as_bytes())
         .map_err(|error| format!("Write failed: {error}"))?;

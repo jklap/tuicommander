@@ -765,3 +765,17 @@ parse times plus process peak RSS. Raw transcripts are never committed.
 The recorded chunk-path parity gate covers all `.tcap` captures under `src-tauri/`,
 including captures in terminal crates. See [Recorded replay oracle](output-parser.md#recorded-replay-oracle)
 for scope, first-difference diagnostics and the explicit regeneration command.
+
+### Bound Telegram interruption
+
+The Telegram daemon arms a draft ownership token in `SessionState` under the
+session writer mutex. Raw desktop/HTTP input, atomic input pairs, managed agent
+submissions, trust answers and retained-composer Enter retries retire that token
+before writing bytes. Retirement records the current epoch, so a delayed draft
+cannot rearm it before native submission bookkeeping establishes a new turn.
+Terminal protocol replies leave it intact. Stop consumes
+the current draft, then checks the token, peer mapping and turn epoch under the
+same writer mutex. It writes one Escape without feeding the input line editor.
+`SilenceState` is released before the native write; synchronous captured output
+can therefore traverse the normal chunk processor. Input bookkeeping remains
+post-write and keeps its existing per-request boundaries.

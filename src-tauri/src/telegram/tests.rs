@@ -281,3 +281,11 @@ mod round6;
 
 #[path = "round7_tests.rs"]
 mod round7;
+
+#[cfg(unix)]
+#[path = "stop_tests.rs"]
+mod stop;
+
+#[cfg(unix)]
+#[path = "critic_stop_tests.rs"]
+mod critic_stop;

@@ -118,11 +118,16 @@ impl Runtime {
                     .find(|(id, _)| id == &request_id)
                     .map(|(_, chat)| *chat)
                     .ok_or(Error::State)?;
+                if self.outbound.active.is_some() {
+                    return Err(Error::State);
+                }
                 let (pty, epoch) = self.current()?;
+                let interrupt = super::stop::arm(&self.state, caller, &pty, epoch)?;
                 let draft = self
                     .outbound
                     .begin(request_id.clone(), caller.into(), pty, epoch, chat)
                     .await?;
+                self.outbound.active.as_mut().ok_or(Error::State)?.interrupt = Some(interrupt);
                 self.pending.retain(|(id, _)| id != &request_id);
                 Ok(json!({"draft_id":draft}))
             }
@@ -192,6 +197,7 @@ impl Runtime {
         if !self.enabled() {
             return Err(Error::Config);
         }
+        self.stop(&value)?;
         self.callback(&value).await?;
         Ok(json!({"accepted":true}))
     }
@@ -289,7 +295,7 @@ impl Runtime {
     }
 }
 
-fn live(state: &AppState, peer: &str, pty: &str, epoch: u64) -> bool {
+pub(super) fn live(state: &AppState, peer: &str, pty: &str, epoch: u64) -> bool {
     state.live_pty_for_peer(peer).as_deref() == Some(pty)
         && !state.session_maps.exit_codes.contains_key(pty)
         && state.session_state_with_shell(pty).is_some_and(|s| {

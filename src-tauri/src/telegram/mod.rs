@@ -12,6 +12,7 @@ mod outbound;
 mod registration;
 mod runtime;
 pub(crate) mod settings;
+mod stop;
 mod tool;
 #[cfg(not(feature = "desktop"))]
 pub(crate) use native::start;
