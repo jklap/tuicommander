@@ -21816,3 +21816,110 @@ fn queue_idempotency_validates_keys_and_bounds_recent_acceptance() {
     enqueue_user_command(&state, sid, "wake", Some("job-0")).unwrap();
     assert_eq!(list_queued_commands(&state, sid).len(), 1);
 }
+
+/// Catches: a newly committed capture or a changed state/question decision escapes
+/// the small hand-picked baseline. Git is authoritative, including crate fixtures.
+#[test]
+fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
+    use serde_json::json;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let tracked = std::process::Command::new("git")
+        .args(["ls-files", "-z", "--", "*.tcap"])
+        .current_dir(root)
+        .output()
+        .expect("enumerate tracked captures");
+    assert!(tracked.status.success(), "git ls-files failed");
+    let mut fixtures: Vec<_> = tracked
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            std::str::from_utf8(p)
+                .expect("UTF-8 fixture path")
+                .to_owned()
+        })
+        .collect();
+    fixtures.sort();
+    assert!(!fixtures.is_empty(), "empty corpus cannot establish parity");
+    let mut manifest = Vec::new();
+    for fixture in fixtures {
+        let agent = [
+            "claude", "codex", "grok", "goose", "opencode", "gemini", "aider", "amp", "cursor",
+            "droid", "pi",
+        ]
+        .into_iter()
+        .find(|agent| {
+            std::path::Path::new(&fixture)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(agent)
+                || fixture.contains(&format!("/{agent}-"))
+        })
+        .unwrap_or_else(|| panic!("{fixture}: declare capture's agent before recording a golden"));
+        let capture =
+            crate::pty_capture::decode_capture(&std::fs::read(root.join(&fixture)).unwrap())
+                .unwrap();
+        let sid = "replay-oracle";
+        let (state, silence) = chunk_trace_state(sid);
+        state
+            .session_maps
+            .session_states
+            .get_mut(sid)
+            .unwrap()
+            .agent_type = Some(agent.into());
+        let (rows, cols) = capture.geometry.unwrap_or((41, 128));
+        state
+            .grid
+            .vt_log_buffers
+            .get(sid)
+            .unwrap()
+            .lock()
+            .resize(rows, cols);
+        let mut rx = state.event_bus.subscribe();
+        let mut cp = ChunkProcessor::new(None, None);
+        let mut utf8 = Utf8ReadBuffer::new();
+        let mut escapes = EscapeAwareBuffer::new();
+        let mut trace = vec![json!({"fixture":fixture,"agent":agent,"geometry":[rows,cols]})];
+        for (record_index, record) in capture.records.iter().enumerate() {
+            if record.direction != crate::pty_capture::CaptureDirection::Output {
+                continue;
+            }
+            let text = utf8.push(&record.data);
+            let escaped = escapes.push(&text);
+            let (clean, _) = crate::state::strip_kitty_sequences(&escaped);
+            let _ = cp.process_chunk(&clean, &silence, sid, &state);
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => {
+                        crate::state::tests_support::apply_replay_event(&state, &event);
+                        if let crate::state::AppEvent::PtyParsed { parsed, .. } = event {
+                            trace.push(json!({"record":record_index,"event":*parsed}));
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                    Err(error) => panic!("{fixture}: replay lost events: {error}"),
+                }
+            }
+            let snapshot = state.session_state_with_shell(sid).unwrap();
+            trace.push(json!({"record":record_index,"state": {
+                "shell":state.session_maps.shell_states.get(sid).unwrap().load(std::sync::atomic::Ordering::Acquire),
+                "agent":snapshot.agent_state,"awaiting":snapshot.awaiting_input,
+                "question":snapshot.question_text,"confident":snapshot.question_confident,
+                "last_question":cp.last_question_text,"choice_sig":cp.last_choice_prompt_sig,
+                "fullscreen":cp.terminal_mode.is_fullscreen(),
+            }}));
+        }
+        trace.push(
+            json!({"ring_len":state.session_maps.output_buffers.get(sid).unwrap().lock().len()}),
+        );
+        manifest.push(json!({"fixture":fixture,"events":trace.len()}));
+        crate::replay_oracle::assert_golden(
+            &std::path::Path::new("captures").join(format!("{fixture}.jsonl")),
+            &trace,
+        );
+    }
+    crate::replay_oracle::assert_golden(std::path::Path::new("corpus.jsonl"), &manifest);
+}

@@ -5266,6 +5266,11 @@ pub(crate) struct AgentConfig {
 pub(crate) mod tests_support {
     use super::*;
 
+    /// Replay the production accumulator synchronously, without scheduling races.
+    pub(crate) fn apply_replay_event(state: &Arc<AppState>, event: &AppEvent) {
+        AppState::apply_event_to_session_state(state, event);
+    }
+
     /// A live `sessions` entry backed by a real PTY. `live_pty_for_peer` filters on
     /// liveness, so a resolver test needs a session that genuinely exists rather
     /// than a stub the filter would reject.
