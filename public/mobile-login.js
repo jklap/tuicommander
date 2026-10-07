@@ -29,7 +29,8 @@
       });
       if (response.ok) {
         const body = await response.json();
-        location.replace(body.next || "/mobile");
+        // Redirects inherit the original fragment; keep it after the form login.
+        location.replace((body.next || "/mobile") + (location.hash || ""));
         return;
       }
       error.textContent = messages[response.status] || `Login failed (${response.status}).`;
