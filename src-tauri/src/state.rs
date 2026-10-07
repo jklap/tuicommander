@@ -256,6 +256,11 @@ pub enum AppEvent {
         request_id: String,
     },
     /// Orchestrator-supplied description of the work currently assigned to a PTY.
+    /// The chat view of a Claude terminal has new entries. Wake only: the entries
+    /// stay behind `chat_view_snapshot`, so a client that missed this event reads
+    /// the same truth as one that did not.
+    #[serde(rename = "chat-view-changed")]
+    ChatViewChanged { session_id: String, seq: u64 },
     #[serde(rename = "pty-description-changed")]
     PtyDescriptionChanged {
         session_id: String,
@@ -2055,6 +2060,9 @@ pub struct AppState {
     /// so each refresh parses only what Claude appended to a subagent
     /// transcript since the last one. Stays empty until Flow is first shown.
     pub(crate) subagent_map_cache: parking_lot::Mutex<crate::subagent_map::MapCache>,
+    /// Per-terminal chat view tails, created on first read and dropped when no
+    /// client has read for a while.
+    pub(crate) chat_views: crate::chat_view::ChatViews,
     /// Shared mdkb daemon client for AST navigation (outline, goto-def, references).
     pub(crate) mdkb_daemon: crate::mdkb_daemon::SharedMdkbDaemon,
     /// Shared async HTTP client for GitHub API requests.
@@ -2340,6 +2348,23 @@ impl AppState {
             let _ = tx.send(event.clone());
         }
         let _ = self.event_bus.send(event);
+    }
+
+    /// Tell every UI a terminal's chat view has entries past `seq`. Bus only
+    /// for non-desktop clients, plus the window event: there is no bus->window
+    /// forwarder, so the producer dual-emits.
+    pub(crate) fn notify_chat_view_changed(&self, session_id: &str, seq: u64) {
+        let _ = self.event_bus.send(AppEvent::ChatViewChanged {
+            session_id: session_id.to_string(),
+            seq,
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "chat-view-changed",
+                serde_json::json!({ "session_id": session_id, "seq": seq }),
+            );
+        }
     }
 
     /// Rename a tab from the backend and tell every UI. Only for renames that
@@ -3419,6 +3444,7 @@ impl AppState {
             dir_watchers: DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             subagent_map_cache: parking_lot::Mutex::new(Default::default()),
+            chat_views: Default::default(),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
             http_client: build_http_client(),
             github: GitHubState::default(),
@@ -4650,6 +4676,7 @@ impl AppState {
                     });
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
+            AppEvent::ChatViewChanged { .. } => {}
             AppEvent::SessionRenamed { .. } => {}
             AppEvent::SessionSuspendRequested { .. } => {}
             AppEvent::TermAliasAssigned { .. } => {}

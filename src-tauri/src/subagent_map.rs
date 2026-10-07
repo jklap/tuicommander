@@ -15,6 +15,8 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::transcript_tail::read_appended;
+
 /// One subagent, described by its `agent-<id>.meta.json`.
 ///
 /// Only `agentType`, `description` and `spawnDepth` appear in all 928 sampled
@@ -312,58 +314,6 @@ struct SpawnCursor {
     offset: u64,
     spawns: Vec<ParentSpawn>,
     last_used: Option<Instant>,
-}
-
-/// What a cursor advance found.
-struct Appended {
-    /// Only whole lines. A partial trailing line stays unread.
-    text: String,
-    /// The file shrank, so everything parsed from it before is gone.
-    restarted: bool,
-}
-
-/// Read the complete lines appended to `path` since `offset`, advancing it.
-///
-/// Shared by both cursors: the byte arithmetic is the part that must not be
-/// written twice, because a second copy is a second chance to consume a
-/// half-written row.
-fn read_appended(path: &Path, offset: &mut u64) -> std::io::Result<Appended> {
-    use std::io::{Read, Seek, SeekFrom};
-
-    let len = std::fs::metadata(path)?.len();
-    // Truncated or rotated. A stale offset would start reading from the middle
-    // of a line, so the only safe answer is to start over.
-    let restarted = len < *offset;
-    if restarted {
-        *offset = 0;
-    }
-    if len == *offset {
-        return Ok(Appended {
-            text: String::new(),
-            restarted,
-        });
-    }
-
-    let mut file = std::fs::File::open(path)?;
-    file.seek(SeekFrom::Start(*offset))?;
-    let mut chunk = String::new();
-    file.take(len - *offset).read_to_string(&mut chunk)?;
-
-    // Stop at the last newline: anything after it is a row Claude is still
-    // writing. Consuming it would parse garbage now and skip the real row when
-    // it lands.
-    let Some(end) = chunk.rfind('\n') else {
-        return Ok(Appended {
-            text: String::new(),
-            restarted,
-        });
-    };
-    chunk.truncate(end + 1);
-    *offset += chunk.len() as u64;
-    Ok(Appended {
-        text: chunk,
-        restarted,
-    })
 }
 
 impl MapCache {

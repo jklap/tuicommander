@@ -4757,3 +4757,10 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] **[HUMAN]** Silent switch on, then off: record whether the reply is audible in each state (unverified, report 2026-10-07 section 8).
 - [ ] **[HUMAN]** With the desktop armed in its own conversation, tap the mic on the phone: record what happens (single `DictationState` conversation, untested).
 - [ ] Lock the screen mid-conversation: expected to stop capture (not supported by iOS, slice 2 handles it); record what the page shows on return.
+## CLI / Chat view for Claude terminals (1568-7b55) — backend restart required
+
+- [ ] After `make dev` restart, open a Claude terminal with a bound session: **CLI | Chat** appears top-right, Chat shows your prompts as bubbles and replies as text with tool calls folded, and a new reply appears within ~2 s without switching back.
+- [ ] Switch Chat → CLI → Chat: the grid scrollback and selection are intact, and Chat resumes without a visible reload.
+- [ ] In a plain shell tab the switch is absent; in a Codex tab Chat is disabled with the reason in its tooltip.
+- [ ] Run `/clear` in Claude while Chat is open: the old conversation disappears and only the new one shows. Exit Claude while Chat is open: the tab returns to the grid with a one-line notice.
+- [ ] Visual check of the switch position (top-right) against the grid scrollbar and the last-prompt bar.
