@@ -188,3 +188,51 @@
   color: var(--error);
   background: rgba(255, 80, 80, 0.1);
 }
+
+/* Sub-agent: indented under its parent, with a guide line that drops from the parent card
+   and ends in an elbow at the last sibling. The card margin (6px) is bridged so the line
+   reads as one continuous group. */
+.child {
+  position: relative;
+  margin-left: 36px;
+  width: calc(100% - 48px);
+}
+
+.child::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: -7px;
+  bottom: -7px;
+  border-left: 2px solid var(--border);
+}
+
+.child::after {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  width: 10px;
+  border-top: 2px solid var(--border);
+}
+
+.childLast::before {
+  bottom: 50%;
+}
+
+.childDeep {
+  margin-left: 52px;
+  width: calc(100% - 64px);
+}
+
+.subAgentTag {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.subAgentIcon {
+  width: 16px;
+  height: 16px;
+}
