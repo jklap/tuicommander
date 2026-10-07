@@ -170,7 +170,7 @@ impl StoryStore {
                 session_id: session_id.into(),
             }
         });
-        self.transition_as(story_id, expected_revision, command, actor)
+        self.transition_as(story_id, expected_revision, command, actor, false)
     }
 
     pub(crate) fn transition_from_local_api(
@@ -184,6 +184,25 @@ impl StoryStore {
             expected_revision,
             command,
             StoryTransitionActor::LocalApi,
+            false,
+        )
+    }
+
+    /// Only the owning workflow may begin its reserved story without a manual claim.
+    pub(crate) fn begin_workflow_story(
+        &self,
+        story_id: &str,
+        revision: i64,
+        session: &str,
+    ) -> Result<Story, String> {
+        self.transition_as(
+            story_id,
+            revision,
+            StoryCommand::StartManual,
+            StoryTransitionActor::ManagedSession {
+                session_id: session.into(),
+            },
+            true,
         )
     }
 
@@ -193,10 +212,21 @@ impl StoryStore {
         expected_revision: i64,
         command: StoryCommand,
         actor: StoryTransitionActor,
+        workflow_start: bool,
     ) -> Result<Story, String> {
+        let run_path = self.db_path.with_file_name("workflow_runs.sqlite3");
+        if command == StoryCommand::Approve
+            && run_path.exists()
+            && let StoryTransitionActor::ManagedSession { session_id } = &actor
+            && crate::workflows::RunStore::open_at(&run_path)?
+                .is_story_implementer(story_id, session_id)?
+        {
+            return Err("a story cannot be approved by its workflow implementer".into());
+        }
         let preflight_plan = self.get_story(story_id)?.plan_id;
         let preflight = DependencyPreflight::prepare(self, &preflight_plan)?;
-        let _reservation_guard = if matches!(command, StoryCommand::StartManual) {
+        let _reservation_guard = if !workflow_start && matches!(command, StoryCommand::StartManual)
+        {
             let project = self.get_plan(&preflight_plan)?.project;
             crate::workflows::guard_manual_story_start(&project, story_id)?
         } else {

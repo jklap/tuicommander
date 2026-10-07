@@ -99,6 +99,7 @@ fn chats(paths: &Paths) -> Result<std::collections::BTreeSet<i64>, Error> {
 }
 fn ensure_directory(paths: &Paths) -> Result<(), Error> {
     if !paths.directory.exists() {
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         {

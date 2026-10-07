@@ -70,10 +70,14 @@ describe("remote terminal replay health", () => {
 	it("reports a stalled attach and replays the existing remote viewport after reconnect without new PTY output", async () => {
 		const errors: unknown[] = [];
 		const painted: string[] = [];
+		const historySizes: number[] = [];
 		await transport.onEvent("stream-error", (error) => errors.push(error));
 		const subscribed = transport.subscribe((bytes) => {
 			const frame = decodeBinaryFrame(bytes);
-			if (frame) painted.push(...frame.rows.map(rowText));
+			if (frame) {
+				historySizes.push(frame.historySize);
+				painted.push(...frame.rows.map(rowText));
+			}
 		});
 		Socket.instances[0].onopen?.();
 		await subscribed;
@@ -84,6 +88,8 @@ describe("remote terminal replay health", () => {
 		expect(Socket.instances).toHaveLength(2);
 		Socket.instances[1].onopen?.();
 		Socket.instances[1].onmessage?.({ data: replay });
+		expect(historySizes).toHaveLength(1);
+		expect(historySizes).toEqual([0]); // This recording is the idle viewport, not scrollback.
 		expect(painted.join("\n")).toContain("~/Gits/personal");
 		expect(painted.join("\n")).toContain("❯");
 		// Healthy idle terminals owe no subsequent output; a watchdog on silence would report a false failure.

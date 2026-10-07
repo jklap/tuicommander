@@ -358,13 +358,48 @@ describe("transport", () => {
 				body: action,
 			});
 		});
-		it("routes workflow run actions to their owning project", () => {
-			const action = { action: "events", run_id: "run-1", after_sequence: 4, limit: 20 };
+		it.each([
+			{ action: "events", run_id: "run-1", after_sequence: 4, limit: 20 },
+			{ action: "incidents", run_id: "run-1" },
+		])("routes workflow run actions to their owning project: $action", (action) => {
 			expect(mapCommandToHttp("workflow_run_action", { project: "/repo a", action })).toEqual({
 				method: "POST",
 				path: "/workflows/run/action?path=%2Frepo%20a",
 				body: action,
 			});
+		});
+
+		it("preserves pinned graph start and recovery payloads through HTTP", () => {
+			// Catches: graph controls being dropped or reshaped on the browser transport.
+			for (const action of [
+				{
+					action: "start_graph",
+					target: { type: "story", id: "story-1" },
+					expected_revision: 3,
+					definition_id: "flow-1",
+					definition_revision: 2,
+					request_id: "start-key",
+				},
+				{
+					action: "command",
+					run_id: "run-1",
+					command_id: "resume-key",
+					expected_sequence: 4,
+					command: { action: "resume_graph", execution_id: "root", activation_id: "a3", resolution: "Reviewed" },
+				},
+				{
+					action: "command",
+					run_id: "run-1",
+					command_id: "cancel-key",
+					expected_sequence: 4,
+					command: { action: "cancel" },
+				},
+			])
+				expect(mapCommandToHttp("workflow_run_action", { project: "/repo a", action })).toEqual({
+					method: "POST",
+					path: "/workflows/run/action?path=%2Frepo%20a",
+					body: action,
+				});
 		});
 
 		it("maps typed project progress controls", () => {
@@ -965,6 +1000,14 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/s1/terminal/scroll-info");
 		});
 
+		it("maps chat_view_snapshot to GET /sessions/{id}/chat-view with the cursor", () => {
+			const first = mapCommandToHttp("chat_view_snapshot", { sessionId: "s1", epoch: null, fromSeq: 0 });
+			expect(first.method).toBe("GET");
+			expect(first.path).toBe("/sessions/s1/chat-view?from_seq=0");
+			const next = mapCommandToHttp("chat_view_snapshot", { sessionId: "s1", epoch: 2, fromSeq: 17 });
+			expect(next.path).toBe("/sessions/s1/chat-view?from_seq=17&epoch=2");
+		});
+
 		it("maps terminal_search to POST with transform", () => {
 			const result = mapCommandToHttp("terminal_search", { sessionId: "s1", query: "foo" });
 			expect(result.method).toBe("POST");
@@ -1136,6 +1179,18 @@ describe("transport", () => {
 			expect(result.body).toEqual({ path: "/repo/a.md", content: "hi" });
 		});
 
+		it("maps write_file_if_unchanged to POST /fs/write-if-unchanged with the expected text", () => {
+			const result = mapCommandToHttp("write_file_if_unchanged", {
+				repoPath: "/repo",
+				file: "a.md",
+				expected: "- [ ] a",
+				content: "- [x] a",
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/fs/write-if-unchanged");
+			expect(result.body).toEqual({ repoPath: "/repo", file: "a.md", expected: "- [ ] a", content: "- [x] a" });
+		});
+
 		it("maps copy_path_abs to POST /fs/copy-abs", () => {
 			const result = mapCommandToHttp("copy_path_abs", { from: "/a/x", to: "/b/x" });
 			expect(result.method).toBe("POST");
@@ -1187,6 +1242,13 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/s1/shell-state");
 			expect(result.transform?.({ state: "busy" })).toBe("busy");
 			expect(result.transform?.({ state: null })).toBeNull();
+		});
+
+		// Catches: inspector RPC routed to the latest typed prompt or wrong PTY.
+		it("maps get_prompt_receipt to the stored session receipt", () => {
+			const result = mapCommandToHttp("get_prompt_receipt", { sessionId: "launch-1" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/sessions/launch-1/prompt-receipt");
 		});
 
 		it("maps get_last_prompt to GET with {prompt} unwrap transform", () => {
@@ -2081,6 +2143,13 @@ describe("transport", () => {
 		// way the code does would agree with any typo.
 		it.each([
 			["acp_workspace_root", {}, "GET", "/acp/workspace", undefined],
+			[
+				"acp_chat_open",
+				{ request: { profile: "coordinator", workspace: "/repo", executable: "/bin/ego" } },
+				"POST",
+				"/acp/chat/open",
+				{ profile: "coordinator", workspace: "/repo", executable: "/bin/ego" },
+			],
 			["acp_connect", { root: "/repo" }, "POST", "/acp/connections", { root: "/repo" }],
 			["acp_connection_snapshot", { connectionId: CONNECTION }, "GET", `/acp/connections/${CONNECTION}`, undefined],
 			["acp_disconnect", { connectionId: CONNECTION }, "DELETE", `/acp/connections/${CONNECTION}`, undefined],
@@ -2120,6 +2189,13 @@ describe("transport", () => {
 				"POST",
 				`/acp/connections/${CONNECTION}/sessions/${SESSION}/fork`,
 				{ authority },
+			],
+			[
+				"acp_session_fork",
+				{ connectionId: CONNECTION, sessionId: SESSION, authority, atMessageId: "reply-id" },
+				"POST",
+				`/acp/connections/${CONNECTION}/sessions/${SESSION}/fork`,
+				{ authority, atMessageId: "reply-id" },
 			],
 			[
 				"acp_session_delete",
@@ -2249,6 +2325,22 @@ describe("transport", () => {
 	});
 
 	describe("ego command line (Providers)", () => {
+		// Catches: browser writes lose roots/network fields or hit the provider endpoint.
+		it("keeps the perimeter payload identical to IPC on dedicated routes", () => {
+			expect(mapCommandToHttp("ego_perimeter", {})).toEqual({ method: "GET", path: "/ego/perimeter" });
+			const roots = { rootDir: "~/Gits", rootAccess: "read", readAllowlist: "/reference", writableDirs: "/scratch" };
+			expect(mapCommandToHttp("ego_set_perimeter_roots", { roots })).toEqual({
+				method: "POST",
+				path: "/ego/perimeter/roots",
+				body: { roots },
+			});
+			expect(mapCommandToHttp("ego_set_perimeter_network", { enabled: false })).toEqual({
+				method: "POST",
+				path: "/ego/perimeter/network",
+				body: { enabled: false },
+			});
+		});
+
 		it("reads the providers without asking ego to re-enumerate its sources", () => {
 			const mapping = mapCommandToHttp("ego_providers", {});
 			expect(mapping.method).toBe("GET");

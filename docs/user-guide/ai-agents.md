@@ -26,6 +26,10 @@ Gemini currently defaults to the primary screen (`ui.useAlternateBuffer: false`)
 
 To allow alternate screen, turn off **Prevent alternate screen** for that agent. The preference applies to new TUIC agent launches and new shells. An explicit `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` value in a Claude command's environment retains precedence.
 
+### Startup updates for managed Codex peers
+
+Managed MCP Codex spawns pass `-c check_for_update_on_startup=false` so an available update does not park a child at the Update now / Skip prompt. This applies to the launch; it does not change the user's saved Codex configuration. Real-binary update-trigger and composer checks are tracked in `to-test.md` (1373-85a3).
+
 ### Workspace trust for managed spawns
 
 **Accept workspace trust for managed spawns** is on by default for Claude Code and Codex in Settings → AI → Agents. When an agent starts another agent through TUICommander's `agent spawn` action in a new folder, the child starts without waiting for a workspace trust answer. Codex receives a trust setting for that one launch and folder, including when a custom launcher forwards its arguments to Codex. TUICommander answers Claude Code's initial trust picker only when it shows the expected question with **No, exit** selected. Neither path edits the CLI's saved trust configuration.
@@ -242,6 +246,8 @@ The resume command honours the agent's **default run config**: TUICommander swap
 
 When you spawn an agent via the context menu or command palette, TUICommander automatically uses the tab's `TUIC_SESSION` as the `--session-id`. This ensures the spawned session is bound to the tab and will resume correctly on restart.
 
+Sidebar agent launches wait for shell readiness and submit once, even if the first idle event arrives before the command is prepared or the terminal subscribes. Remote repositories use the owning daemon's run configurations, environment and launch-scoped hook paths; desktop profile paths are not copied to that machine.
+
 The active-terminal and sidebar agent menus apply the selected run configuration's environment to that agent launch. The values do not persist in the tab's shell for later commands. `TUIC_SESSION` and `TUIC_PARENT` remain controlled by TUICommander, including differently cased names on Windows. Windows menu launches preserve Unicode characters in environment values and commands.
 
 When the run config's command is a custom alias, symlink, or wrapper (e.g. `c2`, `c`), the foreground-process name no longer matches `"claude"` in `classify_agent`. TUICommander compensates by pre-seeding the session's `agent_type` from the run config at PTY creation time, so intent/suggest parsing and tab-title binding work from the first output line. The foreground-process detector also falls back to the pre-seeded type whenever it sees a non-shell process it doesn't recognise, which covers aliases and wrapper scripts without requiring every name to be hardcoded.
@@ -274,3 +280,15 @@ This is useful for enabling feature flags (e.g., `CLAUDE_CODE_EXPERIMENTAL_AGENT
 - **Multiple agents on the same repo** — Use split panes (`Cmd+\`) to run two agents side by side on the same branch
 - **Different agents per branch** — Each worktree is independent, so you can run Claude on one branch and Aider on another
 - **Monitor all at once** — Use the Activity Dashboard (`Cmd+Shift+A`) to see every terminal's agent status in one view
+
+### ego launch permissions
+
+In **Settings > Agents > ego**, choose a permission mode and filesystem sandbox for new terminal launches and managed spawns. **Use ego configuration** leaves that option unchanged. Mode choices are Read-only (`plan`), Ask (`default`), Auto-edit (`edits`), Auto reviewed (`auto`), and Full access (`yolo`). Sandbox choices are Read-only (`ro`) and Workspace writes (`workspace`). The selected choices replace matching raw launch flags. AI Chat uses separate ACP settings.
+
+## Inspect launch instructions
+
+Right-click a terminal and select **Inspect Launch Instructions…**. Expand a section to read its captured text, source and original UTF-8 byte size. Secrets use the same redaction policy as logs. A queued brief is not yet sent; reopen the inspector after submission to read its updated state.
+
+Capture starts with new managed launches after the backend update. It includes the final brief with TUIC peer context, `--system-prompt`/`--append-system-prompt` values, snapshots of explicitly supplied `--system-prompt-file`/`--append-system-prompt-file` files, and TUIC MCP initialize responses. File snapshots show the bytes available to TUIC before spawn, not confirmation of what the agent read. Shell-launched agents, older sessions and independently loaded files such as AGENTS.md are **Not observable by TUIC**. TUIC does not reconstruct them from current settings.
+
+Redacted text is limited to 32 KiB per section and 64 KiB across 16 captured sections. Larger text is labeled truncated; missing, non-regular, non-UTF-8 or over-1-MiB instruction files are labeled unavailable. Byte counts describe the original payload, not the shorter redacted preview. Receipts survive a frontend reload, but not session closure or a backend restart.

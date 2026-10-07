@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import "@testing-library/jest-dom/vitest";
 import { fireEvent, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -147,6 +148,7 @@ vi.mock("../../components/PrDetailPopover/PrDetailPopover", () => ({
 
 import { _resetMergedActivityAccum } from "../../components/Sidebar/RepoSection";
 import { Sidebar } from "../../components/Sidebar/Sidebar";
+import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
@@ -209,12 +211,19 @@ function setRepos(repos: Record<string, unknown>, activeRepoPath?: string) {
 	mockGetGroupedLayout.mockReturnValue({ groups: [], ungrouped: repoValues });
 }
 
+// Legacy row interaction cases exercise compact mode; rich layout cases opt into auto.
+function densityMode(mode: "auto" | "compact") {
+	while (uiStore.state.sidebarDensityMode !== mode) uiStore.cycleSidebarDensityMode();
+}
+
 describe("Sidebar", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		densityMode("compact");
 		vi.clearAllMocks();
 		setRepos({});
 		mockGetActive.mockReturnValue(null);
+		mockGetGroupForRepo.mockReturnValue(undefined);
 		mockTerminalsGet.mockReturnValue(null);
 		mockGetSubAgentTag.mockReturnValue(null);
 		mockGetCheckSummary.mockReturnValue(null);
@@ -227,7 +236,167 @@ describe("Sidebar", () => {
 	});
 
 	afterEach(() => {
+		densityMode("auto");
 		vi.useRealTimers();
+	});
+
+	describe("touch swipe actions", () => {
+		const setup = (overrides: Partial<Parameters<typeof Sidebar>[0]> = {}) => {
+			const branch = (id: string, path: string | null, isMain = false) => ({
+				workspaceId: id,
+				branchName: id,
+				worktreePath: path,
+				isMain,
+				terminals: [],
+				additions: 0,
+				deletions: 0,
+			});
+			setRepos({
+				"/repo1": makeRepo({
+					workspaces: {
+						main: branch("main", "/repo1", true),
+						feat: branch("feat", "/repo1-feat"),
+						other: branch("other", "/repo1-other"),
+						root: branch("root", "/repo1"),
+						plain: branch("plain", null),
+					},
+				}),
+			});
+			return render(() => <Sidebar {...defaultProps(overrides)} />);
+		};
+		const row = (container: HTMLElement, id: string) =>
+			Array.from(container.querySelectorAll<HTMLElement>("[data-swipe-row]")).find(
+				(el) => el.dataset.swipeRow === JSON.stringify(["/repo1", id]),
+			)!;
+		const pointer = (el: Element, type: string, x: number, y: number, pointerType = "touch") => {
+			const event = new Event(type, { bubbles: true, cancelable: true });
+			Object.assign(event, { pointerType, pointerId: 1, clientX: x, clientY: y, button: 0 });
+			fireEvent(el, event);
+		};
+		const swipe = (el: Element, dx = -60, dy = 0, kind = "touch") => {
+			pointer(el, "pointerdown", 100, 50, kind);
+			pointer(el, "pointermove", 100 + dx, 50 + dy, kind);
+			pointer(el, "pointerup", 100 + dx, 50 + dy, kind);
+		};
+
+		it("touch_swipe_reveals_actions", () => {
+			const onBranchSelect = vi.fn();
+			const { container } = setup({ onBranchSelect });
+			const target = row(container, "feat");
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			swipe(target);
+			expect(target.querySelector(".branchSwipeActions button[aria-label='Branch options']")).not.toBeNull();
+			expect(target.querySelector(".branchSwipeActions button[aria-label='Add terminal']")).not.toBeNull();
+			fireEvent.click(target.querySelector(".branchItem")!);
+			expect(target.querySelector(".branchSwipeActions")).not.toBeNull();
+			expect(onBranchSelect).not.toHaveBeenCalled();
+		});
+
+		it("short_swipes_and_cancelled_vertical_gestures_do_not_open_actions", () => {
+			// Catches: jitter or a browser-cancelled scroll revealing destructive actions.
+			const { container } = setup();
+			const target = row(container, "feat");
+			swipe(target, -29);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			pointer(target, "pointerdown", 100, 50);
+			pointer(target, "pointercancel", 100, 50);
+			pointer(target, "pointermove", 30, 50);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+		});
+
+		it("vertical_drag_keeps_actions_closed", () => {
+			const { container } = setup();
+			const target = row(container, "feat");
+			swipe(target, -15, 60);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			pointer(target, "pointerdown", 100, 50);
+			pointer(target, "pointermove", 98, 75);
+			pointer(target, "pointermove", 30, 80);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+		});
+
+		it("delete_only_removable_worktrees", () => {
+			const onRemoveBranch = vi.fn();
+			const { container } = setup({ onRemoveBranch });
+			for (const id of ["main", "root", "plain"]) {
+				swipe(row(container, id));
+				expect(row(container, id).querySelector(".branchSwipeActions .branchRemoveBtn")).toBeNull();
+			}
+			const target = row(container, "feat");
+			swipe(target);
+			fireEvent.click(target.querySelector(".branchSwipeActions .branchRemoveBtn")!);
+			expect(onRemoveBranch).toHaveBeenCalledExactlyOnceWith("/repo1", "feat");
+		});
+
+		it("second_row_closes_first", () => {
+			const { container } = setup();
+			swipe(row(container, "feat"));
+			swipe(row(container, "other"));
+			expect(row(container, "feat").querySelector(".branchSwipeActions")).toBeNull();
+			expect(row(container, "other").querySelector(".branchSwipeActions")).not.toBeNull();
+		});
+
+		it("mouse_pointer_never_swipes", () => {
+			const { container } = setup();
+			swipe(row(container, "feat"), -60, 0, "mouse");
+			expect(container.querySelector(".branchSwipeActions")).toBeNull();
+		});
+
+		it("right_swipe_row_tap_and_outside_tap_dismiss_actions", () => {
+			// Catches: a revealed tray trapping the row open after dismissal gestures.
+			const { container } = setup();
+			const target = row(container, "feat");
+			swipe(target);
+			swipe(target, 60);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			swipe(target);
+			pointer(target, "pointerdown", 100, 50);
+			pointer(target, "pointerup", 100, 50);
+			fireEvent.click(target.querySelector(".branchItem")!);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+			swipe(target);
+			pointer(document.body, "pointerdown", 0, 0);
+			expect(target.querySelector(".branchSwipeActions")).toBeNull();
+		});
+
+		it("tray_add_and_long_press_keep_existing_handlers", () => {
+			// Catches: the swipe tray losing add-terminal or long-press agent launch.
+			const onAddTerminal = vi.fn();
+			const launch = vi.fn();
+			const { container } = setup({
+				onAddTerminal,
+				buildAgentMenuItems: () => [{ label: "Launch test agent", action: launch }],
+			});
+			const target = row(container, "feat");
+			swipe(target);
+			fireEvent.click(target.querySelector(".branchSwipeActions .branchAddBtn")!);
+			expect(onAddTerminal).toHaveBeenCalledExactlyOnceWith("/repo1", "feat");
+			swipe(target);
+			const add = target.querySelector(".branchSwipeActions .branchAddBtn")!;
+			pointer(add, "pointerdown", 100, 50);
+			vi.advanceTimersByTime(500);
+			pointer(add, "pointerup", 100, 50);
+			fireEvent.mouseDown(add);
+			fireEvent.click(add);
+			expect(onAddTerminal).toHaveBeenCalledTimes(1);
+			const menuItem = Array.from(document.querySelectorAll(".menu .item")).find((el) =>
+				el.textContent?.includes("Launch test agent"),
+			);
+			expect(menuItem).toBeDefined();
+			fireEvent.click(menuItem!);
+			expect(launch).toHaveBeenCalledOnce();
+		});
+
+		it("removing_tray_delete_stays_disabled", () => {
+			// Catches: the touch tray enabling deletion during an ongoing removal.
+			const onRemoveBranch = vi.fn();
+			const { container } = setup({ onRemoveBranch, removingBranches: new Set(["/repo1::feat"]) });
+			swipe(row(container, "feat"));
+			const remove = row(container, "feat").querySelector<HTMLButtonElement>(".branchSwipeActions .branchRemoveBtn")!;
+			expect(remove.disabled).toBe(true);
+			fireEvent.click(remove);
+			expect(onRemoveBranch).not.toHaveBeenCalled();
+		});
 	});
 
 	describe("empty state", () => {
@@ -255,6 +424,7 @@ describe("Sidebar", () => {
 	});
 
 	describe("density attribute", () => {
+		beforeEach(() => densityMode("auto"));
 		const manyBranches = (n: number) =>
 			Object.fromEntries(
 				Array.from({ length: n }, (_, i) => [
@@ -383,18 +553,80 @@ describe("Sidebar", () => {
 		});
 	});
 
+	describe("rich repo sections", () => {
+		beforeEach(() => densityMode("auto"));
+		// Catches: treating idle open terminals as inactive, sorting by work, or persisting the partition.
+		it("rich_repo_sections_use_open_terminals", () => {
+			const [repos, setReposLive] = createSignal([
+				makeRepo({ path: "/idle", displayName: "Idle repo" }),
+				makeRepo({
+					path: "/open",
+					displayName: "Open repo",
+					workspaces: {
+						main: {
+							workspaceId: "main",
+							branchName: "main",
+							isMain: true,
+							worktreePath: null,
+							terminals: ["t1"],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+				makeRepo({ path: "/last", displayName: "Last idle" }),
+			]);
+			mockGetOrderedRepos.mockImplementation(repos);
+			mockGetGroupedLayout.mockImplementation(() => ({ groups: [], ungrouped: repos() }));
+			const [state, setState] = createSignal("idle");
+			mockTerminalsGet.mockImplementation(() => ({
+				id: "t1",
+				agentType: "codex",
+				agentState: state(),
+				shellState: "idle",
+			}));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const paths = () =>
+				[...container.querySelectorAll("[data-sidebar-repo]")].map((e) => e.getAttribute("data-sidebar-repo"));
+			expect(paths()).toEqual(["/open", "/idle", "/last"]);
+			expect(container.querySelectorAll("[data-testid='idle-repos-heading']")).toHaveLength(1);
+			expect(container.querySelector("[data-sidebar-repo='/idle'] .branchItem")).toBeNull();
+			fireEvent.click(container.querySelector("[data-sidebar-repo='/idle'] .repoHeader")!);
+			expect(container.querySelector("[data-sidebar-repo='/idle'] .branchItem")).not.toBeNull();
+			expect(mockToggleExpanded).not.toHaveBeenCalled();
+			expect(paths()).toEqual(["/open", "/idle", "/last"]);
+			expect(container.querySelector("[data-testid='working-agent-count']")).toBeNull();
+			setState("working");
+			expect(container.querySelector("[data-testid='working-agent-count']")?.textContent).toBe("1 working");
+			setState("awaiting_input");
+			expect(container.querySelector("[data-testid='working-agent-count']")).toBeNull();
+			setReposLive(
+				repos().map((repo) => (repo.path === "/open" ? makeRepo({ path: "/open", displayName: "Open repo" }) : repo)),
+			);
+			expect(paths()).toEqual(["/idle", "/open", "/last"]);
+			expect(mockReorderRepo).not.toHaveBeenCalled();
+			uiStore.setRepoFilterActiveOnly(true);
+			try {
+				expect(container.querySelector("[data-testid='idle-repos-heading']")).toBeNull();
+			} finally {
+				uiStore.setRepoFilterActiveOnly(false);
+			}
+		});
+	});
+
 	describe("rich layout", () => {
+		beforeEach(() => densityMode("auto"));
 		const richBranch = (over: Record<string, unknown> = {}) => ({
 			workspaceId: "feat",
 			branchName: "feat",
 			isMain: false,
 			worktreePath: "/wt/feat",
-			terminals: [],
+			terminals: ["fixture-open"],
 			additions: 12,
 			deletions: 3,
 			isMerged: false,
 			lastCommitTs: Date.now() - 3 * 3600_000,
-			lifecycleStatus: { dirtyFiles: 4, commitStatus: "unmerged", removalSafety: "destructive" },
+			lifecycleStatus: { dirtyFiles: 4, commitStatus: "unmerged" as const, removalSafety: "requires_force" as const },
 			...over,
 		});
 		const withBranch = (b: Record<string, unknown>) => setRepos({ "/repo1": makeRepo({ workspaces: { feat: b } }) });
@@ -412,6 +644,31 @@ describe("Sidebar", () => {
 			expect(meta).toContain("4 dirty");
 		});
 
+		// Catches: closed-unmerged or live worktrees offered as clean, and bypassing the removal workflow.
+		it("merged_summary_does_not_hide_unsafe_worktrees", () => {
+			const safe = richBranch({
+				terminals: [],
+				isMerged: true,
+				lifecycleStatus: { dirtyFiles: 35, commitStatus: "merged", removalSafety: "destructive" },
+			});
+			const live = richBranch({
+				workspaceId: "live",
+				branchName: "live",
+				isMerged: true,
+				lifecycleStatus: { dirtyFiles: 0, commitStatus: "merged", removalSafety: "safe" },
+			});
+			const unmerged = richBranch({ workspaceId: "closed", branchName: "closed", terminals: [], isMerged: true });
+			setRepos({ "/repo1": makeRepo({ workspaces: { feat: safe, live, closed: unmerged } }) });
+			mockGetPrStatus.mockReturnValue({ state: "CLOSED", number: 1, title: "Closed", url: "" });
+			const onRemoveBranch = vi.fn();
+			const { container } = render(() => <Sidebar {...defaultProps({ onRemoveBranch })} />);
+			const summaries = container.querySelectorAll("[data-testid='merged-worktree-summary']");
+			expect(summaries).toHaveLength(1);
+			expect(summaries[0].textContent).toContain("35 uncommitted");
+			expect(container.querySelectorAll(".branchRichDetail")).toHaveLength(2);
+			fireEvent.click(summaries[0].querySelector("button")!);
+			expect(onRemoveBranch).toHaveBeenCalledExactlyOnceWith("/repo1", "feat");
+		});
 		// Catches: a rich-only detail line leaking into the compact sidebar.
 		it("keeps the compact row free of detail lines", () => {
 			uiStore.cycleSidebarDensityMode(); // auto -> compact
@@ -446,13 +703,71 @@ describe("Sidebar", () => {
 			withBranch(richBranch());
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const meta = container.querySelector("[data-testid='repo-rich-meta']")?.textContent ?? "";
-			expect(meta).toContain("0 open PRs");
+			expect(meta).not.toContain("open PR");
 			expect(meta).toContain("1 worktree");
 			expect(meta).not.toContain("1 worktrees");
 		});
 
+		// Catches: stale zero labels or positive counts disappearing after a live store update.
+		it("sidebar_hides_only_known_zero_counts", () => {
+			const [prs, setPrs] = createSignal<ReturnType<typeof githubStore.getAllOpenPrs>>([]);
+			vi.spyOn(githubStore, "getAllOpenPrs").mockImplementation(prs);
+			const [repo, setRepo] = createSignal(makeRepo());
+			mockGetOrderedRepos.mockImplementation(() => [repo()]);
+			mockGetGroupedLayout.mockImplementation(() => ({ groups: [], ungrouped: [repo()] }));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const meta = () => container.querySelector("[data-testid='repo-rich-meta']")!;
+			expect(meta()).toBeNull();
+			setPrs([{ number: 1 }, { number: 2 }] as ReturnType<typeof githubStore.getAllOpenPrs>);
+			setRepo(makeRepo({ workspaces: { feat: richBranch() } }));
+			expect(meta()!.textContent).toContain("2 open PRs");
+			expect(meta()!.textContent).toContain("1 worktree");
+			setPrs([]);
+			setRepo(makeRepo());
+			expect(meta()).toBeNull();
+		});
+
+		// Catches: idle agents keeping expanded intent rows, or blank intent hiding tooltip fallback.
+		it("rich_agent_intent_extends_only_while_working", () => {
+			const intent = "Review the full sidebar intent without losing any words ".repeat(5);
+			const [term, setTerm] = createSignal({
+				id: "t1",
+				name: "Agent",
+				agentType: "codex",
+				shellState: "busy",
+				awaitingInput: null,
+				unseen: false,
+				agentIntent: intent,
+				currentTask: null,
+				lastPrompt: "Fallback prompt" as string | null,
+			});
+			mockTerminalsGet.mockImplementation(() => term());
+			vi.mocked(terminalsStore.isBusy).mockImplementation(() => term().shellState === "busy");
+			settingsStore.setTabTreeEnabled(true);
+			withBranch(richBranch({ terminals: ["t1"] }));
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const line = () => container.querySelector(".branchTabIntent");
+			expect(line()?.textContent).toBe(intent);
+			expect(container.querySelector(".branchTabItem")?.getAttribute("data-tooltip")).toBe(`Agent: ${intent}`);
+			setTerm({ ...term(), shellState: "idle" });
+			expect(line()).toBeNull();
+			setTerm({ ...term(), agentIntent: "", lastPrompt: "Fallback prompt" });
+			expect(line()).toBeNull();
+			expect(container.querySelector(".branchTabItem")?.getAttribute("data-tooltip")).toBe("Agent: Fallback prompt");
+			setTerm({ ...term(), shellState: "busy", lastPrompt: null });
+			expect(line()).not.toBeNull();
+			uiStore.cycleSidebarDensityMode();
+			try {
+				expect(line()).toBeNull();
+			} finally {
+				uiStore.cycleSidebarDensityMode();
+				uiStore.cycleSidebarDensityMode();
+				vi.mocked(terminalsStore.isBusy).mockImplementation(() => false);
+			}
+		});
+
 		// Catches: the agent row showing only a dot and a title, hiding what the agent is doing or asking.
-		it("prints the agent state and its intent under the tab title", () => {
+		it("keeps awaiting input intent in the one-line row tooltip", () => {
 			mockTerminalsGet.mockImplementation(() => ({
 				id: "t1",
 				name: "claude",
@@ -468,8 +783,9 @@ describe("Sidebar", () => {
 			withBranch(richBranch({ terminals: ["t1"] }));
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const detail = container.querySelector(".branchTabDetail")?.textContent ?? "";
-			expect(detail).toContain("Needs input");
-			expect(detail).toContain("Refactor the sidebar");
+			expect(detail).toBe("");
+			expect(container.querySelector(".branchTabDotQuestion")).not.toBeNull();
+			expect(container.querySelector(".branchTabItem")?.getAttribute("data-tooltip")).toContain("Refactor the sidebar");
 		});
 
 		const OLD_TS = () => Date.now() - 90 * 86_400_000;
@@ -572,7 +888,8 @@ describe("Sidebar", () => {
 			withBranch(richBranch({ branchName: "feature/a-very-long-branch-name" }));
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const name = container.querySelector(".branchName");
-			expect(name?.getAttribute("data-tooltip")).toBe("feature/a-very-long-branch-name");
+			expect(name?.getAttribute("data-tooltip")).toContain("feature/a-very-long-branch-name");
+			expect(name?.getAttribute("data-tooltip")).toContain("Last commit: 3h");
 			expect(container.querySelector(".branchItem [title]")).toBeNull();
 		});
 
@@ -581,7 +898,7 @@ describe("Sidebar", () => {
 			"keeps the full current branch %s in the rich repo chip tooltip",
 			(branchName) => {
 				setRepos({
-					"/repo1": makeRepo({ workspaces: { main: richBranch({ branchName }) } }),
+					"/repo1": makeRepo({ workspaces: { main: richBranch({ branchName }), feat: richBranch() } }),
 				});
 				const { container } = render(() => <Sidebar {...defaultProps()} />);
 				const chip = container.querySelector("[data-testid='repo-rich-meta'] .richChip");
@@ -610,7 +927,7 @@ describe("Sidebar", () => {
 				}),
 			});
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
-			expect(container.querySelector("[data-testid='repo-rich-meta']")?.textContent).toContain("0 worktrees");
+			expect(container.querySelector("[data-testid='repo-rich-meta']")?.textContent).not.toContain("worktree");
 		});
 
 		describe("subagents and child sessions", () => {
@@ -618,6 +935,8 @@ describe("Sidebar", () => {
 				id,
 				name: id,
 				sessionId: `s-${id}`,
+				fontSize: 14,
+				cwd: null,
 				tuicSession: `tuic-${id}`,
 				shellState: "busy",
 				unseen: false,
@@ -651,8 +970,14 @@ describe("Sidebar", () => {
 				})),
 				truncated: false,
 			});
-			const setup = (terms: Record<string, unknown>, subs: ReturnType<typeof sub>[], ids = Object.keys(terms)) => {
-				mockTerminalsGet.mockImplementation((id: string) => terms[id] ?? null);
+			const setup = (
+				terms: Record<string, unknown> | (() => Record<string, unknown>),
+				subs: ReturnType<typeof sub>[],
+				ids = Object.keys(typeof terms === "function" ? terms() : terms),
+			) => {
+				mockTerminalsGet.mockImplementation(
+					(id: string) => (typeof terms === "function" ? terms() : terms)[id] ?? null,
+				);
 				vi.spyOn(progressStore, "sidebarFlow").mockReturnValue(flowOf(subs) as never);
 				vi.spyOn(progressStore, "refreshSidebarFlow").mockResolvedValue();
 				settingsStore.setTabTreeEnabled(true);
@@ -661,16 +986,170 @@ describe("Sidebar", () => {
 			};
 			afterEach(() => vi.restoreAllMocks());
 
+			// Catches: opening a wrong child repository, cross-repo nesting, or stale links after children close.
+			it("cross_repo_child_link_navigates_without_reparenting", async () => {
+				const realRepos = (
+					await vi.importActual<typeof import("../../stores/repositories")>("../../stores/repositories")
+				).repositoriesStore;
+				const realTerms = (await vi.importActual<typeof import("../../stores/terminals")>("../../stores/terminals"))
+					.terminalsStore;
+				const { navigateToTerminal } = await vi.importActual<typeof import("../../utils/navigateToTerminal")>(
+					"../../utils/navigateToTerminal",
+				);
+				const savedRepos = { ...repositoriesStore };
+				const savedTerms = { ...terminalsStore };
+				Object.assign(repositoriesStore, realRepos);
+				Object.assign(terminalsStore, realTerms);
+				mockNavigateToTerminal.mockImplementation(navigateToTerminal);
+				let dispose: (() => void) | undefined;
+				try {
+					vi.spyOn(progressStore, "sidebarFlow").mockReturnValue(flowOf([]) as never);
+					vi.spyOn(progressStore, "refreshSidebarFlow").mockResolvedValue();
+					vi.spyOn(appLogger, "info").mockImplementation(() => {});
+					const persistenceErrors = vi.spyOn(appLogger, "error").mockImplementation(() => {});
+					settingsStore.setTabTreeEnabled(true);
+					expect(persistenceErrors.mock.calls).toEqual([
+						["config", "Refusing to persist settings: store not hydrated — would clobber config.json with defaults"],
+					]);
+					for (const [id, parentSession] of [
+						["t1", null],
+						["child", "tuic-t1"],
+						["other", "s-t1"],
+					] as const) {
+						realTerms.register(id, term(id, { parentSession }) as Parameters<typeof realTerms.register>[1]);
+					}
+					realRepos.add({ path: "/repo1", displayName: "Repo One" });
+					realRepos.setWorkspace("/repo1", "feat", richBranch({ terminals: [] }));
+					realRepos.addTerminalToWorkspace("/repo1", "feat", "t1");
+					realRepos.setActive("/repo1");
+					realRepos.setActiveWorkspace("/repo1", "feat");
+					realTerms.setActive("t1");
+					realRepos.add({ path: "/child", displayName: "Child repo" });
+					realRepos.setWorkspace(
+						"/child",
+						"work",
+						richBranch({ workspaceId: "work", terminals: [], tabsCollapsed: true }),
+					);
+					realRepos.addTerminalToWorkspace("/child", "work", "child");
+					realRepos.addTerminalToWorkspace("/child", "work", "other");
+					realRepos.toggleCollapsed("/child");
+					realRepos.toggleExpanded("/child");
+					const groupId = realRepos.createGroup("Children");
+					if (!groupId) throw new Error("Missing child repository group");
+					realRepos.addRepoToGroup("/child", groupId);
+					realRepos.toggleGroupCollapsed(groupId);
+					const { container, unmount } = render(() => <Sidebar {...defaultProps()} />);
+					dispose = unmount;
+					const link = () => container.querySelector<HTMLButtonElement>("[data-testid='cross-repo-child-link']");
+					const childRow = () => container.querySelector("[data-sidebar-repo='/child'] .branchTabItem.active");
+					expect(link()?.textContent).toContain("2 agents in Child repo");
+					expect(container.querySelector("[data-sidebar-repo='/repo1'] .branchTabNested")).toBeNull();
+					expect(childRow()).toBeNull();
+					const childLink = link();
+					if (!childLink) throw new Error("Missing child navigation link");
+					fireEvent.click(childLink);
+					expect(realRepos.state.activeRepoPath).toBe("/child");
+					expect(realRepos.state.repositories["/child"].activeWorkspaceId).toBe("work");
+					expect(realTerms.state.activeId).toBe("child");
+					expect(childRow()).toBeVisible();
+					expect(childRow()?.textContent).toContain("child");
+					expect(realRepos.state.groups[groupId].collapsed).toBe(false);
+					expect(realRepos.state.repositories["/repo1"].workspaces.feat.terminals).toEqual(["t1"]);
+					expect(realRepos.state.repositories["/child"].workspaces.work.terminals).toEqual(["child", "other"]);
+					expect(realTerms.get("child")?.parentSession).toBe("tuic-t1");
+					realTerms.remove("child");
+					expect(link()?.textContent).toContain("1 agent in Child repo");
+					realTerms.remove("other");
+					expect(link()).toBeNull();
+				} finally {
+					dispose?.();
+					for (const id of ["t1", "child", "other"]) realTerms.remove(id);
+					for (const path of ["/repo1", "/child"]) realRepos.remove(path);
+					for (const id of Object.keys(realRepos.state.groups)) realRepos.deleteGroup(id);
+					mockNavigateToTerminal.mockReset();
+					for (const key of Object.keys(repositoriesStore)) Reflect.deleteProperty(repositoriesStore, key);
+					for (const key of Object.keys(terminalsStore)) Reflect.deleteProperty(terminalsStore, key);
+					Object.assign(repositoriesStore, savedRepos);
+					Object.assign(terminalsStore, savedTerms);
+				}
+			});
+			// Catches: folding at the threshold, hiding attention/selection, or reordering restored rows.
+			it("idle_fold_preserves_attention_and_order", () => {
+				const old = Date.now() - 2 * 3600_000 - 1;
+				const [terms, setTerms] = createSignal({
+					old: term("old", { shellState: "idle", lastActivityAt: old }),
+					exact: term("exact", { shellState: "idle", lastActivityAt: old + 1 }),
+					question: term("question", { shellState: "idle", lastActivityAt: old, awaitingInput: "question" }),
+					unread: term("unread", { shellState: "idle", lastActivityAt: old, unseen: true }),
+					working: term("working", { shellState: "idle", lastActivityAt: old, agentState: "working" }),
+					unknown: term("unknown", { shellState: "idle", lastActivityAt: null }),
+				});
+				const { container } = setup(terms, []);
+				const labels = () =>
+					[...container.querySelectorAll(".branchTabItem .branchAgentActivity")].map((e) => e.textContent);
+				expect(labels()).toEqual(["exact", "question", "unread", "working", "unknown"]);
+				const fold = () => container.querySelector<HTMLButtonElement>("[data-testid='idle-session-fold']")!;
+				expect(fold().textContent).toBe("1 idle sessions");
+				fireEvent.click(fold());
+				expect(labels()).toEqual(Object.keys(terms()));
+				fireEvent.click(fold());
+				setTerms({
+					...terms(),
+					old: term("old", { shellState: "idle", lastActivityAt: old, awaitingInput: "question" }),
+				});
+				expect(labels()).toEqual(Object.keys(terms()));
+				expect(fold()).toBeNull();
+			});
+
+			// Catches: hiding a live child by folding its old parent or changing compact rows.
+			it("idle_fold_keeps_parents_of_live_children_and_compact_rows", () => {
+				const { container } = setup(
+					{
+						parent: term("parent", { shellState: "idle", lastActivityAt: Date.now() - 3 * 3600_000 }),
+						child: term("child", { parentSession: "tuic-parent", shellState: "busy" }),
+						old: term("old", { shellState: "idle", lastActivityAt: Date.now() - 3 * 3600_000 }),
+					},
+					[],
+				);
+				expect(container.querySelectorAll(".branchTabItem")).toHaveLength(2);
+				uiStore.cycleSidebarDensityMode();
+				try {
+					expect(container.querySelectorAll(".branchTabItem")).toHaveLength(3);
+					expect(container.querySelector("[data-testid='idle-session-fold']")).toBeNull();
+				} finally {
+					uiStore.cycleSidebarDensityMode();
+					uiStore.cycleSidebarDensityMode();
+				}
+			});
+
+			// Catches: returned history filling the sidebar or being folded together with active work.
+			it("returned_subagents_fold_without_hiding_running_children", () => {
+				const returned = Array.from({ length: 30 }, (_, i) => sub(i + 2, "done"));
+				const { container } = setup({ t1: term("t1") }, [sub(1), ...returned]);
+				const rows = () => [...container.querySelectorAll(".subagentRow")].map((e) => e.textContent);
+				expect(rows()).toHaveLength(1);
+				expect(rows()[0]).toContain("Sub task 1");
+				const fold = container.querySelector<HTMLButtonElement>("[data-testid='returned-subagent-fold']")!;
+				expect(fold.textContent).toBe("30 returned");
+				fireEvent.click(fold);
+				expect(rows()).toHaveLength(31);
+				returned.forEach((row, i) => expect(rows()[i + 1]).toContain(row.title));
+				fireEvent.click(fold);
+				expect(rows()).toHaveLength(1);
+			});
+
 			// Catches: subagents missing from the rich agent row (Boss: "non ci sono i subagents").
 			it("lists each subagent with state, title, tool calls and age", () => {
 				const { container } = setup({ t1: term("t1") }, [sub(1), sub(2, "done")]);
 				const rows = [...container.querySelectorAll(".subagentRow")].map((r) => r.textContent ?? "");
-				expect(rows).toHaveLength(2);
+				expect(rows).toHaveLength(1);
 				expect(rows[0]).toContain("Running");
 				expect(rows[0]).toContain("Sub task 1");
 				expect(rows[0]).toContain("3 calls");
 				expect(rows[0]).toContain("5m");
-				expect(rows[1]).toContain("Returned");
+				const returned = container.querySelector<HTMLButtonElement>("[data-testid='returned-subagent-fold']")!;
+				fireEvent.click(returned);
+				expect(container.querySelectorAll(".subagentRow")[1].textContent).toContain("Returned");
 			});
 
 			// Catches: a long subagent list pushing every other row off screen.
@@ -1596,7 +2075,7 @@ describe("Sidebar", () => {
 
 	describe("branch badges", () => {
 		// The compact row carries these badges; the rich layout moves them into detail lines.
-		beforeEach(() => uiStore.cycleSidebarDensityMode());
+		beforeEach(() => densityMode("compact"));
 		afterEach(() => {
 			uiStore.cycleSidebarDensityMode();
 			uiStore.cycleSidebarDensityMode();
@@ -2222,6 +2701,7 @@ describe("Sidebar", () => {
 		});
 
 		it("renders expanded terminal activity as one branch card", () => {
+			densityMode("auto");
 			vi.setSystemTime(new Date("2026-09-22T12:10:00Z"));
 			mockTerminalsGet.mockImplementation((id: string) => {
 				const terminals = {
@@ -2945,6 +3425,52 @@ describe("Sidebar", () => {
 	});
 
 	describe("group sections", () => {
+		// Catches: flattening groups, moving repos between groups, or orphan Idle headings after filtering.
+		it("grouped_repo_activity_split_preserves_membership", () => {
+			densityMode("auto");
+			const idle = makeRepo({ path: "/idle" });
+			const active = makeRepo({
+				path: "/active",
+				workspaces: { main: { ...idle.workspaces.main, terminals: ["t1"] } },
+			});
+			const secondIdle = makeRepo({ path: "/second" });
+			const loose = makeRepo({ path: "/loose" });
+			setRepos({ "/idle": idle, "/active": active, "/second": secondIdle, "/loose": loose });
+			mockGetGroupedLayout.mockReturnValue({
+				groups: [
+					{
+						group: { id: "g1", name: "Mixed", collapsed: false, color: "", repoOrder: ["/idle", "/active"] },
+						repos: [idle, active],
+					},
+					{
+						group: { id: "g2", name: "Idle only", collapsed: false, color: "", repoOrder: ["/second"] },
+						repos: [secondIdle],
+					},
+				],
+				ungrouped: [loose],
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+			const paths = (id: string) =>
+				[...container.querySelectorAll(`[data-sidebar-group='${id}'] [data-sidebar-repo]`)].map((e) =>
+					e.getAttribute("data-sidebar-repo"),
+				);
+			expect(paths("g1")).toEqual(["/active", "/idle"]);
+			expect(paths("g2")).toEqual(["/second"]);
+			expect(container.querySelectorAll("[data-testid='idle-repos-heading']")).toHaveLength(3);
+			uiStore.setRepoFilterActiveOnly(true);
+			try {
+				expect(paths("g1")).toEqual(["/active"]);
+				expect(container.querySelector("[data-sidebar-group='g2']")).toBeNull();
+				expect(container.querySelector("[data-testid='idle-repos-heading']")).toBeNull();
+			} finally {
+				uiStore.setRepoFilterActiveOnly(false);
+			}
+			expect(paths("g1")).toEqual(["/active", "/idle"]);
+			expect(paths("g2")).toEqual(["/second"]);
+			expect(mockMoveRepoBetweenGroups).not.toHaveBeenCalled();
+			expect(mockReorderRepoInGroup).not.toHaveBeenCalled();
+		});
+
 		it("renders group headers with name and chevron", () => {
 			const repo = makeRepo();
 			setRepos({ "/repo1": repo });

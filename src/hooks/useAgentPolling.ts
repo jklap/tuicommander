@@ -125,6 +125,13 @@ export function syncAgentLifecycleStates(): Promise<void> {
 	return lifecycleSyncInFlight;
 }
 
+/** Recovery must read state from after the gap: a snapshot already in flight
+ * may have been captured before it, so run one fresh snapshot once it settles. */
+async function resyncAgentLifecycleStates(): Promise<void> {
+	await lifecycleSyncInFlight?.catch(() => {});
+	await syncAgentLifecycleStates();
+}
+
 async function syncAgentLifecycleStatesOnce(): Promise<void> {
 	const request = ++nextLifecycleRequest;
 	const requestedSessions = new Map<
@@ -421,7 +428,7 @@ export function useAgentPolling(): void {
 				onResync: (reason) => {
 					if (subscriptionDisposed) return;
 					appLogger.debug("app", `[AgentLifecycle] resync after ${reason}`);
-					void syncAgentLifecycleStates();
+					void resyncAgentLifecycleStates();
 				},
 			},
 		)

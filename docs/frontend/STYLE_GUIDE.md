@@ -619,3 +619,17 @@ When updating core palette colors in `global.css`, **also update `mobile.css`** 
 - **No `!important`** — except terminal scrollbar overrides.
 - **No pixel values outside the spacing scale** unless component-specific dimension (like 28px repo initials).
 - **No inline styles for theming** — all colors and spacing via CSS variables (desktop: `global.css`, mobile: `mobile.css`).
+
+
+### Touch Sidebar Action Trays
+
+Keep branch actions hidden at rest on touch devices. A left swipe reveals a
+full-height tray with neutral More, accent Add, and error-coloured Remove
+buttons, with at least 44px width per action. Only removable linked worktrees
+show Remove. Keep native vertical scrolling with `touch-action: pan-y`.
+Use the existing palette and radius tokens, and disable slide transitions when
+reduced motion is requested. Mouse hover controls retain their existing layout.
+
+Rich working agent rows reserve two clamped intent lines. Idle, awaiting-input and error rows stay on one line with status dots; their full intent, task or prompt remains in the tooltip. Compact rows keep their one-line layout.
+
+Rich navigation keeps compact typography and padding. Branch identity and facts share one line, with names truncated and full PR/lifecycle facts in tooltips. Repository metadata disappears when PR and worktree counts are both zero. Header controls use compact sizing to protect repo names. Returned subagents fold into an expandable count independently of running work.

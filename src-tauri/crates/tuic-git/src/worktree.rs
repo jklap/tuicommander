@@ -1240,28 +1240,53 @@ fn patches_integrated_in(repo: &Path, target: &str, tip: &str) -> Result<bool, S
     Ok(cherry.stdout.lines().all(|line| line.starts_with("- ")))
 }
 
-/// Ref state read without git subprocesses. Include symbolic targets and HEAD:
-/// switching to a different integration branch matters even at the same tip.
-/// Config and reflog bytes also affect the existing classification rules.
-pub fn monitoring_ref_key(repo: &Path) -> Result<String, String> {
+/// Ref state that decides one branch's classification, read without git
+/// subprocesses: the branch and its remote twin, the default-branch refs
+/// (origin/HEAD, its target, main, master), the main checkout's HEAD, config and
+/// the branch's own reflog. Other branches never enter the key: a commit in one
+/// worktree must not re-run cherry/merge-tree for every sibling branch.
+pub fn monitoring_ref_key(repo: &Path, branch: &str) -> Result<String, String> {
     use gix::bstr::ByteSlice;
     let grepo = gix::open(repo).map_err(|e| e.to_string())?;
-    let platform = grepo.references().map_err(|e| e.to_string())?;
-    let mut refs = Vec::new();
-    for reference in platform.all().map_err(|e| e.to_string())? {
-        let reference = reference.map_err(|e| e.to_string())?;
-        refs.push(format!(
-            "{}={:?}",
-            reference.name().as_bstr().to_str_lossy(),
-            reference.target()
-        ));
+    let mut names = vec![
+        format!("refs/heads/{branch}"),
+        format!("refs/remotes/origin/{branch}"),
+        "refs/remotes/origin/HEAD".to_string(),
+        "refs/heads/main".to_string(),
+        "refs/heads/master".to_string(),
+        "refs/remotes/origin/main".to_string(),
+        "refs/remotes/origin/master".to_string(),
+    ];
+    let origin_default = grepo
+        .try_find_reference("refs/remotes/origin/HEAD")
+        .map_err(|e| e.to_string())?
+        .and_then(|reference| match reference.target() {
+            gix::refs::TargetRef::Symbolic(target) => target
+                .as_bstr()
+                .to_str_lossy()
+                .strip_prefix("refs/remotes/origin/")
+                .map(str::to_owned),
+            gix::refs::TargetRef::Object(_) => None,
+        });
+    if let Some(default) = origin_default {
+        names.push(format!("refs/remotes/origin/{default}"));
+        names.push(format!("refs/heads/{default}"));
     }
-    refs.sort();
+    names.sort();
+    names.dedup();
     let mut digest = Sha256::new();
-    for entry in refs {
-        digest.update(entry.as_bytes());
+    for name in names {
+        let target = grepo
+            .try_find_reference(name.as_str())
+            .map_err(|e| e.to_string())?
+            .map(|reference| format!("{:?}", reference.target()));
+        digest.update(format!("{name}={target:?}").as_bytes());
         digest.update([0]);
     }
+    // HEAD of the checkout whose ancestry the classifier consults.
+    let head = grepo.rev_parse_single("HEAD").ok().map(|id| id.detach());
+    digest.update(format!("HEAD={head:?}").as_bytes());
+    digest.update([0]);
     for file in [
         grepo.git_dir().join("HEAD"),
         grepo.common_dir().join("config"),
@@ -1270,29 +1295,9 @@ pub fn monitoring_ref_key(repo: &Path) -> Result<String, String> {
         digest.update([0]);
     }
     // The branch reflog distinguishes own commits from following the default.
-    let log_root = grepo.common_dir().join("logs/refs/heads");
-    fn hash_logs(path: &Path, digest: &mut Sha256) -> Result<(), String> {
-        if !path.exists() {
-            return Ok(());
-        }
-        let mut entries = std::fs::read_dir(path)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        entries.sort_by_key(|entry| entry.file_name());
-        for entry in entries {
-            let path = entry.path();
-            if path.is_dir() {
-                hash_logs(&path, digest)?;
-            } else {
-                digest.update(path.to_string_lossy().as_bytes());
-                digest.update(std::fs::read(path).map_err(|e| e.to_string())?);
-            }
-            digest.update([0]);
-        }
-        Ok(())
+    if let Ok(log) = std::fs::read(grepo.common_dir().join("logs/refs/heads").join(branch)) {
+        digest.update(log);
     }
-    hash_logs(&log_root, &mut digest)?;
     Ok(hex::encode(digest.finalize()))
 }
 
@@ -1340,7 +1345,6 @@ pub(crate) fn monitoring_branch_merge(
 pub fn inspect_workspace_monitoring_with_pr(
     base_repo: &Path,
     workspace: &WorkspaceWorktree,
-    ref_key: &str,
     pr_proves_tip: impl Fn(&Path, &str, &str) -> bool,
 ) -> WorkspaceLifecycleStatus {
     let result = (|| -> Result<WorkspaceLifecycleStatus, String> {
@@ -1349,8 +1353,9 @@ pub fn inspect_workspace_monitoring_with_pr(
             Some(count) => count,
             None => dirty_files_at(path)?,
         };
+        let ref_key = monitoring_ref_key(base_repo, &workspace.branch)?;
         let (commit_status, merge_proof) =
-            monitoring_branch_merge(base_repo, &workspace.branch, ref_key, true, pr_proves_tip)?;
+            monitoring_branch_merge(base_repo, &workspace.branch, &ref_key, true, pr_proves_tip)?;
         Ok(WorkspaceLifecycleStatus {
             dirty_files: Some(dirty_files),
             missing_checkout: false,
@@ -8388,18 +8393,17 @@ branch refs/heads/feat
         commit_file(&path, "feature.txt", "own work\n");
         commit_file(&repo, "default.txt", "unrelated default work\n");
         let workspace = resolve_any_workspace(&repo, branch).unwrap();
-        let key = monitoring_ref_key(&repo).unwrap();
-        let first = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        let key = monitoring_ref_key(&repo, branch).unwrap();
+        let first = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
         assert_eq!(first.commit_status, WorkspaceCommitStatus::Unmerged);
         // The existing proof-provider boundary uses false for both no proof and lookup failure.
         // No fake GitHub payload is involved: the provider is now able to prove this tip.
         let fresh = inspect_workspace_lifecycle_with_pr(&repo, branch, |_, _, _| true);
         assert_eq!(fresh.commit_status, WorkspaceCommitStatus::Merged);
         assert_eq!(fresh.merge_proof, Some("github_pr"));
-        let next_key = monitoring_ref_key(&repo).unwrap();
+        let next_key = monitoring_ref_key(&repo, branch).unwrap();
         assert_eq!(key, next_key);
-        let recovered =
-            inspect_workspace_monitoring_with_pr(&repo, &workspace, &next_key, |_, _, _| true);
+        let recovered = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| true);
         assert_eq!(recovered.commit_status, WorkspaceCommitStatus::Merged);
         assert_eq!(recovered.merge_proof, Some("github_pr"));
     }
@@ -8427,8 +8431,7 @@ branch refs/heads/feat
             .stdout;
         assert!(porcelain.lines().any(|line| line == "D  README.md"));
         assert!(porcelain.lines().any(|line| line == "?? README.md"));
-        let key = monitoring_ref_key(&repo).unwrap();
-        let status = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        let status = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
         assert_eq!(status.dirty_files, Some(2));
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::RequiresForce);
     }
@@ -8451,15 +8454,14 @@ branch refs/heads/feat
             .run()
             .unwrap();
         let workspace = resolve_any_workspace(&repo, branch).unwrap();
-        let key = monitoring_ref_key(&repo).unwrap();
-        let clean = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        let clean = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
         assert_eq!(clean.dirty_files, Some(0));
         fs::write(
             path.join("modules/local/module.txt"),
             "unsaved module work\n",
         )
         .unwrap();
-        let dirty = inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        let dirty = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
         assert_eq!(dirty.dirty_files, Some(1));
         let removal =
             remove_worktree_by_workspace_id(&repo.to_string_lossy(), branch, true, None, false);
@@ -8493,9 +8495,12 @@ branch refs/heads/feat
             });
         }
         commit_file(&repo, "default.txt", "default advanced\n");
-        let ref_key = monitoring_ref_key(&repo).unwrap();
+        let ref_keys: Vec<_> = workspaces
+            .iter()
+            .map(|w| monitoring_ref_key(&repo, &w.branch).unwrap())
+            .collect();
         for workspace in &workspaces {
-            inspect_workspace_monitoring_with_pr(&repo, workspace, &ref_key, |_, _, _| false);
+            inspect_workspace_monitoring_with_pr(&repo, workspace, |_, _, _| false);
         }
         crate::git::get_merged_branches_impl(&repo).unwrap();
         crate::git_cli::take_command_counts();
@@ -8518,11 +8523,15 @@ branch refs/heads/feat
                     format!("after {round}"),
                 )
                 .unwrap();
-                assert_eq!(monitoring_ref_key(&repo).unwrap(), ref_key);
+                assert_eq!(
+                    monitoring_ref_key(&repo, &workspace.branch).unwrap(),
+                    ref_keys[workspaces
+                        .iter()
+                        .position(|w| w.branch == workspace.branch)
+                        .unwrap()]
+                );
                 let status =
-                    inspect_workspace_monitoring_with_pr(&repo, workspace, &ref_key, |_, _, _| {
-                        false
-                    });
+                    inspect_workspace_monitoring_with_pr(&repo, workspace, |_, _, _| false);
                 assert_eq!(status.dirty_files, Some(1));
                 assert_eq!(status.commit_status, WorkspaceCommitStatus::Unmerged);
                 assert!(status.dirty_fingerprint.is_none());
@@ -8544,6 +8553,41 @@ branch refs/heads/feat
         );
     }
 
+    // Catches the repo-wide ref key: one agent commit in any worktree re-ran the whole
+    // integration classifier (cherry, merge-tree, reflog) for every sibling branch.
+    #[test]
+    fn monitoring_gitpoll_commit_in_one_branch_does_not_reclassify_siblings() {
+        let (_temp, repo, _) = workspace_fixture();
+        let mut workspaces = Vec::new();
+        for name in ["sibling-a", "sibling-b"] {
+            let path = add_worktree(&repo, name);
+            commit_file(&path, &format!("{name}.txt"), "own commit\n");
+            workspaces.push((path, resolve_any_workspace(&repo, name).unwrap()));
+        }
+        commit_file(&repo, "default.txt", "default advanced\n");
+        for (_, workspace) in &workspaces {
+            inspect_workspace_monitoring_with_pr(&repo, workspace, |_, _, _| false);
+        }
+        let key_a = monitoring_ref_key(&repo, "sibling-a").unwrap();
+        let key_b = monitoring_ref_key(&repo, "sibling-b").unwrap();
+        commit_file(&workspaces[1].0, "more.txt", "second commit\n");
+        crate::git_cli::take_command_counts();
+        let a = inspect_workspace_monitoring_with_pr(&repo, &workspaces[0].1, |_, _, _| false);
+        let sibling_spawns = crate::git_cli::take_command_counts();
+        assert_eq!(a.commit_status, WorkspaceCommitStatus::Unmerged);
+        assert_eq!(monitoring_ref_key(&repo, "sibling-a").unwrap(), key_a);
+        assert!(
+            sibling_spawns.is_empty(),
+            "a commit in sibling-b re-ran Git for sibling-a: {sibling_spawns:?}"
+        );
+        assert_ne!(monitoring_ref_key(&repo, "sibling-b").unwrap(), key_b);
+        inspect_workspace_monitoring_with_pr(&repo, &workspaces[1].1, |_, _, _| false);
+        assert!(
+            !crate::git_cli::take_command_counts().is_empty(),
+            "the branch that moved must be reclassified"
+        );
+    }
+
     // Catches cached unmerged badges surviving a main ref movement.
     #[test]
     fn monitoring_gitpoll_merge_refreshes_on_ref_move_and_keeps_dirty_badge() {
@@ -8553,10 +8597,9 @@ branch refs/heads/feat
         commit_file(&path, "feature.txt", "own commit\n");
         commit_file(&repo, "default.txt", "default advanced\n");
         let workspace = resolve_any_workspace(&repo, branch).unwrap();
-        let key = monitoring_ref_key(&repo).unwrap();
+        let key = monitoring_ref_key(&repo, branch).unwrap();
         assert_eq!(
-            inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false)
-                .commit_status,
+            inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false).commit_status,
             WorkspaceCommitStatus::Unmerged
         );
         git_cmd(&repo)
@@ -8564,10 +8607,9 @@ branch refs/heads/feat
             .run()
             .unwrap();
         std::fs::write(path.join("dirty.txt"), "keep me").unwrap();
-        let next = monitoring_ref_key(&repo).unwrap();
+        let next = monitoring_ref_key(&repo, branch).unwrap();
         assert_ne!(key, next);
-        let status =
-            inspect_workspace_monitoring_with_pr(&repo, &workspace, &next, |_, _, _| false);
+        let status = inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
         assert_eq!(status.commit_status, WorkspaceCommitStatus::Merged);
         assert_eq!(status.dirty_files, Some(1));
         assert_eq!(status.removal_safety, WorkspaceRemovalSafety::RequiresForce);
@@ -8590,9 +8632,7 @@ branch refs/heads/feat
         std::fs::create_dir_all(path.join("nested")).unwrap();
         std::fs::write(path.join("nested/a.txt"), "untracked").unwrap();
         std::fs::write(path.join("nested/b.txt"), "untracked").unwrap();
-        let key = monitoring_ref_key(&repo).unwrap();
-        let read =
-            || inspect_workspace_monitoring_with_pr(&repo, &workspace, &key, |_, _, _| false);
+        let read = || inspect_workspace_monitoring_with_pr(&repo, &workspace, |_, _, _| false);
         assert_eq!(read().dirty_files, Some(dirty_files_at(&path).unwrap()));
         assert_eq!(read().dirty_files, Some(3));
         git_cmd(&path)

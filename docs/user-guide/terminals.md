@@ -2,6 +2,10 @@
 
 Remote terminals replay their current viewport when attached or reconnected. A stream failure or stalled initial replay shows a persistent error toast; the client retries without requiring new terminal output. See [Remote Access](remote-access.md).
 
+## Tablet Keyboard
+
+Tap the terminal to focus its keyboard input. Touch and mouse input use the same field, including soft-keyboard text entry and repeated deletion.
+
 ## Terminal Sessions
 
 Each terminal tab runs an independent PTY (pseudo-terminal) session with your shell. Up to 50 concurrent sessions.
@@ -44,6 +48,14 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 - **Cmd+Shift+T** — Reopen the last closed tab
 - Last 10 closed tabs are remembered with their name, font size, and working directory
 - Reopened tabs start a fresh shell session in the original directory
+
+### CLI / Chat view
+
+A terminal that runs Claude Code shows a **CLI | Chat** switch in its top-right corner. **Chat** replaces the grid with the conversation read from Claude's own session file: your prompts as bubbles, Claude's replies as text, and tool calls folded into one compact card each. Plumbing (hook output, system reminders) and empty thinking blocks are left out. The view is read-only: switch back to **CLI** to reply or answer a permission prompt. The grid keeps running while hidden, so scrollback and selection are unchanged.
+
+**Chat** is disabled, with the reason as its tooltip, when the terminal has no agent, the agent is not Claude, or TUICommander has not bound the agent to a session file yet. If the agent exits or the binding is lost while Chat is open, the terminal returns to CLI with a one-line notice.
+
+Older recorded prompts with a prompt ID also appear when Claude did not record a human-origin field. Command echoes, tool results and sidechain conversations stay out of user bubbles. Image and PDF tool outputs show `[image]` and `[document]` markers; a model fallback shows a **Model changed** card.
 
 ### Suspending a Tab
 
@@ -351,3 +363,5 @@ Use **Toggle answers-only view** (`Cmd+Alt+R` on macOS) to read selectable marke
 ### Stored terminal marker coordinates
 
 When old output leaves the scrollback, command boundaries and prompt ticks stay attached to their retained output. Ticks for discarded prompts disappear; answers-only history keeps the retained question and answer association.
+
+Terminal stream reconnect notices use the current terminal name when available and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice. Closing the terminal removes its notice, and late subscription failures cannot publish a notice after closure.

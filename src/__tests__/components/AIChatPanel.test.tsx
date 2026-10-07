@@ -91,6 +91,7 @@ vi.mock("../../stores/settings", async () => {
 // the transcript projection and every reducer between them are the real ones,
 // so a test that passes proves the panel reads what the wire actually carries.
 const client = vi.hoisted(() => ({
+	openConversation: vi.fn(),
 	connect: vi.fn(),
 	reconnect: vi.fn(),
 	disconnect: vi.fn(),
@@ -322,6 +323,58 @@ beforeEach(() => {
 afterEach(() => {
 	cleanup();
 	cleanupToasts();
+});
+
+describe("AIChatPanel: repository profile warnings", () => {
+	// Catches an authoritative ego clamp silently discarded by the chat host.
+	it("shows recorded ego clamp warnings once for the attached conversation", async () => {
+		const recorded = JSON.parse(
+			readFileSync(resolve(process.cwd(), "src-tauri/tests/fixtures/acp/ego-profile-ceiling.json"), "utf8"),
+		);
+		client.newSession.mockImplementation(async () => {
+			acpStore.applySnapshot(
+				snapshot({
+					attachments: [
+						attachment({
+							profileWarnings: recorded._meta.ego.warnings,
+						}),
+					],
+				}),
+			);
+			return SESSION;
+		});
+		await renderPanel();
+		await settle();
+		expect(
+			toastsStore.toasts
+				.filter((toast) => toast.title === "Repository ego profile")
+				.map((toast) => ({ message: toast.message, level: toast.level })),
+		).toEqual([
+			{
+				message:
+					"mode yolo exceeds profile ceiling default; using default\nsandbox off exceeds profile ceiling workspace; using workspace",
+				level: "warn",
+			},
+		]);
+		acpStore.applySnapshot(
+			snapshot({
+				attachments: [
+					attachment({
+						profileWarnings: recorded._meta.ego.warnings,
+					}),
+				],
+			}),
+		);
+		await settle();
+		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(1);
+	});
+
+	// Catches ordinary sessions getting a spurious profile warning.
+	it("keeps sessions without repository profile warnings quiet", async () => {
+		await renderPanel();
+		await settle();
+		expect(toastsStore.toasts.filter((toast) => toast.title === "Repository ego profile")).toHaveLength(0);
+	});
 });
 
 describe("AIChatPanel: the frame it keeps", () => {
@@ -1970,15 +2023,15 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(client.newSession).not.toHaveBeenCalled();
 	});
 
-	it("includes later ACP list pages before ordering the picker", async () => {
+	it("keeps the backend projection order across ACP list pages", async () => {
 		client.listSessions.mockImplementation(async (_id, _root, cursor) =>
 			cursor
 				? {
-						sessions: [{ sessionId: "newest", cwd: CHAT_ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
+						sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
 						nextCursor: null,
 					}
 				: {
-						sessions: [{ sessionId: SESSION, cwd: CHAT_ROOT, title: "First page", updatedAt: "2026-09-25T09:00:00Z" }],
+						sessions: [{ sessionId: "newest", cwd: CHAT_ROOT, title: "New page", updatedAt: "2026-09-27T09:00:00Z" }],
 						nextCursor: "page-2",
 					},
 		);
@@ -2040,12 +2093,12 @@ describe("AIChatPanel: durable conversations", () => {
 		expect(container.textContent).toContain("Earlier answer");
 	});
 
-	it("lists durable conversation titles in latest activity order", async () => {
+	it("renders durable conversation titles in the backend activity order", async () => {
 		client.listSessions.mockResolvedValue({
 			sessions: [
-				{ sessionId: "old", cwd: CHAT_ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
-				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
 				{ sessionId: "newest", cwd: CHAT_ROOT, title: "Latest topic", updatedAt: "2026-09-26T09:00:00Z" },
+				{ sessionId: SESSION, cwd: CHAT_ROOT, title: "Current topic", updatedAt: "2026-09-25T09:00:00Z" },
+				{ sessionId: "old", cwd: CHAT_ROOT, title: "Old topic", updatedAt: "2026-09-24T09:00:00Z" },
 			],
 			nextCursor: null,
 		});
@@ -2277,6 +2330,7 @@ describe("AIChatPanel: tool activity", () => {
 			const dots = () => [...activity.querySelectorAll("summary > span:first-child")];
 			expect(dots()).toHaveLength(2);
 			for (const dot of dots()) expect(dot.className).toContain("toolCallPending");
+			const pendingRowDot = dots()[1];
 
 			feed({
 				kind: "sessionUpdate",
@@ -2284,6 +2338,9 @@ describe("AIChatPanel: tool activity", () => {
 			});
 			await settle();
 
+			// WebKit keeps a running CSS animation when only the class of an element
+			// inside a closed <details> changes, so the row dot must be a new element.
+			expect(dots()[1]).not.toBe(pendingRowDot);
 			for (const dot of dots()) {
 				expect(dot.className).not.toContain("toolCallPending");
 				expect(dot.className).toContain(status === "failed" ? "toolCallFailure" : "toolCallSuccess");
@@ -2993,5 +3050,274 @@ describe("AIChatPanel: pause, resume and compact", () => {
 
 		expect(container.querySelector('button[aria-label="Pause the turn"]')).toBeNull();
 		expect(container.querySelector('button[aria-label="Compact the conversation"]')).toBeNull();
+	});
+});
+
+describe("AIChatPanel: provider retry status", () => {
+	const CAUSE = "Our servers are currently overloaded. Please try again later.";
+	function retry(attempt: number | null) {
+		const providerRetry =
+			attempt === null
+				? null
+				: {
+						state: "waiting",
+						attempt,
+						limit: 6,
+						delayMs: 1000 * 2 ** (attempt - 1),
+						kind: "transient",
+						cause: CAUSE,
+						text: `${CAUSE} — connection problem, retrying in ${2 ** (attempt - 1)}s (attempt ${attempt}/6)`,
+					};
+		feed({
+			kind: "sessionUpdate",
+			update: { sessionUpdate: "session_info_update", _meta: { ego: { providerRetry } } } as never,
+		});
+	}
+	const statusLines = (container: HTMLElement) => [...container.querySelectorAll("[class*=providerRetry]")];
+
+	async function retryingPanel() {
+		const view = await renderPanel();
+		await settle();
+		feed({ kind: "sessionUpdate", update: { sessionUpdate: "session_info_update", title: "Audit terminali" } });
+		acpStore.applySnapshot(snapshot({ attachments: [attachment({ state: "prompting" })] }));
+		await settle();
+		return view;
+	}
+
+	// Catches: one line per retry, or a retry that never shows its n/6 counter.
+	it("shows one status line that a later attempt updates in place", async () => {
+		const { container } = await retryingPanel();
+		retry(1);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+		expect(statusLines(container)[0].textContent).toContain("connection problem");
+		expect(statusLines(container)[0].textContent).toContain("attempt 1/6");
+
+		retry(2);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+		expect(statusLines(container)[0].textContent).toContain("attempt 2/6");
+		expect(statusLines(container)[0].textContent).not.toContain("attempt 1/6");
+		// The retry patch carries no title, so the conversation keeps its name.
+		expect(acpTranscript.title(SESSION)).toBe("Audit terminali");
+	});
+
+	// Catches: a stale retry line left on screen after the provider recovered.
+	it("removes the line when ego clears the retry", async () => {
+		const { container } = await retryingPanel();
+		retry(3);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+
+		retry(null);
+		await settle();
+		expect(statusLines(container)).toHaveLength(0);
+	});
+
+	// Catches: the retry line surviving next to the final error once 6/6 failed.
+	it("replaces the line with the final error when the turn fails", async () => {
+		const { container } = await retryingPanel();
+		retry(6);
+		await settle();
+		expect(statusLines(container)).toHaveLength(1);
+		feed({ kind: "turnFailed", message: "the turn failed: the provider returned HTTP 503", state: "idle" });
+		await settle();
+
+		expect(statusLines(container)).toHaveLength(0);
+		expect(container.textContent).toContain("the turn failed: the provider returned HTTP 503");
+	});
+});
+
+describe("AIChatPanel: fork at message", () => {
+	// Catches: offering a message fork to an agent that can only fork at its tip.
+	it("hides the per-reply fork without the at-message capability", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpTranscript.restore(SESSION, [{ id: "reply", kind: "agent", text: "Answer", messageId: "reply-id" }]);
+		await settle();
+		expect(container.querySelector('[aria-label="Fork from here"]')).toBeNull();
+	});
+	// Catches: the selected reply ID lost between the rendered action and the shared client.
+	it("passes the selected reply ID from the per-message button", async () => {
+		const { container } = await renderPanel();
+		await settle();
+		acpStore.applySnapshot(
+			snapshot({ capabilities: { ...snapshot().capabilities!, fork: true, forkAtMessage: true } }),
+		);
+		acpTranscript.restore(SESSION, [{ id: "reply", kind: "agent", text: "Answer", messageId: "reply-id" }]);
+		client.forkSession.mockResolvedValue(CHILD_SESSION);
+		await settle();
+		container.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')?.click();
+		await settle();
+		expect(client.forkSession).toHaveBeenCalledWith(CONNECTION, SESSION, CHAT_ROOT, "reply-id");
+	});
+});
+
+// Catches: inherited replay shown as the child's own conversation or hidden entirely.
+it("renders inherited replay above a boundary and child turns below", async () => {
+	const { container } = await renderPanel();
+	await settle();
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "user_message_chunk",
+			content: { type: "text", text: "Parent question" },
+			_meta: { ego: { inherited: true } },
+		},
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "agent_message_chunk",
+			messageId: "parent",
+			content: { type: "text", text: "Parent answer" },
+			_meta: { ego: { inherited: true } },
+		},
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Child question" } },
+	});
+	feed({
+		kind: "sessionUpdate",
+		update: {
+			sessionUpdate: "agent_message_chunk",
+			messageId: "child",
+			content: { type: "text", text: "Child answer" },
+		},
+	});
+	await settle();
+	const transcript = container.querySelector('[aria-label="Chat transcript"]')!;
+	const boundary = transcript.querySelector('[role="separator"][aria-label="Inherited history ends"]');
+	expect(boundary).not.toBeNull();
+	const content = transcript.textContent!;
+	expect(content.indexOf("Parent answer")).toBeLessThan(content.indexOf("This conversation"));
+	expect(content.indexOf("Child question")).toBeGreaterThan(content.indexOf("This conversation"));
+	expect(content).toContain("Child answer");
+});
+
+describe("AIChatPanel: lineage picker", () => {
+	// Catches: refreshSessions resorting the backend tree or discarding its indentation/deleted rows.
+	it("keeps two-level ancestry and a disabled deleted parent in the picker", async () => {
+		client.listSessions.mockResolvedValue({
+			sessions: [
+				{
+					sessionId: "root",
+					cwd: CHAT_ROOT,
+					title: "Root",
+					updatedAt: "2026-01-01",
+					_meta: { tuicommander: { lineageDepth: 0 } },
+				},
+				{
+					sessionId: "deleted",
+					cwd: CHAT_ROOT,
+					title: "Deleted conversation",
+					_meta: { tuicommander: { lineageDepth: 1, deleted: true } },
+				},
+				{
+					sessionId: "grandchild",
+					cwd: CHAT_ROOT,
+					title: "Grandchild",
+					updatedAt: "2026-10-05",
+					_meta: {
+						ego: { lineage: { kind: "fork", sourceSessionId: "deleted", rootSessionId: "root", sourceDeleted: true } },
+						tuicommander: { lineageDepth: 2 },
+					},
+				},
+			],
+		});
+		const { container } = await renderPanel();
+		await settle();
+		const rows = [...container.querySelectorAll<HTMLOptionElement>('select[title="Conversation"] option')];
+		expect(rows.map((row) => row.value)).toEqual(["root", "deleted", "grandchild"]);
+		expect(rows[1].disabled).toBe(true);
+		expect(rows[2].textContent).toContain("    ");
+		expect(rows[2].textContent).toContain("Grandchild");
+	});
+});
+
+describe("conversation launch overrides", () => {
+	// Catches: creating a coordinator chat changes settings or sends its next turn through the daily connection.
+	it("opens options on a dedicated conversation and returns default chats to their connection", async () => {
+		const view = await renderPanel();
+		const customConnection = "01932d5e-0000-7000-8000-0000000000c2";
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_sessions: {}, ai_chat_launches: { [SECOND_SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		client.openConversation.mockImplementation(async () => {
+			const connection = snapshot({
+				connectionId: customConnection,
+				attachments: [attachment({ sessionId: SECOND_SESSION })],
+			});
+			acpStore.applySnapshot(connection);
+			acpStore.markStreaming(customConnection);
+			return { connection, sessionId: SECOND_SESSION, launch };
+		});
+		(view.container.querySelector('button[aria-label="New conversation with options"]') as HTMLButtonElement).click();
+		await settle();
+		for (const [label, value] of [
+			["Ego profile", "coordinator"],
+			["Workspace", "/srv/observer"],
+			["Ego executable", "/opt/observer/ego"],
+		]) {
+			const input = view.container.querySelector(`input[aria-label="${label}"]`) as HTMLInputElement;
+			input.value = value;
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		}
+		(
+			[...view.container.querySelectorAll("button")].find(
+				(button) => button.textContent === "Create",
+			) as HTMLButtonElement
+		).click();
+		await settle();
+		expect(client.openConversation).toHaveBeenCalledWith({
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			executable: "/opt/observer/ego",
+		});
+		expect(view.container.textContent).toContain("coordinator · /srv/observer · /opt/observer/ego");
+		await typeAndSend(view.container, "observe");
+		expect(client.prompt).toHaveBeenLastCalledWith(customConnection, SECOND_SESSION, "observe", [], ROOT);
+		(view.container.querySelector(`button[data-chat-session="${SESSION}"]`) as HTMLButtonElement).click();
+		await settle();
+		await typeAndSend(view.container, "daily");
+		expect(client.prompt).toHaveBeenLastCalledWith(CONNECTION, SESSION, "daily", [], ROOT);
+		expect(settings.egoExecutable).toBe("/usr/local/bin/ego");
+	});
+
+	// Catches: a webview reload restores a custom tab on the global connection and loses its launch options.
+	it("reopens a persisted custom tab without starting the default ego", async () => {
+		const launch = {
+			executable: "/opt/observer/ego",
+			profile: "coordinator",
+			workspace: "/srv/observer",
+			peerId: "observer-peer",
+		};
+		aiChatTabs.add("global", SECOND_SESSION);
+		vi.mocked(invoke).mockImplementation(async (command) => {
+			if (command === "load_config") return { ai_chat_launches: { [SECOND_SESSION]: launch } };
+			if (command === "acp_workspace_root") return CHAT_ROOT;
+			return undefined;
+		});
+		client.openConversation.mockImplementation(async () => {
+			const connection = snapshot({ attachments: [attachment({ sessionId: SECOND_SESSION })] });
+			acpStore.applySnapshot(connection);
+			acpStore.markStreaming(CONNECTION);
+			return { connection, sessionId: SECOND_SESSION, launch };
+		});
+		const view = renderIdlePanel();
+		await settle();
+		await typeAndSend(view.container, "resume observation");
+		expect(client.openConversation).toHaveBeenCalledWith({ sessionId: SECOND_SESSION });
+		expect(client.connect).not.toHaveBeenCalled();
+		expect(view.container.textContent).toContain("coordinator · /srv/observer · /opt/observer/ego");
 	});
 });

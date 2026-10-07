@@ -8,6 +8,9 @@ use crate::workflows::{
 };
 use std::sync::Arc;
 
+mod critic_c;
+mod parity;
+
 fn fixture() -> (
     tempfile::TempDir,
     tempfile::TempDir,
@@ -22,7 +25,18 @@ fn fixture() -> (
     result
 }
 
+fn canonical_owner(project: &str) -> String {
+    // Match definition_action: Windows canonicalization adds the verbatim prefix.
+    crate::progress::resolve_owning_project(Some(project))
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
 fn definition(project: &str, pause: bool, agent: bool) -> crate::workflows::PublishedWorkflow {
+    let project = canonical_owner(project);
+    let project = project.as_str();
     let mut nodes = vec![
         Node {
             id: "start".into(),
@@ -146,6 +160,29 @@ async fn owner_ready(state: &Arc<crate::state::AppState>) {
     .expect("daemon setup did not acquire ownership");
 }
 
+/// Catches: raw fixture paths publishing definitions outside the canonical root identity.
+#[test]
+fn runtime_definition_uses_the_api_canonical_owner() {
+    let (config, project, plan, story, _template, _guard) = fixture();
+    let raw = project.path().join(".");
+    let published = definition(raw.to_str().unwrap(), false, false);
+    let plan = StoryStore::open().unwrap().get_plan(&plan).unwrap();
+    assert_eq!(published.project, plan.project);
+    let semantics_definition = semantics::publish(raw.to_str().unwrap(), published.graph.clone());
+    assert_eq!(semantics_definition.project, plan.project);
+    let store = RunStore::open_at(&config.path().join("runs.sqlite3")).unwrap();
+    let run = store
+        .start_graph_run(&request(
+            raw.to_str().unwrap(),
+            &story,
+            &published,
+            "raw-path",
+        ))
+        .unwrap();
+    assert_eq!(run.project, plan.project);
+    assert_eq!(run.status, RunStatus::Running);
+}
+
 #[test]
 fn start_story_activates_first_successor() {
     // catches: a Running snapshot with no runnable node (01), changed-key retries or skipped predecessors.
@@ -211,11 +248,14 @@ fn start_story_activates_first_successor() {
             )
             .is_err()
     );
-    assert_eq!(
-        drive_turn(&owner.store, &run.id).unwrap(),
-        run,
-        "slice B must not run an Agent effect"
+    let prepared = drive_turn(&owner.store, &run.id).unwrap();
+    assert_eq!(prepared.attempts.len(), 1);
+    assert!(prepared.attempts[0].agent.is_none());
+    assert!(
+        prepared.effects.is_empty(),
+        "deterministic turns do not spawn agents"
     );
+    assert_eq!(owner.store.replay(&run.id).unwrap(), prepared);
 }
 
 fn paused(store: &RunStore, run: &RunSnapshot) -> RunSnapshot {
@@ -393,13 +433,15 @@ fn restart_recovers_graph_without_respawning() {
             "restart",
         ))
         .unwrap();
+    let prepared = drive_turn(&owner.store, &run.id).unwrap();
+    let attempt = prepared.attempts.last().unwrap();
     owner
         .store
         .command(
             &run.id,
             "intent",
             RunCommand::ReserveEffect {
-                key: "crash-boundary".into(),
+                key: format!("spawn:{}", attempt.id),
                 kind: EffectKind::SpawnAgent,
             },
         )
@@ -444,6 +486,8 @@ fn restart_recovers_graph_without_respawning() {
         .command(&run.id, "safe-resume", recovery)
         .unwrap();
     let current = drive_turn(&restarted.store, &run.id).unwrap();
+    assert_eq!(current.status, RunStatus::Paused);
+    assert_eq!(current.attempts.len(), prepared.attempts.len());
     assert_eq!(current.spawns, 1);
     assert_eq!(current.effects.len(), 1);
     assert_eq!(current.graph_executions, before.graph_executions);
@@ -512,3 +556,5 @@ async fn deadline_pauses_idle_run_and_bounds_check() {
 }
 
 mod ownership;
+
+mod semantics;

@@ -656,12 +656,35 @@ mod tests {
     /// must hold across bulk and single probes of different hosts.
     #[tokio::test]
     async fn no_more_probes_run_at_once_than_the_gate_allows() {
+        // cmd append redirections are not a concurrent event log. Lock only
+        // each write, leaving the wait outside the lock so probes can overlap.
         let tracker = crate::test_support::fake_ssh_script(
             "ssh-hosts-permits",
             "echo + >> \"$0.log\"; sleep 1; echo - >> \"$0.log\"; exit 0",
-            "echo +>> \"%~f0.log\"\r\nping -n 3 127.0.0.1 >nul\r\necho ->> \"%~f0.log\"\r\nexit /b 0",
+            &format!(
+                r#"call :record +
+if errorlevel 1 exit /b 1
+{ping} -n 3 127.0.0.1 >nul
+if errorlevel 1 exit /b 1
+call :record -
+exit /b %errorlevel%
+:record
+mkdir "%~f0.lock" 2>nul
+if errorlevel 1 (
+    {ping} -n 2 127.0.0.1 >nul
+    if errorlevel 1 exit /b 1
+    goto record
+)
+>> "%~f0.log" echo %1
+set "record_status=%errorlevel%"
+rmdir "%~f0.lock"
+if errorlevel 1 exit /b 1
+exit /b %record_status%"#,
+                ping = crate::test_support::system32_exe("ping.exe"),
+            ),
         );
         let _ = std::fs::remove_file(format!("{}.log", tracker.display()));
+        let _ = std::fs::remove_dir(format!("{}.lock", tracker.display()));
         let gate = ProbeGate::new(2);
         let listed: Vec<DiscoveredHost> = (0..4).map(|i| config_host(&format!("h{i}"))).collect();
         let timeout = Duration::from_secs(10);
@@ -669,13 +692,18 @@ mod tests {
         let single = probe_listed_host(&gate, listed.clone(), "h3", None, &tracker, timeout);
         let (statuses, single) = tokio::join!(bulk, single);
         assert!(statuses.iter().all(|s| s.auth == HostAuth::Shell));
-        single.unwrap();
+        assert_eq!(single.unwrap().auth, HostAuth::Shell);
         let (mut running, mut peak) = (0i32, 0i32);
         for line in std::fs::read_to_string(format!("{}.log", tracker.display()))
             .unwrap()
             .lines()
         {
-            running += if line.trim() == "+" { 1 } else { -1 };
+            running += match line.trim() {
+                "+" => 1,
+                "-" => -1,
+                other => panic!("unexpected probe event: {other:?}"),
+            };
+            assert!(running >= 0, "a probe ended without a recorded start");
             peak = peak.max(running);
         }
         assert_eq!(
@@ -683,6 +711,7 @@ mod tests {
             8,
             "4 hosts, one start and one end each"
         );
+        assert_eq!(running, 0, "every started probe must end");
         assert_eq!(peak, 2, "peak concurrent ssh processes");
     }
 

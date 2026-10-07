@@ -35,8 +35,7 @@ use super::guards::{Authenticated, require_local_or_auth};
 use crate::AppState;
 use crate::acp::{
     AcpAttachKind, AcpClientError, AcpClientErrorCode, AcpConnectionId, AcpDetachKind,
-    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoCompactRequest,
-    EgoHoldRequest,
+    AcpHostRequestId, AcpSessionAuthority, AcpStreamFrame, AcpTurnId, EgoHoldRequest,
 };
 use crate::acp_commands;
 
@@ -45,6 +44,7 @@ use crate::acp_commands;
 pub(super) fn acp_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/workspace", get(workspace_root))
+        .route("/chat/open", post(chat_open))
         .route("/connections", post(connect))
         .route(
             "/connections/{connection_id}",
@@ -313,7 +313,7 @@ async fn session_new(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AuthorityBody>,
 ) -> Response {
-    answer(state.acp.new_session(connection_id, body.authority).await)
+    answer(crate::acp_commands::session_new(&state, connection_id, body.authority).await)
 }
 
 async fn session_list(
@@ -324,7 +324,12 @@ async fn session_list(
     let mut request = v1::ListSessionsRequest::new();
     request.cwd = query.cwd;
     request.cursor = query.cursor;
-    answer(state.acp.list_sessions(connection_id, request).await)
+    answer(
+        state
+            .acp
+            .list_sessions_for_display(connection_id, request)
+            .await,
+    )
 }
 
 /// The three ways to attach differ only in the kind, so they share one body.
@@ -373,19 +378,28 @@ async fn session_resume(
     .await
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ForkBody {
+    authority: AcpSessionAuthority,
+    at_message_id: Option<String>,
+}
+
 async fn session_fork(
     Path((connection_id, session_id)): Path<(AcpConnectionId, v1::SessionId)>,
     State(state): State<Arc<AppState>>,
-    Json(body): Json<AuthorityBody>,
+    Json(body): Json<ForkBody>,
 ) -> Response {
-    attach(
-        &state,
-        AcpAttachKind::Fork,
-        connection_id,
-        session_id,
-        body.authority,
+    answer(
+        crate::acp_chat::fork(
+            &state,
+            connection_id,
+            session_id,
+            body.authority,
+            body.at_message_id,
+        )
+        .await,
     )
-    .await
 }
 
 async fn session_delete(
@@ -507,18 +521,7 @@ async fn session_compact(
     State(state): State<Arc<AppState>>,
     Json(body): Json<RequestIdBody>,
 ) -> Response {
-    answer(
-        state
-            .acp
-            .compact(
-                connection_id,
-                EgoCompactRequest {
-                    session_id,
-                    request_id: body.request_id,
-                },
-            )
-            .await,
-    )
+    answer(crate::acp_chat::compact(&state, connection_id, session_id, body.request_id).await)
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +621,19 @@ async fn pump(socket: WebSocket, mut frames: UnboundedReceiver<AcpStreamFrame>) 
         }
     }
     let _ = sender.close().await;
+}
+
+/// Conversation-specific executable authority uses the same spawn guard as connect.
+async fn chat_open(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<axum::Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<crate::acp_chat::ChatOpenRequest>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    answer(crate::acp_chat::open(&state, request).await)
 }
 
 #[cfg(test)]

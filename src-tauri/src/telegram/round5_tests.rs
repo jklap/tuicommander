@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use super::*;
 
 // Catches: an observed agent exit is forgotten when another agent occupies the

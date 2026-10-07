@@ -427,6 +427,18 @@ fn holders(state: &Arc<AppState>) -> Vec<MapReport> {
     Vec::new()
 }
 
+/// Cheap threshold-crossing context: no payload locks or allocator zone walk.
+pub(crate) fn summary(state: &Arc<AppState>) -> serde_json::Value {
+    let (blocks, heap_bytes) = malloc_zone_stats().unzip();
+    serde_json::json!({
+        "malloc_blocks_in_use": blocks,
+        "malloc_bytes_in_use": heap_bytes,
+        "sessions": state.session_maps.sessions.len(),
+        "vt_log_buffers": state.grid.vt_log_buffers.len(),
+        "content_indices": state.content_indices.len(),
+    })
+}
+
 /// The whole report, as the endpoint returns it.
 pub(crate) fn report(state: &Arc<AppState>) -> serde_json::Value {
     let maps = maps(state);
@@ -445,12 +457,11 @@ pub(crate) fn report(state: &Arc<AppState>) -> serde_json::Value {
         // owns; `blocks_in_use` rising with it says how many.
         "malloc_blocks_in_use": blocks,
         "malloc_bytes_in_use": heap_bytes,
-        // The blocks of `min_bytes` or more among them. `accounted_bytes` plus
-        // these (minus whatever a map also holds as one block) is how much of the
-        // heap a name can be put to; a gap that is one big block is a structure,
-        // a gap with none is small allocations.
+        // All blocks of `min_bytes` or more, including map-owned allocations.
+        // This census is not attribution: never add it to `accounted_bytes`.
         "malloc_large_blocks": {
             "min_bytes": LARGE_BLOCK_BYTES,
+            "may_overlap_accounted_bytes": true,
             // false: the walk failed or is unsupported, so count/bytes are null
             // rather than a low number that reads as a real answer.
             "complete": large.is_some(),
@@ -603,6 +614,50 @@ mod tests {
             longest < std::time::Duration::from_secs(1),
             "a zone stayed locked for {longest:?}"
         );
+    }
+
+    #[test]
+    fn threshold_summary_omits_payload_accounting_and_large_block_census() {
+        // Catches: watchdog threshold crossings invoking the expensive full report.
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.session_maps.output_buffers.insert(
+            "summary-output".to_string(),
+            parking_lot::Mutex::new(crate::state::OutputRingBuffer::new(4096)),
+        );
+        let entry = state
+            .session_maps
+            .output_buffers
+            .get("summary-output")
+            .unwrap();
+        let _payload_lock = entry.value().lock();
+        let summary = summary(&state);
+        assert_eq!(summary["sessions"], 0);
+        assert_eq!(summary["vt_log_buffers"], 0);
+        assert_eq!(summary["content_indices"], 0);
+        assert!(summary.get("malloc_bytes_in_use").is_some());
+        assert!(summary.get("maps").is_none());
+        assert!(summary.get("accounted_bytes").is_none());
+        assert!(summary.get("malloc_large_blocks").is_none());
+    }
+
+    #[test]
+    fn census_does_not_add_owned_large_blocks_to_accounted_bytes() {
+        // Catches: counting the same output buffer through both maps and census.
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let block = crate::state::OutputRingBuffer::new(2 * LARGE_BLOCK_BYTES as usize);
+        let owned_bytes = block.capacity();
+        state.session_maps.output_buffers.insert(
+            "owned-large-output".to_string(),
+            parking_lot::Mutex::new(block),
+        );
+        let report = report(&state);
+        assert_eq!(report["accounted_bytes"], owned_bytes);
+        assert_eq!(
+            report["malloc_large_blocks"]["may_overlap_accounted_bytes"],
+            true
+        );
+        #[cfg(target_os = "macos")]
+        assert!(report["malloc_large_blocks"]["bytes"].as_u64().unwrap() >= owned_bytes as u64);
     }
 
     #[test]

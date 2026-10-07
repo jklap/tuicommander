@@ -12,9 +12,9 @@ const { rpc, subscribePty, output } = vi.hoisted(() => ({
 	output: { text: "" },
 }));
 
-vi.mock("../../transport", () => ({ rpc, subscribePty }));
+vi.mock("../../transport", () => ({ rpc, subscribePty, isTauri: () => false }));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
-vi.mock("../../stores/appLogger", () => ({ appLogger: { warn: vi.fn(), error: vi.fn() } }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/ideas", () => ({ ideasStore: { hydrate: vi.fn() } }));
 vi.mock("../useSessions", () => ({
 	useSessions: () => ({
@@ -22,6 +22,7 @@ vi.mock("../useSessions", () => ({
 		loading: () => false,
 		refreshing: () => false,
 		error: () => null,
+		authError: () => false,
 		refresh: vi.fn(),
 		questionCount: () => 0,
 	}),

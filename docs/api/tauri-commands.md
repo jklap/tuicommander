@@ -1,5 +1,7 @@
 # Tauri Commands Reference
 
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+
 ## Workflow runs
 
 | Command | Parameters | Result | Description |
@@ -68,6 +70,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `list_worktrees` | -- | `Vec<JSON>` | List managed worktrees |
 | `get_session_foreground_process` | `session_id` | `JSON` | Get foreground process info |
 | `get_kitty_flags` | `session_id` | `u32` | Get Kitty keyboard protocol flags for session |
+| `get_prompt_receipt` | `session_id` | `PromptReceipt` | Read captured launch sections and observation gaps; async/blocking worker |
 | `get_last_prompt` | `session_id` | `Option<String>` | Get last user-typed prompt from input line buffer |
 | `get_shell_state` | `session_id` | `Option<String>` | Get current shell state ("busy", "idle", or null); agent-specific semantic Working markers can repair a transient false-idle state |
 | `has_foreground_process` | `session_id: String` | `bool` | Checks if a non-shell foreground process is running |
@@ -81,6 +84,7 @@ grid-cell coordinates. Both match the stored sequence without normalization.
 | `subscribe_terminal_grid` | `session_id, channel: Channel<Response>` | `u64` (epoch) | Register the grid-frame channel for the calling WebView and install a fresh delivery gate (counting from zero). Navigation or destruction releases only that WebView's subscriptions. Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
 | `ack_terminal_frame` | `session_id, epoch: u64, received: u64` | `()` | Report the total number of frames this client has received. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
 | `unsubscribe_terminal_grid` | `session_id, epoch: u64` | `()` | Tear down the grid channel and its gate. The pending scroll target is NOT torn down — it belongs to the session, so an attached browser keeps scrolling after the desktop terminal closes. A non-matching epoch is ignored: a remount subscribes before the outgoing instance unsubscribes, and honouring the stale call would blank a mounted terminal. Browser parity: closing the WS |
+| `chat_view_snapshot` | `session_id, epoch: Option<u64>, from_seq: Option<u64>` | `ChatViewSnapshot` | Chat view of a Claude terminal: transcript entries from the bound session file as ACP updates, with a bounded log, epoch and `reset` flag. Errors `not_bound: <reason>` for a terminal with no bound Claude agent. Browser parity: `GET /sessions/:id/chat-view` |
 | `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
 
 Every terminal grid **read** — the two rows above plus `terminal_get_block_rows`,
@@ -553,6 +557,7 @@ size }` receipt, and uses the same destination, cap, and cleanup rules.
 | `get_home_directory` | — | `String` | Return this machine's home directory for local or remote browsing |
 | `fs_read_file` | `path` | `String` | Read file contents |
 | `write_file` | `path, content` | `()` | Write file |
+| `write_file_if_unchanged` | `repo_path, file, expected, content` | `bool` | Write only when the file still equals `expected`; `false` = changed on disk, nothing written (mobile Markdown review) |
 | `create_directory` | `path` | `()` | Create directory |
 | `delete_path` | `path` | `()` | Delete file or directory |
 | `rename_path` | `src, dest` | `()` | Rename/move path |
@@ -785,10 +790,10 @@ Four rules hold this surface down:
 
 - The binary is the configured `ego_executable`, read per call. No argument
   names a program.
-- There is no key parameter. `model` is the only writable key and it is spelled
-  as its own operation, so a caller cannot reach `sandbox` or
+- There is no key parameter. Dedicated operations write only `model`, `roots`
+  and `network`, so a caller cannot reach `sandbox` or
   `permissions.judge` at all.
-- A value may not look like a flag, carry whitespace or a control character, or
+- A model value may not look like a flag, carry whitespace or a control character, or
   contain `"` or `\` — the last two would break out of ego's TOML string.
 - A failure carries what ego printed.
 
@@ -796,6 +801,28 @@ Four rules hold this surface down:
 |---------|------|---------|-------------|
 | `ego_providers` | `refresh?` | `EgoProviders` | `config ls --json` + `models --json` + `doctor --json`, joined. `refresh: true` adds `--refresh`, the only call that reaches a provider |
 | `ego_set_default_model` | `model` | `EgoProviders` | `config set model="<slug>"`, then a fresh read — the answer is what ego persisted, not what was sent |
+| `ego_perimeter` | -- | `PerimeterView` | Stored `config ls --json` plus `config ls --effective --json` in the AI Chat workspace/profile |
+| `ego_set_perimeter_roots` | `roots: {rootDir, rootAccess, readAllowlist, writableDirs}` | `PerimeterView` | Encode a typed `roots=[...]` assignment, run `config set --`, then read back |
+| `ego_set_perimeter_network` | `enabled: bool` | `PerimeterView` | `config set -- network="on"` or `network="off"`, then read back |
+
+Perimeter operations select `--profile` from `ego_profile` and cwd from
+`ai_chat_workspace` (empty means host HOME); that directory must exist. They
+remove ambient `EGO_PROFILE` so the preview matches the configured ACP profile.
+Path strings are TOML-encoded in Rust, never written to the TOML file by TUIC.
+Each allowlist is newline-delimited; the primary root is one path. `rootAccess`
+is `read` or `read-write`. Paths must be absolute or start with `~/`; limits are
+128 entries and 64 KiB of path input. Empty fields encode explicit `roots=[]`.
+The response contains the edit fields, `networkEnabled`, selected `profile`,
+`effective` (ego's original snake_case JSON schema), `execEnforcement`
+(`enforcedByOs`, `promptOnly`, `notChecked`), and a display-ready `preview`.
+Capability evidence remains exactly what ego reports: a measured string array
+or `not_checked`, with optional `capabilities_reason` and `probe_evidence`.
+Rust classifies the exec badge: `ro` needs `read_scoped` + `write_denied`,
+`workspace` needs `read_scoped` + `write_scoped`, and offline adds `no_ip_network`.
+An empty/partial measured set is Prompt only; unknown evidence is unverified.
+The measured form needs its probe reference. `off` + online is Prompt only,
+never a vacuous OS-enforcement success. Headless inspection currently has no
+measurement, so it reports not checked and its reason.
 
 All three reads must succeed. A partial answer would render as a tab silently
 missing one of the three things it exists to show.
@@ -826,3 +853,19 @@ OSC 133 event `line` and hook-generated `UserInput.line` use all-time rows. `ter
 - `telegram_setup { change }`: `change.action` is `token` (password `token`, checks `getMe`), `pair` (returns `code`, `expires_in_seconds`), `add_chat`/`remove_chat` (`chat_id`), or `configure` (`enabled`). Errors are typed safe Telegram categories.
 
 The daemon executor now owns recovery and duration timers under an OS run-database lock. Reads never recover live work, and a non-owner daemon refuses run mutations. Graph resume uses `resume_graph {execution_id,activation_id,resolution}` with an explicit pending activation; status-only resume cannot bypass graph position. Graph start controls, Agent effects and delivery policy remain unavailable until their later slices.
+
+`acp_session_fork` accepts optional `atMessageId`, with the same behavior as the ACP HTTP fork route. Capability snapshots expose `forkAtMessage` separately from tip fork support.
+
+`acp_session_list` uses the same complete ancestry projection as HTTP: original ego lineage plus `_meta.tuicommander.lineageDepth` and disabled deleted-parent placeholders.
+
+`workflow_run_action` also accepts the read-only `incidents` action with `run_id`. It returns the same project-scoped camelCase incident entries as `POST /workflows/run/action`; see the HTTP API run incident projection.
+
+### `acp_chat_open`
+
+Arguments: `{ request: { sessionId?, profile?, workspace?, executable? } }`. Returns `{ connection, sessionId, launch, replayed }`. Creates a conversation with its own durable launch options, or reopens the saved `sessionId`. HTTP equivalent: `POST /acp/chat/open` with the request object as the body. Global ACP connect defaults remain unchanged.
+
+MCP `session action=declare_worktree` is intentionally not a Tauri command. It
+requires a bound managed caller, which window IPC does not supply. Call it via
+HTTP `POST /mcp`. Its `session-worktree-declared` push is also emitted to Tauri;
+`list_active_sessions` and HTTP `GET /sessions` report the persisted declaration
+in their existing worktree fields. See [MCP backend](../backend/mcp-http.md).

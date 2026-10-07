@@ -16,6 +16,11 @@ When you click a non-main branch in the sidebar:
 
 Main branches (main, master, develop) use the original repository directory — no worktree is created.
 
+When an agent creates a worktree without spawning a separate session, its tab
+stays associated with that worktree during repository refreshes. This changes
+sidebar placement while preserving the shell's working directory. An explicit
+worktree declaration also survives restart when a saved agent tab is restored.
+
 ## Worktree Storage Strategies
 
 Configure where worktrees are stored (Settings → Git & GitHub → Worktree Defaults → Storage):
@@ -179,6 +184,8 @@ Also available via **Command Palette** — type "move to worktree" to see availa
 - **Right-click → Delete Worktree** — Context menu option
 - Both prompt for confirmation
 
+Cancelling or failing the initial confirmation keeps the workspace and its terminals. You can retry removal; duplicate requests for the same workspace remain serialized.
+
 Removing a worktree:
 1. Closes all terminals associated with that branch
 2. Checks checkout and submodule state, restores owner write permission inside the worktree, then runs `git worktree remove` to clean up; a clean populated submodule needs one `--force` after a fresh safety check. If permission repair fails, the checkout stays registered and the error names its path. If Git unregisters the checkout but leaves files behind, TUICommander finishes removing that known checkout before it can delete the branch. If that cleanup fails, the error names the remaining directory.
@@ -283,3 +290,7 @@ When you switch branches:
 Force-deleting a branch preserves its tip at `refs/archive/<branch>`. It refuses a branch checked out in any worktree and never replaces a different existing archive: a reused branch name is archived as `refs/archive/<branch>-<sha7>`.
 
 Worktree names that sanitize to an existing checkout name produce an error when they target a different branch. TUICommander keeps that checkout and its uncommitted files.
+
+Automatic sidebar refreshes are spaced at least five seconds apart for each repository. Changes during that window are collected into one refresh at its end, so the final update is retained. Badges can lag by five seconds plus the time needed to read Git state.
+
+Explicit repository additions, branch checkouts and merge cleanup refresh the affected repository immediately, while still waiting for any active refresh to finish.

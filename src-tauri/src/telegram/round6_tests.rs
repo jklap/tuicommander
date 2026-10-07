@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use super::*;
 
 // Catches: phone authority transfers from Claude to Codex when foreground

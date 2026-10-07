@@ -5,7 +5,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, Uri, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use std::net::IpAddr;
+use std::collections::HashSet;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -44,10 +45,60 @@ fn own_hostnames() -> Vec<String> {
     vec![format!("{host}.local"), host]
 }
 
+/// Rejection log keys kept before the set restarts; bounds memory against a
+/// client that varies its Host or Origin on every request.
+const MAX_LOGGED_REJECTIONS: usize = 256;
+
+/// Longest Host or Origin value written to the log.
+const MAX_LOGGED_VALUE: usize = 200;
+
 pub(super) struct RequestBoundary {
     local_ips: Vec<String>,
-    hostnames: Vec<String>,
     state: Arc<AppState>,
+    logged: parking_lot::Mutex<HashSet<(&'static str, String, String)>>,
+}
+
+/// An Origin is the page's scheme and authority, with the scheme's default port
+/// left out. A Host header may carry that port, and hosts compare ignoring case.
+fn same_origin_authority(origin: &str, host: &str) -> bool {
+    let Some((scheme, authority)) = origin.split_once("://") else {
+        return false;
+    };
+    let default_port = match scheme {
+        "http" => ":80",
+        "https" => ":443",
+        _ => return false,
+    };
+    let bare = |authority: &str| {
+        let authority = authority.to_ascii_lowercase();
+        authority
+            .strip_suffix(default_port)
+            .map_or_else(|| authority.clone(), str::to_string)
+    };
+    bare(authority) == bare(host)
+}
+
+/// A top-level page load. The browser sets these headers itself and a page
+/// cannot read the response of a navigation, so a link from another site or
+/// app may open the mobile app.
+fn is_document_navigation(req: &Request<axum::body::Body>) -> bool {
+    let header_is = |name: &str, value: &str| req.headers().get(name).is_some_and(|v| v == value);
+    matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD
+    ) && header_is("sec-fetch-mode", "navigate")
+        && header_is("sec-fetch-dest", "document")
+}
+
+fn loggable(value: Option<&HeaderValue>) -> String {
+    let text = value.map_or_else(
+        || "-".to_string(),
+        |v| v.to_str().unwrap_or("<non-ascii>").to_string(),
+    );
+    format!(
+        "{:?}",
+        text.chars().take(MAX_LOGGED_VALUE).collect::<String>()
+    )
 }
 
 impl RequestBoundary {
@@ -57,8 +108,8 @@ impl RequestBoundary {
                 .into_iter()
                 .map(|e| e.ip)
                 .collect(),
-            hostnames: own_hostnames(),
             state,
+            logged: Default::default(),
         })
     }
 
@@ -84,10 +135,15 @@ impl RequestBoundary {
                 .parse::<IpAddr>()
                 .is_ok_and(|ip| ip.is_loopback() || is_private_ip(&ip))
             || self.local_ips.iter().any(|ip| ip == name)
-            || self.hostnames.iter().any(|h| name.eq_ignore_ascii_case(h))
+            // Read per request: macOS changes the hostname with the network.
+            || own_hostnames().iter().any(|h| name.eq_ignore_ascii_case(h))
             || matches!(&*self.state.tailscale_state.read(),
                 crate::tailscale::TailscaleState::Running { fqdn, .. }
-                    if name.eq_ignore_ascii_case(fqdn));
+                    if name.eq_ignore_ascii_case(fqdn)
+                        || fqdn
+                            .split('.')
+                            .next()
+                            .is_some_and(|short| name.eq_ignore_ascii_case(short)));
         allowed.then(|| host.to_string())
     }
 
@@ -95,9 +151,37 @@ impl RequestBoundary {
         let Ok(origin) = origin.to_str() else {
             return false;
         };
-        APP_ORIGINS.contains(&origin)
-            || origin == format!("http://{host}")
-            || origin == format!("https://{host}")
+        APP_ORIGINS.contains(&origin) || same_origin_authority(origin, host)
+    }
+
+    /// Log a rejection once per (reason, host, origin): enough to name the
+    /// failing client, never the URL, so a `?token=` cannot reach the log.
+    fn log_rejection(&self, reason: &'static str, req: &Request<axum::body::Body>) {
+        // HTTP/2 carries the authority in the URI and sends no Host header.
+        let host = match req.headers().get(header::HOST) {
+            Some(host) => loggable(Some(host)),
+            None => format!("{:?}", req.uri().authority().map(|a| a.as_str())),
+        };
+        let origin = loggable(req.headers().get(header::ORIGIN));
+        {
+            let mut logged = self.logged.lock();
+            if logged.len() >= MAX_LOGGED_REJECTIONS {
+                logged.clear();
+            }
+            if !logged.insert((reason, host.clone(), origin.clone())) {
+                return;
+            }
+        }
+        tracing::warn!(
+            source = "mcp_http",
+            reason,
+            host,
+            origin,
+            sec_fetch_site = loggable(req.headers().get("sec-fetch-site")),
+            sec_fetch_mode = loggable(req.headers().get("sec-fetch-mode")),
+            peer = ?req.extensions().get::<axum::extract::ConnectInfo<SocketAddr>>().map(|c| c.0),
+            "Request rejected before auth"
+        );
     }
 
     pub(super) fn cors(self: &Arc<Self>) -> CorsLayer {
@@ -130,23 +214,34 @@ pub(super) async fn check(
     next: Next,
 ) -> Response {
     let Some(host) = boundary.allowed_host(req.headers(), req.uri()) else {
+        boundary.log_rejection("untrusted-host", &req);
         return (StatusCode::FORBIDDEN, "Untrusted Host").into_response();
     };
     let origins = req.headers().get_all(header::ORIGIN);
-    if origins.iter().count() > 1
-        || origins
-            .iter()
-            .any(|origin| !boundary.allowed_origin(origin, &host))
-        || (req
-            .headers()
-            .get("sec-fetch-site")
-            .is_some_and(|site| site == "cross-site")
-            && !req
-                .headers()
-                .get(header::ORIGIN)
-                .and_then(|origin| origin.to_str().ok())
-                .is_some_and(|origin| APP_ORIGINS.contains(&origin)))
+    let reason = if origins.iter().count() > 1 {
+        Some("multiple-origins")
+    } else if origins
+        .iter()
+        .any(|origin| !boundary.allowed_origin(origin, &host))
     {
+        Some("origin-not-host")
+    } else if req
+        .headers()
+        .get("sec-fetch-site")
+        .is_some_and(|site| site == "cross-site")
+        && !req
+            .headers()
+            .get(header::ORIGIN)
+            .and_then(|origin| origin.to_str().ok())
+            .is_some_and(|origin| APP_ORIGINS.contains(&origin))
+        && (!is_document_navigation(&req) || req.headers().contains_key(header::ORIGIN))
+    {
+        Some("cross-site")
+    } else {
+        None
+    };
+    if let Some(reason) = reason {
+        boundary.log_rejection(reason, &req);
         return (StatusCode::FORBIDDEN, "Untrusted Origin").into_response();
     }
     next.run(req).await
@@ -359,6 +454,173 @@ mod tests {
                 "{case}"
             );
         }
+    }
+
+    fn token_get(host: &str, origin: Option<&str>) -> Request<Body> {
+        let mut req = request(
+            "/api/auth/session-token",
+            host,
+            origin,
+            true,
+            [100, 64, 0, 3],
+        );
+        *req.method_mut() = axum::http::Method::GET;
+        req
+    }
+
+    /// Catches #untrusted-origin: a Host that spells the same origin differently
+    /// (case, or the scheme's default port) answered 403 "Untrusted Origin", while
+    /// a different port or scheme stays rejected.
+    #[tokio::test]
+    async fn origin_matches_host_ignoring_case_and_default_port() {
+        let app = super::super::build_router(state(), true, true);
+        for (host, origin, expected) in [
+            ("LOCALHOST:9876", "http://localhost:9876", StatusCode::OK),
+            ("192.168.1.2:80", "http://192.168.1.2", StatusCode::OK),
+            ("192.168.1.2:443", "https://192.168.1.2", StatusCode::OK),
+            (
+                "192.168.1.2:9876",
+                "http://192.168.1.2:9877",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "192.168.1.2:9876",
+                "http://192.168.1.2:80",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "192.168.1.2:80",
+                "https://192.168.1.2",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                "192.168.1.2:9876",
+                "ftp://192.168.1.2:9876",
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(token_get(host, Some(origin)))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{host} {origin}");
+        }
+    }
+
+    /// Catches a link from another site or app (Sec-Fetch-Site: cross-site, no
+    /// Origin) answering "Untrusted Origin" instead of opening the app, and the
+    /// exemption widening to fetches, frames or writes.
+    #[tokio::test]
+    async fn cross_site_navigation_opens_the_app_but_cross_site_fetch_does_not() {
+        let app = super::super::build_router(state(), true, true);
+        for (method, mode, dest, expected_forbidden) in [
+            ("GET", "navigate", "document", false),
+            ("HEAD", "navigate", "document", false),
+            ("GET", "cors", "empty", true),
+            ("GET", "no-cors", "image", true),
+            ("GET", "navigate", "iframe", true),
+            ("POST", "navigate", "document", true),
+        ] {
+            let mut req = token_get("100.64.0.2:9876", None);
+            *req.method_mut() = method.parse().unwrap();
+            req.headers_mut()
+                .insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+            req.headers_mut()
+                .insert("sec-fetch-mode", HeaderValue::from_static(mode));
+            req.headers_mut()
+                .insert("sec-fetch-dest", HeaderValue::from_static(dest));
+            let status = app.clone().oneshot(req).await.unwrap().status();
+            assert_eq!(
+                status == StatusCode::FORBIDDEN,
+                expected_forbidden,
+                "{method} {mode} {dest}"
+            );
+        }
+    }
+
+    /// Catches the Tailscale short name (MagicDNS) answering "Untrusted Host" once
+    /// the macOS hostname no longer equals the node name, and a foreign single
+    /// label being accepted with it.
+    #[tokio::test]
+    async fn tailscale_short_name_is_trusted_while_running() {
+        let state = state();
+        *state.tailscale_state.write() = crate::tailscale::TailscaleState::Running {
+            fqdn: "node-x.tail1.ts.net".into(),
+            https_enabled: false,
+        };
+        let app = super::super::build_router(state, true, true);
+        for (host, expected) in [
+            ("node-x:9876", StatusCode::OK),
+            ("node-x.tail1.ts.net:9876", StatusCode::OK),
+            ("other:9876", StatusCode::FORBIDDEN),
+        ] {
+            let status = app
+                .clone()
+                .oneshot(token_get(host, None))
+                .await
+                .unwrap()
+                .status();
+            assert_eq!(status, expected, "{host}");
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct LogSink(Arc<parking_lot::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogSink {
+        type Writer = LogSink;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Catches a rejection that leaves no trace (the next "Untrusted Origin" stays
+    /// undiagnosable), a repeat flooding the log, and the `?token=` of the request
+    /// URL reaching it.
+    #[tokio::test]
+    async fn rejection_is_logged_once_per_reason_host_and_origin_without_the_token() {
+        let sink = LogSink::default();
+        let _guard = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(sink.clone())
+                .with_ansi(false)
+                .finish(),
+        );
+        let app = super::super::build_router(state(), true, true);
+        for origin in [
+            "http://evil.example",
+            "http://evil.example",
+            "http://evil.example",
+            "http://other.example",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(token_get("100.64.0.2:9876", Some(origin)))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        let log = String::from_utf8(sink.0.lock().clone()).unwrap();
+        assert_eq!(
+            log.matches("Request rejected before auth").count(),
+            2,
+            "{log}"
+        );
+        assert!(log.contains("origin-not-host"), "{log}");
+        assert!(log.contains("100.64.0.2:9876"), "{log}");
+        assert!(log.contains("evil.example"), "{log}");
+        assert!(!log.contains("boundary-token"), "{log}");
     }
 
     /// Catches putting auth/health/preflight outside the origin boundary on the daemon.

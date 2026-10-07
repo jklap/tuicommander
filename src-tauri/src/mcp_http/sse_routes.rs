@@ -290,6 +290,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyCwd { .. } => "pty-cwd",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
+        AppEvent::ChatViewChanged { .. } => "chat-view-changed",
         AppEvent::SessionRenamed { .. } => "session-renamed",
         AppEvent::SessionSuspendRequested { .. } => "session-suspend-requested",
         AppEvent::TermAliasAssigned { .. } => "term-alias-assigned",
@@ -302,6 +303,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::AcpNotice(_) => "acp-notice",
         AppEvent::RepositoriesChanged => "repositories-changed",
         AppEvent::DirChanged { .. } => "dir-changed",
+        AppEvent::SessionWorktreeDeclared { .. } => "session-worktree-declared",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
         AppEvent::WorktreeRemoved { .. } => "worktree-removed",
         AppEvent::PeerRegistered { .. } => "peer-registered",
@@ -403,6 +405,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         AppEvent::PluginWatcherLines { session_id, lines } => {
             serde_json::json!({ "session_id": session_id, "lines": lines })
         }
+        AppEvent::ChatViewChanged { session_id, seq } => {
+            serde_json::json!({ "session_id": session_id, "seq": seq })
+        }
         AppEvent::PtyDescriptionChanged {
             session_id,
             description,
@@ -486,6 +491,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         // Forwarded whole, like `AcpNotice`: the desktop `emit` in
         // `notify_worktree_created`/`notify_worktree_removed` serializes this
         // same struct, so the two transports cannot spell a field differently.
+        AppEvent::SessionWorktreeDeclared(payload) => serde_json::json!(payload),
         AppEvent::WorktreeCreated(payload) => serde_json::json!(payload),
         AppEvent::WorktreeRemoved(payload) => serde_json::json!(payload),
         AppEvent::PeerRegistered { tuic_session, name } => {

@@ -285,7 +285,7 @@ pub fn secrets_in(text: &str) -> Vec<String> {
 /// every character (`ghp_…s \r\x1b[Kt\rtuvw…`, `g\x1b[Ch\x1b[Cp…`): no pattern
 /// matches the pieces, so runs are looked up in the control-stripped text and
 /// cut out of the original, escapes between them included.
-pub fn scrub_fragments(raw: &str, known: &[String]) -> String {
+fn fragment_ranges(raw: &str, known: &[String]) -> Vec<(usize, usize)> {
     let stripped = strip_controls(raw);
     let secrets = known.iter().map(String::as_str);
     let mut marked = vec![false; stripped.spans.len()];
@@ -306,8 +306,7 @@ pub fn scrub_fragments(raw: &str, known: &[String]) -> String {
             }
         }
     }
-    let mut out = String::with_capacity(raw.len());
-    let mut copied = 0;
+    let mut ranges = Vec::new();
     let mut i = 0;
     while i < marked.len() {
         if !marked[i] {
@@ -318,13 +317,48 @@ pub fn scrub_fragments(raw: &str, known: &[String]) -> String {
         while last + 1 < marked.len() && marked[last + 1] {
             last += 1;
         }
-        out.push_str(&raw[copied..stripped.spans[i].0]);
-        out.push_str("[REDACTED]");
-        copied = stripped.spans[last].1;
+        ranges.push((stripped.spans[i].0, stripped.spans[last].1));
         i = last + 1;
+    }
+    ranges
+}
+
+/// Scrub known secret fragments from a complete raw stream.
+pub fn scrub_fragments(raw: &str, known: &[String]) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut copied = 0;
+    for (start, end) in fragment_ranges(raw, known) {
+        out.push_str(&raw[copied..start]);
+        out.push_str("[REDACTED]");
+        copied = end;
     }
     out.push_str(&raw[copied..]);
     out
+}
+
+/// Mask secrets before paging, keeping every source byte position unchanged.
+///
+/// Pattern and fragment matching see the complete retained context. Replacing
+/// each sensitive byte with `*` prevents tiny pages from reconstructing a token.
+pub fn mask_raw_context(raw: &str, known: &[String]) -> String {
+    let mut bytes = raw.as_bytes().to_vec();
+    for (pattern, replacement) in PATTERNS.iter() {
+        for captures in pattern.captures_iter(raw) {
+            let matched = captures.get(0).expect("matched pattern");
+            let start = if replacement.starts_with(KEEP_PREFIX) {
+                captures
+                    .get(1)
+                    .map_or(matched.start(), |prefix| prefix.end())
+            } else {
+                matched.start()
+            };
+            bytes[start..matched.end()].fill(b'*');
+        }
+    }
+    for (start, end) in fragment_ranges(raw, known) {
+        bytes[start..end].fill(b'*');
+    }
+    String::from_utf8(bytes).expect("mask ranges cover whole UTF-8 characters")
 }
 
 #[cfg(test)]

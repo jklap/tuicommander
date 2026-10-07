@@ -55,13 +55,39 @@ describe("touch stylesheet contract (#1329-a31a)", () => {
 		expect(value).toBe("pan-x pan-y pinch-zoom");
 	});
 
-	// Catches: the branch + (and its long-press agent list) hidden behind :hover
-	// and therefore unreachable on a tablet.
-	it("sidebar branch actions are visible and hit-testable on a touch device", () => {
+	// Catches: the swipe-revealed tray (replaces the always-visible touch actions)
+	// staying hidden or non-interactive once the row is swiped open, and the legacy
+	// hover actions leaking into the touch row next to it.
+	it("sidebar branch actions are visible and hit-testable once the row is swiped open on a touch device", () => {
 		addCss(css("components/Sidebar/Sidebar.module.css"));
-		document.body.innerHTML = '<div class="branchActions"></div>';
-		const style = getComputedStyle(document.querySelector(".branchActions") as HTMLElement);
-		expect(style.opacity).toBe("1");
-		expect(style.pointerEvents).toBe("auto");
+		document.body.innerHTML =
+			'<div class="sidebar" data-density="compact"><div class="branchSwipeRow branchSwipeOpen" data-touch="true">' +
+			'<div class="branchActions"></div><div class="branchSwipeActions"><button class="branchMoreBtn"></button></div>' +
+			"</div></div>";
+		const tray = getComputedStyle(document.querySelector(".branchSwipeActions") as HTMLElement);
+		expect(tray.display).toBe("flex");
+		expect(["", "1"]).toContain(tray.opacity);
+		expect(["", "auto"]).toContain(tray.pointerEvents);
+		const button = getComputedStyle(document.querySelector(".branchMoreBtn") as HTMLElement);
+		expect(button.display).toBe("flex");
+		expect(getComputedStyle(document.querySelector(".branchActions") as HTMLElement).display).toBe("none");
+	});
+
+	// Catches: attach/send buttons staying vertically centred when the mobile
+	// composer grows to several lines, instead of sticking to the bottom edge.
+	it("mobile command composer row aligns its buttons to the bottom of a growing input", () => {
+		addCss(css("mobile/components/CommandInput.module.css"));
+		document.body.innerHTML =
+			'<div class="form"><button class="attach"></button><textarea class="input"></textarea><button class="send"></button></div>';
+		expect(getComputedStyle(document.querySelector(".form") as HTMLElement).alignItems).toBe("flex-end");
+	});
+
+	// Catches: the AI Chat composer row (shared by the mobile chat screen) centring
+	// its Park/Send buttons against a multi-line textarea.
+	it("AI chat composer row aligns its buttons to the bottom of a growing textarea", () => {
+		addCss(css("components/AIChatPanel/AIChatPanel.module.css"));
+		document.body.innerHTML =
+			'<div class="inputArea"><div class="inputBody"><textarea class="textarea"></textarea></div><button class="sendBtn"></button></div>';
+		expect(getComputedStyle(document.querySelector(".inputArea") as HTMLElement).alignItems).toBe("flex-end");
 	});
 });

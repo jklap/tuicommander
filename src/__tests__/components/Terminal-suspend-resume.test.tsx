@@ -1,12 +1,18 @@
 import { render, waitFor } from "@solidjs/testing-library";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { createSession, resize, sendCommand, mockRpc, ptyOptions, mockVerifyResume } = vi.hoisted(() => ({
 	createSession: vi.fn().mockResolvedValue("fresh-session"),
 	resize: vi.fn().mockResolvedValue(undefined),
 	sendCommand: vi.fn().mockResolvedValue(undefined),
 	mockRpc: vi.fn(),
-	ptyOptions: new Map<string, { onParsed?: (frame: { type: string; event: unknown }) => void }>(),
+	ptyOptions: new Map<
+		string,
+		{
+			onStateChange?: (state: Record<string, unknown>) => void;
+			onParsed?: (frame: { type: string; event: unknown }) => void;
+		}
+	>(),
 	mockVerifyResume: vi.fn(),
 }));
 
@@ -121,5 +127,53 @@ describe("Resume of a suspended agent tab", () => {
 		expect(sendCommand).toHaveBeenCalledTimes(1);
 		expect(sendCommand).toHaveBeenCalledWith("fresh-session", "claude --resume agent-uuid", null);
 		expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ agent_type: "claude" }));
+	});
+});
+
+describe("Pending agent launch readiness", () => {
+	const openedTabs: string[] = [];
+	afterEach(() => {
+		for (const id of openedTabs.splice(0)) terminalsStore.remove(id);
+	});
+	beforeEach(() => {
+		sendCommand.mockClear().mockResolvedValue(undefined);
+		resize.mockClear().mockResolvedValue(undefined);
+		mockRpc.mockReset().mockResolvedValue(undefined);
+		ptyOptions.clear();
+	});
+
+	// Catches: asynchronous command preparation completes after the only idle event.
+	it("launches once when the command becomes ready after the shell is idle", async () => {
+		const id = openIdleAgentTab();
+		openedTabs.push(id);
+		await waitFor(() => expect(ptyOptions.has("live-session")).toBe(true));
+		terminalsStore.update(id, { pendingInitCommand: "claude" });
+		await waitFor(() => expect(sendCommand).toHaveBeenCalledWith("live-session", "claude", null));
+		shellIdle("live-session");
+		expect(sendCommand).toHaveBeenCalledTimes(1);
+	});
+
+	// Catches: the remote prompt predates subscription and only its WS snapshot remains.
+	it("launches from an idle state snapshot without a parsed prompt event", async () => {
+		const id = openIdleAgentTab();
+		openedTabs.push(id);
+		await waitFor(() => expect(ptyOptions.has("live-session")).toBe(true));
+		terminalsStore.update(id, { shellState: null, pendingInitCommand: "claude" });
+		expect(sendCommand).not.toHaveBeenCalled();
+		ptyOptions.get("live-session")?.onStateChange?.({ shell_state: "idle" });
+		await waitFor(() => expect(sendCommand).toHaveBeenCalledWith("live-session", "claude", null));
+		ptyOptions.get("live-session")?.onStateChange?.({ shell_state: "idle" });
+		expect(sendCommand).toHaveBeenCalledTimes(1);
+	});
+
+	// Catches: pending launch input is typed into a running shell command.
+	it("keeps the pending command until the busy shell becomes idle", async () => {
+		const id = openIdleAgentTab();
+		openedTabs.push(id);
+		await waitFor(() => expect(ptyOptions.has("live-session")).toBe(true));
+		terminalsStore.update(id, { shellState: "busy", pendingInitCommand: "claude" });
+		expect(sendCommand).not.toHaveBeenCalled();
+		shellIdle("live-session");
+		await waitFor(() => expect(sendCommand).toHaveBeenCalledWith("live-session", "claude", null));
 	});
 });

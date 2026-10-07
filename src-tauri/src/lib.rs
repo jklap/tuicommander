@@ -5,6 +5,7 @@
 )]
 
 pub mod acp;
+pub(crate) mod acp_chat;
 pub(crate) mod acp_commands;
 pub(crate) mod agent;
 pub(crate) mod agent_hook;
@@ -19,6 +20,7 @@ pub(crate) mod ai_agent;
 pub(crate) mod attachments;
 #[cfg(feature = "desktop")]
 pub(crate) mod audio_enumeration;
+pub(crate) mod prompt_receipt;
 pub use tuic_core::app_instance;
 pub(crate) mod app_logger;
 pub(crate) mod changelog;
@@ -121,6 +123,7 @@ pub(crate) mod pty;
 pub(crate) mod pty_capture;
 pub(crate) mod push;
 pub(crate) use tuic_core::redaction;
+pub(crate) mod chat_view;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
 #[allow(dead_code)] // Constructors used by remote binary and future tests
@@ -146,6 +149,7 @@ pub(crate) mod tasks;
     reason = "Telegram offline ports await native integration after 1419/1420"
 )]
 pub(crate) mod telegram;
+pub(crate) mod transcript_tail;
 pub(crate) use tuic_terminal::terminal_grid;
 #[cfg(test)]
 mod build_graph_tests;
@@ -472,6 +476,22 @@ async fn progress_flow(
     input: progress::ProgressFlowInput,
 ) -> Result<progress::ProgressFlow, String> {
     progress::progress_flow_blocking(state.inner().clone(), project, input).await
+}
+#[cfg(feature = "desktop")]
+#[tauri::command]
+async fn chat_view_snapshot(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    epoch: Option<u64>,
+    from_seq: Option<u64>,
+) -> Result<chat_view::ChatViewSnapshot, String> {
+    chat_view::chat_view_snapshot_blocking(
+        state.inner().clone(),
+        session_id,
+        epoch,
+        from_seq.unwrap_or(0),
+    )
+    .await
 }
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -1973,6 +1993,7 @@ pub fn run() {
             pty::resume_pty,
             pty::get_kitty_flags,
             pty::get_last_prompt,
+            prompt_receipt::get_prompt_receipt,
             pty::get_shell_state,
             pty::get_session_shell_family,
             pty::close_pty,
@@ -2162,6 +2183,7 @@ pub fn run() {
             progress_mark_viewed,
             progress_flow,
             progress_flow_detail,
+            chat_view_snapshot,
             story_action_command,
             story_capabilities,
             workflow_definition_action,
@@ -2323,6 +2345,7 @@ pub fn run() {
             fs::search_content_all,
             fs::fs_read_file,
             fs::write_file,
+            fs::write_file_if_unchanged,
             fs::create_directory,
             fs::delete_path,
             fs::rename_path,
@@ -2405,6 +2428,7 @@ pub fn run() {
             design_mode::tauri_commands::get_design_mode_status,
             acp_commands::acp_workspace_root,
             acp_commands::acp_connect,
+            acp_chat::acp_chat_open,
             acp_commands::acp_reconnect,
             acp_commands::acp_disconnect,
             acp_commands::acp_kill,
@@ -2429,6 +2453,9 @@ pub fn run() {
             acp_commands::acp_respond_elicitation,
             acp_commands::acp_one_shot_prompt,
             ego_cli::ego_providers,
+            ego_cli::perimeter::ego_perimeter,
+            ego_cli::perimeter::ego_set_perimeter_roots,
+            ego_cli::perimeter::ego_set_perimeter_network,
             ego_cli::ego_set_default_model
         ])
         .build(tauri::generate_context!())

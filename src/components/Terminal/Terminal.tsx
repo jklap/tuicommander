@@ -1,4 +1,15 @@
-import { type Component, createEffect, createSignal, lazy, on, onCleanup, onMount, Show, Suspense } from "solid-js";
+import {
+	type Component,
+	createEffect,
+	createSignal,
+	lazy,
+	on,
+	onCleanup,
+	onMount,
+	Show,
+	Suspense,
+	untrack,
+} from "solid-js";
 import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
@@ -32,6 +43,7 @@ import { handleIntentEvent, shouldApplyOscTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
 import { trackQuestionReminder } from "./questionReminder";
 import s from "./Terminal.module.css";
+import { ChatViewFallbackBanner, TerminalChatView, ViewModeToggle } from "./TerminalChatView";
 import { TerminalSearch } from "./TerminalSearch";
 import {
 	REATTACH_PHASE_INITIAL,
@@ -182,6 +194,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	let containerRef: HTMLDivElement | undefined;
 	let sessionId: string | null = null;
 	const [_currentSessionId, setCurrentSessionId] = createSignal<string | null>(null);
+	// Without a session there is nothing to read, so the grid (and its exit notice) stays on screen.
+	const chatActive = () => terminalsStore.get(props.id)?.viewMode === "chat" && _currentSessionId() !== null;
 	const [spawnError, setSpawnError] = createSignal<string | null>(null);
 
 	const [canvasTerminalRef, setCanvasTerminalRef] = createSignal<CanvasTerminalRef | undefined>();
@@ -300,6 +314,21 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	let originalName: string | null = null;
 
 	const pty = usePty();
+
+	// Launch readiness can arrive before or after command preparation. State
+	// snapshots also carry idle when the first prompt predates subscription.
+	createEffect(() => {
+		const terminal = terminalsStore.get(props.id);
+		const targetSessionId = terminal?.sessionId;
+		const command = terminal?.pendingInitCommand;
+		if (disposed || !targetSessionId || !command || terminal.shellState !== "idle") return;
+		untrack(() => {
+			terminalsStore.update(props.id, { pendingInitCommand: null });
+			pty
+				.sendCommand(targetSessionId, command, null)
+				.catch((error) => appLogger.error("terminal", "Failed to write init command", { error: String(error) }));
+		});
+	});
 
 	/** Track PTY activity for the activity dashboard. CanvasTerminal handles
 	 *  rendering and plugin dispatch; this callback only updates store metadata.
@@ -546,17 +575,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					if (parsed.state === "idle") {
 						// Idle arrives first; any parked `suggest:` items follow on a later
 						// silence-timer tick (backend-gated). No promotion logic needed here.
-						const pendingT = terminalsStore.get(props.id);
-						const initCmd = pendingT?.pendingInitCommand;
-						terminalsStore.update(props.id, {
-							shellState: parsed.state,
-							...(initCmd ? { pendingInitCommand: null } : {}),
-						});
-						if (initCmd && targetSessionId) {
-							pty
-								.sendCommand(targetSessionId, initCmd, null)
-								.catch((e) => appLogger.error("terminal", "Failed to write init command", { error: String(e) }));
-						}
+						terminalsStore.update(props.id, { shellState: parsed.state });
 						// Idle: detect agent immediately — only idle can clear a detected agent
 						detectAgentForTerminal(props.id, "idle").catch((err) =>
 							appLogger.warn("terminal", "[AgentDetect] unexpected error", { error: String(err), termId: props.id }),
@@ -1270,6 +1289,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					canvasTerminalRef()?.focus();
 				}}
 			/>
+			<ViewModeToggle terminalId={props.id} />
+			<ChatViewFallbackBanner terminalId={props.id} />
 			<Show
 				when={
 					settingsStore.state.showLastPrompt &&
@@ -1313,7 +1334,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					</button>
 				</div>
 			</Show>
-			<div ref={containerRef} class={s.content}>
+			{/* Chat mode HIDES the grid (display:none, the background-tab path) and never
+			    unmounts it: a disposed CanvasTerminal under a queued frame event froze the UI. */}
+			<div ref={containerRef} class={s.content} classList={{ [s.contentHidden]: chatActive() }}>
 				{/* keyed: pass sessionId as a stable string value, NOT the Show's reactive
 				    accessor. CanvasTerminal's onFrame (and ~35 other async IPC handlers) re-read
 				    props.sessionId on every backend frame. With a non-keyed Show, props.sessionId
@@ -1407,6 +1430,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					)}
 				</Show>
 			</div>
+			<Show keyed when={chatActive() ? _currentSessionId() : null}>
+				{(sid) => <TerminalChatView terminalId={props.id} sessionId={sid} />}
+			</Show>
 			<Show when={!composeOpen()}>
 				<div
 					class={s.composeHint}
