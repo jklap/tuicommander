@@ -91,7 +91,9 @@ async function cacheFirstAsset(request) {
   const hit = await cache.match(request);
   if (hit) return hit;
   const response = await fetch(request);
-  if (response.ok) {
+  // A pruned chunk gets the SPA fallback (HTML, 200); caching it would pin the wrong body for that URL.
+  const isHtml = (response.headers?.get("content-type") || "").includes("text/html");
+  if (response.ok && !isHtml) {
     await cache.put(request, response.clone());
     await trimAssets(cache);
   }

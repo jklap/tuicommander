@@ -97,6 +97,31 @@ describe("service worker asset cache", () => {
 		await expect(run()).resolves.toMatchObject({ cloned: true });
 	});
 
+	// Plausible bug: a pruned chunk gets the SPA fallback (HTML, 200); caching it serves HTML as JS for that URL forever.
+	it("does not cache an HTML response for an asset URL", async () => {
+		const listeners: Record<string, Listener> = {};
+		const put = vi.fn();
+		const cache = { put, match: async () => undefined, keys: async () => [], delete: async () => true };
+		const caches = { open: async () => cache, match: async () => undefined, keys: async () => [] };
+		const self = {
+			location: { origin: "http://tuic.test:9876" },
+			addEventListener: (n: string, f: Listener) => void (listeners[n] = f),
+		};
+		const fetchStub = vi.fn(async () => ({
+			ok: true,
+			headers: new Headers({ "content-type": "text/html; charset=utf-8" }),
+			clone: () => ({}),
+		}));
+		new Function("self", "caches", "fetch", "clients", "crypto", source)(self, caches, fetchStub, {}, {});
+		let pending: Promise<unknown> | undefined;
+		listeners.fetch({
+			request: { method: "GET", url: "http://tuic.test:9876/assets/pruned-abc.js", mode: "cors" },
+			respondWith: (p: Promise<unknown>) => void (pending = p),
+		});
+		await pending;
+		expect(put).not.toHaveBeenCalled();
+	});
+
 	// Plausible bug: unbounded growth, every rebuild leaves its old hashed files behind.
 	it("keeps at most 200 assets", async () => {
 		const listeners: Record<string, Listener> = {};
