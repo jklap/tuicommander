@@ -323,8 +323,8 @@ impl VtLogBuffer {
         changed
     }
 
-    /// Resize with reflow. The reflow_wrap flag on Row prevents stale
-    /// natural wraps from merging — only shrink-produced wraps get merged.
+    /// Resize with full reflow so visible logical lines keep their content
+    /// and natural soft-wrap continuity for terminal and redaction readers.
     /// Alt screen and reflow_history=false disable reflow entirely.
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let prev = self.pty_cols;
@@ -342,7 +342,7 @@ impl VtLogBuffer {
         let mode = if !self.grid.reflow_history || self.grid.is_alternate_screen() {
             ReflowMode::None
         } else {
-            ReflowMode::HistoryOnly
+            ReflowMode::All
         };
         self.grid.resize_with_mode(rows, cols, mode);
         // A resize can change the inactive primary grid's history length while an

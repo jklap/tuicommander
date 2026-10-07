@@ -293,8 +293,12 @@ need a separate decision; neither is included in this patch.
 
 Every primary-screen resize records the source/target column widths, grid
 sequence, original viewport-top row index and the viewport's own row snapshot
-(#1407-1ab2). Live VtLogBuffer width changes reflow history only; the visible
-cursor-addressed Ink screen remains a separate replacement domain.
+(#1407-1ab2). Live VtLogBuffer width changes use full reflow so visible
+logical lines retain their complete content and soft-wrap continuity.
+History-only reflow truncates visible cells on shrink and leaves natural wrap
+flags at the old column on growth, breaking session-output redaction. The
+cursor-addressed Ink redraw remains a separate replacement domain for the
+reconciliation below.
 
 The first explicit full viewport erase can replace an old displaced row only
 when that complete physical row occurs in the new replacement. A two-row
