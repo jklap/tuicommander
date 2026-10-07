@@ -137,9 +137,27 @@ fn claude_result_for_a_call_outside_the_window_is_dropped() {
     assert!(updates.is_empty());
 }
 
+/// A prompt with a pasted image is an ARRAY of blocks. Only tool results were
+/// read from arrays, so such a prompt vanished from the chat.
 #[test]
-fn claude_large_tool_output_is_cut_and_flagged() {
-    let big = "x".repeat(MAX_TOOL_OUTPUT_CHARS * 3);
+fn claude_prompt_with_an_image_is_not_dropped_from_the_chat() {
+    let line = r#"{"type":"user","uuid":"u1","origin":{"kind":"human"},"message":{"role":"user","content":[{"type":"text","text":"what is this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]}}"#;
+    let (updates, _) = run(line);
+    assert_eq!(kinds(&updates), ["user_message_chunk"]);
+    assert_eq!(updates[0]["content"]["text"], "what is this\n[image]");
+}
+
+/// An array row that is only tool results (no human origin) stays no prompt.
+#[test]
+fn claude_array_row_without_human_origin_is_not_a_prompt() {
+    let line = r#"{"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>x</system-reminder>"}]}}"#;
+    let (updates, _) = run(line);
+    assert!(updates.is_empty());
+}
+
+#[test]
+fn claude_large_tool_output_is_cut() {
+    let big = "x".repeat(12_000);
     let call = r#"{"type":"assistant","uuid":"a","message":{"id":"m","content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls"}}]}}"#;
     let result = format!(
         r#"{{"type":"user","uuid":"u","message":{{"content":[{{"type":"tool_result","tool_use_id":"t","content":"{big}"}}]}}}}"#
@@ -147,8 +165,7 @@ fn claude_large_tool_output_is_cut_and_flagged() {
     let (updates, _) = run(&format!("{call}\n{result}"));
     let update = &updates[1];
     let text = update["content"][0]["content"]["text"].as_str().unwrap();
-    assert_eq!(text.chars().count(), MAX_TOOL_OUTPUT_CHARS);
-    assert_eq!(update["_meta"]["tuic"]["truncated"], true);
+    assert_eq!(text.chars().count(), 4_000);
 }
 
 #[test]
