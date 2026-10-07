@@ -1908,6 +1908,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { repoPath: args.repoPath, file: args.file, content: args.content },
 		}),
 	},
+	write_file_if_unchanged: {
+		map: (args) => ({
+			method: "POST",
+			path: "/fs/write-if-unchanged",
+			body: { repoPath: args.repoPath, file: args.file, expected: args.expected, content: args.content },
+		}),
+	},
 	create_directory: {
 		map: (args) => ({
 			method: "POST",

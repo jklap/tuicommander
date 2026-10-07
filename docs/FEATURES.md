@@ -2008,7 +2008,9 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Markdown paths in session output open here through the desktop terminal-path resolver. Absolute, relative, `file://`, and `tuic://open//` references are supported, including line numbers. Files outside registered repositories are refused with a toast naming the path.
 - Show an explicit error when the session has no repository path, no registered repository contains its working directory, or the directory request fails
 - Open `.md` files as rendered Markdown using the desktop's shared `ContentRenderer`; other UTF-8 text files remain plain text
-- Switch from View to Edit for source changes, then save through the existing file commands and return to View
+- Tap a task-list checkbox (a 44 px target around the box) in a rendered `.md` file to toggle `- [ ]` / `- [x]` / `- [~]` on disk; tap a paragraph, heading or list item to select it and add a comment, saved as the same `<!--tweak:block:...-->` / `item` marker the desktop Markdown tab writes
+- Every mobile write (checkbox, comment, Edit → Save) goes through `write_file_if_unchanged`: if the file changed on disk since it was read, nothing is written, the view reloads and a notice asks to repeat the change (an edit draft or comment draft is kept)
+- Switch from View to Edit for source changes, then save and return to View
 - Refuse files over 1 MB before reading and show a clear message for binary or non-text files
 
 ### 18.3 Session Detail Screen

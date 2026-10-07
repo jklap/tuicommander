@@ -1628,6 +1628,7 @@ GET  /fs/read?repoPath=/path/to/repo&file=src/main.rs
 GET  /fs/markdown-image?repoPath=/path/to/repo&file=docs/images/chart.png -> image bytes
 GET  /fs/read-external?path=/absolute/path/to/file
 POST /fs/write         { "repoPath": "...", "file": "...", "content": "..." }
+POST /fs/write-if-unchanged { "repoPath": "...", "file": "...", "expected": "...", "content": "..." } -> true | false (false: disk text differs from `expected`, nothing written)
 POST /fs/mkdir         { "repoPath": "...", "dir": "..." }
 POST /fs/delete        { "repoPath": "...", "path": "..." }
 POST /fs/rename        { "repoPath": "...", "from": "...", "to": "..." }

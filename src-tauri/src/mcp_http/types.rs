@@ -431,6 +431,15 @@ pub(super) struct FsWriteFileRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct FsWriteIfUnchangedRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub file: String,
+    pub expected: String,
+    pub content: String,
+}
+
+#[derive(Deserialize)]
 pub(super) struct FsDirCreateRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,

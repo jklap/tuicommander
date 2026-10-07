@@ -2326,6 +2326,7 @@ pub fn run() {
             fs::search_content_all,
             fs::fs_read_file,
             fs::write_file,
+            fs::write_file_if_unchanged,
             fs::create_directory,
             fs::delete_path,
             fs::rename_path,
