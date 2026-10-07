@@ -323,7 +323,7 @@ stops the combined operation and leaves the worktree in place. With force,
 removal may discard dirty checkout files, but an unmerged branch is retained
 with a warning.
 
-The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. Refresh is single-flight per repository: concurrent requests join the active run and coalesce into one trailing rerun. This guarantees that sustained filesystem events cannot repeatedly cancel Phase 1 and leave deleted worktrees in the persisted sidebar cache. `get_repo_summary` remains for backward compatibility.
+The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. Refresh is single-flight per repository, with at least five seconds between automatic refresh starts. Requests inside that window join one trailing refresh at the window end, which reads the latest state. Requests during an active pass request one subsequent pass; repositories have independent windows. Explicit repository additions, branch checkouts and merge cleanup refreshes bypass the waiting window for the affected repository while preserving single-flight reads. Sidebar badges can lag by up to five seconds plus the backend read duration. This guarantees that sustained filesystem events cannot repeatedly cancel Phase 1 and leave deleted worktrees in the persisted sidebar cache. `get_repo_summary` remains for backward compatibility.
 
 ### Branch Operations
 

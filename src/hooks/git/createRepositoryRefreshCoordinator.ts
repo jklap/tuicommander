@@ -522,10 +522,19 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	// cancellation made structure reconciliation starvation-prone: a sustained
 	// repo-changed stream could obsolete every in-flight Phase 1 before it pruned
 	// deleted worktrees, leaving persisted ghost rows in the sidebar forever.
-	// Every caller now joins the current run and requests at most one fresh pass.
+	// Automatic starts are at least 5s apart per repo. Explicit UI operations
+	// can wake a trailing wait, but still join any active backend pass.
 	const refreshInFlight = new Map<string, Promise<void>>();
 	const refreshQueued = new Set<string>();
-	const refreshRepo = async (repoPath: string): Promise<void> => {
+	const refreshStartedAt = new Map<string, number>();
+	const MIN_REFRESH_INTERVAL_MS = 5_000;
+	const refreshImmediate = new Set<string>();
+	const wakeRefresh = new Map<string, () => void>();
+	const refreshRepo = async (repoPath: string, immediate: boolean): Promise<void> => {
+		if (immediate) {
+			refreshImmediate.add(repoPath);
+			wakeRefresh.get(repoPath)?.();
+		}
 		const existing = refreshInFlight.get(repoPath);
 		if (existing) {
 			refreshQueued.add(repoPath);
@@ -535,7 +544,26 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		const run = (async () => {
 			do {
+				const now = Date.now();
+				const startedAt = refreshStartedAt.get(repoPath);
+				const remaining = startedAt === undefined ? 0 : MIN_REFRESH_INTERVAL_MS - (now - startedAt);
+				if (remaining > 0 && !refreshImmediate.has(repoPath)) {
+					await new Promise<void>((resolve) => {
+						const timer = setTimeout(resolve, remaining);
+						wakeRefresh.set(repoPath, () => {
+							clearTimeout(timer);
+							resolve();
+						});
+					});
+					wakeRefresh.delete(repoPath);
+				}
+				refreshImmediate.delete(repoPath);
+				// Requests received while waiting belong to this pass, not another rerun.
 				refreshQueued.delete(repoPath);
+				// A repo may have been removed or parked during the trailing wait.
+				if (!repositoriesStore.getActivePaths().includes(repoPath)) break;
+				const start = Date.now();
+				refreshStartedAt.set(repoPath, start);
 				try {
 					await refreshRepoOnce(repoPath);
 				} catch (err) {
@@ -555,18 +583,18 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	// event carries the one repo that changed, so scoping avoids re-scanning
 	// every open repo in unison on each filesystem event. Called with no arg
 	// (init, branch ops) it refreshes all active repos as before.
-	const refreshReposCapped = async (paths: string[], maxConcurrent: number): Promise<void> => {
+	const refreshReposCapped = async (paths: string[], maxConcurrent: number, immediate: boolean): Promise<void> => {
 		let nextIndex = 0;
 		const worker = async () => {
 			while (nextIndex < paths.length) {
 				const path = paths[nextIndex++];
-				await refreshRepo(path);
+				await refreshRepo(path, immediate);
 			}
 		};
 		await Promise.all(Array.from({ length: Math.min(maxConcurrent, paths.length) }, worker));
 	};
 
-	const refreshAllBranchStats = async (scopeRepoPath?: string) => {
+	const refreshAllBranchStats = async (scopeRepoPath?: string, options: { immediate?: boolean } = {}) => {
 		// Skip parked repos — they should stay dormant. (#1358-caf5)
 		const activePaths = repositoriesStore.getActivePaths();
 		const paths = scopeRepoPath ? activePaths.filter((p) => p === scopeRepoPath) : [...activePaths];
@@ -575,7 +603,7 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 			paths.splice(paths.indexOf(activeRepoPath), 1);
 			paths.unshift(activeRepoPath);
 		}
-		await refreshReposCapped(paths, 4);
+		await refreshReposCapped(paths, 4, options.immediate === true);
 	};
 
 	/** Detect orphaned linked worktrees and act based on the orphanCleanup setting. */
