@@ -1171,6 +1171,18 @@ describe("transport", () => {
 			expect(result.body).toEqual({ path: "/repo/a.md", content: "hi" });
 		});
 
+		it("maps write_file_if_unchanged to POST /fs/write-if-unchanged with the expected text", () => {
+			const result = mapCommandToHttp("write_file_if_unchanged", {
+				repoPath: "/repo",
+				file: "a.md",
+				expected: "- [ ] a",
+				content: "- [x] a",
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/fs/write-if-unchanged");
+			expect(result.body).toEqual({ repoPath: "/repo", file: "a.md", expected: "- [ ] a", content: "- [x] a" });
+		});
+
 		it("maps copy_path_abs to POST /fs/copy-abs", () => {
 			const result = mapCommandToHttp("copy_path_abs", { from: "/a/x", to: "/b/x" });
 			expect(result.method).toBe("POST");
