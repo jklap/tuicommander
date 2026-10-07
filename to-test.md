@@ -4736,3 +4736,18 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] On Boss's next planned Linux daemon rebuild/restart, confirm closing filled throwaway terminals reduces resident memory while other terminals remain readable. The isolated mint comparison proves freed grid pages can remain resident until trim. This lane does not restart or signal the live mint daemon.
 - [ ] After the backend restart, confirm Settings > MCP shows a short dedicated summary for the native workflow_run tool. Native catalog and HTTP status regressions cover the wire response.
+
+## PWA voice, slice 1 (#1573-84f8) — client only, no Rust change
+
+Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a build that contains `feat/pwa-voice-s1` (the phone loads the frontend of the instance it opens), and the instance reachable over HTTPS (Tailscale HTTPS URL). Headless `tuic-remote` has no voice route: the mic button must be absent there.
+
+- [ ] **[HUMAN]** Open `https://<tailscale-host>/mobile` in Safari, open a Claude or Codex session. A microphone button must sit left of the tasks button in the header. Open the same page over plain `http://<ip>:9876/mobile`: tap the mic; a toast "Voice not started" must say the page needs https (not "Cannot read properties of undefined").
+- [ ] **[HUMAN]** Back on HTTPS: tap the mic. iOS asks for microphone permission once; allow. The button turns red and the subtitle shows `Voice waiting`. Check `GET /dictation/hands-free` on the desktop: `armed: true`, `owner` starting `browser-`, `sessionId` = the open session.
+- [ ] **[HUMAN]** Say the activation phrase and a short request. Subtitle moves `capturing` → `transcribing` → `holding_back` → `delivered`; the text arrives in the agent. If the agent calls `voice speak_reply`, the reply must play **from the phone speaker** and the desktop must stay silent. Silent reply with the mic light on = the suspended-AudioContext bug (#1573-84f8) is not fixed: note the iOS version and Safari vs installed app.
+- [ ] **[HUMAN]** Repeat the whole sequence from the installed Home Screen app (Add to Home Screen). Record whether the permission prompt reappears on each arm.
+- [ ] **[HUMAN]** Tap the red mic: it returns to normal, the Safari mic indicator goes off, `armed: false` on the desktop.
+- [ ] **[HUMAN]** Arm, then press Back to the session list: the mic indicator must go off and `armed: false` (the screen disarms on leaving).
+- [ ] **[HUMAN]** Deny the microphone permission once (Settings > Safari > Microphone): the toast must show the refusal and the button stay un-armed; `GET /dictation/hands-free` stays `armed: false` and no `browser-` audio socket remains.
+- [ ] **[HUMAN]** Silent switch on, then off: record whether the reply is audible in each state (unverified, report 2026-10-07 section 8).
+- [ ] **[HUMAN]** With the desktop armed in its own conversation, tap the mic on the phone: record what happens (single `DictationState` conversation, untested).
+- [ ] Lock the screen mid-conversation: expected to stop capture (not supported by iOS, slice 2 handles it); record what the page shows on return.
