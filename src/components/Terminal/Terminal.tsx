@@ -1433,7 +1433,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			<Show keyed when={chatActive() ? _currentSessionId() : null}>
 				{(sid) => <TerminalChatView terminalId={props.id} sessionId={sid} />}
 			</Show>
-			<Show when={!composeOpen()}>
+			<Show when={!composeOpen() && !chatActive()}>
 				<div
 					class={s.composeHint}
 					onClick={() => setComposeOpen(true)}
@@ -1451,7 +1451,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					Compose {keyFor("toggle-compose-panel")}
 				</div>
 			</Show>
-			<Show when={composeOpen()}>
+			<Show when={composeOpen() && !chatActive()}>
 				<Suspense>
 					<ComposePanel
 						isOpen={composeOpen}
