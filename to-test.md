@@ -4777,3 +4777,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After Boss restarts `make dev` or installs a rebuilt release, spawn a disposable managed Claude peer and confirm background-task output goes under `~/Gits/.tmp/claude`. Repeat with an explicit run-config or caller `CLAUDE_CODE_TMPDIR` and confirm it wins. Rust environment defaults do not hot-reload; no desktop instance was started by this lane.
 
 - [ ] #1407-1ab2: after Boss rebuilds/restarts, resize a real streaming Claude terminal 120 → 160 → 60 columns and scroll its answer; confirm each bullet appears once and selection/search follow the retained text. Rust changes require a manual restart; desktop visual verification is pending.
+
+- [ ] #1407-1ab2: After the next Rust restart, confirm resize keeps full terminal text and wrapped secrets stay redacted in session output; repeat the recorded Claude streaming/idle resize check. Automated coverage: `resize_preserves_complete_visible_logical_text_1407` and the two MCP resize/capture redaction regressions.
+
+- [ ] #1407-1ab2: after Boss restarts the Rust build, confirm an omitted short history record survives resize even when another redrawn record contains the same text. Automated regression: `resize_redraw_preserves_omitted_record_contained_in_another_replaced_record`.
