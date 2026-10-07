@@ -288,6 +288,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	acp_workspace_root: {
 		map: () => ({ method: "GET", path: "/acp/workspace" }),
 	},
+	acp_chat_open: {
+		map: (args) => ({ method: "POST", path: "/acp/chat/open", body: args.request }),
+	},
 	acp_connect: {
 		map: (args) => ({ method: "POST", path: "/acp/connections", body: { root: args.root } }),
 	},
@@ -341,7 +344,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => ({
 			method: "POST",
 			path: `/acp/connections/${p("connectionId")}/sessions/${p("sessionId")}/fork`,
-			body: { authority: args.authority },
+			body: { authority: args.authority, ...(args.atMessageId !== undefined ? { atMessageId: args.atMessageId } : {}) },
 		}),
 	},
 	acp_session_delete: {
@@ -438,6 +441,15 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 	ego_set_default_model: {
 		map: (args) => ({ method: "POST", path: "/ego/providers/model", body: { model: args.model } }),
+	},
+	ego_perimeter: {
+		map: () => ({ method: "GET", path: "/ego/perimeter" }),
+	},
+	ego_set_perimeter_roots: {
+		map: (args) => ({ method: "POST", path: "/ego/perimeter/roots", body: { roots: args.roots } }),
+	},
+	ego_set_perimeter_network: {
+		map: (args) => ({ method: "POST", path: "/ego/perimeter/network", body: { enabled: args.enabled } }),
 	},
 
 	// --- Session lifecycle ---
@@ -580,6 +592,9 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { state: string | null }).state ?? null,
 		}),
 	},
+	get_prompt_receipt: {
+		map: (args) => ({ method: "GET", path: `/sessions/${args.sessionId}/prompt-receipt` }),
+	},
 	get_last_prompt: {
 		map: (args) => ({
 			method: "GET",
@@ -679,6 +694,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "GET",
 			path: `/sessions/${args.sessionId}/terminal/lines?start=${args.start}&end=${args.end}`,
 			transform: (data) => (data as { lines: string[] }).lines,
+		}),
+	},
+	chat_view_snapshot: {
+		map: (args) => ({
+			method: "GET",
+			path: `/sessions/${args.sessionId}/chat-view?from_seq=${args.fromSeq ?? 0}${args.epoch != null ? `&epoch=${args.epoch}` : ""}`,
 		}),
 	},
 	terminal_styled_rows: {
@@ -1891,6 +1912,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "POST",
 			path: "/fs/write",
 			body: { repoPath: args.repoPath, file: args.file, content: args.content },
+		}),
+	},
+	write_file_if_unchanged: {
+		map: (args) => ({
+			method: "POST",
+			path: "/fs/write-if-unchanged",
+			body: { repoPath: args.repoPath, file: args.file, expected: args.expected, content: args.content },
 		}),
 	},
 	create_directory: {

@@ -142,8 +142,13 @@ impl GitCmd {
                 .collect::<Vec<_>>();
             let family = args
                 .iter()
-                .find(|arg| !arg.starts_with('-'))
-                .map(|arg| arg.to_string())
+                .scan(false, |skip_operand, arg| {
+                    let skip = *skip_operand;
+                    *skip_operand = matches!(arg.as_ref(), "-c" | "-C");
+                    Some((arg, skip))
+                })
+                .find(|(arg, skip)| !skip && !arg.starts_with('-'))
+                .map(|(arg, _)| arg.to_string())
                 .unwrap_or_default();
             *counts.borrow_mut().entry(family).or_default() += 1;
         });
@@ -1283,6 +1288,37 @@ DU src/deleted.rs
 
         reclaim_stale_index_lock(&path, |_| panic!("a fresh lock must not be probed"));
         assert!(lock.exists(), "a fresh lock is kept without asking anyone");
+    }
+
+    /// Catches: Windows -c operands being counted as subcommands instead of status/cherry.
+    #[test]
+    fn command_counts_skip_windows_global_config_operands() {
+        let (_dir, path) = setup_test_repo();
+        take_command_counts();
+        // Exercise the Windows-injected argv on every host, including Linux rb.
+        git_cmd(&path)
+            .args(["-c", "core.longpaths=true", "status", "--porcelain"])
+            .run()
+            .unwrap();
+        git_cmd(&path)
+            .args([
+                "-c",
+                "core.longpaths=true",
+                "-c",
+                "core.autocrlf=false",
+                "status",
+                "--porcelain",
+            ])
+            .run()
+            .unwrap();
+        git_cmd(&path)
+            .args(["status", "--porcelain"])
+            .run()
+            .unwrap();
+        assert_eq!(
+            take_command_counts(),
+            std::collections::BTreeMap::from([("status".into(), 3),])
+        );
     }
 
     #[test]

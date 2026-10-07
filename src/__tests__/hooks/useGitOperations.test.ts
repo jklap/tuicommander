@@ -779,6 +779,81 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.worktreePath).toBe("/repo/wt");
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("unmerged commits"));
 		});
+		// Catches: a rejected confirmation retaining the lock and suppressing a later removal.
+		it("rejected_confirmation_then_second_removal_proceeds", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
+			const dialogError = new Error("confirmation failed");
+			mockDialogs.confirmRemoveWorktree.mockRejectedValueOnce(dialogError);
+
+			await expect(gitOps.handleRemoveWorkspace("/repo", "feature")).rejects.toBe(dialogError);
+
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.terminals).toEqual([id]);
+			expect(terminalsStore.get(id)).toBeDefined();
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.isRemoving).toBeFalsy();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledTimes(2);
+			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
+		// Catches: synchronous dialog failures after successful preflight leaking the removal lock.
+		it("throwing_confirmation_after_preflight_preserves_workspace_and_permits_retry", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
+			const dialogError = new Error("dialog threw");
+			mockDialogs.confirmRemoveWorktree.mockImplementationOnce(() => {
+				expect(mockRepo.getWorkspaceLifecycle).toHaveBeenCalledWith("/repo", "feature");
+				throw dialogError;
+			});
+
+			await expect(gitOps.handleRemoveWorkspace("/repo", "feature")).rejects.toBe(dialogError);
+
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.terminals).toEqual([id]);
+			expect(terminalsStore.get(id)).toBeDefined();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledTimes(2);
+			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
+		// Catches: cancellation closing terminals or retaining the lock so a later removal is ignored.
+		it("false_confirmation_preserves_workspace_and_terminals_and_permits_retry", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
+			const id = terminalsStore.add(makeTerminal({ name: "T1" }));
+			repositoriesStore.addTerminalToWorkspace("/repo", "feature", id);
+			mockDialogs.confirmRemoveWorktree.mockResolvedValueOnce(false);
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]?.terminals).toEqual([id]);
+			expect(terminalsStore.get(id)).toBeDefined();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+
+			await gitOps.handleRemoveWorkspace("/repo", "feature");
+
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledTimes(2);
+			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1);
+			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeUndefined();
+		});
+
 		it("removes worktree branch after confirmation, passing deleteBranchOnRemove setting", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
@@ -1598,6 +1673,7 @@ describe("useGitOperations", () => {
 			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
 
 			await gitOps.refreshAllBranchStats("/repo");
+			vi.advanceTimersByTime(5_000);
 			await gitOps.refreshAllBranchStats("/repo");
 
 			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(2);
@@ -1764,7 +1840,7 @@ describe("useGitOperations", () => {
 			vi.setSystemTime(new Date("2026-09-29T12:01:00Z"));
 			await coordinator.refreshAllBranchStats("/repo");
 			expect(repositoriesStore.get("/repo")?.workspaces.new).toBeDefined();
-			vi.setSystemTime(new Date("2026-09-29T12:01:00.001Z"));
+			vi.setSystemTime(new Date("2026-09-29T12:01:05Z"));
 			await coordinator.refreshAllBranchStats("/repo");
 			expect(repositoriesStore.get("/repo")?.workspaces.new).toBeUndefined();
 		});
@@ -1788,6 +1864,7 @@ describe("useGitOperations", () => {
 			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(1);
 
 			structureResolvers[0]({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
+			await vi.advanceTimersByTimeAsync(5_000);
 			await vi.waitFor(() => expect(structureResolvers).toHaveLength(2));
 			structureResolvers[1]({ worktree_paths: wtPaths({ main: "/repo" }), merged_branches: [] });
 			await Promise.all([first, ...queued]);
@@ -1812,6 +1889,7 @@ describe("useGitOperations", () => {
 			await vi.waitFor(() => expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(1));
 			const queued = gitOps.refreshAllBranchStats("/repo");
 			rejectFirst(new Error("transient structure failure"));
+			await vi.advanceTimersByTimeAsync(5_000);
 			await Promise.all([first, queued]);
 
 			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(2);
@@ -2215,6 +2293,7 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.workspaces.stale).toBeUndefined();
 			repositoriesStore.setWorkspace("/repo", "stale", { worktreePath: "/repo/.worktrees/recreated" });
 			vi.setSystemTime(new Date("2026-09-29T12:00:02.001Z"));
+			vi.advanceTimersByTime(5_000);
 			await gitOps.refreshAllBranchStats("/repo");
 
 			expect(repositoriesStore.get("/repo")?.workspaces.stale).toBeUndefined();
@@ -2572,14 +2651,25 @@ describe("useGitOperations", () => {
 			expect(mockCloseTerminal).toHaveBeenCalledWith(id, true);
 		});
 
-		it("does not remove when user cancels worktree confirmation", async () => {
+		// Catches: destructive cleanup deleting dirty files or closing sessions after cancellation.
+		it("dirty_worktree_cleanup_cancellation_preserves_files_and_sessions", async () => {
 			mockDialogs.confirmRemoveWorktree.mockResolvedValue(false);
+			const lifecycle = {
+				dirtyFiles: 35,
+				dirtyFingerprint: "dirty-worktree",
+				commitStatus: "merged",
+				removalSafety: "destructive",
+			};
+			mockRepo.getWorkspaceLifecycle.mockResolvedValueOnce(lifecycle);
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "feature", { worktreePath: "/repo/wt" });
 
 			await gitOps.handleRemoveWorkspace("/repo", "feature");
 
 			expect(repositoriesStore.get("/repo")?.workspaces["feature"]).toBeDefined();
+			expect(mockDialogs.confirmRemoveWorktree).toHaveBeenCalledWith("feature", lifecycle, true);
+			expect(mockRepo.removeWorktree).not.toHaveBeenCalled();
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
 		});
 	});
 
@@ -3466,6 +3556,29 @@ describe("useGitOperations", () => {
 	});
 
 	describe("handleCheckoutRemoteBranch", () => {
+		it("opens the remote checkout without waiting for the sidebar refresh window", async () => {
+			// Catches: remote checkout awaits a throttled refresh before selecting its workspace and opening a terminal.
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+			});
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {}, workspace_statuses: {} });
+			await gitOps.refreshAllBranchStats("/repo");
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ "feat-remote": "/repo" }),
+				merged_branches: [],
+			});
+			mockRepo.checkoutRemoteBranch.mockResolvedValue(undefined);
+
+			await gitOps.handleCheckoutRemoteBranch("/repo", "feat-remote");
+
+			expect(repositoriesStore.get("/repo")?.activeWorkspaceId).toBe("feat-remote");
+			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(2);
+			expect(repositoriesStore.get("/repo")?.workspaces["feat-remote"].terminals).toHaveLength(1);
+		});
+
 		it("calls repo.checkoutRemoteBranch and refreshes branch lists", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
@@ -3721,6 +3834,7 @@ describe("useGitOperations", () => {
 			const ops = gitOpsWith(confirmOrphanCleanup);
 
 			await ops.refreshAllBranchStats();
+			vi.advanceTimersByTime(5_000);
 			await ops.refreshAllBranchStats();
 
 			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
@@ -4117,7 +4231,9 @@ describe("useGitOperations", () => {
 			// First refresh: user clicks "Keep" (cancel)
 			await askGitOps.refreshAllBranchStats();
 			// Subsequent refreshes must NOT re-open the dialog for the kept orphan
+			vi.advanceTimersByTime(5_000);
 			await askGitOps.refreshAllBranchStats();
+			vi.advanceTimersByTime(5_000);
 			await askGitOps.refreshAllBranchStats();
 
 			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
@@ -4164,10 +4280,12 @@ describe("useGitOperations", () => {
 			mockRepo.assessOrphanCleanup.mockResolvedValue([dirty("fp-1")]);
 
 			await ops.refreshAllBranchStats();
+			vi.advanceTimersByTime(5_000);
 			await ops.refreshAllBranchStats();
 			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
 
 			mockRepo.assessOrphanCleanup.mockResolvedValue([dirty("fp-2")]);
+			vi.advanceTimersByTime(5_000);
 			await ops.refreshAllBranchStats();
 			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(2);
 		});
@@ -4183,6 +4301,7 @@ describe("useGitOperations", () => {
 			mockRepo.assessOrphanCleanup.mockResolvedValue([
 				{ path: "/wt/hooked", safe: true, dirty_fingerprint: "fp-clean" },
 			]);
+			vi.advanceTimersByTime(5_000);
 			await ops.refreshAllBranchStats();
 
 			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
@@ -4205,6 +4324,7 @@ describe("useGitOperations", () => {
 			dirtyOrphans();
 
 			await askGitOps.refreshAllBranchStats();
+			vi.advanceTimersByTime(5_000);
 			await askGitOps.refreshAllBranchStats();
 
 			expect(confirmOrphanCleanup).toHaveBeenCalledTimes(2);
@@ -4347,6 +4467,8 @@ describe("useGitOperations", () => {
 				liveSessions: [],
 				warnings: [warning],
 			});
+
+			vi.advanceTimersByTime(5_000);
 
 			await gitOps.refreshAllBranchStats();
 
@@ -4888,6 +5010,7 @@ describe("useGitOperations", () => {
 				{ path: "/wt/b", safe: true },
 			]);
 			mockRepo.removeOrphanWorktree.mockRejectedValue(new Error("locked"));
+			vi.advanceTimersByTime(5_000);
 			p = keep.refreshAllBranchStats();
 			await vi.advanceTimersByTimeAsync(0);
 			await p;
@@ -4899,6 +5022,7 @@ describe("useGitOperations", () => {
 			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/one", safe: true }]);
 			await gitOps.refreshAllBranchStats();
 			mockRepo.assessOrphanCleanup.mockResolvedValue([{ path: "/wt/two", safe: true }]);
+			vi.advanceTimersByTime(5_000);
 			await gitOps.refreshAllBranchStats();
 			expect(orphanStatuses()).toEqual(["Removed 1 orphaned worktree(s)", "Removed 1 orphaned worktree(s)"]);
 		});

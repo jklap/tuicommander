@@ -5,7 +5,15 @@ import { HeroMetrics } from "../components/HeroMetrics";
 import { NewSessionSheet } from "../components/NewSessionSheet";
 import { SessionCard } from "../components/SessionCard";
 import type { SessionInfo } from "../useSessions";
+import {
+	readRecentSessionIds,
+	readSessionSort,
+	recentFirst,
+	type SessionSort,
+	writeSessionSort,
+} from "../utils/recentSessions";
 import { ptysLast } from "../utils/sessionKind";
+import { nestUnderParents, parentLabel } from "../utils/sessionTree";
 import styles from "./SessionsScreen.module.css";
 
 interface SessionsScreenProps {
@@ -29,7 +37,13 @@ export function SessionsScreen(props: SessionsScreenProps) {
 	// Memoized so the sort runs on a real list change, not on every render.
 	// `reconcileSessions` hands back the same array reference for an idle poll,
 	// which keeps this inert — and keeps `<For>` from rebuilding every card.
-	const ordered = createMemo(() => ptysLast(props.sessions));
+	const [sort, setSort] = createSignal<SessionSort>(readSessionSort());
+	const [sortOpen, setSortOpen] = createSignal(false);
+	// The list screen is unmounted while a detail is open, so reading once per mount sees every open.
+	const recentIds = readRecentSessionIds();
+	const ordered = createMemo(() =>
+		sort() === "recent" ? recentFirst(props.sessions, recentIds) : ptysLast(props.sessions),
+	);
 	const visibleSessions = createMemo(() => {
 		const query = searchQuery().trim().toLowerCase();
 		if (!query) return ordered();
@@ -43,6 +57,8 @@ export function SessionsScreen(props: SessionsScreenProps) {
 			].some((value) => value?.toLowerCase().includes(query)),
 		);
 	});
+	// Nest after filtering: a child whose parent was filtered out stays a visible top-level row.
+	const rows = createMemo(() => nestUnderParents(visibleSessions()));
 	let startY = 0;
 	let listEl: HTMLDivElement | undefined;
 
@@ -87,6 +103,12 @@ export function SessionsScreen(props: SessionsScreenProps) {
 		setPulling(false);
 	}
 
+	function chooseSort(next: SessionSort) {
+		setSort(next);
+		writeSessionSort(next);
+		setSortOpen(false);
+	}
+
 	function toggleSearch() {
 		if (searchOpen()) setSearchQuery("");
 		setSearchOpen(!searchOpen());
@@ -97,6 +119,54 @@ export function SessionsScreen(props: SessionsScreenProps) {
 			<div class={styles.searchHeader}>
 				<div class={styles.searchRow}>
 					<span class={styles.sectionTitle}>Sessions</span>
+					<div class={styles.sortMenu}>
+						<button
+							type="button"
+							class={styles.searchToggle}
+							aria-label="Sort sessions"
+							aria-haspopup="menu"
+							aria-expanded={sortOpen()}
+							onClick={() => setSortOpen(!sortOpen())}
+						>
+							<svg
+								width="20"
+								height="20"
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2"
+								stroke-linecap="round"
+								aria-hidden="true"
+							>
+								<path d="M4 7h16M7 12h10M10 17h4" />
+							</svg>
+						</button>
+						<Show when={sortOpen()}>
+							<div class={styles.sortList} role="menu" aria-label="Sort sessions">
+								<For
+									each={
+										[
+											["default", "Default"],
+											["recent", "Recent"],
+										] as const
+									}
+								>
+									{([value, label]) => (
+										<button
+											type="button"
+											role="menuitemradio"
+											aria-checked={sort() === value}
+											class={styles.sortOption}
+											classList={{ [styles.sortOptionActive]: sort() === value }}
+											onClick={() => chooseSort(value)}
+										>
+											{label}
+										</button>
+									)}
+								</For>
+							</div>
+						</Show>
+					</div>
 					<button
 						type="button"
 						class={styles.searchToggle}
@@ -212,8 +282,17 @@ export function SessionsScreen(props: SessionsScreenProps) {
 				</div>
 			</Show>
 
-			<For each={visibleSessions()}>
-				{(session) => <SessionCard session={session} onSelect={props.onSelectSession} onKill={handleKill} />}
+			<For each={rows()}>
+				{(row) => (
+					<SessionCard
+						session={row.session}
+						depth={row.depth}
+						lastInGroup={row.last}
+						spawnedBy={row.session.parent_session ? parentLabel(rows(), row.session) : undefined}
+						onSelect={props.onSelectSession}
+						onKill={handleKill}
+					/>
+				)}
 			</For>
 
 			<button class={styles.fab} aria-label="New session" onClick={openNewSessionSheet} data-testid="new-session-fab">

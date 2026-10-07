@@ -135,6 +135,8 @@ pub(super) async fn create_worktree_http(
         body.base_repo.clone(),
         body.branch_name.clone(),
         body.base_ref.clone(),
+        None,
+        false,
     )
     .await
     {
@@ -170,6 +172,8 @@ pub(super) async fn create_worktree_shared(
     base_repo: String,
     branch_name: String,
     base_ref: Option<String>,
+    creator_session: Option<String>,
+    spawn_session: bool,
 ) -> Result<CreatedWorktree, (StatusCode, Json<serde_json::Value>)> {
     validate_repo_path(&base_repo)?;
     // Model provides only branch_name and optionally base_ref (start point).
@@ -224,6 +228,8 @@ pub(super) async fn create_worktree_shared(
             // not change what was already warm.
             let instructions = workspace.instruction_payload_pending();
             state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
+                creator_session,
+                spawn_session,
                 repo_path: base_repo.clone(),
                 workspace_id: workspace_id.clone(),
                 branch: branch_name.clone(),
@@ -840,6 +846,8 @@ mod warm_tests {
                 repo_for_create,
                 "pending-setup".into(),
                 None,
+                None,
+                false,
             )
             .await
         });
@@ -890,6 +898,8 @@ mod warm_tests {
                 repo_for_create,
                 "cancelled-setup".into(),
                 None,
+                None,
+                false,
             )
             .await
         });

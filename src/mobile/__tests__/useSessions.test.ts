@@ -24,7 +24,7 @@ vi.mock("../../stores/appLogger", () => ({
 
 import { rpc, subscribeEvents } from "../../transport";
 import type { SessionInfo } from "../useSessions";
-import { useSessions } from "../useSessions";
+import { isAuthError, pollDelayMs, useSessions } from "../useSessions";
 
 const mockRpc = vi.mocked(rpc);
 const mockSubscribeEvents = vi.mocked(subscribeEvents);
@@ -770,5 +770,57 @@ describe("useSessions — visibility gating", () => {
 		expect(mockRpc).toHaveBeenCalledTimes(1);
 
 		dispose();
+	});
+});
+
+describe("offline polling", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	/** Plausible bug: a dead server is polled every 3s forever, draining the phone battery. */
+	it("backs off while polls fail and a manual refresh retries at once", async () => {
+		mockRpc.mockReset().mockRejectedValue(new Error("offline"));
+		let hook!: ReturnType<typeof useSessions>;
+		const dispose = createRoot((dispose) => {
+			hook = useSessions();
+			return dispose;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mockRpc).toHaveBeenCalledTimes(1);
+		// failure 1 waits 3s, failure 2 waits 6s: the 6s mark polls once, the 9s mark does not
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(mockRpc).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(mockRpc).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(mockRpc).toHaveBeenCalledTimes(3);
+		hook.refresh();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(mockRpc).toHaveBeenCalledTimes(4);
+		dispose();
+	});
+
+	/** Plausible bug: 401/403 counted as an outage, so the UI says "retrying" instead of "sign in". */
+	it("flags an auth failure and clears it on success", async () => {
+		mockRpc.mockReset().mockRejectedValueOnce(Object.assign(new Error("RPC failed: 401"), { status: 401 }));
+		let hook!: ReturnType<typeof useSessions>;
+		const dispose = createRoot((dispose) => {
+			hook = useSessions();
+			return dispose;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(hook.authError()).toBe(true);
+		mockRpc.mockResolvedValue([] as never);
+		hook.refresh();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(hook.authError()).toBe(false);
+		dispose();
+	});
+
+	it("pollDelayMs doubles from 3s and caps at 30s; only 401/403 are auth errors", () => {
+		expect([0, 1, 2, 3, 4, 9].map(pollDelayMs)).toEqual([3000, 6000, 12000, 24000, 30000, 30000]);
+		expect(isAuthError(Object.assign(new Error("x"), { status: 403 }))).toBe(true);
+		expect(isAuthError(Object.assign(new Error("x"), { status: 500 }))).toBe(false);
+		expect(isAuthError(new Error("offline"))).toBe(false);
 	});
 });

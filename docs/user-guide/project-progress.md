@@ -13,7 +13,7 @@ Five kinds of entry.
 | Kind | Written by | Meaning |
 |---|---|---|
 | `done` | the agent | The work an `intent:` announced is finished. |
-| `blocked` | the agent | The agent cannot continue without you. |
+| `blocked` | the agent | The agent stops and waits for you, because it cannot continue without you. |
 | `intent` | TUICommander | The agent said what it was starting. Recorded from its `intent:` marker. |
 | `delegated` | TUICommander | The agent started another agent with `agent action=spawn`. The text is the task it handed over. |
 | `message` | TUICommander | The agent sent another agent a message with `agent action=send`. |
@@ -48,6 +48,11 @@ The MCP `progress` tool takes three fields.
 ```json
 {"type": "done", "text": "OpenRouter applications can now be identified.", "step": "Shadow AI Detection"}
 ```
+
+A `blocked` report marks the agent's tab as waiting for your answer. The mark
+clears when you reply in the terminal, or when the same terminal later reports
+`done` or starts another agent. A progress report never clears a question that
+the agent shows on its screen, such as an approval dialog.
 
 TUICommander adds the project, the time, the agent's name and the source PTY
 when it can identify one. The agent does not supply them.

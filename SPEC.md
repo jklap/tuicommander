@@ -1,7 +1,21 @@
 # TUICommander Specification
 
+Published story workflows can start in Plans and Stories through the owning daemon. Run history renders graph positions, decisions, evidence and paged event payloads, with explicit graph recovery and cancellation. IPC/HTTP and the generated `workflow_run` MCP schema share the native run service. Plan start remains visibly unavailable pending plan dispatch.
+
 **Version:** 1.8.0
 **Last Updated:** 2026-09-16
+
+## ego Perimeter Settings — Implemented (#1401-ab1c)
+
+Settings > AI Chat edits user/profile `roots` and `network` through ego CLI,
+with IPC/HTTP parity. Roots add permission reach beside the configured AI Chat
+workspace. The effective preview comes from `ego config ls --effective --json`
+in that workspace/profile. An explicit empty roots declaration stays empty.
+Capability evidence is never inferred from the OS or selected backend; the
+current ego `not_checked` value is shown as **Enforcement not checked** (approved
+by the coordinator on 2026-10-06). The ego297 measured-array contract is supported: all selected exec guarantees
+produce an OS badge; partial/empty arrays produce Prompt only with explanation.
+Unknown evidence remains unverified, and off+online never passes vacuously. Existing ACP sessions retain their admitted state.
 
 ## Overview
 
@@ -234,7 +248,9 @@ There is no hybrid route and no fallback between them.
 - **ACP.** AI Chat's `ego`, through the Agent Client Protocol v1 client in
   `src-tauri/src/acp/`. TUICommander launches `ego acp -C <root>` directly,
   adding `--profile <name>` only when a user selected an ego profile, and
-  owns its stdio JSON-RPC connection. No terminal is allocated, no shell is
+  owns its stdio JSON-RPC connection. A workspace's `.tuic.json` `ego_profile`
+  selects a session profile bounded by the explicit machine profile via ACP
+  `_meta.ego.ceilingProfile`; ego owns the clamp and TUIC displays its warnings. No terminal is allocated, no shell is
   invoked, and no output is scraped. The host issues a durable `TUIC_SESSION`
   peer UUID for the repository conversation, persists it beside the selected
   conversation binding, and passes it to ego and its MCP bridge. Mail and child
@@ -366,6 +382,14 @@ Features:
 
 ## Workspaces: linked worktrees with warm artifacts
 
+MCP callers can declare an existing linked worktree through
+`session action=declare_worktree worktree_path=/absolute/path`. Ownership comes
+from the immutable PTY launch directory and registered Git worktrees. The
+caller-only association persists under stable `TUIC_SESSION`, survives restart
+and does not change shell cwd or acquire cleanup ownership. MCP creation
+without a session spawn also places only the same-repository creator.
+
+
 Every workspace created by TUICommander is a linked Git worktree. Its refs and
 objects are shared with the parent repository, so commits are visible from the
 parent immediately. Git permits a branch to be checked out in only one
@@ -415,7 +439,7 @@ backend safety check.
 
 Native plan and story records have a separate config-directory SQLite authority (`stories.sqlite3`). Progress remains a human-readable journal and does not determine story status. Manual story actions use the shared Rust service across IPC, HTTP, MCP, and CLI. The desktop and browser UI exposes plan and story lists, criteria, dependencies, and manual transitions. For manual plans, WontFix is terminal for plan aggregation but does not satisfy a dependency or promote a dependent; a nonempty plan with only Done/WontFix stories is Done, while an empty plan is Draft. Any trusted caller can remove a direct WontFix dependency only from a Backlog story with a current revision. In plans with no workflow run, a dependent becomes Ready when every remaining dependency is Done; workflow-owned plans additionally require current integration receipts. An explicitly Blocked story is never auto-unblocked. Rust derives direct and transitive abandoned dependency indicators and the WontFix count on `plan_view` reads; the UI renders them. Any trusted caller may approve after checking the acceptance criteria. Actor identity is tracking only and never restricts story or workflow actions. Desktop IPC and credential-authenticated HTTP record `human`, sessionless local HTTP records `local_api`, and managed transitions record the acting session. Local token exchange is accepted. The optional workflow engine described in `plans/native-story-workflows.md` remains in development; import/export is excluded.
 
-Workflow definitions have their own config-directory database (`workflows.sqlite3`): editable drafts and immutable published revisions. Graph validation gates publication; the seeded `Resolve plan` definition pins a published `Story delivery` revision. The existing `human` closure policy requires an explicit approval transition, which may come from any trusted caller; `automatic` closure cannot be published until a TUIC-owned evidence gate exists. Definitions pin bounded direct-executable check commands. TUIC runs independent checks outside the global receipt-service lock. Completion probes the assigned worktree and Git artifact before the receipt transaction, then revalidates persisted run sequence, story revisions and command identity inside it; unrelated run events do not discard a valid result, and retries keep their original request cursor. TUIC records durable commit/tree-bound check receipts, then verifies an operator-created merge on the canonical branch against the clean tree computed by Git from its exact parents and runs the checks again on its result before recording `StoryIntegrated`. Extra or omitted merge content is rejected. A conflicted merge requires explicit human review or a separately verified artifact; the current receipt path cannot certify it. A later canonical commit requires a TUIC-computed `CanonicalRecertified` event with successful checks at the clean new tip and ancestry of every integrated source. Durable run records and event projections exist in `workflow_runs.sqlite3`, with idempotent actions and recovery of uncertain effects after restart. Runtime reconciliation preserves live attempts and in-flight effects; restart-only recovery logs each failed run and continues recovering healthy runs. Explicit story dispatch enforces bounded concurrency and conservative file-scope exclusion, while a managed coordinator assigns registered isolated worktrees before spawn. Dependents and final run completion require a current integration receipt at each accepted story revision. The Plans and Stories dialog reads a plan's run list and ordered event timeline. A coordinator does not yet execute definitions automatically.
+Workflow definitions have their own config-directory database (`workflows.sqlite3`): editable drafts and immutable published revisions. Graph validation gates publication; the seeded `Resolve plan` definition pins a published `Story delivery` revision. The existing `human` closure policy requires an explicit approval transition, which may come from any trusted caller; `automatic` closure cannot be published until a TUIC-owned evidence gate exists. Definitions pin bounded direct-executable check commands. TUIC runs independent checks outside the global receipt-service lock. Completion probes the assigned worktree and Git artifact before the receipt transaction, then revalidates persisted run sequence, story revisions and command identity inside it; unrelated run events do not discard a valid result, and retries keep their original request cursor. TUIC records durable commit/tree-bound check receipts, then verifies an operator-created merge on the canonical branch against the clean tree computed by Git from its exact parents and runs the checks again on its result before recording `StoryIntegrated`. Extra or omitted merge content is rejected. A conflicted merge requires explicit human review or a separately verified artifact; the current receipt path cannot certify it. A later canonical commit requires a TUIC-computed `CanonicalRecertified` event with successful checks at the clean new tip and ancestry of every integrated source. Durable run records and event projections exist in `workflow_runs.sqlite3`, with idempotent actions and recovery of uncertain effects after restart. Runtime reconciliation preserves live attempts and in-flight effects; restart-only recovery logs each failed run and continues recovering healthy runs. Explicit story dispatch enforces bounded concurrency and conservative file-scope exclusion, while a managed coordinator assigns registered isolated worktrees before spawn. Dependents and final run completion require a current integration receipt at each accepted story revision. The Plans and Stories dialog reads a plan's run list and ordered event timeline. The owning daemon executes the published serial story and plan graphs; public graph start controls remain in development.
 
 Progress is one append-only journal per project, read from a dialog. The dialog
 opens on the active PTY and can switch to another PTY or the repository aggregate.
@@ -585,7 +609,9 @@ Some frontend-only stores persist to localStorage:
 ### Completed (P2)
 - [x] Design Mode opens a dedicated Chrome window per repository and pre-fills selected element context into the bound agent terminal without submitting the draft; local per-repository URL, status events, HTTP parity and bounded/redacted payloads
 - [x] Split pane layout
+- [x] Touch branch action trays: left swipe reveals existing actions; vertical scrolling and desktop hover controls remain unchanged
 - [x] Multi-repository sidebar
+- [x] Rich parent-agent links reveal and select live children in other repositories without moving sessions
 - [x] Git diff panel
 - [x] Interactive agent prompts UI
 - [x] IDE launcher dropdown
@@ -593,6 +619,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Sidebar PR badges retain `#number` while showing lifecycle, conflict, CI, and review state
 - [x] Parallel agent orchestration
 - [x] Orchestrated PTY task descriptions with prompt-derived fallback metadata
+- [x] Page retained MCP terminal output through text/byte offsets, with continuation instructions and eviction-gap reporting
 - [x] One-call MCP managed-agent submission with bounded terminal-movement receipt
 - [x] Expandable terminal Context bar for agent intent, orchestrator assignment, and last user prompt
 - [x] Recover captured intent and substantial prompt through session snapshot catch-up and live state reconciliation
@@ -715,6 +742,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Agent binary detection and version display
 - [x] Per-agent native scrollback preference applies to supported CLI launches and commands typed in TUIC shells
 - [x] Managed Claude and direct Codex spawns accept new workspace trust by default without editing the agents' saved trust files; per-agent opt-out leaves their normal question in place
+- [x] ego terminal permission mode and sandbox choices persist in agents.json and share one Rust translator for terminal launches and MCP spawns
 - [x] agents.json persistence for run configurations
 
 ### Completed (P3)
@@ -758,3 +786,27 @@ Workflow safety: pinned checks own process trees and stop on timeout, run cancel
 Graph runtime slice A adds version-2 serial activation/predecessor/decision history and executable start validation with pinned Pause targets and deterministic final checks. History is bounded to 4096 activations per execution. Fork/all-Join schema and execution are deferred to slice G. Pre-contract runs support inspect/cancel only. Autonomous scheduling remains disabled pending slice B and authorization story 956-9745.
 
 Workflow graph slice B: AppState owns the serial daemon executor and OS database owner lock on desktop and headless boot. Initial graph position is atomic and start-key idempotent; per-run mailboxes and durable deadlines drive controls without a frontend. Graph roots reserve native stories, and manual claim/start shares the run writer lock. No Agent effects, delivery policy or new UI are enabled; unsupported graphs cannot start as executable workflows.
+
+Workflow graph slice C: the owning daemon executes pinned serial Agent/Judge/Loop/Pause/Notify/Join nodes through the existing RunStore ledger and managed launch fences. Named sol/sonnet profiles are required. New unsupported Gate and plan node publications are refused visibly. Manual pauses suspend active duration. Slice F supplies public story graph starts and history controls; D/E add independent approval and plan dispatch; graph completion alone never closes a native story.
+
+
+### Workflow story policy (slice D)
+
+The daemon runs pinned deterministic checks before accepting an independent reviewer approval. Native approval history preserves the reviewer actor and revision; the run retains the reviewed artifact and check receipts. A workflow implementer cannot approve its story after exit or claim release. Integration remains an explicit operator action.
+
+
+### Workflow plan dispatch (slice E)
+
+The owning daemon executes pinned plan coordinator and Create Stories visits through the existing proposal effects. Disjoint story children share a bounded project wave; overlapping or unknown scopes wait. A dependency starts only after its accepted revision has a current explicit Git integration receipt. Done alone and WontFix never release it. Approved children wait for an operator merge. The final plan Judge runs the pinned canonical checks and binds verification to the current plan fingerprint. Failed checks route through a bounded replan with a fresh coordinator attempt. Public start/history controls use the same graph entry point; parallel graph branches follow in slice G.
+
+## Managed launch instruction inspection
+
+Implemented: terminal context-menu inspector backed by prospectively captured live-session receipts. It displays final managed briefs, explicit system instruction arguments/file snapshots and MCP initialize responses with source and original UTF-8 byte size. Existing workflow preview/hash receipts are unchanged. Autonomous agent file reads and historical launches are explicitly unobservable. Redacted receipt text is limited to 64 KiB/16 sections, with a 32 KiB section cap; receipts are not restored after backend restart.
+
+### Run incidents
+
+Plans and Stories run history contains a read-only incident projection owned by Rust. Workflow reports, interrupted attempts, bound-session exit/state and pending prompt-delivery failure markers, and bound task records supply evidence. No elapsed-time stuck inference, new persistence or automatic recovery is introduced. Suggestions require operator action. Only agents explicitly bound to the selected run participate; unavailable causes are disclosed. IPC and HTTP use the existing workflow run action contract.
+
+### Conversation-specific AI Chat launch (implemented)
+
+Custom conversations snapshot executable/profile/workspace overrides in `ai_chat_launches`, keyed by ego session id, and retain a host-issued peer identity. Each has its own ACP connection; default chats continue on the shared default connection. The header shows saved launch values. `acp_chat_open` and `POST /acp/chat/open` create or reopen the same conversation. MCP inbox reads emit content-free INFO audit events with protocol caller, bound peer/owner and returned message ids.

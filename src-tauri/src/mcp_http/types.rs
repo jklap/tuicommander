@@ -122,6 +122,7 @@ pub(super) struct OutputQuery {
     pub limit: Option<usize>,
     /// Native MCP output windows, used only by format=mcp/mcp_raw.
     pub from_line: Option<usize>,
+    pub from_byte: Option<u64>,
     pub since_cursor: Option<usize>,
     /// When set to "text", ANSI escape sequences are stripped from the output.
     pub format: Option<String>,
@@ -426,6 +427,15 @@ pub(super) struct FsWriteFileRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,
     pub file: String,
+    pub content: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct FsWriteIfUnchangedRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub file: String,
+    pub expected: String,
     pub content: String,
 }
 
@@ -969,6 +979,12 @@ pub(super) struct TerminalRowQuery {
 pub(super) struct TerminalLinesQuery {
     pub start: usize,
     pub end: usize,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ChatViewQuery {
+    pub epoch: Option<u64>,
+    pub from_seq: Option<u64>,
 }
 
 #[derive(Deserialize)]

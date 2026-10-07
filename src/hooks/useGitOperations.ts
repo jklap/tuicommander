@@ -418,7 +418,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			// because nothing claimed its cwd. Now something does.
 			reconcileTerminalOwnership();
 
-			await refreshAllBranchStats();
+			await refreshAllBranchStats(info.path, { immediate: true });
 		} catch (err) {
 			appLogger.error("git", "Failed to add repository", err);
 			deps.setStatusInfo(`Failed to add repo: ${err}`);
@@ -527,7 +527,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setCreatingWorktreeRepos,
 		setMergePendingCtx,
 		setupNewWorktree,
-		refreshAllBranchStats,
+		refreshAllBranchStats: (repoPath) => refreshAllBranchStats(repoPath, { immediate: true }),
 	});
 
 	/**
@@ -683,8 +683,8 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	};
 
 	// Compose branch stats + branch list refresh into a single function
-	const refreshAllBranchStatsAndLists = async (scopeRepoPath?: string) => {
-		await refreshAllBranchStats(scopeRepoPath);
+	const refreshAllBranchStatsAndLists = async (scopeRepoPath?: string, options: { immediate?: boolean } = {}) => {
+		await refreshAllBranchStats(scopeRepoPath, options);
 		await refreshBranchLists(scopeRepoPath);
 	};
 
@@ -732,7 +732,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			const result = await deps.repo.switchBranch(repoPath, branchName, { stash: true });
 			deps.setStatusInfo(`Switched to ${result.new_branch} (changes stashed)`);
 			migrateMainWorktreeBranches(repoPath, result.new_branch);
-			await refreshAllBranchStatsAndLists();
+			await refreshAllBranchStatsAndLists(repoPath, { immediate: true });
 		};
 
 		try {
@@ -741,7 +741,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				result.stashed ? `Switched to ${result.new_branch} (changes stashed)` : `Switched to ${result.new_branch}`,
 			);
 			migrateMainWorktreeBranches(repoPath, result.new_branch);
-			await refreshAllBranchStatsAndLists();
+			await refreshAllBranchStatsAndLists(repoPath, { immediate: true });
 		} catch (err) {
 			const errMsg = String(err);
 			if (errMsg === "dirty" || errMsg.includes("dirty")) {
@@ -778,7 +778,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			await deps.repo.checkoutRemoteBranch(repoPath, branchName);
 			deps.setStatusInfo(`Checked out ${branchName}`);
 			migrateMainWorktreeBranches(repoPath, branchName);
-			await refreshAllBranchStatsAndLists();
+			await refreshAllBranchStatsAndLists(repoPath, { immediate: true });
 			await handleBranchSelectInner(repoPath, branchName);
 		} catch (err) {
 			appLogger.error("git", "Failed to checkout remote branch", { error: String(err) });

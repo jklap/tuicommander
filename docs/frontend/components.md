@@ -1,5 +1,7 @@
 # Components
 
+Slice F exposes `start_graph {target:{type:story|plan,id},expected_revision?,definition_id,definition_revision,request_id,limits?}` through the existing owning-daemon service. Story starts require the current native revision and pin the selected publication; the request ID is bound to its payload. Omitted limits use Rust defaults. Plan dispatch remains unavailable in this build and its start control says so. The `workflow_run` MCP tool uses an inline schema generated from `RunAction` and the public `RunCommand` variants; it returns the same scoped snapshots and cursor-ordered events as IPC/HTTP. Run history shows pinned activations, decisions/evidence, repair counters, pause targets and complete event payloads across pages. Graph recovery uses `resume_graph {execution_id,activation_id,resolution}` after answering pending input; pause and cancel use the existing sequence-fenced commands. Legacy runs offer inspection and cancellation in the UI. No new persistence or client scheduler is added.
+
 All components are SolidJS functional components in `src/components/`.
 
 ## Component Tree
@@ -233,7 +235,10 @@ input-listener cleanup. These controllers do not use reactive state.
 
 ### Sidebar (`Sidebar/`)
 
-Repository tree with branch management.
+Repository tree with branch management. Touch branch rows reveal their existing
+actions in a full-height tray after a horizontal left swipe. A Sidebar-owned
+row identity permits one open tray across repositories; vertical scrolling and
+mouse interactions keep their existing behavior.
 
 Branch rows keep the status icon separate from the always-visible agents disclosure button. Clicking status selects the workspace; the chevron toggles its agents.
 
@@ -622,3 +627,27 @@ before IPC/HTTP entry. Only requested fields render; approval instead shows
 exact argv/names/directory and optional template consent.
 
 `SettingsPanel/tabs/TelegramTab` renders the shared Telegram setup controls in desktop Settings and, when opened, in mobile `SettingsScreen`. All validation, pairing, private-file writes and polling ownership remain in Rust. The registered agent is read-only; agents opt in through MCP rather than a destination selector.
+
+Pending agent commands in `Terminal` drain once when both the command and an idle shell session are available. Parsed events, shell-state synchronization and WebSocket snapshots feed this same readiness check, including late launch preparation.
+
+Closed refusal turns show one plain-text card with the agent’s existing ACP refusal text. A refusal without text shows a generic refusal message.
+
+Browser HTML and Markdown previews load local images only from open repositories and their linked worktrees, through the authenticated repository image route. Images outside those roots show “Image unavailable: outside open repositories.” Desktop asset loading is unchanged.
+
+`StoriesDialog` run history embeds `RunIncidents`. It renders backend-owned cause and recovery suggestion text with run/attempt/story/session/task identities. It refreshes on run cursor changes and explicit operator refresh, ignores stale responses after selection changes, and discloses unavailable evidence. It does not execute recovery.
+
+Rich `RepoSection` metadata shows PR and worktree count chips only for positive counts, with reactive store updates.
+
+In rich mode, sessions idle for more than two hours fold into an expandable count. Backend activity timestamps determine age; busy sessions, awaiting input, unread output, selected rows and parents of visible children stay visible. Expanding preserves row order. Compact mode does not fold idle sessions.
+
+Rich working agent rows reserve two clamped intent lines. Idle, awaiting-input and error rows stay on one line with status dots; their full intent, task or prompt remains in the tooltip. Compact rows keep their one-line layout.
+
+Rich navigation keeps compact typography and padding. Branch identity and facts share one line, with names truncated and full PR/lifecycle facts in tooltips. Repository metadata disappears when PR and worktree counts are both zero. Header controls use compact sizing to protect repo names. Returned subagents fold into an expandable count independently of running work.
+
+In rich mode, ungrouped repositories with open terminals appear first, followed by an Idle section. Manual order is preserved inside each section. Idle headers start on one line; disclosure reveals their branches without changing activity or saved order. Headers count agents in the backend working state, independently of open-terminal membership.
+
+Rich active/idle sections also apply independently inside each existing repository group. Group membership and group ordering remain intact; active-only filtering hides idle-only groups and empty Idle headings.
+
+Rich merged linked worktrees with no sessions and verified lifecycle facts use a one-line summary: Merged, N uncommitted, Clean up. Live, unmerged, or unknown worktrees retain full rows. Clean up enters the existing lifecycle preflight and confirmation workflow; cancellation preserves the worktree.
+
+Rich parent terminal rows show N agents in each other repository containing live children. Clicking reveals the child group, repository and workspace, then selects a child through existing terminal navigation. Session placement and same-branch nesting stay intact; closed children disappear from summaries.

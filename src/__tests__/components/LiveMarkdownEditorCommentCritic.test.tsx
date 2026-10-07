@@ -8,7 +8,12 @@ import { LiveMarkdownEditor } from "../../components/MarkdownTab/LiveMarkdownEdi
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect ??= () => new DOMRect();
 
-afterEach(cleanup);
+afterEach(async () => {
+	// CodeMirror defers focus notifications by 10ms even after view.destroy().
+	// Drain that dependency-owned callback before Vitest checks async leaks.
+	cleanup();
+	await new Promise((resolve) => setTimeout(resolve, 20));
+});
 
 async function composer() {
 	const { container } = render(() => (

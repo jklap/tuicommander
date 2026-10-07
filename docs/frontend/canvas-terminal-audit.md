@@ -5,7 +5,7 @@
 
 CanvasTerminal is the sole terminal renderer. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel (desktop) or WebSocket (browser/PWA).
 
-Remote grid streams report handshake, initial-replay timeout (15 seconds), decode and unexpected-close failures through the WS-only `onStreamError` callback (never a Tauri PTY listener). CanvasTerminal displays a persistent error toast. Reconnect health resets only after the renderer receives a frame or the server explicitly finishes an empty replay, not at socket open; intentional teardown cancels replay and reconnect timers. No silence deadline applies after initial replay. Replay timeouts detach the socket and schedule recovery directly, even when its close handshake never completes.
+Remote grid streams report handshake, initial-replay timeout (15 seconds), decode and unexpected-close failures through the WS-only `onStreamError` callback (never a Tauri PTY listener). CanvasTerminal displays a persistent error toast. Reconnect health resets only after the renderer receives a frame or the server explicitly finishes an empty replay, not at socket open; intentional teardown cancels replay and reconnect timers. No silence deadline applies after initial replay. Replay timeouts detach the socket and schedule recovery directly, even when its close handshake never completes. The recorded idle remote replay regression asserts visible viewport text after reconnect without new PTY output. The backend WS attach regression separately verifies existing scrollback text at both the live viewport and a history offset without publishing a new frame (story 1421-733e); these prove recovery and replay, not attribution of the historical blank pane.
 
 Answers-only history includes a retained prompt-less prefix before the first tracked prompt. Finished prefix and prompt turns share the history-base cache, with prompt association included in its validity check. The panel shows a status notice when no turn has a marked answer.
 
@@ -202,7 +202,7 @@ cell's full text span, since native search points have no subcell index.
 | MCP atomic agent submission | OK | Backend-only `session action=submit`; the shared PTY writer lock spans payload, raw-mode gap, and Enter, so CanvasTerminal input cannot splice the submitted command. No renderer state or new frontend transport exists. |
 | Image paste detection | OK | Checks `items[i].type.startsWith("image/")` |
 | Resume banner keyboard | OK | Space/Enter/Escape/printable |
-| Touch tap/swipe/pinch (mobile) | OK | `installTouchHandlers` via offscreen textarea |
+| Touch tap/swipe/pinch (mobile) | OK | `installTouchHandlers` focuses the shared keyboard input; touch and compatibility mouse events retain one focus target |
 
 ### Selection & Clipboard
 
@@ -310,3 +310,5 @@ None. All tracked gaps have been resolved or marked wontfix.
 ### Stored terminal marker coordinates
 
 Stored command blocks and user prompt markers use all-time rows. Answers history consumes them directly. Gutter, scrollbar, search scope, navigation and buffer reads subtract the current frame history base at grid-relative boundaries. Evicted markers are omitted.
+
+Terminal stream reconnect notices use the current terminal name when available and show the transport’s current attempt (up to 10). A received grid frame or confirmed empty replay removes only that stream notice; socket opening alone does not. Exhausted retries leave a persistent failure notice. Closing the terminal removes its notice, and late subscription failures cannot publish a notice after closure.

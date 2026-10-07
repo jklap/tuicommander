@@ -1,10 +1,11 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { ContentRenderer } from "../../components/ui/ContentRenderer";
 import { appLogger } from "../../stores/appLogger";
 import { toastsStore } from "../../stores/toasts";
 import { rpc } from "../../transport";
 import { isAbsolutePath, pathStripPrefix } from "../../utils/pathUtils";
 import { repoImageUrl } from "../../utils/repoImageUrl";
+import { insertTweakBlockComment, type TweakComment, toggleCheckbox } from "../../utils/tweakComments";
+import { ReviewableMarkdown } from "../components/ReviewableMarkdown";
 import styles from "./FilesScreen.module.css";
 
 interface FileEntry {
@@ -47,6 +48,9 @@ export function FilesScreen(props: FilesScreenProps) {
 	const [editing, setEditing] = createSignal(false);
 	const [busy, setBusy] = createSignal(false);
 	const [error, setError] = createSignal("");
+	// Refusals of a review write (file changed on disk, write failed). Unlike `error` it keeps the document visible.
+	const [notice, setNotice] = createSignal("");
+	const [writing, setWriting] = createSignal(false);
 	let requestId = 0;
 	let searchRequestId = 0;
 	let pathPreviewTimer: ReturnType<typeof setTimeout> | undefined;
@@ -194,6 +198,7 @@ export function FilesScreen(props: FilesScreenProps) {
 		setContent("");
 		setEditing(false);
 		setError("");
+		setNotice("");
 		if (entry.size > MAX_MOBILE_FILE_BYTES) {
 			setError("File too large to open on mobile (1 MB limit).");
 			return;
@@ -232,6 +237,7 @@ export function FilesScreen(props: FilesScreenProps) {
 		requestId++;
 		setBusy(false);
 		setError("");
+		setNotice("");
 		if (props.initialLink && props.onExit) {
 			props.onExit();
 			return;
@@ -261,16 +267,58 @@ export function FilesScreen(props: FilesScreenProps) {
 		return repoImageUrl(repoPath, `${currentFile.split("/").slice(0, -1).join("/")}/${relativePath}`);
 	}
 
-	async function save() {
+	/** Replace the open file with `next`, but only if the disk still holds what this screen last read. */
+	async function writeIfUnchanged(next: string): Promise<boolean> {
 		const repoPath = repo();
 		const filePath = file();
-		if (!repoPath || !filePath) return;
+		if (!repoPath || !filePath) return false;
+		const written = await rpc<boolean>("write_file_if_unchanged", {
+			repoPath,
+			file: filePath,
+			expected: content(),
+			content: next,
+		});
+		if (written) setContent(next);
+		return written;
+	}
+
+	/** Run one write on behalf of a review tap. A stale view is reloaded, never written over. */
+	async function reviewWrite(next: () => string | null): Promise<boolean> {
+		if (writing()) return false;
+		setWriting(true);
+		setNotice("");
+		try {
+			const updated = next();
+			if (updated === null || updated === content()) return false;
+			if (await writeIfUnchanged(updated)) return true;
+			setContent(await rpc<string>("fs_read_file", { repoPath: repo(), file: file() }));
+			setNotice("The file changed on disk. It was reloaded; repeat your change.");
+			return false;
+		} catch (err) {
+			appLogger.warn("network", `Failed to save mobile review change: ${String(err)}`);
+			setNotice(`Could not save: ${String(err)}`);
+			return false;
+		} finally {
+			setWriting(false);
+		}
+	}
+
+	const toggleTask = (sourceLine: number, mark: " " | "x" | "~", sourceCol?: number) =>
+		void reviewWrite(() => toggleCheckbox(content(), sourceLine, mark, sourceCol));
+
+	const saveBlockComment = (comment: TweakComment, range: { start: number; end: number }) =>
+		reviewWrite(() => insertTweakBlockComment(content(), comment, range));
+
+	async function save() {
+		if (!repo() || !file()) return;
 		setBusy(true);
 		setError("");
 		try {
-			await rpc("write_file", { repoPath, file: filePath, content: draft() });
-			setContent(draft());
-			setEditing(false);
+			if (await writeIfUnchanged(draft())) {
+				setEditing(false);
+			} else {
+				setError("The file changed on disk since you opened it. Copy your text, cancel, and edit again.");
+			}
 		} catch (err) {
 			appLogger.warn("network", `Failed to save mobile file: ${String(err)}`);
 			setError(`Could not save file: ${String(err)}`);
@@ -365,6 +413,11 @@ export function FilesScreen(props: FilesScreenProps) {
 					{error()}
 				</p>
 			</Show>
+			<Show when={notice()}>
+				<p class={styles.error} role="alert">
+					{notice()}
+				</p>
+			</Show>
 			<Show when={busy()}>
 				<p class={styles.status}>Loading…</p>
 			</Show>
@@ -435,7 +488,12 @@ export function FilesScreen(props: FilesScreenProps) {
 					fallback={
 						file()?.toLowerCase().endsWith(".md") ? (
 							<div class={styles.markdownView}>
-								<ContentRenderer content={content()} imageSrc={markdownImageSrc} />
+								<ReviewableMarkdown
+									content={content()}
+									imageSrc={markdownImageSrc}
+									onCheckboxToggle={toggleTask}
+									onSaveBlockComment={saveBlockComment}
+								/>
 							</div>
 						) : (
 							<pre class={styles.viewer}>{content()}</pre>

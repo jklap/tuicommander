@@ -193,7 +193,13 @@ export const SessionControls: Component<{ chat: AcpChat }> = (props) => {
 				>
 					<For each={sessions()}>
 						{(session) => (
-							<option value={session.sessionId} title={session.sessionId}>
+							<option
+								value={session.sessionId}
+								title={session.sessionId}
+								disabled={session._meta?.tuicommander?.deleted === true}
+							>
+								{"  ".repeat(session._meta?.tuicommander?.lineageDepth ?? 0)}
+								{session._meta?.tuicommander?.lineageDepth ? "↳ " : ""}
 								{conversationLabel(session)}
 							</option>
 						)}

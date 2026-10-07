@@ -257,6 +257,19 @@ pub(super) async fn write_file_http(Json(body): Json<FsWriteFileRequest>) -> Res
     }
 }
 
+/// `Ok(true)` body is `true` (written), `false` means the file changed on disk first.
+pub(super) async fn write_file_if_unchanged_http(
+    Json(body): Json<FsWriteIfUnchangedRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    json_result(
+        crate::fs::write_file_if_unchanged(body.repo_path, body.file, body.expected, body.content)
+            .await,
+    )
+}
+
 pub(super) async fn create_directory_http(Json(body): Json<FsDirCreateRequest>) -> Response {
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();

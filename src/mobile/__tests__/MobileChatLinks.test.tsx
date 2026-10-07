@@ -10,7 +10,7 @@ const { rpc, chatText } = vi.hoisted(() => ({
 	chatText: { value: "" },
 }));
 
-vi.mock("../../transport", () => ({ rpc }));
+vi.mock("../../transport", () => ({ rpc, isTauri: () => false }));
 vi.mock("../../invoke", () => ({ invoke: vi.fn() }));
 vi.mock("../../stores/appLogger", () => ({ appLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../../stores/settings", () => ({ settingsStore: { hydrate: vi.fn(async () => {}) } }));
@@ -50,6 +50,7 @@ vi.mock("../useSessions", () => ({
 		loading: () => false,
 		refreshing: () => false,
 		error: () => null,
+		authError: () => false,
 		refresh: vi.fn(),
 		questionCount: () => 0,
 		markSeen: vi.fn(),

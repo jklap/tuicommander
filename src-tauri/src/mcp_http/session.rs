@@ -20,6 +20,16 @@ use uuid::Uuid;
 use super::types::*;
 use super::ws_compression::{DEFLATE_SUBPROTOCOL, WsCompression, WsFrameSender};
 
+pub(super) async fn get_prompt_receipt(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    match crate::prompt_receipt::read_receipt(&state, &id) {
+        Ok(receipt) => Json(receipt).into_response(),
+        Err(_) => session_not_found().into_response(),
+    }
+}
+
 /// Standard 404 response for missing sessions.
 fn session_not_found() -> (StatusCode, Json<serde_json::Value>) {
     (
@@ -87,6 +97,7 @@ pub(crate) fn live_tuic_sessions_by_pty(
 /// in both lists the same way.
 pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
     let tuic_by_pty = live_tuic_sessions_by_pty(state);
+    let repositories = crate::config::load_repositories();
     state
         .session_maps
         .sessions
@@ -94,13 +105,20 @@ pub(crate) fn local_session_rows(state: &AppState) -> Vec<SessionInfo> {
         .map(|entry| {
             let session_id = entry.key().clone();
             let session = entry.value().lock();
+            let declared = tuic_by_pty
+                .get(&session_id)
+                .and_then(|peer| super::session_placement::declared_worktree(&repositories, peer));
             SessionInfo {
                 cwd: session.cwd.clone(),
-                worktree_path: session
-                    .worktree
-                    .as_ref()
-                    .map(|w| w.path.to_string_lossy().to_string()),
-                worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
+                worktree_path: declared.as_ref().map(|(path, _)| path.clone()).or_else(|| {
+                    session
+                        .worktree
+                        .as_ref()
+                        .map(|w| w.path.to_string_lossy().to_string())
+                }),
+                worktree_branch: declared
+                    .map(|(_, branch)| branch)
+                    .or_else(|| session.worktree.as_ref().and_then(|w| w.branch.clone())),
                 display_name: session.display_name.clone(),
                 display_name_is_custom: session.display_name_is_custom,
                 display_name_from_spawn: session.display_name_from_spawn,
@@ -490,7 +508,7 @@ pub(super) async fn get_output(
                 "action": "output", "session_id": session_id,
                 "format": if format == "mcp_raw" { "raw" } else { "text" },
                 "limit": query.limit, "from_line": query.from_line,
-                "since_cursor": query.since_cursor,
+                "since_cursor": query.since_cursor, "from_byte": query.from_byte,
             }),
         );
         return (
@@ -812,11 +830,13 @@ pub(super) fn spawn_pty_session(
         &state,
         &session_id,
         PtySession {
+            launch_receipt: None,
             writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
             paused: paused.clone(),
             worktree,
+            initial_cwd: cwd.clone(),
             cwd: cwd.clone(),
             display_name: None,
             display_name_is_custom: false,
@@ -1137,6 +1157,8 @@ pub(super) async fn create_session_with_worktree(
     let worktree_branch = worktree.branch.clone();
     let branch_name = worktree_branch.clone().unwrap_or_default();
     state.notify_worktree_created(crate::state::WorktreeCreatedPayload {
+        creator_session: None,
+        spawn_session: true,
         repo_path: base_repo.clone(),
         workspace_id: crate::worktree::workspace_id_of_worktree(&branch_name),
         branch: branch_name.clone(),
@@ -2236,6 +2258,24 @@ pub(super) async fn terminal_get_lines(
     }
 }
 
+/// The chat view of a Claude terminal from `from_seq`. A terminal with no bound
+/// Claude agent answers `not_bound: <reason>`.
+pub(super) async fn chat_view(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<ChatViewQuery>,
+) -> Response {
+    super::json_result(
+        crate::chat_view::chat_view_snapshot_blocking(
+            state,
+            session_id,
+            query.epoch,
+            query.from_seq.unwrap_or(0),
+        )
+        .await,
+    )
+}
+
 /// Serialize the whole grid for ONE client, without touching what the other
 /// clients are about to receive.
 ///
@@ -2648,6 +2688,74 @@ mod tests {
         );
         assert!(state.session_maps.sessions.is_empty());
         server.abort();
+    }
+
+    /// Catches: attaching after output ended waits for a new watch update or skips existing scrollback.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn grid_ws_attach_replays_existing_scrollback_without_new_output() {
+        for (offset, first_line) in [(0, "history 7"), (7, "history 0")] {
+            let state = super::super::tests::test_state();
+            let sid = "existing-scrollback-replay";
+            crate::state::tests_support::insert_dummy_session(&state, sid);
+            // Feed our real terminal parser before any client attaches. No
+            // reader/ticker publishes frames after the handshake.
+            let mut vt = VtLogBuffer::new(4, 32, 1000);
+            for line in 0..10 {
+                vt.process(format!("history {line}\r\n").as_bytes());
+            }
+            assert_eq!(vt.grid_history_size(), 7);
+            vt.grid_scroll_to_offset(offset);
+            state.grid.vt_log_buffers.insert(sid.into(), Mutex::new(vt));
+            state
+                .grid
+                .watch
+                .insert(sid.into(), crate::grid_watch::new_grid_watch());
+            let app = super::super::build_router(state, false, true);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let _ = axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await;
+            });
+            let (mut socket, _) = tokio_tungstenite::connect_async(format!(
+                "ws://{addr}/sessions/{sid}/stream?format=grid"
+            ))
+            .await
+            .expect("complete attach setup before replay deadline");
+            let replay = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
+                .await
+                .expect("existing history must replay without fresh PTY output")
+                .expect("stream open")
+                .expect("replay frame");
+            assert!(
+                replay.is_binary(),
+                "attach must deliver a renderable grid frame"
+            );
+            let bytes = replay.into_data();
+            assert_eq!(u16::from_le_bytes(bytes[0..2].try_into().unwrap()), 4);
+            assert_eq!(
+                u32::from_le_bytes(bytes[7..11].try_into().unwrap()),
+                offset as u32
+            );
+            assert_eq!(u32::from_le_bytes(bytes[11..15].try_into().unwrap()), 7);
+            // Full-frame row 0 starts after the 26-byte header and 4-byte
+            // row header; each cell stores a UTF-32 character plus styling.
+            let text: String = bytes[30..30 + 32 * 11]
+                .as_chunks::<11>()
+                .0
+                .iter()
+                .map(|cell| {
+                    char::from_u32(u32::from_le_bytes(cell[0..4].try_into().unwrap())).unwrap()
+                })
+                .collect();
+            assert_eq!(text.trim_end(), first_line);
+            socket.close(None).await.expect("close disposable client");
+            server.abort();
+        }
     }
 
     /// Catches: a live but empty grid stream sends nothing on attach, causing

@@ -822,6 +822,84 @@ describe("terminalsStore", () => {
 		});
 	});
 
+	describe("activation history (back/forward)", () => {
+		function addActivated(n: number): string[] {
+			const ids: string[] = [];
+			for (let i = 0; i < n; i++) {
+				const id = store.add(makeTerminal({ name: `T${i}` }));
+				store.setActive(id);
+				ids.push(id);
+			}
+			return ids;
+		}
+
+		// catches: back navigation reorders the history so back twice returns to the start
+		it("history_back_forward_walks_mru_without_reordering", () => {
+			testInScope(() => {
+				const [a, b, c] = addActivated(3);
+				const walk = (dir: "back" | "forward") => {
+					const id = store.stepHistory(dir);
+					if (id) store.setActive(id);
+					return id;
+				};
+				expect(walk("back")).toBe(b);
+				expect(walk("back")).toBe(a);
+				expect(walk("back")).toBeNull();
+				expect(walk("forward")).toBe(b);
+				expect(walk("forward")).toBe(c);
+				expect(walk("forward")).toBeNull();
+				expect(store.state.history).toEqual([c, b, a]);
+			});
+		});
+
+		// catches: activating a terminal after stepping back leaves a stale forward part
+		it("activating_another_terminal_truncates_the_forward_part", () => {
+			testInScope(() => {
+				const [a, b, c] = addActivated(3);
+				store.setActive(store.stepHistory("back") as string); // b
+				const d = store.add(makeTerminal({ name: "D" }));
+				store.setActive(d);
+				expect(store.getHistoryTarget("forward")).toBeNull();
+				expect(store.state.history).toEqual([d, b, a]);
+				expect(store.state.history).not.toContain(c);
+			});
+		});
+
+		// catches: back jumps to a closed terminal
+		it("closed_terminal_leaves_history", () => {
+			testInScope(() => {
+				const [a, b, c] = addActivated(3);
+				store.remove(b);
+				expect(store.state.history).toEqual([c, a]);
+				expect(store.getHistoryTarget("back")).toBe(a);
+			});
+		});
+
+		// catches: removing an entry before the cursor shifts back/forward onto the wrong terminal
+		it("removing_an_entry_ahead_of_the_cursor_keeps_the_current_position", () => {
+			testInScope(() => {
+				const [a, b, c] = addActivated(3);
+				store.setActive(store.stepHistory("back") as string); // b, cursor 1
+				store.setActive(store.stepHistory("back") as string); // a, cursor 2
+				store.remove(c);
+				expect(store.state.history).toEqual([b, a]);
+				expect(store.getHistoryTarget("forward")).toBe(b);
+				expect(store.getHistoryTarget("back")).toBeNull();
+			});
+		});
+
+		// catches: unbounded history growth
+		it("keeps_only_the_ten_most_recent_distinct_terminals", () => {
+			testInScope(() => {
+				const ids = addActivated(12);
+				expect(store.state.history).toEqual(ids.slice(2).reverse());
+				store.setActive(ids[5]);
+				expect(store.state.history[0]).toBe(ids[5]);
+				expect(new Set(store.state.history).size).toBe(store.state.history.length);
+			});
+		});
+	});
+
 	describe("findTerminalWithSession()", () => {
 		it("returns active terminal when it has a session", () => {
 			testInScope(() => {

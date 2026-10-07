@@ -182,6 +182,15 @@ turn epoch. A still-open dialog or a new question in that output chunk remains
 awaiting; the reducer checks the expected text and epoch before applying the
 clear.
 
+A `progress type=blocked` report from an agent with a live PTY emits a
+confident `question` with `source: "progress-blocked"`, and the reducer records
+that source on the awaiting evidence. When the same PTY later reports `done`, or
+journals a `delegated` hand-off, `emit_progress_entry` emits
+`progress-superseded` for that PTY. The reducer clears the badge only when the
+current awaiting evidence still has the `progress-blocked` source: a dialog, a
+choice prompt or another confident question records a different source and
+stays awaiting. A new `blocked` report replaces the question text.
+
 ### Raw Capture Regression Fixtures
 
 Agent-state failures must be captured from the raw PTY stream before analysis.

@@ -10,7 +10,11 @@ import { LiveMarkdownEditor } from "../../components/MarkdownTab/LiveMarkdownEdi
 Range.prototype.getClientRects ??= () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect ??= () => new DOMRect();
 
-afterEach(cleanup);
+afterEach(async () => {
+	cleanup();
+	// CodeMirror's dependency-owned focus notification is deferred by 10ms.
+	await new Promise((resolve) => setTimeout(resolve, 20));
+});
 
 function setup(initial: string, disk: () => string) {
 	const [content, setContent] = createSignal(initial);

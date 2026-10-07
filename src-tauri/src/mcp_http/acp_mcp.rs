@@ -449,6 +449,7 @@ fn touches_workspace(event: &crate::state::AppEvent) -> bool {
             | AppEvent::SessionClosed { .. }
             | AppEvent::PtyExit { .. }
             | AppEvent::SessionStateChanged { .. }
+            | AppEvent::SessionWorktreeDeclared(_)
             | AppEvent::WorktreeCreated(_)
             | AppEvent::WorktreeRemoved(_)
             | AppEvent::TermAliasAssigned { .. }

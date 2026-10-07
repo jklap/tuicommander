@@ -104,6 +104,7 @@ export interface AppInitDeps {
 		listActiveSessions: () => Promise<
 			Array<{
 				session_id: string;
+				worktree_path?: string | null;
 				cwd: string | null;
 				display_name?: string | null;
 				pty_description?: string | null;
@@ -983,6 +984,7 @@ export async function initApp(deps: AppInitDeps) {
 				// name came from: every OSC/intent title is synced back as non-custom.
 				nameFromSpawn: session.display_name_from_spawn === true,
 				parentSession: session.parent_session ?? null,
+				placementPath: session.worktree_path ?? null,
 				...(session.tuic_session ? { tuicSession: session.tuic_session } : {}),
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				// The Context bar mounts once intent or prompt is known. Waiting for the
@@ -1001,7 +1003,13 @@ export async function initApp(deps: AppInitDeps) {
 			});
 			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
 
-			assignSessionToRepoBranch(session.session_id, id, session.cwd, deps.registerRepo, deps.refreshAllBranchStats);
+			assignSessionToRepoBranch(
+				session.session_id,
+				id,
+				session.worktree_path ?? session.cwd,
+				deps.registerRepo,
+				deps.refreshAllBranchStats,
+			);
 		}
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
 	}

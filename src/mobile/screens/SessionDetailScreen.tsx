@@ -13,6 +13,7 @@ import { SuggestChips } from "../components/SuggestChips";
 import { TerminalKeybar } from "../components/TerminalKeybar";
 
 import { getAgentCommands } from "../config/agentCommands";
+import { useMobileVoice } from "../useMobileVoice";
 import type { SessionInfo } from "../useSessions";
 import { formatRetryCountdown } from "../utils/formatRetryCountdown";
 import { isKnownAgentType } from "../utils/sessionKind";
@@ -56,6 +57,10 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	const [moreOpen, setMoreOpen] = createSignal(false);
 	const [headerPanel, setHeaderPanel] = createSignal<SessionHeaderPanel | null>(null);
 	const agentType = () => sessionState()?.agent_type;
+	const voice = useMobileVoice(
+		() => props.session.session_id,
+		() => !!agentType() && props.sessionExists,
+	);
 	const statusText = () =>
 		({
 			idle: "Idle",
@@ -230,8 +235,33 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 						{projectName(props.session.worktree_path ?? props.session.cwd)}
 						<Show when={props.session.worktree_branch}> · {props.session.worktree_branch}</Show> · {statusText()}{" "}
 						{sessionState()?.last_activity_ms ? elapsedTime(sessionState()!.last_activity_ms) : ""}
+						<Show when={voice.phase()}> · Voice {voice.phase()}</Show>
 					</span>
 				</button>
+				<Show when={voice.available()}>
+					<button
+						type="button"
+						class={styles.headerAction}
+						classList={{ [styles.voiceActive]: voice.armed() }}
+						aria-label={voice.armed() ? "Stop voice conversation" : "Start voice conversation"}
+						aria-pressed={voice.armed()}
+						onClick={() => void voice.toggle()}
+					>
+						<svg
+							width="20"
+							height="20"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							aria-hidden="true"
+						>
+							<rect x="9" y="3" width="6" height="11" rx="3" />
+							<path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
+						</svg>
+					</button>
+				</Show>
 				<button
 					type="button"
 					class={styles.headerAction}

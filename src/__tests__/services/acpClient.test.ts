@@ -627,3 +627,132 @@ describe("acpClient: letting go", () => {
 		expect(streams.opened).toHaveLength(1);
 	});
 });
+
+// Catches: atMessageId dropped and the child showing all four replies after a mid-history fork.
+it("forks from the second of four replies without changing the parent", async () => {
+	const streams = new FakeStreams();
+	const client = createAcpClient(streams.open);
+	await client.connect(ROOT);
+	for (let index = 1; index <= 4; index++) {
+		acpTranscript.noteUserMessage(SESSION, `prompt ${index}`);
+		acpTranscript.applyFrame({
+			...frame(index),
+			event: {
+				kind: "sessionUpdate",
+				update: {
+					sessionUpdate: "agent_message_chunk",
+					messageId: `reply-${index}`,
+					content: { type: "text", text: `reply ${index}` },
+				},
+			},
+		});
+	}
+	const child = "child";
+	mockInvoke.mockImplementation(answering({ acp_session_fork: { sessionId: child } }));
+	await client.forkSession(CONNECTION, SESSION, ROOT, "reply-2");
+	expect(mockInvoke).toHaveBeenCalledWith("acp_session_fork", {
+		connectionId: CONNECTION,
+		sessionId: SESSION,
+		authority: { cwd: ROOT, additionalDirectories: [] },
+		atMessageId: "reply-2",
+	});
+	expect(acpTranscript.entries(child).map((entry) => ("text" in entry ? entry.text : ""))).toEqual([
+		"prompt 1",
+		"reply 1",
+		"prompt 2",
+		"reply 2",
+	]);
+	expect(acpTranscript.entries(SESSION)).toHaveLength(8);
+});
+
+describe("configured conversation replay", () => {
+	const launch = { executable: "/bin/ego", profile: "coordinator", workspace: "/observer", peerId: "peer" };
+	// Catches: reopening appends replayed history to the old projection instead of replacing it.
+	it("clears the old projection for a replay but retains it when already attached", async () => {
+		acpTranscript.noteUserMessage(SESSION, "old projection");
+		mockInvoke.mockImplementation(
+			answering({ acp_chat_open: { connection: snapshot(), sessionId: SESSION, launch, replayed: true } }),
+		);
+		await client.openConversation({ sessionId: SESSION });
+		expect(acpTranscript.entries(SESSION)).toEqual([]);
+		acpTranscript.noteUserMessage(SESSION, "current projection");
+		mockInvoke.mockImplementation(
+			answering({ acp_chat_open: { connection: snapshot(), sessionId: SESSION, launch, replayed: false } }),
+		);
+		await client.openConversation({ sessionId: SESSION });
+		expect(acpTranscript.entries(SESSION).map((entry) => (entry.kind === "user" ? entry.text : ""))).toEqual([
+			"current projection",
+		]);
+	});
+	// Catches: a failed custom conversation reopen destroys the transcript a user was reading.
+	it("restores the projection when the saved launch is refused", async () => {
+		acpTranscript.noteUserMessage(SESSION, "keep this history");
+		mockInvoke.mockRejectedValueOnce(new Error("launch refused"));
+		await expect(client.openConversation({ sessionId: SESSION })).rejects.toThrow("launch refused");
+		expect(acpTranscript.entries(SESSION).map((entry) => (entry.kind === "user" ? entry.text : ""))).toEqual([
+			"keep this history",
+		]);
+	});
+});
+
+// Catches: switching back to an attached custom chat erases response chunks received during the open request.
+it("retains live response chunks while reopening an already attached custom conversation", async () => {
+	await client.connect(ROOT);
+	acpTranscript.noteUserMessage(SESSION, "question before switching tabs");
+	let finishOpen!: (value: unknown) => void;
+	const pendingOpen = new Promise<unknown>((resolve) => {
+		finishOpen = resolve;
+	});
+	mockInvoke.mockImplementation(answering({ acp_chat_open: pendingOpen }));
+	const reopening = client.openConversation({ sessionId: SESSION });
+	streams.deliver({
+		...frame(2),
+		event: {
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "response arriving during tab switch" },
+			},
+		},
+	});
+	finishOpen({
+		connection: snapshot({ latestSequence: 2 }),
+		sessionId: SESSION,
+		launch: { executable: "/bin/ego", profile: "coordinator", workspace: "/observer", peerId: "peer" },
+		replayed: false,
+	});
+	await reopening;
+	expect(acpTranscript.entries(SESSION).map((entry) => ("text" in entry ? entry.text : ""))).toEqual([
+		"question before switching tabs",
+		"response arriving during tab switch",
+	]);
+});
+
+// Catches: a rejected reopen restores stale history over chunks received on the live stream.
+it("retains live response chunks when custom conversation reopen is refused", async () => {
+	await client.connect(ROOT);
+	acpTranscript.noteUserMessage(SESSION, "question before switching tabs");
+	let refuseOpen!: (error: Error) => void;
+	const pendingOpen = new Promise<unknown>((_resolve, reject) => {
+		refuseOpen = reject;
+	});
+	mockInvoke.mockImplementation(answering({ acp_chat_open: pendingOpen }));
+	const reopening = client.openConversation({ sessionId: SESSION });
+	const rejected = expect(reopening).rejects.toThrow("launch refused");
+	streams.deliver({
+		...frame(2),
+		event: {
+			kind: "sessionUpdate",
+			update: {
+				sessionUpdate: "agent_message_chunk",
+				content: { type: "text", text: "response arriving during refused reopen" },
+			},
+		},
+	});
+	refuseOpen(new Error("launch refused"));
+	await rejected;
+	expect(acpTranscript.entries(SESSION).map((entry) => ("text" in entry ? entry.text : ""))).toEqual([
+		"question before switching tabs",
+		"response arriving during refused reopen",
+	]);
+});

@@ -50,6 +50,7 @@ benchmarks
 CLAUDE.md
 .mdkb
 scripts/*
+!scripts/record-chat-fixtures.py
 !scripts/build-docs.sh
 !scripts/dev-install.sh
 !scripts/dev-server.mjs

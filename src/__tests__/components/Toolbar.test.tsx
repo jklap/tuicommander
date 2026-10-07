@@ -52,8 +52,10 @@ import { githubStore } from "../../stores/github";
 import { prNotificationsStore } from "../../stores/prNotifications";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
+import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { uiStore } from "../../stores/ui";
+import { makeTerminal } from "../helpers/store";
 
 function setTauriEnv(on: boolean) {
 	const global = globalThis as Record<string, unknown>;
@@ -119,6 +121,29 @@ describe("Toolbar", () => {
 	it("renders toolbar element", () => {
 		const { container } = render(() => <Toolbar />);
 		expect(container.querySelector(".toolbar")).not.toBeNull();
+	});
+
+	// Catches: history arrows enabled at the ends of the history, or a tooltip that does not name the target terminal.
+	it("history arrows are disabled at the ends and their tooltip names the target terminal", () => {
+		const first = terminalsStore.add(makeTerminal({ name: "Alpha" }));
+		const second = terminalsStore.add(makeTerminal({ name: "Beta" }));
+		try {
+			terminalsStore.setActive(first);
+			terminalsStore.setActive(second);
+			const { container } = render(() => <Toolbar />);
+			const back = container.querySelector("[data-testid='history-back']") as HTMLButtonElement;
+			const forward = container.querySelector("[data-testid='history-forward']") as HTMLButtonElement;
+			expect(back.disabled).toBe(false);
+			expect(back.title).toContain("Alpha");
+			expect(forward.disabled).toBe(true);
+			fireEvent.click(back);
+			expect(back.disabled).toBe(true);
+			expect(forward.disabled).toBe(false);
+			expect(forward.title).toContain("Beta");
+		} finally {
+			terminalsStore.remove(first);
+			terminalsStore.remove(second);
+		}
 	});
 
 	// Catches: the sidebar layout mode readable only through title/tooltip, which touch never shows.

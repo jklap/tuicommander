@@ -67,6 +67,20 @@ returns `400` and does not enter the session map.
 
 ### Session Control
 
+Session removal polls the child once and releases the PTY handles immediately.
+If the child has not terminated yet, a separate waiter owns only its child handle
+until `wait()` reaps it. This covers reader EOF arriving before process exit and
+explicit close/kill racing termination, without holding session or map locks.
+The existing post-mortem buffers still expire through the five-minute tombstone
+sweeper; explicit close removes them immediately.
+
+On Linux with glibc, releasing terminal payloads also calls `malloc_trim(0)`
+after the owners and map guards are dropped. The expiry sweeper trims once per
+batch that actually releases payloads. This returns unused scrollback pages
+that glibc thread arenas otherwise keep resident, without changing live grids
+or the process-wide arena limit. Other platforms and libcs keep their allocator
+behavior.
+
 | Command | Description |
 |---------|-------------|
 | `write_pty(session_id, data)` | Write data (user input) to the PTY. Raises the calling thread to `QOS_CLASS_USER_INTERACTIVE` on macOS for the duration of the write and restores the previous class on the way out, so a keystroke is not scheduled behind background work on a pool thread TUIC only borrowed. |
@@ -393,11 +407,11 @@ struct ChangedRow {
 
 **How it works:**
 
-1. Maintains a `vt100::Parser` — a full VT100 screen emulator (24 rows × 220 cols default)
+1. Owns the session's `TerminalGrid`, backed by Alacritty (24 rows × 220 cols default); the same grid supplies rendered frames, scrollback, copy and search
 2. On each `process()` call, compares current screen rows against previous snapshot
-3. Lines that have scrolled off the top are emitted to the log (diff-based detection)
+3. Newly scrolled primary-history rows are extracted into the separate `LogLine` log
 4. **Separate alternate-screen contracts:** changed rows are still returned while a TUI app owns the alternate screen, so status/intent/question parsers keep working. Durable log extraction reads only primary-screen history, so fullscreen repaint noise never reaches mobile/MCP logs
-5. Bounded by `VT_LOG_BUFFER_CAPACITY` (10,000 lines); oldest lines are dropped when full
+5. The grid retains 10,000 history rows per screen; the separate log is bounded by `VT_LOG_BUFFER_CAPACITY` (10,000 lines). Oldest entries are dropped when each buffer is full. The grid history cannot be reduced as an independent log scratch buffer
 6. **Monotonic cursor:** `total_lines()` returns a monotonically increasing count of all lines ever pushed (not the current buffer length). Clients use this as a stable cursor for paginated reads via `lines_since_owned(offset, limit)`. If a client's saved offset falls in the evicted range, it is clamped to `oldest_offset()`
 
 **Resize:** When the PTY is resized, `VtLogBuffer.resize()` keeps the parser in sync and clears the previous-row snapshot (avoids false scroll detection after resize). If an alternate-screen app is active, the durable-log cursor is synchronized against the inactive primary grid, not the unrelated alternate history; normal shell capture therefore resumes on the first line after exit.
@@ -730,3 +744,20 @@ OSC 133 command boundaries and OSC 7770 prompt rows are eviction-stable all-time
 Claude launch settings apply to prompt and option-first launches. Shell wrappers use backend-captured installed CLI help to recognise subcommands and aliases, without probing again at launch. Help is unavailable unless its `Commands:` section has parseable command rows; empty, whitespace-only or truncated help therefore uses the complete recorded Claude help, including `auth` and advertised aliases. Rust publishes this fallback to the shell environment; generated wrappers also embed it for an unusable cached value. No separate fallback verb list is maintained. The exact hidden `remote-control` command also bypasses settings because its reported CLI refusal confirms that requirement. Hyphenated prompts retain settings. Explicit settings and bare mode remain authoritative.
 
 Headless PTY registration uses the requested terminal geometry without a minimum VT width. A same-size resize preserves that width.
+
+MCP retained-output pages use `VtLogBuffer::lines_since_logical` source-row
+start/end positions, including omitted chrome slots. The end is a page boundary,
+not the total scrollback size. Logical wrap lines stay whole; raw pages use the
+existing output ring and original-byte cursors. See [MCP output paging](mcp-http.md#mcp-tool-session-output).
+
+### Claude transcript Chat view
+
+`chat_view::View::advance` reads complete JSONL rows through `transcript_tail`,
+projects them with `ClaudeAdapter`, and retains a bounded ACP update log. It
+recognizes older prompt-ID rows without `origin`, excludes harness command echoes
+and sidechains, and preserves image/PDF result markers and model fallback cards.
+Recorded sanitized cases and the last-30-days schema counts are in
+[`fixtures/chat_view/recorded`](../../src-tauri/src/fixtures/chat_view/recorded/README.md).
+The opt-in `view_real_transcript_throughput` measurement reads an authorized local
+file at runtime through the same path, reporting both the 2 MiB attach and full
+parse times plus process peak RSS. Raw transcripts are never committed.

@@ -1,8 +1,11 @@
 use super::*;
-use crate::telegram::tool::{Button, Input};
+#[cfg(unix)]
+use crate::telegram::tool::Button;
+use crate::telegram::tool::Input;
 
 // Catches: an old phone button still delivers a choice after a final reply or
 // an authored done notice replaced the message the user is acting on.
+#[cfg(unix)]
 #[tokio::test]
 async fn final_reply_and_done_notice_retire_previous_button_mail() {
     for notice in [false, true] {

@@ -40,6 +40,8 @@ const BROWSER_ACTION_IDS = new Set([
 	"prev-tab",
 	"next-tab",
 	"focus-last-terminal",
+	"history-back",
+	"history-forward",
 	"jump-waiting-terminal",
 	"zoom-in",
 	"zoom-out",
