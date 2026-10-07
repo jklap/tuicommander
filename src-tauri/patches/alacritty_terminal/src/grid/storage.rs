@@ -10,7 +10,9 @@ use super::Row;
 use crate::index::Line;
 
 /// Maximum number of buffered lines outside of the grid for performance optimization.
-const MAX_CACHE_SIZE: usize = 1_000;
+// 32 spare rows retain 165 KiB at 220 columns (24-byte Cell), versus 5 MiB
+// for the upstream 1,000-row cache, per grid. Still amortizes scrolling allocations.
+const MAX_CACHE_SIZE: usize = 32;
 
 /// A ring buffer for optimizing indexing and rotation.
 ///
@@ -311,6 +313,19 @@ mod tests {
         fn flags_mut(&mut self) -> &mut Flags {
             unimplemented!();
         }
+    }
+
+    /// Catches: reset history retains a thousand allocated spare cell rows per grid.
+    #[test]
+    fn history_release_keeps_at_most_thirty_two_spare_rows() {
+        let mut storage = Storage::<char>::with_capacity(24, 220);
+        storage.initialize(10_000, 220);
+        storage.rotate(17);
+        storage.shrink_lines(10_000);
+        assert!(storage.inner.len() <= storage.len + 32);
+        storage.initialize(1, 220);
+        assert!(storage.inner.len() <= storage.len + 32);
+        assert_eq!(storage[Line(0)].len(), 220);
     }
 
     #[test]
