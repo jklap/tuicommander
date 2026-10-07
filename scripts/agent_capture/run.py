@@ -65,6 +65,17 @@ def reject_login(text):
         raise RuntimeError("CLI requires login; agent remains unverified")
 
 
+def portable(metadata):
+    """Replace absolute recording paths (they embed the user's home) with placeholders."""
+    metadata = json.loads(json.dumps(metadata))
+    health = metadata.get("daemon_health")
+    if health and health.get("socket_path"):
+        health["socket_path"] = "<output>/" + Path(health["socket_path"]).name
+    if metadata.get("capture"):
+        metadata["capture"] = "<output>/raw/" + Path(metadata["capture"]).name
+    return metadata
+
+
 def promote(capture, metadata, name):
     """Promote only complete real recordings; baseline regeneration is explicit."""
     if not name or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in name):
@@ -81,7 +92,7 @@ def promote(capture, metadata, name):
     if any(path.exists() for path in (dest, dest.with_suffix(".scenario.json"), dest.with_suffix(".md"))):
         raise ValueError("fixture already exists; promotion never overwrites evidence")
     dest.write_bytes(data)
-    dest.with_suffix(".scenario.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    dest.with_suffix(".scenario.json").write_text(json.dumps(portable(metadata), indent=2) + "\n")
     dest.with_suffix(".md").write_text(
         f"# {metadata['agent']} scenario capture\n\n"
         "Source: real CLI output recorded through `/diagnostics/capture` on an\n"

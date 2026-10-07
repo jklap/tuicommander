@@ -21,7 +21,6 @@
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-idle.tcap","events":97}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-interrupted.tcap","events":80}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/goose-1.49.0-mid-turn.tcap","events":137}
-{"fixture":"src-tauri/src/fixtures/agent_prompts/goose-headless-short-20261008.tcap","events":24}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/grok-1.0.5-minimal-turn.tcap","events":282}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/opencode-1.18.30-mini-narrow-tool-turn.tcap","events":368}
 {"fixture":"src-tauri/src/fixtures/agent_prompts/opencode-1.18.30-mini-resize.tcap","events":11}

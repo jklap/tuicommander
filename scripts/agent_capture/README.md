@@ -97,16 +97,17 @@ scenario metadata and the generated oracle files together.
 | Claude | `~/.local/bin/claude` | Unverified: real CLI reports login expired; never logged in automatically |
 | Codex | `/opt/homebrew/bin/codex` | Recorded and replayed real READY turn; fixture `codex-headless-short-20261008` |
 | pi | `/opt/homebrew/bin/pi` | Recorded and replayed READY turn and real question/answer (Gemini 2.5 Flash); fixtures `pi-headless-short-20261008`, `pi-headless-question-20261008` |
-| goose | `~/.local/bin/goose` | Recorded and replayed real READY turn (local Ollama gemma4:12b-mlx); fixture `goose-headless-short-20261008` |
+| goose | `~/.local/bin/goose` | Unverified: the real banner prints the capture cwd, so a recording under `~/Gits` embeds the home path; re-record with a username-free cwd |
 | Amp | Not found on PATH | Unverified |
 | Cursor | `cursor-agent` not found on PATH | Unverified |
 | Droid | Not found on PATH | Unverified |
 
 The inventory command is a PATH check, not proof of authentication or CLI
-behavior. The three smoke fixtures and the pi question/answer fixture passed the focused replay gate on 2026-10-08.
-The failed real Claude capture under `fixtures/` is negative driver-test evidence,
-not a successful promoted scenario; it proves a login failure cannot become
-success merely because the terminal returned to idle.
+behavior. The Codex fixture and the two pi fixtures passed the focused replay gate on 2026-10-08.
+The real Claude capture embedded the home path through its CLAUDE.md import list,
+so it is not committed; `reject_login` is tested with the observed wording instead.
+Committed fixtures must not contain `/Users/` or `/home/`; promotion stores
+`<output>/...` placeholders instead of the recording paths.
 
 ## Focused driver tests
 
@@ -115,7 +116,7 @@ scripts/with-test-tmp.sh python3 -B -m unittest discover -s scripts/agent_captur
 ```
 
 These protect malformed scenario rejection, honest inventory, login-failure
-rejection from real Claude evidence, and lossless/non-overwriting promotion using
+rejection, the absence of home paths from committed capture fixtures, and lossless/non-overwriting promotion using
 an existing real Codex capture. Live capture evidence is separately recorded in
 the promoted fixture provenance and scenario metadata.
 

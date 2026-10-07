@@ -72,7 +72,7 @@
       "target": "aarch64-apple-darwin",
       "sha256": "0fece3d5e06bb87845d765695ecef7148f87a1326f8fb033f0aaa2ee1556bbdb"
     },
-    "socket_path": "/Users/stefano.straus/Gits/.tmp/agent-capture-1343/codex-short-2/tuic-mcp-8c9335becd72195b.sock",
+    "socket_path": "<output>/tuic-mcp-8c9335becd72195b.sock",
     "instance_id": "9bffe1a0-9a44-4c0c-bf92-e284c37e9158"
   },
   "observed_states": [
@@ -90,5 +90,5 @@
     }
   ],
   "sha256": "0b7b88cab3073e39494a4b99f638a86c61360828eaaf4125d7b4924d0dbf8d17",
-  "capture": "/Users/stefano.straus/Gits/.tmp/agent-capture-1343/codex-short-2/raw/d2d5181c-f075-4e92-978f-5a5cef468b49.tcap"
+  "capture": "<output>/raw/d2d5181c-f075-4e92-978f-5a5cef468b49.tcap"
 }
