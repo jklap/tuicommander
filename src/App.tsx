@@ -225,7 +225,7 @@ const App: Component = () => {
 	const [repoPathPromptVisible, setRepoPathPromptVisible] = createSignal(false);
 	let repoPathPromptResolve: ((value: string | null) => void) | null = null;
 
-	/** Show an in-app text-input dialog for repo path (browser mode only) */
+	/** Browse the serving machine for a repo path (browser mode only) */
 	const promptRepoPath = (): Promise<string | null> =>
 		new Promise((resolve) => {
 			repoPathPromptResolve = resolve;

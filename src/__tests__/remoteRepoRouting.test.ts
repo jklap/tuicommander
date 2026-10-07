@@ -275,6 +275,15 @@ describe("a repo registered on a remote machine runs its work there", () => {
 	});
 
 	describe("an explicit connection still wins", () => {
+		// Catches: browsing the serving TUIC jumps to a registered daemon with the same path.
+		it("keeps explicit current-server directory browsing local despite remote path ownership", async () => {
+			await rpc("list_directory", { repoPath: REMOTE_REPO, subdir: "" }, "");
+			expect(fetchedUrls()).toHaveLength(1);
+			expect(fetchedUrls()[0]).not.toContain(BASE_URL);
+			expect(fetchedUrls()[0]).not.toContain("token=");
+			expect(new URL(fetchedUrls()[0]).origin).toBe(window.location.origin);
+		});
+
 		it("probes a path before its repo is registered", async () => {
 			await rpc("get_repo_info", { path: "/home/boss/work/not-yet-added" }, CONNECTION);
 

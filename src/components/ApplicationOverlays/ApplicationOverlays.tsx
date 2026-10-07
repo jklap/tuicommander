@@ -317,11 +317,9 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 				onClose={() => props.prompts.resolveOpenPath(null)}
 				onConfirm={props.prompts.resolveOpenPath}
 			/>
-			<PromptDialog
+			<RemoteRepoPicker
 				visible={props.prompts.repoPathVisible()}
-				title="Add Repository"
-				placeholder="Enter absolute path to repository"
-				confirmLabel="Add"
+				connectionName={window.location.host}
 				onClose={() => props.prompts.resolveRepoPath(null)}
 				onConfirm={props.prompts.resolveRepoPath}
 			/>

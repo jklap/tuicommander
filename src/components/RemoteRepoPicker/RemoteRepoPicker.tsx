@@ -8,8 +8,8 @@ import s from "./RemoteRepoPicker.module.css";
 
 export interface RemoteRepoPickerProps {
 	visible: boolean;
-	/** The machine to browse. Every call this dialog makes is routed to it explicitly. */
-	connectionId: string;
+	/** The daemon to browse; omitted in browser mode to use the serving TUIC. */
+	connectionId?: string;
 	/** Shown in the header, so the user can see which machine they are walking. */
 	connectionName: string;
 	onClose: () => void;
@@ -58,14 +58,16 @@ export const RemoteRepoPicker: Component<RemoteRepoPickerProps> = (props) => {
 		setLoading(true);
 		setError(null);
 		try {
+			// An explicit empty connection keeps the serving TUIC even if this path
+			// also belongs to a registered remote repository.
 			// subdir "" means "list the path itself". `list_directory` canonicalizes
 			// whatever it is given and does not require a registered repository,
 			// which is the whole reason this works before the repo exists.
-			const result = await rpc<DirEntry[]>("list_directory", { repoPath: path, subdir: "" }, props.connectionId);
+			const result = await rpc<DirEntry[]>("list_directory", { repoPath: path, subdir: "" }, props.connectionId ?? "");
 			setEntries(result.filter((e) => e.is_dir).sort((a, b) => a.name.localeCompare(b.name)));
 			setCwd(path);
 			setDraft(path);
-			lastVisited.set(props.connectionId, path);
+			lastVisited.set(props.connectionId ?? "current-server", path);
 		} catch (e) {
 			// The message is the daemon's own. A path that is not there and a
 			// machine that stopped answering are different failures, and the user
@@ -84,13 +86,13 @@ export const RemoteRepoPicker: Component<RemoteRepoPickerProps> = (props) => {
 	createEffect(() => {
 		if (!props.visible) return;
 		const connectionId = props.connectionId;
-		const remembered = lastVisited.get(connectionId);
+		const remembered = lastVisited.get(connectionId ?? "current-server");
 		if (remembered) {
 			void load(remembered);
 			return;
 		}
 		setLoading(true);
-		void rpc<string>("get_home_directory", {}, connectionId)
+		void rpc<string>("get_home_directory", {}, connectionId ?? "")
 			.then((home) => {
 				if (props.visible && props.connectionId === connectionId) void load(home);
 			})
