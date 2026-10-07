@@ -8,6 +8,7 @@ use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode, TermParseDamage};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
+use unicode_width::UnicodeWidthStr;
 // `parking_lot::Mutex` has no poison state. A panic taken anywhere near this
 // queue used to poison a `std::sync::Mutex` permanently: `send_event` then
 // panicked on `.lock().unwrap()` for the rest of the terminal's life, and
@@ -637,6 +638,20 @@ fn append_cell_extras_trailer(
     }
 }
 
+/// Provenance captured before changing the grid geometry.
+struct ResizeViewport {
+    before_columns: usize,
+    after_columns: usize,
+    grid_sequence: u64,
+    viewport_top: usize,
+    rows: Vec<String>,
+    /// Immutable contiguous history immediately above the owned viewport.
+    preceding_logical: String,
+    /// Only these newest old history rows came from this viewport.
+    displaced_rows: usize,
+    scrolled_after_resize: usize,
+}
+
 /// Wraps `alacritty_terminal::Term` with a TUICommander-specific API.
 ///
 /// Provides `process() → Vec<ChangedRow>` + `screen_text_rows()`
@@ -680,6 +695,11 @@ pub struct TerminalGrid {
     reprint_head_snapshot: Vec<String>,
     /// `total_scrolled` when `reprint_head_snapshot` was taken.
     reprint_snapshot_scrolled: usize,
+    /// Full viewport erase generation at the resize/last examined repaint.
+    reprint_clear_generation: usize,
+    grid_sequence: u64,
+    resize_viewport: Option<ResizeViewport>,
+    history_source_widths: std::collections::HashMap<String, usize>,
 }
 
 impl TerminalGrid {
@@ -731,6 +751,10 @@ impl TerminalGrid {
             frame_end_carry: Vec::new(),
             reprint_head_snapshot: Vec::new(),
             reprint_snapshot_scrolled: 0,
+            reprint_clear_generation: 0,
+            grid_sequence: 0,
+            resize_viewport: None,
+            history_source_widths: std::collections::HashMap::new(),
         }
     }
 
@@ -739,6 +763,7 @@ impl TerminalGrid {
     /// Returns changed rows. OSC 133 events are delivered via `drain_events()`
     /// as `TermEvent::Osc133` (parsed natively by the patched VTE handler).
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
+        self.grid_sequence = self.grid_sequence.wrapping_add(1);
         if self.reprint_merge_armed_at.is_some() {
             if self.advance_frame_by_frame(data) {
                 // History shrank: the cached rows and the frame bookkeeping are stale.
@@ -1213,11 +1238,98 @@ impl TerminalGrid {
             lines: rows as usize,
         };
         let was_alt = self.is_alternate_screen();
+        let before_columns = self.term.grid().columns();
+        let before_lines = self.term.grid().screen_lines();
+        let viewport_top = self.term.grid().total_scrolled();
+        // Height growth pulls these exact coordinate-owned rows from history
+        // into the resized viewport. Keep their redraw; they no longer have
+        // an older history copy to preserve.
+        let pulled_rows = (rows as usize)
+            .saturating_sub(before_lines)
+            .min(self.term.grid().history_size());
+        let viewport_rows: Vec<String> = (-(pulled_rows as i32)..before_lines as i32)
+            .map(|row| self.row_to_text(Line(row)).unwrap_or_default())
+            .collect();
+        let preceding_count = self
+            .term
+            .grid()
+            .history_size()
+            .saturating_sub(pulled_rows)
+            .min(before_lines.saturating_mul(4).min(256));
+        // Preserve the source width of immutable hard rows across reflow.
+        // VT soft wraps are joined by bounds_to_string before the lookup;
+        // unchanged hard-row text keeps the width recorded at its last snapshot.
+        let hard_rows = self.logical_text_rows(
+            -(pulled_rows as i32 + preceding_count as i32),
+            -(pulled_rows as i32),
+        );
+        let mut widths = std::collections::HashMap::new();
+        let source_widths: Vec<usize> = hard_rows
+            .iter()
+            .map(|row| {
+                let width = self
+                    .history_source_widths
+                    .get(row)
+                    .copied()
+                    .unwrap_or(before_columns);
+                widths.insert(row.clone(), width);
+                width
+            })
+            .collect();
+        self.history_source_widths = widths;
+        let mut preceding_parts = Vec::new();
+        let mut first = 0;
+        while first < hard_rows.len() {
+            if hard_rows[first].trim().is_empty() {
+                preceding_parts.push(String::new());
+                first += 1;
+                continue;
+            }
+            let mut last = first + 1;
+            while last < hard_rows.len() && !hard_rows[last].trim().is_empty() {
+                last += 1;
+            }
+            let part: Vec<&str> = hard_rows[first..last].iter().map(String::as_str).collect();
+            preceding_parts.extend(reflow_copied_run_at_widths(
+                &part,
+                before_columns,
+                2,
+                true,
+                Some(&source_widths[first..last]),
+            ));
+            first = last;
+        }
+        let preceding_logical = preceding_parts.join("\n");
+        // All-mode width reflow can intermingle viewport and older history.
+        // Only short, unwrapped viewport rows have an unambiguous height map.
+        let simple_rows = (0..before_lines.saturating_sub(rows as usize)).all(|row| {
+            !self.row_wrapped(Line(row as i32))
+                && viewport_rows[pulled_rows + row].width() <= cols as usize
+        });
+        let displaced_rows = if before_columns == cols as usize
+            || mode == ReflowMode::HistoryOnly
+            || (cols as usize <= before_columns && simple_rows)
+        {
+            before_lines.saturating_sub(rows as usize)
+        } else {
+            0
+        };
         self.term.resize_reflow(size, mode);
         self.reprint_merge_armed_at = (!was_alt).then(|| self.term.grid().total_scrolled());
         self.frame_end_carry.clear();
         self.reprint_head_snapshot = self.armed_screen_rows();
         self.reprint_snapshot_scrolled = self.term.grid().total_scrolled();
+        self.reprint_clear_generation = self.term.viewport_clear().0;
+        self.resize_viewport = (!was_alt).then_some(ResizeViewport {
+            before_columns,
+            after_columns: cols as usize,
+            grid_sequence: self.grid_sequence,
+            viewport_top,
+            rows: viewport_rows,
+            preceding_logical,
+            displaced_rows,
+            scrolled_after_resize: self.term.grid().total_scrolled(),
+        });
         self.prev_rows.clear();
         self.term.mark_fully_damaged();
     }
@@ -1261,6 +1373,27 @@ impl TerminalGrid {
         merged
     }
 
+    fn logical_text_rows(&self, mut start: i32, end: i32) -> Vec<String> {
+        let mut rows = Vec::new();
+        while start < end {
+            let mut last = start;
+            while last + 1 < end && self.row_wrapped(Line(last)) {
+                last += 1;
+            }
+            let raw = self.term.bounds_to_string(
+                Point::new(Line(start), Column(0)),
+                Point::new(Line(last), Column(self.term.grid().columns() - 1)),
+            );
+            if raw.is_empty() {
+                rows.push(String::new());
+            } else {
+                rows.extend(raw.lines().map(str::to_string));
+            }
+            start = last + 1;
+        }
+        rows
+    }
+
     fn armed_screen_rows(&self) -> Vec<String> {
         let lines = self.term.grid().screen_lines() as i32;
         (0..lines)
@@ -1293,11 +1426,22 @@ impl TerminalGrid {
                 grid.total_scrolled(),
             )
         };
+        if !self.is_alternate_screen()
+            && self.term.viewport_clear().0 != self.reprint_clear_generation
+        {
+            let merged = self.merge_cleared_viewport_reprint();
+            self.reprint_merge_armed_at = None;
+            return merged;
+        }
         if self.is_alternate_screen() || scrolled.saturating_sub(armed_at) > lines {
             self.reprint_merge_armed_at = None;
             return false;
         }
-        let m = history.min(lines) as i32;
+        let owned = self
+            .resize_viewport
+            .as_ref()
+            .map_or(0, |resize| resize.displaced_rows);
+        let m = history.min(lines).min(owned) as i32;
         let text = |line: i32| self.row_to_text(Line(line)).unwrap_or_default();
         let tail: Vec<String> = (-m..0).map(text).collect();
         let head = self.armed_screen_rows();
@@ -1322,6 +1466,174 @@ impl TerminalGrid {
         self.term.grid_mut().drop_newest_history(overlap);
         self.reprint_merge_armed_at = None;
         true
+    }
+
+    /// Reconcile only the viewport captured at resize. An older-history prefix
+    /// in the redraw is NEW duplicate output, not permission to delete old rows.
+    fn merge_cleared_viewport_reprint(&mut self) -> bool {
+        let (generation, cleared_at) = self.term.viewport_clear();
+        self.reprint_clear_generation = generation;
+        let Some(resize) = self.resize_viewport.take() else {
+            return false;
+        };
+        let grid = self.term.grid();
+        if resize.after_columns != grid.columns()
+            || resize.grid_sequence > self.grid_sequence
+            || cleared_at != resize.scrolled_after_resize
+            || resize.viewport_top > resize.scrolled_after_resize
+        {
+            return false;
+        }
+        let newer = grid.total_scrolled().saturating_sub(cleared_at);
+        if newer > grid.history_size() {
+            return false;
+        }
+        let normalize = |rows: &[&str], columns: usize| {
+            let mut out = Vec::new();
+            let mut first = 0;
+            while first < rows.len() {
+                if rows[first].trim().is_empty() {
+                    out.push(String::new());
+                    first += 1;
+                    continue;
+                }
+                let mut last = first + 1;
+                while last < rows.len() && !rows[last].trim().is_empty() {
+                    last += 1;
+                }
+                out.extend(reflow_copied_run(&rows[first..last], columns, 2, true));
+                first = last;
+            }
+            out.join("\n")
+        };
+        let fresh_text = |start: i32| {
+            let text = self.term.bounds_to_string(
+                Point::new(Line(start), Column(0)),
+                Point::new(
+                    Line(grid.screen_lines() as i32 - 1),
+                    Column(grid.columns() - 1),
+                ),
+            );
+            normalize(&text.lines().collect::<Vec<_>>(), grid.columns())
+        };
+        let fresh = fresh_text(-(newer as i32));
+        let anchor = (0..resize.rows.len().saturating_sub(1)).find_map(|source_row| {
+            let rows = &resize.rows[source_row..source_row + 2];
+            if rows.iter().any(|row| row.trim().is_empty()) {
+                return None;
+            }
+            let anchor = normalize(
+                &rows.iter().map(String::as_str).collect::<Vec<_>>(),
+                resize.before_columns,
+            );
+            let anchor = anchor.strip_prefix("  ").unwrap_or(&anchor);
+            if anchor.len() < 16 {
+                return None;
+            }
+            let mut matches = fresh.match_indices(anchor);
+            matches.next()?;
+            if matches.next().is_some() {
+                return None;
+            }
+            // Last start row that still contains the complete owned anchor.
+            // If it starts inside a row, preserve that complete boundary row.
+            let prefix = (0..newer + grid.screen_lines())
+                .rev()
+                .find(|&prefix| fresh_text(prefix as i32 - newer as i32).contains(anchor))?;
+            Some((source_row, prefix))
+        });
+        let Some((source_row, mut prefix)) = anchor else {
+            return false;
+        };
+        // Historical blank rows stay in the proof. At the owned boundary,
+        // a leading viewport blank may instead be part of its replacement.
+        // Try the full historical prefix first; exclude owned blanks only
+        // when the remaining prefix proves the same exact historical suffix.
+        let old_logical = resize.preceding_logical.as_str();
+        let first_fragment = self.row_to_text(Line(-(newer as i32))).unwrap_or_default();
+        let first_fragment = first_fragment.strip_prefix("  ").unwrap_or(&first_fragment);
+        let mut candidate = prefix;
+        let mut owned_blanks = if resize.rows[..source_row]
+            .iter()
+            .all(|row| row.trim().is_empty())
+        {
+            source_row
+        } else {
+            0
+        };
+        let prefix_proven = loop {
+            let rows = self.logical_text_rows(-(newer as i32), candidate as i32 - newer as i32);
+            let text = normalize(
+                &rows.iter().map(String::as_str).collect::<Vec<_>>(),
+                grid.columns(),
+            );
+            let whole = old_logical
+                .strip_suffix(&text)
+                .is_some_and(|before| before.is_empty() || before.ends_with('\n'));
+            let partial = text.strip_prefix("  ").unwrap_or(&text);
+            if candidate != 0
+                && !text.is_empty()
+                && (whole || (first_fragment.width() >= 16 && old_logical.ends_with(partial)))
+            {
+                prefix = candidate;
+                break true;
+            }
+            if candidate == 0
+                || owned_blanks == 0
+                || !self
+                    .row_to_text(Line(candidate as i32 - newer as i32 - 1))
+                    .is_some_and(|row| row.trim().is_empty())
+            {
+                break false;
+            }
+            candidate -= 1;
+            owned_blanks -= 1;
+        };
+        let history_prefix = if prefix_proven { prefix.min(newer) } else { 0 };
+        let screen_prefix = if prefix_proven {
+            prefix.saturating_sub(newer)
+        } else {
+            0
+        };
+        // Collect proof before mutating any history coordinates.
+        let fresh_rows: Vec<String> = (-(newer as i32)..grid.screen_lines() as i32)
+            .map(|row| self.row_to_text(Line(row)).unwrap_or_default())
+            .collect();
+        let owned = resize
+            .displaced_rows
+            .min(grid.history_size().saturating_sub(newer));
+        let old_replaced: Vec<bool> = (0..owned)
+            .map(|row| {
+                let old = self
+                    .row_to_text(Line(row as i32 - newer as i32 - owned as i32))
+                    .unwrap_or_default();
+                !old.trim().is_empty() && fresh_rows.iter().any(|fresh| fresh == &old)
+            })
+            .collect();
+        let remaining = newer - history_prefix;
+        let mut removed = self
+            .term
+            .grid_mut()
+            .drop_history_before(remaining, history_prefix);
+        for row in 0..screen_prefix {
+            for col in 0..self.term.grid().columns() {
+                self.term.grid_mut()[Line(row as i32)][Column(col)] = Cell::default();
+            }
+        }
+        // Old rows are independent replacements, never an anchor-licensed block.
+        // Iterate oldest to newest so newer row offsets remain stable.
+        for (row, replaced) in old_replaced.into_iter().enumerate() {
+            if replaced {
+                removed += self
+                    .term
+                    .grid_mut()
+                    .drop_history_before(remaining + owned - row - 1, 1);
+            }
+        }
+        if screen_prefix != 0 {
+            self.term.mark_fully_damaged();
+        }
+        removed + screen_prefix != 0
     }
 
     /// Override ANSI colors 0-15 with theme values.
@@ -1931,7 +2243,7 @@ impl TerminalGrid {
                 >= 2;
 
             if should_strip {
-                out.extend(reflow_copied_run(&contents, num_cols, 4));
+                out.extend(reflow_copied_run(&contents, num_cols, 4, false));
             } else {
                 out.extend(lines[run_start..index].iter().map(|line| line.to_string()));
             }
@@ -1959,7 +2271,7 @@ impl TerminalGrid {
             contents.push(content);
             index += 1;
         }
-        let mut out = reflow_copied_run(&contents, num_cols, 2);
+        let mut out = reflow_copied_run(&contents, num_cols, 2, false);
         if index < lines.len() {
             out.push(Self::normalize_copied_selection(
                 &lines[index..].join("\n"),
@@ -2567,7 +2879,22 @@ fn gutter_content(line: &str) -> Option<&str> {
 ///
 /// Blank rows, list markers and deeper indents always start a new line: they
 /// mark structure the author chose, which the width rule alone cannot see.
-fn reflow_copied_run(contents: &[&str], num_cols: usize, margin_cols: usize) -> Vec<String> {
+fn reflow_copied_run(
+    contents: &[&str],
+    num_cols: usize,
+    margin_cols: usize,
+    exact_fit_wrap: bool,
+) -> Vec<String> {
+    reflow_copied_run_at_widths(contents, num_cols, margin_cols, exact_fit_wrap, None)
+}
+
+fn reflow_copied_run_at_widths(
+    contents: &[&str],
+    num_cols: usize,
+    margin_cols: usize,
+    exact_fit_wrap: bool,
+    source_widths: Option<&[usize]>,
+) -> Vec<String> {
     // Room for an agent's own right margin plus the ragged edge a greedy
     // wrapper leaves when the overflowing word is long.
     const WRAP_EVIDENCE_SLACK: usize = 24;
@@ -2575,13 +2902,11 @@ fn reflow_copied_run(contents: &[&str], num_cols: usize, margin_cols: usize) -> 
     // every run through. Prose quotes do not happen at such widths anyway.
     const MIN_REFLOW_COLS: usize = 48;
 
-    let width = contents
-        .iter()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(0);
+    // Recorded Ink repaints can wrap an exact-fit word; clipboard cleanup
+    // retains its stricter rule for an ambiguous typed newline.
+    let width = contents.iter().map(|line| line.width()).max().unwrap_or(0);
     let wrap_threshold = num_cols.saturating_sub(margin_cols + WRAP_EVIDENCE_SLACK);
-    if num_cols < MIN_REFLOW_COLS || width < wrap_threshold {
+    if source_widths.is_none() && (num_cols < MIN_REFLOW_COLS || width < wrap_threshold) {
         return contents.iter().map(|line| (*line).to_string()).collect();
     }
     let mut out: Vec<String> = Vec::with_capacity(contents.len());
@@ -2592,19 +2917,32 @@ fn reflow_copied_run(contents: &[&str], num_cols: usize, margin_cols: usize) -> 
     // short lines onto the paragraph.
     let mut previous_row: Option<(usize, usize)> = None;
 
-    for line in contents {
+    let mut recorded_max = std::collections::HashMap::new();
+    if let Some(widths) = source_widths {
+        for (line, &columns) in contents.iter().zip(widths) {
+            let max = recorded_max.entry(columns).or_insert(0usize);
+            *max = (*max).max(line.width());
+        }
+    }
+    for (index, line) in contents.iter().enumerate() {
+        let previous_columns =
+            source_widths.map_or(num_cols, |widths| widths[index.saturating_sub(1)]);
+        let previous_max = source_widths.map_or(width, |_| recorded_max[&previous_columns]);
+        let evidence = previous_columns >= MIN_REFLOW_COLS
+            && previous_max >= previous_columns.saturating_sub(margin_cols + WRAP_EVIDENCE_SLACK);
         let trimmed = line.trim_start();
-        let length = line.chars().count();
-        let indent = length - trimmed.chars().count();
+        let length = line.width();
+        let indent = length - trimmed.width();
 
         let joinable = match previous_row {
             Some((previous_length, previous_indent)) => {
-                !trimmed.is_empty()
+                evidence
+                    && !trimmed.is_empty()
                     && previous_length > previous_indent
                     && indent <= previous_indent
                     && !starts_list_item(trimmed)
-                    && previous_length + 1 + trimmed.split(' ').next().unwrap_or("").chars().count()
-                        > width
+                    && previous_length + 1 + trimmed.split(' ').next().unwrap_or("").width()
+                        > previous_max.saturating_sub(usize::from(exact_fit_wrap))
             }
             None => false,
         };

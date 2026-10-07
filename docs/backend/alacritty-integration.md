@@ -288,3 +288,39 @@ The largest remaining payload is the retained terminal grid: `(10,000 + 24) ×
 220 × 24 = 52,926,720` nominal cell bytes per session, before inactive-screen
 rows, spare rows and allocator rounding. Compact cells or file-backed history
 need a separate decision; neither is included in this patch.
+
+### Resize repaint reconciliation
+
+Every primary-screen resize records the source/target column widths, grid
+sequence, original viewport-top row index and the viewport's own row snapshot
+(#1407-1ab2). Live VtLogBuffer width changes reflow history only; the visible
+cursor-addressed Ink screen remains a separate replacement domain.
+
+The first explicit full viewport erase can replace an old displaced row only
+when that complete physical row occurs in the new replacement. A two-row
+viewport anchor does not license removing other old rows.
+
+A fresh redraw prefix is suppressed only when its entire text equals a contiguous
+suffix of an immutable history snapshot ending immediately above the owned
+viewport. The snapshot includes at most four original viewport heights, capped
+at 256 rows. Only its first row may start inside a source logical line, with a fragment
+of at least 16 visible characters; all following content must match exactly
+through the anchor. Short fragments, non-suffix matches, gaps or missing
+anchors preserve the entire prefix. Trailing historical blank separators remain
+in the comparison: a redraw omitting that gap provides no replay proof.
+Leading blank rows owned by the viewport remain in its replacement domain,
+so the prefix boundary excludes their replacement. This path never deletes old history. A genuinely new prefix
+identical to that complete retained suffix is indistinguishable from a replay:
+its older copy remains, but event multiplicity is lost. This bounded residual
+is explicit and regression-tested.
+
+Height growth records the exact history coordinates pulled into the new viewport,
+so their new redraw is retained. Matching preserves intra-line whitespace and
+uses the shared greedy-width rule for Ink's hard-line word wrapping. The bounded
+snapshot retains recorded source widths for unchanged hard rows across subsequent
+width changes; native VT soft wraps are joined before comparison, and blank
+paragraph separators remain explicit. Fresh
+visible duplicates are blanked without shifting child row coordinates.
+Alternate screens and ordinary edits provide no replacement authority.
+The recorded streaming and idle PTY captures and resize byte timelines live in
+`crates/tuic-terminal/src/fixtures/claude-resize-1407/`.

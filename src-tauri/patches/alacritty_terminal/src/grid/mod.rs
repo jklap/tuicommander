@@ -243,6 +243,22 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         count
     }
 
+    /// Remove duplicate history immediately before `newer` freshly repainted rows.
+    /// Retained oldest rows keep their absolute coordinates, as for newest removal.
+    pub fn drop_history_before(&mut self, newer: usize, count: usize) -> usize {
+        let count = min(count, self.history_size().saturating_sub(newer));
+        if count == 0 {
+            return 0;
+        }
+        self.raw.remove_history_range(newer, count);
+        self.raw[Line(-(newer as i32))].copy_origin_unknown = true;
+        self.lines_scrolled = self.lines_scrolled.saturating_sub(count);
+        if self.display_offset > newer {
+            self.display_offset = self.display_offset.saturating_sub(count).max(newer);
+        }
+        count
+    }
+
     fn increase_scroll_limit(&mut self, count: usize) {
         let count = min(count, self.max_scroll_limit - self.history_size());
         if count != 0 {

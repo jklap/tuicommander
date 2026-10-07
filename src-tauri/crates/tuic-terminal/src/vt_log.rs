@@ -342,7 +342,7 @@ impl VtLogBuffer {
         let mode = if !self.grid.reflow_history || self.grid.is_alternate_screen() {
             ReflowMode::None
         } else {
-            ReflowMode::All
+            ReflowMode::HistoryOnly
         };
         self.grid.resize_with_mode(rows, cols, mode);
         // A resize can change the inactive primary grid's history length while an
