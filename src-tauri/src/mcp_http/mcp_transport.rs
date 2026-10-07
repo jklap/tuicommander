@@ -4756,6 +4756,11 @@ fn handle_agent_with_parent_cwd(
                 cmd.env(k, v);
                 screen_env.insert(k.clone(), v.clone());
             }
+            if let Err(error) =
+                apply_managed_claude_tmpdir(&mut cmd, effective_agent_type.as_deref())
+            {
+                return serde_json::json!({"error": error});
+            }
             let mut env_keys: Vec<_> = screen_env.keys().collect();
             env_keys.sort();
             tracing::debug!(
@@ -9106,6 +9111,27 @@ fn resolve_spawn_agent_type(binary_path: &str, configured: Option<&str>) -> Opti
     } else {
         configured.map(str::to_string)
     }
+}
+
+/// Keep Claude's harness-owned background output under Gits unless the user
+/// supplied a location through inherited, run-config or caller environment.
+fn apply_managed_claude_tmpdir(
+    cmd: &mut CommandBuilder,
+    agent_type: Option<&str>,
+) -> Result<(), String> {
+    if agent_type != Some("claude") || cmd.get_env("CLAUDE_CODE_TMPDIR").is_some() {
+        return Ok(());
+    }
+    let home = cmd
+        .get_env("HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(dirs::home_dir)
+        .ok_or("Cannot determine home directory for Claude background output")?;
+    let path = home.join("Gits/.tmp/claude");
+    std::fs::create_dir_all(&path)
+        .map_err(|error| format!("Cannot create Claude background output directory: {error}"))?;
+    cmd.env("CLAUDE_CODE_TMPDIR", path.as_os_str());
+    Ok(())
 }
 
 fn codex_wrapper_launch_warning(
@@ -13946,6 +13972,113 @@ mod tests {
             wait_for_file_content_async(&output, std::time::Duration::from_secs(5)).await,
             format!("/run|{unparented_id}||run|present|1")
         );
+    }
+
+    // Catches: managed Claude background output falls back to the system temp directory.
+    #[test]
+    fn managed_claude_tmpdir_creates_default_before_spawn() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let mut cmd = CommandBuilder::new("claude");
+        cmd.env_clear();
+        cmd.env("HOME", home.path());
+        apply_managed_claude_tmpdir(&mut cmd, Some("claude")).unwrap();
+        let expected = home.path().join("Gits/.tmp/claude");
+        assert_eq!(
+            cmd.get_env("CLAUDE_CODE_TMPDIR"),
+            Some(expected.as_os_str())
+        );
+        assert!(
+            expected.is_dir(),
+            "the harness needs an existing output directory"
+        );
+    }
+
+    // Catches: TUIC overwrites an explicit inherited/config/caller harness setting.
+    #[test]
+    fn managed_claude_tmpdir_preserves_explicit_environment() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let custom = home.path().join("custom");
+        let mut cmd = CommandBuilder::new("claude");
+        cmd.env_clear();
+        cmd.env("HOME", home.path());
+        cmd.env("CLAUDE_CODE_TMPDIR", custom.as_os_str());
+        apply_managed_claude_tmpdir(&mut cmd, Some("claude")).unwrap();
+        assert_eq!(cmd.get_env("CLAUDE_CODE_TMPDIR"), Some(custom.as_os_str()));
+        assert!(!home.path().join("Gits").exists());
+    }
+
+    // Catches: a Claude-only default changes other agents or anonymous executable spawns.
+    #[test]
+    fn managed_claude_tmpdir_leaves_other_agents_unchanged() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        for agent in [Some("codex"), Some("goose"), None] {
+            let mut cmd = CommandBuilder::new("agent");
+            cmd.env_clear();
+            cmd.env("HOME", home.path());
+            apply_managed_claude_tmpdir(&mut cmd, agent).unwrap();
+            assert!(cmd.get_env("CLAUDE_CODE_TMPDIR").is_none());
+        }
+        assert!(!home.path().join("Gits").exists());
+    }
+
+    // Catches: a failed default-directory creation silently launches Claude into system temp.
+    #[test]
+    fn managed_claude_tmpdir_rejects_unusable_default_directory() {
+        let home = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::fs::write(home.path().join("Gits"), "not a directory").unwrap();
+        let mut cmd = CommandBuilder::new("claude");
+        cmd.env_clear();
+        cmd.env("HOME", home.path());
+        let error = apply_managed_claude_tmpdir(&mut cmd, Some("claude")).unwrap_err();
+        assert!(error.contains("Cannot create Claude background output directory"));
+        assert!(cmd.get_env("CLAUDE_CODE_TMPDIR").is_none());
+    }
+
+    // Catches: spawn assembly drops the default or overwrites run-config/caller overrides.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_claude_spawn_passes_tmpdir_to_child_with_env_precedence() {
+        let root = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _config = crate::config::set_config_dir_override(root.path().join("config"));
+        let output = root.path().join("child-env");
+        let command = format!(
+            "printf '%s' \"$CLAUDE_CODE_TMPDIR\" > '{}'",
+            output.display()
+        );
+        let configured = root.path().join("configured");
+        let caller = root.path().join("caller");
+        let config: crate::config::AgentsConfig = serde_json::from_value(serde_json::json!({
+            "agents": {"claude": {"run_configs": [
+                {"name": "Default Tmp", "command": "/bin/sh", "args": ["-c", command, "{prompt}"]},
+                {"name": "Configured Tmp", "command": "/bin/sh", "args": ["-c", command, "{prompt}"],
+                 "env": {"CLAUDE_CODE_TMPDIR": configured}}
+            ]}}
+        })).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), config).unwrap();
+        let state = test_state();
+        let default = std::env::var_os("CLAUDE_CODE_TMPDIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| root.path().join("Gits/.tmp/claude"));
+        for (profile, override_path, expected) in [
+            ("Default Tmp", None, &default),
+            ("Configured Tmp", None, &configured),
+            ("Configured Tmp", Some(&caller), &caller),
+        ] {
+            let mut request = serde_json::json!({
+                "action": "spawn", "agent_type": profile, "prompt": "inspect env",
+                "env": {"HOME": root.path()}
+            });
+            if let Some(path) = override_path {
+                request["env"]["CLAUDE_CODE_TMPDIR"] = serde_json::json!(path);
+            }
+            let spawned = handle_agent(&state, "127.0.0.1:1".parse().unwrap(), &request, None);
+            assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+            assert_eq!(
+                wait_for_file_content_async(&output, std::time::Duration::from_secs(30)).await,
+                expected.to_string_lossy()
+            );
+            std::fs::remove_file(&output).unwrap();
+        }
     }
 
     #[test]

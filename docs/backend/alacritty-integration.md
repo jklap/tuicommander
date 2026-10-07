@@ -37,6 +37,9 @@ review semantic changes separately from that reflow.
 | `src/term/cell.rs` | `pub enum Osc133CellType { None, Prompt, Input, Output }` + `Cell.cell_type` (`serde(default)`) | Semantic cell tagging from OSC 133 A/B/C/D, written by `Term::osc133` and read by `TerminalGrid` to emit prompt/input/output zones. Replaces the regex pre-parser TUIC used to run over raw output. |
 | `src/grid/tests.rs` | Upstream resize tests migrated to `ReflowMode`; new `shrink_reflow_history_only` case | Keeps upstream's reflow coverage green after the signature change and pins the new mode. |
 | `src/term/cell.rs` | `CellExtra.zerowidth: ArrayVec<char, MAX_ZEROWIDTH_CHARS>` (was `Vec<char>`), `push_zerowidth` uses `try_push`, `clear_wide` assigns `ArrayVec::new()`; direct `arrayvec` dep | **Backport of upstream `ede2ac14`** (2026-08-26, master only — 0.26.0 predates it, so this is not yet available from crates.io). The unbounded `Vec` let a single cell absorb combining marks forever (`echo -en a; while true; do echo -en '\xcc\x81'; done`), a memory-exhaustion vector any PTY child can reach. Overflow now drops the character instead of allocating. Bound is 9, upstream's value — no glyph cluster we render needs more, and `zerowidth()` still hands out a `&[char]` so no caller changed. **This row exists to stop the next rebase silently reverting the fix:** delete it only once the version we pin actually contains `ede2ac14`. `arrayvec` was already in the lock via `vte`, so the dep costs no new crate. |
+| `src/grid/row.rs` | Safe `Row::new` using `iter::repeat_with(T::default).take(columns).collect()` | **Backport of upstream `d692748d`** (2026-08-31, master only; 0.26.0 predates it). Removes the unsafe initializer and its hidden nonzero-column requirement. A zero-column row is now empty. Keep this backport until the pinned upstream release includes it. |
+| `src/grid/row.rs` | `grow` reserves exactly the requested additional columns; `shrink` returns allocation slack in both the retained row and its nonempty tail | Width changes no longer double row capacity or retain the previous wide allocation after shrinking. The cell values and reflow contract are unchanged. |
+| `src/grid/storage.rs` | `MAX_CACHE_SIZE = 32` (upstream: 1,000) | Bounds spare allocated rows while retaining batched allocation during scrollback growth. At 220 columns and 24 bytes per cell, the spare-cell budget falls from 5,280,000 to 168,960 bytes per grid, before allocator rounding. See the scrollback memory measurement below. |
 | `src/tty/unix.rs` | `ShellUser::from_env` calls `getpwuid_r` only when `USER`/`HOME`/`SHELL` is missing | Upstream resolves the passwd entry unconditionally on every PTY spawn. TUIC spawns many PTYs; the lookup is skipped when the environment already answers. |
 | `src/term/mod.rs` | IL/DL reset the cursor column; ICH/DCH/ECH clear the pending wrap; ED0 spares the cell behind a pending wrap | Three inherited divergences from the DEC contract, found by the ANSI differential harness (`tests/terminal-stress/INTEGRITY_FINDINGS.md`). They are described one row below; each is pinned by a `term::tests` case that names the operation. |
 | `src/term/mod.rs` | `fn scroll_up_overflow()`, separate from `Handler::scroll_up`; DL and SU scroll as `ScrollSource::Control` | DL and SU remove lines that never reached the bottom, so TUIC gained scrollback rows the agent never printed — an agent TUI that repaints with DL manufactured history. `wrapline` and `advance_line` called the same `Handler::scroll_up` the SU control dispatches to, so routing that one method would have stopped a linefeed feeding history as well; the overflow path gets its own entry point instead. Replaying the retained ANSI captures moves the row-count-grew residual bucket from 205 to 0 (#834-1878). |
@@ -248,3 +251,40 @@ Driven by the `alacritty-upstream` entry in `.claude/scheduled-checks.json` (eve
 ### Stored terminal marker coordinates
 
 OSC 133 and OSC 7770 event rows use `grid.total_scrolled() + cursor row`. Capture this origin inside the OSC handler, before later bytes in the same chunk can evict history. Retained history size is not an absolute origin.
+
+## Scrollback memory and the single-grid contract
+
+`VtLogBuffer` owns the session's only `TerminalGrid`. That grid backs desktop
+frames, HTTP scrollback, copy and search, as well as log extraction. Its
+10,000-row history is user-visible history; it is not a duplicate scratch grid
+that can be capped independently. The separate 10,000-line `LogLine` deque serves
+mobile pagination. Reducing its grid history would delete terminal scrollback.
+
+The 2026-10-07 six-session measurement uses 220 columns and full history,
+including a resize cycle to expose retained row capacity. The workload and native
+RSS, `vmmap`, `footprint`, `heap`, and diagnostics measurements are recorded in
+story `1575-2c7b`. Row cache sizing retains a 32-row allocation batch instead of
+allocating one row at a time. This patch changes allocation retention, not the
+history limit or transport behavior.
+
+| Metric (six sessions after the width cycle) | Before | After |
+|---|---:|---:|
+| RSS (KiB) | 977,584 | 966,176 |
+| Physical footprint (bytes, diagnostics) | 1,118,438,912 | 596,067,624 |
+| Malloc bytes in use (diagnostics) | 822,958,480 | 454,159,264 |
+| Heap bytes (`heap -s`) | 822,623,440 | 453,913,968 |
+| `LogLine` bytes (diagnostics estimate) | 14,638,752 | 14,638,752 |
+
+The requested 50% RSS reduction was not reached: RSS fell by 1.17%, while
+malloc bytes in use fell by 44.81% and physical footprint by 46.71%. The after
+`footprint` report also classified 355 MB of Malloc Small as reclaimable; RSS
+alone does not show the live-allocation reduction. Heap row allocations changed
+from approximately 60,294 12 KiB blocks to 60,295 6 KiB blocks. At that measured
+6 KiB per 220-column row, the spare-row bound is 6,144,000 bytes per grid before
+and 196,608 bytes after. This is a bound calculation, not a separate measurement
+of the cache's contribution to the total reduction.
+
+The largest remaining payload is the retained terminal grid: `(10,000 + 24) ×
+220 × 24 = 52,926,720` nominal cell bytes per session, before inactive-screen
+rows, spare rows and allocator rounding. Compact cells or file-backed history
+need a separate decision; neither is included in this patch.
