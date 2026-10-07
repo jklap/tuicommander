@@ -1,5 +1,8 @@
 .backdrop {
-  position: fixed;
+  /* Absolute, not fixed: the shell is the box that follows the visual viewport
+     (--app-top/--app-height). A fixed backdrop sits on the layout viewport, so
+     the iOS keyboard covers the sheet and only the Sessions list stays visible. */
+  position: absolute;
   inset: 0;
   z-index: 100;
   display: flex;
@@ -8,7 +11,7 @@
 
 .sheet {
   width: 100%;
-  max-height: 60vh;
+  max-height: min(60vh, 100%);
   overflow-y: auto;
   background: var(--bg-secondary);
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);

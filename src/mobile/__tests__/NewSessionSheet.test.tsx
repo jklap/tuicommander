@@ -38,6 +38,18 @@ describe("NewSessionSheet", () => {
 		expect(onDismiss).toHaveBeenCalled();
 	});
 
+	it("filters on the directory part of the path, not only the repository name", async () => {
+		// Catches: narrowing the filter to the basename, which hides repos the user finds by parent folder.
+		const view = render(() => (
+			<NewSessionSheet repos={["/work/alpha/api", "/personal/web"]} onDismiss={() => {}} onCreated={() => {}} />
+		));
+		await fireEvent.input(view.getByRole("searchbox", { name: "Search repositories" }), {
+			target: { value: "ALPHA" },
+		});
+		expect(view.getByRole("button", { name: /api/ })).toBeTruthy();
+		expect(view.queryByRole("button", { name: /web/ })).toBeNull();
+	});
+
 	it("closes with an explicit X", async () => {
 		const onDismiss = vi.fn();
 		const view = render(() => <NewSessionSheet repos={REPOS} onDismiss={onDismiss} onCreated={() => {}} />);
