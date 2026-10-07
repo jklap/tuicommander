@@ -81,7 +81,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 		displayName: string,
 		agentSeed?: AgentSeed,
 	) => Promise<void>;
-	refreshAllBranchStats: () => Promise<void>;
+	refreshAllBranchStats: (repoPath: string) => Promise<void>;
 }
 
 /** Owns auto-fix, conflict assist, merge, and post-merge cleanup workflows. */
@@ -265,12 +265,12 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				const action = afterMerge as "archive" | "delete";
 				if (!(await finalizeWithConfirmation(repoPath, workspaceId, action))) {
 					deps.setStatusInfo(`Merged ${branchName} via GitHub — worktree kept`);
-					await refreshAllBranchStats();
+					await refreshAllBranchStats(repoPath);
 					return;
 				}
 				deps.setStatusInfo(`Merged ${branchName} via GitHub (${action === "archive" ? "archived" : "deleted"})`);
 				repositoriesStore.removeWorkspace(repoPath, workspaceId);
-				await refreshAllBranchStats();
+				await refreshAllBranchStats(repoPath);
 				return;
 			}
 
@@ -417,7 +417,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		repositoriesStore.removeWorkspace(repoPath, workspaceId);
 
 		// Refresh to pick up updated branch stats
-		await refreshAllBranchStats();
+		await refreshAllBranchStats(repoPath);
 	};
 
 	/** Dismiss the post-merge cleanup dialog. */
