@@ -886,6 +886,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - `slash_mode` cleared on user-input events and status-line events
 
 ### 6.13 Inter-Agent Messaging
+- **Claude background output**: managed MCP peers default to `CLAUDE_CODE_TMPDIR=$HOME/Gits/.tmp/claude/`, created before spawn; explicit inherited, run-config or caller values take precedence.
 - Agent-to-agent coordination when multiple agents are spawned in parallel, carried by the `agent` MCP tool — there is no separate `messaging` tool
 - **Identity**: Each agent uses its `$TUIC_SESSION` env var (stable tab UUID) as its messaging identity. A headerless external caller may `register` without `tuic_session` to be issued an MCP-scoped UUID, or supply a stable UUID to reclaim an existing identity
 - **Actions**: `register` (announce presence, or rename/re-project an auto-bound peer), `list_peers` (discover other agents, optional `path` filter), `send` (message a peer by `to` = tuic_session), `inbox` (poll for messages), `wait` (block until new mail)
