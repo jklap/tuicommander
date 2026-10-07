@@ -11,7 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Add a CLI | Chat switch to Claude terminals: a read-only conversation view built from the agent's session file, with prompts apart from replies and tool calls folded into compact cards. The grid is hidden while Chat is open and never unmounted.
 
 ### Changed
-- Space sidebar refresh starts at least five seconds apart per repository, retaining one trailing update during event bursts.
+- Space automatic sidebar refresh starts at least five seconds apart per repository, retaining one trailing update during event bursts; explicit repository additions, checkouts and merge cleanup bypass the wait.
 - Resolve browser HTML and Markdown images through open repositories; show a clear placeholder for external images.
 - Show the existing ACP refusal text once in a plain-text AI Chat card.
 - Integrate workflow approval, plan dispatch and public story controls; public plan API starts share the daemon executor. Canonical workflow test fixtures preserve Windows ownership.

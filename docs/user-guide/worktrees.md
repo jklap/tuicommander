@@ -291,4 +291,6 @@ Force-deleting a branch preserves its tip at `refs/archive/<branch>`. It refuses
 
 Worktree names that sanitize to an existing checkout name produce an error when they target a different branch. TUICommander keeps that checkout and its uncommitted files.
 
-Sidebar refreshes are spaced at least five seconds apart for each repository. Changes during that window are collected into one refresh at its end, so the final update is retained. Badges can lag by five seconds plus the time needed to read Git state.
+Automatic sidebar refreshes are spaced at least five seconds apart for each repository. Changes during that window are collected into one refresh at its end, so the final update is retained. Badges can lag by five seconds plus the time needed to read Git state.
+
+Explicit repository additions, branch checkouts and merge cleanup refresh the affected repository immediately, while still waiting for any active refresh to finish.
