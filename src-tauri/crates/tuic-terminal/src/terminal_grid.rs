@@ -1259,25 +1259,10 @@ impl TerminalGrid {
         // Preserve the source width of immutable hard rows across reflow.
         // VT soft wraps are joined by bounds_to_string before the lookup;
         // unchanged hard-row text keeps the width recorded at its last snapshot.
-        let mut hard_rows = Vec::new();
-        let mut start = -(pulled_rows as i32 + preceding_count as i32);
-        let end = -(pulled_rows as i32);
-        while start < end {
-            let mut last = start;
-            while last + 1 < end && self.row_wrapped(Line(last)) {
-                last += 1;
-            }
-            let raw = self.term.bounds_to_string(
-                Point::new(Line(start), Column(0)),
-                Point::new(Line(last), Column(before_columns - 1)),
-            );
-            if raw.is_empty() {
-                hard_rows.push(String::new());
-            } else {
-                hard_rows.extend(raw.lines().map(str::to_string));
-            }
-            start = last + 1;
-        }
+        let hard_rows = self.logical_text_rows(
+            -(pulled_rows as i32 + preceding_count as i32),
+            -(pulled_rows as i32),
+        );
         let mut widths = std::collections::HashMap::new();
         let source_widths: Vec<usize> = hard_rows
             .iter()
@@ -1388,6 +1373,27 @@ impl TerminalGrid {
         merged
     }
 
+    fn logical_text_rows(&self, mut start: i32, end: i32) -> Vec<String> {
+        let mut rows = Vec::new();
+        while start < end {
+            let mut last = start;
+            while last + 1 < end && self.row_wrapped(Line(last)) {
+                last += 1;
+            }
+            let raw = self.term.bounds_to_string(
+                Point::new(Line(start), Column(0)),
+                Point::new(Line(last), Column(self.term.grid().columns() - 1)),
+            );
+            if raw.is_empty() {
+                rows.push(String::new());
+            } else {
+                rows.extend(raw.lines().map(str::to_string));
+            }
+            start = last + 1;
+        }
+        rows
+    }
+
     fn armed_screen_rows(&self) -> Vec<String> {
         let lines = self.term.grid().screen_lines() as i32;
         (0..lines)
@@ -1483,10 +1489,22 @@ impl TerminalGrid {
             return false;
         }
         let normalize = |rows: &[&str], columns: usize| {
-            rows.split(|row| row.trim().is_empty())
-                .map(|paragraph| reflow_copied_run(paragraph, columns, 2, true).join("\n"))
-                .collect::<Vec<_>>()
-                .join("\n\n")
+            let mut out = Vec::new();
+            let mut first = 0;
+            while first < rows.len() {
+                if rows[first].trim().is_empty() {
+                    out.push(String::new());
+                    first += 1;
+                    continue;
+                }
+                let mut last = first + 1;
+                while last < rows.len() && !rows[last].trim().is_empty() {
+                    last += 1;
+                }
+                out.extend(reflow_copied_run(&rows[first..last], columns, 2, true));
+                first = last;
+            }
+            out.join("\n")
         };
         let fresh_text = |start: i32| {
             let text = self.term.bounds_to_string(
@@ -1524,37 +1542,53 @@ impl TerminalGrid {
                 .find(|&prefix| fresh_text(prefix as i32 - newer as i32).contains(anchor))?;
             Some((source_row, prefix))
         });
-        let Some((_source_row, prefix)) = anchor else {
+        let Some((source_row, mut prefix)) = anchor else {
             return false;
         };
-        // Prove the ENTIRE fresh prefix against a contiguous snapshot suffix
-        // ending at the old viewport boundary. A new line or a gap keeps it all.
-        let prefix_text = if prefix == 0 {
-            String::new()
-        } else {
-            let raw = self.term.bounds_to_string(
-                Point::new(Line(-(newer as i32)), Column(0)),
-                Point::new(
-                    Line(prefix as i32 - newer as i32 - 1),
-                    Column(grid.columns() - 1),
-                ),
-            );
-            normalize(&raw.lines().collect::<Vec<_>>(), grid.columns())
-        };
-        let old_logical = &resize.preceding_logical;
-        let prefix_logical = prefix_text.trim_end_matches('\n');
-        let old_logical = old_logical.trim_end_matches('\n');
-        let whole_suffix = old_logical
-            .strip_suffix(prefix_logical)
-            .is_some_and(|before| before.is_empty() || before.ends_with('\n'));
-        // Ink adds its two-column margin to the first fresh fragment even
-        // when that fragment starts inside an old logical line.
-        let partial_logical = prefix_logical.strip_prefix("  ").unwrap_or(prefix_logical);
+        // Historical blank rows stay in the proof. At the owned boundary,
+        // a leading viewport blank may instead be part of its replacement.
+        // Try the full historical prefix first; exclude owned blanks only
+        // when the remaining prefix proves the same exact historical suffix.
+        let old_logical = resize.preceding_logical.as_str();
         let first_fragment = self.row_to_text(Line(-(newer as i32))).unwrap_or_default();
         let first_fragment = first_fragment.strip_prefix("  ").unwrap_or(&first_fragment);
-        let partial_suffix = first_fragment.width() >= 16 && old_logical.ends_with(partial_logical);
-        let prefix_proven =
-            prefix != 0 && !prefix_logical.is_empty() && (whole_suffix || partial_suffix);
+        let mut candidate = prefix;
+        let mut owned_blanks = if resize.rows[..source_row]
+            .iter()
+            .all(|row| row.trim().is_empty())
+        {
+            source_row
+        } else {
+            0
+        };
+        let prefix_proven = loop {
+            let rows = self.logical_text_rows(-(newer as i32), candidate as i32 - newer as i32);
+            let text = normalize(
+                &rows.iter().map(String::as_str).collect::<Vec<_>>(),
+                grid.columns(),
+            );
+            let whole = old_logical
+                .strip_suffix(&text)
+                .is_some_and(|before| before.is_empty() || before.ends_with('\n'));
+            let partial = text.strip_prefix("  ").unwrap_or(&text);
+            if candidate != 0
+                && !text.is_empty()
+                && (whole || (first_fragment.width() >= 16 && old_logical.ends_with(partial)))
+            {
+                prefix = candidate;
+                break true;
+            }
+            if candidate == 0
+                || owned_blanks == 0
+                || !self
+                    .row_to_text(Line(candidate as i32 - newer as i32 - 1))
+                    .is_some_and(|row| row.trim().is_empty())
+            {
+                break false;
+            }
+            candidate -= 1;
+            owned_blanks -= 1;
+        };
         let history_prefix = if prefix_proven { prefix.min(newer) } else { 0 };
         let screen_prefix = if prefix_proven {
             prefix.saturating_sub(newer)

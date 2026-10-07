@@ -306,7 +306,10 @@ viewport. The snapshot includes at most four original viewport heights, capped
 at 256 rows. Only its first row may start inside a source logical line, with a fragment
 of at least 16 visible characters; all following content must match exactly
 through the anchor. Short fragments, non-suffix matches, gaps or missing
-anchors preserve the entire prefix. This path never deletes old history. A genuinely new prefix
+anchors preserve the entire prefix. Trailing historical blank separators remain
+in the comparison: a redraw omitting that gap provides no replay proof.
+Leading blank rows owned by the viewport remain in its replacement domain,
+so the prefix boundary excludes their replacement. This path never deletes old history. A genuinely new prefix
 identical to that complete retained suffix is indistinguishable from a replay:
 its older copy remains, but event multiplicity is lost. This bounded residual
 is explicit and regression-tested.
