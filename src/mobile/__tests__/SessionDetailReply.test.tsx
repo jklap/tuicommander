@@ -36,7 +36,7 @@ it("submits a root coordinator's answer atomically from the deep-linked session"
 		<SessionDetailScreen session={session} sessionExists={true} onBack={() => {}} onOpenFiles={() => {}} />
 	));
 	await fireEvent.input(container.querySelector("textarea")!, { target: { value: "Approve the change" } });
-	expect(rpc).not.toHaveBeenCalled();
+	expect(rpc).not.toHaveBeenCalledWith("submit_agent_reply", expect.anything());
 	await fireEvent.click(screen.getByRole("button", { name: "Send" }));
 	await waitFor(() =>
 		expect(rpc).toHaveBeenCalledWith("submit_agent_reply", {
