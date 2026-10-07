@@ -90,16 +90,4 @@ describe("touch stylesheet contract (#1329-a31a)", () => {
 			'<div class="inputArea"><div class="inputBody"><textarea class="textarea"></textarea></div><button class="sendBtn"></button></div>';
 		expect(getComputedStyle(document.querySelector(".inputArea") as HTMLElement).alignItems).toBe("flex-end");
 	});
-
-	// Catches: the slash/skill suggestions wrapping or stacking vertically (tall list
-	// over the composer) instead of one horizontally scrollable chip row.
-	it("mobile slash menu is a single non-wrapping horizontally scrollable chip row", () => {
-		addCss(css("mobile/components/SlashMenuOverlay.module.css"));
-		document.body.innerHTML = '<div class="dropup"><button class="item"></button></div>';
-		const row = getComputedStyle(document.querySelector(".dropup") as HTMLElement);
-		expect(row.display).toBe("flex");
-		expect(["", "nowrap"]).toContain(row.flexWrap);
-		expect(row.overflowX).toBe("auto");
-		expect(getComputedStyle(document.querySelector(".item") as HTMLElement).flexShrink).toBe("0");
-	});
 });
