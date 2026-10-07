@@ -4736,3 +4736,6 @@ Known limit for 1439-d84f: **Open terminal** is a harmless no-op when the remote
 
 - [ ] On Boss's next planned Linux daemon rebuild/restart, confirm closing filled throwaway terminals reduces resident memory while other terminals remain readable. The isolated mint comparison proves freed grid pages can remain resident until trim. This lane does not restart or signal the live mint daemon.
 - [ ] After the backend restart, confirm Settings > MCP shows a short dedicated summary for the native workflow_run tool. Native catalog and HTTP status regressions cover the wire response.
+
+
+- [ ] [HUMAN] On an iPhone PWA, tap + on Sessions, then tap "Search repositories". The New Session sheet must stay visible above the keyboard (not the Sessions list), and typing a folder name or a parent folder must filter the list. _(Story 1572-6be7: sheet backdrop moved from fixed to absolute inside the visual-viewport shell; needs real iOS keyboard.)_
