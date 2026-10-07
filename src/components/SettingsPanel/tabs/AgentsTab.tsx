@@ -29,6 +29,14 @@ import { settingsStore } from "../../../stores/settings";
 import { isTauri, rpc } from "../../../transport";
 import { onClickKeyDown } from "../../../utils/a11y";
 import { buildEnvFromEntries, findDuplicateEnvKeys } from "../../../utils/envVars";
+import {
+	type ArgConflict,
+	egoProfileChips,
+	findArgConflicts,
+	hasBlockingConflict,
+	type ProfileChip,
+	splitRawArgs,
+} from "../../../utils/runConfigArgs";
 import { AgentIcon } from "../../ui/AgentIcon";
 import { ExpertSetting } from "../ExpertSetting";
 import { MachineSelector } from "../MachineSelector";
@@ -113,6 +121,50 @@ const EnvVarRow: Component<{
 	</div>
 );
 
+/** Chips for args the permissions profile adds at launch, then the raw args as an advanced field. */
+const RunArgsFields: Component<{
+	chips: ProfileChip[];
+	conflicts: ArgConflict[];
+	value: string;
+	onInput: (value: string) => void;
+	onKeyDown: (e: KeyboardEvent) => void;
+}> = (props) => (
+	<>
+		<Show when={props.chips.length > 0}>
+			<div class={a.formRow}>
+				<span class={a.envVarsLabel}>From permissions profile</span>
+				<For each={props.chips}>
+					{(chip) => (
+						<span class={a.argChip} title="Set in the ego permissions section; applied at every launch">
+							{chip.flag} {chip.value}
+						</span>
+					)}
+				</For>
+			</div>
+		</Show>
+		<div class={a.formRow}>
+			<input
+				class={`${a.formInput} ${a.mono}`}
+				classList={{ [a.inputError]: hasBlockingConflict(props.conflicts) }}
+				aria-label="Raw arguments (advanced)"
+				placeholder="Raw arguments (advanced, space-separated)"
+				value={props.value}
+				onInput={(e) => props.onInput(e.currentTarget.value)}
+				onKeyDown={props.onKeyDown}
+			/>
+		</div>
+		<For each={props.conflicts}>
+			{(c) => (
+				<div
+					classList={{ [a.validationError]: c.kind === "duplicate", [a.validationWarning]: c.kind === "overridden" }}
+				>
+					{c.message}
+				</div>
+			)}
+		</For>
+	</>
+);
+
 /** Inline form for adding a new run config */
 const AddConfigForm: Component<{
 	agentType: AgentType;
@@ -145,14 +197,16 @@ const AddConfigForm: Component<{
 
 	const duplicateEnvKeys = createMemo(() => findDuplicateEnvKeys(envVars()));
 	const duplicateEnvKeysSet = createMemo(() => new Set(duplicateEnvKeys()));
+	const egoProfile = () => configStore.state.agents.ego;
+	const argConflicts = createMemo(() => findArgConflicts(props.agentType, splitRawArgs(args()), egoProfile()));
 
 	const handleSave = async () => {
 		const n = name().trim();
-		if (!n || isDuplicate() || duplicateEnvKeys().length > 0) return;
+		if (!n || isDuplicate() || duplicateEnvKeys().length > 0 || hasBlockingConflict(argConflicts())) return;
 		const config: AgentRunConfig = {
 			name: n,
 			command: command().trim() || AGENTS[props.agentType].binary,
-			args: args().trim() ? args().trim().split(/\s+/) : [],
+			args: splitRawArgs(args()),
 			model: model().trim() || undefined,
 			env: buildEnvFromEntries(envVars()),
 			is_default: false,
@@ -186,17 +240,17 @@ const AddConfigForm: Component<{
 					value={command()}
 					onInput={(e) => setCommand(e.currentTarget.value)}
 				/>
-				<input
-					class={`${a.formInput} ${a.mono}`}
-					placeholder="Arguments (space-separated)"
-					value={args()}
-					onInput={(e) => setArgs(e.currentTarget.value)}
-					onKeyDown={(e) => {
-						if (e.key === "Enter") handleSave();
-						if (e.key === "Escape") props.onClose();
-					}}
-				/>
 			</div>
+			<RunArgsFields
+				chips={props.agentType === "ego" ? egoProfileChips(egoProfile()) : []}
+				conflicts={argConflicts()}
+				value={args()}
+				onInput={setArgs}
+				onKeyDown={(e) => {
+					if (e.key === "Enter") handleSave();
+					if (e.key === "Escape") props.onClose();
+				}}
+			/>
 			<div class={a.formRow}>
 				<input
 					class={`${a.formInput} ${a.mono}`}
@@ -237,7 +291,9 @@ const AddConfigForm: Component<{
 				<button
 					class={a.smallBtn}
 					onClick={handleSave}
-					disabled={isDuplicate() || !name().trim() || duplicateEnvKeys().length > 0}
+					disabled={
+						isDuplicate() || !name().trim() || duplicateEnvKeys().length > 0 || hasBlockingConflict(argConflicts())
+					}
 				>
 					Save
 				</button>
@@ -299,14 +355,20 @@ const RunConfigRow: Component<{
 		return n.length > 0 && allExistingNames().has(n);
 	};
 
+	const egoProfile = () => configStore.state.agents.ego;
+	const profileChips = () => (props.agentType === "ego" ? egoProfileChips(egoProfile()) : []);
+	const editConflicts = createMemo(() => findArgConflicts(props.agentType, splitRawArgs(editArgs()), egoProfile()));
+	// Already-saved args may predate the profile; the row warns before launch.
+	const savedConflicts = createMemo(() => findArgConflicts(props.agentType, props.config.args, egoProfile()));
+
 	const saveConfig = async () => {
 		const n = editName().trim();
-		if (!n || isDuplicateName()) return;
+		if (!n || isDuplicateName() || hasBlockingConflict(editConflicts())) return;
 		const updated: AgentRunConfig = {
 			...props.config,
 			name: n,
 			command: editCommand().trim() || props.config.command,
-			args: editArgs().trim() ? editArgs().trim().split(/\s+/) : [],
+			args: splitRawArgs(editArgs()),
 			model: editModel().trim() || undefined,
 		};
 		await configStore.updateRunConfig(props.agentType, props.index, updated);
@@ -357,6 +419,17 @@ const RunConfigRow: Component<{
 						<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 							<path d="M12 2 1 22h22L12 2zm-1 7h2v6h-2V9zm0 8h2v2h-2v-2z" />
 						</svg>
+					</span>
+				</Show>
+				<Show when={savedConflicts().length > 0}>
+					<span
+						class={a.envBadge}
+						title={savedConflicts()
+							.map((c) => c.message)
+							.join("\n")}
+						aria-label="Conflicting arguments"
+					>
+						args conflict
 					</span>
 				</Show>
 				<Show when={envCount() > 0}>
@@ -423,17 +496,17 @@ const RunConfigRow: Component<{
 							value={editCommand()}
 							onInput={(e) => setEditCommand(e.currentTarget.value)}
 						/>
-						<input
-							class={`${a.formInput} ${a.mono}`}
-							placeholder="Arguments (space-separated)"
-							value={editArgs()}
-							onInput={(e) => setEditArgs(e.currentTarget.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter") saveConfig();
-								if (e.key === "Escape") setEditingConfig(false);
-							}}
-						/>
 					</div>
+					<RunArgsFields
+						chips={profileChips()}
+						conflicts={editConflicts()}
+						value={editArgs()}
+						onInput={setEditArgs}
+						onKeyDown={(e) => {
+							if (e.key === "Enter") saveConfig();
+							if (e.key === "Escape") setEditingConfig(false);
+						}}
+					/>
 					<div class={a.formRow}>
 						<input
 							class={`${a.formInput} ${a.mono}`}
@@ -444,7 +517,11 @@ const RunConfigRow: Component<{
 						/>
 					</div>
 					<div class={a.formRow}>
-						<button class={a.smallBtn} onClick={saveConfig} disabled={isDuplicateName() || !editName().trim()}>
+						<button
+							class={a.smallBtn}
+							onClick={saveConfig}
+							disabled={isDuplicateName() || !editName().trim() || hasBlockingConflict(editConflicts())}
+						>
 							Save
 						</button>
 						<button class={a.smallBtn} onClick={() => setEditingConfig(false)}>
