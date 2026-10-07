@@ -304,6 +304,17 @@ The first explicit full viewport erase can replace an old displaced row only
 when that complete physical row occurs in the new replacement. A two-row
 viewport anchor does not license removing other old rows.
 
+Full reflow can move the original viewport prefix into history even when the
+height is unchanged. A unique complete two-row source prefix locates that
+owned range in the reflowed coordinates; incomplete or ambiguous matches
+retain the rows. Each old row still needs complete replacement proof.
+
+Blank screen-prefix rows created by proven suppression retain explicit
+provenance. A write, erase, scroll or alternate-screen switch touching them
+invalidates that provenance, even if the visible text remains blank. Before
+the next full reflow, only still-owned synthetic blanks are removed without
+adding history. Program-authored separators are never included.
+
 A fresh redraw prefix is suppressed only when its entire text equals a contiguous
 suffix of an immutable history snapshot ending immediately above the owned
 viewport. The snapshot includes at most four original viewport heights, capped
