@@ -97,7 +97,9 @@ it("shows a refused start as a readable toast without the Error prefix", async (
 	});
 	mount();
 	fireEvent.click(await screen.findByRole("button", { name: "Start voice conversation" }));
-	await waitFor(() => expect(toastAdd).toHaveBeenCalledWith("Voice not started", "Voice needs a secure page", "error", true));
+	await waitFor(() =>
+		expect(toastAdd).toHaveBeenCalledWith("Voice not started", "Voice needs a secure page", "error", true),
+	);
 });
 
 it("ends the conversation when the session screen is left", async () => {
