@@ -4793,3 +4793,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] iPad remote access after the next backend restart: open `/` without an authenticated cookie, sign in through the form, and confirm the touch interface loads. Recheck the originally reported connection failure on the physical iPad; no attributable transport error was available in server logs. Rust auth changes require a manual `make dev` restart by Boss.
 - [ ] Browser desktop Add Repository: browse server home, select a folder, or cancel; native desktop and connected-daemon pickers retain their own machine ownership.
+
+- [ ] Telegram Stop (#1521-52cd): after Boss restarts the rebuilt headless daemon, start a Telegram-bound reply, press Stop and verify the bound agent sees Escape. Send a replacement message and verify a repeated old Stop cannot interrupt it. Backend byte ordering and captured Codex submission are covered by targeted tests; live Telegram client rendering remains unverified.
