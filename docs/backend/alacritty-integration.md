@@ -303,15 +303,20 @@ viewport anchor does not license removing other old rows.
 A fresh redraw prefix is suppressed only when its entire text equals a contiguous
 suffix of an immutable history snapshot ending immediately above the owned
 viewport. The snapshot includes at most four original viewport heights, capped
-at 256 rows. A mismatch, gap, partial boundary or missing anchor preserves the
-entire prefix. This path never deletes old history. A genuinely new prefix
+at 256 rows. Only its first row may start inside a source logical line, with a fragment
+of at least 16 visible characters; all following content must match exactly
+through the anchor. Short fragments, non-suffix matches, gaps or missing
+anchors preserve the entire prefix. This path never deletes old history. A genuinely new prefix
 identical to that complete retained suffix is indistinguishable from a replay:
 its older copy remains, but event multiplicity is lost. This bounded residual
 is explicit and regression-tested.
 
 Height growth records the exact history coordinates pulled into the new viewport,
 so their new redraw is retained. Matching preserves intra-line whitespace and
-uses the shared greedy-width rule for Ink's hard-line word wrapping. Fresh
+uses the shared greedy-width rule for Ink's hard-line word wrapping. The bounded
+snapshot retains recorded source widths for unchanged hard rows across subsequent
+width changes; native VT soft wraps are joined before comparison, and blank
+paragraph separators remain explicit. Fresh
 visible duplicates are blanked without shifting child row coordinates.
 Alternate screens and ordinary edits provide no replacement authority.
 The recorded streaming and idle PTY captures and resize byte timelines live in
