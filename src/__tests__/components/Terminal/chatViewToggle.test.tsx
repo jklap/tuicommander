@@ -88,5 +88,11 @@ describe("chat view toggle", () => {
 
 		expect(canvas.isConnected).toBe(true);
 		expect(hiddenAncestor()).not.toBeNull();
+		// Catches: the absolute Compose handle covering the read-only Chat footer.
+		expect(rendered.queryByTitle("Open compose editor (⌘I)")).toBeNull();
+		expect(rendered.container.querySelector('[class*="composeHint"]')).toBeNull();
+		terminalsStore.setViewMode(id, "cli");
+		await Promise.resolve();
+		expect(rendered.container.querySelector('[class*="composeHint"]')).not.toBeNull();
 	});
 });
