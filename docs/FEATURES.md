@@ -85,6 +85,7 @@ per cell and the configured history limit still apply.
 - **Remote replay health** — Stream failure, unreadable frames and initial replay stalls show a persistent error toast. Reconnect success requires a delivered frame; healthy idle terminals have no output-silence deadline.
 
 - **CLI / Chat view** — Claude terminals switch between the grid and a read-only conversation view built from the agent's session file (including older prompts, replies, folded tool cards, image/PDF markers and model-change cards). The grid is hidden, never unmounted.
+- **Chat transcript presentation** — Harness notices use compact system notes, image placeholders use attachment chips, adjacent thinking blocks share a disclosure, and TUIC answers retain the CLI highlight. Historical tool cards show status without fabricated execution timing.
 
 ### 1.2 Tab Bar
 - Create: `Cmd+T`, `+` button (click = new tab, right-click or long press = agent list)

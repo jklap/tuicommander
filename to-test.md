@@ -3,6 +3,11 @@
 - [ ] After Boss chooses to rebuild/restart the backend, launch a new managed peer and open **Inspect Launch Instructions…** from its terminal context menu. Confirm the final brief includes peer context, explicit system instruction sections/file snapshots and served MCP initialization sections have sources/bytes, and secrets are redacted. A shell-launched or restored session must show its launch as unavailable while retaining any MCP initialization instructions actually served; autonomous agent file reads must remain unobservable. The standalone real-component preview was visually checked; live desktop/backend integration waits for the authorized restart. No second desktop instance was launched.
 # To Test
 
+## Terminal Chat presentation (1576-6320)
+
+- [x] Compact inbox/interruption notices, image chips, merged thinking rows, hidden empty replies, answer highlighting, historical tool status and attached Copy actions. _(verified: real Transcript component in an isolated Vite browser preview; screenshot `~/Gits/.tmp/tuic-chatview-1007/chat-final.png`, DOM coordinates and 149 targeted Vitest tests. The mounted terminal toggle test confirms Compose disappears in Chat and returns in CLI. No desktop instance was launched.)_
+- [ ] After landing and loading the frontend, reopen Boss's Release Fixes and COORDINATOR conversations to compare the live transcript with the recorded screenshots. The standalone preview does not prove integration with the installed release candidate.
+
 ## Claude Chat recorded transcripts (1568-7b55) — Rust restart required
 
 - [ ] After Boss's next planned `make dev` restart or `make build`, open Chat on a bound Claude terminal: confirm older prompt-ID prompts appear, command echoes remain absent, media tool results show markers and model changes show a card. The real-record parser tests cover these projections; the live backend still requires a manual restart because Rust does not hot-reload. This lane does not launch or restart a desktop instance.
