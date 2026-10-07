@@ -15,12 +15,54 @@ use tauri::State;
 pub(crate) use tuic_git::worktree::*;
 
 pub(crate) fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) -> bool {
-    let Some(url) = crate::git::read_remote_url(repo) else {
-        return false;
-    };
-    let Some((host, owner, name)) = crate::github_account::parse_remote_url(&url) else {
-        return false;
-    };
+    query_merged_github_pr(repo, branch, tip).unwrap_or(false)
+}
+
+/// How long the sidebar refresh trusts a GitHub answer for one branch tip.
+const PR_PROOF_TTL: Duration = Duration::from_secs(300);
+
+static PR_PROOFS: std::sync::LazyLock<moka::sync::Cache<(PathBuf, String, String), bool>> =
+    std::sync::LazyLock::new(|| {
+        moka::sync::Cache::builder()
+            .max_capacity(1024)
+            .time_to_live(PR_PROOF_TTL)
+            .build()
+    });
+
+/// Sidebar monitoring variant: every repository refresh asked GitHub about every
+/// unmerged branch (one `gh api graphql` each), many times a minute under agent
+/// writes. A definitive answer is reused for `PR_PROOF_TTL`; a failed lookup is
+/// not remembered. Removal preflights keep the uncached function above.
+pub(crate) fn merged_github_pr_proves_tip_monitoring(repo: &Path, branch: &str, tip: &str) -> bool {
+    cached_pr_proof(&PR_PROOFS, repo, branch, tip, || {
+        query_merged_github_pr(repo, branch, tip)
+    })
+}
+
+fn cached_pr_proof(
+    cache: &moka::sync::Cache<(PathBuf, String, String), bool>,
+    repo: &Path,
+    branch: &str,
+    tip: &str,
+    lookup: impl FnOnce() -> Option<bool>,
+) -> bool {
+    let key = (repo.to_path_buf(), branch.to_owned(), tip.to_owned());
+    if let Some(answer) = cache.get(&key) {
+        return answer;
+    }
+    match lookup() {
+        Some(answer) => {
+            cache.insert(key, answer);
+            answer
+        }
+        None => false,
+    }
+}
+
+/// `None` when GitHub could not be asked or did not answer.
+fn query_merged_github_pr(repo: &Path, branch: &str, tip: &str) -> Option<bool> {
+    let url = crate::git::read_remote_url(repo)?;
+    let (host, owner, name) = crate::github_account::parse_remote_url(&url)?;
     let query = r#"query($owner: String!, $name: String!, $branch: String!, $endCursor: String) {
       repository(owner: $owner, name: $name) {
         pullRequests(first: 100, after: $endCursor, headRefName: $branch, states: [MERGED]) {
@@ -47,17 +89,15 @@ pub(crate) fn merged_github_pr_proves_tip(repo: &Path, branch: &str, tip: &str) 
         &format!("branch={branch}"),
     ]);
     crate::cli::apply_no_window(&mut command);
-    let Ok(output) = crate::git_cli::output_with_deadline(&mut command, Duration::from_secs(20))
-    else {
-        return false;
-    };
+    let output =
+        crate::git_cli::output_with_deadline(&mut command, Duration::from_secs(20)).ok()?;
     if !output.status.success() {
-        return false;
+        return None;
     }
-    let Ok(pages) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
-        return false;
-    };
-    tuic_git::worktree::merged_pr_proof_from_pages(repo, branch, tip, &pages)
+    let pages = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok()?;
+    Some(tuic_git::worktree::merged_pr_proof_from_pages(
+        repo, branch, tip, &pages,
+    ))
 }
 
 pub(crate) fn inspect_workspace_lifecycle(
@@ -1429,6 +1469,32 @@ mod tests {
     use tuic_git::test_fixtures::{
         base_branch_of, dirty_worktree_with, setup_test_repo, worktree_with,
     };
+
+    // Catches: every sidebar refresh re-running `gh api graphql` per unmerged branch
+    // (answered definitively before), while a failed lookup must stay retryable.
+    #[test]
+    fn pr_proof_monitoring_reuses_definitive_answers_and_retries_failures_1491() {
+        let cache = moka::sync::Cache::builder().max_capacity(8).build();
+        let repo = Path::new("/repo");
+        let calls = std::cell::Cell::new(0);
+        let ask = |answer: Option<bool>| {
+            cached_pr_proof(&cache, repo, "branch", "tip", || {
+                calls.set(calls.get() + 1);
+                answer
+            })
+        };
+        assert!(!ask(None));
+        assert!(ask(Some(true)));
+        assert!(ask(None));
+        assert_eq!(calls.get(), 2, "the failure was retried, the answer reused");
+        assert!(!cached_pr_proof(
+            &cache,
+            repo,
+            "branch",
+            "newer-tip",
+            || Some(false)
+        ));
+    }
 
     // Catches accepting an empty or unregistered orphan list after weakening
     // the validation OR: neither request may create an actionable dialog.
