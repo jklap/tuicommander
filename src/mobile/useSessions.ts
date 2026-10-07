@@ -62,6 +62,9 @@ export interface SessionInfo {
 	worktree_path: string | null;
 	worktree_branch: string | null;
 	display_name?: string | null;
+	/** Live agent identity bound to this PTY; a child's parent_session may name it. */
+	tuic_session?: string | null;
+	/** Session (or $TUIC_SESSION) of the agent that spawned this one. */
 	parent_session?: string | null;
 	state?: SessionState;
 }
