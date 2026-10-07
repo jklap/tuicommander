@@ -522,9 +522,12 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	// cancellation made structure reconciliation starvation-prone: a sustained
 	// repo-changed stream could obsolete every in-flight Phase 1 before it pruned
 	// deleted worktrees, leaving persisted ghost rows in the sidebar forever.
-	// Every caller now joins the current run and requests at most one fresh pass.
+	// Starts are at least 5s apart per repo. Callers join one trailing pass;
+	// there is no separate explicit/manual bypass in this entry point.
 	const refreshInFlight = new Map<string, Promise<void>>();
 	const refreshQueued = new Set<string>();
+	const refreshStartedAt = new Map<string, number>();
+	const MIN_REFRESH_INTERVAL_MS = 5_000;
 	const refreshRepo = async (repoPath: string): Promise<void> => {
 		const existing = refreshInFlight.get(repoPath);
 		if (existing) {
@@ -535,7 +538,21 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 
 		const run = (async () => {
 			do {
+				const now = Date.now();
+				const startedAt = refreshStartedAt.get(repoPath);
+				const remaining = startedAt === undefined ? 0 : MIN_REFRESH_INTERVAL_MS - (now - startedAt);
+				if (remaining > 0) {
+					await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+				}
+				// Requests received while waiting belong to this pass, not another rerun.
 				refreshQueued.delete(repoPath);
+				// A repo may have been removed or parked during the trailing wait.
+				if (!repositoriesStore.getActivePaths().includes(repoPath)) break;
+				const start = Date.now();
+				for (const [path, timestamp] of refreshStartedAt) {
+					if (start - timestamp >= MIN_REFRESH_INTERVAL_MS) refreshStartedAt.delete(path);
+				}
+				refreshStartedAt.set(repoPath, start);
 				try {
 					await refreshRepoOnce(repoPath);
 				} catch (err) {
