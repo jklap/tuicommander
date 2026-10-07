@@ -76,7 +76,10 @@ describe("service worker asset cache", () => {
 			delete: async () => true,
 		};
 		const caches = { open: async () => cache, match: async () => undefined, keys: async () => [] };
-		const self = { location: { origin: "http://tuic.test:9876" }, addEventListener: (n: string, f: Listener) => void (listeners[n] = f) };
+		const self = {
+			location: { origin: "http://tuic.test:9876" },
+			addEventListener: (n: string, f: Listener) => void (listeners[n] = f),
+		};
 		let online = true;
 		const fetchStub = vi.fn(async () => {
 			if (!online) throw new TypeError("offline");
@@ -106,7 +109,10 @@ describe("service worker asset cache", () => {
 			delete: async (req: { url: string }) => stored.delete(req.url),
 		};
 		const caches = { open: async () => cache, match: async () => undefined, keys: async () => [] };
-		const self = { location: { origin: "http://tuic.test:9876" }, addEventListener: (n: string, f: Listener) => void (listeners[n] = f) };
+		const self = {
+			location: { origin: "http://tuic.test:9876" },
+			addEventListener: (n: string, f: Listener) => void (listeners[n] = f),
+		};
 		const fetchStub = vi.fn(async () => ({ ok: true, clone: () => ({}) }));
 		new Function("self", "caches", "fetch", "clients", "crypto", source)(self, caches, fetchStub, {}, {});
 		let pending: Promise<unknown> | undefined;
