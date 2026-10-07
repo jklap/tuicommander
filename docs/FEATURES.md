@@ -55,7 +55,7 @@ Durable workflow run storage records event history, pinned graph revisions, node
 
 ## 1. Terminal Management
 
-- **Tablet keyboard input** — Touch taps and mouse presses focus the same terminal input. Soft-keyboard text and deletion use the shared input handler.
+- **Tablet keyboard input** — Touch taps and mouse presses focus the same terminal input. Soft-keyboard text and deletion use the shared input handler. Primary presses suppress the browser default canvas focus change.
 
 Terminal text retains stored combining marks through rendering, scrolling,
 copy and exact-codepoint search, including marks arriving in a later output
