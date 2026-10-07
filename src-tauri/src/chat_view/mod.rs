@@ -27,8 +27,8 @@ use crate::state::AppState;
 use crate::transcript_tail::{read_appended, read_last_window};
 use claude::ClaudeAdapter;
 
-/// How much of the end of a transcript is read on first attach. Not measured
-/// against a real 31 MB transcript yet; a tunable, not a contract.
+/// How much of the end of a transcript is read on first attach. The opt-in
+/// `measurement` test measures this and a full parse against a real disk file.
 const TAIL_WINDOW_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_LOG_ENTRIES: usize = 2_000;
 const MAX_LOG_BYTES: usize = 4 * 1024 * 1024;
@@ -354,5 +354,7 @@ fn tick(state: &AppState, session_id: &str, view: &Arc<Mutex<View>>) -> Tick {
 
 #[cfg(test)]
 mod critic_tests;
+#[cfg(test)]
+mod measurement;
 #[cfg(test)]
 mod tests;
