@@ -33,6 +33,8 @@ interface ChatViewState {
 	unavailable: Record<string, string>;
 }
 
+const inFlight = new Map<string, { again: boolean }>();
+
 const [state, setState] = createStore<ChatViewState>({ cursors: {}, unavailable: {} });
 
 /** The key a terminal's conversation is filed under in `acpTranscript`. */
@@ -65,6 +67,42 @@ function isNotBound(error: unknown): string | null {
 	return match ? match[1].trim() : null;
 }
 
+async function readOnce(sessionId: string): Promise<void> {
+	const key = chatViewKey(sessionId);
+	const cursor = state.cursors[sessionId];
+	// Not watched: nobody asked for this view, or it was closed.
+	if (!cursor) return;
+	let snapshot: ChatViewSnapshot;
+	try {
+		snapshot = await invoke<ChatViewSnapshot>("chat_view_snapshot", {
+			sessionId,
+			epoch: cursor.epoch,
+			fromSeq: cursor.nextSeq,
+		});
+	} catch (error) {
+		const reason = isNotBound(error);
+		if (reason === null) throw error;
+		setState("unavailable", sessionId, reason);
+		return;
+	}
+	// A reply that arrives after the view was closed must not resurrect state.
+	if (!state.cursors[sessionId]) return;
+	if (snapshot.reset) acpTranscript.clear(key);
+	for (const update of snapshot.updates) {
+		acpTranscript.applyFrame({
+			kind: "event",
+			connectionId: "pty",
+			generation: 0,
+			sequence: 0,
+			sessionId: key,
+			turnId: null,
+			event: { kind: "sessionUpdate", update },
+		});
+	}
+	setState("cursors", sessionId, { epoch: snapshot.epoch, nextSeq: snapshot.nextSeq });
+	chatViewStore.clearUnavailable(sessionId);
+}
+
 export const chatViewStore = {
 	state,
 
@@ -86,41 +124,28 @@ export const chatViewStore = {
 		);
 	},
 
-	/** Read what is new and fold it into the terminal's conversation. */
+	/**
+	 * Read what is new and fold it into the terminal's conversation. One read
+	 * per terminal at a time: a wake that overlaps a read in flight would read
+	 * from the same cursor and apply the same chunk twice, so it only asks for
+	 * one more read once the current one settles.
+	 */
 	async refresh(sessionId: string): Promise<void> {
-		const key = chatViewKey(sessionId);
-		const cursor = state.cursors[sessionId];
-		// Not watched: nobody asked for this view, or it was closed.
-		if (!cursor) return;
-		let snapshot: ChatViewSnapshot;
-		try {
-			snapshot = await invoke<ChatViewSnapshot>("chat_view_snapshot", {
-				sessionId,
-				epoch: cursor.epoch,
-				fromSeq: cursor.nextSeq,
-			});
-		} catch (error) {
-			const reason = isNotBound(error);
-			if (reason === null) throw error;
-			setState("unavailable", sessionId, reason);
+		const running = inFlight.get(sessionId);
+		if (running) {
+			running.again = true;
 			return;
 		}
-		// A reply that arrives after the view was closed must not resurrect state.
-		if (!state.cursors[sessionId]) return;
-		if (snapshot.reset) acpTranscript.clear(key);
-		for (const update of snapshot.updates) {
-			acpTranscript.applyFrame({
-				kind: "event",
-				connectionId: "pty",
-				generation: 0,
-				sequence: 0,
-				sessionId: key,
-				turnId: null,
-				event: { kind: "sessionUpdate", update },
-			});
+		const run = { again: false };
+		inFlight.set(sessionId, run);
+		try {
+			do {
+				run.again = false;
+				await readOnce(sessionId);
+			} while (run.again);
+		} finally {
+			inFlight.delete(sessionId);
 		}
-		setState("cursors", sessionId, { epoch: snapshot.epoch, nextSeq: snapshot.nextSeq });
-		chatViewStore.clearUnavailable(sessionId);
 	},
 
 	/** Refresh on every wake for one terminal. Returns the disposer. */
@@ -142,6 +167,7 @@ export const chatViewStore = {
 
 	/** Tests only. */
 	reset(): void {
+		inFlight.clear();
 		setState({ cursors: {}, unavailable: {} });
 	},
 };
