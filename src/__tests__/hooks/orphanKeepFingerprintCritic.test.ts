@@ -29,6 +29,7 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 	});
 
 	beforeEach(() => {
+		vi.useFakeTimers();
 		for (const path of repositoriesStore.getPaths()) repositoriesStore.remove(path);
 		for (const s of repoSettingsStore.getAll()) repoSettingsStore.remove(s.path);
 		setStatusInfo.mockReset();
@@ -70,6 +71,7 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 
 	afterEach(() => {
 		repositoriesStore._testCancelPendingSave();
+		vi.useRealTimers();
 	});
 
 	// Catches: the Keep being forgotten between refreshes (or keyed on something that
@@ -78,7 +80,9 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 		rows = [dirty("/wt/a", "fp-1")];
 
 		await refresh("/repo");
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 
 		expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
@@ -92,7 +96,9 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 		await refresh("/repo");
 
 		rows = [dirty("/wt/a", "fp-2")];
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 
 		expect(confirmOrphanCleanup).toHaveBeenCalledTimes(2);
@@ -108,6 +114,7 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 		expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
 
 		rows = [{ path: "/wt/a", safe: true, dirty_fingerprint: "fp-1" }];
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 
 		expect(removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/a", true);
@@ -134,9 +141,12 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 		await refresh("/repo");
 
 		rows = [dirty("/wt/a", "fp-a"), dirty("/wt/b", "fp-b")];
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 		expect(confirmOrphanCleanup).toHaveBeenCalledTimes(2);
 		expect(confirmOrphanCleanup.mock.calls[1][1].map((entry: Row) => entry.path)).toEqual(["/wt/b"]);
+
+		vi.setSystemTime(Date.now() + 5_000);
 
 		await refresh("/repo");
 		expect(confirmOrphanCleanup).toHaveBeenCalledTimes(2);
@@ -147,10 +157,12 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 	it("a Keep on an orphan with no fingerprint holds while it still has none, and lapses once one appears", async () => {
 		rows = [dirty("/wt/unreadable", undefined)];
 		await refresh("/repo");
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 		expect(confirmOrphanCleanup).toHaveBeenCalledTimes(1);
 
 		rows = [dirty("/wt/unreadable", "now-readable")];
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 		expect(confirmOrphanCleanup).toHaveBeenCalledTimes(2);
 	});
@@ -163,6 +175,7 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 		pendingOrphanCleanupAnswer.mockResolvedValue(false);
 
 		await refresh("/repo");
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 
 		expect(removeOrphanWorktree).not.toHaveBeenCalled();
@@ -181,6 +194,7 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 
 		rows = [dirty("/wt/b", "fp-b")];
 		confirmOrphanCleanup.mockResolvedValue(false);
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 		expect(clearOrphanCleanup).toHaveBeenLastCalledWith("/repo", true);
 	});
@@ -192,6 +206,7 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 		removeOrphanWorktree.mockRejectedValueOnce(new Error("live session: late"));
 
 		await refresh("/repo");
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 
 		expect(confirmOrphanCleanup).not.toHaveBeenCalled();
@@ -214,6 +229,7 @@ describe("orphan Keep memory by path + fingerprint (critic-1367, story 1367-7d6e
 		rows = [live("fp-1"), dirty("/wt/dirty", "d-1")];
 		await refresh("/repo");
 		rows = [live("fp-2"), dirty("/wt/dirty", "d-2")];
+		vi.setSystemTime(Date.now() + 5_000);
 		await refresh("/repo");
 
 		expect(confirmOrphanCleanup).toHaveBeenCalledTimes(2);

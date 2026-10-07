@@ -287,6 +287,8 @@ A terminal tab can be suspended from its context menu (**Suspend Tab**) or with 
 
 ## 2. Sidebar
 
+Repository refreshes start at least five seconds apart per repository. Event bursts retain one trailing refresh; badges can lag by five seconds plus backend read time.
+
 ### 2.1 Repository List
 - Add repository via `+` button or folder dialog
 - Click repo header to expand/collapse branch list
