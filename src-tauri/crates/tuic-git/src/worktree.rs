@@ -4611,6 +4611,52 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn removing_a_worktree_with_read_only_build_evidence_deletes_every_file_itview_067() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "readonly-evidence-removal");
+        commit_file(&path, ".gitignore", "target/\n");
+        // The shape a warm copy of agent2 target/ leaves: dr-xr-xr-x directories
+        // holding r--r--r-- files, one directory nested inside another.
+        let outer = path.join("target/exact/run");
+        let inner = outer.join("nested");
+        fs::create_dir_all(&inner).unwrap();
+        for dir in [&outer, &inner] {
+            fs::write(dir.join("evidence.txt"), "evidence\n").unwrap();
+            fs::set_permissions(dir.join("evidence.txt"), fs::Permissions::from_mode(0o444))
+                .unwrap();
+        }
+        fs::set_permissions(&inner, fs::Permissions::from_mode(0o555)).unwrap();
+        fs::set_permissions(&outer, fs::Permissions::from_mode(0o555)).unwrap();
+        let worktree = WorktreeInfo {
+            name: "readonly-evidence-removal".into(),
+            path: path.clone(),
+            branch: Some("readonly-evidence-removal".into()),
+            base_repo: repo.clone(),
+        };
+
+        let result = remove_worktree_internal(&worktree, false);
+        let registered = registered_worktree_admin_dir(&repo, &path)
+            .unwrap()
+            .is_some();
+        // Leave the tree deletable if the assertions below fail.
+        for dir in [&inner, &outer] {
+            if dir.exists() {
+                fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+
+        assert!(
+            result.is_ok(),
+            "read-only worktree removal failed: {result:?}"
+        );
+        assert!(!path.exists(), "removal left a worktree remnant");
+        assert!(!registered, "removal left Git registration");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn unreadable_ignored_tree_refuses_removal_before_git_unregisters_it() {
         use std::os::unix::fs::PermissionsExt;
 
