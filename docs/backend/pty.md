@@ -749,3 +749,15 @@ MCP retained-output pages use `VtLogBuffer::lines_since_logical` source-row
 start/end positions, including omitted chrome slots. The end is a page boundary,
 not the total scrollback size. Logical wrap lines stay whole; raw pages use the
 existing output ring and original-byte cursors. See [MCP output paging](mcp-http.md#mcp-tool-session-output).
+
+### Claude transcript Chat view
+
+`chat_view::View::advance` reads complete JSONL rows through `transcript_tail`,
+projects them with `ClaudeAdapter`, and retains a bounded ACP update log. It
+recognizes older prompt-ID rows without `origin`, excludes harness command echoes
+and sidechains, and preserves image/PDF result markers and model fallback cards.
+Recorded sanitized cases and the last-30-days schema counts are in
+[`fixtures/chat_view/recorded`](../../src-tauri/src/fixtures/chat_view/recorded/README.md).
+The opt-in `view_real_transcript_throughput` measurement reads an authorized local
+file at runtime through the same path, reporting both the 2 MiB attach and full
+parse times plus process peak RSS. Raw transcripts are never committed.

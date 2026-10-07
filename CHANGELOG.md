@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Mobile Markdown review** — In the mobile Files view, tapping a task-list checkbox toggles it in the file, and a block comment can be added to a paragraph, heading or list item in the desktop's `<!--tweak:...-->` format. Saves refuse to overwrite a file that changed on disk meanwhile (new `write_file_if_unchanged` command, `POST /fs/write-if-unchanged`).
 - Add a CLI | Chat switch to Claude terminals: a read-only conversation view built from the agent's session file, with prompts apart from replies and tool calls folded into compact cards. The grid is hidden while Chat is open and never unmounted.
+- Fix missing older Claude prompts, image/PDF tool-output markers and model-change cards in Chat; validate the parser against sanitized records from real CLI transcripts.
 
 ### Changed
 - Space automatic sidebar refresh starts at least five seconds apart per repository, retaining one trailing update during event bursts; explicit repository additions, checkouts and merge cleanup bypass the wait.
@@ -68,6 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Tablet terminal input** — Touch taps use the main keyboard input instead of an offscreen textarea, avoiding a focus switch on subsequent mouse events and sharing soft-keyboard deletion handling.
 - Reap PTY children that exit after terminal EOF or session removal, preventing zombie shells in the headless daemon and desktop backend.
 - Return freed terminal scrollback pages to the OS after session cleanup on Linux/glibc instead of retaining them in allocator arenas.
+- Keep managed Claude background-task output under `~/Gits/.tmp/claude` by default, preserving an explicit `CLAUDE_CODE_TMPDIR`.
 
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 

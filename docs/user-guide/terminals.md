@@ -55,6 +55,8 @@ A terminal that runs Claude Code shows a **CLI | Chat** switch in its top-right 
 
 **Chat** is disabled, with the reason as its tooltip, when the terminal has no agent, the agent is not Claude, or TUICommander has not bound the agent to a session file yet. If the agent exits or the binding is lost while Chat is open, the terminal returns to CLI with a one-line notice.
 
+Older recorded prompts with a prompt ID also appear when Claude did not record a human-origin field. Command echoes, tool results and sidechain conversations stay out of user bubbles. Image and PDF tool outputs show `[image]` and `[document]` markers; a model fallback shows a **Model changed** card.
+
 ### Suspending a Tab
 
 **Right-click → Suspend Tab** ends the tab's process and its agent, freeing the memory and CPU they used, and keeps the tab in the tab bar marked `zz`. It is not auto-standby: auto-standby only pauses an idle process, which keeps its memory, and wakes it when you focus the tab. A suspended tab holds no process at all.
