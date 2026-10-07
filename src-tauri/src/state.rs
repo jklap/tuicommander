@@ -686,6 +686,12 @@ pub(crate) struct SessionState {
     /// were parsed so the async accumulator cannot restore prior-turn completion.
     #[serde(skip)]
     pub(crate) turn_epoch: u64,
+    /// One draft may interrupt this turn until the next native input write.
+    #[serde(skip)]
+    pub(crate) turn_interrupt: Option<Arc<()>>,
+    /// Native input retired this epoch; late drafts cannot rearm it.
+    #[serde(skip)]
+    pub(crate) turn_interrupt_retired_epoch: Option<u64>,
     /// Slash command menu items (from slash-menu parsed events)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slash_menu_items: Option<Vec<crate::output_parser::SlashMenuItem>>,
@@ -2313,6 +2319,9 @@ impl AppState {
             .pty_writer(session_id)
             .ok_or_else(|| "Session not found".to_string())?;
         let mut writer = writer.lock();
+        if parts.iter().any(|part| !part.is_empty()) {
+            self.retire_turn_interrupt(session_id);
+        }
         for part in parts {
             writer
                 .write_all(part)
@@ -2321,6 +2330,14 @@ impl AppState {
         writer
             .flush()
             .map_err(|error| format!("Flush failed: {error}"))
+    }
+
+    /// Called only under the PTY writer lock, before any user input escapes.
+    pub(crate) fn retire_turn_interrupt(&self, session_id: &str) {
+        if let Some(mut session) = self.session_maps.session_states.get_mut(session_id) {
+            session.turn_interrupt = None;
+            session.turn_interrupt_retired_epoch = Some(session.turn_epoch);
+        }
     }
 
     /// Emit a PTY-scoped lifecycle event to
