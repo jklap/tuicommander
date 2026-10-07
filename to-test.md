@@ -4786,3 +4786,6 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1407-1ab2: After the next Rust restart, confirm resize keeps full terminal text and wrapped secrets stay redacted in session output; repeat the recorded Claude streaming/idle resize check. Automated coverage: `resize_preserves_complete_visible_logical_text_1407` and the two MCP resize/capture redaction regressions.
 
 - [ ] #1407-1ab2: after Boss restarts the Rust build, confirm an omitted short history record survives resize even when another redrawn record contains the same text. Automated regression: `resize_redraw_preserves_omitted_record_contained_in_another_replaced_record`.
+
+- [ ] iPad remote access after the next backend restart: open `/` without an authenticated cookie, sign in through the form, and confirm the touch interface loads. Recheck the originally reported connection failure on the physical iPad; no attributable transport error was available in server logs. Rust auth changes require a manual `make dev` restart by Boss.
+- [ ] Browser desktop Add Repository: browse server home, select a folder, or cancel; native desktop and connected-daemon pickers retain their own machine ownership.

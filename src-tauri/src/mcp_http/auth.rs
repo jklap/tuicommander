@@ -393,14 +393,14 @@ pub async fn basic_auth_middleware(
     // them out of the map prevents unauthenticated scans from retaining an IP
     // entry for the whole rate-limit window.
     if auth_header.is_none() || username.is_empty() || hash.is_empty() {
-        // A page navigation of the mobile app cannot rely on the Basic dialog:
+        // An app page navigation cannot rely on the Basic dialog:
         // an iOS home-screen app with a registered service worker never shows it
         // (story 1359). Send it to the in-app form instead. Without a configured
         // password the form could never succeed, so that case keeps the 401.
         if auth_header.is_none()
             && !username.is_empty()
             && !hash.is_empty()
-            && is_mobile_page_navigation(&req)
+            && is_app_page_navigation(&req)
         {
             return login_redirect(req.uri());
         }
@@ -461,11 +461,11 @@ fn is_public_login_route(method: &Method, path: &str) -> bool {
     }
 }
 
-/// A browser page load of the mobile app, as opposed to an API call or an asset.
-fn is_mobile_page_navigation(req: &Request<axum::body::Body>) -> bool {
+/// A browser page load of either app shell, as opposed to an API call or an asset.
+fn is_app_page_navigation(req: &Request<axum::body::Body>) -> bool {
     let path = req.uri().path();
     *req.method() == Method::GET
-        && (path == "/mobile" || path.starts_with("/mobile/"))
+        && (path == "/" || path == "/mobile" || path.starts_with("/mobile/"))
         && req
             .headers()
             .get(header::ACCEPT)
@@ -473,12 +473,16 @@ fn is_mobile_page_navigation(req: &Request<axum::body::Body>) -> bool {
             .is_some_and(|accept| accept.contains("text/html"))
 }
 
-/// Keep a post-login destination inside the mobile app: anything else (another
+/// Keep a post-login destination inside an app shell: anything else (another
 /// origin, `//host`, a backslash trick, control characters) falls back to the
 /// app root, so the form cannot be turned into an open redirect.
 fn safe_next(next: Option<&str>) -> String {
     let next = next.unwrap_or_default();
-    let in_app = next == "/mobile" || next.starts_with("/mobile/") || next.starts_with("/mobile?");
+    let in_app = next == "/"
+        || next.starts_with("/?")
+        || next == "/mobile"
+        || next.starts_with("/mobile/")
+        || next.starts_with("/mobile?");
     let hostile = next.starts_with("//")
         || next.contains('\\')
         || next.contains("://")
@@ -1431,6 +1435,7 @@ mod tests {
         axum::Router::new()
             .route("/auth/login", axum::routing::post(login_handler))
             .route("/mobile/login", axum::routing::get(|| async { "form" }))
+            .route("/", axum::routing::get(|| async { "desktop app" }))
             .route("/mobile", axum::routing::get(|| async { "app" }))
             .route("/mobile/session/a", axum::routing::get(|| async { "app" }))
             .route("/api/ping", axum::routing::get(|| async { "pong" }))
@@ -1489,6 +1494,8 @@ mod tests {
 
     #[test]
     fn safe_next_keeps_only_in_app_destinations() {
+        assert_eq!(safe_next(Some("/")), "/");
+        assert_eq!(safe_next(Some("/?view=tablet")), "/?view=tablet");
         assert_eq!(safe_next(Some("/mobile/session/a")), "/mobile/session/a");
         assert_eq!(safe_next(Some("/mobile?shared=k")), "/mobile?shared=k");
         for hostile in [
@@ -1522,6 +1529,49 @@ mod tests {
             "/mobile/login?next=/mobile/session/a"
         );
         assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+    }
+
+    /// Catches: desktop-mode iPad navigation receives a Basic challenge instead of the form.
+    #[tokio::test]
+    async fn root_html_navigation_uses_form_and_login_returns_to_root() {
+        let app = login_app(&login_state(5));
+        let response = send(
+            &app,
+            nav("/?view=tablet")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FOUND);
+        assert_eq!(
+            response.headers().get(header::LOCATION).unwrap(),
+            "/mobile/login?next=/%3Fview%3Dtablet"
+        );
+        assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+        let response = send(
+            &app,
+            login_post()
+                .body(credentials("boss", "correct", Some("/?view=tablet")).into())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_of(response).await["next"], "/?view=tablet");
+    }
+
+    /// Catches: root API-style fetches follow a redirect and parse login HTML as data.
+    #[tokio::test]
+    async fn root_non_html_request_keeps_basic_challenge() {
+        let app = login_app(&login_state(5));
+        let request = Request::get("/")
+            .header(header::ACCEPT, "application/json")
+            .extension(ConnectInfo(SocketAddr::from((PUBLIC_IP, 51234))))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = send(&app, request).await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert!(!response.headers().contains_key(header::LOCATION));
     }
 
     /// The API contract is unchanged: a 401 with the Basic challenge, never a

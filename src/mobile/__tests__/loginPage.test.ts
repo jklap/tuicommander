@@ -57,7 +57,7 @@ describe("mobile login form", () => {
 	const script = readFileSync("public/mobile-login.js", "utf8");
 	const replace = vi.fn();
 
-	function mount(search: string, response: Response | Error) {
+	function mount(search: string, response: Response | Error, hash = "") {
 		document.documentElement.innerHTML = html.replace(/<script[\s\S]*?<\/script>/, "");
 		const fetchMock = vi.fn(async () => {
 			if (response instanceof Error) throw response;
@@ -66,7 +66,7 @@ describe("mobile login form", () => {
 		runInNewContext(script, {
 			document,
 			fetch: fetchMock,
-			location: { search, replace },
+			location: { search, hash, replace },
 			URLSearchParams,
 			JSON,
 		});
@@ -90,6 +90,13 @@ describe("mobile login form", () => {
 		expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
 		expect(JSON.parse(init.body as string)).toEqual({ username: "boss", password: "pw", next: "/mobile/session/a" });
 		expect(replace).toHaveBeenCalledWith("/mobile/session/a");
+	});
+
+	// Catches: root form login drops the fragment before iPad tablet routing can preserve it.
+	it("preserves the root query and inherited fragment after login", async () => {
+		mount("?next=%2F%3Fshared%3Dk", Response.json({ ok: true, next: "/?shared=k" }), "#sessions");
+		await submit("boss", "pw");
+		expect(replace).toHaveBeenCalledWith("/?shared=k#sessions");
 	});
 
 	// Plausible bug: a rejected login redirects anyway, or leaves the button dead.
