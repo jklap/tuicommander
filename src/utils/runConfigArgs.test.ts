@@ -32,7 +32,13 @@ describe("findArgConflicts", () => {
 		const conflicts = findArgConflicts("ego", ["--mode", "auto"], { ego_mode: "plan" });
 		expect(conflicts).toHaveLength(1);
 		expect(conflicts[0]).toMatchObject({ kind: "overridden", flag: "--mode" });
+		expect(conflicts[0].message).toContain("--mode auto in raw args");
 		expect(hasBlockingConflict(conflicts)).toBe(false);
+	});
+
+	it("names only the replaced values in the override warning (bug: matching raw value listed as replaced)", () => {
+		const conflicts = findArgConflicts("ego", ["--mode", "plan", "--mode", "yolo"], { ego_mode: "plan" });
+		expect(conflicts.find((c) => c.kind === "overridden")?.message).toContain("--mode yolo in raw args");
 	});
 
 	it("does not warn when the raw value equals the profile value", () => {
