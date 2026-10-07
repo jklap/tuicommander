@@ -33,6 +33,22 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 describe("useMobileVoice critic", () => {
 	beforeEach(() => vi.clearAllMocks());
 
+	it("catches: a second tap during arming opens a second conversation", async () => {
+		let voice!: ReturnType<typeof useMobileVoice>;
+		createRoot(() => {
+			voice = useMobileVoice(
+				() => "s1",
+				() => true,
+			);
+		});
+		await flush();
+		await flush();
+		expect(voice.available()).toBe(true);
+		void voice.toggle();
+		void voice.toggle();
+		expect(dictationStore.armHandsFree).toHaveBeenCalledTimes(1);
+	});
+
 	it("catches: leaving the screen while the mic prompt is pending leaves the mic open on a hidden page", async () => {
 		let dispose = () => {};
 		let voice!: ReturnType<typeof useMobileVoice>;
@@ -52,20 +68,5 @@ describe("useMobileVoice critic", () => {
 		await pending;
 		await flush();
 		expect(dictationStore.disarmHandsFree).toHaveBeenCalled();
-	});
-
-	it("catches: a second tap during arming opens a second conversation", async () => {
-		let voice!: ReturnType<typeof useMobileVoice>;
-		createRoot(() => {
-			voice = useMobileVoice(
-				() => "s1",
-				() => true,
-			);
-		});
-		await flush();
-		await flush();
-		void voice.toggle();
-		void voice.toggle();
-		expect(dictationStore.armHandsFree).toHaveBeenCalledTimes(1);
 	});
 });
