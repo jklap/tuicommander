@@ -153,6 +153,8 @@ pub(crate) mod transcript_tail;
 pub(crate) use tuic_terminal::terminal_grid;
 #[cfg(test)]
 mod build_graph_tests;
+#[cfg(test)]
+pub(crate) mod replay_oracle;
 #[cfg(feature = "desktop")]
 pub(crate) mod terminal_grid_commands;
 #[cfg(test)]
