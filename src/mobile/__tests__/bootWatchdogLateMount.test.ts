@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /** Runs the inline boot watchdog of mobile.html against a minimal fake DOM. */
 function bootWatchdog() {
 	const html = readFileSync(resolve(__dirname, "../../../mobile.html"), "utf8");
-	const code = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).find((c) => c.includes("__tuicBootFail")) as string;
+	const code = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+		.map((m) => m[1])
+		.find((c) => c.includes("__tuicBootFail")) as string;
 	const els: Record<string, Record<string, unknown>> = {
 		"mobile-preloader": { className: "" },
 		"pl-text": { textContent: "" },
