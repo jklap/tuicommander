@@ -9,6 +9,14 @@ vi.mock("../../../hooks/usePty", () => ({
 		getKittyFlags: vi.fn().mockResolvedValue(0),
 	}),
 }));
+vi.mock("../../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../transport")>()),
+	rpc: vi.fn(),
+	subscribePty: () => Promise.resolve(() => {}),
+}));
+vi.mock("@tauri-apps/api/core", () => ({
+	invoke: vi.fn(async (cmd: string) => (cmd === "get_session_foreground_process" ? "claude" : undefined)),
+}));
 vi.mock("../../../stores/agentConfigs", () => ({
 	ensureAgentConfigsForRepo: vi.fn().mockResolvedValue({ getEnvFlags: () => ({}) }),
 	agentConfigsForRepo: () => ({ getEnvFlags: () => ({}) }),
@@ -44,16 +52,33 @@ describe("chat view toggle", () => {
 	// Catches: the Show-keyed disposal freeze / lost scroll when switching to chat.
 	it("toggle_hides_canvas_without_unmounting_it", async () => {
 		const id = terminalsStore.add({
-			sessionId: null,
+			sessionId: "live-session",
 			cwd: "/tmp/repo",
-			repoPath: null,
+			repoPath: "/tmp/repo",
 			name: "claude",
 			fontSize: 13,
 			awaitingInput: null,
-			agentType: "claude",
-			agentSessionId: "uuid",
 		});
-		const { findByTestId } = render(() => <Terminal id={id} cwd="/tmp/repo" alwaysVisible />);
+		terminalsStore.update(id, { agentType: "claude", agentSessionId: "uuid" });
+		// The canvas mounts only once the container has a size.
+		const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+		const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+		Object.defineProperty(HTMLElement.prototype, "offsetWidth", { configurable: true, get: () => 800 });
+		Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get: () => 600 });
+		const oldRaf = globalThis.requestAnimationFrame;
+		globalThis.requestAnimationFrame = (cb) => {
+			cb(0);
+			return 1;
+		};
+		let rendered: ReturnType<typeof render>;
+		try {
+			rendered = render(() => <Terminal id={id} cwd="/tmp/repo" alwaysVisible />);
+		} finally {
+			globalThis.requestAnimationFrame = oldRaf;
+			if (width) Object.defineProperty(HTMLElement.prototype, "offsetWidth", width);
+			if (height) Object.defineProperty(HTMLElement.prototype, "offsetHeight", height);
+		}
+		const { findByTestId } = rendered;
 		const canvas = await findByTestId("canvas");
 		const hiddenAncestor = () => canvas.closest('[class*="contentHidden"]');
 		expect(hiddenAncestor()).toBeNull();
