@@ -31,7 +31,9 @@ const MAX_TITLE_ARG_CHARS: usize = 120;
 const PLUMBING_ROWS: &[&str] = &[
     "attachment",
     "file-history-snapshot",
+    "file-history-delta",
     "custom-title",
+    "ai-title",
     "agent-name",
     "last-prompt",
     "mode",
@@ -41,6 +43,12 @@ const PLUMBING_ROWS: &[&str] = &[
     "summary",
     "system",
     "progress",
+    "cost-state",
+    "continued-in",
+    "pr-link",
+    "fork-context-ref",
+    "started",
+    "launched",
 ];
 
 #[derive(Deserialize)]
@@ -201,6 +209,7 @@ impl ClaudeAdapter {
                     }));
                 }
                 Some("tool_use") => out.extend(self.tool_use(block)),
+                Some("fallback") => out.push(notice("Model changed")),
                 _ => {}
             }
         }
@@ -225,10 +234,34 @@ impl ClaudeAdapter {
 
 /// A prompt the user typed, as a user entry. `None` for harness text.
 fn human_prompt(row: &Value, text: &str) -> Option<Value> {
-    // DEFERRED (2026-10-07) — transcripts older than `origin` carry
-    // no marker; their prompts are not shown rather than guessed at
-    // (slash-command echoes are string rows too).
-    let human = row.pointer("/origin/kind").and_then(Value::as_str) == Some("human");
+    let origin = row.pointer("/origin/kind").and_then(Value::as_str);
+    // Recorded older CLI rows have promptId but no origin. Harness echoes
+    // also have promptId: exclude their markers, meta rows and tool results.
+    let legacy_prompt = origin.is_none()
+        && row.get("promptId").and_then(Value::as_str).is_some()
+        && row.get("isMeta").and_then(Value::as_bool) != Some(true)
+        && row.get("sourceToolAssistantUUID").is_none()
+        && !row
+            .pointer("/message/content")
+            .and_then(Value::as_array)
+            .is_some_and(|blocks| {
+                blocks
+                    .iter()
+                    .any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+            })
+        && ![
+            "<command-name>",
+            "<command-message>",
+            "<local-command-stdout>",
+            "<local-command-caveat>",
+            "<bash-input>",
+            "<bash-stdout>",
+            "<task-notification>",
+            "<system-reminder>",
+        ]
+        .iter()
+        .any(|prefix| text.trim_start().starts_with(prefix));
+    let human = origin == Some("human") || legacy_prompt;
     if !human || text.trim().is_empty() {
         return None;
     }
@@ -247,6 +280,7 @@ fn blocks_text(blocks: &[Value]) -> String {
         .filter_map(|b| match b.get("type").and_then(Value::as_str) {
             Some("text") => b.get("text").and_then(Value::as_str).map(str::to_owned),
             Some("image") => Some("[image]".to_owned()),
+            Some("document") => Some("[document]".to_owned()),
             _ => None,
         })
         .collect::<Vec<_>>()
@@ -279,12 +313,7 @@ fn clean(text: &str, max: usize) -> String {
 fn tool_result_text(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|b| b.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Some(Value::Array(blocks)) => blocks_text(blocks),
         _ => String::new(),
     }
 }
@@ -339,3 +368,6 @@ fn cap_strings(value: &Value) -> Value {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod recorded_tests;
