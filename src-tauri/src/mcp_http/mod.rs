@@ -3210,7 +3210,7 @@ mod tests {
             assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
         }
         let mut duplicate = Request::post("/remote/update")
-                .header(header::COOKIE, "tui-session=update-secret")
+            .header(header::COOKIE, "tui-session=update-secret")
             .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header("x-tuic-sha256", good_hash)
@@ -3261,7 +3261,7 @@ mod tests {
             Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"replacement"))
         }));
         let mut first = Request::post("/remote/update")
-                .header(header::COOKIE, "tui-session=update-secret")
+            .header(header::COOKIE, "tui-session=update-secret")
             .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
@@ -3281,7 +3281,7 @@ mod tests {
         first_chunk_received.await.unwrap();
 
         let mut second = Request::post("/remote/update")
-                .header(header::COOKIE, "tui-session=update-secret")
+            .header(header::COOKIE, "tui-session=update-secret")
             .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(

@@ -659,10 +659,7 @@ mod tests {
             }
         }
         *state.session_token.write() = "rotated-secret".to_string();
-        let request = daemon_upload_request(
-            "/remote/update",
-            Some("tui-session=update-secret"),
-        );
+        let request = daemon_upload_request("/remote/update", Some("tui-session=update-secret"));
         assert_eq!(
             app.clone().oneshot(request).await.unwrap().status(),
             StatusCode::UNAUTHORIZED
