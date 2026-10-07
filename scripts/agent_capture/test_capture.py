@@ -16,11 +16,17 @@ class CaptureContractTests(unittest.TestCase):
         base = {"agent": "pi", "args": [], "steps": [
             {"action": "wait", "expect": {"agent": "working"}}]}
         self.assertEqual(validate(base), [{"agent": "working"}])
+        dialog = {**base, "agent": "claude", "steps": [
+            {"action": "wait", "text": "Allow external CLAUDE.md file imports?"},
+            {"action": "approval", "key": "enter"}, *base["steps"]]}
+        self.assertEqual(validate(dialog), [{"agent": "working"}])
         for steps in [[], [{"action": "prompt", "text": ""}],
                       [{"action": "wait", "expect": {}}],
                       [{"action": "wait", "expect": {"awaiting": "false"}}],
                       [{"action": "wait", "expect": {"agent": "working"}, "timeout_secs": float("nan")}],
-                      [{"action": "shell", "text": "anything"}]]:
+                      [{"action": "shell", "text": "anything"}],
+                      [{"action": "approval", "key": "unknown"}],
+                      [{"action": "wait", "expect": {"agent": "working"}, "replay_expect": {"agent": "idle"}}]]:
             with self.subTest(steps=steps), self.assertRaises(ValueError):
                 validate({**base, "steps": steps})
 
@@ -31,6 +37,20 @@ class CaptureContractTests(unittest.TestCase):
         self.assertTrue(inventory)
         self.assertTrue(all(row == {"binary": None, "status": "unverified",
                                     "reason": "not installed"} for row in inventory.values()))
+
+    # Catches: a login error looks like an idle successful turn and gets promoted.
+    def test_real_login_failure_cannot_be_promoted_as_success(self):
+        failure = Path(__file__).parent / "fixtures/claude-login-expired.tcap"
+        data = failure.read_bytes()
+        metadata = {"agent": "claude", "status": "captured",
+                    "expected_states": [{"awaiting": False}],
+                    "sha256": hashlib.sha256(data).hexdigest()}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "src-tauri/src/fixtures/agent_prompts").mkdir(parents=True)
+            with patch("run.ROOT", root), self.assertRaisesRegex(RuntimeError, "requires login"):
+                run.promote(failure, metadata, "must-remain-unverified")
+            self.assertFalse(list(root.rglob("*.tcap")))
 
     # Catches: changed or failed recordings overwrite previously reviewed evidence.
     def test_promotion_preserves_real_bytes_and_refuses_overwrite_and_tampering(self):

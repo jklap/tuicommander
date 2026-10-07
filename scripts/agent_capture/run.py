@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -34,6 +35,36 @@ def under_gits(path):
     return path
 
 
+def recording_output(data):
+    if not data.startswith(b"TUICCAP2\n") or len(data) <= 13:
+        raise ValueError("promotion requires a nonempty TUICCAP2 recording")
+    cursor, records, output = 13, 0, []
+    while cursor < len(data):
+        if len(data) - cursor < 13 or data[cursor] not in (0, 1):
+            raise ValueError("truncated or invalid capture record")
+        length = struct.unpack_from("<I", data, cursor + 9)[0]
+        direction = data[cursor]
+        begin = cursor + 13
+        cursor += 13 + length
+        if cursor > len(data):
+            raise ValueError("truncated capture payload")
+        if direction == 0:
+            output.append(data[begin:cursor])
+        records += 1
+    if not records:
+        raise ValueError("capture contains no records")
+    return b"".join(output).decode(errors="replace")
+
+
+def reject_login(text):
+    # Match real CLI failures without depending on cursor-position whitespace.
+    clean = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    clean = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", clean)
+    compact = "".join(clean.casefold().split())
+    if any(marker in compact for marker in ("loginexpired", "notloggedin", "pleaserun/login", "run/loginto")):
+        raise RuntimeError("CLI requires login; agent remains unverified")
+
+
 def promote(capture, metadata, name):
     """Promote only complete real recordings; baseline regeneration is explicit."""
     if not name or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in name):
@@ -41,19 +72,7 @@ def promote(capture, metadata, name):
     if metadata.get("agent") not in {*AGENTS, "claude", "codex", "grok", "opencode"}:
         raise ValueError("unsupported capture agent")
     data = capture.read_bytes()
-    if not data.startswith(b"TUICCAP2\n") or len(data) <= 13:
-        raise ValueError("promotion requires a nonempty TUICCAP2 recording")
-    cursor, records = 13, 0
-    while cursor < len(data):
-        if len(data) - cursor < 13 or data[cursor] not in (0, 1):
-            raise ValueError("truncated or invalid capture record")
-        length = struct.unpack_from("<I", data, cursor + 9)[0]
-        cursor += 13 + length
-        if cursor > len(data):
-            raise ValueError("truncated capture payload")
-        records += 1
-    if not records:
-        raise ValueError("capture contains no records")
+    reject_login(recording_output(data))
     if metadata.get("status") != "captured" or not metadata.get("expected_states"):
         raise ValueError("only a completed scenario with expected states can be promoted")
     if hashlib.sha256(data).hexdigest() != metadata["sha256"]:
@@ -86,9 +105,11 @@ def capture_run(args):
     output.mkdir(parents=True, exist_ok=False)
     home = output / "daemon-home"
     home.mkdir()
-    agent_home = under_gits(args.agent_home)
+    agent_home = Path(args.agent_home).expanduser().resolve()
+    if agent_home != Path.home():
+        agent_home = under_gits(agent_home)
     if not agent_home.is_dir():
-        raise ValueError("agent-home must already exist and be authenticated; no login is automated")
+        raise ValueError("agent-home must already exist; no login is automated")
     daemon = args.daemon.resolve()
     # Release startup probes the native vault. Only accept an explicit debug artifact.
     if "debug" not in daemon.parts or daemon.name != "tuic-remote":
@@ -132,8 +153,14 @@ def capture_run(args):
                     raise RuntimeError("headless daemon exited; inspect its isolated log")
                 try:
                     health = api("GET", "/health")
-                    if health.get("instance_id") != instance:
+                    # instance_id is a fresh process UUID, not the --instance label.
+                    # The daemon's socket must live in this run's unique temp/HOME.
+                    socket_path = health.get("socket_path")
+                    if os.name == "posix" and (not socket_path or not Path(socket_path).is_relative_to(output)):
                         raise RuntimeError("port belongs to another instance")
+                    if health.get("session_count") != 0:
+                        raise RuntimeError("capture daemon must start without existing sessions")
+                    report["daemon_health"] = health
                     break
                 except (urllib.error.URLError, TimeoutError):
                     if time.monotonic() >= deadline:
@@ -152,6 +179,7 @@ def capture_run(args):
             report["observed_states"] = run_steps(api, session_id, scenario["steps"])
             api("POST", "/diagnostics/capture", {"enabled": False})
             recording = output / "raw" / f"{session_id}.tcap"
+            reject_login(recording_output(recording.read_bytes()))
             report.update(status="captured", sha256=hashlib.sha256(recording.read_bytes()).hexdigest())
             report["capture"] = str(recording)
         except Exception as error:
@@ -185,7 +213,7 @@ def main():
     record = commands.add_parser("record")
     record.add_argument("--daemon", type=Path, required=True)
     record.add_argument("--scenario", type=Path, required=True)
-    record.add_argument("--agent-home", type=Path, required=True)
+    record.add_argument("--agent-home", type=Path, default=Path.home())
     record.add_argument("--output", type=Path, required=True)
     promotion = commands.add_parser("promote")
     promotion.add_argument("report", type=Path)

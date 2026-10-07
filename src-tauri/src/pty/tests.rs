@@ -21889,9 +21889,20 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
         let mut cp = ChunkProcessor::new(None, None);
         let mut utf8 = Utf8ReadBuffer::new();
         let mut escapes = EscapeAwareBuffer::new();
+        let scenario_path = root.join(&fixture).with_extension("scenario.json");
         let mut trace = vec![json!({"fixture":fixture,"agent":agent,"geometry":[rows,cols]})];
         for (record_index, record) in capture.records.iter().enumerate() {
             if record.direction != crate::pty_capture::CaptureDirection::Output {
+                // New scenario captures also preserve the real submit boundary.
+                // Keep legacy output-only goldens unchanged; use the production
+                // input FSM and state transitions rather than hand-setting busy.
+                if scenario_path.exists() {
+                    crate::mcp_http::session::apply_input_bookkeeping(
+                        &state,
+                        sid,
+                        std::str::from_utf8(&record.data).expect("UTF-8 scenario input"),
+                    );
+                }
                 continue;
             }
             let text = utf8.push(&record.data);
@@ -21922,7 +21933,6 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
         trace.push(
             json!({"ring_len":state.session_maps.output_buffers.get(sid).unwrap().lock().len()}),
         );
-        let scenario_path = root.join(&fixture).with_extension("scenario.json");
         if scenario_path.exists() {
             let scenario: serde_json::Value = serde_json::from_slice(
                 &std::fs::read(&scenario_path).expect("read capture scenario"),
