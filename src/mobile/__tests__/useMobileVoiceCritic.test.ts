@@ -1,6 +1,6 @@
 import { createRoot } from "solid-js";
 import { createStore } from "solid-js/store";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({ release: null as null | ((ok: boolean) => void) }));
 
@@ -31,11 +31,22 @@ import { useMobileVoice } from "../useMobileVoice";
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("useMobileVoice critic", () => {
+	let disposeRoot = () => {};
 	beforeEach(() => vi.clearAllMocks());
+	afterEach(async () => {
+		// Settle the arm promise a test left pending and dispose its reactive root,
+		// so nothing outlives the test.
+		h.release?.(false);
+		h.release = null;
+		disposeRoot();
+		disposeRoot = () => {};
+		await flush();
+	});
 
 	it("catches: a second tap during arming opens a second conversation", async () => {
 		let voice!: ReturnType<typeof useMobileVoice>;
-		createRoot(() => {
+		createRoot((d) => {
+			disposeRoot = d;
 			voice = useMobileVoice(
 				() => "s1",
 				() => true,
@@ -50,10 +61,9 @@ describe("useMobileVoice critic", () => {
 	});
 
 	it("catches: leaving the screen while the mic prompt is pending leaves the mic open on a hidden page", async () => {
-		let dispose = () => {};
 		let voice!: ReturnType<typeof useMobileVoice>;
 		createRoot((d) => {
-			dispose = d;
+			disposeRoot = d;
 			voice = useMobileVoice(
 				() => "s1",
 				() => true,
@@ -63,7 +73,7 @@ describe("useMobileVoice critic", () => {
 		await flush();
 		expect(voice.available()).toBe(true);
 		const pending = voice.toggle();
-		dispose(); // user presses Back while getUserMedia prompt is open
+		disposeRoot(); // user presses Back while getUserMedia prompt is open
 		h.release?.(true); // permission granted afterwards
 		await pending;
 		await flush();
