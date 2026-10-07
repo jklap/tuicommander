@@ -7,6 +7,7 @@ import type { SessionInfo } from "../useSessions";
 
 const { rpc } = vi.hoisted(() => ({ rpc: vi.fn() }));
 vi.mock("../../transport", () => ({ rpc }));
+vi.mock("../../stores/appLogger", () => ({ appLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../components/OutputView", () => ({ OutputView: () => <div data-testid="terminal-output">Output</div> }));
 vi.mock("../components/CommandInput", () => ({ CommandInput: () => <textarea aria-label="Command" /> }));
 vi.mock("../components/TerminalKeybar", () => ({ TerminalKeybar: () => <div /> }));
@@ -37,14 +38,24 @@ function session(id: string, agentType: string, name: string): SessionInfo {
 	};
 }
 
+// useMobileVoice probes get_hands_free_status on mount. Answering it like the headless
+// `tuic-remote` (a rejection) hides the control and leaves no dictation import pending.
+function rpcReplies(value: unknown) {
+	rpc.mockImplementation((method: string) =>
+		method === "get_hands_free_status" ? Promise.reject(new Error("404")) : Promise.resolve(value),
+	);
+}
+
 afterEach(() => {
 	cleanup();
 	rpc.mockReset();
+	// useMobileVoice probes get_hands_free_status on mount; an undefined return breaks its promise chain.
+	rpcReplies({});
 });
 
 describe("mobile session header", () => {
 	it("shows the Codex brand and name in one compact header, with session-scoped Progress in overflow", async () => {
-		rpc.mockResolvedValue({
+		rpcReplies({
 			project: "/repo",
 			entries: [{ id: 1, type: "done", text: "Tests pass", ptyId: "codex-1" }],
 			nextCursor: null,
@@ -76,7 +87,7 @@ describe("mobile session header", () => {
 	});
 
 	it("shows the Claude brand and this session's task count and intent history", async () => {
-		rpc.mockResolvedValue({
+		rpcReplies({
 			project: "/repo",
 			entries: [{ id: 2, type: "intent", text: "Earlier audit", ptyId: "claude-2" }],
 			nextCursor: null,
