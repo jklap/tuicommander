@@ -21,8 +21,8 @@ describe("chat view toggle", () => {
 		);
 		expect(css).toMatch(/\.contentHidden\s*\{\s*display:\s*none;\s*\}/);
 		// ...and the Show that owns CanvasTerminal still depends on the session alone.
-		const start = source.indexOf("when={_currentSessionId()}");
-		const end = source.indexOf("<CanvasTerminal", start);
+		const end = source.indexOf("<CanvasTerminal\n");
+		const start = source.lastIndexOf("when={_currentSessionId()}", end);
 		expect(start).toBeGreaterThan(-1);
 		expect(end).toBeGreaterThan(start);
 		expect(source.slice(start, end)).not.toMatch(/viewMode|chatActive/);
