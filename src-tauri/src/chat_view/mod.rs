@@ -168,8 +168,9 @@ impl View {
             }
             appended
         } else {
+            let window = read_last_window(&self.path, &mut self.offset, window)?;
             self.attached = true;
-            read_last_window(&self.path, &mut self.offset, window)?
+            window
         };
         for line in appended.text.lines() {
             for update in self.adapter.absorb(line) {
