@@ -1451,7 +1451,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					Compose {keyFor("toggle-compose-panel")}
 				</div>
 			</Show>
-			<Show when={composeOpen()}>
+			<Show when={composeOpen() && !chatActive()}>
 				<Suspense>
 					<ComposePanel
 						isOpen={composeOpen}
