@@ -407,11 +407,11 @@ struct ChangedRow {
 
 **How it works:**
 
-1. Maintains a `vt100::Parser` — a full VT100 screen emulator (24 rows × 220 cols default)
+1. Owns the session's `TerminalGrid`, backed by Alacritty (24 rows × 220 cols default); the same grid supplies rendered frames, scrollback, copy and search
 2. On each `process()` call, compares current screen rows against previous snapshot
-3. Lines that have scrolled off the top are emitted to the log (diff-based detection)
+3. Newly scrolled primary-history rows are extracted into the separate `LogLine` log
 4. **Separate alternate-screen contracts:** changed rows are still returned while a TUI app owns the alternate screen, so status/intent/question parsers keep working. Durable log extraction reads only primary-screen history, so fullscreen repaint noise never reaches mobile/MCP logs
-5. Bounded by `VT_LOG_BUFFER_CAPACITY` (10,000 lines); oldest lines are dropped when full
+5. The grid retains 10,000 history rows per screen; the separate log is bounded by `VT_LOG_BUFFER_CAPACITY` (10,000 lines). Oldest entries are dropped when each buffer is full. The grid history cannot be reduced as an independent log scratch buffer
 6. **Monotonic cursor:** `total_lines()` returns a monotonically increasing count of all lines ever pushed (not the current buffer length). Clients use this as a stable cursor for paginated reads via `lines_since_owned(offset, limit)`. If a client's saved offset falls in the evicted range, it is clamped to `oldest_offset()`
 
 **Resize:** When the PTY is resized, `VtLogBuffer.resize()` keeps the parser in sync and clears the previous-row snapshot (avoids false scroll detection after resize). If an alternate-screen app is active, the durable-log cursor is synchronized against the inactive primary grid, not the unrelated alternate history; normal shell capture therefore resumes on the first line after exit.
@@ -749,3 +749,15 @@ MCP retained-output pages use `VtLogBuffer::lines_since_logical` source-row
 start/end positions, including omitted chrome slots. The end is a page boundary,
 not the total scrollback size. Logical wrap lines stay whole; raw pages use the
 existing output ring and original-byte cursors. See [MCP output paging](mcp-http.md#mcp-tool-session-output).
+
+### Claude transcript Chat view
+
+`chat_view::View::advance` reads complete JSONL rows through `transcript_tail`,
+projects them with `ClaudeAdapter`, and retains a bounded ACP update log. It
+recognizes older prompt-ID rows without `origin`, excludes harness command echoes
+and sidechains, and preserves image/PDF result markers and model fallback cards.
+Recorded sanitized cases and the last-30-days schema counts are in
+[`fixtures/chat_view/recorded`](../../src-tauri/src/fixtures/chat_view/recorded/README.md).
+The opt-in `view_real_transcript_throughput` measurement reads an authorized local
+file at runtime through the same path, reporting both the 2 MiB attach and full
+parse times plus process peak RSS. Raw transcripts are never committed.
