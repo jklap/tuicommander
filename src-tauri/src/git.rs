@@ -364,7 +364,6 @@ pub(crate) async fn get_repo_diff_stats_impl(
         state.git_cache.repo_diff_stats.clone(),
         repo_path,
         move || {
-            let ref_key = tuic_git::worktree::monitoring_ref_key(Path::new(&path))?;
             let mut diff_stats = HashMap::new();
             let mut workspace_statuses = HashMap::new();
             for (id, workspace) in &worktree_paths {
@@ -377,8 +376,7 @@ pub(crate) async fn get_repo_diff_stats_impl(
                     tuic_git::worktree::inspect_workspace_monitoring_with_pr(
                         Path::new(&path),
                         workspace,
-                        &ref_key,
-                        crate::worktree::merged_github_pr_proves_tip,
+                        crate::worktree::merged_github_pr_proves_tip_monitoring,
                     ),
                 );
             }
