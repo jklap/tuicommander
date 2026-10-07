@@ -3556,6 +3556,29 @@ describe("useGitOperations", () => {
 	});
 
 	describe("handleCheckoutRemoteBranch", () => {
+		it("opens the remote checkout without waiting for the sidebar refresh window", async () => {
+			// Catches: remote checkout awaits a throttled refresh before selecting its workspace and opening a terminal.
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ main: "/repo" }),
+				merged_branches: [],
+			});
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {}, workspace_statuses: {} });
+			await gitOps.refreshAllBranchStats("/repo");
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: wtPaths({ "feat-remote": "/repo" }),
+				merged_branches: [],
+			});
+			mockRepo.checkoutRemoteBranch.mockResolvedValue(undefined);
+
+			await gitOps.handleCheckoutRemoteBranch("/repo", "feat-remote");
+
+			expect(repositoriesStore.get("/repo")?.activeWorkspaceId).toBe("feat-remote");
+			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(2);
+			expect(repositoriesStore.get("/repo")?.workspaces["feat-remote"].terminals).toHaveLength(1);
+		});
+
 		it("calls repo.checkoutRemoteBranch and refreshes branch lists", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRepositoryRefreshCoordinator } from "../../hooks/git/createRepositoryRefreshCoordinator";
+import { appLogger } from "../../stores/appLogger";
 import { repositoriesStore } from "../../stores/repositories";
 
 describe("repository refresh interval (#1491)", () => {
@@ -115,5 +116,56 @@ describe("repository refresh interval (#1491)", () => {
 		await vi.advanceTimersByTimeAsync(5_000);
 		await pending;
 		expect(structure).toHaveBeenCalledTimes(1);
+	});
+	it("counts a failed pass as a start instead of retrying git inside the window", async () => {
+		const failure = new Error("structure read failed");
+		const warning = vi.spyOn(appLogger, "warn").mockImplementation(() => {});
+		try {
+			structure.mockRejectedValueOnce(failure);
+			await refresh("/repo");
+			expect(warning).toHaveBeenCalledWith("git", "Repository refresh failed for /repo", failure);
+			const pending = refresh("/repo");
+			await vi.advanceTimersByTimeAsync(4_999);
+			expect(structure).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1);
+			await pending;
+			expect(structure).toHaveBeenCalledTimes(2);
+			expect(stats).toHaveBeenCalledTimes(1);
+		} finally {
+			warning.mockRestore();
+		}
+	});
+
+	it("wakes an existing trailing wait instead of blocking an explicit UI refresh", async () => {
+		await refresh("/repo");
+		const queued = refresh("/repo");
+		additions = 42;
+		await refresh("/repo", { immediate: true });
+		await queued;
+		expect(structure).toHaveBeenCalledTimes(2);
+		expect(repositoriesStore.get("/repo")?.workspaces.main.additions).toBe(42);
+		// The bypass also starts a new automatic window; the cancelled timer must not run again.
+		const next = refresh("/repo");
+		await vi.advanceTimersByTimeAsync(4_999);
+		expect(structure).toHaveBeenCalledTimes(2);
+		await vi.advanceTimersByTimeAsync(1);
+		await next;
+		expect(structure).toHaveBeenCalledTimes(3);
+	});
+
+	it("queues an explicit UI refresh behind an active read instead of overlapping git", async () => {
+		let release: (() => void) | undefined;
+		structure.mockImplementationOnce(async (path) => {
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			return { worktree_paths: { main: { branch: "main", path, kind: "worktree" as const } }, merged_branches: [] };
+		});
+		const active = refresh("/repo");
+		const explicit = refresh("/repo", { immediate: true });
+		expect(structure).toHaveBeenCalledTimes(1);
+		release?.();
+		await Promise.all([active, explicit]);
+		expect(structure).toHaveBeenCalledTimes(2);
 	});
 });
