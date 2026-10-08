@@ -9436,12 +9436,12 @@ fn write_custom_pty_env_config(dir: &std::path::Path, entries: &[(&str, &str)]) 
 fn custom_pty_env_reaches_the_real_child() {
     let tmp = tempfile::tempdir().unwrap();
     let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
-    write_custom_pty_env_config(tmp.path(), &[("TUIC_PROBE_CUSTOM", "custom-value")]);
+    write_custom_pty_env_config(tmp.path(), &[("PROBE_CUSTOM", "custom-value")]);
 
     let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
         let mut cmd = CommandBuilder::new("/bin/sh");
         cmd.arg("-c");
-        cmd.arg(r#"printf '%s\n' "${TUIC_PROBE_CUSTOM-unset}""#);
+        cmd.arg(r#"printf '%s\n' "${PROBE_CUSTOM-unset}""#);
         cmd
     })
     .expect("sh must spawn");
@@ -9469,7 +9469,7 @@ fn custom_pty_env_overrides_caller_env_but_never_tuic_pty_tty() {
     write_custom_pty_env_config(
         tmp.path(),
         &[
-            ("TUIC_PROBE_OVERRIDE", "custom-wins"),
+            ("PROBE_OVERRIDE", "custom-wins"),
             ("TUIC_PTY_TTY", "user-cannot-override-this"),
         ],
     );
@@ -9477,9 +9477,9 @@ fn custom_pty_env_overrides_caller_env_but_never_tuic_pty_tty() {
     let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
         let mut cmd = CommandBuilder::new("/bin/sh");
         // Mirrors a caller (e.g. PtyConfig::env) setting its own value first.
-        cmd.env("TUIC_PROBE_OVERRIDE", "caller-value");
+        cmd.env("PROBE_OVERRIDE", "caller-value");
         cmd.arg("-c");
-        cmd.arg(r#"printf '%s\n%s\n' "$TUIC_PROBE_OVERRIDE" "$TUIC_PTY_TTY""#);
+        cmd.arg(r#"printf '%s\n%s\n' "$PROBE_OVERRIDE" "$TUIC_PTY_TTY""#);
         cmd
     })
     .expect("sh must spawn");
@@ -9517,13 +9517,13 @@ fn custom_pty_env_overrides_caller_env_but_never_tuic_pty_tty() {
 fn custom_pty_env_reaches_a_minimal_agent_binary_style_spawn() {
     let tmp = tempfile::tempdir().unwrap();
     let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
-    write_custom_pty_env_config(tmp.path(), &[("TUIC_PROBE_MINIMAL", "reached")]);
+    write_custom_pty_env_config(tmp.path(), &[("PROBE_MINIMAL", "reached")]);
 
     let (pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
         let mut cmd = CommandBuilder::new("/bin/sh");
         sanitize_pty_parent_env(&mut cmd); // the entirety of POST /agents's own env work
         cmd.arg("-c");
-        cmd.arg(r#"printf '%s\n' "${TUIC_PROBE_MINIMAL-unset}""#);
+        cmd.arg(r#"printf '%s\n' "${PROBE_MINIMAL-unset}""#);
         cmd
     })
     .expect("sh must spawn");
@@ -9569,6 +9569,51 @@ fn custom_pty_env_skips_invalid_keys_but_applies_valid_ones() {
         Some("should-apply".to_string()),
         "a structurally valid key must still be applied"
     );
+}
+
+/// Batch 35 review: custom_pty_env is applied after every caller's env, so a
+/// `TUIC_*` entry could rebind a tab's identity and `ZDOTDIR` silently kills
+/// the zsh integration; neither (nor the dynamic loader) reaches a PTY.
+#[cfg(unix)]
+#[test]
+fn custom_pty_env_never_overrides_tuic_identity_zdotdir_or_the_loader() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+    write_custom_pty_env_config(
+        tmp.path(),
+        &[
+            ("TUIC_SESSION", "someone-elses-tab"),
+            ("ZDOTDIR", "/tmp/not-tuic"),
+            ("DYLD_INSERT_LIBRARIES", "/tmp/evil.dylib"),
+            ("LD_PRELOAD", "/tmp/evil.so"),
+            ("KEEP_ME", "applied"),
+        ],
+    );
+
+    let mut cmd = CommandBuilder::new("/bin/sh");
+    cmd.env("TUIC_SESSION", "this-tab");
+    apply_custom_pty_env(&mut cmd);
+    assert_eq!(
+        cmd.get_env("TUIC_SESSION")
+            .map(|v| v.to_string_lossy().to_string()),
+        Some("this-tab".to_string())
+    );
+    // Compared by value: the test process may itself run inside a TUIC zsh,
+    // so an inherited ZDOTDIR can legitimately be present.
+    for (key, injected) in [
+        ("ZDOTDIR", "/tmp/not-tuic"),
+        ("DYLD_INSERT_LIBRARIES", "/tmp/evil.dylib"),
+        ("LD_PRELOAD", "/tmp/evil.so"),
+    ] {
+        assert_ne!(
+            cmd.get_env(key)
+                .map(|v| v.to_string_lossy().to_string())
+                .as_deref(),
+            Some(injected),
+            "{key} must not be applied"
+        );
+    }
+    assert!(cmd.get_env("KEEP_ME").is_some());
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -514,16 +514,18 @@ where
 /// app needs correct for its own bookkeeping and must never be user-overridable.
 ///
 /// Backend re-validation, never trust the file: `config::valid_custom_env_key`/
-/// `valid_custom_env_value` reject only what the OS cannot represent as an env var
-/// (an empty/malformed key, a NUL byte) — no name denylist. See
-/// `AppConfig::custom_pty_env`'s doc comment for why a denylist is deliberately
-/// absent here unlike `copy_paths`/`additional_readable_dirs`.
+/// `valid_custom_env_value` reject what the OS cannot represent as an env var
+/// (an empty/malformed key, a NUL byte) and the reserved names of
+/// `config::reserved_custom_env_key` (`TUIC_*`, `ZDOTDIR`, the dynamic loader) —
+/// the list is normally already clean (`config::sanitize_custom_pty_env` runs on
+/// load and save), this is the last line.
 pub(crate) fn apply_custom_pty_env(cmd: &mut CommandBuilder) {
     for entry in crate::config::resolve_custom_pty_env() {
         if !crate::config::valid_custom_env_key(&entry.key) {
             tracing::warn!(
-                "Skipping invalid custom_pty_env key {:?}: not a valid env var name",
-                entry.key
+                "Skipping custom_pty_env key {:?}: not a valid env var name, or reserved ({})",
+                entry.key,
+                crate::config::reserved_custom_env_key(&entry.key).unwrap_or("malformed")
             );
             continue;
         }
