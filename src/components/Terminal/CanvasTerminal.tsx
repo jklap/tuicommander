@@ -979,10 +979,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 	}
 
-	/** Converts `smartMenuMatch()`'s absolute start/end coords into per-viewport-row
+	/** Converts `smartMenuMatch()`'s start/end coords into per-viewport-row
 	 *  underline spans, the same shape `hoveredLink.spans` uses — mirrors
-	 *  `paintSelection`'s abs-row iteration/multi-row handling for a match that
-	 *  spans a soft-wrap boundary. */
+	 *  `paintSelection`'s row iteration/multi-row handling for a match that
+	 *  spans a soft-wrap boundary. The coords are eviction-stable selection rows
+	 *  (`trySmartMatch` is fed `viewportRowToAbs`), so they map back through
+	 *  `selectionAbsRowToViewport` and index `rowCache` directly, exactly like
+	 *  `paintSelection`. */
 	function smartMenuMatchSpans(): { row: number; colStart: number; colEnd: number }[] {
 		const match = smartMenuMatch();
 		if (!match) return [];
@@ -993,10 +996,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const endCol = startFirst ? match.endCoord.col : match.startCoord.col;
 		const spans: { row: number; colStart: number; colEnd: number }[] = [];
 		for (let absRi = absStartRow; absRi <= absEndRow; absRi++) {
-			const vpRow = absRowToViewport(absRi);
+			const vpRow = selectionAbsRowToViewport(absRi);
 			if (vpRow === null) continue;
-			const row =
-				overlayScrollOffset != null ? rowCache.get((currentFrame?.historyBase ?? 0) + absRi) : rowMap.get(vpRow);
+			const row = overlayScrollOffset != null ? rowCache.get(absRi) : rowMap.get(vpRow);
 			if (!row) continue;
 			if (absStartRow === absEndRow) {
 				spans.push({ row: vpRow, colStart: startCol, colEnd: endCol + 1 });

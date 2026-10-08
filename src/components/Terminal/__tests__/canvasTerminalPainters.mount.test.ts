@@ -369,6 +369,34 @@ describe("paintLinkUnderline (smart-selection right-click highlight)", () => {
 		await mounted.dispose();
 	});
 
+	it("still draws the underline after scrollback eviction (historyBase > 0)", async () => {
+		// The match's coords are eviction-stable selection rows (historyBase +
+		// grid-relative); mapping them as grid-relative rows would put the
+		// span 5000 rows off-screen and draw nothing.
+		terminalsStore.register(TERM_ID, makeTerminal({ sessionId: SESSION_ID }));
+		const mounted = await mountCanvasTerminal({ sessionId: SESSION_ID, terminalId: TERM_ID });
+		fakeTransport.current!.pushFrame(
+			buildTextFrame(["foo bar baz", "row1", "row2", "row3", "row4"], 40, { historySize: 0, historyBase: 5000 }),
+		);
+		await waitFor(() => {
+			const c = overlayCtx(mounted.container, env.contexts);
+			if (!vi.mocked(c.clearRect).mock.calls.length) throw new Error("overlay not painted yet");
+		});
+		const ctx = overlayCtx(mounted.container, env.contexts);
+
+		fireEvent.contextMenu(mounted.canvas, cellPoint(1, 0)); // inside "foo"
+		await waitFor(() => expect(within(mounted.container).getByText("Copy")).toBeTruthy());
+
+		await waitFor(() => {
+			const moveToCalls = vi.mocked(ctx.moveTo).mock.calls;
+			const lineToCalls = vi.mocked(ctx.lineTo).mock.calls;
+			expect(moveToCalls.some(([x, y]) => x === EXPECTED_X0 && y === EXPECTED_Y)).toBe(true);
+			expect(lineToCalls.some(([x, y]) => x === EXPECTED_X1 && y === EXPECTED_Y)).toBe(true);
+		});
+
+		await mounted.dispose();
+	});
+
 	it("stops drawing the underline once the context menu closes", async () => {
 		terminalsStore.register(TERM_ID, makeTerminal({ sessionId: SESSION_ID }));
 		const mounted = await mountAndPaint(["foo bar baz", "row1", "row2", "row3", "row4"]);
