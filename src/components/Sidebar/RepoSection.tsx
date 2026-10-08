@@ -1664,6 +1664,7 @@ export const RepoSection: Component<{
 						<Show when={ghBadgeCount() > 0}>
 							<button
 								class={cx(s.repoActionBtn, s.ghBadgeBtn)}
+								data-gh-panel-trigger
 								onClick={(e) => {
 									e.stopPropagation();
 									setRemoteOnlyPopoverVisible((v) => !v);

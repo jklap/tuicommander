@@ -183,3 +183,31 @@ describe("RemoteOnlyPrPopover — merge button label reflects effective method",
 		expect(btn?.textContent).toBe("Rebase & Merge");
 	});
 });
+
+describe("RemoteOnlyPrPopover — outside dismissal", () => {
+	beforeEach(() => vi.clearAllMocks());
+
+	// Catches: an invisible fixed inset:0 backdrop swallows the press (and wheel) meant for the sidebar.
+	it("closes on an outside pointer press without swallowing it", () => {
+		const onSidebarPress = vi.fn();
+		const { container } = render(() => (
+			<>
+				<aside onPointerDown={onSidebarPress}>Repositories</aside>
+				<RemoteOnlyPrPopover {...defaultProps} />
+			</>
+		));
+		expect(container.querySelector(".remoteOnlyOverlay")).toBeNull();
+		const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
+		container.querySelector("aside")!.dispatchEvent(event);
+		expect(defaultProps.onClose).toHaveBeenCalledOnce();
+		expect(onSidebarPress).toHaveBeenCalledOnce();
+		expect(event.defaultPrevented).toBe(false);
+	});
+
+	// Catches: pressing inside the popover is treated as an outside press.
+	it("stays open for a press inside the popover", () => {
+		const { container } = render(() => <RemoteOnlyPrPopover {...defaultProps} />);
+		fireEvent.pointerDown(container.querySelector(".remoteOnlyRow")!);
+		expect(defaultProps.onClose).not.toHaveBeenCalled();
+	});
+});
