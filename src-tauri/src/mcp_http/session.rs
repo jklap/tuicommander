@@ -1470,6 +1470,9 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyParsed { parsed, .. } => {
                                     serde_json::json!({"type": "parsed", "event": parsed})
                                 }
+                                crate::state::AppEvent::PtyTitle { title, .. } => {
+                                    serde_json::json!({"type": "title", "title": title})
+                                }
                                 crate::state::AppEvent::PtyExit { session_id: sid } => {
                                     serde_json::json!({"type": "exit", "session_id": sid})
                                 }
@@ -1597,6 +1600,11 @@ async fn handle_ws_log_session(
             let _ = ws_sender.text(&frame.to_string()).await;
         }
 
+        // Event traffic must not restart the batching deadline: animated titles
+        // can arrive faster than 200 ms indefinitely.
+        let mut poll_tick = tokio::time::interval(std::time::Duration::from_millis(200));
+        poll_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        poll_tick.tick().await;
         loop {
             // Track whether we need to check state and/or send log frames
             enum LoopAction {
@@ -1607,7 +1615,7 @@ async fn handle_ws_log_session(
             }
 
             let action = tokio::select! {
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(200)) => {
+                _ = poll_tick.tick() => {
                     if state_poll.grid.vt_log_buffers.contains_key(&sid_poll) {
                         LoopAction::Poll
                     } else {
@@ -1620,6 +1628,12 @@ async fn handle_ws_log_session(
                     // channel was reaped (session gone): exit instead of spinning on
                     // the immediately-ready error arm. Lagged is a transient skip.
                     match event {
+                        Ok(crate::state::AppEvent::PtyTitle { title, .. }) => {
+                            if ws_sender.text(&serde_json::json!({"type": "title", "title": title}).to_string()).await.is_err() {
+                                break;
+                            }
+                            LoopAction::Skip
+                        }
                         Ok(_) => LoopAction::Event,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => LoopAction::SessionGone,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => LoopAction::Skip,
@@ -4015,6 +4029,113 @@ mod tests {
             .is_none(),
             "the activity pulse must not be forwarded on the grid WS"
         );
+    }
+
+    /// Catches: a title bus event never reaches raw/log/text WS consumers.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn remote_title_crosses_live_ws_without_starving_log_output() {
+        for format in ["raw", "log", "text"] {
+            let state = super::super::tests::test_state();
+            let sid = "remote-title-wire";
+            crate::state::tests_support::insert_dummy_session(&state, sid);
+            state
+                .session_maps
+                .output_buffers
+                .insert(sid.into(), Mutex::new(OutputRingBuffer::new(1024)));
+            state
+                .grid
+                .vt_log_buffers
+                .insert(sid.into(), Mutex::new(VtLogBuffer::new(4, 32, 1000)));
+            let app = super::super::build_router(state.clone(), false, true);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let _ = axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await;
+            });
+            let (mut socket, _) = tokio_tungstenite::connect_async(format!(
+                "ws://{addr}/sessions/{sid}/stream?format={format}"
+            ))
+            .await
+            .unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                while !state
+                    .session_maps
+                    .pty_event_channels
+                    .get(sid)
+                    .is_some_and(|tx| tx.receiver_count() > 0)
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("WS subscriber setup");
+            for title in ["Claude Code", ""] {
+                state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+                    session_id: sid.into(),
+                    title: title.into(),
+                });
+                let received = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    loop {
+                        let message = socket.next().await.unwrap().unwrap();
+                        if let Ok(frame) =
+                            serde_json::from_str::<serde_json::Value>(&message.into_text().unwrap())
+                            && frame["type"] == "title"
+                        {
+                            break frame;
+                        }
+                    }
+                })
+                .await
+                .expect("title event must be streamed without another PTY output chunk");
+                assert_eq!(
+                    received,
+                    serde_json::json!({"type": "title", "title": title})
+                );
+            }
+
+            if format != "raw" {
+                state
+                    .grid
+                    .vt_log_buffers
+                    .get(sid)
+                    .unwrap()
+                    .lock()
+                    .process(b"stream while titles change\r\n");
+                let animated_state = state.clone();
+                let animation = tokio::spawn(async move {
+                    let mut tick = tokio::time::interval(std::time::Duration::from_millis(20));
+                    loop {
+                        tick.tick().await;
+                        animated_state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+                            session_id: sid.into(),
+                            title: "animated title".into(),
+                        });
+                    }
+                });
+                let output = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                    loop {
+                        let message = socket.next().await.unwrap().unwrap();
+                        let frame: serde_json::Value =
+                            serde_json::from_str(&message.into_text().unwrap()).unwrap();
+                        if frame["type"] == "log"
+                            && frame.to_string().contains("stream while titles change")
+                        {
+                            break;
+                        }
+                    }
+                })
+                .await;
+                animation.abort();
+                output.expect("title traffic must not keep restarting the log batching deadline");
+            }
+            socket.close(None).await.unwrap();
+            server.abort();
+        }
     }
 
     // --- Grid watch channel (format=grid WS endpoint) ---
