@@ -2765,6 +2765,90 @@ async fn repo_worktree_setup_status_reports_unknown_for_an_untracked_pair() {
     assert_eq!(response, serde_json::json!({"state": "unknown"}));
 }
 
+/// B2.1: the create-path gate is bounded and fail-open — a shell that never
+/// reaches idle returns `false` on the gate's own bound, never hangs.
+#[tokio::test]
+async fn gate_new_shell_session_fails_open_after_its_bound() {
+    use std::sync::atomic::AtomicU8;
+
+    let state = test_state();
+    insert_managed_test_session(&state, "gate-never-idle", "/tmp");
+    state.session_maps.shell_states.insert(
+        "gate-never-idle".to_string(),
+        AtomicU8::new(crate::pty::SHELL_BUSY),
+    );
+    let met = tokio::time::timeout(
+        std::time::Duration::from_millis(1_000),
+        gate_new_shell_session(&state, "gate-never-idle", 50, "test"),
+    )
+    .await
+    .expect("the gate must return on its own bound, not hang");
+    assert!(!met);
+}
+
+/// B2.1: a session that can never produce a readiness signal (not live, or
+/// no shell-state atom) is skipped outright — no wait, and no broadcast
+/// channel minted for an id nothing will ever reap.
+#[tokio::test]
+async fn gate_new_shell_session_skips_a_session_with_no_readiness_signal() {
+    let state = test_state();
+    let met = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        gate_new_shell_session(&state, "no-such-session", 60_000, "test"),
+    )
+    .await
+    .expect("an unknown session must not wait out the bound");
+    assert!(!met);
+    assert!(
+        !state
+            .session_maps
+            .pty_event_channels
+            .contains_key("no-such-session")
+    );
+
+    insert_managed_test_session(&state, "no-shell-atom", "/tmp");
+    state.session_maps.shell_states.remove("no-shell-atom");
+    let met = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        gate_new_shell_session(&state, "no-shell-atom", 60_000, "test"),
+    )
+    .await
+    .expect("a session without a shell-state atom must not wait out the bound");
+    assert!(!met);
+}
+
+/// B2.1: MCP `session action=create` returns the id only once the new
+/// shell is ready. Without the gate the response arrives while the shell
+/// is still `SHELL_NULL`.
+#[cfg(unix)]
+#[tokio::test]
+async fn mcp_session_create_returns_only_after_the_shell_reaches_idle() {
+    let state = test_state();
+    let created = handle_mcp_tool_call(
+        &state,
+        loopback_addr(),
+        "session",
+        &serde_json::json!({"action": "create", "cwd": "/tmp"}),
+        None,
+    )
+    .await;
+    let Some(session_id) = created["session_id"].as_str().map(str::to_owned) else {
+        eprintln!("Skipping: PTY not available in this environment ({created})");
+        return;
+    };
+    let shell_state = state
+        .session_maps
+        .shell_states
+        .get(&session_id)
+        .map(|v| v.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(shell_state, Some(crate::pty::SHELL_IDLE), "{created}");
+    handle_session(
+        &state,
+        &serde_json::json!({"action": "kill", "session_id": session_id}),
+        None,
+    );
+}
+
 #[test]
 fn should_defer_prompt_for_mcp_bind_scopes_to_interactive_claude_only() {
     assert!(should_defer_prompt_for_mcp_bind(Some("claude"), false));
@@ -3199,6 +3283,55 @@ async fn agent_spawn_defers_claude_prompt_via_the_ordinary_no_binary_path_call_s
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
+}
+
+/// B2.1: `repo action=worktree_create spawn_session=true` returns the new
+/// session id only once its shell is ready (`create_session_in_dir` is the
+/// fourth plain-shell create path behind the readiness gate).
+#[cfg(unix)]
+#[tokio::test]
+#[serial_test::serial]
+async fn repo_worktree_create_spawn_session_returns_only_after_the_shell_reaches_idle() {
+    let repo = crate::state::tests_support::create_temp_git_repo();
+    let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let state = Arc::new(crate::state::tests_support::make_test_app_state());
+    let path = repo.path().to_string_lossy().to_string();
+    let created = handle_repo(
+        &state,
+        &serde_json::json!({
+            "action": "worktree_create",
+            "path": &path,
+            "branch": "mcp-spawn-session-gate",
+            "spawn_session": true,
+        }),
+        false,
+    )
+    .await;
+    let Some(session_id) = created["session_id"].as_str().map(str::to_owned) else {
+        eprintln!("Skipping: PTY/worktree not available in this environment ({created})");
+        return;
+    };
+    let shell_state = state
+        .session_maps
+        .shell_states
+        .get(&session_id)
+        .map(|v| v.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(shell_state, Some(crate::pty::SHELL_IDLE), "{created}");
+    handle_session(
+        &state,
+        &serde_json::json!({"action": "kill", "session_id": session_id}),
+        None,
+    );
+    let wt = std::path::PathBuf::from(created["worktree_path"].as_str().unwrap());
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while crate::worktree::warm_status(&wt)["status"] == "pending" {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    crate::worktree::clear_warm(&wt);
 }
 
 #[tokio::test]

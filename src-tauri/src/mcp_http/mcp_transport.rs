@@ -183,6 +183,8 @@ use super::mcp_transport_session_agent::compose_mcp_spawn_args;
 use super::mcp_transport_session_agent::finalize_explicit_spawn_args;
 #[cfg(test)]
 use super::mcp_transport_session_agent::finalize_spawn_args;
+use super::mcp_transport_session_agent::gate_created_session_response;
+pub(crate) use super::mcp_transport_session_agent::gate_new_shell_session;
 #[cfg(test)]
 use super::mcp_transport_session_agent::handle_agent;
 #[cfg(test)]
@@ -743,19 +745,25 @@ async fn dispatch_mcp_tool_call_with_context(
                     "error": "This session action is restricted to localhost connections"
                 })
             } else if session_action_requires_blocking_pool(action) {
-                let state = state.clone();
+                let blocking_state = state.clone();
                 let args = args.clone();
                 let sid = mcp_session_id.map(str::to_owned);
-                if action == "input" {
+                let result = if action == "input" {
                     crate::pty::run_bounded_pty_input(move || {
-                        Ok(handle_session(&state, &args, sid.as_deref()))
+                        Ok(handle_session(&blocking_state, &args, sid.as_deref()))
                     })
                     .await
                     .unwrap_or_else(|error| serde_json::json!({"error": error}))
                 } else {
-                    run_blocking_handler(move || handle_session(&state, &args, sid.as_deref()))
-                        .await
+                    run_blocking_handler(move || {
+                        handle_session(&blocking_state, &args, sid.as_deref())
+                    })
+                    .await
+                };
+                if action == "create" {
+                    gate_created_session_response(state, &result, "MCP session create").await;
                 }
+                result
             } else {
                 handle_session(state, args, mcp_session_id)
             }
