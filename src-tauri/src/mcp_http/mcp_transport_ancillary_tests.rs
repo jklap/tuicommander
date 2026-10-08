@@ -2390,6 +2390,44 @@ async fn repo_worktree_setup_status_reports_unknown_for_an_untracked_pair() {
     assert_eq!(response, serde_json::json!({"state": "unknown"}));
 }
 
+/// B2.2 (b): the deferred prompt's forced write waits for PTY quiet — it
+/// returns only once output has been silent for `quiet_ms`, gives up at
+/// `max_ms` while output keeps flowing, and stops for a gone session.
+#[tokio::test]
+async fn wait_for_pty_quiet_waits_for_silence_and_is_bounded() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let state = test_state();
+    state
+        .session_maps
+        .last_output_ms
+        .insert("quiet-probe".to_string(), AtomicU64::new(now_unix_ms()));
+    let started = std::time::Instant::now();
+    assert!(wait_for_pty_quiet(&state, "quiet-probe", 150, 2_000).await);
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(140),
+        "returned before the PTY was quiet for the window ({:?})",
+        started.elapsed()
+    );
+
+    // Output that never stops: bounded by `max_ms`, reports `false`.
+    let chatty = Arc::clone(&state);
+    let ticker = tokio::spawn(async move {
+        loop {
+            if let Some(at) = chatty.session_maps.last_output_ms.get("quiet-probe") {
+                at.store(now_unix_ms(), Ordering::Release);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    });
+    if let Some(at) = state.session_maps.last_output_ms.get("quiet-probe") {
+        at.store(now_unix_ms(), Ordering::Release);
+    }
+    assert!(!wait_for_pty_quiet(&state, "quiet-probe", 150, 300).await);
+    ticker.abort();
+
+    assert!(!wait_for_pty_quiet(&state, "no-such-session", 10, 1_000).await);
+}
+
 /// B2.1: the create-path gate is bounded and fail-open — a shell that never
 /// reaches idle returns `false` on the gate's own bound, never hangs.
 #[tokio::test]
