@@ -85,6 +85,39 @@ fn decided_for(agent_type: &str, fingerprint: &str) -> bool {
 /// Callers have already validated `agent_type` and `fingerprint` (the OSC
 /// verb is untrusted terminal output); both are re-checked here so a future
 /// call site cannot skip that.
+/// Parse a `userwrap` OSC payload, `<agent>:<fingerprint>:<tuic_session>`, read
+/// from PTY `session_id`'s output, and accept it only when every part is valid
+/// AND the session token is this PTY's own identity (its key, or the
+/// `$TUIC_SESSION` bound to it). Terminal output is untrusted: any program can
+/// print the sequence — and, by also forging `133;D` first, get past the
+/// "a foreground command is running" filter — but it cannot know this terminal's
+/// identity, so a forged request is dropped instead of opening the consent
+/// dialog. A payload without the token (an older integration script) is
+/// refused too; the script is rewritten on every spawn.
+pub(crate) fn bound_userwrap_payload<'a>(
+    state: &AppState,
+    session_id: &str,
+    payload: &'a str,
+) -> Option<(&'a str, &'a str)> {
+    let mut parts = payload.splitn(3, ':');
+    let agent = parts.next()?;
+    let fingerprint = parts.next()?;
+    let owner = parts.next()?;
+    if !is_wrappable_agent(agent)
+        || !crate::shell_integration::is_user_function_fingerprint(fingerprint)
+        || owner.is_empty()
+        || owner.len() > 128
+        || !owner
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return None;
+    }
+    let bound =
+        owner == session_id || state.live_pty_for_peer(owner).as_deref() == Some(session_id);
+    bound.then_some((agent, fingerprint))
+}
+
 pub(crate) fn request(state: &AppState, agent_type: &str, fingerprint: &str) {
     if !is_wrappable_agent(agent_type)
         || !crate::shell_integration::is_user_function_fingerprint(fingerprint)

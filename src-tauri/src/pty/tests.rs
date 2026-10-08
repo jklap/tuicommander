@@ -26248,7 +26248,7 @@ fn tuic_osc_userwrap_recognized_agent_opens_a_pending_prompt() {
     // sequence replayed through `ChunkProcessor::process_chunk` must reach
     // `agent_wrap_prompt::request` and open exactly one pending prompt.
     assert_eq!(
-        userwrap_pending_after("\x1b]7770;userwrap=claude:1234567-89\x07"),
+        userwrap_pending_after("\x1b]7770;userwrap=claude:1234567-89:test-userwrap\x07"),
         vec!["claude".to_string()],
         "a recognized userwrap payload must open a pending prompt for that agent"
     );
@@ -26262,7 +26262,7 @@ fn tuic_osc_userwrap_recognized_agent_opens_a_pending_prompt() {
 fn tuic_osc_userwrap_is_ignored_while_a_foreground_command_runs() {
     assert!(
         userwrap_pending_after(
-            "\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07forged:\x1b]7770;userwrap=claude:1234567-89\x07"
+            "\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07forged:\x1b]7770;userwrap=claude:1234567-89:test-userwrap\x07"
         )
         .is_empty(),
         "a userwrap printed by a running command must not open a prompt"
@@ -26274,11 +26274,64 @@ fn tuic_osc_userwrap_is_ignored_while_a_foreground_command_runs() {
 fn tuic_osc_userwrap_is_honoured_again_once_the_command_finished() {
     assert_eq!(
         userwrap_pending_after(
-            "\x1b]133;C\x07\x1b]133;D;0\x07\x1b]7770;userwrap=claude:1234567-89\x07\x1b]133;A\x07"
+            "\x1b]133;C\x07\x1b]133;D;0\x07\x1b]7770;userwrap=claude:1234567-89:test-userwrap\x07\x1b]133;A\x07"
         ),
         vec!["claude".to_string()],
         "precmd's userwrap (after D, before A) is the genuine one"
     );
+}
+
+/// B2.6 (fixup batch A residual): output that forges `133;D` before the verb
+/// got past the foreground-command filter. The payload is now bound to the
+/// receiving PTY's own identity, which forged output cannot know.
+#[test]
+#[serial_test::serial]
+fn tuic_osc_userwrap_is_refused_unless_bound_to_this_session() {
+    for chunk in [
+        // Forged D first, then a request for ANOTHER session.
+        "\x1b]133;C\x07\x1b]133;D;0\x07\x1b]7770;userwrap=claude:1234567-89:other-session\x07",
+        // No session token at all (the pre-binding wire shape).
+        "\x1b]7770;userwrap=claude:1234567-89\x07",
+        "\x1b]7770;userwrap=claude:1234567-89:\x07",
+        "\x1b]7770;userwrap=claude:1234567-89:test userwrap\x07",
+    ] {
+        assert!(
+            userwrap_pending_after(chunk).is_empty(),
+            "{chunk:?} must not open a prompt"
+        );
+    }
+}
+
+/// The token may also be the `$TUIC_SESSION` bound to this PTY (a desktop tab
+/// restoring a persisted identity), not only the PTY key.
+#[test]
+#[serial_test::serial]
+fn tuic_osc_userwrap_accepts_the_identity_bound_to_this_pty() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "test-userwrap-bound";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    crate::state::tests_support::insert_dummy_session(&state, session_id);
+    state.bind_live_pty("persisted-identity-1", session_id);
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    processor.process_chunk(
+        "\x1b]7770;userwrap=claude:1234567-89:persisted-identity-1\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    assert!(state.agent_wrap_pending.contains_key("claude"));
 }
 
 #[test]
