@@ -361,7 +361,7 @@ via a per-process keyed fingerprint).
 |---------|------|---------|-------------|
 | `plan_ssh_daemon_provision` | `id, action: "start" \| "set_password"` | `ProvisionPlan` (`{ connection_id, connection_name, action, destination, summary, steps: [{ description, command? }], digest }`) | What accepting the connection's `provision_offer` would run on the remote host, with the exact remote commands. Contacts nothing. Same as `GET /config/ssh-daemon/{id}/plan?action=` |
 | `start_ssh_daemon` | `id, planDigest` | `()` | Run an accepted Start plan (`remote_deploy::deploy_ephemeral_for`: pinned, SHA-256-checked release asset; pairing token on stdin), mark the daemon as started by this app, then connect. Needs `start_if_not_running`. Same as `POST /config/ssh-daemon/{id}/start` |
-| `stop_ssh_daemon` | `id` | `bool` | Stop the connection's ephemeral daemon, PID-file verified (the PID must be a running `tuic-remote`); `true` when one was signalled. Same as `POST /config/ssh-daemon/{id}/stop` |
+| `stop_ssh_daemon` | `id` | `bool` | Stop the connection's ephemeral daemon — only one this app started through a confirmed Start plan in this run (refused otherwise, nothing dialled) — PID-file verified (the PID must be a running `tuic-remote`); `true` when one was signalled. Same as `POST /config/ssh-daemon/{id}/stop` |
 | `configure_ssh_daemon_password` | `id, planDigest` | `String` | Run an accepted SetPassword plan: the saved username and password go on stdin to `tuic-remote --set-password-if-unset`, which refuses when the daemon already has credentials. Returns the follow-up message (restart the daemon). Same as `POST /config/remote-connections/{id}/configure-ssh-password` |
 
 ## Remote Connection Runtime (`remote_runtime.rs`)
