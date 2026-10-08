@@ -439,11 +439,24 @@ fn classify_set_password_failure(detail: &str, password: &str) -> String {
     )
 }
 
+/// Refusal of [`stop_daemon`] for a daemon this app did not start in this run.
+pub(crate) const NOT_STARTED_HERE: &str = "This app did not start this connection's remote daemon in this run; nothing was stopped. Stop it on the remote host itself.";
+
 /// Stop a daemon this app started for a connection, PID-verified. `Ok(true)`
 /// when a `tuic-remote` was signalled.
+///
+/// Only a daemon THIS app started through a confirmed Start plan in this run
+/// (the same "ours" mark Disconnect uses): the route takes no digest, so
+/// without this any authorised caller could stop any stored SSH connection's
+/// daemon — including one somebody else started that runs their sessions
+/// (Batch 32 review #4). A daemon this app did not start is refused before
+/// anything is dialled.
 pub(crate) async fn stop_daemon(state: &Arc<AppState>, id: &str) -> Result<bool, String> {
     let _daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = crate::remote_runtime::load_connection(state, id)?;
+    if !state.remote.is_provisioned(id) {
+        return Err(NOT_STARTED_HERE.to_string());
+    }
     let target = ssh_target(&connection)?;
     let profile = crate::remote_runtime::ssh_profile(&connection)
         .ok_or("remote daemon provisioning needs an SSH connection")?;
@@ -928,6 +941,21 @@ mod tests {
             .await
             .expect("runs once the lock is free");
         assert!(unblocked.is_err(), "unknown id");
+    }
+
+    /// A daemon this app did not start in this run is never stopped, and
+    /// the stored host is not even dialled (closed port: dialling it would
+    /// have produced an SSH error instead of the refusal).
+    #[tokio::test]
+    async fn stop_refuses_a_daemon_this_app_did_not_start() {
+        let mut connection = provisioned_connection();
+        if let RemoteTransport::Ssh { ssh, .. } = &mut connection.transport {
+            ssh.host = "127.0.0.1".into();
+            ssh.port = 1;
+        }
+        let (state, _dir) = state_with(&connection);
+        let err = stop_daemon(&state, &connection.id).await.unwrap_err();
+        assert_eq!(err, NOT_STARTED_HERE);
     }
 
     #[tokio::test]
