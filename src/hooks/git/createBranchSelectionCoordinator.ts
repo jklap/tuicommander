@@ -98,6 +98,17 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				// behind, with the new terminal rendered as an orphan on top of it. Save the
 				// outgoing branch's layout and resolve the incoming one, same as a real branch
 				// select does, before docking the new tab.
+				//
+				// Leave the manual Global Workspace first, exactly like handleBranchSelectInner:
+				// while it is showing, paneLayoutStore holds the WORKSPACE's layout, and saving
+				// that under the outgoing branch's key overwrote (or deleted) the branch's real
+				// split that `globalWorkspaceStore.activate` stashed. `deactivate` restores the
+				// stashed layout, so the save below records what the branch really had.
+				if (globalWorkspaceStore.isManualWorkspaceActive()) {
+					globalWorkspaceStore.deactivate(
+						activeRepo?.activeWorkspaceId ? paneLayoutKey(activeRepo.path, activeRepo.activeWorkspaceId) : undefined,
+					);
+				}
 				if (activeRepo?.activeWorkspaceId) {
 					savePaneLayoutForBranch(activeRepo.path, activeRepo.activeWorkspaceId);
 				}
