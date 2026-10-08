@@ -1869,7 +1869,8 @@ connection that is not connected has no such answer.
 `POST .../connect` brings a connection up and `DELETE .../connect` takes it
 down; taking it down also stops a daemon this app started through a confirmed
 Start plan in this run, PID-file verified, unless `leave_running_on_disconnect`
-is set. Neither returns the new status: every transition is pushed as a
+is set or the daemon still advertises live sessions (it is then left running
+and stays stoppable by a later disconnect or `.../stop`). Neither returns the new status: every transition is pushed as a
 `remote-connection-status` event on `/events` SSE (and to the desktop window),
 so one client connecting is visible to all of them.
 

@@ -431,7 +431,11 @@ A daemon too old to know `--set-password-if-unset` refuses too, and nothing
 changes.
 
 **Disconnect** stops a daemon TUICommander started this way in this run, unless
-**Leave it running on disconnect** is checked. The stop is PID-file verified: the
+**Leave it running on disconnect** is checked — or the daemon still has live
+sessions (terminals or agents on that machine): those are never killed by a
+Disconnect; the daemon keeps running and exits by itself once its last client has
+been gone for the survive time. A later Disconnect with no sessions left still
+stops it. The stop is PID-file verified: the
 file must name a process that `ps` reports as `tuic-remote`, otherwise nothing is
 signalled — a stale PID is never killed and nothing is stopped by name. A daemon
 somebody else started is never touched.
