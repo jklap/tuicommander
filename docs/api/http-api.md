@@ -1840,7 +1840,10 @@ answers the follow-up message as a JSON string. `POST /config/ssh-daemon/{id}/st
 stops the ephemeral daemon only when its PID file names a running `tuic-remote`,
 answering `true` when one was signalled. All four are guarded by
 `require_local_or_auth` (403 from a public address before the store is read) and
-answer 502 for any failure. There is no route that takes a caller-supplied host,
+answer 502 for any failure. Start, stop and set-password — like service
+install/uninstall and Update — hold a per-connection lock for the whole remote
+operation, so two of them never interleave on the same connection's daemon
+(they queue; different connections never wait on each other). There is no route that takes a caller-supplied host,
 user or credential.
 
 ### Remote Connection Runtime

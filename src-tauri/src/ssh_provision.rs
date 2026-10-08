@@ -350,6 +350,7 @@ pub(crate) async fn start_daemon(
     id: &str,
     plan_digest: &str,
 ) -> Result<(), String> {
+    let daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = crate::remote_runtime::load_connection(state, id)?;
     let plan = build_plan(&connection, ProvisionAction::Start, None)?;
     check_digest(&plan, plan_digest)?;
@@ -372,6 +373,9 @@ pub(crate) async fn start_daemon(
     .await
     .map_err(|e| redact(&format!("Starting the remote daemon failed: {e}"), &token))?;
     state.remote.mark_provisioned(id);
+    // Connecting is not a daemon operation: an Update it may trigger must be
+    // able to take the lock.
+    drop(daemon_ops);
     crate::remote_runtime::connect(state, id)
         .await
         .map_err(|e| format!("The remote daemon started, but connecting failed: {e}"))
@@ -383,6 +387,7 @@ pub(crate) async fn configure_password(
     id: &str,
     plan_digest: &str,
 ) -> Result<String, String> {
+    let _daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = crate::remote_runtime::load_connection(state, id)?;
     // Read once: the digest binds THIS value, and it is the one sent.
     let password = saved_password(id)?.ok_or("this connection has no saved password to set")?;
@@ -437,6 +442,7 @@ fn classify_set_password_failure(detail: &str, password: &str) -> String {
 /// Stop a daemon this app started for a connection, PID-verified. `Ok(true)`
 /// when a `tuic-remote` was signalled.
 pub(crate) async fn stop_daemon(state: &Arc<AppState>, id: &str) -> Result<bool, String> {
+    let _daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = crate::remote_runtime::load_connection(state, id)?;
     let target = ssh_target(&connection)?;
     let profile = crate::remote_runtime::ssh_profile(&connection)
@@ -895,6 +901,33 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, PLAN_CHANGED);
         assert!(!state.remote.take_provisioned(&connection.id));
+    }
+
+    /// Batch 32 review #5b: concurrent Start/Stop/Update/configure-password
+    /// for the SAME connection interleaved. Every one of them now waits for
+    /// that connection's daemon lock; another connection's never does.
+    #[tokio::test]
+    async fn daemon_operations_on_one_connection_serialize() {
+        // An unknown id fails instantly once it gets the lock, so a call
+        // that has not returned within the window can only be waiting for it.
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let held = state.remote.lock_daemon_ops("c1").await;
+
+        let blocked =
+            tokio::time::timeout(Duration::from_millis(300), stop_daemon(&state, "c1")).await;
+        assert!(blocked.is_err(), "stop must wait for the held lock");
+        let other =
+            tokio::time::timeout(Duration::from_millis(300), stop_daemon(&state, "c2")).await;
+        assert!(
+            matches!(other, Ok(Err(_))),
+            "another connection never waits: {other:?}"
+        );
+
+        drop(held);
+        let unblocked = tokio::time::timeout(Duration::from_secs(5), stop_daemon(&state, "c1"))
+            .await
+            .expect("runs once the lock is free");
+        assert!(unblocked.is_err(), "unknown id");
     }
 
     #[tokio::test]

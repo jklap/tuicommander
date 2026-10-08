@@ -249,6 +249,12 @@ pub(crate) struct RemoteRuntime {
     /// stop (`ssh_provision::stop_after_disconnect`). Never persisted: after a
     /// restart nothing here is "ours" any more.
     provisioned: DashMap<String, ()>,
+    /// One async mutex per connection id, serialising every operation that
+    /// starts, stops, replaces or reconfigures that connection's remote daemon
+    /// over SSH: provisioning Start/Stop/configure-password, service
+    /// install/uninstall and Update. Two of them interleaving on one host could
+    /// stop the daemon the other just launched, or race on its PID file.
+    provision_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
 
 impl Default for RemoteRuntime {
@@ -266,6 +272,7 @@ impl Default for RemoteRuntime {
             ),
             direct_proxies: Default::default(),
             provisioned: DashMap::new(),
+            provision_locks: DashMap::new(),
         }
     }
 }
@@ -274,6 +281,18 @@ impl RemoteRuntime {
     /// Record that this app started `id`'s daemon (confirmed Start plan).
     pub(crate) fn mark_provisioned(&self, id: &str) {
         self.provisioned.insert(id.to_string(), ());
+    }
+
+    /// Wait for exclusive use of `id`'s remote daemon (see `provision_locks`).
+    /// Held for the whole remote operation; operations on OTHER connections
+    /// never wait on it.
+    pub(crate) async fn lock_daemon_ops(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = self
+            .provision_locks
+            .entry(id.to_string())
+            .or_default()
+            .clone();
+        lock.lock_owned().await
     }
 
     /// Whether this app started `id`'s daemon in this run, without forgetting it.
