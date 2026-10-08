@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Remove terminal-grid prompt tint because recorded cursor rows can identify the composer or tool output; keep prompt colours in Chat (#1595-22b1).
+
 - Reject HTML responses to remote JSON RPCs with the endpoint and content type, so Add Repository shows the error instead of an HTML home path (#1594-f297).
 
 - Remote desktop terminal tabs now receive daemon agent identity, parsed state and OSC title/reset notifications through the owning connection (#1581-8fd0).
