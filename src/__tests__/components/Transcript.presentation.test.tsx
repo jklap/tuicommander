@@ -3,7 +3,9 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { Transcript } from "../../components/AIChatPanel/Transcript";
+import { buildAnswersTurn } from "../../components/Terminal/answersTurn";
 import type { AcpTranscriptEntry } from "../../stores/acpTranscript";
+import fixture from "./fixtures/chat-answer-parity.json";
 
 afterEach(cleanup);
 
@@ -96,5 +98,34 @@ describe("transcript presentation", () => {
 		setEntries([{ id: "a", kind: "agent", text: "💬 **Updated answer**" }]);
 		await Promise.resolve();
 		expect(container.querySelector("[data-tuic-answer]")?.textContent).toBe("Updated answer");
+	});
+
+	// Catches: blank lines dropped (paragraphs fold into the list above), only the first paragraph of an
+	// answer tinted, and the second 💬 left raw — the chat view disagreeing with the CLI grid.
+	it("shows each 💬 answer over the extent the CLI grid highlights", async () => {
+		const gridRows = fixture.text
+			.split("\n")
+			.map((line, i) => ({ text: i === 0 ? `● ${line}` : line && `  ${line}`, isWrapped: false }));
+		const grid = buildAnswersTurn(gridRows, false).answers;
+		const { container } = render(() => (
+			<Transcript
+				entries={() => [{ id: "a", kind: "agent", text: fixture.text }]}
+				busy={() => false}
+				emptyMessage="Empty"
+				observeToolDuration={false}
+			/>
+		));
+		await Promise.resolve();
+		const blocks = Array.from(container.querySelectorAll<HTMLElement>("#markdown-content > div > *"));
+		expect(blocks.map((block) => block.tagName)).toEqual(["P", "UL", "P", "UL", "P", "P"]);
+		expect(blocks.map((block) => block.getAttribute("data-tuic-answer"))).toEqual(["", "end", "", "", "", "end"]);
+		const heads = blocks.filter((block) => block.hasAttribute("data-tuic-answer-start"));
+		expect(heads.map((head) => head.textContent)).toEqual([
+			"Sì, l'avevamo valutata e scartata nel piano originale di Design Mode, a settembre. Non funziona per due motivi:",
+			"Il plugin secondo me è la strada giusta, come estensione di Chrome:",
+		]);
+		expect(container.textContent).not.toContain("💬");
+		expect(grid).toHaveLength(heads.length);
+		expect(grid[1].endsWith(blocks[5].textContent ?? "")).toBe(true);
 	});
 });

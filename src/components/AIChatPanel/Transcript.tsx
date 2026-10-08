@@ -15,7 +15,7 @@ import { cx } from "../../utils";
 import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { filePathRegex, matchWebUrls } from "../Terminal/linkProvider";
-import { ANSWER_MARKER_RE } from "../Terminal/suggestOverlay";
+import { ANSWER_MARKER_RE, answerBlockRanges, type ChatBlock } from "../Terminal/suggestOverlay";
 import { ContentRenderer } from "../ui/ContentRenderer";
 import s from "./AIChatPanel.module.css";
 import { projectChatProtocolText } from "./protocolText";
@@ -326,13 +326,29 @@ const UserText: Component<{ text: string; onOpenFile?: (href: string) => void }>
 };
 
 /** Reuse the terminal's answer marker and tint, after Markdown has rendered.
- * Code examples and quotations retain their literal marker. Stored/copy text stays intact. */
+ * An answer spans the blocks the grid highlights (`answerBlockRanges`); the 💬 glyph is
+ * dropped from its first paragraph, which keeps `data-tuic-answer-start` so a later pass
+ * still finds it. Code examples and quotations keep their literal marker; stored/copy text stays intact. */
 function highlightAnswers(container: HTMLDivElement | undefined): void {
-	for (const paragraph of container?.querySelectorAll("p") ?? []) {
-		if (paragraph.closest("pre, code, blockquote") || !ANSWER_MARKER_RE.test(paragraph.textContent ?? "")) continue;
-		paragraph.setAttribute("data-tuic-answer", "");
-		let remaining = /^[\s●⏺]*💬[\t ]*/.exec(paragraph.textContent ?? "")?.[0].length ?? 0;
-		const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+	const elements = Array.from(container?.querySelectorAll<HTMLElement>(":scope > div > *") ?? []);
+	const blocks: ChatBlock[] = elements.map((element) => {
+		const text = element.textContent ?? "";
+		const paragraph = element.tagName === "P";
+		return {
+			kind: paragraph ? "paragraph" : element.tagName === "PRE" ? "code" : "other",
+			text,
+			marker: paragraph && (element.hasAttribute("data-tuic-answer-start") || ANSWER_MARKER_RE.test(text)),
+		};
+	});
+	for (const element of elements) element.removeAttribute("data-tuic-answer");
+	for (const [first, last] of answerBlockRanges(blocks)) {
+		for (let index = first; index <= last; index++)
+			elements[index].setAttribute("data-tuic-answer", index === last ? "end" : "");
+		const head = elements[first];
+		if (head.hasAttribute("data-tuic-answer-start")) continue;
+		head.setAttribute("data-tuic-answer-start", "");
+		let remaining = /^[\s●⏺]*💬[\t ]*/.exec(head.textContent ?? "")?.[0].length ?? 0;
+		const walker = document.createTreeWalker(head, NodeFilter.SHOW_TEXT);
 		while (remaining > 0 && walker.nextNode()) {
 			const node = walker.currentNode;
 			const text = node.textContent ?? "";

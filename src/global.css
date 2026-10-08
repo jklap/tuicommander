@@ -203,6 +203,9 @@
   --fg-muted: #9aa1a9;
   --accent: #59a8dd;
   --accent-hover: #7abde5;
+  /* The user's question in the terminal grid and the chat view; the answer keeps its green. */
+  --prompt-tint: color-mix(in srgb, var(--accent) 16%, transparent);
+  --prompt-bar: var(--accent);
   --activity: #59a8dd;  /* semantic: always blue, not overridden by themes */
   --border: #3e3e42;
   --success: #4ade80;
