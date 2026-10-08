@@ -1868,6 +1868,51 @@ mod tests {
         }
     }
 
+    /// Batch 36 review: no test drove a hostile path through the generated
+    /// `.zshenv`. The app-data dir is user-controlled (an instance's config
+    /// dir) and lands inside zsh source text, so a path holding quotes,
+    /// `$(...)`, backticks, `;` and spaces must be taken literally — sourced,
+    /// never executed.
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn a_hostile_app_data_path_is_quoted_in_the_generated_zshenv() {
+        let config_dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        let root = tempfile::tempdir().unwrap();
+        let canary = root.path().join("PWNED");
+        let hostile = root.path().join(format!(
+            "it's $(touch {c}) `touch {c}` ;touch {c}; \"$HOME\"",
+            c = canary.display()
+        ));
+        std::fs::create_dir_all(&hostile).unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let mut cmd = portable_pty::CommandBuilder::new("/bin/zsh");
+        super::inject_zsh(&hostile, &mut cmd);
+        let zdotdir = hostile.join("zdotdir");
+        assert!(zdotdir.join(".zshenv").is_file(), "the .zshenv was written");
+
+        let out = std::process::Command::new("zsh")
+            .arg("-c")
+            .arg("print -r -- \"SOURCED:${+functions[__tuic_precmd]}\"")
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("ZDOTDIR", &zdotdir)
+            .current_dir(root.path())
+            .output()
+            .expect("zsh must be installed (scripts/install-launch-shells.sh)");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stdout.contains("SOURCED:1"),
+            "the eager script must be sourced from the hostile path: {stdout:?} {stderr:?}"
+        );
+        assert!(!canary.exists(), "path text must never run as code");
+    }
+
     /// The consent rule for a user's OWN `claude`/`codex`/`goose` function,
     /// exercised by sourcing the real deferred script in `zsh -f -c` with the
     /// exact env `inject_zsh` exports. No PTY needed: the decision logic runs

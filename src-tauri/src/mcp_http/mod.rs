@@ -1553,6 +1553,12 @@ async fn agent_wrap_prompt_response_http(
         body.decision,
     ) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))),
+        // An agent outside the allow-list is the caller's mistake; only a
+        // failed save of a valid answer is a server error.
+        Err(e) if !crate::agent_wrap_prompt::is_wrappable_agent(&body.agent_type) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),
@@ -3172,6 +3178,23 @@ mod tests {
         state.config.write().disabled_native_tools = Vec::new();
         mcp_transport::rebuild_tool_search_index(&state);
         state
+    }
+
+    /// Batch 36 review: an agent outside the allow-list is a bad request,
+    /// not a server error.
+    #[tokio::test]
+    async fn agent_wrap_prompt_response_rejects_an_unknown_agent_with_400() {
+        let response = agent_wrap_prompt_response_http(
+            State(test_state()),
+            Json(AgentWrapPromptResponseBody {
+                request_id: "00000000-0000-4000-8000-000000000000".into(),
+                agent_type: "not-an-agent".into(),
+                decision: Some(true),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
