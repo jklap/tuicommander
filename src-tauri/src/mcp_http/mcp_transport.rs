@@ -3019,6 +3019,23 @@ pub(crate) async fn wait_for_mcp_identity_bound(
 /// Detached via `tokio::spawn` internally rather than awaited — the caller (any spawn path)
 /// must keep returning immediately, unaffected by this wait.
 ///
+/// Three hardening steps (fixup batch B2.2, after wip's documented 500+ s hang):
+/// - the forced first write waits for `DEFERRED_PROMPT_QUIET_MS` of PTY silence
+///   (bounded by `DEFERRED_PROMPT_QUIET_MAX_MS`, fail-open), so the wake notice does not
+///   land while the TUI is still painting;
+/// - a watchdog: if `DEFERRED_PROMPT_WATCHDOG_MS` after the notice the session's
+///   `turn_epoch` has not advanced and the prompt is still UNREAD in the inbox, it is
+///   claimed out of the inbox (`take_unread_agent_message`, so it can never be delivered
+///   twice) and typed directly (`pty::force_type_deferred_prompt`); refused — and put back
+///   in the inbox — when that could clobber a draft or answer an open dialog;
+/// - every spawn path pre-registers the peer row (`register_spawned_peer`), so the filing
+///   step below can only miss when the session is really gone.
+///
+/// `pty_session` is the PTY key (writes); `peer_identity` is the child's `$TUIC_SESSION`
+/// (peer row, bind wait, inbox) — equal on the MCP and HTTP paths, different on a desktop
+/// spawn that restores a persisted identity. The task keeps no per-session state: it ends
+/// when the session closes or the watchdog has run.
+///
 /// `from_tuic_session`: the caller-agent's own identity to attribute the delivered message
 /// to, or `None` when there is no caller identity (an HTTP/desktop-IPC-originated spawn has
 /// no agent-to-agent caller). `None` becomes an empty-string sentinel on the delivered
@@ -3035,13 +3052,103 @@ pub(crate) async fn wait_for_mcp_identity_bound(
 /// `deliver_notice_to_managed_pty`/`settle_terminal_delivery` piecemeal into other files.
 pub(crate) fn spawn_deferred_prompt_delivery(
     state: Arc<AppState>,
-    tuic_session: String,
+    pty_session: String,
+    peer_identity: String,
     from_tuic_session: Option<String>,
     prompt: String,
 ) {
+    spawn_deferred_prompt_delivery_with(
+        state,
+        pty_session,
+        peer_identity,
+        from_tuic_session,
+        prompt,
+        DeferredPromptTimings::DEFAULT,
+    );
+}
+
+/// The bounds [`spawn_deferred_prompt_delivery`] runs with. A parameter (not
+/// baked into the body) so a test can drive every branch without waiting out the
+/// real 5 s/20 s bounds.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DeferredPromptTimings {
+    /// [`wait_for_mcp_identity_bound`]'s bound.
+    pub(crate) bind_timeout_ms: u64,
+    /// How long the PTY must have been silent before the forced first write.
+    pub(crate) quiet_ms: u64,
+    /// Give up waiting for that silence after this long (fail-open).
+    pub(crate) quiet_max_ms: u64,
+    /// After the wake notice, how long to wait for the agent to read its inbox
+    /// before typing the prompt itself.
+    pub(crate) watchdog_ms: u64,
+}
+
+impl DeferredPromptTimings {
+    pub(crate) const DEFAULT: Self = Self {
+        bind_timeout_ms: MCP_IDENTITY_BIND_TIMEOUT_MS,
+        quiet_ms: DEFERRED_PROMPT_QUIET_MS,
+        quiet_max_ms: DEFERRED_PROMPT_QUIET_MAX_MS,
+        watchdog_ms: DEFERRED_PROMPT_WATCHDOG_MS,
+    };
+}
+
+/// PTY silence required before the deferred prompt's forced first write, so the
+/// wake notice is not typed into a TUI still painting its startup screen.
+pub(crate) const DEFERRED_PROMPT_QUIET_MS: u64 = 500;
+/// Upper bound on waiting for that silence (a chatty startup must not stall
+/// delivery forever).
+pub(crate) const DEFERRED_PROMPT_QUIET_MAX_MS: u64 = 5_000;
+/// How long after the wake notice the agent has to read its inbox before the
+/// watchdog types the prompt directly.
+pub(crate) const DEFERRED_PROMPT_WATCHDOG_MS: u64 = 20_000;
+
+/// Wait until `session_id` has produced no PTY output for `quiet_ms`, bounded by
+/// `max_ms`. Returns `false` when the bound ran out or the session went away.
+async fn wait_for_pty_quiet(
+    state: &Arc<AppState>,
+    session_id: &str,
+    quiet_ms: u64,
+    max_ms: u64,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(max_ms);
+    loop {
+        let Some(last_output_ms) = state
+            .session_maps
+            .last_output_ms
+            .get(session_id)
+            .map(|at| at.load(std::sync::atomic::Ordering::Acquire))
+        else {
+            return false;
+        };
+        if now_unix_ms().saturating_sub(last_output_ms) >= quiet_ms {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(quiet_ms.clamp(10, 50))).await;
+    }
+}
+
+fn session_turn_epoch(state: &AppState, session_id: &str) -> Option<u64> {
+    state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .map(|session| session.turn_epoch)
+}
+
+pub(crate) fn spawn_deferred_prompt_delivery_with(
+    state: Arc<AppState>,
+    pty_session: String,
+    peer_identity: String,
+    from_tuic_session: Option<String>,
+    prompt: String,
+    timings: DeferredPromptTimings,
+) -> tokio::task::JoinHandle<()> {
     let gate_from = from_tuic_session.unwrap_or_default();
     tokio::spawn(async move {
-        wait_for_mcp_identity_bound(&state, &tuic_session, MCP_IDENTITY_BIND_TIMEOUT_MS).await;
+        wait_for_mcp_identity_bound(&state, &peer_identity, timings.bind_timeout_ms).await;
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -3050,15 +3157,15 @@ pub(crate) fn spawn_deferred_prompt_delivery(
             id: uuid::Uuid::new_v4().to_string(),
             from_tuic_session: gate_from,
             from_name: "tuic".to_string(),
-            content: prompt,
+            content: prompt.clone(),
             timestamp: now_ms,
             delivered_via_channel: false,
         };
         let msg_id = msg.id.clone();
         let filed = {
             let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
-            if state.peer_agents.contains_key(&tuic_session) {
-                state.push_agent_inbox(&tuic_session, msg);
+            if state.peer_agents.contains_key(&peer_identity) {
+                state.push_agent_inbox(&peer_identity, msg);
                 true
             } else {
                 false
@@ -3066,19 +3173,93 @@ pub(crate) fn spawn_deferred_prompt_delivery(
         };
         if !filed {
             // The session was killed/retired during the wait — nothing to deliver
-            // into and nothing to wake. Matches `send`'s own "recipient not
-            // registered" outcome; this path never surfaces an error to anyone
-            // since there is no caller left waiting on this specific spawn's
-            // prompt delivery.
+            // into and nothing to wake. Every spawn path pre-registers the peer row
+            // (`register_spawned_peer`), so a missing row really means "gone", not
+            // "this spawn path never registered it" (which used to silently LOSE the
+            // prompt on `POST /sessions/agent` and desktop `spawn_agent`).
             return;
         }
-        let outcome = crate::pty::deliver_notice_to_managed_pty(
-            &state,
-            &tuic_session,
-            crate::pty::PEER_MAIL_WAKE,
-        );
-        crate::pty::settle_terminal_delivery(&state, &tuic_session, &msg_id, outcome);
-    });
+        // Let the TUI finish painting before the forced first write lands.
+        if !wait_for_pty_quiet(&state, &pty_session, timings.quiet_ms, timings.quiet_max_ms).await
+            && !state.session_maps.sessions.contains_key(&pty_session)
+        {
+            return;
+        }
+        let outcome =
+            crate::pty::deliver_notice_to_managed_pty(&state, &pty_session, crate::pty::PEER_MAIL_WAKE);
+        crate::pty::settle_terminal_delivery(&state, &peer_identity, &msg_id, outcome);
+
+        // Watchdog. The wake notice only points at the inbox; if it landed before
+        // the TUI was ready (or in a dialog) nothing ever reads the prompt — the
+        // documented 500+ s hang. Snapshot the epoch AFTER the notice (its own
+        // forced write counts as a submission), then give the agent `watchdog_ms`
+        // to read the inbox. A new submitted turn (the user typed, or a queued
+        // notice flushed) means someone is driving the session: stand down.
+        let epoch_after_notice = session_turn_epoch(&state, &pty_session);
+        tokio::time::sleep(std::time::Duration::from_millis(timings.watchdog_ms)).await;
+        if !state.session_maps.sessions.contains_key(&pty_session)
+            || session_turn_epoch(&state, &pty_session) != epoch_after_notice
+        {
+            return;
+        }
+        let Some(message) = state.take_unread_agent_message(&peer_identity, &msg_id) else {
+            return; // read (or gone): the normal path worked
+        };
+        // Drop a still-queued wake notice: the prompt is about to be typed itself.
+        if let Some(mut queue) = state.pending_injections.get_mut(&pty_session) {
+            queue.retain(|entry| entry.text() != crate::pty::PEER_MAIL_WAKE);
+        }
+        match crate::pty::force_type_deferred_prompt(&state, &pty_session, &message.content) {
+            crate::pty::ForcedPromptOutcome::Typed => {
+                tracing::warn!(
+                    session_id = %pty_session,
+                    "deferred initial prompt was still unread {}ms after its wake notice — typed it directly",
+                    timings.watchdog_ms
+                );
+            }
+            other => {
+                tracing::warn!(
+                    session_id = %pty_session,
+                    outcome = ?other,
+                    "deferred-prompt watchdog could not type the prompt; it stays in the inbox"
+                );
+                state.store_agent_inbox(&peer_identity, message);
+            }
+        }
+    })
+}
+
+/// Register a freshly spawned managed agent as a peer immediately, before its
+/// own MCP bridge connects — so it is addressable at once, and so the deferred
+/// prompt (`spawn_deferred_prompt_delivery`) always has a row to file under even
+/// when the child's own MCP `initialize` never arrives within the bind bound.
+/// `apply_initialize_identity` later fills `mcp_session_id` on the same row.
+/// The row is retired with the PTY (`remove_live_session_state` /
+/// `retire_peer_identity`), so it cannot outlive the session.
+pub(crate) fn register_spawned_peer(
+    state: &AppState,
+    peer_identity: &str,
+    name: String,
+    project: Option<String>,
+) {
+    let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+    // Overwrite, like the MCP spawn path always did: a row left by an earlier PTY
+    // under a reused identity (desktop resume) must not carry its stale
+    // `mcp_session_id` into this spawn's bind wait.
+    state.peer_agents.insert(
+        peer_identity.to_string(),
+        crate::state::PeerAgent {
+            tuic_session: peer_identity.to_string(),
+            mcp_session_id: String::new(), // filled when the child connects via MCP
+            name,
+            project,
+            registered_at: now_unix_ms(),
+        },
+    );
+    state
+        .agent_inbox
+        .entry(peer_identity.to_string())
+        .or_default();
 }
 
 /// `session action=wait` — block (server-side) until the session is idle or has
@@ -5569,17 +5750,7 @@ fn handle_agent_with_parent_cwd(
 
             // Every managed child is a peer immediately, independent of whether
             // its initial prompt runs or its own MCP bridge has connected yet.
-            state.peer_agents.insert(
-                session_id.clone(),
-                crate::state::PeerAgent {
-                    tuic_session: session_id.clone(),
-                    mcp_session_id: String::new(), // filled when child connects via MCP
-                    name: peer_name.clone(),
-                    project: effective_cwd.clone(),
-                    registered_at: now_unix_ms(),
-                },
-            );
-            state.agent_inbox.entry(session_id.clone()).or_default();
+            register_spawned_peer(state, &session_id, peer_name.clone(), effective_cwd.clone());
 
             // Computed before the `if let Some(prompt_text) = deferred_prompt_for_mcp_bind`
             // block below moves it — feeds `spawn_response`'s own deferral notice.
@@ -5593,6 +5764,7 @@ fn handle_agent_with_parent_cwd(
             if let Some(prompt_text) = deferred_prompt_for_mcp_bind {
                 spawn_deferred_prompt_delivery(
                     Arc::clone(state),
+                    session_id.clone(),
                     session_id.clone(),
                     caller_tuic.clone(),
                     prompt_text,
@@ -16618,6 +16790,44 @@ mod tests {
             !met,
             "wait_for_shell_idle must return false rather than hang when idle never arrives"
         );
+    }
+
+    /// B2.2 (b): the deferred prompt's forced write waits for PTY quiet — it
+    /// returns only once output has been silent for `quiet_ms`, gives up at
+    /// `max_ms` while output keeps flowing, and stops for a gone session.
+    #[tokio::test]
+    async fn wait_for_pty_quiet_waits_for_silence_and_is_bounded() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let state = test_state();
+        state
+            .session_maps
+            .last_output_ms
+            .insert("quiet-probe".to_string(), AtomicU64::new(now_unix_ms()));
+        let started = std::time::Instant::now();
+        assert!(wait_for_pty_quiet(&state, "quiet-probe", 150, 2_000).await);
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(140),
+            "returned before the PTY was quiet for the window ({:?})",
+            started.elapsed()
+        );
+
+        // Output that never stops: bounded by `max_ms`, reports `false`.
+        let chatty = Arc::clone(&state);
+        let ticker = tokio::spawn(async move {
+            loop {
+                if let Some(at) = chatty.session_maps.last_output_ms.get("quiet-probe") {
+                    at.store(now_unix_ms(), Ordering::Release);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        });
+        if let Some(at) = state.session_maps.last_output_ms.get("quiet-probe") {
+            at.store(now_unix_ms(), Ordering::Release);
+        }
+        assert!(!wait_for_pty_quiet(&state, "quiet-probe", 150, 300).await);
+        ticker.abort();
+
+        assert!(!wait_for_pty_quiet(&state, "no-such-session", 10, 1_000).await);
     }
 
     /// B2.1: the create-path gate is bounded and fail-open — a shell that never

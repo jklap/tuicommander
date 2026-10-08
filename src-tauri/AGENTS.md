@@ -949,6 +949,22 @@ never carry the prompt) and hand the withheld prompt to the shared
   `should_defer_prompt_for_mcp_bind`/`spawn_deferred_prompt_delivery` with the other two
   paths, plus a `to-test.md` item for a real UI spawn.
 
+**!! Known risk, mitigated 2026-10-08 (fixup B2.2): the deferred prompt could hang a spawn
+for 500+ s.** Pre-rebase wip's own to-test notes recorded real-task Claude spawns sitting idle
+for minutes on this path: the forced `PEER_MAIL_WAKE` write could land before the TUI was ready
+(or inside its trust dialog), `note_submitted_input` still recorded it as a submitted turn (a
+Protocol-rank busy latch held until `PROTOCOL_STALE_TIMEOUT`), and nothing retried. Also, the
+HTTP and desktop paths never inserted a `PeerAgent` row, so a bind slower than 5 s LOST their
+prompt, and the desktop path waited on the PTY key while a restored tab's child binds under its
+persisted `$TUIC_SESSION`. Now: every spawn path calls `register_spawned_peer` (keyed by the
+child's real identity), the forced write waits for `DEFERRED_PROMPT_QUIET_MS` of PTY silence, and
+a `DEFERRED_PROMPT_WATCHDOG_MS` (20 s) watchdog types the prompt itself
+(`pty::force_type_deferred_prompt`) when `turn_epoch` has not advanced since the notice and the
+message is still unread — claiming it out of the inbox first (`take_unread_agent_message`) so it is
+never delivered twice, and refusing (message kept) over a draft or an open dialog. The task holds
+no per-session map entry. Do not remove the watchdog without replacing it with an equivalent
+"did a turn start?" check; see the to-test.md entry for the live verification still owed.
+
 The inline deferred-delivery logic is `pub(crate) fn spawn_deferred_prompt_delivery`
 (`mcp_transport.rs`, next to `wait_for_mcp_identity_bound`) — all three spawn paths call the
 same function rather than each reimplementing the wait/lock/push/deliver/settle sequence.
