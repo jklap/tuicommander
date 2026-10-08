@@ -274,7 +274,7 @@ sha2 = "0.11"
 hkdf = "0.13"
 axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 axum-server-dual-protocol = { version = "0.7", default-features = false }
-web-push-native = { version = "0.4", default-features = false }
+web-push-native = { version = "0.5", default-features = false }
 rand_core = { version = "0.6", features = ["getrandom"] }
 base64ct = { version = "1", features = ["alloc"] }
 anyhow = "1"
