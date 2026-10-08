@@ -495,27 +495,43 @@ mod tests {
     /// costs an OS file watcher: the map must stop growing at its cap.
     #[tokio::test]
     async fn refuses_a_new_watcher_past_the_distinct_session_cap() {
+        // A small cap: every distinct session costs a real (slow to create)
+        // OS watcher, and 64 of them timed out under a loaded full suite.
+        const CAP: usize = 4;
         let tmp = tempfile::tempdir().unwrap();
         let project_dir = tmp.path();
         let state = make_test_state();
+        let watch = |id: &str| watch_session_review_with_cap(project_dir, id, "/repo", &state, CAP);
 
-        for i in 0..MAX_SESSION_REVIEW_WATCHERS {
-            watch_session_review_internal(project_dir, &format!("session-{i}"), "/repo", &state)
-                .unwrap();
+        for i in 0..CAP {
+            watch(&format!("session-{i}")).unwrap();
         }
-        let err = watch_session_review_internal(project_dir, "one-too-many", "/repo", &state)
-            .unwrap_err();
+        let err = watch("one-too-many").unwrap_err();
         assert!(err.contains("Too many"), "{err}");
-        assert_eq!(
-            state.session_review_watchers.len(),
-            MAX_SESSION_REVIEW_WATCHERS
-        );
+        assert_eq!(state.session_review_watchers.len(), CAP);
 
         // An existing watcher still takes another subscriber at the cap.
-        watch_session_review_internal(project_dir, "session-0", "/repo", &state).unwrap();
+        watch("session-0").unwrap();
         // Freeing a slot lets a new session in again.
         unwatch_session_review_internal(project_dir, "session-1", &state);
-        watch_session_review_internal(project_dir, "one-too-many", "/repo", &state).unwrap();
+        watch("one-too-many").unwrap();
+    }
+
+    /// The public entry point enforces `MAX_SESSION_REVIEW_WATCHERS` (checked
+    /// by filling the slot counter, not by creating 64 OS watchers).
+    #[tokio::test]
+    async fn the_public_watch_uses_the_max_watchers_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = make_test_state();
+        state
+            .session_review_watcher_slots
+            .store(MAX_SESSION_REVIEW_WATCHERS, Ordering::Release);
+        let err = watch_session_review_internal(tmp.path(), "new", "/repo", &state).unwrap_err();
+        assert!(err.contains("Too many"), "{err}");
+        state
+            .session_review_watcher_slots
+            .store(MAX_SESSION_REVIEW_WATCHERS - 1, Ordering::Release);
+        watch_session_review_internal(tmp.path(), "new", "/repo", &state).unwrap();
     }
 
     /// Subscribers that never unwatch (a crashed client) cannot pin an
