@@ -50,6 +50,7 @@ benchmarks
 CLAUDE.md
 .mdkb
 scripts/*
+!scripts/agent_capture/
 !scripts/replay-oracle.sh
 !scripts/record-chat-fixtures.py
 !scripts/build-docs.sh
