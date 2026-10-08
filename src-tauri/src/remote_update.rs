@@ -214,6 +214,7 @@ pub(crate) async fn perform_update_and_restart(
                     &profile,
                     *remote_daemon_port,
                     &token,
+                    instance_id.as_deref(),
                 )
                 .await
                 .map_err(|e| format!("Installed SSH update failed: {e}"))?;

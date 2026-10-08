@@ -1724,20 +1724,34 @@ fn stop_deleted_ephemeral(state: &Arc<AppState>, id: &str) {
             None
         }
     };
-    let Some(profile) = connection.as_ref().and_then(delete_stop_profile) else {
+    let Some((profile, instance)) = connection.as_ref().and_then(delete_stop_target) else {
         return;
     };
     tokio::spawn(async move {
-        let _ = crate::remote_deploy::stop_ephemeral(&profile).await;
+        let _ = crate::remote_deploy::stop_ephemeral_for(&profile, instance.as_deref()).await;
     });
 }
 
-fn delete_stop_profile(
+/// What deleting an OnConnect SSH connection stops: its profile and the
+/// `--instance` its ephemeral daemon runs under. Each instance has its own PID
+/// file, so stopping the default one instead would leak this connection's
+/// daemon and signal whatever other connection owns the default on that host.
+fn delete_stop_target(
     connection: &RemoteConnection,
-) -> Option<crate::tunnels::profile::TunnelProfile> {
+) -> Option<(crate::tunnels::profile::TunnelProfile, Option<String>)> {
     (connection.deploy == DeployMode::OnConnect)
         .then(|| ssh_profile(connection))
         .flatten()
+        .map(|profile| (profile, ssh_instance_id(connection)))
+}
+
+/// The `--instance` a stored SSH connection's ephemeral daemon runs under, if
+/// it names one (`None` is the default instance).
+pub(crate) fn ssh_instance_id(connection: &RemoteConnection) -> Option<String> {
+    match &connection.transport {
+        RemoteTransport::Ssh { instance_id, .. } => instance_id.clone(),
+        _ => None,
+    }
 }
 
 /// Stop everything one entry owns and announce the departure.
@@ -4352,15 +4366,30 @@ mod tests {
     fn teardown_delete_stops_only_an_on_connect_ssh_daemon() {
         let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
         connection.deploy = DeployMode::OnConnect;
-        let profile = delete_stop_profile(&connection).expect("ephemeral daemon");
+        let (profile, instance) = delete_stop_target(&connection).expect("ephemeral daemon");
         assert_eq!(profile.ssh.host, "host");
+        assert_eq!(instance, None);
 
         connection.deploy = DeployMode::Installed;
-        assert!(delete_stop_profile(&connection).is_none());
+        assert!(delete_stop_target(&connection).is_none());
 
         let mut direct = RemoteConnection::new_direct("lan", "http://host:9877", "boss");
         direct.deploy = DeployMode::OnConnect;
-        assert!(delete_stop_profile(&direct).is_none());
+        assert!(delete_stop_target(&direct).is_none());
+    }
+
+    /// Batch 32 review #1: deleting a connection with an Instance ID stopped
+    /// the DEFAULT instance's daemon (maybe another connection's on the same
+    /// host) and leaked its own.
+    #[test]
+    fn teardown_delete_stops_the_connections_own_instance() {
+        let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
+        connection.deploy = DeployMode::OnConnect;
+        if let RemoteTransport::Ssh { instance_id, .. } = &mut connection.transport {
+            *instance_id = Some("dev-box".into());
+        }
+        let (_, instance) = delete_stop_target(&connection).expect("ephemeral daemon");
+        assert_eq!(instance.as_deref(), Some("dev-box"));
     }
 
     #[test]
@@ -4369,7 +4398,7 @@ mod tests {
         let start = source.find("fn stop_deleted_ephemeral").unwrap();
         let body = &source[start..source[start..].find("\n}\n").unwrap() + start];
         assert!(body.contains("tokio::spawn"));
-        assert!(body.contains("remote_deploy::stop_ephemeral"));
+        assert!(body.contains("remote_deploy::stop_ephemeral_for"));
         assert!(
             body.contains("let _ ="),
             "remote SSH failure must be ignored"

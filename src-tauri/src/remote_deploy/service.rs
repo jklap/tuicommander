@@ -96,21 +96,30 @@ async fn run(
         .map_err(|reason| exit_error(step, reason))
 }
 
-pub(crate) async fn install(profile: &TunnelProfile, port: u16, token: &str) -> Result<(), String> {
+/// `instance` is the connection's `--instance` (`None` = default): the
+/// ephemeral daemon stopped first, and the staging launch, use THAT
+/// instance's PID file — never the default one, which may belong to another
+/// connection on the same host (Batch 32 review #1).
+pub(crate) async fn install(
+    profile: &TunnelProfile,
+    port: u16,
+    token: &str,
+    instance: Option<&str>,
+) -> Result<(), String> {
     validate_token(token)?;
     let uname = run(profile, "platform probe failed", "uname -sm", None).await?;
     let platform = host_platform(&uname)?;
 
-    super::stop_ephemeral(profile)
+    super::stop_ephemeral_for(profile, instance)
         .await
         .map_err(|reason| exit_error("could not stop ephemeral daemon", reason))?;
     // Reuse the release resolver, hash comparison and atomic upload. The
     // short-lived launch proves the uploaded executable can start; it is
     // stopped again before the persistent service is enabled.
-    super::deploy_ephemeral(profile, port, token, 60)
+    super::deploy_ephemeral_for(profile, port, token, 60, instance)
         .await
         .map_err(|error| format!("could not stage remote daemon: {error}"))?;
-    super::stop_ephemeral(profile)
+    super::stop_ephemeral_for(profile, instance)
         .await
         .map_err(|reason| exit_error("could not stop staged daemon", reason))?;
 
@@ -207,6 +216,7 @@ pub(crate) async fn update_installed(
     profile: &TunnelProfile,
     port: u16,
     token: &str,
+    instance: Option<&str>,
 ) -> Result<(), String> {
     let uname = run(profile, "platform probe failed", "uname -sm", None).await?;
     match host_platform(&uname)? {
@@ -229,7 +239,7 @@ pub(crate) async fn update_installed(
             .await?;
         }
     }
-    install(profile, port, token).await
+    install(profile, port, token, instance).await
 }
 
 fn connection_profile(connection: &RemoteConnection) -> Result<(TunnelProfile, u16), String> {
@@ -292,7 +302,8 @@ pub(crate) async fn install_remote_daemon_shared(
     let connection = load_connection(state, id)?;
     let token = pairing_token(id)?;
     let (profile, port) = connection_profile(&connection)?;
-    install(&profile, port, &token).await?;
+    let instance = crate::remote_runtime::ssh_instance_id(&connection);
+    install(&profile, port, &token, instance.as_deref()).await?;
     save_mode(state, id, DeployMode::Installed).await
 }
 
