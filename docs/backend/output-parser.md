@@ -594,3 +594,8 @@ and promotion. `.scenario.json` companions specify ordered expected states;
 through the production input bookkeeping for scenario captures and enforces them in
 addition to the 1342 golden trace. Failed or absent agents remain unverified;
 no synthetic external transcripts substitute for captures.
+
+OSC 0/2 title notifications use the terminal event path (`PtyTitle`), separately
+from parsed lifecycle events. Desktop remote tabs consume parsed events on the
+owning daemon's WebSocket instead of subscribing to local IPC. Identity comes
+from the authoritative backend `agent_type`, not from a title heuristic.

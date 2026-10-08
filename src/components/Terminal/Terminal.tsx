@@ -10,7 +10,7 @@ import {
 	Suspense,
 	untrack,
 } from "solid-js";
-import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
+import { applySessionStateEvent, detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { t } from "../../i18n";
@@ -25,6 +25,7 @@ import { settingsStore } from "../../stores/settings";
 import { type AwaitingInputType, isShellState, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { HttpRpcError, isTauri, subscribePty, type Unsubscribe } from "../../transport";
+import { getSessionConnection } from "../../transportRuntime";
 import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
@@ -93,15 +94,6 @@ type ParsedEvent =
 	| { type: "shell-state"; state: "busy" | "idle" }
 	| { type: "agent-session-conflict"; matched_text: string; kind: "in-use" | "not-found" }
 	| { type: "agent-block"; action: "start" | "end"; line: number; exit_code?: number };
-
-type BackendSessionState = {
-	shell_state?: "busy" | "idle";
-	agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
-	awaiting_input?: boolean;
-	question_confident?: boolean;
-	background_work?: boolean;
-	queued_commands?: number;
-};
 
 export interface TerminalProps {
 	id: string;
@@ -230,7 +222,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// synchronous try/catch that cannot see the rejection.
 	let unlistenParsed: (() => unknown) | undefined;
 	let unlistenKitty: (() => unknown) | undefined;
-	let unlistenTitle: (() => unknown) | undefined;
 	let unlistenClipboardStore: (() => unknown) | undefined;
 
 	let kittyFlags = 0;
@@ -244,8 +235,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		unlistenParsed = undefined;
 		safeUnlisten(unlistenKitty);
 		unlistenKitty = undefined;
-		safeUnlisten(unlistenTitle);
-		unlistenTitle = undefined;
 		safeUnlisten(unlistenClipboardStore);
 		unlistenClipboardStore = undefined;
 	};
@@ -351,6 +340,32 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		if (terminalsStore.state.activeId !== props.id && !activityFlagged) {
 			activityFlagged = true;
 			terminalsStore.update(props.id, { activity: true });
+		}
+	};
+
+	const handlePtyTitle = (title: string) => {
+		if (disposed) return;
+		const term = terminalsStore.get(props.id);
+		if (
+			!term ||
+			!shouldApplyOscTitle({
+				nameIsCustom: term.nameIsCustom,
+				nameFromSpawn: term.nameFromSpawn,
+				agentIntent: term.agentIntent,
+				intentTabTitle: settingsStore.state.intentTabTitle,
+			})
+		)
+			return;
+		if (!title) {
+			if (originalName) terminalsStore.update(props.id, { name: originalName });
+		} else {
+			const cleaned = cleanOscTitle(title);
+			if (cleaned) {
+				if (!originalName) originalName = terminalsStore.get(props.id)?.name || null;
+				terminalsStore.update(props.id, { name: cleaned });
+			} else if (originalName) {
+				terminalsStore.update(props.id, { name: originalName });
+			}
 		}
 	};
 
@@ -697,6 +712,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			},
 			{
 				onActivity: handlePtyActivity,
+				onTitle: handlePtyTitle,
 				onReconnecting: (attempt, max) => setReconnecting({ attempt, max }),
 				onReconnected: () => setReconnecting(null),
 				// Browser mode: receive parsed events via WebSocket JSON frames
@@ -706,30 +722,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					}
 				},
 				onStateChange: (snapshot) => {
-					const state = snapshot as BackendSessionState;
-					const wasAwaiting = terminalsStore.get(props.id)?.awaitingInput === "question";
-					const isAwaiting = state.awaiting_input === true;
-					terminalsStore.update(props.id, {
-						agentState: state.agent_state ?? null,
-						backgroundWork: state.background_work === true,
-						queuedCommands: state.queued_commands ?? 0,
-						awaitingInput: state.awaiting_input === true ? "question" : null,
-						awaitingInputConfident: state.question_confident === true,
-						...(state.shell_state ? { shellState: state.shell_state } : {}),
-					});
-					if (wasAwaiting !== isAwaiting) {
-						pluginRegistry.dispatchStructuredEvent(
-							"awaiting",
-							{ awaiting: isAwaiting, confident: state.question_confident === true },
-							targetSessionId,
-						);
-					}
+					if (disposed) return;
+					applySessionStateEvent({ session_id: targetSessionId, state: snapshot });
 				},
 			},
 		);
 
 		// Tauri-only listeners (kitty keyboard, shell state sync)
-		if (isTauri()) {
+		if (isTauri() && !getSessionConnection(targetSessionId)) {
 			const { listen } = await import("@tauri-apps/api/event");
 			unlistenParsed = await listen<ParsedEvent>(`pty-parsed-${targetSessionId}`, (event) => {
 				handleParsedEvent(event.payload);
@@ -757,42 +757,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			// delivery had just installed, inventing one empty command block per
 			// prompt. `agent-block` above still feeds the same sink, but that is a
 			// different source for agents with no shell integration, not a copy.
-
-			// Listen for OSC 0/2 title changes from Rust (native renderer)
-			unlistenTitle = await listen<string>(`pty-title-${targetSessionId}`, (event) => {
-				if (disposed) return;
-				const title = event.payload;
-				const term = terminalsStore.get(props.id);
-				if (
-					!term ||
-					!shouldApplyOscTitle({
-						nameIsCustom: term.nameIsCustom,
-						nameFromSpawn: term.nameFromSpawn,
-						agentIntent: term.agentIntent,
-						intentTabTitle: settingsStore.state.intentTabTitle,
-					})
-				)
-					return;
-				if (!title) {
-					if (originalName) terminalsStore.update(props.id, { name: originalName });
-				} else {
-					const cleaned = cleanOscTitle(title);
-					if (cleaned) {
-						if (!originalName) originalName = terminalsStore.get(props.id)?.name || null;
-						terminalsStore.update(props.id, { name: cleaned });
-					} else if (originalName) {
-						terminalsStore.update(props.id, { name: originalName });
-					}
-				}
-			});
-			// Unmounting during the await above leaves this listener attached:
-			// onCleanup already ran and saw `unlistenTitle` still undefined. Every
-			// sibling listener has this guard; this one was missing it.
-			if (disposed) {
-				safeUnlisten(unlistenTitle);
-				unlistenTitle = undefined;
-				return;
-			}
 
 			// Listen for OSC 52 clipboard store from Rust (native renderer).
 			// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log

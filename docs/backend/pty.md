@@ -779,3 +779,15 @@ same writer mutex. It writes one Escape without feeding the input line editor.
 `SilenceState` is released before the native write; synchronous captured output
 can therefore traverse the normal chunk processor. Input bookkeeping remains
 post-write and keeps its existing per-request boundaries.
+
+## Remote terminal metadata
+
+Desktop terminals owned by a remote connection subscribe to that daemon's
+`/sessions/{id}/stream` WebSocket for parsed events, activity, title and exit.
+Local desktop terminals retain IPC subscriptions. OSC 0/2 titles and resets
+are dual-emitted: `pty-title-{id}` carries the text on IPC, while `PtyTitle`
+reaches the per-session socket and `/events` (`pty-title`, `{session_id,title}`).
+A reset carries an empty string. Titles do not change semantic session activity
+and bypass the lossless state queue. Authoritative lifecycle snapshots and pushes
+apply `agent_type` immediately, including removal when the shell returns; the
+30-second foreground probe remains a recovery/discovery path.

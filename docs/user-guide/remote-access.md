@@ -751,3 +751,8 @@ Follow the response's `continuation` instructions and `next_cursor` while
 `has_more` is true. Raw pages use byte positions; text pages use scrollback rows.
 The same paging works through a connected remote daemon. Buffer eviction can
 remove old output, and the response reports the resulting gap.
+
+Remote desktop terminal tabs consume the daemon's detected agent identity and
+OSC title updates, with the same custom-name and spawn-name protection as local
+tabs. Grid output streams over WebSocket; the text/log view batches rows at
+200 ms. Loopback timings do not establish latency on an SSH or Tailscale link.
