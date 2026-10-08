@@ -57,6 +57,9 @@ function createIdeasStore() {
 		ideas: [],
 	});
 
+	const visibleIdeas = (activeRepo: string | null): Idea[] =>
+		activeRepo ? state.ideas.filter((n) => n.repoPath === null || n.repoPath === activeRepo) : state.ideas;
+
 	const actions = {
 		/** Load ideas from Rust backend */
 		async hydrate(): Promise<void> {
@@ -163,8 +166,7 @@ function createIdeasStore() {
 
 		/** Get ideas filtered by active repo. null = all ideas. */
 		getFilteredIdeas(activeRepo: string | null): Idea[] {
-			if (!activeRepo) return state.ideas;
-			return state.ideas.filter((n) => n.repoPath === null || n.repoPath === activeRepo);
+			return visibleIdeas(activeRepo);
 		},
 
 		/** Count of ideas visible for the given repo filter */
@@ -179,9 +181,9 @@ function createIdeasStore() {
 				.length;
 		},
 
-		/** Remove all ideas that have been used (usedAt !== null) */
-		clearCompleted(): void {
-			const completed = state.ideas.filter((n) => n.usedAt !== null);
+		/** Remove the used ideas (usedAt !== null) visible for the repo filter. null = all. */
+		clearCompleted(activeRepo: string | null = null): void {
+			const completed = visibleIdeas(activeRepo).filter((n) => n.usedAt !== null);
 			if (completed.length === 0) return;
 			const completedIds = completed.map((n) => n.id);
 			setState("ideas", (ideas) => ideas.filter((n) => !completedIds.includes(n.id)));

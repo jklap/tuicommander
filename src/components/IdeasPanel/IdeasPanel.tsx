@@ -47,9 +47,14 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 	const [editingImages, setEditingImages] = createSignal<string[]>([]);
 	let textareaRef: HTMLTextAreaElement | undefined;
 
-	const filteredIdeas = () => ideasStore.getFilteredIdeas(props.repoPath);
-	const badgeCount = () => ideasStore.pendingCount(props.repoPath);
-	const hasCompleted = () => ideasStore.getFilteredIdeas(props.repoPath).some((n) => n.usedAt !== null);
+	// In-memory only: the panel persists no other UI state (edit/draft/reassign are all signals).
+	const [showAllRepos, setShowAllRepos] = createSignal(false);
+	/** Repo filter of the visible list; null = every idea (store convention). */
+	const listRepo = () => (showAllRepos() ? null : props.repoPath);
+
+	const filteredIdeas = () => ideasStore.getFilteredIdeas(listRepo());
+	const badgeCount = () => ideasStore.pendingCount(listRepo());
+	const hasCompleted = () => filteredIdeas().some((n) => n.usedAt !== null);
 
 	const repoOptions = () => {
 		const repos = repositoriesStore.state.repositories;
@@ -169,10 +174,24 @@ export const IdeasPanel: Component<IdeasPanelProps> = (props) => {
 					</Show>
 				</div>
 				<div class={p.headerRight}>
+					<button
+						class={cx(p.headerBtn, showAllRepos() && s.headerBtnPressed)}
+						onClick={() => setShowAllRepos((v) => !v)}
+						aria-pressed={showAllRepos()}
+						title={
+							showAllRepos()
+								? t("ideasPanel.showThisRepo", "Show this repository only")
+								: t("ideasPanel.showAllRepos", "Show ideas from all repositories")
+						}
+					>
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M8 1 .5 4.5 8 8l7.5-3.5L8 1zm-6.1 7.3L.5 9l7.5 3.5L15.5 9l-1.4-.7L8 11.2 1.9 8.3zm0 3.5L.5 12.5 8 16l7.5-3.5-1.4-.7L8 14.7l-6.1-2.9z" />
+						</svg>
+					</button>
 					<Show when={hasCompleted()}>
 						<button
 							class={p.headerBtn}
-							onClick={() => ideasStore.clearCompleted()}
+							onClick={() => ideasStore.clearCompleted(listRepo())}
 							title={t("ideasPanel.clearCompleted", "Clear completed ideas")}
 						>
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
