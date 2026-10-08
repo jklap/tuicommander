@@ -285,6 +285,13 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		}
 	};
 
+	// This popover is non-modal: a full-window backdrop would intercept wheel
+	// hit-testing over the sidebar even while the terminal keeps keyboard focus.
+	const handleOutsidePointerDown = (e: PointerEvent) => {
+		if (cleanupCtx() || !popoverEl || !(e.target instanceof Node) || popoverEl.contains(e.target)) return;
+		props.onClose();
+	};
+
 	// Flip to top-anchor when the bottom-anchored popover would overflow the
 	// viewport top (clipping the repo/title header). Monotonic: only ever flips
 	// to top, never back — avoids oscillation.
@@ -295,6 +302,7 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 
 	onMount(() => {
 		document.addEventListener("keydown", handleKeyDown);
+		document.addEventListener("pointerdown", handleOutsidePointerDown, true);
 		if (!props.anchor) {
 			requestAnimationFrame(evaluateAnchor);
 			// CI check details and the AI-review section load/expand async after
@@ -308,6 +316,7 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 
 	onCleanup(() => {
 		document.removeEventListener("keydown", handleKeyDown);
+		document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
 		resizeObs?.disconnect();
 	});
 
@@ -361,7 +370,6 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 			</Show>
 
 			<Show when={!cleanupCtx()}>
-				<div class={s.overlay} onClick={props.onClose} />
 				<div ref={popoverEl} class={cx(s.popover, shouldAnchorTop() && s.anchorTop)}>
 					<Show
 						when={prData()}
