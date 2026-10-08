@@ -221,6 +221,28 @@ describe("PromptDrawer auto-execute", () => {
 		expect(terminalMocks.openComposeWithText).not.toHaveBeenCalled();
 	});
 
+	// Batch 39 review (PROBLEM 0fba1a938): a double-click submits even an
+	// autoExecute=false prompt, so the busy gate must be asked WITH the override.
+	it("gates a double-click submission on canExecute with the submit override", async () => {
+		smartPromptsMocks.canExecute.mockImplementation(((_prompt: unknown, submitOverride?: boolean) =>
+			submitOverride ? { ok: false, reason: "Agent is busy" } : { ok: true }) as () => {
+			ok: boolean;
+			reason?: string;
+		});
+		const { container } = render(() => <PromptDrawer />);
+		const row = createPromptThroughEditor(container, "Busy double-click", "Do not submit into a busy agent", false);
+
+		fireEvent.click(row, { detail: 1 });
+		fireEvent.click(row, { detail: 2 });
+		fireEvent.dblClick(row, { detail: 2 });
+		await vi.advanceTimersByTimeAsync(250);
+
+		expect(smartPromptsMocks.canExecute).toHaveBeenCalledWith(expect.anything(), true);
+		expect(ptyMocks.sendCommand).not.toHaveBeenCalled();
+		expect(toastMocks.add).toHaveBeenCalledWith('"Busy double-click" failed', "Agent is busy", "error");
+		smartPromptsMocks.canExecute.mockReset().mockReturnValue({ ok: true });
+	});
+
 	it("injects a slow double-click only once", async () => {
 		// The 200ms de-dup timer is shorter than macOS's configurable double-click
 		// interval (up to ~1s). When the timer wins the race the single-click
