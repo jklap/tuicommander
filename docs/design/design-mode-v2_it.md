@@ -53,7 +53,7 @@ Stessa regola agenti di Markdown (`reviewAgents`: stesso repo, primo come defaul
 
 ## 8. Reload
 
-TUIC calcola il busy→idle dopo l'invio e lo notifica all'estensione. Se la sonda HMR ha visto un messaggio dopo l'invio: nessun reload. Altrimenti `chrome.tabs.reload(bypassCache)`. Coalescenza (max uno ogni 2 s), nessun busy entro 30 s = scarta, toggle auto-reload, pulsante manuale.
+TUIC calcola il busy→idle dopo l'invio e lo notifica all'estensione. Dopo la revisione Codex: nessun segnale basato su `enqueue`; si correla id comando → consegna → epoca turno → completamento confermato, ignorando idle a timer e `awaiting_input` di Codex pronto. Reload normale (non bypassCache) che salta e avvisa se c'è un form sporco; HMR non prova un aggiornamento riuscito. Coalescenza, toggle auto-reload, pulsante manuale.
 
 ## 9. Lancio, installazione, banner
 
@@ -85,4 +85,11 @@ S0 spike (Edge 154: load-extension, sidePanel, NativeMessagingHosts in profilo c
 
 ## 14. Revisione Codex
 
-In attesa della risposta.
+Revisore: Codex (astra), sola lettura, HEAD e25adff0e. Verdetto: X-A con native messaging, **condizionato a uno S0 più forte**; non cancellare ancora il CDP. Rischio principale: reload della pagina sbagliata / perdita dati. Nessun disaccordo: ho accettato tutti i punti.
+
+1. **Ranking rigido: d'accordo.** URL esplicito etichettato; URL PTY fresco e validato preferito alle porte nude se Vite incrementa; dedup; worktree e app monorepo distinti; Docker non prova l'identità del repo; includere listener wildcard/IPv6; `lsof` limitato e in cache con costo misurato su macOS; mai aprire in automatico un candidato ambiguo.
+2. **MAIN da solo non basta: d'accordo.** Picker/bridge in ISOLATED world più minimi hint MAIN (CSP della pagina, API sostituibili, origini per `all_frames`). Verificato `manager.rs:481`: le source map oggi arrivano da `Debugger.scriptParsed` (CDP); senza CDP la scoperta è più debole → test in S0. Il nonce MAIN non è autenticazione.
+3. **Native messaging: d'accordo.** Il bridge esistente non è riusabile così com'è (framing a riga, rifiuta argomenti: `tuic-bridge/src/main.rs:902,986`; verificato): serve un adattatore con framing a lunghezza e handshake esplicito dell'istanza.
+4. **Install: d'accordo.** Unpacked per il pilota (una volta per profilo), poi store non in elenco.
+5. **Euristica di reload sbagliata: d'accordo.** Correlare id comando → consegna reale → epoca del turno → completamento confermato; `awaiting_input` è sempre vero per Codex pronto (`pty.rs:8536-8542`, verificato); idle a timer è euristico; traffico HMR ≠ aggiornamento riuscito; reload normale che preserva i form sporchi.
+6. Mancanze accettate: `captureVisibleTab` richiede `activeTab`/all_urls, race tab/documento, trasformazioni di coordinate dei frame, aggiornamenti dell'estensione, sostituzione delle source map.
