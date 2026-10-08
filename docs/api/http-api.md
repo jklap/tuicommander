@@ -592,7 +592,7 @@ GET  /sessions/:id/input-buffer                        -> { "content": string }
 GET  /sessions/:id/leaf-pid                            -> { "pid": number|null }
 GET  /sessions/:id/chat-view?from_seq=N&epoch=E        -> { epoch, nextSeq, reset, updates[], unknownRows, malformedRows }
 GET  /sessions/:id/has-foreground                      -> { "process": string|null }
-POST /sessions/:id/visible              { "visible": bool }   -> { "ok": true }
+POST /sessions/:id/visible              { "visible": bool, "viewer_id"?: string, "wake"?: bool }   -> { "ok": true }
 GET  /sessions/:id/terminal/selection-text?startRow=&startCol=&endRow=&endCol=&historyBase=  -> { "text": string }
 GET  /sessions/:id/terminal/logical-line?row=N         -> [logicalStartRow, text]
 GET  /sessions/:id/terminal/hyperlink-span?row=R&col=C -> [startCol, endCol, url] | null
@@ -601,6 +601,14 @@ GET  /process/stats                                    -> ProcessStats[]
 ```
 
 `chat-view` is the transcript of a Claude terminal as ACP `SessionUpdate`s, tailed from the agent's own session file (never the grid). `updates` are the entries from `from_seq` in the `epoch` the client last saw; `reset: true` means the client holds a different conversation (`/clear`, new session, file truncated) or fell behind the bounded log, and must drop what it has and apply `updates` from scratch. A terminal with no bound Claude agent answers 500 `{"error":"not_bound: <reason>"}`. A read keeps the tail alive for 20 s; the server wakes clients with the `chat-view-changed` event while one reads.
+
+`/sessions/:id/visible` records one viewer's assertion (`viewer_id`, the client's
+`CLIENT_INSTANCE_ID`; omitted = a shared legacy viewer) with a 90 s TTL; `visible: false`
+drops it at once. `visible: true` also wakes (SIGCONT) a session parked in standby unless
+`wake: false` — the frontend's 30 s keep-alive sends `wake: false`, skips while its document
+is hidden or its window unfocused, sends `visible: false` when the document hides and a waking
+`visible: true` on focus, so a minimised client's session can still reach standby. The desktop
+`set_session_visible` command takes the same optional `wake`.
 
 The `/agents/map`, `/agents/map/data` and `/agents/map/prompt` routes were
 removed on 2026-09-23. The Progress Flow view (`/progress/flow`, see Project
