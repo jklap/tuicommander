@@ -62,6 +62,37 @@ fn add_ref(entry: &SessionWatchEntry) -> Result<(), String> {
         })
 }
 
+/// A reserved slot against [`MAX_SESSION_REVIEW_WATCHERS`]. Released on
+/// drop unless `keep()` hands it over to an inserted entry — so every early
+/// return between reserving and inserting gives the slot back.
+struct WatcherSlot<'a> {
+    slots: &'a std::sync::atomic::AtomicUsize,
+    kept: bool,
+}
+
+impl<'a> WatcherSlot<'a> {
+    fn reserve(slots: &'a std::sync::atomic::AtomicUsize, max: usize) -> Result<Self, String> {
+        slots
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < max).then_some(n + 1)
+            })
+            .map(|_| Self { slots, kept: false })
+            .map_err(|_| format!("Too many live session review watchers (max {max})"))
+    }
+
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for WatcherSlot<'_> {
+    fn drop(&mut self) {
+        if !self.kept {
+            self.slots.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
 /// One ref-counted watcher entry, keyed by `(project_dir, claude_session_id)`
 /// in `AppState::session_review_watchers`.
 pub(crate) struct SessionWatchEntry {
@@ -88,15 +119,32 @@ pub(crate) fn watch_session_review_internal(
     repo_path: &str,
     state: &Arc<AppState>,
 ) -> Result<(), String> {
+    watch_session_review_with_cap(
+        project_dir,
+        session_id,
+        repo_path,
+        state,
+        MAX_SESSION_REVIEW_WATCHERS,
+    )
+}
+
+/// `watch_session_review_internal` with the distinct-watcher cap as a
+/// parameter, so tests can exercise the cap with a handful of (slow to
+/// create) OS watchers instead of 64.
+fn watch_session_review_with_cap(
+    project_dir: &Path,
+    session_id: &str,
+    repo_path: &str,
+    state: &Arc<AppState>,
+    max_watchers: usize,
+) -> Result<(), String> {
     let key = watch_key(project_dir, session_id);
     if let Some(entry) = state.session_review_watchers.get(&key) {
         return add_ref(&entry);
     }
-    if state.session_review_watchers.len() >= MAX_SESSION_REVIEW_WATCHERS {
-        return Err(format!(
-            "Too many live session review watchers (max {MAX_SESSION_REVIEW_WATCHERS})"
-        ));
-    }
+    // Reserved atomically before the (slow) OS watcher is built; a plain
+    // `len()` check here let concurrent first watches all pass it.
+    let slot = WatcherSlot::reserve(&state.session_review_watcher_slots, max_watchers)?;
     if !project_dir.is_dir() {
         return Err(format!(
             "Claude project directory does not exist: {}",
@@ -240,12 +288,15 @@ pub(crate) fn watch_session_review_internal(
     // while this one was being built: share it (dropping this watcher) rather
     // than overwrite it and lose that subscriber's ref.
     match state.session_review_watchers.entry(key) {
+        // `slot` drops (released) on this arm: the shared entry already
+        // holds its own.
         dashmap::mapref::entry::Entry::Occupied(existing) => add_ref(existing.get()),
-        dashmap::mapref::entry::Entry::Vacant(slot) => {
-            slot.insert(SessionWatchEntry {
+        dashmap::mapref::entry::Entry::Vacant(vacant) => {
+            vacant.insert(SessionWatchEntry {
                 watcher: Mutex::new(watcher),
                 ref_count: AtomicUsize::new(1),
             });
+            slot.keep();
             Ok(())
         }
     }
@@ -279,6 +330,9 @@ pub(crate) fn unwatch_session_review_internal(
             })
             .is_some()
     {
+        state
+            .session_review_watcher_slots
+            .fetch_sub(1, Ordering::AcqRel);
         state.announced_edit_sessions.remove(session_id);
     }
 }
@@ -377,6 +431,64 @@ mod tests {
 
         unwatch_session_review_internal(project_dir, "session-a", &state);
         assert!(!state.session_review_watchers.contains_key(&key));
+    }
+
+    /// Concurrent first watches for distinct sessions must not overshoot the
+    /// cap (Batch 44 review: the old `len()` check ran before the slow OS
+    /// watcher was built, so every racer passed it).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_first_watches_never_overshoot_the_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().to_path_buf();
+        let state = make_test_state();
+        const CAP: usize = 4;
+        let racers = 32;
+        let barrier = Arc::new(std::sync::Barrier::new(racers));
+        let handle = tokio::runtime::Handle::current();
+        let threads: Vec<_> = (0..racers)
+            .map(|i| {
+                let (state, barrier, dir, handle) = (
+                    state.clone(),
+                    barrier.clone(),
+                    project_dir.clone(),
+                    handle.clone(),
+                );
+                std::thread::spawn(move || {
+                    let _rt = handle.enter();
+                    barrier.wait();
+                    watch_session_review_with_cap(&dir, &format!("race-{i}"), "/repo", &state, CAP)
+                        .is_ok()
+                })
+            })
+            .collect();
+        let accepted = threads
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .filter(|ok| *ok)
+            .count();
+        assert_eq!(accepted, CAP);
+        assert_eq!(state.session_review_watchers.len(), CAP);
+    }
+
+    /// A refused/failed watch and a torn-down watcher both give their slot
+    /// back, so the cap counts live watchers, not attempts.
+    #[tokio::test]
+    async fn slots_are_released_by_failures_and_teardown() {
+        const CAP: usize = 3;
+        let tmp = tempfile::tempdir().unwrap();
+        let state = make_test_state();
+        let missing = tmp.path().join("does-not-exist");
+        let watch =
+            |dir: &Path, id: &str| watch_session_review_with_cap(dir, id, "/repo", &state, CAP);
+        for i in 0..CAP + 5 {
+            assert!(watch(&missing, &format!("m-{i}")).is_err());
+        }
+        for i in 0..CAP {
+            watch(tmp.path(), &format!("s-{i}")).unwrap();
+        }
+        assert!(watch(tmp.path(), "extra").is_err());
+        unwatch_session_review_internal(tmp.path(), "s-0", &state);
+        watch(tmp.path(), "extra").unwrap();
     }
 
     /// The watch routes are reachable over HTTP, and every distinct session id
