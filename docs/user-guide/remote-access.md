@@ -358,6 +358,14 @@ being on the same machine is not treated as a credential, and a rejected or
 missing password leaves it **unauthenticated**. A named instance that cannot be
 found (never started, typo) fails Connect without contacting anything. Pointing
 it at the instance you are configuring is refused like a Direct self-connection.
+Before any password is sent (Connect and Test Connection), the process on that
+port must prove it is a TUICommander instance of your user — and, for a Named
+instance, that instance: its `/health` must name an IPC socket in the place that
+instance keeps one, owned by you, and that socket must report the same instance
+id. A port taken over by another program (a stale port after a restart, or a
+squatter) fails with "could not be verified … nothing was sent to it". (Not
+checked on Windows; a local relay that forwards the real instance's `/health`
+verbatim is not detected.)
 **Update & restart** is not offered for a Local connection's binary: update
 that install directly. When the other instance runs a different version than this
 app, the row shows **Remote out of date** with a "Version mismatch" notice naming
