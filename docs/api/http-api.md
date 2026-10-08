@@ -1821,7 +1821,11 @@ calls. A missing id answers 404 (the vault entries are cleared either way).
 accepting a connection's `provision_offer` would run:
 `{ connection_id, connection_name, action, destination: "user@host:port", summary, steps: [{ description, command? }], digest }`
 — `command` is the exact remote shell command, `digest` a SHA-256 over the
-whole plan. It contacts nothing. `POST /config/ssh-daemon/{id}/start` and
+whole plan plus every stored input that changes what runs (the full SSH
+settings incl. `identity_file`, keepalive, compression and host-key policy, the
+daemon port, instance, flags, deploy mode, `survive_secs`, the Auth username,
+and for `set_password` a per-process keyed fingerprint of the saved password —
+never a plain hash of it). It contacts nothing. `POST /config/ssh-daemon/{id}/start` and
 `POST /config/remote-connections/{id}/configure-ssh-password` take
 `{ "plan_digest": "<digest>" }` and nothing else: the plan is rebuilt from the
 STORED connection and a different digest is refused (502, "nothing was run")
