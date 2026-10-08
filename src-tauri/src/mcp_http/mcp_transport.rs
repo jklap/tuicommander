@@ -2471,10 +2471,17 @@ async fn dispatch_mcp_tool_call_with_context(
                     "error": "This session action is restricted to localhost connections"
                 })
             } else if session_action_requires_blocking_pool(action) {
-                let state = state.clone();
+                let blocking_state = state.clone();
                 let args = args.clone();
                 let sid = mcp_session_id.map(str::to_owned);
-                run_blocking_handler(move || handle_session(&state, &args, sid.as_deref())).await
+                let result = run_blocking_handler(move || {
+                    handle_session(&blocking_state, &args, sid.as_deref())
+                })
+                .await;
+                if action == "create" {
+                    gate_created_session_response(state, &result, "MCP session create").await;
+                }
+                result
             } else {
                 handle_session(state, args, mcp_session_id)
             }
@@ -2841,6 +2848,66 @@ pub(crate) async fn wait_for_shell_idle(
         session_wait_met(s, session_id, "idle")
     })
     .await
+}
+
+/// Shell-readiness gate for a freshly created PLAIN SHELL session, run by every
+/// create path whose caller is expected to type into the new shell right away:
+/// MCP `session action=create`, MCP `repo action=worktree_create
+/// spawn_session=true` (`create_session_in_dir`), HTTP `POST /sessions` and
+/// `POST /sessions/worktree`. Without it the caller's very first write races
+/// `.zshrc`/Oh My Zsh/Powerlevel10k startup exactly like the tmux shim did before
+/// `tmux_routes::materialize` got its gate (plans/p10k-wizard-hijack-agent-pane-spawn-race.md).
+///
+/// Agent spawns (`POST /sessions/agent`, MCP `agent action=spawn`, desktop
+/// `spawn_agent`) are deliberately NOT gated: they exec the agent binary
+/// directly, so there is no interactive shell startup to wait out.
+///
+/// Bounded and fail-open: returns `false` after `timeout_ms` with a log line,
+/// and the caller returns the session id anyway — nothing hangs.
+///
+/// Skips (returns `false` immediately, no wait) when the session can never
+/// produce a readiness signal: it is not a live session, or it has no shell
+/// state atom (no reader thread). A shell WITHOUT OSC 133 integration (bash/fish
+/// that never sourced `$TUIC_SHELL_INTEGRATION`, `sh`, any other shell) is NOT
+/// skipped: the silence-timer fallback moves it to `SHELL_IDLE` ~500 ms after
+/// its startup output goes quiet, so it does not wait out the timeout — see
+/// `http_create_session_without_shell_integration_is_ready_well_before_the_timeout`.
+/// (`ZDOTDIR` — the one setting that used to silently disable zsh's integration
+/// and make every gate wait the full bound — is rejected in `custom_pty_env`.)
+pub(crate) async fn gate_new_shell_session(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+    origin: &str,
+) -> bool {
+    if !state.session_maps.sessions.contains_key(session_id)
+        || !state.session_maps.shell_states.contains_key(session_id)
+    {
+        return false;
+    }
+    if wait_for_shell_idle(state, session_id, timeout_ms).await {
+        return true;
+    }
+    tracing::warn!(
+        session_id,
+        origin,
+        timeout_ms,
+        "new shell session never reached a ready prompt within the readiness bound — \
+         returning the session anyway (fail-open)"
+    );
+    false
+}
+
+/// Run [`gate_new_shell_session`] for a `session action=create` result that
+/// carries a `session_id` (an error result has nothing to gate).
+async fn gate_created_session_response(
+    state: &Arc<AppState>,
+    result: &serde_json::Value,
+    origin: &str,
+) {
+    if let Some(session_id) = result.get("session_id").and_then(|v| v.as_str()) {
+        gate_new_shell_session(state, session_id, SHELL_READINESS_TIMEOUT_MS, origin).await;
+    }
 }
 
 /// Whether `agent action=spawn` should withhold the prompt from launch argv
@@ -4609,6 +4676,13 @@ async fn handle_worktree(
                     if args["spawn_session"].as_bool().unwrap_or(false) {
                         match create_session_in_dir(state, &wt_path) {
                             Ok(sid) => {
+                                gate_new_shell_session(
+                                    state,
+                                    &sid,
+                                    SHELL_READINESS_TIMEOUT_MS,
+                                    "MCP worktree_create spawn_session",
+                                )
+                                .await;
                                 response["session_id"] = serde_json::json!(sid);
                             }
                             Err(e) => {
@@ -11412,6 +11486,55 @@ mod tests {
         assert_eq!(response, serde_json::json!({"state": "unknown"}));
     }
 
+    /// B2.1: `repo action=worktree_create spawn_session=true` returns the new
+    /// session id only once its shell is ready (`create_session_in_dir` is the
+    /// fourth plain-shell create path behind the readiness gate).
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn repo_worktree_create_spawn_session_returns_only_after_the_shell_reaches_idle() {
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let path = repo.path().to_string_lossy().to_string();
+        let created = handle_repo(
+            &state,
+            &serde_json::json!({
+                "action": "worktree_create",
+                "path": &path,
+                "branch": "mcp-spawn-session-gate",
+                "spawn_session": true,
+            }),
+            false,
+        )
+        .await;
+        let Some(session_id) = created["session_id"].as_str().map(str::to_owned) else {
+            eprintln!("Skipping: PTY/worktree not available in this environment ({created})");
+            return;
+        };
+        let shell_state = state
+            .session_maps
+            .shell_states
+            .get(&session_id)
+            .map(|v| v.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(shell_state, Some(crate::pty::SHELL_IDLE), "{created}");
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": session_id}),
+            None,
+        );
+        let wt = std::path::PathBuf::from(created["worktree_path"].as_str().unwrap());
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while crate::worktree::warm_status(&wt)["status"] == "pending" {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        crate::worktree::clear_warm(&wt);
+    }
+
     #[tokio::test]
     async fn repo_worktree_setup_status_reports_the_outcome_after_create() {
         // An MCP client that just created a worktree with a configured setup
@@ -16494,6 +16617,90 @@ mod tests {
         assert!(
             !met,
             "wait_for_shell_idle must return false rather than hang when idle never arrives"
+        );
+    }
+
+    /// B2.1: the create-path gate is bounded and fail-open — a shell that never
+    /// reaches idle returns `false` on the gate's own bound, never hangs.
+    #[tokio::test]
+    async fn gate_new_shell_session_fails_open_after_its_bound() {
+        use std::sync::atomic::AtomicU8;
+
+        let state = test_state();
+        insert_managed_test_session(&state, "gate-never-idle", "/tmp");
+        state.session_maps.shell_states.insert(
+            "gate-never-idle".to_string(),
+            AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        let met = tokio::time::timeout(
+            std::time::Duration::from_millis(1_000),
+            gate_new_shell_session(&state, "gate-never-idle", 50, "test"),
+        )
+        .await
+        .expect("the gate must return on its own bound, not hang");
+        assert!(!met);
+    }
+
+    /// B2.1: a session that can never produce a readiness signal (not live, or
+    /// no shell-state atom) is skipped outright — no wait, and no broadcast
+    /// channel minted for an id nothing will ever reap.
+    #[tokio::test]
+    async fn gate_new_shell_session_skips_a_session_with_no_readiness_signal() {
+        let state = test_state();
+        let met = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            gate_new_shell_session(&state, "no-such-session", 60_000, "test"),
+        )
+        .await
+        .expect("an unknown session must not wait out the bound");
+        assert!(!met);
+        assert!(
+            !state
+                .session_maps
+                .pty_event_channels
+                .contains_key("no-such-session")
+        );
+
+        insert_managed_test_session(&state, "no-shell-atom", "/tmp");
+        state.session_maps.shell_states.remove("no-shell-atom");
+        let met = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            gate_new_shell_session(&state, "no-shell-atom", 60_000, "test"),
+        )
+        .await
+        .expect("a session without a shell-state atom must not wait out the bound");
+        assert!(!met);
+    }
+
+    /// B2.1: MCP `session action=create` returns the id only once the new
+    /// shell is ready. Without the gate the response arrives while the shell
+    /// is still `SHELL_NULL`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_session_create_returns_only_after_the_shell_reaches_idle() {
+        let state = test_state();
+        let created = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "session",
+            &serde_json::json!({"action": "create", "cwd": "/tmp"}),
+            None,
+        )
+        .await;
+        let Some(session_id) = created["session_id"].as_str().map(str::to_owned) else {
+            eprintln!("Skipping: PTY not available in this environment ({created})");
+            return;
+        };
+        let shell_state = state
+            .session_maps
+            .shell_states
+            .get(&session_id)
+            .map(|v| v.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(shell_state, Some(crate::pty::SHELL_IDLE), "{created}");
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": session_id}),
+            None,
         );
     }
 
