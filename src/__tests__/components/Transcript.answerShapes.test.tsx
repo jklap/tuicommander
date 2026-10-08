@@ -24,9 +24,9 @@ async function show(text: string) {
 describe("chat answer shapes follow the CLI grid extent", () => {
 	// Catches: a single-line answer left raw or untinted.
 	it("tints and strips a one-line answer", async () => {
-		const { container, marks } = await show("💬 Yes.");
+		const { blocks, marks } = await show("💬 Yes.");
 		expect(marks).toEqual(["end"]);
-		expect(container.textContent).toBe("Yes.");
+		expect(blocks[0].textContent).toBe("Yes.");
 	});
 
 	// Catches: a table, nested list or code fence ending the answer early (tint stops, tail untinted).
@@ -47,7 +47,7 @@ describe("chat answer shapes follow the CLI grid extent", () => {
 	});
 
 	// Catches: streaming a second answer onto a finished one leaving a raw 💬 or a stale "end" mark.
-	it("re-marks the whole message when a second answer streams in", async () => {
+	it("re-marks each answer when a second one streams in", async () => {
 		const [entries, setEntries] = createSignal<AcpTranscriptEntry[]>([{ id: "a", kind: "agent", text: "💬 One.\n\nMore." }]);
 		const { container } = render(() => <Transcript entries={entries} busy={() => false} emptyMessage="Empty" />);
 		await Promise.resolve();
@@ -55,7 +55,7 @@ describe("chat answer shapes follow the CLI grid extent", () => {
 		await Promise.resolve();
 		await Promise.resolve();
 		const blocks = Array.from(container.querySelectorAll<HTMLElement>("#markdown-content > div > *"));
-		expect(blocks.map((b) => b.getAttribute("data-tuic-answer"))).toEqual(["", "", "", "end"]);
+		expect(blocks.map((b) => b.getAttribute("data-tuic-answer"))).toEqual(["", "end", "", "end"]);
 		expect(container.textContent).not.toContain("💬");
 	});
 
