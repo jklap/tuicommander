@@ -1,4 +1,5 @@
 import { toggleHandsFreeConversation } from "../actions/handsFreeConversation";
+import { explainActiveSessionState, toggleDiagnosticsCaptureForActive } from "../actions/sessionActions";
 import type { ActionName } from "../keybindingDefaults";
 import { normalizeCombo } from "../keybindingDefaults";
 import { lastMenuActionTime } from "../menuDedup";
@@ -9,6 +10,7 @@ import { paneLayoutStore } from "../stores/paneLayout";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
+import { tunnelPanelStore } from "../stores/tunnelPanel";
 import { isTauri } from "../transport";
 
 /**
@@ -391,6 +393,27 @@ export function dispatchAction(action: ActionName, handlers: ShortcutHandlers): 
 			return true;
 		case "jump-waiting-terminal":
 			handlers.jumpWaitingTerminal();
+			return true;
+
+		// Palette actions with a keybinding slot (Batch 40 review: these six had
+		// a palette handler but no case, so a user-bound key did nothing).
+		case "toggle-tunnels":
+			tunnelPanelStore.toggle();
+			return true;
+		case "toggle-diagnostics-capture":
+			toggleDiagnosticsCaptureForActive();
+			return true;
+		case "explain-session-state":
+			explainActiveSessionState();
+			return true;
+		case "process-manager":
+			handlers.toggleProcessManager();
+			return true;
+		case "open-generators":
+			handlers.toggleGenerators();
+			return true;
+		case "show-remote-qr":
+			handlers.showRemoteQr();
 			return true;
 
 		default: {

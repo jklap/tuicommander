@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
-import { type ShortcutHandlers, useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
+import { dispatchAction, type ShortcutHandlers, useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
+import { ACTION_NAMES } from "../../keybindingDefaults";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { progressStore } from "../../stores/progress";
 import { repositoriesStore } from "../../stores/repositories";
@@ -472,5 +473,18 @@ describe("useKeyboardShortcuts", () => {
 			fireKeydown("t", { metaKey: true });
 			expect(handlers.createNewTerminal).not.toHaveBeenCalled();
 		});
+	});
+});
+
+// Batch 40 review: six palette actions (explain-session-state,
+// toggle-diagnostics-capture, toggle-tunnels, process-manager, open-generators,
+// show-remote-qr) had a keybinding slot but no `dispatchAction` case, so a
+// user-bound key silently did nothing. Every action with a keybinding slot
+// must be handled.
+describe("dispatchAction covers every action with a keybinding slot", () => {
+	beforeEach(() => resetStores());
+
+	it.each([...ACTION_NAMES])("handles %s", (action) => {
+		expect(dispatchAction(action, createMockHandlers())).toBe(true);
 	});
 });
