@@ -286,6 +286,7 @@ fn event_type_name(event: &AppEvent) -> &str {
         AppEvent::PtyParsed { .. } => "pty-parsed",
         AppEvent::PtyExit { .. } => "pty-exit",
         AppEvent::PtyActivity { .. } => "pty-activity",
+        AppEvent::PtyTitle { .. } => "pty-title",
         AppEvent::PtyOsc133 { .. } => "pty-osc133",
         AppEvent::PtyCwd { .. } => "pty-cwd",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
@@ -382,6 +383,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::PtyExit { session_id } => {
             serde_json::json!({ "session_id": session_id })
+        }
+        AppEvent::PtyTitle { session_id, title } => {
+            serde_json::json!({ "session_id": session_id, "title": title })
         }
         AppEvent::PtyActivity { session_id } => {
             serde_json::json!({ "session_id": session_id })
@@ -770,6 +774,20 @@ mod tests {
         assert_eq!(body["display_name"], "linux-primary");
         // Browser clients tag sub-agent tabs from this field, as the desktop does.
         assert_eq!(body["parent_session"], "tuic-parent");
+    }
+
+    #[test]
+    fn pty_title_has_matching_sse_name_and_payload() {
+        let event = AppEvent::PtyTitle {
+            session_id: "session-1".into(),
+            title: "Claude Code".into(),
+        };
+
+        assert_eq!(event_type_name(&event), "pty-title");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({"session_id": "session-1", "title": "Claude Code"})
+        );
     }
 
     #[test]
