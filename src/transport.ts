@@ -8,6 +8,7 @@
 import type { LogLine } from "./mobile/utils/logLine";
 import {
 	getRemoteBaseUrl,
+	getSessionConnection,
 	previewLogPayload,
 	resolveOwningConnection,
 	transportLogger,
@@ -2831,6 +2832,7 @@ export interface SubscribePtyOptions {
 	 * Delivered on both transports from one backend signal.
 	 */
 	onActivity?: () => void;
+	onTitle?: (title: string) => void;
 	onParsed?: (event: WsParsedEvent) => void;
 	/** Called when WebSocket drops and reconnect is attempted (browser mode only). */
 	onReconnecting?: (attempt: number, maxAttempts: number) => void;
@@ -2852,7 +2854,8 @@ export async function subscribePty(
 	// it is on. Desktop has no socket to drop, so pausing there means suppressing
 	// delivery — the same observable contract, at the only cost desktop has.
 	let paused = false;
-	if (isTauri()) {
+	const connectionId = getSessionConnection(sessionId);
+	if (isTauri() && !connectionId) {
 		const { listen } = await import("@tauri-apps/api/event");
 		// No pty-output listener: nothing emits that event. It was removed from
 		// Rust in cda39f31 when line assembly moved to the reader thread, and the
@@ -2865,6 +2868,11 @@ export async function subscribePty(
 		// No `paused` guard: an exit is lifecycle, not data. Desktop has no
 		// reconnect to eventually notice a dead session, so suppressing it here
 		// would lose it for good.
+		const unlistenTitle = opts.onTitle
+			? await listen<string>(`pty-title-${sessionId}`, (event) => {
+					if (!paused) opts.onTitle?.(event.payload);
+				})
+			: undefined;
 		const unlistenExit = await listen(`pty-exit-${sessionId}`, () => {
 			onExit();
 		});
@@ -2878,6 +2886,7 @@ export async function subscribePty(
 			disposed = true;
 			Promise.resolve(unlistenActivity() as unknown).catch(() => {});
 			Promise.resolve(unlistenExit() as unknown).catch(() => {});
+			if (unlistenTitle) Promise.resolve(unlistenTitle() as unknown).catch(() => {});
 		};
 		return Object.assign(dispose, {
 			pause: () => {
@@ -2933,6 +2942,9 @@ export async function subscribePty(
 				switch (frame.type) {
 					case "output":
 						onData(frame.data as string);
+						break;
+					case "title":
+						if (typeof frame.title === "string") opts.onTitle?.(frame.title);
 						break;
 					case "activity":
 						opts.onActivity?.();
@@ -2999,7 +3011,10 @@ export async function subscribePty(
 			params.set("offset", String(opts.logOffset));
 		}
 		const query = params.size > 0 ? `?${params}` : "";
-		return `${protocol}//${window.location.host}/sessions/${sessionId}/stream${query}`;
+		const baseUrl = connectionId ? getRemoteBaseUrl(connectionId) : undefined;
+		if (connectionId && !baseUrl) throw new Error(`Remote connection ${connectionId} not connected`);
+		const wsBase = baseUrl ? baseUrl.replace(/^http/, "ws") : `${protocol}//${window.location.host}`;
+		return withRemoteToken(`${wsBase}/sessions/${encodeURIComponent(sessionId)}/stream${query}`, connectionId);
 	};
 
 	/** Connect (or reconnect) the WebSocket. */
