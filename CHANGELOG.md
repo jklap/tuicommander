@@ -52,6 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Local remote connections verify the instance before sending your password** — Connect and Test Connection for a Remote Server — Local first check that the process on the port is the intended TUICommander instance (via its own IPC socket); a port held by anything else fails with nothing sent.
 - **The "wrap your own shell function?" prompt can't be raised by command output** — the request is ignored while a command is running (only the shell's own prompt-time check counts), an unanswered prompt expires after 10 minutes instead of blocking the real one, and answering for an unknown agent over HTTP is a 400.
 - **Custom Environment Variables can't override TUICommander's own environment** — `TUIC_*`, `ZDOTDIR` and dynamic-loader variables (`LD_PRELOAD`, `DYLD_*`, ...) are refused (and dropped from a hand-edited config), validation now lives in the backend only, and the section is an expert setting.
+- **SSH hosts and users are validated strictly** — `@`, whitespace and control characters are refused in either, `:` in the user, and `:` in the host unless it is a bare IPv6 address (which scp now receives bracketed), so the destination shown is the one dialled and `host:path` can't be mis-parsed.
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 
 - Return from captured Windows background launches before the command exits, and resolve Git in Windows worktree hooks.

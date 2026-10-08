@@ -96,11 +96,50 @@ impl SshConnectionParams {
         if self.user.trim_start().starts_with('-') {
             return Err("user must not start with '-'".to_string());
         }
+        // An unambiguous destination (Batch 32/34 reviews): `user@host` is
+        // built by joining the two, and scp reads `host:path`, so `@` in
+        // either half, `:` in the user, or a `:` that isn't part of an IPv6
+        // literal in the host would make the displayed and the dialled
+        // destination differ (or turn part of the host into an scp path).
+        // Whitespace and control characters are never part of a host or user
+        // (checked untrimmed: not every caller trims before validating, and
+        // the raw value is what reaches ssh).
+        let bad_char = |c: char| c.is_whitespace() || c.is_control() || c == '@';
+        if self
+            .host
+            .chars()
+            .any(|c| bad_char(c) || c == '[' || c == ']')
+        {
+            return Err(
+                "host must not contain '@', brackets, whitespace or control characters".to_string(),
+            );
+        }
+        if self.host.contains(':') && !is_ipv6_literal(&self.host) {
+            return Err("host must not contain ':' (only a bare IPv6 address may)".to_string());
+        }
+        if self.user.chars().any(|c| bad_char(c) || c == ':') {
+            return Err(
+                "user must not contain '@', ':', whitespace or control characters".to_string(),
+            );
+        }
         if self.port == 0 {
             return Err("SSH port must be in range 1-65535".to_string());
         }
         Ok(())
     }
+}
+
+/// A bare IPv6 address, optionally with a `%zone` (`fe80::1%en0`) — the only
+/// host form allowed to contain `:`. ssh takes it as written; scp needs it
+/// bracketed (`tunnels::exec::scp_destination`).
+pub(crate) fn is_ipv6_literal(host: &str) -> bool {
+    let (addr, zone) = host.split_once('%').unwrap_or((host, ""));
+    addr.parse::<std::net::Ipv6Addr>().is_ok()
+        && (host.split_once('%').is_none()
+            || (!zone.is_empty()
+                && zone
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-')))
 }
 
 /// One-time rewrite of the pre-nested (flat) on-disk shapes.
@@ -251,6 +290,51 @@ mod tests {
         let params = SshConnectionParams::new("host", "-oProxyCommand=touch /tmp/pwned");
         let err = params.validate().unwrap_err();
         assert!(err.contains("user must not start with '-'"), "{err}");
+    }
+
+    /// Batch 32/34 reviews: `@`, `:` and whitespace/control characters made
+    /// the destination ambiguous (and `host:path` mis-parse in scp).
+    #[test]
+    fn validate_rejects_ambiguous_destination_characters() {
+        for (host, user) in [
+            ("evil@host", "user"),
+            ("host", "us@er"),
+            ("host", "us:er"),
+            ("host:22", "user"),
+            ("host:/etc/passwd", "user"),
+            ("ho st", "user"),
+            ("host", "us er"),
+            ("host\tname", "user"),
+            ("host\u{7}", "user"),
+            ("host", "user\n"),
+            ("[::1]", "user"),
+            ("-::1", "user"),
+            ("::1%", "user"),
+        ] {
+            assert!(
+                SshConnectionParams::new(host, user).validate().is_err(),
+                "{host:?} / {user:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accepts_hostnames_ipv4_and_bare_ipv6() {
+        for host in [
+            "host.example.com",
+            "10.0.0.1",
+            "::1",
+            "2001:db8::42",
+            "fe80::1%en0",
+            "my-host_1",
+        ] {
+            assert!(
+                SshConnectionParams::new(host, "deploy.user-1")
+                    .validate()
+                    .is_ok(),
+                "{host:?} must be accepted"
+            );
+        }
     }
 
     #[test]
