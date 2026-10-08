@@ -6532,6 +6532,13 @@ pub(crate) mod tests_support {
     /// than a stub the filter would reject.
     #[cfg(unix)]
     pub fn insert_dummy_session(state: &AppState, session_id: &str) {
+        insert_session_running(state, session_id, "sleep 30");
+    }
+
+    /// A `sessions` entry whose PTY child runs `script` under `/bin/sh -c` —
+    /// e.g. `true` for a session whose process has already exited.
+    #[cfg(unix)]
+    pub fn insert_session_running(state: &AppState, session_id: &str, script: &str) {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};
         let pair = native_pty_system()
             .openpty(PtySize {
@@ -6542,7 +6549,7 @@ pub(crate) mod tests_support {
             })
             .expect("openpty");
         let mut command = CommandBuilder::new("/bin/sh");
-        command.args(["-c", "sleep 30"]);
+        command.args(["-c", script]);
         let child = pair.slave.spawn_command(command).expect("spawn shell");
         let writer = pair.master.take_writer().expect("writer");
         state.session_maps.sessions.insert(

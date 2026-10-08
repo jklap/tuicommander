@@ -86,22 +86,36 @@ pub(crate) struct WorktreeLiveSession {
     pub name: String,
 }
 
-/// Sessions of the registry whose cwd is inside `checkout`. The one source of
-/// "who is working in this checkout" for every removal guard.
+/// Live sessions of the registry working inside `checkout`: its live cwd (OSC 7,
+/// so a shell that `cd`'d in counts) OR the worktree it was spawned into (a
+/// session registered to the worktree that has since `cd`'d out still has its
+/// tab and process tied to it). A session whose process has already exited
+/// does not count, even while its registry entry is still being torn down.
+/// The one source of "who is working in this checkout" for every removal guard.
 pub(crate) fn live_sessions_in(state: &AppState, checkout: &Path) -> Vec<WorktreeLiveSession> {
     let root = checkout
         .canonicalize()
         .unwrap_or_else(|_| checkout.to_path_buf());
+    let inside = |path: &Path| {
+        path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .starts_with(&root)
+    };
     let mut live_sessions = Vec::new();
     for entry in &state.session_maps.sessions {
-        let session = entry.value().lock();
-        let cwd = session.cwd.as_ref().map(PathBuf::from).or_else(|| {
-            session
+        let mut session = entry.value().lock();
+        let attached = session
+            .cwd
+            .as_deref()
+            .is_some_and(|cwd| inside(Path::new(cwd)))
+            || session
                 .worktree
                 .as_ref()
-                .map(|worktree| worktree.path.clone())
-        });
-        if cwd.is_some_and(|cwd| cwd.canonicalize().unwrap_or(cwd).starts_with(&root)) {
+                .is_some_and(|worktree| inside(&worktree.path));
+        // `try_wait` caches the status once reaped, so `mark_session_exited`
+        // still reads the real exit code afterwards.
+        let exited = matches!(session._child.try_wait(), Ok(Some(_)));
+        if attached && !exited {
             live_sessions.push(WorktreeLiveSession {
                 session_id: entry.key().clone(),
                 name: session
@@ -113,6 +127,78 @@ pub(crate) fn live_sessions_in(state: &AppState, checkout: &Path) -> Vec<Worktre
     }
     live_sessions.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     live_sessions
+}
+
+/// Stable prefix of the live-session refusal. Every transport carries the same
+/// message (IPC `Err`, HTTP 409 `error`, MCP `error`), so a client matches the
+/// prefix, not the wording after it.
+pub(crate) const BUSY_WORKTREE_PREFIX: &str = "worktree_busy:";
+
+/// A removal refused because live sessions still work in the checkout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct WorktreeBusy {
+    pub live_sessions: Vec<WorktreeLiveSession>,
+}
+
+impl WorktreeBusy {
+    pub(crate) fn message(&self) -> String {
+        let sessions: Vec<String> = self
+            .live_sessions
+            .iter()
+            .map(|session| format!("{} [{}]", session.name, session.session_id))
+            .collect();
+        format!(
+            "{BUSY_WORKTREE_PREFIX} {} live session(s) in this worktree: {}. \
+             Close them, or retry with override_busy to remove it anyway",
+            self.live_sessions.len(),
+            sessions.join(", ")
+        )
+    }
+
+    /// The JSON error body HTTP and MCP return: the shared message plus the
+    /// sessions, so a client can show them without parsing the message.
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "error": self.message(),
+            "code": "worktree_busy",
+            "live_sessions": self.live_sessions,
+        })
+    }
+}
+
+/// The live-session guard every removal of a workspace's checkout shares (IPC
+/// `remove_worktree`, HTTP `DELETE /worktrees/{id}`, MCP `repo worktree_remove`).
+/// git's own refusals cover dirty files and locks; a CLEAN, unlocked checkout
+/// can still have a terminal or agent working in it, which is how a live
+/// worktree was deleted twice on 2026-08-26. Only an explicit `override_busy`
+/// (a user who saw the sessions) lifts it — never `force` or `override_lock`.
+///
+/// A checkout that does not exist holds no work, and the main checkout is
+/// never removable here (the removal itself refuses it), so neither is
+/// guarded. An id that resolves to nothing is left to the removal's own error.
+pub(crate) fn workspace_removal_guard(
+    state: &AppState,
+    repo_path: &str,
+    workspace_id: &str,
+    override_busy: bool,
+) -> Result<(), WorktreeBusy> {
+    if override_busy {
+        return Ok(());
+    }
+    let Ok(workspace) = resolve_any_workspace(Path::new(repo_path), workspace_id) else {
+        return Ok(());
+    };
+    let checkout = Path::new(&workspace.path);
+    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if !checkout.exists() || canonical(checkout) == canonical(Path::new(repo_path)) {
+        return Ok(());
+    }
+    let live_sessions = live_sessions_in(state, checkout);
+    if live_sessions.is_empty() {
+        Ok(())
+    } else {
+        Err(WorktreeBusy { live_sessions })
+    }
 }
 
 pub(crate) fn inspect_worktree_removal(
@@ -1071,6 +1157,39 @@ pub(crate) async fn remove_worktree(
     override_lock: Option<bool>,
     expected_fingerprint: Option<String>,
     confirm_missing_checkout: Option<bool>,
+    override_busy: Option<bool>,
+) -> Result<RemoveWorktreeOutcome, String> {
+    remove_worktree_ipc_impl(
+        state.inner(),
+        repo_path,
+        workspace_id,
+        delete_branch,
+        force,
+        override_lock,
+        expected_fingerprint,
+        confirm_missing_checkout,
+        override_busy,
+    )
+    .await
+}
+
+/// The body of the desktop `remove_worktree` command, outside the
+/// `#[tauri::command]` so it can be tested without a Tauri runtime.
+#[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "flat IPC safety-confirmation contract"
+)]
+pub(crate) async fn remove_worktree_ipc_impl(
+    state: &Arc<AppState>,
+    repo_path: String,
+    workspace_id: String,
+    delete_branch: Option<bool>,
+    force: Option<bool>,
+    override_lock: Option<bool>,
+    expected_fingerprint: Option<String>,
+    confirm_missing_checkout: Option<bool>,
+    override_busy: Option<bool>,
 ) -> Result<RemoveWorktreeOutcome, String> {
     let force = force.unwrap_or(false);
     let confirm_missing_checkout = confirm_missing_checkout.unwrap_or(false);
@@ -1081,18 +1200,28 @@ pub(crate) async fn remove_worktree(
     }
     let delete_branch = delete_branch.unwrap_or(!force);
     let override_lock = override_lock.unwrap_or(false);
+    let override_busy = override_busy.unwrap_or(false);
     tracing::info!(
         source = "worktree",
         workspace_id = %workspace_id,
         repo = %repo_path,
         delete_branch = %delete_branch,
         force = %force,
+        override_busy = %override_busy,
         "remove_worktree command: invoked"
     );
     let script = resolve_archive_script(&repo_path);
     let repo_path_clone = repo_path.clone();
     let workspace_id_clone = workspace_id.clone();
+    let guard_state = Arc::clone(state);
     let result = tokio::task::spawn_blocking(move || {
+        workspace_removal_guard(
+            &guard_state,
+            &repo_path_clone,
+            &workspace_id_clone,
+            override_busy,
+        )
+        .map_err(|busy| busy.message())?;
         remove_worktree_with_presence_confirmation(
             &repo_path_clone,
             &workspace_id_clone,
@@ -1195,6 +1324,28 @@ pub(crate) fn get_worktree_paths_cached(
     .clone()
 }
 
+/// Everything an orphan removal must pass before anything is deleted: the
+/// path is one of the repo's own worktrees, and [`orphan_removal_guard`]'s
+/// live-session verdict. `remove_orphan_checkout` and the HTTP route (which
+/// maps a refusal to 400 and a failed removal to 500) both call this, so the
+/// two can never guard differently.
+pub(crate) fn check_orphan_removal(
+    state: &AppState,
+    repo_path: &str,
+    worktree_path: &str,
+    safe_only: bool,
+    confirmed_sessions: &[String],
+) -> Result<(), String> {
+    validate_worktree_path(repo_path, worktree_path)?;
+    orphan_removal_guard(
+        state,
+        repo_path,
+        worktree_path,
+        safe_only,
+        confirmed_sessions,
+    )
+}
+
 /// Remove an orphan checkout by path after the shared guard. Both the desktop
 /// command and the MCP `worktree_remove` call this.
 pub(crate) fn remove_orphan_checkout(
@@ -1204,8 +1355,7 @@ pub(crate) fn remove_orphan_checkout(
     safe_only: bool,
     confirmed_sessions: &[String],
 ) -> Result<(), String> {
-    validate_worktree_path(repo_path, worktree_path)?;
-    orphan_removal_guard(
+    check_orphan_removal(
         state,
         repo_path,
         worktree_path,
@@ -2975,6 +3125,211 @@ mod tests {
         );
         assert!(worktree.join("after-confirmation.txt").exists());
     }
+    /// The live-session guard shared by IPC `remove_worktree`, HTTP
+    /// `DELETE /worktrees/{id}` and MCP `repo worktree_remove` (wip 9586bf02c:
+    /// a CLEAN worktree with a live session was deleted twice on 2026-08-26).
+    #[cfg(unix)]
+    mod workspace_removal_guard_tests {
+        use super::*;
+        use crate::state::tests_support::{
+            insert_dummy_session, insert_session_running, make_test_app_state, set_session_cwd,
+        };
+
+        fn guard(state: &AppState, repo: &Path, id: &str, over: bool) -> Result<(), WorktreeBusy> {
+            workspace_removal_guard(state, &repo.to_string_lossy(), id, over)
+        }
+
+        // Catches: a clean worktree whose only claim is a session's live cwd
+        // (no registered terminal) being removable — the frontend's
+        // `branch.terminals` misses exactly this session.
+        #[test]
+        fn refuses_a_clean_worktree_a_session_only_has_its_cwd_in() {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "busy", false);
+            fs::create_dir_all(worktree.join("nested")).unwrap();
+            let state = make_test_app_state();
+            insert_dummy_session(&state, "pty-cwd");
+            set_session_cwd(
+                &state,
+                "pty-cwd",
+                &worktree.join("nested").to_string_lossy(),
+            );
+
+            let busy = guard(&state, repo.path(), "busy", false).expect_err("live cwd refuses");
+            assert_eq!(busy.live_sessions.len(), 1);
+            assert_eq!(busy.live_sessions[0].session_id, "pty-cwd");
+            let message = busy.message();
+            assert!(message.starts_with(BUSY_WORKTREE_PREFIX), "{message}");
+            assert!(message.contains("1 live session(s)"), "{message}");
+            assert!(message.contains("pty-cwd"), "{message}");
+            assert_eq!(busy.to_json()["code"], "worktree_busy");
+        }
+
+        // Catches: matching only by cwd, so a terminal spawned into the
+        // worktree that later `cd`'d out stops counting.
+        #[test]
+        fn refuses_a_worktree_a_session_was_spawned_into() {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "spawned", false);
+            let state = make_test_app_state();
+            insert_dummy_session(&state, "pty-registered");
+            set_session_cwd(&state, "pty-registered", &repo.path().to_string_lossy());
+            state
+                .session_maps
+                .sessions
+                .get("pty-registered")
+                .unwrap()
+                .lock()
+                .worktree = Some(WorktreeInfo {
+                name: "spawned".into(),
+                path: worktree.clone(),
+                branch: Some("spawned".into()),
+                base_repo: repo.path().to_path_buf(),
+            });
+
+            assert!(guard(&state, repo.path(), "spawned", false).is_err());
+        }
+
+        // Catches: the override not lifting the refusal (the user's explicit
+        // "Delete anyway" must still work).
+        #[test]
+        fn override_busy_lifts_the_refusal() {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "override", false);
+            let state = make_test_app_state();
+            insert_dummy_session(&state, "pty-live");
+            set_session_cwd(&state, "pty-live", &worktree.to_string_lossy());
+
+            assert!(guard(&state, repo.path(), "override", false).is_err());
+            guard(&state, repo.path(), "override", true).expect("override");
+        }
+
+        // Catches: a session whose process already exited still blocking the
+        // removal while its registry entry waits to be torn down.
+        #[test]
+        fn an_exited_session_does_not_count() {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "exited", false);
+            let state = make_test_app_state();
+            insert_session_running(&state, "pty-done", "true");
+            set_session_cwd(&state, "pty-done", &worktree.to_string_lossy());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !matches!(
+                state
+                    .session_maps
+                    .sessions
+                    .get("pty-done")
+                    .unwrap()
+                    .lock()
+                    ._child
+                    .try_wait(),
+                Ok(Some(_))
+            ) {
+                assert!(std::time::Instant::now() < deadline, "child never exited");
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+
+            guard(&state, repo.path(), "exited", false).expect("exited session is not live");
+        }
+
+        // Catches: a session elsewhere in the repo (main checkout, a sibling)
+        // or an unknown id blocking a removal it has nothing to do with.
+        #[test]
+        fn unrelated_sessions_and_unknown_ids_pass() {
+            let repo = setup_test_repo();
+            worktree_with(repo.path(), "free", false);
+            let sibling = worktree_with(repo.path(), "free-2", false);
+            let state = make_test_app_state();
+            insert_dummy_session(&state, "pty-main");
+            set_session_cwd(&state, "pty-main", &repo.path().to_string_lossy());
+            insert_dummy_session(&state, "pty-sibling");
+            set_session_cwd(&state, "pty-sibling", &sibling.to_string_lossy());
+
+            guard(&state, repo.path(), "free", false).expect("nothing in this worktree");
+            guard(&state, repo.path(), "no-such-workspace", false).expect("left to removal");
+        }
+
+        // Catches: the IPC command removing a live worktree (the guard must
+        // run before git is asked to remove anything), and the override path
+        // not reaching the removal.
+        #[tokio::test]
+        async fn ipc_remove_worktree_refuses_then_overrides() {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "ipc", false);
+            let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+            let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+            let state = Arc::new(make_test_app_state());
+            insert_dummy_session(&state, "pty-ipc");
+            set_session_cwd(&state, "pty-ipc", &worktree.to_string_lossy());
+            let repo_path = repo.path().to_string_lossy().into_owned();
+            let remove = |over: Option<bool>| {
+                remove_worktree_ipc_impl(
+                    &state,
+                    repo_path.clone(),
+                    "ipc".into(),
+                    Some(false),
+                    None,
+                    None,
+                    None,
+                    None,
+                    over,
+                )
+            };
+
+            let error = remove(None).await.expect_err("live session refuses");
+            assert!(error.starts_with(BUSY_WORKTREE_PREFIX), "{error}");
+            assert!(worktree.exists(), "nothing may be removed on refusal");
+
+            remove(Some(true)).await.expect("override removes");
+            assert!(!worktree.exists());
+        }
+
+        // Catches: the orphan path (desktop, MCP detached, HTTP
+        // `/worktrees/orphan`) matching a registered session only when it
+        // has no cwd at all — one spawned into the checkout that `cd`'d out
+        // slipped past the shared check.
+        #[test]
+        fn orphan_check_counts_a_session_registered_to_the_checkout() {
+            let repo = setup_test_repo();
+            let linked = repo.path().join("linked");
+            let out = std::process::Command::new("git")
+                .current_dir(repo.path())
+                .args(["worktree", "add", "--detach"])
+                .arg(&linked)
+                .arg("HEAD")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+            let state = make_test_app_state();
+            insert_dummy_session(&state, "pty-orphan");
+            set_session_cwd(&state, "pty-orphan", &repo.path().to_string_lossy());
+            state
+                .session_maps
+                .sessions
+                .get("pty-orphan")
+                .unwrap()
+                .lock()
+                .worktree = Some(WorktreeInfo {
+                name: "linked".into(),
+                path: linked.clone(),
+                branch: None,
+                base_repo: repo.path().to_path_buf(),
+            });
+
+            let repo_path = repo.path().to_string_lossy();
+            let linked_path = linked.to_string_lossy();
+            assert!(check_orphan_removal(&state, &repo_path, &linked_path, false, &[]).is_err());
+            check_orphan_removal(
+                &state,
+                &repo_path,
+                &linked_path,
+                false,
+                &["pty-orphan".to_string()],
+            )
+            .expect("reviewed session");
+        }
+    }
+
     #[cfg(unix)]
     mod orphan_removal_guard_critic {
         use super::*;

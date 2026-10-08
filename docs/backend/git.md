@@ -286,10 +286,27 @@ sealed ignored evidence remains available and the new worktree stays removable.
 Removal never collapses git's two independent refusals into one flag: `force` only
 permits discarding dirty files (and needs the confirmed `expected_fingerprint`), while a
 `git worktree lock` needs the separate `override_lock`. Branch deletion after a removal
-always uses the safe `git branch -d`. Live sessions in a checkout (`live_sessions_in`)
-are reported by the removal preview and block orphan cleanup; the desktop removal flow
-additionally asks a Cancel-by-default "in use" question before closing any attached
-terminal (`createWorktreeRemovalCoordinator`).
+always uses the safe `git branch -d`. Live sessions in a checkout (`live_sessions_in`:
+a session whose live cwd is inside it OR that was spawned into it, excluding a session
+whose process already exited) are reported by the removal preview and block orphan
+cleanup. They also block the removal itself: `workspace_removal_guard` is the one
+backend guard IPC `remove_worktree`, HTTP `DELETE /worktrees/{id}` and MCP
+`repo worktree_remove` all call before git is asked to remove anything. A refusal starts
+with `worktree_busy:` (HTTP 409 with `code: "worktree_busy"` and `live_sessions`; the
+same body as the MCP `error`), and only the separate `override_busy` flag lifts it —
+never `force` or `override_lock`. A checkout that does not exist and the main checkout
+are not guarded. The desktop removal flow asks a Cancel-by-default "in use" question
+before closing any attached terminal (`createWorktreeRemovalCoordinator`), and asks it
+again for a `worktree_busy:` refusal (sessions it had no terminal for), retrying with
+`override_busy` only on an explicit yes. Merge/finalize cleanup reports live sessions as
+`needs_confirmation`; orphan removal keeps its own reviewed-session list
+(`confirmed_sessions`), with every orphan entry point going through
+`check_orphan_removal`.
+
+Sessions do NOT hold a `git worktree lock` for their lifetime (the pre-rebase branch
+did): the guard covers every TUIC entry point, while a session lock would have turned
+main's agent-lock prompt ("locked by an active Claude agent") into a second busy
+question, and needed a startup sweep for locks a crash left behind.
 
 ## Tauri Commands
 
