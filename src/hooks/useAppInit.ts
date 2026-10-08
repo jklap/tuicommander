@@ -355,6 +355,36 @@ function assignSessionToRepoBranch(
 	}
 }
 
+/** The local PTY-exit teardown `Terminal.tsx` runs for a mounted human-created
+ *  tab, for a tab with no mounted Terminal watching its exit: an agent tab stays
+ *  with a grey "exited" dot, a plain shell's tab closes. Keep the field set in
+ *  step with Terminal.tsx's pty-exit handler. */
+function closeUnwatchedLocalTab(termId: string, sessionId: string): void {
+	const t = terminalsStore.get(termId);
+	if (!t) return;
+	if (t.agentType != null) {
+		const notified = handleAgentExitCompletion(termId);
+		terminalsStore.update(termId, {
+			shellState: "exited",
+			sessionId: null,
+			...(notified ? { completionNotified: true } : {}),
+			currentTask: null,
+			agentType: null,
+			agentSessionId: null,
+			exactAgentSessionId: null,
+			pendingResumeCommand: null,
+			pendingResumeTitle: null,
+			pendingResumeSource: null,
+		});
+		terminalsStore.clearAwaitingInput(termId);
+		pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId, terminalId: termId });
+		return;
+	}
+	terminalsStore.update(termId, { sessionId: null });
+	terminalsStore.clearAwaitingInput(termId);
+	terminalsStore.notifyShellExit(termId);
+}
+
 let settingsSyncGeneration = 0;
 const settingsSyncStops = new Set<() => void>();
 function stopSettingsSync(): void {
@@ -1320,9 +1350,18 @@ export async function initApp(deps: AppInitDeps) {
 		// leave the name stuck forever because the ticker's isExternallyCreated guard
 		// aborts on the first tick and the setTimeout's isExternallyCreated guard skips removal.
 		const t0 = terminalsStore.get(termId);
-		if (!t0?.isExternallyCreated) return;
+		if (!t0) return;
 		// A suspended tab ended its PTY on purpose and must stay, restorable.
 		if (isSuspendingOrSuspended(termId)) return;
+		if (!t0.isExternallyCreated) {
+			// Owned by its mounted Terminal component — unless none is mounted. A
+			// human-created tab seen from ANOTHER window/client is
+			// `isExternallyCreated: false` too, and if it was never rendered there
+			// nobody would ever run its exit teardown, leaving a dead tab open
+			// (Batch 47 review).
+			if (!terminalsStore.isPtyExitWatched(termId)) closeUnwatchedLocalTab(termId, session_id);
+			return;
+		}
 
 		const parsedAgentType = parseAgentType(agent_type);
 		// Deliberately a different signal from `hadAgent` below: this one reads
