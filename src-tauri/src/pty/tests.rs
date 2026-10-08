@@ -21955,3 +21955,30 @@ fn replay_oracle_all_committed_tcap_preserves_chunk_decisions() {
     }
     crate::replay_oracle::assert_golden(std::path::Path::new("corpus.jsonl"), &manifest);
 }
+
+/// Catches: OSC titles only emit on AppHandle, leaving headless remote tabs named shell.
+#[test]
+fn remote_title_parser_publishes_title_and_reset() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let sid = "remote-title";
+    agent_session(&state, sid, SHELL_IDLE);
+    state
+        .grid
+        .vt_log_buffers
+        .insert(sid.into(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+    let silence = state.session_maps.silence_states.get(sid).unwrap().clone();
+    let mut processor = ChunkProcessor::new(None, None);
+    let mut events = state.event_bus.subscribe();
+    processor.process_chunk("\x1b]0;Claude Code\x07", &silence, sid, &state);
+    processor.process_chunk("\x1b]2;\x07", &silence, sid, &state);
+    let titles: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            crate::state::AppEvent::PtyTitle { session_id, title } => {
+                assert_eq!(session_id, sid);
+                Some(title)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(titles, vec!["Claude Code", ""]);
+}

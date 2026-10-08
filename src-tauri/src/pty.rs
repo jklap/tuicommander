@@ -6682,6 +6682,10 @@ impl ChunkProcessor {
                         write_terminal_reply(state, session_id, response.as_bytes(), "PtyWrite");
                     }
                     TermEvent::Title(title) => {
+                        state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+                            session_id: session_id.to_string(),
+                            title: title.clone(),
+                        });
                         #[cfg(feature = "desktop")]
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), &title);
@@ -6714,6 +6718,10 @@ impl ChunkProcessor {
                         self.title_awaiting = title_awaiting;
                     }
                     TermEvent::ResetTitle => {
+                        state.emit_pty_event(crate::state::AppEvent::PtyTitle {
+                            session_id: session_id.to_string(),
+                            title: String::new(),
+                        });
                         #[cfg(feature = "desktop")]
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), "");

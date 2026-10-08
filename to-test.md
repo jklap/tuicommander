@@ -1,3 +1,7 @@
+## Remote terminal metadata (1581-8fd0) — Rust restart required
+
+- [ ] After Boss chooses to rebuild/restart the backend and update the Mint daemon, run Claude in a remote shell: verify agent icon, idle/busy transitions and OSC tab title updates; custom names remain protected. Compare observed streaming with the loopback baseline (grid marker delay 4–16 ms; text/log batches about 200 ms). No Mint latency improvement is claimed by the loopback probe.
+
 ## Launch instruction inspector (1547-2f5c) — Rust restart required
 
 ## iPad terminal keyboard focus (1577-a9bf)

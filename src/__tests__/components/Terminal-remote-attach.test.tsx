@@ -74,6 +74,32 @@ describe("remote terminal attachment", () => {
 		await waitFor(() => expect(attachedOwners).toEqual(["mac-mint"]));
 	});
 
+	// Catches: remote title frames arrive but Terminal still waits for local IPC titles.
+	it("applies remote title and reset notifications while protecting a custom name", async () => {
+		const transport = await import("../../transport");
+		let onTitle: ((title: string) => void) | undefined;
+		const subscribe = vi.spyOn(transport, "subscribePty").mockImplementation(async (_id, _data, _exit, options) => {
+			if (options && typeof options !== "function") onTitle = options.onTitle;
+			return Object.assign(() => {}, { pause: () => {}, resume: () => {} });
+		});
+		let unmount: (() => void) | undefined;
+		try {
+			const view = await open("/remote/title-repo", "title-host");
+			unmount = view.unmount;
+			await waitFor(() => expect(onTitle).toBeTypeOf("function"));
+			onTitle!("Claude Code");
+			expect(terminalsStore.get(view.id)?.name).toBe("Claude Code");
+			onTitle!("");
+			expect(terminalsStore.get(view.id)?.name).toBe("shell");
+			terminalsStore.update(view.id, { name: "My tab", nameIsCustom: true });
+			onTitle!("Claude Code");
+			expect(terminalsStore.get(view.id)?.name).toBe("My tab");
+		} finally {
+			unmount?.();
+			subscribe.mockRestore();
+		}
+	});
+
 	// Catches: the ownership fix accidentally assigns the selected remote machine to local PTYs.
 	it("keeps a newly created local PTY on the local transport", async () => {
 		createSession.mockResolvedValueOnce("local-session");

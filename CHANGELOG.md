@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Remote desktop terminal tabs now receive daemon agent identity, parsed state and OSC title/reset notifications through the owning connection (#1581-8fd0).
+
+
 ### Added
 - Add a headless agent capture scenario driver with explicit fixture promotion and ordered replay expectations; record real Codex and pi turns; Claude (expired login) and goose (its banner prints the home directory) stay unverified, and a test rejects fixtures that embed `/Users/` or `/home/` paths.
 
