@@ -60,6 +60,13 @@ particular, a literal `null` body is a valid result for commands whose Tauri
 contract returns `Option<T>`; browser and PWA callers receive the same `null`
 that desktop IPC returns for `None`.
 
+A successful non-JSON response to a JSON RPC is rejected with the request URL
+and content type; connection tokens are excluded from that URL. This prevents an
+HTML page from becoming a remote picker's home path. JSON bodies without a
+content type remain supported. `read_plugin_data` also accepts `text/plain`
+(or an omitted content type) and preserves those bytes as a string. HTML is
+rejected for that route too.
+
 A zero-length text or JSON body is not the same value and is rejected with the
 command name in the error. Responses declared as JSON are also rejected when
 their non-empty body is malformed, while non-success HTTP statuses retain their

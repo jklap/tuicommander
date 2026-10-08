@@ -2967,18 +2967,59 @@ describe("transport", () => {
 			expect(result).toEqual({ result: "ok" });
 		});
 
-		it("returns plain text when response is not JSON", async () => {
+		// Catches: a remote HTML page is returned as the home path, leaking its token in diagnostics.
+		it("rejects HTML 200 for get_home_directory with a credential-free URL and content type", async () => {
 			const { rpc } = await import("../transport");
+			setRemoteBaseUrlLookup(() => "http://remote.test:9877");
+			setRemoteTokenLookup(() => "private-token");
+			globalThis.fetch = vi.fn().mockResolvedValue(
+				new Response('<!doctype html><html lang="en">', {
+					headers: { "content-type": "text/html; charset=utf-8" },
+				}),
+			);
+			try {
+				await expect(rpc("get_home_directory", {}, "verification")).rejects.toThrow(
+					"RPC get_home_directory: expected JSON from http://remote.test:9877/system/home-directory, received text/html; charset=utf-8",
+				);
+			} finally {
+				setRemoteBaseUrlLookup(() => undefined);
+				setRemoteTokenLookup(() => undefined);
+			}
+		});
 
-			const mockResponse = {
+		// Catches: untyped non-JSON bodies silently become JSON RPC return values.
+		it("rejects plain text without content-type for JSON RPCs", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue({
 				ok: true,
 				headers: new Headers({}),
 				text: vi.fn().mockResolvedValue("plain text response"),
-			};
-			globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
+			});
+			await expect(rpc("get_orchestrator_stats")).rejects.toThrow(/expected JSON from .*received missing content-type/);
+		});
 
-			const result = await rpc("get_orchestrator_stats");
-			expect(result).toBe("plain text response");
+		// Catches: enforcing JSON for every route breaks the plugin data string contract.
+		it.each(["plain text response", "null", "123", '"quoted"'])("preserves plugin text data %s", async (body) => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(
+				new Response(body, {
+					headers: { "content-type": "text/plain; charset=utf-8" },
+				}),
+			);
+			expect(await rpc("read_plugin_data", { pluginId: "p", path: "content" })).toBe(body);
+		});
+
+		// Catches: the raw-text exception lets a proxy HTML page overwrite plugin content.
+		it("rejects HTML for plugin data despite its text response contract", async () => {
+			const { rpc } = await import("../transport");
+			globalThis.fetch = vi.fn().mockResolvedValue(
+				new Response("<!doctype html>", {
+					headers: { "content-type": "text/html" },
+				}),
+			);
+			await expect(rpc("read_plugin_data", { pluginId: "p", path: "content" })).rejects.toThrow(
+				/expected JSON from .*received text\/html/,
+			);
 		});
 
 		it("throws on non-ok response", async () => {
