@@ -109,6 +109,16 @@ describe("RemoteRepoPicker", () => {
 		await findByText("Gits");
 	});
 
+	// Catches: a rejected HTML home response is hidden or copied into the path input.
+	it("shows the transport HTML error and leaves the home body out of the path", async () => {
+		const message =
+			"RPC get_home_directory: expected JSON from http://verification.test/system/home-directory, received text/html";
+		mockRpc.mockRejectedValue(new Error(message));
+		const { findByText, container } = open();
+		await findByText(`Could not find this machine's home directory: Error: ${message}`);
+		expect((container.querySelector("input") as HTMLInputElement).value).toBe("/");
+	});
+
 	// Catches: reopening a connection discards the last browsed remote folder.
 	it("reopens at the last directory visited on that connection", async () => {
 		serveTree({ "/": [dir("home")], "/home": [dir("stefano")] });
