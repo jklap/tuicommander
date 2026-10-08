@@ -7646,3 +7646,41 @@ echo was only a redundant round trip. Unit-tested (`terminals.renameEchoGuard.te
   with no flicker.
 
 - [ ] **Frame-starvation watchdog (blank-tab self-heal)** — the dead-channel state has no known on-demand trigger, so the heal itself is covered by `frameStarvationWatchdog.test.ts` (12 unit tests, incl. the baseline-after-reset case) and `canvasTerminalFrameStarvation.mount.test.ts` (13 tests mounting the real component: arm on subscribe/show, cancel on hide/unmount, bounded retries, shared reattach `resubscribe`), each wiring point mutation-verified red. What still needs a live check is the no-regression half: switch repeatedly between several terminals, then `GET /logs?limit=100` and confirm there are no `No grid frame after a frame request — resubscribing` warnings on healthy tabs. _(NOTE: if that warning shows up on a healthy tab, `FRAME_STARVATION_MS` is too tight.)_
+
+## Worktree removal safety gate (2026-08-26, restored 2026-10-08, **Rust change — needs `make dev` restart**)
+
+Fix for the incident in `plans/docs/worktree-removal-incident-2026-08-26.md` (worktree
+deleted twice while an agent worked in it), restored onto main's removal design after
+the rebase dropped wip's backend refusal. Rust tests cover the logic directly
+(`cargo nextest run -E 'test(workspace_removal_guard_tests) | test(removal_refuses_a_live_worktree) | test(mcp_worktree_remove_refuses)'`);
+the end-to-end UI flow needs a live app. Verify against a throwaway repo on the
+worktree build's HTTP API (`:9877` — never `:9876`, never Boss's real repos).
+Sessions no longer take a `git worktree lock` for their lifetime (deliberately not
+restored — see `docs/backend/git.md` "Worktree Removal Safety"), so wip's lock and
+stale-lock-sweep checks are gone.
+
+- [ ] With a terminal open in a worktree, click Delete (sidebar `×` or Worktree
+  Manager). The "in use" confirmation should appear naming the attached
+  terminal(s), BEFORE the terminal closes, with Enter = Cancel — cancel it and
+  confirm nothing closed. Confirm it and verify the terminal closes, then the
+  worktree and branch are removed as before (no second question).
+- [ ] Open a terminal in the MAIN checkout, `cd` into a worktree, then click Delete
+  on that worktree. Expect the "in use" question again, this time naming the
+  live session(s) the backend found ("live session(s) still work in …"),
+  Enter = Cancel; cancelling keeps the worktree and its row; confirming removes it.
+- [ ] `DELETE :9877/worktrees/<id>?repoPath=<repo>&deleteBranch=false` on a clean
+  worktree with a live session (cwd inside) → expect **409** with
+  `code: "worktree_busy"`, `live_sessions`, and the worktree still on disk; repeat
+  with `&overrideBusy=true` → expect 200 and the worktree gone.
+- [ ] Same through MCP: `repo action=worktree_remove` refuses with
+  `worktree_busy:`; `override_busy=true` removes it.
+- [ ] After the session's process exits (`exit` in the shell, tab still lingering),
+  the removal is no longer refused.
+- [ ] Leave an uncommitted file in a worktree with no terminal attached, click
+  Delete. Expect the destructive "Destroy workspace state?" confirmation (not a
+  silent removal). Confirm and verify it's actually gone.
+- [ ] Select several worktrees in the Worktree Manager, including one with an
+  attached terminal, and batch-delete. The uncontroversial ones should go
+  through; the busy one gets its own confirmation, not silently included.
+- [ ] `curl :9877/logs` after clicking through a removal and confirm a
+  `git`-sourced `handleRemoveWorkspace` entry from the click shows up.
