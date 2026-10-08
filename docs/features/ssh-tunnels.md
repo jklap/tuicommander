@@ -13,7 +13,7 @@ TunnelManager
 
 The **TunnelManager** orchestrates multiple **TunnelSupervisor** instances, one per active tunnel profile. Each supervisor owns an SSH child process and runs a supervision loop:
 
-1. Validate the profile (fields, port ranges, duplicate bind ports)
+1. Validate the profile (fields, port ranges, duplicate bind ports). Host and user (`SshConnectionParams::validate`, shared with Remote Server — SSH connections) must not start with `-`, contain `@`, whitespace or control characters; the user must not contain `:`, and the host may contain `:` only as a bare IPv6 address (`2001:db8::1`, `fe80::1%en0` — scp gets it bracketed). This keeps the displayed `user@host` and scp's `host:path` unambiguous
 2. Check local port availability for all `-L` forwards
 3. Spawn `ssh` with constructed arguments (including agent forwarding if `SSH_AUTH_SOCK` is found)
 4. Require SSH to survive 500 ms and wait up to 30 seconds for every local `-L` forward to accept TCP connections; classify an SSH exit immediately

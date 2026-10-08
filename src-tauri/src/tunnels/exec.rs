@@ -81,6 +81,18 @@ pub(crate) async fn scp_push(
     .await
 }
 
+/// `user@host:path` for scp. scp splits the host from the path at the first
+/// `:`, so an IPv6 host (the only host `SshConnectionParams::validate` lets
+/// contain `:`) is bracketed: `user@[::1]:path`. ssh itself takes the bare
+/// address, so only scp's destination brackets it.
+fn scp_destination(user: &str, host: &str, path: &str) -> String {
+    if crate::ssh_connection::is_ipv6_literal(host) {
+        format!("{user}@[{host}]:{path}")
+    } else {
+        format!("{user}@{host}:{path}")
+    }
+}
+
 pub(crate) async fn scp_push_with_binaries(
     profile: &TunnelProfile,
     local: &Path,
@@ -94,9 +106,10 @@ pub(crate) async fn scp_push_with_binaries(
     let mut args = build_ssh_base_args(profile);
     args.push("--".to_string());
     args.push(local.to_string_lossy().into_owned());
-    args.push(format!(
-        "{}@{}:{staged}",
-        profile.ssh.user, profile.ssh.host
+    args.push(scp_destination(
+        &profile.ssh.user,
+        &profile.ssh.host,
+        &staged,
     ));
 
     run_process(scp_binary, &args, None, timeout).await?;
@@ -247,6 +260,23 @@ mod tests {
         assert!(output.stdout.contains("got:secret"));
         assert!(output.stderr.contains("warning"));
         assert_eq!(output.code, Some(0));
+    }
+
+    #[test]
+    fn scp_destination_brackets_only_an_ipv6_host() {
+        assert_eq!(
+            scp_destination("u", "host.example", "p"),
+            "u@host.example:p"
+        );
+        assert_eq!(scp_destination("u", "10.0.0.1", "p"), "u@10.0.0.1:p");
+        assert_eq!(
+            scp_destination("u", "2001:db8::1", "p"),
+            "u@[2001:db8::1]:p"
+        );
+        assert_eq!(
+            scp_destination("u", "fe80::1%en0", "p"),
+            "u@[fe80::1%en0]:p"
+        );
     }
 
     /// Catches: the one-shot ssh and scp destinations lacking `--`, so a
