@@ -8601,19 +8601,19 @@ impl ChunkProcessor {
                             // precmd, so while OSC 133 says a foreground command
                             // runs (between `C` and `D`/`A`) it is output from
                             // that command — `cat` of a file, remote SSH output —
-                            // and is dropped. (A sender that also forges `133;D`
-                            // first still gets through; that only reopens the
-                            // same consent dialog, bounded by its TTL.)
+                            // and is dropped. A sender that also forges `133;D`
+                            // first is stopped by the session binding:
+                            // `bound_userwrap_payload` accepts the payload only
+                            // when it carries this PTY's own `$TUIC_SESSION`.
                             if self.foreground_command_running {
                                 tracing::debug!(
                                     source = "pty",
                                     session_id,
                                     "ignoring userwrap while a foreground command runs"
                                 );
-                            } else if let Some((agent, fingerprint)) = payload.split_once(':')
-                                && crate::agent_wrap_prompt::is_wrappable_agent(agent)
-                                && crate::shell_integration::is_user_function_fingerprint(
-                                    fingerprint,
+                            } else if let Some((agent, fingerprint)) =
+                                crate::agent_wrap_prompt::bound_userwrap_payload(
+                                    state, session_id, &payload,
                                 )
                             {
                                 crate::agent_wrap_prompt::request(state, agent, fingerprint);
