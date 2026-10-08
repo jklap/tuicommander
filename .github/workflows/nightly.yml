@@ -17,7 +17,8 @@ concurrency:
 
 # Keep the sccache server alive across a compile longer than its 600s idle timer —
 # see the note in release.yml. RUST_VERSION pins the compiler; bump it in lockstep
-# with ci.yml, release.yml and audit.yml — see the note in ci.yml and docs/guides/ci.md.
+# with ci.yml, release.yml, remote-daemon.yml and audit.yml — see the note in
+# ci.yml and docs/guides/ci.md.
 env:
   SCCACHE_IDLE_TIMEOUT: "0"
   RUST_VERSION: "1.98.0"
@@ -87,28 +88,7 @@ jobs:
 
       - name: Patch nightly version
         shell: bash
-        run: |
-          # Append nightly timestamp to current version (strip any existing -nightly suffix first)
-          VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
-          VERSION="${VERSION%%-nightly*}"
-          NIGHTLY="$VERSION-nightly.$(date -u +%Y%m%d).t$(date -u +%H%M)"
-          echo "Nightly version: $NIGHTLY (from $VERSION)"
-
-          # Patch tauri.conf.json: version + add nightly updater endpoint
-          python3 -c "
-          import json
-          c = json.load(open('src-tauri/tauri.conf.json'))
-          c['version'] = '$NIGHTLY'
-          nightly_ep = 'https://github.com/sstraus/tuicommander/releases/download/nightly/latest.json'
-          ep = c['plugins']['updater']['endpoints']
-          if nightly_ep not in ep:
-              ep.insert(0, nightly_ep)
-          json.dump(c, open('src-tauri/tauri.conf.json','w'), indent=2)
-          print('Patched tauri.conf.json')
-          "
-
-          # Patch Cargo.toml version
-          sed "s/^version = \"$VERSION\"/version = \"$NIGHTLY\"/" src-tauri/Cargo.toml > tmp.toml && mv tmp.toml src-tauri/Cargo.toml
+        run: bash scripts/patch-nightly-version.sh
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -269,6 +249,20 @@ jobs:
         run: |
           security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
           rm -f "$APPLE_API_KEY_PATH" 2>/dev/null || true
+
+  # tuic-remote + tuic-bridge for the four daemon targets, uploaded to the rolling
+  # `nightly` release under the same asset names release.yml uses. `needs: cleanup`
+  # is what keeps the old binaries out: cleanup deletes the whole release, so an
+  # upload that ran before it would be deleted with it. The legs retry the upload
+  # until the build matrix (tauri-action) has recreated the release; latest.json is
+  # written by tauri-action alone, so the updater feed is not touched.
+  remote-daemon:
+    needs: cleanup
+    permissions:
+      contents: write
+    uses: ./.github/workflows/remote-daemon.yml
+    with:
+      nightly: true
 
   update-notes:
     timeout-minutes: 15

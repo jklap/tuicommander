@@ -342,7 +342,7 @@ When modifying the remote daemon binary or standalone server behavior:
 | `src-tauri/src/remote_deploy/{mod,assets,service}.rs` | SSH asset resolution/cache, ephemeral launch, and systemd/launchd install lifecycle; keep Sections 22/24 and the remote-access guide aligned |
 | `docs/user-guide/remote-access.md` | `tuic-remote (Beta)` section, incl. "What the daemon runs" |
 | `docs/FEATURES.md` | Section 22 (Remote Daemon) |
-| `.github/workflows/release.yml` | Release artifact build job — publishes **both** `tuic-remote` and `tuic-bridge` per target |
+| `.github/workflows/remote-daemon.yml` | Daemon build job shared by `release.yml` and `nightly.yml` — publishes **both** `tuic-remote` and `tuic-bridge` per target |
 
 ### SSH Tunnel Management
 When modifying tunnel profiles, supervisor, audit logging, backoff, or tunnel UI:
