@@ -1130,6 +1130,13 @@ POST /repo/session-review/revert-step
 
 Undo one step, keeping every later step.
 
+`revert-step`, `revert-file`, `watch` and `unwatch` are gated by `require_local_or_auth`
+(loopback, or an authenticated remote caller; otherwise 403): the reverts write and delete
+working-tree files and the watches hold OS file watchers. Both reverts only touch a file the
+session itself touched AND that lies inside the repo/worktree, a registered repository, or
+`~/.claude/plans/` (never through a symlink, never via `..`) — otherwise an error and nothing
+is written; see [`docs/backend/session-review.md`](../backend/session-review.md).
+
 ```
 POST /repo/session-review/revert-file
 { "path": "/path/to/repo", "session_id": "<uuid>", "abs_path": "/path/to/repo/src/main.rs", "force": false, "dry_run": false }
