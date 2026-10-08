@@ -57,21 +57,41 @@ export function scheduleRemoteAutoClose(termId: string, agentTypeHint?: AgentTyp
 	// display name.
 	const baseName = t0.name ?? termId;
 	let remaining = Math.round(autoCloseMs / 1000);
-	terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` }, { echo: false });
+	// The label this countdown last wrote. Any other name on a later tick means
+	// the user (or the backend) renamed the tab mid-countdown: stop writing the
+	// label from then on, so the rename survives.
+	let ownLabel: string | null = `${baseName} (${remaining}s)`;
+	terminalsStore.update(termId, { name: ownLabel }, { echo: false });
 
+	const stop = () => {
+		clearInterval(ticker);
+		activeCountdowns.delete(termId);
+	};
 	const ticker = setInterval(() => {
 		remaining--;
 		const t = terminalsStore.get(termId);
+		if (ownLabel !== null && t?.name !== ownLabel) ownLabel = null;
+		// Re-check every tick, not just at the start: the tab may have been
+		// suspended, or its session revived (no longer exited), since the
+		// countdown began — neither may be auto-closed.
+		if (t?.isRemote && (t.shellState !== "exited" || isSuspendingOrSuspended(termId))) {
+			stop();
+			appLogger.info("app", `Remote tab ${termId} no longer exited/closable — auto-close cancelled`);
+			if (ownLabel !== null) terminalsStore.update(termId, { name: baseName }, { echo: false });
+			return;
+		}
 		if (!t?.isRemote || remaining <= 0) {
-			clearInterval(ticker);
-			activeCountdowns.delete(termId);
+			stop();
 			if (t?.isRemote) {
 				appLogger.info("app", `Auto-removing remote tab ${termId} (countdown elapsed)`);
 				terminalsStore.remove(termId);
 			}
 			return;
 		}
-		terminalsStore.update(termId, { name: `${baseName} (${remaining}s)` }, { echo: false });
+		if (ownLabel !== null) {
+			ownLabel = `${baseName} (${remaining}s)`;
+			terminalsStore.update(termId, { name: ownLabel }, { echo: false });
+		}
 	}, 1000);
 	activeCountdowns.set(termId, ticker);
 }
