@@ -177,12 +177,23 @@ export function useConfirmDialog() {
 	 *  Asked after the removal confirmation and BEFORE any terminal is closed,
 	 *  using the workspace's attached-terminal list as of the click — the
 	 *  2026-08-26 incident deleted a worktree with a live (even idle) terminal
-	 *  in it. `defaultButton: "cancel"` so Enter cannot destroy live work. */
-	async function confirmRemoveBusyWorktree(branchName: string, summary: BranchActivitySummary): Promise<boolean> {
+	 *  in it. `defaultButton: "cancel"` so Enter cannot destroy live work.
+	 *
+	 *  `liveSessions`: asked again when the backend refuses the removal with
+	 *  `worktree_busy:` — sessions still working in the checkout that are not
+	 *  this workspace's terminals (so nothing closes them). */
+	async function confirmRemoveBusyWorktree(
+		branchName: string,
+		summary: BranchActivitySummary,
+		options?: { liveSessions?: boolean },
+	): Promise<boolean> {
 		const lines = summary.terminals.map((t) => `  • ${t.agentType ?? "terminal"} — ${t.label}`).join("\n");
+		const message = options?.liveSessions
+			? `${summary.terminalCount} live session(s) still work in "${branchName}":\n${lines}\n\nRemoving it now deletes the directory under them and interrupts whatever is running there.\n\nDelete anyway?`
+			: `${summary.terminalCount} terminal(s) are attached to "${branchName}":\n${lines}\n\nRemoving it now will close them and interrupt whatever is running there.\n\nDelete anyway?`;
 		return await confirm({
 			title: `"${branchName}" is in use`,
-			message: `${summary.terminalCount} terminal(s) are attached to "${branchName}":\n${lines}\n\nRemoving it now will close them and interrupt whatever is running there.\n\nDelete anyway?`,
+			message,
 			okLabel: "Delete anyway",
 			cancelLabel: "Cancel",
 			kind: "error",
