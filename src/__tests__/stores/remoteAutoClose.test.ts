@@ -97,6 +97,44 @@ describe("remoteAutoClose", () => {
 			});
 		});
 
+		// Batch 47 review: the ticker checked exited/suspended only when the
+		// countdown started.
+		it("cancels a running countdown when the tab is suspended or no longer exited", () => {
+			testInScope(() => {
+				const parked = terminalsStore.add({ ...makeTerminal({ name: "Parked" }), isRemote: true, agentType: "claude" });
+				terminalsStore.update(parked, { shellState: "exited" });
+				const revived = terminalsStore.add({ ...makeTerminal({ name: "Revived" }), isRemote: true });
+				terminalsStore.update(revived, { shellState: "exited" });
+
+				scheduleRemoteAutoClose(parked);
+				scheduleRemoteAutoClose(revived);
+				vi.advanceTimersByTime(2_000);
+				terminalsStore.update(parked, { suspended: true });
+				terminalsStore.update(revived, { shellState: "idle" });
+				vi.advanceTimersByTime(REMOTE_TAB_AUTOCLOSE_MS * 2);
+
+				expect(terminalsStore.get(parked)).toBeDefined();
+				expect(terminalsStore.get(revived)).toBeDefined();
+				// The countdown label is taken back off.
+				expect(terminalsStore.get(parked)?.name).toBe("Parked");
+				expect(terminalsStore.get(revived)?.name).toBe("Revived");
+			});
+		});
+
+		it("does not overwrite a rename made during the countdown", () => {
+			testInScope(() => {
+				const id = terminalsStore.add({ ...makeTerminal({ name: "Agent" }), isRemote: true, agentType: "claude" });
+				terminalsStore.update(id, { shellState: "exited" });
+
+				scheduleRemoteAutoClose(id);
+				vi.advanceTimersByTime(2_000);
+				terminalsStore.update(id, { name: "keep this name" });
+				vi.advanceTimersByTime(3_000);
+
+				expect(terminalsStore.get(id)?.name).toBe("keep this name");
+			});
+		});
+
 		it("is idempotent: a second call mid-countdown does not restart or extend the deadline", () => {
 			testInScope(() => {
 				const id = terminalsStore.add({ ...makeTerminal({ name: "Shell" }), isRemote: true });
