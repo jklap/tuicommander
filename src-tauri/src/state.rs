@@ -2707,6 +2707,11 @@ pub struct AppState {
     /// / `MAX_SESSION_REVIEW_WATCH_REFS`.
     pub(crate) session_review_watchers:
         DashMap<(String, String), crate::session_review_watcher::SessionWatchEntry>,
+    /// Slots reserved against `MAX_SESSION_REVIEW_WATCHERS` — taken BEFORE a
+    /// new watcher is built and released when it is torn down (or never
+    /// inserted), so concurrent first watches for distinct sessions can't all
+    /// pass a `len()` check and overshoot the cap.
+    pub(crate) session_review_watcher_slots: AtomicUsize,
     /// Claude session id → the TUIC PTY session currently running it, from
     /// the `ccsession` OSC 7770 metadata verb (`pty.rs`). Read via
     /// `AppState::tuic_session_for_claude_session`.
@@ -4350,6 +4355,7 @@ impl AppState {
             pending_orphan_cleanup: DashMap::new(),
             dir_watchers: DashMap::new(),
             session_review_watchers: DashMap::new(),
+            session_review_watcher_slots: AtomicUsize::new(0),
             claude_session_map: DashMap::new(),
             tuic_to_claude_session: DashMap::new(),
             announced_edit_sessions: DashMap::new(),
