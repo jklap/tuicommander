@@ -44,7 +44,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Delete the whole rolling nightly release (KEEPING the tag we just moved) so
-          # the build matrix's tauri-action recreates it fresh — resetting published_at
+          # cleanup recreates it fresh before either matrix starts — resetting published_at
           # to the current run time. The previous approach deleted only the ASSETS and
           # left the release object intact; GitHub freezes published_at at the initial
           # draft->published transition and NEVER refreshes it on tag moves, asset swaps,
@@ -57,6 +57,13 @@ jobs:
           # stable /releases/tag/nightly URL); `|| true` tolerates the first-ever run
           # when no release exists yet.
           gh release delete nightly --repo "$GITHUB_REPOSITORY" --cleanup-tag=false --yes || true
+          gh release create nightly \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "TUICommander Nightly" \
+            --notes "Rolling build from main. Assets are uploaded as builds complete." \
+            --prerelease \
+            --latest=false
 
   build:
     timeout-minutes: 90
@@ -253,9 +260,9 @@ jobs:
   # tuic-remote + tuic-bridge for the four daemon targets, uploaded to the rolling
   # `nightly` release under the same asset names release.yml uses. `needs: cleanup`
   # is what keeps the old binaries out: cleanup deletes the whole release, so an
-  # upload that ran before it would be deleted with it. The legs retry the upload
-  # until the build matrix (tauri-action) has recreated the release; latest.json is
-  # written by tauri-action alone, so the updater feed is not touched.
+  # upload that ran before it would be deleted with it. Cleanup recreates the
+  # prerelease before either matrix starts, so daemon uploads do not depend on
+  # desktop builds succeeding. latest.json is written by tauri-action alone.
   remote-daemon:
     needs: cleanup
     permissions:

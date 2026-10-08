@@ -10,6 +10,14 @@ Five GitHub Actions workflows compile Rust:
 | [`nightly.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/nightly.yml) | push to `main` | the rolling `nightly` release |
 | [`audit.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/audit.yml) | Monday 09:00 UTC | nothing — a prebuilt `cargo-audit` runs the advisory scan; accepted advisories live in `src-tauri/.cargo/audit.toml` |
 
+## Nightly release ordering
+
+The cleanup job moves the `nightly` tag, deletes the old release and recreates an
+empty prerelease before the desktop and daemon matrices start. Successful daemon
+builds can publish even if every desktop build fails. `tauri-action` reuses the
+release with that tag and alone writes `latest.json`; daemon uploads contain only
+`tuic-remote` and `tuic-bridge` binaries.
+
 ## The Rust toolchain is pinned
 
 Every `dtolnay/rust-toolchain` step takes its version from a workflow-level
