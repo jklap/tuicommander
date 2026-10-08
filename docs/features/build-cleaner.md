@@ -1,9 +1,17 @@
 # Build Artifacts Cleaner
 
-A preinstalled plugin (`plugins/build-cleaner/`, id `build-cleaner`) that scans registered
-repos for stale build-artifact directories, shows per-repo size + last-build age in a
-dashboard, and offers a guarded one-click cleanup. It warns via the Activity Center bell
-and the status ticker when reclaimable disk crosses a configurable threshold.
+A plugin from the official plugins repository (`plugins/build-cleaner/` in this repo's
+`plugins` submodule, id `build-cleaner`) that scans registered repos for stale
+build-artifact directories, shows per-repo size + last-build age in a dashboard, and
+offers a guarded one-click cleanup. It warns via the Activity Center bell and the status
+ticker when reclaimable disk crosses a configurable threshold.
+
+It is **not preinstalled**: only `plan` and `stories-ticker` are seeded into a new install
+(`SEEDED_PLUGINS` in `src-tauri/src/plugins.rs`), and the submodule's `registry.json` has
+no `build-cleaner` entry, so it does not appear under Settings → Plugins → Browse either.
+Install it by hand — copy `plugins/build-cleaner/` into your plugins directory or install a
+ZIP of it (see [Plugins](../user-guide/plugins.md#manual-installation)). The backend half
+(`fs:scan`/`fs:delete`, `plugin_fs.rs`) ships with the app.
 
 Capabilities: `fs:scan` (read-only walk), `fs:delete` (guarded `remove_dir_all`),
 `ui:panel` (dashboard), `ui:ticker` (status bar warning).
