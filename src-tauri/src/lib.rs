@@ -3384,13 +3384,25 @@ fn set_password_from_stdin(only_if_unset: bool) -> anyhow::Result<()> {
     cfg.services.auth.password_hash = hash;
     config::save_app_config(cfg).map_err(|e| anyhow::anyhow!(e))?;
 
-    let masked = if username.len() <= 2 {
-        format!("{}*", &username[..1])
-    } else {
-        format!("{}…{}", &username[..1], &username[username.len() - 1..])
-    };
-    println!("Credentials saved for user \"{masked}\"");
+    println!("Credentials saved for user \"{}\"", mask_username(&username));
     Ok(())
+}
+
+/// The username as `set_password_from_stdin` prints it: first character, then
+/// `*` (two characters or fewer) or `…` and the last character. Character-
+/// aware: byte slicing panicked on a multibyte first or last character —
+/// AFTER the credentials were already saved, so the caller saw a failure for a
+/// password that had in fact been set (Batch 32 review #5).
+#[cfg_attr(feature = "desktop", allow(dead_code))]
+fn mask_username(username: &str) -> String {
+    let mut chars = username.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    match (username.chars().count(), chars.next_back()) {
+        (count, Some(last)) if count > 2 => format!("{first}…{last}"),
+        _ => format!("{first}*"),
+    }
 }
 
 /// Background tasks the `tuic-remote` daemon runs.
@@ -3821,6 +3833,20 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Batch 32 review #5: `&username[..1]` panicked on a multibyte first
+    /// character (and the last-character slice on a multibyte last one).
+    #[test]
+    fn mask_username_is_character_aware() {
+        assert_eq!(mask_username("bo"), "b*");
+        assert_eq!(mask_username("b"), "b*");
+        assert_eq!(mask_username("boss"), "b…s");
+        assert_eq!(mask_username("éa"), "é*");
+        assert_eq!(mask_username("étienne"), "é…e");
+        assert_eq!(mask_username("ab日"), "a…日");
+        assert_eq!(mask_username("日本語"), "日…語");
+        assert_eq!(mask_username(""), "");
+    }
 
     #[cfg(feature = "desktop")]
     fn register_document_grid(state: &AppState, session_id: &str, webview_label: &str) -> u64 {
