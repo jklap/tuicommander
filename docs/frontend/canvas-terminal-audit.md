@@ -9,6 +9,8 @@ Remote grid streams report handshake, initial-replay timeout (15 seconds), decod
 
 Answers-only history includes a retained prompt-less prefix before the first tracked prompt. Finished prefix and prompt turns share the history-base cache, with prompt association included in its validity check. The panel shows a status notice when no turn has a marked answer.
 
+Submitted prompts are not tinted in the terminal grid. Recorded `userPromptLines` still drive scrollbar ticks and answers-only turn grouping; Chat user messages retain the theme prompt tint and gutter.
+
 ## Architecture
 
 ```
