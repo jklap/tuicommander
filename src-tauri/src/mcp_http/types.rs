@@ -1211,6 +1211,10 @@ pub(super) struct GitDeleteLocalBranchRequest {
     pub workspace_id: String,
     #[serde(rename = "keepWorktree")]
     pub keep_worktree: Option<bool>,
+    /// Lifts only the live-session refusal (`worktree_busy:`) when the checkout
+    /// is removed with the branch — same as `DELETE /worktrees/{id}`'s.
+    #[serde(rename = "overrideBusy", default)]
+    pub override_busy: Option<bool>,
 }
 
 #[derive(Deserialize)]

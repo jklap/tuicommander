@@ -167,7 +167,9 @@ impl WorktreeBusy {
 }
 
 /// The live-session guard every removal of a workspace's checkout shares (IPC
-/// `remove_worktree`, HTTP `DELETE /worktrees/{id}`, MCP `repo worktree_remove`).
+/// `remove_worktree`, HTTP `DELETE /worktrees/{id}`, MCP `repo worktree_remove`,
+/// and a branch deletion that takes its worktree with it —
+/// [`delete_local_branch_guard`]).
 /// git's own refusals cover dirty files and locks; a CLEAN, unlocked checkout
 /// can still have a terminal or agent working in it, which is how a live
 /// worktree was deleted twice on 2026-08-26. Only an explicit `override_busy`
@@ -1265,6 +1267,11 @@ pub(crate) async fn remove_worktree_ipc_impl(
 /// ref. Used by the post-merge cleanup dialog when the user unchecks the
 /// "Archive/Delete worktree" step.
 ///
+/// With `keep_worktree = false` the workspace's checkout is removed with the
+/// branch, so it runs the same live-session guard as every other removal
+/// ([`workspace_removal_guard`]): a `worktree_busy:` refusal unless
+/// `override_busy` (optional, default `false`).
+///
 /// Async + `spawn_blocking` because the body runs `git branch -d` and may
 /// remove a whole worktree directory. A plain `fn` command runs inline on the
 /// IPC thread — the macOS main thread — so it froze the WebView for the length
@@ -1278,13 +1285,24 @@ pub(crate) async fn delete_local_branch(
     branch_name: String,
     workspace_id: String,
     keep_worktree: Option<bool>,
+    override_busy: Option<bool>,
 ) -> Result<(), String> {
     let keep_worktree = keep_worktree.unwrap_or(false);
+    let override_busy = override_busy.unwrap_or(false);
     {
         let repo_path = repo_path.clone();
         let branch_name = branch_name.clone();
         let workspace_id = workspace_id.clone();
+        let guard_state = Arc::clone(&state);
         tokio::task::spawn_blocking(move || {
+            delete_local_branch_guard(
+                &guard_state,
+                &repo_path,
+                &workspace_id,
+                keep_worktree,
+                override_busy,
+            )
+            .map_err(|busy| busy.message())?;
             delete_local_branch_impl(&repo_path, &branch_name, &workspace_id, keep_worktree)
         })
         .await
@@ -1303,6 +1321,23 @@ pub(crate) async fn delete_local_branch(
         });
     }
     Ok(())
+}
+
+/// The live-session guard for a branch deletion: only when the checkout goes
+/// with the branch (`keep_worktree == false`) — keeping the worktree removes
+/// nothing a session is working in. Shared by IPC `delete_local_branch` and
+/// HTTP `POST /repo/delete-local-branch`.
+pub(crate) fn delete_local_branch_guard(
+    state: &AppState,
+    repo_path: &str,
+    workspace_id: &str,
+    keep_worktree: bool,
+    override_busy: bool,
+) -> Result<(), WorktreeBusy> {
+    if keep_worktree {
+        return Ok(());
+    }
+    workspace_removal_guard(state, repo_path, workspace_id, override_busy)
 }
 
 /// Cached workspaces (id -> checkout) for synchronous callers (MCP handlers, etc.).
@@ -3202,6 +3237,26 @@ mod tests {
 
             assert!(guard(&state, repo.path(), "override", false).is_err());
             guard(&state, repo.path(), "override", true).expect("override");
+        }
+
+        // B2.8 (Batch B1 report): `delete_local_branch` with keep_worktree=false
+        // removed the checkout without this guard.
+        #[test]
+        fn a_branch_delete_that_takes_its_worktree_is_guarded_too() {
+            let repo = setup_test_repo();
+            let worktree = worktree_with(repo.path(), "merged-feat", false);
+            let state = make_test_app_state();
+            insert_dummy_session(&state, "pty-in-merged");
+            set_session_cwd(&state, "pty-in-merged", &worktree.to_string_lossy());
+            let repo_str = repo.path().to_string_lossy();
+
+            let busy = delete_local_branch_guard(&state, &repo_str, "merged-feat", false, false)
+                .expect_err("removing the checkout with a live session refuses");
+            assert!(busy.message().starts_with(BUSY_WORKTREE_PREFIX));
+            delete_local_branch_guard(&state, &repo_str, "merged-feat", false, true)
+                .expect("override_busy lifts it");
+            delete_local_branch_guard(&state, &repo_str, "merged-feat", true, false)
+                .expect("keeping the worktree removes nothing a session works in");
         }
 
         // Catches: a session whose process already exited still blocking the
