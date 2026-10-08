@@ -162,7 +162,7 @@ async fn tunnel_class_requires_confirmation_after_owner_validation() {
         )),
     )
     .with_policy(state.settings_policy.clone());
-    for (leaf, value) in [("port", json!(2222)), ("auto_connect", json!(true))] {
+    for (leaf, value) in [("ssh/port", json!(2222)), ("auto_connect", json!(true))] {
         let path = format!("/profiles/{}/{leaf}", profile.id);
         let error = service
             .patch(
@@ -175,10 +175,10 @@ async fn tunnel_class_requires_confirmation_after_owner_validation() {
             .unwrap_err();
         assert_eq!(error.code, "confirmation_required");
         let saved = crate::tunnels::storage::ProfileStore::load_all(dir.path(), None).unwrap();
-        assert_eq!(saved[0].port, 22);
+        assert_eq!(saved[0].ssh.port, 22);
         assert!(!saved[0].auto_connect);
     }
-    let path = format!("/profiles/{}/port", profile.id);
+    let path = format!("/profiles/{}/ssh/port", profile.id);
     let error = service
         .patch(
             Target::Machine,

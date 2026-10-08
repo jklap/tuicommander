@@ -55,6 +55,7 @@ pub(crate) mod cli_usage_rpc;
 pub(crate) mod codex_usage;
 pub(crate) mod config;
 pub(crate) mod conflict_assist;
+pub(crate) mod connection_test;
 pub(crate) mod content_index;
 pub(crate) mod mcp_capabilities;
 mod open_markdown_tabs;
@@ -63,6 +64,7 @@ pub mod settings;
 pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
+pub(crate) mod direct_proxy;
 #[cfg(feature = "desktop")]
 mod default_app;
 pub(crate) mod design_mode;
@@ -202,6 +204,8 @@ mod shell_integration;
 #[cfg(feature = "desktop")]
 pub(crate) mod sleep_prevention;
 pub(crate) mod smart_prompt;
+pub(crate) mod ssh_connection;
+pub(crate) mod ssh_provision;
 pub(crate) mod state;
 pub(crate) mod stories;
 pub(crate) mod subagent_map;
@@ -2277,6 +2281,7 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
     let data_dir = config::config_dir();
 
     agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
+    ssh_connection::legacy::migrate_persisted_shapes(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, config.clone(), log_buffer);
     *app_state.github.token.get_mut() = github_token;
@@ -2876,11 +2881,17 @@ pub fn run(mut context: tauri::Context<tauri::Wry>) {
             remote_connection::fetch_remote_connection_token,
             remote_runtime::connect_remote_connection,
             remote_runtime::disconnect_remote_connection,
+            ssh_provision::plan_ssh_daemon_provision,
+            ssh_provision::start_ssh_daemon,
+            ssh_provision::stop_ssh_daemon,
+            ssh_provision::configure_ssh_daemon_password,
             remote_runtime::remote_connection_statuses,
             remote_update::prepare_remote_update,
             remote_update::update_and_restart_remote,
             remote_deploy::service::install_remote_daemon,
             remote_deploy::service::uninstall_remote_daemon,
+            connection_test::test_connection,
+            direct_proxy::probe_direct_tls_connection,
             open_secondary_window,
             default_app::open_default_app,
             native_notification::show_native_notification,
@@ -3598,11 +3609,44 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     webview_recovery::spawn(state.clone());
 }
 
+/// Whether a daemon already has Basic Auth credentials. Either half counts:
+/// `--set-password-if-unset` must never overwrite (or complete) an existing
+/// configuration, only fill an empty one.
+#[cfg(any(not(feature = "desktop"), test))]
+pub(crate) fn auth_credentials_configured(auth: &config::AuthConfig) -> bool {
+    !auth.username.is_empty() || !auth.password_hash.is_empty()
+}
+
+/// What `--set-password-if-unset` prints (on stderr, exit 1) when the daemon
+/// already has credentials. `ssh_provision` matches it to say "nothing was
+/// changed" rather than report a failure it cannot explain.
+pub const PASSWORD_ALREADY_CONFIGURED: &str =
+    "credentials are already configured; refusing to overwrite them";
+
 /// Interactive CLI to set username + password for headless auth.
 /// Reads from stdin, hashes with bcrypt, writes to config.json.
 #[cfg(not(feature = "desktop"))]
 pub fn set_password_interactive() -> anyhow::Result<()> {
+    set_password_from_stdin(false)
+}
+
+/// `tuic-remote --set-password-if-unset`: the same stdin interface, but it
+/// refuses — before reading anything — when credentials already exist. This is
+/// the only mode the desktop's SSH provisioning uses (`ssh_provision`), so an
+/// existing password is never overwritten from the other end of a connection;
+/// the check runs on the daemon's own config, not on what the client believes.
+#[cfg(not(feature = "desktop"))]
+pub fn set_password_if_unset_interactive() -> anyhow::Result<()> {
+    set_password_from_stdin(true)
+}
+
+#[cfg(not(feature = "desktop"))]
+fn set_password_from_stdin(only_if_unset: bool) -> anyhow::Result<()> {
     use std::io::{self, BufRead, Write};
+
+    if only_if_unset && auth_credentials_configured(&config::load_app_config().services.auth) {
+        anyhow::bail!(PASSWORD_ALREADY_CONFIGURED);
+    }
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
@@ -3629,6 +3673,10 @@ pub fn set_password_interactive() -> anyhow::Result<()> {
         bcrypt::hash(&password, 12).map_err(|e| anyhow::anyhow!("Failed to hash password: {e}"))?;
 
     let mut cfg = config::load_app_config();
+    // Re-checked on the copy about to be written: stdin may have taken a while.
+    if only_if_unset && auth_credentials_configured(&cfg.services.auth) {
+        anyhow::bail!(PASSWORD_ALREADY_CONFIGURED);
+    }
     cfg.services.auth.username = username.clone();
     cfg.services.auth.password_hash = hash;
     config::save_app_config(cfg).map_err(|e| anyhow::anyhow!(e))?;
@@ -3875,6 +3923,7 @@ pub async fn run_remote(mut options: RemoteOptions) -> anyhow::Result<()> {
     let (github_token, github_token_source) = crate::github_auth::resolve_token_from_env();
 
     agent_hook_launch::regenerate_launch_assets_at_boot(&data_dir);
+    ssh_connection::legacy::migrate_persisted_shapes(&data_dir);
 
     let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
     app_state.remote_survive_secs = options.survive_secs;

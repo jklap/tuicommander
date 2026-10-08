@@ -2325,6 +2325,50 @@ export const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	uninstall_remote_daemon: {
 		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}/install` }),
 	},
+	// Test Connection (story: SSH Tunnels + Remote Servers consolidation, Phase 2).
+	// `args.request` is the whole `{ transport, auth_username, password }` shape —
+	// mirrors the Rust `test_connection(request: TestConnectionRequest)` command's
+	// single named parameter, same convention as `save_remote_connection` passing
+	// `args.connection` straight through as the body.
+	test_connection: {
+		map: (args) => ({ method: "POST", path: "/config/remote-connections/test", body: args.request }),
+	},
+	// What certificate a Direct URL presents, before the user pins it. There is
+	// deliberately no command to start/stop the pinned relay: only the backend's
+	// connect flow starts one, from the saved connection.
+	probe_direct_tls_connection: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/remote-connections/probe-direct-tls",
+			body: { url: args.url, tls_fingerprint: args.tlsFingerprint ?? null },
+		}),
+	},
+	// SSH remote daemon provisioning (`ssh_provision.rs`). Every command names a
+	// STORED connection by id and nothing else that reaches the remote host; an
+	// execute call carries only the digest of the plan the user accepted.
+	plan_ssh_daemon_provision: {
+		map: (args, p) => ({
+			method: "GET",
+			path: `/config/ssh-daemon/${p("id")}/plan?action=${encodeURIComponent(String(args.action))}`,
+		}),
+	},
+	start_ssh_daemon: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/config/ssh-daemon/${p("id")}/start`,
+			body: { plan_digest: args.planDigest },
+		}),
+	},
+	stop_ssh_daemon: {
+		map: (_args, p) => ({ method: "POST", path: `/config/ssh-daemon/${p("id")}/stop` }),
+	},
+	configure_ssh_daemon_password: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/config/remote-connections/${p("id")}/configure-ssh-password`,
+			body: { plan_digest: args.planDigest },
+		}),
+	},
 
 	// --- Tunnels ---
 	start_design_mode: {

@@ -1,4 +1,4 @@
-import { batch } from "solid-js";
+import { batch, createSignal } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { settingsRefresh } from "../services/settingsRefresh";
@@ -6,6 +6,7 @@ import { subscribeEvents } from "../transport";
 import { setRemoteBaseUrlLookup, setRemoteTokenLookup } from "../transportRuntime";
 import { ensureAgentConfigs, invalidateAgentConfigs } from "./agentConfigs";
 import { appLogger } from "./appLogger";
+import type { SshConnectionParams } from "./tunnels";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,7 +16,11 @@ export interface RemoteConnection {
 	id: string;
 	name: string;
 	transport: RemoteTransport;
-	auth_username: string;
+	/**
+	 * Basic Auth username, optional (`null` when unset). With a stored password
+	 * and no username the backend's token exchange is refused by the daemon.
+	 */
+	auth_username?: string | null;
 	enabled: boolean;
 	auto_update?: boolean;
 	deploy: DeployMode;
@@ -55,20 +60,107 @@ export interface SshHostStatus {
 export type RemoteTransport =
 	| {
 			type: "Ssh";
-			ssh_host: string;
-			ssh_port: number;
-			ssh_user: string;
-			identity_file: string | null;
+			/** Host/port/user/identity/keepalive config — shared shape with `TunnelProfile.ssh`. */
+			ssh: SshConnectionParams;
 			remote_daemon_port: number;
+			/** Offer to start `tuic-remote` when Connect finds nothing answering
+			 * (deploy "never" only). Absent = off: the backend omits the three
+			 * provisioning fields while unset. */
+			start_if_not_running?: boolean;
+			/** Keep a daemon this app started running on Disconnect. */
+			leave_running_on_disconnect?: boolean;
+			/** `--instance <id>` used when this app launches or configures the
+			 * remote daemon — a lowercase DNS label, never discovered remotely. */
+			instance_id?: string | null;
 	  }
-	| { type: "Direct"; url: string }
+	| {
+			type: "Direct";
+			url: string;
+			/** SHA-256 fingerprint (lowercase hex) of a pinned self-signed/untrusted
+			 * certificate, set only after the user confirms it in
+			 * `DirectCertConfirmDialog`. Absent/`null` for `http://`, a CA-trusted
+			 * `https://`, or a target not yet confirmed (the backend omits it then). */
+			tls_fingerprint?: string | null;
+	  }
+	| {
+			type: "Local";
+			/** Exactly one of `port`/`instance_id` is set. */
+			port: number | null;
+			instance_id: string | null;
+	  }
 	| { type: "Relay" };
+
+/**
+ * Test Connection input (story: SSH Tunnels + Remote Servers consolidation,
+ * Phase 2) — enough data to test a connection that may not be saved yet.
+ * `password` is plaintext, in-memory only for this one call; it is never
+ * persisted (not to `connections.json`, not to the keyring).
+ */
+export interface TestConnectionRequest {
+	transport: RemoteTransport;
+	auth_username?: string | null;
+	password?: string | null;
+}
+
+/**
+ * Result of `testConnection`. Mirrors the Rust `ConnectionTestResult` enum
+ * (`src-tauri/src/connection_test.rs`) — a `#[serde(tag = "type")]` shape, so
+ * `result.type` narrows the rest of the fields.
+ */
+export type ConnectionTestResult =
+	| { type: "Reachable" }
+	| { type: "AuthFailed" }
+	| { type: "NotConfigured" }
+	| { type: "InstanceNotFound" }
+	| { type: "Unreachable"; reason: string };
 
 /**
  * `unauthenticated` is deliberately not `error`: the daemon is reachable and
  * `/health` answers, but every other route needs a credential this client does
  * not have. The fix is a password, not a network one, and the panel says so.
  */
+/**
+ * What a Direct URL presents. Mirrors Rust `direct_proxy::ProbeResult`
+ * (`#[serde(tag = "type")]`).
+ */
+export type ProbeResult =
+	| { type: "NoTlsNeeded" }
+	| { type: "Trusted" }
+	| { type: "NeedsConfirmation"; fingerprint: string }
+	| { type: "PinnedMatch" }
+	| { type: "PinnedMismatch"; presented_fingerprint: string };
+
+/** A self-signed certificate waiting for the user's decision before it is pinned. */
+export interface PendingFingerprintConfirmation {
+	connectionId: string;
+	connectionName: string;
+	url: string;
+	fingerprint: string;
+}
+
+/** What the backend can offer to do over SSH about a failed connect. */
+export type ProvisionAction = "start" | "set_password";
+
+/** One remote step of a provisioning plan; `command` is the exact remote shell command. */
+export interface ProvisionStep {
+	description: string;
+	command?: string;
+}
+
+/**
+ * Everything a provisioning confirmation shows. Mirrors Rust
+ * `ssh_provision::ProvisionPlan`; `digest` binds the accept to exactly this plan.
+ */
+export interface ProvisionPlan {
+	connection_id: string;
+	connection_name: string;
+	action: ProvisionAction;
+	destination: string;
+	summary: string;
+	steps: ProvisionStep[];
+	digest: string;
+}
+
 export type ConnectionStatus = "disconnected" | "connecting" | "deploying" | "connected" | "unauthenticated" | "error";
 
 export interface ConnectionState {
@@ -86,6 +178,8 @@ export interface ConnectionState {
 	deployStep?: string;
 	/** Why a relay connection is down: relay_unreachable, daemon_offline, pairing_rejected or link_lost. */
 	relayFailure?: string;
+	/** An SSH action the backend offers about this failure; runs only after confirmation. */
+	provisionOffer?: ProvisionAction;
 }
 
 /** One connection as the backend reports it. Snake case: it is a Rust struct. */
@@ -104,6 +198,7 @@ interface RemoteConnectionStatusPayload {
 	retry_after_secs?: number;
 	step?: string;
 	relay_failure?: string;
+	provision_offer?: ProvisionAction;
 }
 
 interface RemoteConnectionsState {
@@ -172,6 +267,34 @@ function createRemoteConnectionsStore() {
 		hydrated: false,
 	});
 
+	// Certificate confirmation is one modal at a time: `connect()` awaits
+	// `requestFingerprintConfirmation`, which resolves when `DirectCertConfirmDialog`
+	// calls `resolveFingerprintConfirmation`. A second request declines the first
+	// rather than leaving its promise hanging.
+	const [pendingConfirmation, setPendingConfirmation] = createSignal<PendingFingerprintConfirmation | null>(null);
+	let confirmationResolver: ((accepted: boolean) => void) | null = null;
+
+	// Provisioning confirmation: same one-at-a-time shape. The dialog shows the
+	// plan the backend built; only an explicit accept sends its digest back.
+	const [pendingProvision, setPendingProvision] = createSignal<ProvisionPlan | null>(null);
+	let provisionResolver: ((accepted: boolean) => void) | null = null;
+
+	function requestProvisionConfirmation(plan: ProvisionPlan): Promise<boolean> {
+		provisionResolver?.(false);
+		return new Promise((resolve) => {
+			provisionResolver = resolve;
+			setPendingProvision(plan);
+		});
+	}
+
+	function requestFingerprintConfirmation(request: PendingFingerprintConfirmation): Promise<boolean> {
+		confirmationResolver?.(false);
+		return new Promise((resolve) => {
+			confirmationResolver = resolve;
+			setPendingConfirmation(request);
+		});
+	}
+
 	// ---------------------------------------------------------------------------
 	// Internal helpers
 	// ---------------------------------------------------------------------------
@@ -208,6 +331,7 @@ function createRemoteConnectionsStore() {
 			retryAfterSecs: payload.retry_after_secs,
 			deployStep: payload.step,
 			relayFailure: payload.relay_failure,
+			provisionOffer: payload.provision_offer,
 		});
 
 		// A machine's run configs belong to the machine, and a daemon that went
@@ -260,8 +384,13 @@ function createRemoteConnectionsStore() {
 				for (const conn of connections ?? []) {
 					connectionsMap[conn.id] = { connection: conn, status: "disconnected" };
 				}
+				// `reconcile`, not a plain-object `setState`, which SolidJS store
+				// setters MERGE onto the existing key rather than replace — a
+				// connection the backend no longer reports would otherwise linger
+				// in state forever (fixed, story: SSH Tunnels + Remote Servers
+				// consolidation).
 				batch(() => {
-					setState("connections", connectionsMap);
+					setState("connections", reconcile(connectionsMap));
 					setState("hydrated", true);
 				});
 				hydrated = true;
@@ -290,11 +419,82 @@ function createRemoteConnectionsStore() {
 		 * `unauthenticated` status; callers that only render can ignore the throw.
 		 */
 		async connect(id: string): Promise<void> {
-			if (!state.connections[id]) {
+			const current = state.connections[id];
+			if (!current) {
 				appLogger.warn("store", `connect: unknown connection ${id}`);
 				return;
 			}
+			const conn = current.connection;
+			// A Direct `https://` daemon nobody vouches for is refused by the backend
+			// until its certificate is pinned. Ask the user here, where a person
+			// pressed Connect: the probe reports the fingerprint, nothing is pinned
+			// without an explicit accept, and a changed certificate is left to the
+			// backend, which refuses it with the explanation.
+			if (conn.transport.type === "Direct") {
+				const transport = conn.transport;
+				let probe: ProbeResult | undefined;
+				try {
+					probe = await invoke<ProbeResult>("probe_direct_tls_connection", {
+						url: transport.url,
+						tlsFingerprint: transport.tls_fingerprint ?? null,
+					});
+				} catch (err) {
+					// Unreachable and the like: the connect below reports it properly.
+					appLogger.warn("store", `Certificate probe failed for ${id}`, err);
+				}
+				if (probe?.type === "NeedsConfirmation") {
+					const accepted = await requestFingerprintConfirmation({
+						connectionId: id,
+						connectionName: conn.name,
+						url: transport.url,
+						fingerprint: probe.fingerprint,
+					});
+					if (!accepted) return;
+					await actions.addConnection({ ...conn, transport: { ...transport, tls_fingerprint: probe.fingerprint } });
+				}
+			}
 			await invoke("connect_remote_connection", { id });
+		},
+
+		/** The certificate confirmation the dialog should show, if any (reactive). */
+		getPendingFingerprintConfirmation(): PendingFingerprintConfirmation | null {
+			return pendingConfirmation();
+		},
+
+		/** Answer the pending confirmation: `true` pins and connects, `false` aborts. */
+		resolveFingerprintConfirmation(accepted: boolean): void {
+			const resolve = confirmationResolver;
+			confirmationResolver = null;
+			setPendingConfirmation(null);
+			resolve?.(accepted);
+		},
+
+		/**
+		 * Act on a provisioning offer: fetch the plan, show it, and run it only
+		 * when the user accepts. Returns the backend's follow-up message (set
+		 * password) or `null` when declined. Start also connects on success.
+		 */
+		async provision(id: string, action: ProvisionAction): Promise<string | null> {
+			const plan = await invoke<ProvisionPlan>("plan_ssh_daemon_provision", { id, action });
+			if (!(await requestProvisionConfirmation(plan))) return null;
+			if (action === "start") {
+				await invoke("start_ssh_daemon", { id, planDigest: plan.digest });
+				return "Remote daemon started.";
+			}
+			return (await invoke<string>("configure_ssh_daemon_password", { id, planDigest: plan.digest })) ?? null;
+		},
+
+		/** The provisioning plan the dialog should show, if any (reactive). */
+		getPendingProvisionConfirmation(): ProvisionPlan | null {
+			return pendingProvision();
+		},
+
+		/** Answer the pending plan: `true` runs it, `false` runs nothing. */
+		resolveProvisionConfirmation(accepted: boolean): void {
+			const resolve = provisionResolver;
+			provisionResolver = null;
+			setPendingProvision(null);
+			resolve?.(accepted);
 		},
 
 		/** Ask the backend to take a connection down. */
@@ -439,6 +639,16 @@ function createRemoteConnectionsStore() {
 		/** Reactive getter for a single connection's state */
 		getConnectionState(id: string): ConnectionState | undefined {
 			return state.connections[id];
+		},
+
+		/**
+		 * Test connectivity for a transport that may not be saved yet (Phase 2 —
+		 * no UI wired to this yet, Phase 3 owns that). Never mutates store state:
+		 * a pure passthrough to the backend, which itself has no side effects
+		 * beyond the outbound probe (no tunnel started, nothing persisted).
+		 */
+		async testConnection(request: TestConnectionRequest): Promise<ConnectionTestResult> {
+			return invoke<ConnectionTestResult>("test_connection", { request });
 		},
 	};
 

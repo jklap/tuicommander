@@ -668,6 +668,7 @@ export const RemoteAccessPanel: Component = () => {
 							<div class={s.group}>
 								<label>{t("services.label.tailscaleStatus", "Status")}</label>
 								<div class={s.mcpStatusRow}>
+									<span class={cx(s.mcpStatusDot, ts.state === "Running" && ts.https_enabled && s.running)} />
 									<span class={s.mcpStatusText}>{statusText}</span>
 									<Button
 										data-non-setting="Explicit Tailscale runtime discovery"
@@ -725,6 +726,7 @@ export const RemoteAccessPanel: Component = () => {
 									<div class={s.row}>
 										<span class={s.label}>{t("services.label.selfSignedStatus", "Status")}</span>
 										<span class={s.value}>
+											<span class={cx(s.mcpStatusDot, ss.active && s.running)} />
 											{statusText}
 											<button
 												class={s.inlineBtn}

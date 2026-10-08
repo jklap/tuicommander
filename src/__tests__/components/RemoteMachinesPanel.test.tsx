@@ -78,6 +78,10 @@ vi.mock("../../stores/appLogger", () => ({
 
 import { RemoteMachinesPanel } from "../../components/SettingsPanel/tabs/services/RemoteMachinesPanel";
 
+// Add/edit moved to the Remote Servers page's merged editor
+// (RemoteConnectionEditor.test.tsx); the list only reports what to open.
+const handlers = { onEdit: vi.fn(), onAddFromHost: vi.fn() };
+
 function sshConnection(deploy: "never" | "on_connect" | "installed" = "never") {
 	return {
 		connection: {
@@ -85,10 +89,16 @@ function sshConnection(deploy: "never" | "on_connect" | "installed" = "never") {
 			name: "Build host",
 			transport: {
 				type: "Ssh" as const,
-				ssh_host: "builder.local",
-				ssh_port: 22,
-				ssh_user: "dev",
-				identity_file: null,
+				ssh: {
+					host: "builder.local",
+					port: 22,
+					user: "dev",
+					identity_file: null,
+					server_alive_interval: 15,
+					server_alive_count_max: 3,
+					strict_host_key_checking: "AcceptNew" as const,
+					compression: true,
+				},
 				remote_daemon_port: 9876,
 			},
 			auth_username: "tuic",
@@ -104,6 +114,8 @@ describe("RemoteMachinesPanel", () => {
 	beforeEach(() => {
 		for (const key of Object.keys(connections)) delete connections[key];
 		for (const action of Object.values(actions)) action.mockClear();
+		handlers.onEdit.mockClear();
+		handlers.onAddFromHost.mockClear();
 	});
 
 	afterEach(() => {
@@ -120,7 +132,7 @@ describe("RemoteMachinesPanel", () => {
 			status: "connected",
 			baseUrl: "http://mac-mint.tail911da.ts.net:9876",
 		};
-		const view = render(() => <RemoteMachinesPanel />);
+		const view = render(() => <RemoteMachinesPanel onEdit={() => {}} onAddFromHost={() => {}} />);
 		expect(actions.addConnection).not.toHaveBeenCalled();
 		fireEvent.click(view.getByRole("button", { name: "Save resolved address" }));
 		await waitFor(() =>
@@ -145,7 +157,7 @@ describe("RemoteMachinesPanel", () => {
 			},
 		]) {
 			connections["machine-1"] = state;
-			const view = render(() => <RemoteMachinesPanel />);
+			const view = render(() => <RemoteMachinesPanel onEdit={() => {}} onAddFromHost={() => {}} />);
 			expect(view.queryByRole("button", { name: "Save resolved address" })).toBeNull();
 			view.unmount();
 		}
@@ -158,7 +170,7 @@ describe("RemoteMachinesPanel", () => {
 			error: "Unreachable: old error",
 			retryAfterSecs: 3,
 		};
-		const view = render(() => <RemoteMachinesPanel />);
+		const view = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect(view.getByText("Connecting...")).toBeTruthy();
 		expect(view.queryByText("Unreachable: old error")).toBeNull();
 		expect(view.queryByText("Retry delay: 3s")).toBeNull();
@@ -171,7 +183,7 @@ describe("RemoteMachinesPanel", () => {
 			error: "Cannot resolve mac-mint",
 			retryAfterSecs: 3,
 		};
-		const view = render(() => <RemoteMachinesPanel />);
+		const view = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect(view.getByText("Cannot resolve mac-mint")).toBeTruthy();
 		expect(view.getByText("Retry delay: 3s")).toBeTruthy();
 		expect(view.queryByText("Connecting...")).toBeNull();
@@ -199,7 +211,7 @@ describe("RemoteMachinesPanel", () => {
 	it("hides update action when the connected remote reports the current build", () => {
 		const state = createMutable({ ...sshConnection(), status: "connected", outOfDate: true });
 		connections["machine-1"] = state;
-		const view = render(() => <RemoteMachinesPanel />);
+		const view = render(() => <RemoteMachinesPanel onEdit={() => {}} onAddFromHost={() => {}} />);
 		expect(view.getByText("Remote out of date")).toBeTruthy();
 		expect(view.getByRole("button", { name: "Update & restart remote" })).toBeTruthy();
 		// record_updated_build publishes this false flag after /health confirms the selected SHA.
@@ -215,7 +227,7 @@ describe("RemoteMachinesPanel", () => {
 			{ ...sshConnection(), status: "disconnected", outOfDate: true },
 		]) {
 			connections["machine-1"] = state;
-			const view = render(() => <RemoteMachinesPanel />);
+			const view = render(() => <RemoteMachinesPanel onEdit={() => {}} onAddFromHost={() => {}} />);
 			expect(view.queryByRole("button", { name: "Update & restart remote" })).toBeNull();
 			view.unmount();
 		}
@@ -233,7 +245,7 @@ describe("RemoteMachinesPanel", () => {
 		};
 		const confirm = vi.fn(() => true);
 		vi.stubGlobal("confirm", confirm);
-		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const { getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect(getByText("Remote out of date")).toBeTruthy();
 		fireEvent.click(getByText("Update & restart remote"));
 		await waitFor(() => expect(actions.updateAndRestart).toHaveBeenCalledWith("machine-1", 3, "known-digest"));
@@ -248,7 +260,7 @@ describe("RemoteMachinesPanel", () => {
 			"confirm",
 			vi.fn(() => false),
 		);
-		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const { getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		fireEvent.click(getByText("Update & restart remote"));
 		await waitFor(() => expect(actions.prepareUpdate).toHaveBeenCalledWith("machine-1"));
 		expect(actions.updateAndRestart).not.toHaveBeenCalled();
@@ -256,7 +268,7 @@ describe("RemoteMachinesPanel", () => {
 
 	it("offers the manual update with the live session count", async () => {
 		connections["machine-1"] = { ...sshConnection(), status: "connected", outOfDate: true, liveSessions: 3 };
-		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const { getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect(getByText("3 live sessions. Update available.")).toBeTruthy();
 		expect(getByText("Update & restart remote")).toBeTruthy();
 	});
@@ -267,7 +279,7 @@ describe("RemoteMachinesPanel", () => {
 			status: "connected",
 			updateNotice: "Remote updated successfully.",
 		};
-		const { getByRole } = render(() => <RemoteMachinesPanel />);
+		const { getByRole } = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect(getByRole("status").textContent).toBe("Remote updated successfully.");
 	});
 
@@ -278,7 +290,7 @@ describe("RemoteMachinesPanel", () => {
 			outOfDate: true,
 			updateInProgress: true,
 		};
-		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const { getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		const button = getByText("Update & restart remote") as HTMLButtonElement;
 		expect(button.disabled).toBe(true);
 		fireEvent.click(button);
@@ -288,51 +300,9 @@ describe("RemoteMachinesPanel", () => {
 	it("shows the reason when a manual update cannot be prepared", async () => {
 		connections["machine-1"] = { ...sshConnection(), status: "connected", outOfDate: true };
 		actions.prepareUpdate.mockRejectedValueOnce(new Error("requires --no-default-features"));
-		const { getByText, getByRole } = render(() => <RemoteMachinesPanel />);
+		const { getByText, getByRole } = render(() => <RemoteMachinesPanel {...handlers} />);
 		fireEvent.click(getByText("Update & restart remote"));
 		await waitFor(() => expect(getByRole("alert").textContent).toBe("Error: requires --no-default-features"));
-	});
-
-	it("offers auto update per connection, off for a new machine", async () => {
-		const { getByLabelText, getByTitle, getByPlaceholderText, getByText } = render(() => <RemoteMachinesPanel />);
-		fireEvent.click(getByTitle("Add remote machine"));
-		const toggle = getByLabelText("Auto-update remote daemons") as HTMLInputElement;
-		expect(toggle.checked).toBe(false);
-		fireEvent.input(getByPlaceholderText("Name (e.g. dev-server, staging)"), { target: { value: "Builder" } });
-		fireEvent.input(getByPlaceholderText("Host (e.g. 192.168.1.100)"), { target: { value: "builder.local" } });
-		fireEvent.click(toggle);
-		fireEvent.click(getByText("Save"));
-		await waitFor(() =>
-			expect(actions.addConnection).toHaveBeenCalledWith(expect.objectContaining({ auto_update: true })),
-		);
-	});
-
-	it("persists deployment mode and survive minutes when saving an SSH machine", async () => {
-		const { getByTitle, getByPlaceholderText, getByText, container } = render(() => <RemoteMachinesPanel />);
-		fireEvent.click(getByTitle("Add remote machine"));
-
-		fireEvent.input(getByPlaceholderText("Name (e.g. dev-server, staging)"), {
-			target: { value: "Builder" },
-		});
-		fireEvent.input(getByPlaceholderText("Host (e.g. 192.168.1.100)"), {
-			target: { value: "builder.local" },
-		});
-		const deployment = Array.from(container.querySelectorAll("select")).find((select) =>
-			select.textContent?.includes("Deploy on connect"),
-		);
-		expect(deployment).toBeTruthy();
-		fireEvent.change(deployment!, { target: { value: "on_connect" } });
-		const survive = Array.from(container.querySelectorAll('input[type="number"]')).at(-1);
-		expect(survive).toBeTruthy();
-		fireEvent.input(survive!, { target: { value: "45" } });
-		fireEvent.click(getByText("Save"));
-
-		await waitFor(() => expect(actions.addConnection).toHaveBeenCalledTimes(1));
-		expect(actions.addConnection.mock.calls[0][0]).toMatchObject({
-			name: "Builder",
-			deploy: "on_connect",
-			survive_secs: 2700,
-		});
 	});
 
 	it("renders deployment progress from the backend status payload", () => {
@@ -341,42 +311,21 @@ describe("RemoteMachinesPanel", () => {
 			status: "deploying",
 			deployStep: "starting daemon",
 		};
-		const { getByText } = render(() => <RemoteMachinesPanel />);
+		const { getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect(getByText("Deploying: starting daemon")).toBeTruthy();
 	});
 
 	it("offers install and uninstall based on the persisted deploy mode", async () => {
 		connections["machine-1"] = sshConnection();
-		let view = render(() => <RemoteMachinesPanel />);
+		let view = render(() => <RemoteMachinesPanel {...handlers} />);
 		fireEvent.click(view.getByText("Install"));
 		await waitFor(() => expect(actions.install).toHaveBeenCalledWith("machine-1"));
 		view.unmount();
 
 		connections["machine-1"] = sshConnection("installed");
-		view = render(() => <RemoteMachinesPanel />);
+		view = render(() => <RemoteMachinesPanel {...handlers} />);
 		fireEvent.click(view.getByText("Uninstall"));
 		await waitFor(() => expect(actions.uninstall).toHaveBeenCalledWith("machine-1"));
-	});
-
-	it("lists probed host states while keeping the SSH host input free-form", async () => {
-		actions.probeSshHosts.mockResolvedValueOnce([
-			{ host: "shell-host", target: "shell-host", port: null, auth: "shell" },
-			{ host: "git-only", target: "git-only", port: null, auth: "no_shell" },
-		]);
-		const { getByTitle, getByText, getByPlaceholderText, container } = render(() => <RemoteMachinesPanel />);
-		fireEvent.click(getByTitle("Add remote machine"));
-		fireEvent.click(getByText("Probe SSH hosts"));
-
-		await waitFor(() => expect(container.querySelectorAll("datalist option")).toHaveLength(2));
-		const options = Array.from(container.querySelectorAll("datalist option"));
-		expect(options.map((option) => option.getAttribute("label"))).toEqual([
-			"shell-host — shell",
-			"git-only — no shell",
-		]);
-
-		const hostInput = getByPlaceholderText("Host (e.g. 192.168.1.100)") as HTMLInputElement;
-		fireEvent.input(hostInput, { target: { value: "other.example" } });
-		expect(hostInput.value).toBe("other.example");
 	});
 
 	it("lists discovered hosts without opening the Add form and probes nothing until asked", async () => {
@@ -387,7 +336,7 @@ describe("RemoteMachinesPanel", () => {
 			],
 			hashed_count: 7,
 		});
-		const { findByText, getByText } = render(() => <RemoteMachinesPanel />);
+		const { findByText, getByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect(await findByText("boss@vps")).toBeTruthy();
 		expect(getByText("10.0.0.5:2222")).toBeTruthy();
 		expect(getByText("7 known_hosts entries are hashed and cannot be listed.")).toBeTruthy();
@@ -409,7 +358,7 @@ describe("RemoteMachinesPanel", () => {
 			hashed_count: 0,
 		});
 		actions.probeSshHost.mockResolvedValueOnce({ host: "db", target: "db", port: null, auth: "auth_failed" });
-		const { findAllByText, getAllByText, queryAllByText } = render(() => <RemoteMachinesPanel />);
+		const { findAllByText, getAllByText, queryAllByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		await findAllByText("db");
 		// Second row is the known_hosts entry: its Probe button is the second one.
 		fireEvent.click(getAllByText("Probe")[1]);
@@ -423,22 +372,16 @@ describe("RemoteMachinesPanel", () => {
 		expect(getAllByText("ssh config")).toHaveLength(1);
 	});
 
-	it("prefills the Add form with host, user and port from a discovered host", async () => {
-		actions.discoverSshHosts.mockResolvedValueOnce({
-			hosts: [{ host: "vps", target: "vps", user: "boss", port: 2222, source: "config" }],
-			hashed_count: 0,
-		});
-		const { findByText, getByPlaceholderText, container } = render(() => <RemoteMachinesPanel />);
+	it("a discovered host opens the page's editor prefilled with it", async () => {
+		const host = { host: "vps", target: "vps", user: "boss", port: 2222, source: "config" as const };
+		actions.discoverSshHosts.mockResolvedValueOnce({ hosts: [host], hashed_count: 0 });
+		const { findByText } = render(() => <RemoteMachinesPanel {...handlers} />);
 		fireEvent.click(await findByText("boss@vps:2222"));
-		expect((getByPlaceholderText("Host (e.g. 192.168.1.100)") as HTMLInputElement).value).toBe("vps");
-		expect((getByPlaceholderText("SSH user") as HTMLInputElement).value).toBe("boss");
-		expect((getByPlaceholderText("Name (e.g. dev-server, staging)") as HTMLInputElement).value).toBe("vps");
-		expect((container.querySelector('input[type="number"]') as HTMLInputElement).value).toBe("2222");
+		expect(handlers.onAddFromHost).toHaveBeenCalledWith(host);
 	});
-
 	it("warns when the SSH agent holds no identities", async () => {
 		actions.sshAgentInfo.mockResolvedValueOnce({ keys: [], agent_type: "Not available" });
-		const { findByRole } = render(() => <RemoteMachinesPanel />);
+		const { findByRole } = render(() => <RemoteMachinesPanel {...handlers} />);
 		expect((await findByRole("alert")).textContent).toContain("No SSH agent identities loaded");
 	});
 });

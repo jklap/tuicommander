@@ -52,11 +52,12 @@ import { globalTabLabel } from "./settingsTabs";
  * in that Show's `fallback` carries `platform: "browser"`; search offers each
  * client only what it renders.
  *
- * ## Composed pages (mcp, remote-machines)
+ * ## Composed pages (mcp, remote-servers)
  *
  * A page rendered by several components is extracted from all of them, in
  * render order: `mcp` is `LocalMcpPanel` then `UpstreamMcpPanel`,
- * `remote-machines` is `RemoteMachinesTab` wrapping `RemoteMachinesPanel`. The
+ * `remote-servers` is `RemoteServersTab` with the merged connection editor, then
+ * `SshTunnelsSection`, then `RemoteMachinesTab` wrapping `RemoteMachinesPanel`. The
  * drift test holds the source list and checks it against what `SettingsPanel`
  * renders for each tab.
  */
@@ -1050,6 +1051,18 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 	{ tab: "remote-access", section: "Tailscale HTTPS", label: "Status", labelKey: "services.label.tailscaleStatus" },
 	{
 		tab: "remote-access",
+		section: "Self-Signed HTTPS",
+		label: "Status",
+		labelKey: "services.label.selfSignedStatus",
+	},
+	{
+		tab: "remote-access",
+		section: "Self-Signed HTTPS",
+		label: "Fingerprint",
+		labelKey: "services.label.selfSignedFingerprint",
+	},
+	{
+		tab: "remote-access",
 		section: "Cloud Relay",
 		label: "Enable cloud relay",
 		labelKey: "services.toggle.enableRelay",
@@ -1066,25 +1079,36 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		hintKey: "services.hint.relayToken",
 	},
 	{ tab: "remote-access", section: "Cloud Relay", label: "Session ID", labelKey: "services.label.relaySessionId" },
-	{ tab: "remote-machines", section: "Remote Machines", sectionKey: "settings.remoteMachines" },
-	{ tab: "remote-machines", section: "Connections and SSH discovery" },
-	{ tab: "remote-machines", section: "Name and transport" },
-	{ tab: "remote-machines", section: "Deployment and lifetime" },
-	{ tab: "remote-machines", section: "Your machines" },
-	{ tab: "remote-machines", section: "Name and transport", label: "Name" },
-	{ tab: "remote-machines", section: "Name and transport", label: "Transport" },
-	{ tab: "remote-machines", section: "Name and transport", label: "Host" },
-	{ tab: "remote-machines", section: "Name and transport", label: "Port" },
-	{ tab: "remote-machines", section: "Name and transport", label: "User" },
-	{ tab: "remote-machines", section: "Name and transport", label: "Identity file" },
-	{ tab: "remote-machines", section: "Name and transport", label: "Remote daemon port" },
-	{ tab: "remote-machines", section: "Name and transport", label: "URL" },
-	{ tab: "remote-machines", section: "Name and transport", label: "Pairing bundle" },
-	{ tab: "remote-machines", section: "Deployment and lifetime", label: "Deployment" },
-	{ tab: "remote-machines", section: "Deployment and lifetime", label: "Keep ephemeral daemon alive (minutes)" },
-	{ tab: "remote-machines", section: "Deployment and lifetime", label: "Auto-update remote daemons" },
-	{ tab: "remote-machines", section: "Deployment and lifetime", label: "Auth username" },
-	{ tab: "remote-machines", section: "Deployment and lifetime", label: "Auth password" },
+	// tabs/RemoteServersTab.tsx + the merged connection editor (RemoteConnectionEditor,
+	// SshConnectionFields, PortForwardsEditor) + SshTunnelsSection + RemoteMachinesTab/Panel
+	{ tab: "remote-servers", section: "Remote Servers", sectionKey: "remoteServers.heading" },
+	{ tab: "remote-servers", section: "SSH Port-Forwarding Tunnels", sectionKey: "remoteServers.sshTunnels" },
+	{ tab: "remote-servers", section: "Remote Machines", sectionKey: "settings.remoteMachines" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Auto-update remote daemons" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Auth username (optional)" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Auth password (optional)" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Name" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Kind" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Connect automatically on startup" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Remote daemon port" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Deployment" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Keep ephemeral daemon alive (minutes)" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Instance ID (optional)" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Offer to start the remote daemon if it is not running" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Leave it running on disconnect" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "URL" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Target" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Instance ID" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Port" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Host" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "User" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Identity / Authentication" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "ServerAliveInterval" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "ServerAliveCountMax" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "StrictHostKeyChecking" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Compress the channel (ssh -C)" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Port Forwards" },
+	{ tab: "remote-servers", section: "Remote Servers", label: "Pairing bundle" },
 	{ tab: "plugins", section: "Manage plugins" },
 	{ tab: "plugins", section: "Installed plugins" },
 	{ tab: "plugins", section: "Community registry" },
