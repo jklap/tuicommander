@@ -117,7 +117,7 @@ authors and communities behind each project.
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 |
 | url | 2.5.8 | MIT OR Apache-2.0 |
 | uuid | 1.27.0 | Apache-2.0 OR MIT |
-| web-push-native | 0.4.0 | MIT OR Apache-2.0 |
+| web-push-native | 0.5.0 | MIT OR Apache-2.0 |
 | webrtc-audio-processing | 2.1.0 | BSD-3-Clause |
 | whichlang | 0.1.1 | MIT |
 | whisper-rs | 0.16.0 | Unlicense |
