@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Launch the Design Mode browser without chromey's `--enable-automation` and `--disable-extensions`, so it shows no automation infobar and can load extensions (#1593-987f).
+
 - Keep sidebar wheel and clicks working while the status-bar ticker popover and info balloon, the GitHub panel and the Smart Prompts dropdown are open; their invisible full-window backdrops are replaced by one shared outside-press dismissal that does not consume the press (#1597-fab6).
 - Keep sidebar wheel scrolling available while the PR detail popover is open; outside presses dismiss the popover without blocking the underlying control (#1596-df57).
 - Remove terminal-grid prompt tint because recorded cursor rows can identify the composer or tool output; keep prompt colours in Chat (#1595-22b1).
