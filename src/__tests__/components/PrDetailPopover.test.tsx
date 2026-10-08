@@ -176,27 +176,45 @@ describe("PrDetailPopover", () => {
 		expect(onClose).toHaveBeenCalledOnce();
 	});
 
-	it("calls onClose on overlay click", () => {
-		mockGetBranchPrData.mockReturnValue({
-			branch: "feature/x",
-			number: 1,
-			title: "Test",
-			state: "OPEN",
-			url: "",
-			additions: 0,
-			deletions: 0,
-			author: "bob",
-			commits: 1,
-			checks: { passed: 0, failed: 0, pending: 0, total: 0 },
-			check_details: [],
-		});
+	// Catches: outside dismissal requires a full-window backdrop that intercepts sidebar wheel input.
+	it("dismisses on an outside pointer press without swallowing sidebar input", () => {
 		const onClose = vi.fn();
-		const { container } = render(() => <PrDetailPopover {...defaultProps} onClose={onClose} />);
-
-		const overlay = container.querySelector(".overlay");
-		expect(overlay).not.toBeNull();
-		fireEvent.click(overlay!);
+		const onSidebarPress = vi.fn();
+		const { getByRole } = render(() => (
+			<>
+				<input aria-label="Terminal input" />
+				<aside onPointerDown={onSidebarPress}>Repositories</aside>
+				<PrDetailPopover {...defaultProps} onClose={onClose} />
+			</>
+		));
+		const input = getByRole("textbox");
+		input.focus();
+		fireEvent.wheel(getByRole("complementary"), { deltaY: 120 });
+		expect(onClose).not.toHaveBeenCalled();
+		expect(document.activeElement).toBe(input);
+		const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
+		getByRole("complementary").dispatchEvent(event);
 		expect(onClose).toHaveBeenCalledOnce();
+		expect(onSidebarPress).toHaveBeenCalledOnce();
+		expect(event.defaultPrevented).toBe(false);
+		expect(document.activeElement).toBe(input);
+	});
+
+	// Catches: outside dismissal also closes the popover when a user presses one of its controls.
+	it("keeps the popover open for an inside pointer press", () => {
+		const onClose = vi.fn();
+		const { getByText } = render(() => <PrDetailPopover {...defaultProps} onClose={onClose} />);
+		fireEvent.pointerDown(getByText(/No PR data available/));
+		expect(onClose).not.toHaveBeenCalled();
+	});
+
+	// Catches: a removed popover retains an outside listener and closes newer UI on the next press.
+	it("removes outside dismissal when unmounted", () => {
+		const onClose = vi.fn();
+		const { unmount } = render(() => <PrDetailPopover {...defaultProps} onClose={onClose} />);
+		unmount();
+		fireEvent.pointerDown(document.body);
+		expect(onClose).not.toHaveBeenCalled();
 	});
 
 	it("handles no-data gracefully", () => {
@@ -962,7 +980,8 @@ describe("PrDetailPopover", () => {
 				.mockResolvedValueOnce("sha123") // merge_pr_via_github
 				.mockResolvedValueOnce({ stdout: "" }); // run_git_command (git status --porcelain)
 
-			const { container } = render(() => <PrDetailPopover {...defaultProps} />);
+			const onClose = vi.fn();
+			const { container, getByText } = render(() => <PrDetailPopover {...defaultProps} onClose={onClose} />);
 			const mergeBtn = container.querySelector(".mergeBtn") as HTMLButtonElement;
 			fireEvent.click(mergeBtn);
 
@@ -971,6 +990,9 @@ describe("PrDetailPopover", () => {
 				expect(container.textContent).toContain("feature/x");
 				expect(container.textContent).toContain("main");
 			});
+			// Catches: the popover's outside listener dismisses its replacement cleanup dialog.
+			fireEvent.pointerDown(getByText("Post-merge cleanup"));
+			expect(onClose).not.toHaveBeenCalled();
 		});
 
 		it("calls pollRepo AFTER setCleanupCtx (cleanup dialog is mounted first)", async () => {

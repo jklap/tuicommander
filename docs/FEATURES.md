@@ -1086,7 +1086,7 @@ re-derived later.
 - Merge state: Ready to merge, Checks failing, Has conflicts, Behind base, Blocked, Draft
 - Review state: Approved, Changes requested, Review required
 - PR lifecycle rules: CLOSED PRs hidden from sidebar and status bar; MERGED PRs shown for 5 minutes of accumulated user activity then hidden
-- Auto-show PR popover filters out CLOSED and MERGED PRs (configurable in Settings > Git & GitHub > Pull Requests)
+- Auto-show PR popover filters out CLOSED and MERGED PRs (configurable in Settings > Git & GitHub > Pull Requests). The popover is non-modal: wheel scrolling over the sidebar keeps terminal keyboard focus; an outside press dismisses it and reaches the underlying control.
 
 ### 8.2 CI Checks
 - Ring indicator with proportional segments
