@@ -408,6 +408,11 @@ function createTerminalsStore() {
 	const idleToBusyCallbacks: Array<(id: string) => void> = [];
 	const onRemoveCallbacks: Array<(id: string) => void> = [];
 	const shellExitCallbacks: Array<(id: string) => void> = [];
+	/** Terminals whose mounted `Terminal` component currently holds a PTY exit
+	 *  subscription — i.e. will run the local exit teardown itself. A tab that is
+	 *  not in here (never rendered, or unmounted) has nobody watching its exit,
+	 *  so `session-closed` must clean it up instead. Not reactive on purpose. */
+	const ptyExitWatched = new Set<string>();
 	// Tracks which terminals have completed their initial shell startup (reached idle at least once).
 	// Used to distinguish "busy from .zshrc startup" from "busy from a user-launched process".
 	const reachedIdleSet = new Set<string>();
@@ -704,6 +709,7 @@ function createTerminalsStore() {
 			tabOrderingStore.remove(id);
 			cleanupBusyState(id);
 			lastDataAtMap.delete(id);
+			ptyExitWatched.delete(id);
 			// Cancel any pending OSC 133 flush so its rAF callback can't fire after
 			// removal and resurrect a ghost terminal entry via setState("terminals", id, ...).
 			const osc133Raf = _osc133FlushTimers.get(id);
@@ -1342,6 +1348,18 @@ function createTerminalsStore() {
 				const idx = shellExitCallbacks.indexOf(callback);
 				if (idx >= 0) shellExitCallbacks.splice(idx, 1);
 			};
+		},
+
+		/** Record whether a mounted `Terminal` holds this tab's PTY exit
+		 *  subscription (see `ptyExitWatched`). */
+		setPtyExitWatched(id: string, watched: boolean): void {
+			if (watched) ptyExitWatched.add(id);
+			else ptyExitWatched.delete(id);
+		},
+
+		/** Whether a mounted `Terminal` will handle this tab's PTY exit itself. */
+		isPtyExitWatched(id: string): boolean {
+			return ptyExitWatched.has(id);
 		},
 
 		/** Fire the shell-exit callbacks for a terminal whose plain shell ended.

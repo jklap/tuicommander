@@ -2936,6 +2936,39 @@ describe("initApp", () => {
 			playCompletion.mockRestore();
 		});
 
+		// Batch 47 review: a human-created tab seen from another window/client is
+		// `isRemote: false`, and if it was never rendered there no Terminal
+		// component watches its exit — session-closed must clean it up.
+		it("cleans up a non-remote tab whose terminal never mounted, leaving a watched one to its Terminal", async () => {
+			const { getCallback } = captureSessionClosed();
+			await initApp(createMockDeps());
+			const shellExits: string[] = [];
+			const dispose = terminalsStore.onShellExit((id) => shellExits.push(id));
+
+			const unwatchedShell = terminalsStore.add({ ...makeTerminal({ sessionId: "shell-gone" }), isRemote: false });
+			const unwatchedAgent = terminalsStore.add({
+				...makeTerminal({ sessionId: "agent-gone" }),
+				isRemote: false,
+				agentType: "claude",
+			});
+			const watched = terminalsStore.add({ ...makeTerminal({ sessionId: "watched-gone" }), isRemote: false });
+			terminalsStore.setPtyExitWatched(watched, true);
+
+			getCallback()!({ payload: { session_id: "shell-gone", reason: "process_exit" } });
+			getCallback()!({ payload: { session_id: "agent-gone", reason: "process_exit", agent_type: "claude" } });
+			getCallback()!({ payload: { session_id: "watched-gone", reason: "process_exit" } });
+
+			// Plain shell: handed to the app's shell-exit close path.
+			expect(shellExits).toEqual([unwatchedShell]);
+			expect(terminalsStore.get(unwatchedShell)?.sessionId).toBeNull();
+			// Agent: kept with the grey exited dot, like a mounted tab.
+			expect(terminalsStore.get(unwatchedAgent)?.shellState).toBe("exited");
+			expect(terminalsStore.get(unwatchedAgent)?.agentType).toBeNull();
+			// Watched: its mounted Terminal owns the teardown — untouched here.
+			expect(terminalsStore.get(watched)?.sessionId).toBe("watched-gone");
+			dispose();
+		});
+
 		it("does not set shellState when session_id has no matching terminal", async () => {
 			const { getCallback } = captureSessionClosed();
 			const deps = createMockDeps();

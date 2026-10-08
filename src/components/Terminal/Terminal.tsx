@@ -200,6 +200,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const detachSessionListeners = () => {
 		safeUnlisten(unsubscribePty);
 		unsubscribePty = undefined;
+		terminalsStore.setPtyExitWatched(props.id, false);
 		safeUnlisten(unlistenParsed);
 		unlistenParsed = undefined;
 		safeUnlisten(unlistenClipboardStore);
@@ -738,6 +739,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				},
 			},
 		);
+		// This mounted component now owns the local exit teardown above; a tab
+		// with no such owner is cleaned up by useAppInit's session-closed listener.
+		if (!disposed) terminalsStore.setPtyExitWatched(props.id, true);
 
 		// Listen for OSC 52 clipboard store from the backend. Was a desktop-only,
 		// per-session-suffixed Tauri event (D.7) — converted to the unsuffixed

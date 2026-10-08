@@ -332,6 +332,35 @@ function windowIsSeen(): boolean {
 	return !document.hidden && document.hasFocus();
 }
 
+/** The local (non-remote) PTY-exit teardown `Terminal.tsx` runs for a mounted
+ *  tab, for a tab with no mounted Terminal watching its exit: an agent tab stays
+ *  with a grey "exited" dot, a plain shell's tab closes. */
+function closeUnwatchedLocalTab(termId: string, sessionId: string): void {
+	const t = terminalsStore.get(termId);
+	if (!t) return;
+	if (t.agentType != null) {
+		const notified = handleAgentExitCompletion(termId);
+		terminalsStore.update(termId, {
+			shellState: "exited",
+			sessionId: null,
+			...(notified ? { completionNotified: true } : {}),
+			currentTask: null,
+			agentType: null,
+			agentSessionId: null,
+			agentSessionIdIsAuthoritative: false,
+			pendingResumeCommand: null,
+			pendingResumeTitle: null,
+			pendingResumeSource: null,
+		});
+		terminalsStore.clearAwaitingInput(termId);
+		pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId, terminalId: termId });
+		return;
+	}
+	terminalsStore.update(termId, { sessionId: null });
+	terminalsStore.clearAwaitingInput(termId);
+	terminalsStore.notifyShellExit(termId);
+}
+
 /** Re-assert that this client still shows its active terminal's session.
  *  Visibility is per viewer and an assertion expires after
  *  `SESSION_VISIBILITY_TTL_MS` (90 s, `state.rs`), while `terminalsStore.setActive`
@@ -1228,9 +1257,17 @@ export async function initApp(deps: AppInitDeps) {
 		// would leave the name stuck forever because the ticker's isRemote guard
 		// aborts on the first tick and the setTimeout's isRemote guard skips removal.
 		const t0 = terminalsStore.get(termId);
-		if (!t0?.isRemote) return;
+		if (!t0) return;
 		// A suspended tab ended its PTY on purpose and must stay, restorable.
 		if (isSuspendingOrSuspended(termId)) return;
+		if (!t0.isRemote) {
+			// Owned by its mounted Terminal component — unless none is mounted. A
+			// human-created tab seen from ANOTHER window/client is `isRemote: false`
+			// too, and if it was never rendered there nobody would ever run its exit
+			// teardown, leaving a dead tab open (Batch 47 review).
+			if (!terminalsStore.isPtyExitWatched(termId)) closeUnwatchedLocalTab(termId, session_id);
+			return;
+		}
 
 		const parsedAgentType = parseAgentType(agent_type);
 		// Deliberately a different signal from `hadAgent` below: this one reads
