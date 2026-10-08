@@ -1225,6 +1225,29 @@ describe("transport", () => {
 			expect(result.body).toEqual({ enabled: true });
 		});
 
+		it("maps agent_wrap_prompt_response to POST /agent-wrap-prompt/response with snake_case body", () => {
+			const result = mapCommandToHttp("agent_wrap_prompt_response", {
+				requestId: "r-1",
+				agentType: "claude",
+				decision: null,
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/agent-wrap-prompt/response");
+			expect(result.body).toEqual({ request_id: "r-1", agent_type: "claude", decision: null });
+		});
+
+		it("maps the wrap-user-function setting with exact GET/PUT parity", () => {
+			const get = mapCommandToHttp("get_agent_wrap_user_function", { agentType: "codex" });
+			expect(get.method).toBe("GET");
+			expect(get.path).toBe("/config/agents/codex/wrap-user-function");
+			expect(get.transform?.({ value: false })).toBe(false);
+			expect(get.transform?.({ value: null })).toBeNull();
+			const set = mapCommandToHttp("set_agent_wrap_user_function", { agentType: "codex", value: true });
+			expect(set.method).toBe("PUT");
+			expect(set.path).toBe("/config/agents/codex/wrap-user-function");
+			expect(set.body).toEqual({ value: true });
+		});
+
 		it("maps native status signal commands with exact GET/PUT parity", () => {
 			const get = mapCommandToHttp("get_agent_native_status_signals", { agentType: "claude" });
 			expect(get.method).toBe("GET");

@@ -26209,6 +26209,33 @@ fn tuic_osc_userwrap_recognized_agent_opens_a_pending_prompt() {
     );
 }
 
+/// Batch 36 review: any program's output (`cat` of a file, remote SSH
+/// output) could forge the verb. The shell sends it only from precmd, so it
+/// is dropped while OSC 133 says a foreground command is running.
+#[test]
+#[serial_test::serial]
+fn tuic_osc_userwrap_is_ignored_while_a_foreground_command_runs() {
+    assert!(
+        userwrap_pending_after(
+            "\x1b]133;A\x07\x1b]133;B\x07\x1b]133;C\x07forged:\x1b]7770;userwrap=claude:1234567-89\x07"
+        )
+        .is_empty(),
+        "a userwrap printed by a running command must not open a prompt"
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn tuic_osc_userwrap_is_honoured_again_once_the_command_finished() {
+    assert_eq!(
+        userwrap_pending_after(
+            "\x1b]133;C\x07\x1b]133;D;0\x07\x1b]7770;userwrap=claude:1234567-89\x07\x1b]133;A\x07"
+        ),
+        vec!["claude".to_string()],
+        "precmd's userwrap (after D, before A) is the genuine one"
+    );
+}
+
 #[test]
 #[serial_test::serial]
 fn tuic_osc_userwrap_unrecognized_payload_is_ignored() {
