@@ -306,23 +306,45 @@
   white-space: normal;
 }
 
-/* Same answer tint and left rule as Terminal/suggestOverlay and AnswersPanel. The blocks of one
-   answer touch: a transparent border carries the tint (and the rule) across the paragraph gap. */
+/* Same answer tint and left rule as Terminal/suggestOverlay and AnswersPanel. The tint is a layer
+   under each block's own content, so a code block, table or quote keeps its own look. The blocks of
+   one answer sit 8px apart, like paragraphs in the chat, and a block after the first reaches that far up, so the gap is tinted. */
 .assistantMsg :global(#markdown-content [data-tuic-answer]) {
+  position: relative;
+  isolation: isolate;
+}
+
+.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer="end"])) {
   margin-bottom: 0;
-  border-bottom: 16px solid transparent;
+}
+
+.assistantMsg :global(#markdown-content [data-tuic-answer]::before) {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
   background:
-    linear-gradient(rgba(94,190,140,0.9), rgba(94,190,140,0.9)) left top / 3px 100% no-repeat border-box,
+    linear-gradient(rgba(94,190,140,0.9), rgba(94,190,140,0.9)) left top / 3px 100% no-repeat,
     rgba(94,190,140,0.14);
 }
 
-.assistantMsg :global(#markdown-content [data-tuic-answer="end"]) {
-  margin-bottom: 16px;
-  border-bottom: 0;
+.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-start])) {
+  margin-top: 8px;
+}
+
+.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-start])::before) {
+  top: -8px;
 }
 
 .assistantMsg :global(#markdown-content p[data-tuic-answer]) {
   padding: 2px 0 2px 8px;
+}
+
+/* A clipped block would cut off the tint of the gap above it. */
+.assistantMsg :global(#markdown-content pre[data-tuic-answer]),
+.assistantMsg :global(#markdown-content hr[data-tuic-answer]) {
+  overflow: visible;
 }
 
 .agentIntent {
