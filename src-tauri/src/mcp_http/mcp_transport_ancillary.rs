@@ -420,6 +420,7 @@ async fn handle_worktree_with_caller(
             let force = args["force"].as_bool().unwrap_or(false);
             let delete_branch = args["delete_branch"].as_bool().unwrap_or(!force);
             let override_lock = args["override_lock"].as_bool().unwrap_or(false);
+            let override_busy = args["override_busy"].as_bool().unwrap_or(false);
             let expected_fingerprint = args["expected_fingerprint"].as_str().map(str::to_owned);
             if force && expected_fingerprint.is_none() {
                 return serde_json::json!({"error": "force requires expected_fingerprint from worktree_lifecycle after user confirmation"});
@@ -428,6 +429,14 @@ async fn handle_worktree_with_caller(
             let workspace_id_for_remove = workspace_id.clone();
             let preview_state = Arc::clone(state);
             let result = tokio::task::spawn_blocking(move || {
+                if let Err(busy) = crate::worktree::workspace_removal_guard(
+                    &preview_state,
+                    &path_for_remove,
+                    &workspace_id_for_remove,
+                    override_busy,
+                ) {
+                    return Err(busy.to_json());
+                }
                 let warnings = crate::worktree::inspect_worktree_removal(
                     &preview_state,
                     std::path::Path::new(&path_for_remove),
@@ -444,8 +453,9 @@ async fn handle_worktree_with_caller(
                     force,
                     override_lock,
                     expected_fingerprint.as_deref(),
-                )?;
-                Ok::<_, String>((outcome, warnings))
+                )
+                .map_err(|e| serde_json::json!({"error": e}))?;
+                Ok::<_, serde_json::Value>((outcome, warnings))
             })
             .await;
             match result {
@@ -462,7 +472,7 @@ async fn handle_worktree_with_caller(
                     response["warnings"] = serde_json::json!(warnings);
                     response
                 }
-                Ok(Err(e)) => serde_json::json!({"error": e}),
+                Ok(Err(error_body)) => error_body,
                 Err(e) => serde_json::json!({
                     "error": format!("worktree removal task failed to complete: {e}")
                 }),
