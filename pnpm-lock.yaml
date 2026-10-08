@@ -7,6 +7,8 @@ settings:
 overrides:
   dompurify: 3.4.16
   qs: 6.16.0
+  seroval: ^1.6.3
+  source-map-js: ^1.2.2
   vite-plugin-purgecss>purgecss: ^8.0.0
   minimatch: '>=3.1.4'
   brace-expansion: '>=1.1.13'
@@ -51,7 +53,7 @@ importers:
         version: 0.1.7
       '@git-diff-view/solid':
         specifier: ^0.1.7
-        version: 0.1.7(react@19.3.0)(solid-js@1.9.15)
+        version: 0.1.7(react@19.3.0)(solid-js@1.9.17)
       '@lezer/common':
         specifier: ^1.5.2
         version: 1.5.2
@@ -63,7 +65,7 @@ importers:
         version: 6.3.0(@codemirror/language@6.12.4)(@codemirror/state@6.7.4)(@codemirror/view@6.43.11)
       '@tanstack/solid-virtual':
         specifier: ^3.13.38
-        version: 3.13.38(solid-js@1.9.15)
+        version: 3.13.38(solid-js@1.9.17)
       '@tauri-apps/api':
         specifier: ^2.11.1
         version: 2.11.1
@@ -102,17 +104,17 @@ importers:
         version: 1.5.4
       solid-codemirror:
         specifier: ^2.3.3
-        version: 2.3.3(@codemirror/state@6.7.4)(@codemirror/view@6.43.11)(solid-js@1.9.15)
+        version: 2.3.3(@codemirror/state@6.7.4)(@codemirror/view@6.43.11)(solid-js@1.9.17)
       solid-js:
-        specifier: ^1.9.15
-        version: 1.9.15
+        specifier: ^1.9.17
+        version: 1.9.17
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.5.13
         version: 2.5.13
       '@solidjs/testing-library':
         specifier: ^0.8.10
-        version: 0.8.10(solid-js@1.9.15)
+        version: 0.8.10(solid-js@1.9.17)
       '@stryker-mutator/core':
         specifier: 10.0.0
         version: 10.0.0(@types/node@22.20.2)
@@ -163,7 +165,7 @@ importers:
         version: 0.2.13(@types/node@22.20.2)(esbuild@0.28.2)(postcss@8.5.28)(typescript@7.0.2)
       vite-plugin-solid:
         specifier: ^2.11.14
-        version: 2.11.14(@testing-library/jest-dom@6.10.0(@testing-library/dom@10.4.1))(solid-js@1.9.15)(vite@8.3.0(@types/node@22.20.2)(esbuild@0.28.2))
+        version: 2.11.14(@testing-library/jest-dom@6.10.0(@testing-library/dom@10.4.1))(solid-js@1.9.17)(vite@8.3.0(@types/node@22.20.2)(esbuild@0.28.2))
       vitest:
         specifier: ^5.0.0
         version: 5.0.0(@types/node@22.20.2)(@vitest/coverage-v8@5.0.0)(happy-dom@20.11.0)(jsdom@30.0.1)(vite@8.3.0(@types/node@22.20.2)(esbuild@0.28.2))
@@ -3007,14 +3009,14 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  seroval-plugins@1.5.6:
-    resolution: {integrity: sha512-HXuLAX2pu/UByPpaeo/TaMfvMIi+1QqIoPJYCcAtU8QkVNwgR6MPlGuCQTErV1JwraaMbYaWVIBX7mppzGLATQ==}
+  seroval-plugins@1.6.8:
+    resolution: {integrity: sha512-N7mWAMydj89EnYTHtRpS3LBrAz3J9O6oVrqpuXuvlAHfAUG8WEKqtbAd7SBiJNY5NfCAFhSdyAh7wI4Shjqy4g==}
     engines: {node: '>=10'}
     peerDependencies:
-      seroval: ^1.0
+      seroval: ^1.6.3
 
-  seroval@1.5.6:
-    resolution: {integrity: sha512-rVQVWjjSvlINzaQPZH5JFqsqEsIWdTxY3iJZCnTL/5gQbXIRooVZKI60tVCkOVfzcRPejboxO2t0P89dg5mQaA==}
+  seroval@1.6.8:
+    resolution: {integrity: sha512-HlSgSAkTk4EqHcje1ptJjfZi1YDv5KbhVJ/d3P7T/nAXua2VmDu+AKDX5VTdFfZf48nDkWB2TKYt0DrCSa+3wg==}
     engines: {node: '>=10'}
 
   set-blocking@2.0.0:
@@ -3062,16 +3064,16 @@ packages:
       '@codemirror/view': ^6.40.0
       solid-js: ^1.7.0
 
-  solid-js@1.9.15:
-    resolution: {integrity: sha512-EeiY2xfpZJqPLjXspVEKjAII4yv8NyG//NxZ3IpOFHdUNnnTyL0uJOeS9LWGvA7cFCz5y94cjFwYlmw5Luncsg==}
+  solid-js@1.9.17:
+    resolution: {integrity: sha512-4GAmLOWPfNV8H9Jfn2LSFTpNEG6jiOKPiwd5lnLGQtehHaX6l3TOLzJqQ7mqwB/3k1Yy3zyumFVopmc/tm34ow==}
 
   solid-refresh@0.6.3:
     resolution: {integrity: sha512-F3aPsX6hVw9ttm5LYlth8Q15x6MlI/J3Dn+o3EQyRTtTxidepSTwAYdozt01/YA+7ObcciagGEyXIopGZzQtbA==}
     peerDependencies:
       solid-js: ^1.3
 
-  source-map-js@1.2.1:
-    resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
+  source-map-js@1.2.2:
+    resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
 
   source-map@0.7.6:
@@ -4299,7 +4301,7 @@ snapshots:
       highlight.js: 11.12.0
       lowlight: 3.3.0
 
-  '@git-diff-view/solid@0.1.7(react@19.3.0)(solid-js@1.9.15)':
+  '@git-diff-view/solid@0.1.7(react@19.3.0)(solid-js@1.9.17)':
     dependencies:
       '@git-diff-view/core': 0.1.7
       '@types/hast': 3.0.5
@@ -4307,7 +4309,7 @@ snapshots:
       highlight.js: 11.12.0
       lowlight: 3.3.0
       reactivity-store: 0.4.0(react@19.3.0)
-      solid-js: 1.9.15
+      solid-js: 1.9.17
     transitivePeerDependencies:
       - react
 
@@ -4707,10 +4709,10 @@ snapshots:
 
   '@sindresorhus/merge-streams@4.0.0': {}
 
-  '@solidjs/testing-library@0.8.10(solid-js@1.9.15)':
+  '@solidjs/testing-library@0.8.10(solid-js@1.9.17)':
     dependencies:
       '@testing-library/dom': 10.4.1
-      solid-js: 1.9.15
+      solid-js: 1.9.17
 
   '@stryker-mutator/api@10.0.0':
     dependencies:
@@ -4769,10 +4771,10 @@ snapshots:
 
   '@stryker-mutator/util@10.0.0': {}
 
-  '@tanstack/solid-virtual@3.13.38(solid-js@1.9.15)':
+  '@tanstack/solid-virtual@3.13.38(solid-js@1.9.17)':
     dependencies:
       '@tanstack/virtual-core': 3.17.9
-      solid-js: 1.9.15
+      solid-js: 1.9.17
 
   '@tanstack/virtual-core@3.17.9': {}
 
@@ -5215,12 +5217,12 @@ snapshots:
       html-entities: 2.3.3
       parse5: 7.3.0
 
-  babel-preset-solid@1.9.15(@babel/core@7.29.7)(solid-js@1.9.15):
+  babel-preset-solid@1.9.15(@babel/core@7.29.7)(solid-js@1.9.17):
     dependencies:
       '@babel/core': 7.29.7
       babel-plugin-jsx-dom-expressions: 0.40.10(@babel/core@7.29.7)
     optionalDependencies:
-      solid-js: 1.9.15
+      solid-js: 1.9.17
 
   balanced-match@4.0.4: {}
 
@@ -5344,7 +5346,7 @@ snapshots:
   css-tree@3.2.1:
     dependencies:
       mdn-data: 2.27.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   css.escape@1.5.1: {}
 
@@ -6004,7 +6006,7 @@ snapshots:
     dependencies:
       '@babel/parser': 7.29.8
       '@babel/types': 7.29.8
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   marked@16.4.2: {}
 
@@ -6179,7 +6181,7 @@ snapshots:
     dependencies:
       nanoid: 3.3.19
       picocolors: 1.1.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   powershell-utils@0.1.0: {}
 
@@ -6350,11 +6352,11 @@ snapshots:
 
   semver@7.8.5: {}
 
-  seroval-plugins@1.5.6(seroval@1.5.6):
+  seroval-plugins@1.6.8(seroval@1.6.8):
     dependencies:
-      seroval: 1.5.6
+      seroval: 1.6.8
 
-  seroval@1.5.6: {}
+  seroval@1.6.8: {}
 
   set-blocking@2.0.0: {}
 
@@ -6398,28 +6400,28 @@ snapshots:
 
   signal-exit@4.1.0: {}
 
-  solid-codemirror@2.3.3(@codemirror/state@6.7.4)(@codemirror/view@6.43.11)(solid-js@1.9.15):
+  solid-codemirror@2.3.3(@codemirror/state@6.7.4)(@codemirror/view@6.43.11)(solid-js@1.9.17):
     dependencies:
       '@codemirror/state': 6.7.4
       '@codemirror/view': 6.43.11
-      solid-js: 1.9.15
+      solid-js: 1.9.17
 
-  solid-js@1.9.15:
+  solid-js@1.9.17:
     dependencies:
       csstype: 3.2.3
-      seroval: 1.5.6
-      seroval-plugins: 1.5.6(seroval@1.5.6)
+      seroval: 1.6.8
+      seroval-plugins: 1.6.8(seroval@1.6.8)
 
-  solid-refresh@0.6.3(solid-js@1.9.15):
+  solid-refresh@0.6.3(solid-js@1.9.17):
     dependencies:
       '@babel/generator': 7.29.8
       '@babel/helper-module-imports': 7.29.7
       '@babel/types': 7.29.8
-      solid-js: 1.9.15
+      solid-js: 1.9.17
     transitivePeerDependencies:
       - supports-color
 
-  source-map-js@1.2.1: {}
+  source-map-js@1.2.2: {}
 
   source-map@0.7.6: {}
 
@@ -6660,14 +6662,14 @@ snapshots:
       - typescript
       - yaml
 
-  vite-plugin-solid@2.11.14(@testing-library/jest-dom@6.10.0(@testing-library/dom@10.4.1))(solid-js@1.9.15)(vite@8.3.0(@types/node@22.20.2)(esbuild@0.28.2)):
+  vite-plugin-solid@2.11.14(@testing-library/jest-dom@6.10.0(@testing-library/dom@10.4.1))(solid-js@1.9.17)(vite@8.3.0(@types/node@22.20.2)(esbuild@0.28.2)):
     dependencies:
       '@babel/core': 7.29.7
       '@types/babel__core': 7.20.5
-      babel-preset-solid: 1.9.15(@babel/core@7.29.7)(solid-js@1.9.15)
+      babel-preset-solid: 1.9.15(@babel/core@7.29.7)(solid-js@1.9.17)
       merge-anything: 5.1.7
-      solid-js: 1.9.15
-      solid-refresh: 0.6.3(solid-js@1.9.15)
+      solid-js: 1.9.17
+      solid-refresh: 0.6.3(solid-js@1.9.17)
       vite: 8.3.0(@types/node@22.20.2)(esbuild@0.28.2)
       vitefu: 1.1.3(vite@8.3.0(@types/node@22.20.2)(esbuild@0.28.2))
     optionalDependencies:
