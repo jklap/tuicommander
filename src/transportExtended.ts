@@ -331,6 +331,7 @@ const EXTENDED_COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				branchName: args.branchName,
 				workspaceId: args.workspaceId,
 				keepWorktree: args.keepWorktree,
+				overrideBusy: args.overrideBusy,
 			},
 		}),
 	},
