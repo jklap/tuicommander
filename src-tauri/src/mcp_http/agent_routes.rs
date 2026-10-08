@@ -485,6 +485,18 @@ pub(super) async fn spawn_agent_session(
     // bus half had it.
     spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
+    // A peer at once, like an MCP-spawned child — and the row the deferred prompt
+    // below files under (without it a child whose MCP bind outlived the bound
+    // lost its prompt).
+    crate::mcp_http::mcp_transport::register_spawned_peer(
+        &state,
+        &session_id,
+        effective_agent_type
+            .clone()
+            .unwrap_or_else(|| "agent".to_string()),
+        body.cwd.clone(),
+    );
+
     // Withheld from argv above by `defer_prompt_for_mcp_bind` — deliver it once this
     // session's own MCP identity binds (bounded, fail-open). See
     // `spawn_deferred_prompt_delivery`'s doc comment. `from_tuic_session: None` — this is
@@ -492,6 +504,7 @@ pub(super) async fn spawn_agent_session(
     if defer_prompt_for_mcp_bind {
         crate::mcp_http::mcp_transport::spawn_deferred_prompt_delivery(
             state,
+            session_id.clone(),
             session_id.clone(),
             None,
             body.prompt.clone(),
@@ -740,6 +753,207 @@ mod tests {
             output.contains(&format!("TUIC_SESSION={session_id}")),
             "{output}"
         );
+        super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    // ── B2.2: deferred initial prompt — peer row at spawn + watchdog ─────────
+
+    /// Spawn a stand-in "claude" over `POST /sessions/agent` that echoes every
+    /// line it reads as `GOT:<line>`. Explicit `args` keep the route itself from
+    /// deferring anything, so a test drives `spawn_deferred_prompt_delivery_with`
+    /// directly with short bounds.
+    #[cfg(unix)]
+    async fn spawn_echo_agent(state: &Arc<AppState>, name: &str) -> String {
+        let script = crate::test_support::fake_ssh_script(
+            name,
+            "while IFS= read -r line; do printf 'GOT:%s\\n' \"$line\"; done",
+            "set /p HOLD=",
+        );
+        let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
+            "prompt": "unused",
+            "agent_type": "claude",
+            "binary_path": script.to_string_lossy(),
+            "args": [],
+        }))
+        .unwrap();
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(body),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        response_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[cfg(unix)]
+    fn screen_text(state: &AppState, session_id: &str) -> String {
+        state
+            .grid
+            .vt_log_buffers
+            .get(session_id)
+            .map(|buffer| buffer.lock().screen_rows().join("\n"))
+            .unwrap_or_default()
+    }
+
+    #[cfg(unix)]
+    fn fast_timings() -> crate::mcp_http::mcp_transport::DeferredPromptTimings {
+        crate::mcp_http::mcp_transport::DeferredPromptTimings {
+            bind_timeout_ms: 50,
+            quiet_ms: 50,
+            quiet_max_ms: 1_000,
+            watchdog_ms: 400,
+        }
+    }
+
+    /// (a) `POST /sessions/agent` registers the child as a peer at spawn, so a
+    /// deferred prompt whose MCP bind outlives the bound still has a row to be
+    /// filed under. Before, only the MCP spawn path had one and this route's
+    /// prompt was silently LOST after the 5 s bind timeout.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_agent_spawn_registers_a_peer_row_at_spawn() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let session_id = spawn_echo_agent(&state, "http-agent-peer-row").await;
+        let peer = state
+            .peer_agents
+            .get(&session_id)
+            .map(|peer| (peer.mcp_session_id.clone(), peer.name.clone()));
+        assert_eq!(
+            peer,
+            Some((String::new(), "claude".to_string())),
+            "the spawn must pre-register an unbound peer row"
+        );
+        assert!(state.agent_inbox.contains_key(&session_id));
+        super::super::session::close_session(
+            State(state.clone()),
+            axum::extract::Path(session_id.clone()),
+        )
+        .await;
+        assert!(
+            !state.peer_agents.contains_key(&session_id),
+            "the pre-registered row must not outlive the PTY"
+        );
+    }
+
+    /// (a)+(c) end to end: the bind never happens, the wake notice cannot be
+    /// typed (the stand-in never reaches a ready composer), so the watchdog types
+    /// the prompt itself and claims it out of the inbox (no second delivery).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn deferred_prompt_watchdog_types_an_unread_prompt_directly() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let session_id = spawn_echo_agent(&state, "deferred-watchdog-types").await;
+        crate::mcp_http::mcp_transport::spawn_deferred_prompt_delivery_with(
+            state.clone(),
+            session_id.clone(),
+            session_id.clone(),
+            None,
+            "the deferred task".to_string(),
+            fast_timings(),
+        )
+        .await
+        .unwrap();
+        let typed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if screen_text(&state, &session_id).contains("GOT:the deferred task") {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(
+            typed.is_ok(),
+            "watchdog never typed the prompt: {}",
+            screen_text(&state, &session_id)
+        );
+        assert!(
+            state
+                .agent_inbox
+                .get(&session_id)
+                .is_none_or(|inbox| inbox.iter().all(|m| m.content != "the deferred task")),
+            "a prompt the watchdog typed must leave the inbox"
+        );
+        super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// (c) the watchdog stands down when the agent read its inbox (the normal
+    /// path worked) — nothing is typed and the message is left alone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn deferred_prompt_watchdog_stands_down_once_the_inbox_was_read() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let session_id = spawn_echo_agent(&state, "deferred-watchdog-read").await;
+        let mut timings = fast_timings();
+        timings.watchdog_ms = 1_000;
+        let task = crate::mcp_http::mcp_transport::spawn_deferred_prompt_delivery_with(
+            state.clone(),
+            session_id.clone(),
+            session_id.clone(),
+            None,
+            "already read task".to_string(),
+            timings,
+        );
+        // Wait for the prompt to be filed, then "read" it (cursor past it).
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while state
+                .agent_inbox
+                .get(&session_id)
+                .is_none_or(|inbox| inbox.is_empty())
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("prompt filed");
+        state.agent_read_cursor.insert(session_id.clone(), u64::MAX);
+        task.await.unwrap();
+        assert!(!screen_text(&state, &session_id).contains("GOT:already read task"));
+        assert_eq!(
+            state.agent_inbox.get(&session_id).map(|inbox| inbox.len()),
+            Some(1)
+        );
+        super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// (c) a new submitted turn during the watchdog window means someone is
+    /// driving the session — the watchdog must not type over it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn deferred_prompt_watchdog_stands_down_after_a_new_turn() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let session_id = spawn_echo_agent(&state, "deferred-watchdog-turn").await;
+        let mut timings = fast_timings();
+        timings.watchdog_ms = 1_000;
+        let task = crate::mcp_http::mcp_transport::spawn_deferred_prompt_delivery_with(
+            state.clone(),
+            session_id.clone(),
+            session_id.clone(),
+            None,
+            "superseded task".to_string(),
+            timings,
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while state
+                .agent_inbox
+                .get(&session_id)
+                .is_none_or(|inbox| inbox.is_empty())
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("prompt filed");
+        // Past the quiet wait + notice; then a user turn starts.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        crate::pty::note_submitted_input(&state, &session_id);
+        task.await.unwrap();
+        assert!(!screen_text(&state, &session_id).contains("GOT:superseded task"));
         super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
     }
 

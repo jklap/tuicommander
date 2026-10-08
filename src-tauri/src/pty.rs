@@ -12177,6 +12177,57 @@ pub(crate) fn deliver_notice_to_managed_pty(
     }
 }
 
+/// What [`force_type_deferred_prompt`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ForcedPromptOutcome {
+    /// The prompt (and Enter) went to the composer — or the write was ambiguous,
+    /// which must not be retried either. Counted as a submitted line.
+    Typed,
+    /// Not typed on purpose: not an agent, the user has a half-typed line, or a
+    /// confident question/dialog is open (Enter would answer it).
+    Refused(&'static str),
+    /// The write failed before a text byte reached the PTY.
+    NotStarted(String),
+}
+
+/// Watchdog fallback for a deferred initial prompt (`spawn_deferred_prompt_delivery`):
+/// type the prompt ITSELF into the agent's composer, whatever the shell state.
+///
+/// The ordinary wake path types only `PEER_MAIL_WAKE` and relies on the agent
+/// reading its inbox. When that forced first write landed before the TUI was ready
+/// (or was swallowed), `note_submitted_input` still recorded a submitted turn, so
+/// the session sits on that Protocol-rank busy latch until `PROTOCOL_STALE_TIMEOUT`
+/// and nothing retries — the documented 500+ s hang. This is the retry: one direct
+/// write, under the same writer lock and Ctrl-U boundary every forced write uses,
+/// refused when typing could clobber the user's draft or answer an open dialog.
+pub(crate) fn force_type_deferred_prompt(
+    state: &AppState,
+    session_id: &str,
+    prompt: &str,
+) -> ForcedPromptOutcome {
+    if !session_is_agent(state, session_id) {
+        return ForcedPromptOutcome::Refused("not an agent session");
+    }
+    if has_partial_user_input(state, session_id) {
+        return ForcedPromptOutcome::Refused("the composer holds a half-typed line");
+    }
+    if blocked_on_confident_question(state, session_id) {
+        return ForcedPromptOutcome::Refused("a confident question or dialog is open");
+    }
+    match write_agent_command_with_boundary(state, session_id, prompt).0 {
+        InjectionOutcome::Submitted => {
+            note_submitted_input(state, session_id);
+            ForcedPromptOutcome::Typed
+        }
+        InjectionOutcome::Uncertain(error) => {
+            tracing::warn!(session = %session_id, error, "deferred-prompt watchdog write outcome uncertain; treating as delivered");
+            note_submitted_input(state, session_id);
+            ForcedPromptOutcome::Typed
+        }
+        InjectionOutcome::NotStarted(error) => ForcedPromptOutcome::NotStarted(error),
+    }
+}
+
 /// `flush_pending_injections_blocking` off the calling thread.
 ///
 /// This is the entry point for every caller that runs on a tokio worker — the

@@ -1619,10 +1619,26 @@ pub(crate) async fn spawn_agent(
     // desktop command has no separate caller-agent identity to attribute the message to;
     // `pty_config.tuic_session` is this NEW session's own persisted identity (for
     // resume-after-restart), not a caller's.
+    //
+    // The child's `$TUIC_SESSION` is the persisted `pty_config.tuic_session` when the
+    // caller supplied one (resume-after-restart), else the PTY key — the same
+    // `bind_pty_identity` rule. Its MCP identity binds under THAT id, so the peer row,
+    // the bind wait and the inbox use it, while the wake/watchdog writes go to the PTY.
+    let peer_identity = pty_config
+        .tuic_session
+        .clone()
+        .unwrap_or_else(|| session_id.clone());
+    crate::mcp_http::mcp_transport::register_spawned_peer(
+        &state,
+        &peer_identity,
+        effective_agent_type.clone(),
+        agent_config.cwd.clone().or_else(|| pty_config.cwd.clone()),
+    );
     if defer_prompt_for_mcp_bind {
         crate::mcp_http::mcp_transport::spawn_deferred_prompt_delivery(
             state.inner().clone(),
             session_id.clone(),
+            peer_identity,
             None,
             agent_config.prompt.clone(),
         );

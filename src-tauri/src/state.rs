@@ -4123,6 +4123,39 @@ impl AppState {
             .count()
     }
 
+    /// Atomically claim a still-UNREAD inbox message so the caller can deliver it
+    /// another way (the deferred-prompt watchdog types it into the terminal). Under
+    /// the delivery gate: `None` when the message is gone, already returned to a
+    /// waiter, or covered by the read cursor (a plain `inbox` read); otherwise the
+    /// message is removed from the inbox — so a later `inbox` read cannot hand the
+    /// agent the same prompt a second time — and its owner entry is dropped.
+    pub(crate) fn take_unread_agent_message(
+        &self,
+        recipient: &str,
+        message_id: &str,
+    ) -> Option<AgentMessage> {
+        let gate_entry = self
+            .active_agent_waiters
+            .entry(recipient.to_string())
+            .or_default();
+        let mut gate = gate_entry.lock();
+        if gate.owners.get(message_id) == Some(&AgentDeliveryOwner::WaiterObserved) {
+            return None;
+        }
+        let cursor = self
+            .agent_read_cursor
+            .get(recipient)
+            .map(|entry| *entry.value());
+        let mut inbox = self.agent_inbox.get_mut(recipient)?;
+        let index = inbox.iter().position(|message| message.id == message_id)?;
+        if cursor.is_some_and(|cursor| inbox[index].timestamp <= cursor) {
+            return None;
+        }
+        let message = inbox.remove(index)?;
+        gate.owners.remove(message_id);
+        Some(message)
+    }
+
     pub(crate) fn mark_terminal_delivery_dispatched(&self, tuic_session: &str, message_id: &str) {
         if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
             let mut gate = gate.lock();
