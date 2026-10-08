@@ -179,7 +179,7 @@ export function isSuggestBlock(
 /** One row the overlay masks, and why. */
 export interface OverlayBlock {
 	row: number;
-	kind: "suggest" | "continuation" | "intent" | "answer";
+	kind: "suggest" | "continuation" | "intent" | "answer" | "prompt";
 }
 
 /**
@@ -195,6 +195,7 @@ export interface OverlayBlock {
 export function planSuggestOverlay(
 	totalRows: number,
 	getRow: (i: number) => RowSnapshot | null,
+	isPromptRow: (i: number) => boolean = () => false,
 ): { key: string; blocks: OverlayBlock[] } {
 	const blocks: OverlayBlock[] = [];
 	const parts: string[] = [];
@@ -203,7 +204,16 @@ export function planSuggestOverlay(
 		if (!snapshot) continue;
 		const text = snapshot.text;
 
-		if (SUGGEST_ANCHOR_RE.test(text) && isSuggestBlock(row, totalRows, getRow)) {
+		if (!snapshot.isWrapped && isPromptRow(row)) {
+			// A submitted prompt: its row and the rows it wraps onto. The composer is never one.
+			blocks.push({ row, kind: "prompt" });
+			parts.push(`p${row}`);
+			while (row + 1 < totalRows && getRow(row + 1)?.isWrapped) {
+				row++;
+				blocks.push({ row, kind: "prompt" });
+				parts.push(`p${row}`);
+			}
+		} else if (SUGGEST_ANCHOR_RE.test(text) && isSuggestBlock(row, totalRows, getRow)) {
 			blocks.push({ row, kind: "suggest" });
 			parts.push(`s${row}`);
 			const hiddenRows = continuationRowsAfterSuggest(row, totalRows, getRow);
@@ -238,8 +248,8 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
  * planned block. Masks (`suggest`, `continuation`) paint the terminal
- * background over the row; `intent` and `answer` are translucent tints, so the
- * row's text stays readable underneath. An answer also gets a solid gutter bar.
+ * background over the row; `intent`, `answer` and `prompt` are translucent tints, so the
+ * row's text stays readable underneath. An answer or prompt also gets a solid gutter bar.
  */
 export function paintOverlayBlocks(
 	container: HTMLElement,
@@ -253,6 +263,11 @@ export function paintOverlayBlocks(
 		if (block.kind === "answer") {
 			const div = overlayDiv(top, cellHeight, "rgba(94,190,140,0.14)");
 			div.style.boxShadow = "inset 3px 0 0 rgba(94,190,140,0.9)";
+			container.appendChild(div);
+		} else if (block.kind === "prompt") {
+			// Theme tokens (global.css), shared with the chat view's user message.
+			const div = overlayDiv(top, cellHeight, "var(--prompt-tint)");
+			div.style.boxShadow = "inset 3px 0 0 var(--prompt-bar)";
 			container.appendChild(div);
 		} else {
 			container.appendChild(overlayDiv(top, cellHeight, block.kind === "intent" ? "rgba(181,147,90,0.12)" : bg));

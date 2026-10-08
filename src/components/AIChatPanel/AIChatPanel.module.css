@@ -269,7 +269,8 @@
   position: relative;
   align-self: flex-end;
   max-width: 85%;
-  background: var(--bg-tertiary);
+  background: var(--prompt-tint);
+  box-shadow: inset 3px 0 0 var(--prompt-bar);
   color: var(--fg-primary);
   padding: 8px 12px;
   border-radius: var(--radius-lg);

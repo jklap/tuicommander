@@ -619,7 +619,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		repaintOverlay(frame, m);
 
 		updateScrollbar(frame);
-		updateSuggestOverlay(frame, m, dirtyIndices);
+		updateSuggestOverlay(frame, m, frame.historyBase + frame.historySize - frame.displayOffset, dirtyIndices);
 		if (answersView() !== null) scheduleAnswersRefresh();
 	}
 
@@ -1045,18 +1045,34 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// Cached suggest/intent overlay state to avoid full DOM rebuild
 	let lastSuggestOverlayKey = "";
 
+	/** Viewport rows that start a submitted prompt of an agent turn (never a shell command). */
+	function promptRowsInView(viewTopAbs: number, numRows: number): number[] {
+		const term = terminalsStore.get(props.terminalId);
+		if (!term?.agentType || term.userPromptLines.length === 0) return [];
+		const lines = new Set(term.userPromptLines);
+		const rows: number[] = [];
+		for (let r = 0; r < numRows; r++) if (lines.has(viewTopAbs + r)) rows.push(r);
+		return rows;
+	}
+	let lastPromptRowsKey = "";
+
 	function updateSuggestOverlay(
 		_frame: DecodedFrame,
 		m: CellMetrics,
+		viewTopAbs: number,
 		dirtyIndices?: Set<number>,
 		snapshotOverride?: (i: number) => { text: string; isWrapped: boolean } | null,
 	) {
 		if (!overlayRef) return;
 
+		const numRows = lastResizeRows || 24;
+		const promptRows = promptRowsInView(viewTopAbs, numRows);
+		const promptRowsKey = promptRows.join(",");
+
 		// Skip full rescan if no dirty rows touch suggest/intent/answer patterns
 		// (skipped entirely when rendering from the cache during a scroll gesture).
 		if (!snapshotOverride && dirtyIndices && !fullRepaintNeeded) {
-			let hasSuggestContent = false;
+			let hasSuggestContent = promptRowsKey !== lastPromptRowsKey;
 			for (const idx of dirtyIndices) {
 				const row = rowMap.get(idx);
 				if (!row) continue;
@@ -1072,8 +1088,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 		}
 
+		lastPromptRowsKey = promptRowsKey;
 		const bg = cachedBgDefault;
-		const numRows = lastResizeRows || 24;
+		const promptRowSet = new Set(promptRows);
 
 		const getRowSnapshot =
 			snapshotOverride ??
@@ -1088,7 +1105,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// Decide what to mask before building anything: most repaints leave the
 		// plan untouched, and the elements were being created and dropped just to
 		// discover that.
-		const { key, blocks } = planSuggestOverlay(numRows, getRowSnapshot);
+		const { key, blocks } = planSuggestOverlay(numRows, getRowSnapshot, (row) => promptRowSet.has(row));
 		if (key === lastSuggestOverlayKey) return;
 		lastSuggestOverlayKey = key;
 
@@ -1284,7 +1301,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// scrolling content instead of the lagging backend frame (no flicker, and the
 		// raw suggest line stays masked).
 		if (currentFrame) {
-			updateSuggestOverlay(currentFrame, m, undefined, (i) => {
+			updateSuggestOverlay(currentFrame, m, hist - intOffset, undefined, (i) => {
 				const cached = cacheRow(hist - intOffset + i);
 				if (!cached) return null;
 				return { text: rowToText(cached), isWrapped: cacheRow(hist - intOffset + i - 1)?.wrapped ?? false };
