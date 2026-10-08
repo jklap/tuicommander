@@ -473,6 +473,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Mark as used: notes sent to terminal or queued are timestamped (`usedAt`) for tracking
 - Badge count: status bar toggle shows count of notes visible for the active repo
 - Per-repo filtering: notes can be tagged to a repository; untagged notes visible everywhere
+- All-repositories toggle (stacked-layers button, header): shows the ideas of every repository together; in memory only. Badge and "clear completed" follow the visible list; new ideas stay tagged with the active repo
 - **Image paste**: `Ctrl+V` / `Cmd+V` pastes clipboard images as thumbnails attached to the note
   - Images saved to `config_dir()/note-images/<note-id>/` on disk
   - Thumbnails displayed inline below note text and in the input area before submit
