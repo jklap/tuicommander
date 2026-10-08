@@ -352,7 +352,10 @@ reached is an error carrying ego's own sentence, never an empty result.
 Every command names a STORED connection by `id`; host, user, port, instance and
 credentials are read from `connections.json` and the vault, never from the caller.
 An execute command carries only the digest of the plan the user accepted, and is
-refused when the stored connection no longer produces that plan.
+refused when the stored connection no longer produces that plan. The digest also
+covers every stored input that changes what runs but is not displayed (SSH key
+file, keepalive, compression, host-key policy, deploy mode, the saved password
+via a per-process keyed fingerprint).
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
