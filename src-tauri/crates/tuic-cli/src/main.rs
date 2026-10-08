@@ -261,14 +261,20 @@ enum AgentAction {
     },
     /// Type a prompt into an agent's PTY and submit it (no peer routing).
     ///
-    /// Unlike `tuic send`, this uses the agent-safe framing: the text and the
-    /// Enter go in separate PTY writes, because a raw-mode Ink TUI treats a
-    /// combined `text\r` as a prefill and leaves it unsent.
+    /// Goes through the backend's `session action=submit`: one writer-lock
+    /// section for clear + text + Enter (nothing can splice in between), the
+    /// agent-safe framing (text and Enter as separate reads), and it is refused
+    /// — exit 1, nothing typed — while the agent's input box already holds
+    /// text, so a half-typed prompt of yours is never wiped.
     Type {
         /// Agent session ID or name
         target: String,
         /// Prompt text
         message: String,
+        /// Don't clear the input box first: send just the text and the Enter
+        /// as two plain PTY writes (not atomic, no busy/composer check).
+        #[arg(long)]
+        no_clear: bool,
     },
     /// Wait for new mailbox entries without polling
     Wait {
@@ -1005,20 +1011,23 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
                 println!("{}", mcp::delivery_line(&target, &report));
             }
         }
-        AgentAction::Type { target, message } => {
-            let (clear, payload, enter) = agent_send_parts(&message);
-            // Ctrl-U alone first, a real gap before the text: Claude Code treats
-            // a long input chunk as a paste and strips a Ctrl-U inside it as an
-            // invisible character, then refuses the Enter. Same recipe as the
-            // backend `write_agent_command_with_boundary` and `sendCommand.ts`.
-            mcp_session_call("input", &target, serde_json::json!({"input": clear}))?;
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            mcp_session_call("input", &target, serde_json::json!({"input": payload}))?;
-
-            // Raw-mode agent TUIs require Enter in a later PTY read. A combined
-            // `message\r` is commonly treated as a prefill and left unsent.
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            mcp_session_call("input", &target, serde_json::json!({"input": enter}))?;
+        AgentAction::Type {
+            target,
+            message,
+            no_clear,
+        } => {
+            let calls = agent_type_calls(&message, no_clear);
+            let last = calls.len() - 1;
+            for (i, (action, fields)) in calls.into_iter().enumerate() {
+                let reply = mcp_session_call(action, &target, fields)?;
+                if action == "submit" {
+                    submit_outcome(&reply)?;
+                }
+                if i < last {
+                    // Raw-mode agent TUIs need the Enter in a later PTY read.
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
         }
         AgentAction::Wait {
             since,
@@ -1255,6 +1264,44 @@ fn cmd_repo(action: RepoAction) -> Result<(), String> {
     };
     print_mcp_payload(&mcp::McpClient::connect()?.call("repo", payload)?, json);
     Ok(())
+}
+
+/// The MCP `session` calls `tuic agent type` makes. By default ONE `submit`:
+/// the backend writes Ctrl-U, the framed text and the Enter inside a single
+/// writer-lock section (`write_agent_command_with_boundary`) and refuses a
+/// non-empty composer instead of wiping it. `--no-clear`: just the framed text
+/// and the Enter as two `input` writes — no Ctrl-U at all.
+fn agent_type_calls(message: &str, no_clear: bool) -> Vec<(&'static str, serde_json::Value)> {
+    if no_clear {
+        let (_, payload, enter) = agent_send_parts(message);
+        vec![
+            ("input", serde_json::json!({ "input": payload })),
+            ("input", serde_json::json!({ "input": enter })),
+        ]
+    } else {
+        vec![("submit", serde_json::json!({ "input": message }))]
+    }
+}
+
+/// `Ok` when the backend's submit receipt says the text was submitted;
+/// otherwise the reason (a rejected submit typed nothing and is retry-safe).
+fn submit_outcome(receipt: &serde_json::Value) -> Result<(), String> {
+    if let Some(error) = receipt.get("error").and_then(|e| e.as_str()) {
+        return Err(error.to_string());
+    }
+    if receipt.get("submitted").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(());
+    }
+    let reason = receipt
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("not submitted");
+    let detail = receipt
+        .get("detail")
+        .and_then(|v| v.as_str())
+        .map(|d| format!(": {d}"))
+        .unwrap_or_default();
+    Err(format!("not submitted ({reason}){detail}"))
 }
 
 /// The three writes of `tuic agent type`: Ctrl-U (clear pending input), the
@@ -1972,10 +2019,11 @@ fn remove_with_elevation(path: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cli, Command, MAX_OPEN_HERE_PATHS, Path, PathBuf, agent_send_parts,
+        Cli, Command, MAX_OPEN_HERE_PATHS, Path, PathBuf, agent_send_parts, agent_type_calls,
         build_open_terminal_url, capture_payload, disposable_roots, is_disposable_root,
         is_tmux_invocation, looks_like_uuid, match_session, resolve_open_here_paths, resolve_path,
-        session_status, short_id, short_repo, strip_verbatim, translate_keys, truncate, urlencod,
+        session_status, short_id, short_repo, strip_verbatim, submit_outcome, translate_keys,
+        truncate, urlencod,
     };
     use clap::Parser;
 
@@ -2327,6 +2375,53 @@ mod tests {
     fn session_status_defaults_to_dash_when_state_absent_or_empty() {
         assert_eq!(session_status(&json!({})), "-");
         assert_eq!(session_status(&json!({ "state": {} })), "-");
+    }
+
+    /// Batch 45/46 review: the old three `input` calls had no writer lock (a
+    /// concurrent write could splice between them) and an unconditional
+    /// Ctrl-U wiped half-typed text. The default is now one atomic `submit`.
+    #[test]
+    fn agent_type_defaults_to_a_single_atomic_submit() {
+        let calls = agent_type_calls("fix the tests", false);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "submit");
+        assert_eq!(calls[0].1, json!({ "input": "fix the tests" }));
+    }
+
+    #[test]
+    fn agent_type_no_clear_never_sends_ctrl_u() {
+        for message in ["fix the tests", "line one\nline two"] {
+            let calls = agent_type_calls(message, true);
+            assert_eq!(calls.len(), 2, "text and Enter as separate writes");
+            assert!(calls.iter().all(|(action, _)| *action == "input"));
+            assert!(
+                calls
+                    .iter()
+                    .all(|(_, fields)| !fields["input"].as_str().unwrap().contains('\x15')),
+                "{message:?}"
+            );
+            assert_eq!(calls[1].1, json!({ "input": "\r" }));
+        }
+    }
+
+    #[test]
+    fn submit_outcome_reports_a_rejection_with_its_reason() {
+        assert!(submit_outcome(&json!({ "status": "acknowledged", "submitted": true })).is_ok());
+        let err = submit_outcome(&json!({
+            "status": "rejected",
+            "submitted": false,
+            "reason": "composer_not_empty",
+            "detail": "the input box already holds text",
+        }))
+        .unwrap_err();
+        assert!(
+            err.contains("composer_not_empty") && err.contains("already holds text"),
+            "{err}"
+        );
+        assert_eq!(
+            submit_outcome(&json!({ "error": "Session not found" })).unwrap_err(),
+            "Session not found"
+        );
     }
 
     #[test]
