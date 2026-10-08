@@ -117,6 +117,7 @@ pub(crate) async fn perform_update_and_restart(
     confirmed_sessions: usize,
     expected_sha256: &str,
 ) -> Result<UpdatePreview, String> {
+    let _daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = crate::remote_runtime::load_connection(state, id)?;
     let base_url = state
         .remote
