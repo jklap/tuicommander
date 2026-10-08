@@ -11,15 +11,13 @@ import { dictationStore } from "../stores/dictation";
 import { keybindingsStore } from "../stores/keybindings";
 import { progressStore } from "../stores/progress";
 import { settingsStore } from "../stores/settings";
-import { stateExplainStore } from "../stores/stateExplain";
 import { terminalsStore } from "../stores/terminals";
-import { toastsStore } from "../stores/toasts";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
 import { isTauri } from "../transport";
 import { comboToDisplay } from "../utils/hotkey";
 import { isPerfDebug } from "../utils/perfDebug";
-import { ptyCaptureStore } from "../utils/ptyCapture";
 import { isHandsFreeArmed, toggleHandsFreeConversation } from "./handsFreeConversation";
+import { explainActiveSessionState, toggleDiagnosticsCaptureForActive } from "./sessionActions";
 
 /** The one dynamic category (from `useCommandPaletteActions.ts`) the Command
  *  Palette's scope chips need to name explicitly — shared so the two files
@@ -188,28 +186,8 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 		"command-overview": handlers.toggleCommandOverview,
 		"detach-activity-dashboard": handlers.detachActivityDashboard,
 		"toggle-tunnels": () => tunnelPanelStore.toggle(),
-		"toggle-diagnostics-capture": () => {
-			const id = terminalsStore.getActive()?.sessionId;
-			if (id) {
-				void ptyCaptureStore.toggle(id);
-			} else {
-				// A freshly-spawned tab (PTY not assigned a sessionId yet) or a
-				// non-terminal active tab — ptyCaptureStore.toggle() itself always
-				// surfaces failure via a toast, so this no-op needs the same rather
-				// than silently doing nothing with no feedback at all.
-				toastsStore.add("Diagnostics capture", "No active terminal session to capture.", "warn");
-			}
-		},
-		"explain-session-state": () => {
-			const active = terminalsStore.getActive();
-			if (active?.sessionId && active.shellState !== "exited") {
-				stateExplainStore.open(active.id);
-			} else {
-				// Mirrors toggle-diagnostics-capture's guard: give feedback rather than
-				// silently no-op-ing when there's no live active terminal session.
-				toastsStore.add("Explain session state", "No active terminal session to explain.", "warn");
-			}
-		},
+		"toggle-diagnostics-capture": toggleDiagnosticsCaptureForActive,
+		"explain-session-state": explainActiveSessionState,
 		"process-manager": handlers.toggleProcessManager,
 		"open-generators": handlers.toggleGenerators,
 		"show-remote-qr": handlers.showRemoteQr,
