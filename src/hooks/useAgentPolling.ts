@@ -11,6 +11,7 @@ const POLL_INTERVAL_MS = 30_000;
 const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
 
 type BackendSessionState = {
+	agent_type?: string | null;
 	shell_state?: string;
 	agent_state?: string;
 	agent_intent?: string | null;
@@ -90,6 +91,7 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
 		lastActivityAt: state?.last_activity_ms ?? null,
 		...(shellState !== undefined ? { shellState } : {}),
 	});
+	applyAgentIdentity(termId, toAgentType(state?.agent_type ?? null));
 	if (wasAwaiting !== isAwaiting) {
 		pluginRegistry.dispatchStructuredEvent(
 			"awaiting",
@@ -105,7 +107,7 @@ function applySessionState(termId: string, sessionId: string, state: BackendSess
  * a visible-but-idle window costs zero IPC — this replaced a 1 Hz
  * `list_active_sessions` poll that ran for as long as any terminal existed.
  */
-function applySessionStateEvent(payload: unknown): void {
+export function applySessionStateEvent(payload: unknown): void {
 	const event = payload as SessionLifecycleResponse | null;
 	const sessionId = event?.session_id;
 	if (typeof sessionId !== "string") return;
@@ -136,7 +138,13 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 	const request = ++nextLifecycleRequest;
 	const requestedSessions = new Map<
 		string,
-		{ sessionId: string; shellStateRevision: number; agentIntent: string | null; lastPrompt: string | null }
+		{
+			sessionId: string;
+			shellStateRevision: number;
+			agentIntent: string | null;
+			lastPrompt: string | null;
+			agentType: AgentType | null;
+		}
 	>();
 	for (const termId of terminalsStore.getIds()) {
 		const terminal = terminalsStore.get(termId);
@@ -148,6 +156,7 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 				shellStateRevision: revision,
 				agentIntent: terminal?.agentIntent ?? null,
 				lastPrompt: terminal?.lastPrompt ?? null,
+				agentType: terminal?.agentType ?? null,
 			});
 		}
 	}
@@ -186,7 +195,8 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 			requested?.sessionId === session.session_id &&
 			requested.shellStateRevision === terminalsStore.getShellStateRevision(termId) &&
 			requested.agentIntent === (terminalsStore.get(termId)?.agentIntent ?? null) &&
-			requested.lastPrompt === (terminalsStore.get(termId)?.lastPrompt ?? null);
+			requested.lastPrompt === (terminalsStore.get(termId)?.lastPrompt ?? null) &&
+			requested.agentType === (terminalsStore.get(termId)?.agentType ?? null);
 		if (!snapshotIsFresh) continue;
 		applySessionState(termId, session.session_id, session.state);
 	}
@@ -206,6 +216,46 @@ export type DetectionSource = "idle" | "busy" | "poll";
 function toAgentType(value: string | null): AgentType | null {
 	if (value === null) return null;
 	return (AGENT_TYPES as readonly string[]).includes(value) ? (value as AgentType) : null;
+}
+
+/** Apply identity before plugin dispatch so both snapshot and discovery paths agree. */
+function applyAgentIdentity(termId: string, agentType: AgentType | null): void {
+	const current = terminalsStore.get(termId);
+	if (!current) return;
+	const prevAgentType = current.agentType;
+	if (prevAgentType !== agentType) {
+		appLogger.debug("app", `[AgentDetect] ${termId} agentType "${prevAgentType}" → "${agentType}"`);
+
+		const sessId = current.sessionId;
+
+		// Notify stop of previous agent BEFORE updating the store. Plugin dispatch
+		// filters read the current store.agentType, so agent-stopped must fire
+		// while the previous type is still current or filtered plugins miss it
+		// (their internal per-session tracking then leaks across agent changes —
+		// e.g. cache-keepalive kept writing to a session that switched claude→codex).
+		if (prevAgentType !== null && sessId) {
+			pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: sessId, terminalId: termId });
+		}
+
+		terminalsStore.update(termId, { agentType });
+
+		// Reset agent-specific state carried over from the previous agent.
+		if (prevAgentType !== null) {
+			terminalsStore.update(termId, { agentSessionId: null });
+		}
+
+		// Notify start of new agent AFTER updating the store so filtered plugins
+		// for the new type see the event and receive the synthetic shell-state replay.
+		if (agentType !== null && sessId) {
+			pluginRegistry.notifyStateChange({ type: "agent-started", sessionId: sessId, terminalId: termId });
+			// Replay current shell state to plugins filtered by agentType — they missed
+			// events dispatched before detection completed (agentType was still stale).
+			const freshShellState = terminalsStore.get(termId)?.shellState;
+			if (freshShellState) {
+				pluginRegistry.dispatchStructuredEvent("shell-state", { state: freshShellState }, sessId);
+			}
+		}
+	}
 }
 
 /**
@@ -245,39 +295,7 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 		if (source !== "idle") return; // Not a reliable clearing signal — skip
 	}
 
-	if (prevAgentType !== agentType) {
-		appLogger.debug("app", `[AgentDetect] ${termId} agentType "${prevAgentType}" → "${agentType}"`);
-
-		const sessId = current.sessionId;
-
-		// Notify stop of previous agent BEFORE updating the store. Plugin dispatch
-		// filters read the current store.agentType, so agent-stopped must fire
-		// while the previous type is still current or filtered plugins miss it
-		// (their internal per-session tracking then leaks across agent changes —
-		// e.g. cache-keepalive kept writing to a session that switched claude→codex).
-		if (prevAgentType !== null && sessId) {
-			pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: sessId, terminalId: termId });
-		}
-
-		terminalsStore.update(termId, { agentType });
-
-		// Reset agent-specific state carried over from the previous agent.
-		if (prevAgentType !== null) {
-			terminalsStore.update(termId, { agentSessionId: null });
-		}
-
-		// Notify start of new agent AFTER updating the store so filtered plugins
-		// for the new type see the event and receive the synthetic shell-state replay.
-		if (agentType !== null && sessId) {
-			pluginRegistry.notifyStateChange({ type: "agent-started", sessionId: sessId, terminalId: termId });
-			// Replay current shell state to plugins filtered by agentType — they missed
-			// events dispatched before detection completed (agentType was still stale).
-			const freshShellState = terminalsStore.get(termId)?.shellState;
-			if (freshShellState) {
-				pluginRegistry.dispatchStructuredEvent("shell-state", { state: freshShellState }, sessId);
-			}
-		}
-	}
+	applyAgentIdentity(termId, agentType);
 
 	// Attempt session discovery when an agent is running.
 	// Agents with sessionDiscovery: always re-discover (session ID changes after /clear, /new, etc.).
