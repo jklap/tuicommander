@@ -7,7 +7,9 @@ use tokio::process::Command;
 
 use super::agent::discover_agent_socket;
 use super::classifier::{ExitReason, classify_exit};
-use super::command::{build_ssh_base_args, build_ssh_env, ensure_ssh_control_dir};
+use super::command::{
+    build_ssh_base_args, build_ssh_env, build_ssh_test_args, ensure_ssh_control_dir,
+};
 use super::profile::TunnelProfile;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,10 +38,30 @@ pub(crate) async fn ssh_exec_with_binary(
     let mut args = build_ssh_base_args(profile);
     args.push("-T".to_string());
     args.push("--".to_string());
-    args.push(format!("{}@{}", profile.user, profile.host));
+    args.push(format!("{}@{}", profile.ssh.user, profile.ssh.host));
     args.push(remote_command.to_string());
 
     run_process(ssh_binary, &args, stdin, timeout).await
+}
+
+/// Test Connection's one-shot SSH check (`command::build_ssh_test_args`):
+/// connect, authenticate, run `true`, exit — through the same runner, agent
+/// socket and exit classification as every other one-shot ssh here.
+pub(crate) async fn ssh_check(
+    ssh: &crate::ssh_connection::SshConnectionParams,
+    timeout: Duration,
+) -> Result<(), ExitReason> {
+    ssh_check_with_binary(ssh, timeout, Path::new("ssh")).await
+}
+
+pub(crate) async fn ssh_check_with_binary(
+    ssh: &crate::ssh_connection::SshConnectionParams,
+    timeout: Duration,
+    ssh_binary: &Path,
+) -> Result<(), ExitReason> {
+    run_process(ssh_binary, &build_ssh_test_args(ssh), None, timeout)
+        .await
+        .map(|_| ())
 }
 
 pub(crate) async fn scp_push(
@@ -59,6 +81,18 @@ pub(crate) async fn scp_push(
     .await
 }
 
+/// `user@host:path` for scp. scp splits the host from the path at the first
+/// `:`, so an IPv6 host (the only host `SshConnectionParams::validate` lets
+/// contain `:`) is bracketed: `user@[::1]:path`. ssh itself takes the bare
+/// address, so only scp's destination brackets it.
+fn scp_destination(user: &str, host: &str, path: &str) -> String {
+    if crate::ssh_connection::is_ipv6_literal(host) {
+        format!("{user}@[{host}]:{path}")
+    } else {
+        format!("{user}@{host}:{path}")
+    }
+}
+
 pub(crate) async fn scp_push_with_binaries(
     profile: &TunnelProfile,
     local: &Path,
@@ -72,7 +106,11 @@ pub(crate) async fn scp_push_with_binaries(
     let mut args = build_ssh_base_args(profile);
     args.push("--".to_string());
     args.push(local.to_string_lossy().into_owned());
-    args.push(format!("{}@{}:{staged}", profile.user, profile.host));
+    args.push(scp_destination(
+        &profile.ssh.user,
+        &profile.ssh.host,
+        &staged,
+    ));
 
     run_process(scp_binary, &args, None, timeout).await?;
 
@@ -224,6 +262,23 @@ mod tests {
         assert_eq!(output.code, Some(0));
     }
 
+    #[test]
+    fn scp_destination_brackets_only_an_ipv6_host() {
+        assert_eq!(
+            scp_destination("u", "host.example", "p"),
+            "u@host.example:p"
+        );
+        assert_eq!(scp_destination("u", "10.0.0.1", "p"), "u@10.0.0.1:p");
+        assert_eq!(
+            scp_destination("u", "2001:db8::1", "p"),
+            "u@[2001:db8::1]:p"
+        );
+        assert_eq!(
+            scp_destination("u", "fe80::1%en0", "p"),
+            "u@[fe80::1%en0]:p"
+        );
+    }
+
     /// Catches: the one-shot ssh and scp destinations lacking `--`, so a
     /// profile user starting with `-` is read as an option.
     #[tokio::test]
@@ -235,7 +290,7 @@ mod tests {
         let _ = std::fs::remove_file(format!("{}.log", ssh.display()));
         let _ = std::fs::remove_file(format!("{}.log", scp.display()));
         let mut hostile = profile();
-        hostile.user = "-oProxyCommand=evil".to_string();
+        hostile.ssh.user = "-oProxyCommand=evil".to_string();
         let local_dir = tempfile::tempdir().expect("temp dir");
         let local = local_dir.path().join("bin");
         std::fs::write(&local, b"x").expect("write local");

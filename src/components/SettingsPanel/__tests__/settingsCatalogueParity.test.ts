@@ -18,7 +18,7 @@ function files(directory: string): string[] {
 // expert/platform branches and dynamic row bodies are all parsed, even when unmounted.
 const sources = [
 	...files(join(root, "src/components/SettingsPanel")),
-	join(root, "src/components/TunnelsPanel/TunnelEditorModal.tsx"),
+	join(root, "src/components/TunnelsPanel/PortForwardsEditor.tsx"),
 ].filter(
 	(path) =>
 		path.endsWith(".tsx") &&

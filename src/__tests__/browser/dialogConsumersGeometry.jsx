@@ -8,13 +8,10 @@ import { WhatsNewDialog } from '../../components/WhatsNewDialog/WhatsNewDialog';
 import { PostMergeCleanupDialog } from '../../components/PostMergeCleanupDialog/PostMergeCleanupDialog';
 import { UpdateProgressDialog } from '../../components/UpdateProgressDialog/UpdateProgressDialog';
 import { PromptInspector } from '../../components/PromptInspector/PromptInspector';
-import { TunnelEditorModal } from '../../components/TunnelsPanel/TunnelEditorModal';
 import { updaterStore } from '../../stores/updater';
 import '../../global.css';
-// Synthetic frontend IPC responses only. No git, SSH, updater, or receipt service is contacted.
+// Synthetic frontend IPC responses only. No git, updater, or receipt service is contacted.
 window.__TAURI_INTERNALS__={invoke:async command=>{
- if(command==='list_ssh_config_hosts')return [];
- if(command==='list_ssh_agent_keys')return {keys:[],agent_type:''};
  if(command==='get_prompt_receipt')return {sections:[],captureLimited:false};
  if(command==='plugin:app|version')return '0.0.0';
  if(command.startsWith('plugin:updater') || command==='check_update_channel')throw new Error('Fixture update failure');
@@ -35,7 +32,6 @@ render(()=><div id="geometry">
  <PostMergeCleanupDialog branchName="fixture" baseBranch="main" repoPath="/fixture" isOnBaseBranch isDefaultBranch={false} hasTerminals={false} onExecute={noop} onSkip={noop}/>
  <UpdateProgressDialog/>
  <PromptInspector sessionId="fixture" onClose={noop}/>
- <TunnelEditorModal onClose={noop}/>
 </div>,document.getElementById('root'));
 await updaterStore.checkForUpdate();
 requestAnimationFrame(()=>{window.controlGeometryReady=true;});

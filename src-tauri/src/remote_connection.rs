@@ -1,12 +1,22 @@
 //! Remote connection config model.
 //!
-//! Persists named connections (SSH or Direct) to `connections.json` in the
-//! app config directory. Each connection has a UUID, a human-readable name,
-//! a transport, auth info, and an enabled flag.
+//! Persists named connections (SSH, Direct, or Local) to `connections.json`
+//! in the app config directory. Each connection has a UUID, a human-readable
+//! name, a transport, optional auth info, and an enabled flag.
+//!
+//! The SSH transport nests its settings as `ssh: SshConnectionParams` — the
+//! same struct a `TunnelProfile` carries. Files written before that change
+//! stored them flat (`ssh_host`/`ssh_port`/`ssh_user`/`identity_file`);
+//! `RemoteTransport`'s reader still accepts that shape, and
+//! [`migrate_legacy_connections_file`] rewrites it once at startup, keeping a
+//! timestamped backup of the original next to it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+
+use crate::ssh_connection::{SshConnectionParams, StrictHostKeyChecking};
 
 const CONNECTIONS_FILE: &str = "connections.json";
 
@@ -23,8 +33,16 @@ pub(crate) struct RemoteConnection {
     pub(crate) name: String,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates transport for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) transport: RemoteTransport,
+    /// The Basic Auth username, optional: a desktop TUICommander on the LAN
+    /// with `lan_auth_bypass`, or a deployed daemon reached by pairing token,
+    /// needs none. When a password IS stored and this is absent, the token
+    /// exchange sends an empty username, which every daemon rejects — so a
+    /// missing username fails closed rather than authenticating as anybody.
+    /// The password half lives in the vault, never here
+    /// (`Credential::RemoteConnection`).
+    #[serde(default)]
     #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates auth username for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-    pub(crate) auth_username: String,
+    pub(crate) auth_username: Option<String>,
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates enabled for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) enabled: bool,
     #[serde(default)]
@@ -53,29 +71,228 @@ const fn default_survive_secs() -> u64 {
     1_800
 }
 
+/// An SSH connection's `instance_id` is interpolated into a remote shell
+/// command (`--instance <id>`), so it must be exactly what `tuic-remote` itself
+/// accepts — a lowercase DNS label, never `default` — and nothing that a shell
+/// could read as syntax. Checked on save and again by every command builder.
+pub(crate) fn validate_remote_instance_id(id: &str) -> Result<(), String> {
+    crate::app_instance::AppInstance::named(id)
+        .map(|_| ())
+        .map_err(|e| format!("invalid instance_id: {e}"))
+}
+
+/// What the token exchange reports when the daemon answers 401 because it has
+/// NO password configured at all — distinct from a wrong password. Read off the
+/// response body (`mcp_http/auth.rs` answers "Scan the QR code…" for an
+/// unconfigured daemon even when a Basic header was sent, and "Invalid
+/// credentials" for a wrong one). Only this case may lead to an offer to set
+/// the password over SSH (`ssh_provision`).
+pub(crate) const REMOTE_PASSWORD_NOT_CONFIGURED: &str =
+    "The remote daemon has no password configured yet";
+
+/// What "Update & restart remote" reports for a `Local` connection. Connect
+/// works (`remote_runtime::resolve_local_base_url`), but streaming a binary to
+/// another instance on this machine would have it replace its own executable —
+/// a local install is updated like one, so the runtime refuses instead.
+/// Deployment needs SSH and refuses a Local transport on its own.
+pub(crate) const LOCAL_TRANSPORT_UPDATE_UNSUPPORTED: &str = "Update & restart is not available for a Local connection: it is another instance on this machine — update that install directly";
+
 /// Transport layer for a remote connection.
+///
+/// Serialized internally tagged (`"type": "Ssh" | "Direct" | "Local"`) with
+/// the SSH settings nested under `ssh`. Deserialization goes through
+/// [`RemoteTransportWire`], which also accepts the pre-nested flat SSH shape.
+///
+/// The catalogue schema (`schemars(!try_from)`) describes the shape this type
+/// serializes, not the wire type it also reads.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type")]
+#[serde(tag = "type", try_from = "RemoteTransportWire")]
+#[schemars(!try_from)]
 pub(crate) enum RemoteTransport {
     Ssh {
-        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates ssh host for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-        ssh_host: String,
-        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates ssh port for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-        ssh_port: u16,
-        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates ssh user for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-        ssh_user: String,
-        #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates identity file for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
-        identity_file: Option<String>,
+        /// Host/port/user/identity/keepalive config — shared with
+        /// `tunnels::profile::TunnelProfile` via `SshConnectionParams`.
+        /// `strict_host_key_checking` is stored but the runtime always uses
+        /// `AcceptNew` for the tunnel it opens on the user's behalf
+        /// (`remote_runtime::ssh_profile`).
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates ssh for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        ssh: SshConnectionParams,
         #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates remote daemon port for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         remote_daemon_port: u16,
+        /// Offer to start `tuic-remote` on the remote host when a Connect finds
+        /// nothing answering (`DeployMode::Never` only — the other modes deploy
+        /// by themselves). Never acts on its own: the offer is published on the
+        /// connection's status and runs only after the user accepts the exact
+        /// plan (`ssh_provision`), with `remote_deploy`'s pinned, checksummed
+        /// binary. Omitted from the file while off (as are the two fields
+        /// below while unset), so a connection that never uses provisioning
+        /// keeps the exact shape older builds wrote.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates start if not running for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
+        start_if_not_running: bool,
+        /// Keep a daemon started through that offer running on Disconnect.
+        /// When false, Disconnect stops it again — PID-file verified, and only
+        /// a daemon this app started in this run.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates leave running on disconnect for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        leave_running_on_disconnect: bool,
+        /// The `--instance <id>` the daemon is launched or configured with when
+        /// this app does it (`remote_deploy` launch, `--set-password-if-unset`).
+        /// An argument this side chooses, validated as a lowercase DNS label —
+        /// never discovered from the remote host, unlike `Local`'s field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates instance id for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
+        #[schemars(description = "TUICommander instance id (a lowercase DNS label) this connection targets.")]
+        instance_id: Option<String>,
     },
     Direct {
         #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates url for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
         url: String,
+        /// SHA-256 fingerprint (lowercase hex) of a pinned self-signed/
+        /// untrusted certificate, set only after the user explicitly confirms
+        /// it (`direct_proxy::probe_direct_tls` → `NeedsConfirmation`). When
+        /// set, Connect talks to the daemon only through a relay that accepts
+        /// exactly this certificate (`direct_proxy::DirectProxies`). `None` for
+        /// `http://`, a CA-trusted `https://`, or a target not yet confirmed —
+        /// and then an untrusted certificate fails Connect closed. Omitted from
+        /// the file when `None`, so an unpinned connection keeps the exact shape
+        /// older builds wrote (they ignore the key when present).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates tls fingerprint for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
+        tls_fingerprint: Option<String>,
     },
     /// Reached through a relay. Everything that identifies the pairing lives in
     /// the vault bundle keyed by the connection id, not in this plain-text record.
     Relay,
+    /// Another named/isolated TUICommander instance running on this same
+    /// machine (`tuic-remote --instance <id>`, or `TUIC_APP_INSTANCE=<id>`
+    /// for the desktop app). Exactly one of `port`/`instance_id` is set:
+    /// when `instance_id` is set, the real port is resolved by reading that
+    /// instance's own `config.json` off disk at connect time (see
+    /// `resolve_local_instance_port`), never cached, so a restarted instance
+    /// that landed on a different port via the 9876→9877→9878 retry chain
+    /// doesn't leave a stale port behind. `port` alone covers the unnamed
+    /// case (e.g. a plain `make dev` second debug instance on 9877, which
+    /// has no `instances/<id>/` directory to discover).
+    ///
+    /// Connect resolves it to `http://127.0.0.1:<port>` with the ordinary
+    /// token handshake; update refuses it with
+    /// [`LOCAL_TRANSPORT_UPDATE_UNSUPPORTED`] and deployment (SSH only) refuses
+    /// it too.
+    Local {
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates port for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
+        port: Option<u16>,
+        #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates instance id for the current owner.","operations":["get","set"],"confirmationClass":"execution_authority"}))]
+        #[schemars(description = "TUICommander instance id (a lowercase DNS label) this connection targets.")]
+        instance_id: Option<String>,
+    },
+}
+
+/// Both accepted shapes of a [`RemoteTransport`].
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum RemoteTransportWire {
+    Ssh(SshTransportWire),
+    Direct {
+        url: String,
+        #[serde(default)]
+        tls_fingerprint: Option<String>,
+    },
+    Local {
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default)]
+        instance_id: Option<String>,
+    },
+    Relay,
+}
+
+/// An `Ssh` transport either nested (`ssh: {...}`) or flat, as every build
+/// before the nested model wrote it. Exactly one of the two must be present.
+#[derive(Deserialize)]
+struct SshTransportWire {
+    #[serde(default)]
+    ssh: Option<SshConnectionParams>,
+    #[serde(default)]
+    ssh_host: Option<String>,
+    #[serde(default)]
+    ssh_port: Option<u16>,
+    #[serde(default)]
+    ssh_user: Option<String>,
+    #[serde(default)]
+    identity_file: Option<String>,
+    remote_daemon_port: u16,
+    #[serde(default)]
+    start_if_not_running: bool,
+    #[serde(default)]
+    leave_running_on_disconnect: bool,
+    #[serde(default)]
+    instance_id: Option<String>,
+}
+
+/// The flat shape never stored keepalive, host-key or compression settings;
+/// these reproduce what it actually ran with (`remote_runtime::ssh_profile`
+/// built every tunnel with keepalive 15/3, `Compression=yes` and
+/// `StrictHostKeyChecking=accept-new`).
+fn legacy_remote_ssh_params(
+    host: String,
+    port: u16,
+    user: String,
+    identity_file: Option<String>,
+) -> SshConnectionParams {
+    let mut ssh = SshConnectionParams::new(host, user);
+    ssh.port = port;
+    ssh.identity_file = identity_file.map(PathBuf::from);
+    ssh.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
+    ssh
+}
+
+impl TryFrom<RemoteTransportWire> for RemoteTransport {
+    type Error = String;
+
+    fn try_from(wire: RemoteTransportWire) -> Result<Self, String> {
+        Ok(match wire {
+            RemoteTransportWire::Direct {
+                url,
+                tls_fingerprint,
+            } => Self::Direct {
+                url,
+                tls_fingerprint,
+            },
+            RemoteTransportWire::Local { port, instance_id } => Self::Local { port, instance_id },
+            RemoteTransportWire::Relay => Self::Relay,
+            RemoteTransportWire::Ssh(ssh) => {
+                let flat = ssh.ssh_host.is_some()
+                    || ssh.ssh_port.is_some()
+                    || ssh.ssh_user.is_some()
+                    || ssh.identity_file.is_some();
+                let params = match (ssh.ssh, flat) {
+                    (Some(params), false) => params,
+                    (Some(_), true) => {
+                        return Err("Ssh transport has both a nested `ssh` object and legacy \
+                             flat ssh_host/ssh_port/ssh_user/identity_file fields"
+                            .to_string());
+                    }
+                    (None, _) => {
+                        let missing = |field: &str| format!("missing field `{field}`");
+                        legacy_remote_ssh_params(
+                            ssh.ssh_host.ok_or_else(|| missing("ssh_host"))?,
+                            ssh.ssh_port.ok_or_else(|| missing("ssh_port"))?,
+                            ssh.ssh_user.ok_or_else(|| missing("ssh_user"))?,
+                            ssh.identity_file,
+                        )
+                    }
+                };
+                Self::Ssh {
+                    ssh: params,
+                    remote_daemon_port: ssh.remote_daemon_port,
+                    start_if_not_running: ssh.start_if_not_running,
+                    leave_running_on_disconnect: ssh.leave_running_on_disconnect,
+                    instance_id: ssh.instance_id,
+                }
+            }
+        })
+    }
 }
 
 impl RemoteConnection {
@@ -86,17 +303,19 @@ impl RemoteConnection {
         user: impl Into<String>,
     ) -> Self {
         let ssh_user = user.into();
+        let mut ssh = SshConnectionParams::new(host, ssh_user.clone());
+        ssh.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
             transport: RemoteTransport::Ssh {
-                ssh_host: host.into(),
-                ssh_port: 22,
-                ssh_user: ssh_user.clone(),
-                identity_file: None,
+                ssh,
                 remote_daemon_port: 9877,
+                start_if_not_running: false,
+                leave_running_on_disconnect: false,
+                instance_id: None,
             },
-            auth_username: ssh_user,
+            auth_username: Some(ssh_user),
             enabled: true,
             auto_update: false,
             deploy: DeployMode::Never,
@@ -111,29 +330,52 @@ impl RemoteConnection {
         if self.name.trim().is_empty() {
             return Err("name must not be empty".to_string());
         }
-        if self.auth_username.trim().is_empty() {
-            return Err("auth_username must not be empty".to_string());
-        }
         match &self.transport {
             RemoteTransport::Ssh {
-                ssh_host,
-                ssh_user,
-                ssh_port,
-                ..
+                ssh, instance_id, ..
             } => {
-                if ssh_host.trim().is_empty() {
-                    return Err("ssh_host must not be empty".to_string());
-                }
-                if ssh_user.trim().is_empty() {
-                    return Err("ssh_user must not be empty".to_string());
-                }
-                if *ssh_port == 0 {
-                    return Err("ssh_port must be in range 1-65535".to_string());
+                ssh.validate()?;
+                if let Some(id) = instance_id {
+                    validate_remote_instance_id(id)?;
                 }
             }
-            RemoteTransport::Direct { url } => {
+            RemoteTransport::Direct {
+                url,
+                tls_fingerprint,
+            } => {
                 if url.trim().is_empty() {
                     return Err("url must not be empty".to_string());
+                }
+                if let Some(pin) = tls_fingerprint {
+                    if crate::direct_proxy::normalize_fingerprint(pin).is_none() {
+                        return Err(
+                            "tls_fingerprint must be a SHA-256 fingerprint (64 hex digits)"
+                                .to_string(),
+                        );
+                    }
+                    if !matches!(crate::direct_proxy::https_target(url), Ok(Some(_))) {
+                        return Err("tls_fingerprint requires an https:// url".to_string());
+                    }
+                }
+            }
+            RemoteTransport::Local { port, instance_id } => {
+                let has_instance = instance_id.as_ref().is_some_and(|s| !s.trim().is_empty());
+                match (port, has_instance) {
+                    (None, false) => {
+                        return Err(
+                            "Local connection requires either a port or an instance_id".to_string()
+                        );
+                    }
+                    (Some(_), true) => {
+                        return Err(
+                            "Local connection must specify either a port or an instance_id, not both"
+                                .to_string(),
+                        );
+                    }
+                    (Some(0), false) => {
+                        return Err("port must be in range 1-65535".to_string());
+                    }
+                    _ => {}
                 }
             }
             RemoteTransport::Relay => {
@@ -153,7 +395,7 @@ impl RemoteConnection {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
             transport: RemoteTransport::Relay,
-            auth_username: "relay".to_string(),
+            auth_username: Some("relay".to_string()),
             enabled: true,
             auto_update: false,
             deploy: DeployMode::Never,
@@ -170,14 +412,157 @@ impl RemoteConnection {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.into(),
-            transport: RemoteTransport::Direct { url: url.into() },
-            auth_username: auth_username.into(),
+            transport: RemoteTransport::Direct {
+                url: url.into(),
+                tls_fingerprint: None,
+            },
+            auth_username: Some(auth_username.into()),
             enabled: true,
             auto_update: false,
             deploy: DeployMode::Never,
             survive_secs: default_survive_secs(),
         }
     }
+
+    /// Create a new Local connection pointing at a named instance, resolved
+    /// by instance id rather than a manually-entered port.
+    #[cfg(test)]
+    pub(crate) fn new_local_instance(
+        name: impl Into<String>,
+        instance_id: impl Into<String>,
+    ) -> Self {
+        Self::new_local(
+            name,
+            RemoteTransport::Local {
+                port: None,
+                instance_id: Some(instance_id.into()),
+            },
+        )
+    }
+
+    /// Create a new Local connection pointing at a manually-entered port
+    /// (the unnamed-instance case — e.g. a plain `make dev` second debug
+    /// instance, which has no `instances/<id>/` directory to discover).
+    #[cfg(test)]
+    pub(crate) fn new_local_port(name: impl Into<String>, port: u16) -> Self {
+        Self::new_local(
+            name,
+            RemoteTransport::Local {
+                port: Some(port),
+                instance_id: None,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    fn new_local(name: impl Into<String>, transport: RemoteTransport) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: name.into(),
+            transport,
+            auth_username: None,
+            enabled: true,
+            auto_update: false,
+            deploy: DeployMode::Never,
+            survive_secs: default_survive_secs(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Local instance port resolution
+// ---------------------------------------------------------------------------
+
+/// Distinguishes "this instance id has no on-disk config directory at all"
+/// (a typo, or an instance that was never started) from "the directory
+/// exists but its `config.json` couldn't be read/parsed" (a real instance,
+/// transient or corrupt state) — Test Connection needs to tell these apart in
+/// its UI, and Connect needs the same distinction to give a useful error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LocalInstancePortError {
+    InstanceNotFound,
+    Unreadable(String),
+}
+
+impl std::fmt::Display for LocalInstancePortError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InstanceNotFound => write!(f, "instance not found"),
+            Self::Unreadable(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+/// Minimal shape of `config.json` needed to pull out
+/// `services.server.port` without dragging in the full `AppConfig` type
+/// (and its many `#[serde(default = ...)]` helpers) into this module. Missing
+/// sub-objects default to port 0, which `resolve_local_instance_port_at`
+/// never accepts — a `config.json` with no `services.server.port` key at all
+/// is at least as "unreadable" as one with a bad type.
+#[derive(Debug, Default, Deserialize)]
+struct MinimalAppConfigForPort {
+    #[serde(default)]
+    services: MinimalServicesConfigForPort,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MinimalServicesConfigForPort {
+    #[serde(default)]
+    server: MinimalServerConfigForPort,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MinimalServerConfigForPort {
+    #[serde(default)]
+    port: u16,
+}
+
+/// Resolve a named instance's `remote_access_port` (`services.server.port`
+/// in `config.json`) by reading that instance's own config directory off
+/// disk, using the real platform config dir and home dir. Re-read on every
+/// call, never cached — see `RemoteTransport::Local`'s doc comment for why.
+pub(crate) fn resolve_local_instance_port(
+    instance_id: &str,
+) -> Result<u16, LocalInstancePortError> {
+    let platform_config = dirs::config_dir();
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    resolve_local_instance_port_at(instance_id, platform_config.as_deref(), &home)
+}
+
+/// The testable body of [`resolve_local_instance_port`], taking explicit
+/// `platform_config`/`home` bases instead of reading them from `dirs::` —
+/// mirrors `config::resolve_real_config_dir`'s own split so a test can point
+/// it at a tempdir instead of the real platform config location.
+fn resolve_local_instance_port_at(
+    instance_id: &str,
+    platform_config: Option<&Path>,
+    home: &Path,
+) -> Result<u16, LocalInstancePortError> {
+    let instance = crate::app_instance::AppInstance::named(instance_id)
+        .map_err(|_| LocalInstancePortError::InstanceNotFound)?;
+    let dir = instance.config_dir_from(platform_config, home);
+    if !dir.is_dir() {
+        return Err(LocalInstancePortError::InstanceNotFound);
+    }
+
+    let config_path = dir.join("config.json");
+    let content = std::fs::read_to_string(&config_path).map_err(|e| {
+        LocalInstancePortError::Unreadable(format!("failed to read {}: {e}", config_path.display()))
+    })?;
+    let parsed: MinimalAppConfigForPort = serde_json::from_str(&content).map_err(|e| {
+        LocalInstancePortError::Unreadable(format!(
+            "failed to parse {}: {e}",
+            config_path.display()
+        ))
+    })?;
+    let port = parsed.services.server.port;
+    if port == 0 {
+        return Err(LocalInstancePortError::Unreadable(format!(
+            "{} has no valid services.server.port",
+            config_path.display()
+        )));
+    }
+    Ok(port)
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +621,114 @@ impl RemoteConnectionStore {
         })?;
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// One-time migration of the pre-nested SSH shape
+// ---------------------------------------------------------------------------
+
+/// Rewrite one `transport` object from the flat SSH shape to the nested one,
+/// in place. Keys are moved rather than re-serialized so nothing else in the
+/// object (`remote_daemon_port`, anything newer) is touched. Returns whether
+/// it changed; a non-SSH or already-nested transport is left alone.
+fn migrate_transport_value(transport: &mut serde_json::Map<String, serde_json::Value>) -> bool {
+    use serde_json::Value;
+    if transport.get("type").and_then(Value::as_str) != Some("Ssh")
+        || transport.contains_key("ssh")
+        || !transport.contains_key("ssh_host")
+    {
+        return false;
+    }
+    let mut ssh = serde_json::Map::new();
+    for (from, to) in [
+        ("ssh_host", "host"),
+        ("ssh_port", "port"),
+        ("ssh_user", "user"),
+        ("identity_file", "identity_file"),
+    ] {
+        ssh.insert(
+            to.to_string(),
+            transport.remove(from).unwrap_or(Value::Null),
+        );
+    }
+    // What the flat shape ran with — see `legacy_remote_ssh_params`.
+    let defaults = legacy_remote_ssh_params(String::new(), 22, String::new(), None);
+    ssh.insert(
+        "server_alive_interval".to_string(),
+        defaults.server_alive_interval.into(),
+    );
+    ssh.insert(
+        "server_alive_count_max".to_string(),
+        defaults.server_alive_count_max.into(),
+    );
+    ssh.insert(
+        "strict_host_key_checking".to_string(),
+        serde_json::to_value(&defaults.strict_host_key_checking)
+            .expect("a unit enum always serializes"),
+    );
+    ssh.insert("compression".to_string(), defaults.compression.into());
+    transport.insert("ssh".to_string(), Value::Object(ssh));
+    true
+}
+
+/// Rewrite a whole `connections.json` document. Errors when it is not the
+/// array this file has always been; returns whether anything changed.
+fn migrate_connections_document(doc: &mut serde_json::Value) -> Result<bool, String> {
+    let entries = doc
+        .as_array_mut()
+        .ok_or_else(|| "connections.json is not a JSON array".to_string())?;
+    let mut changed = false;
+    for entry in entries {
+        if let Some(transport) = entry
+            .get_mut("transport")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            changed |= migrate_transport_value(transport);
+        }
+    }
+    Ok(changed)
+}
+
+/// Rewrite `<config_dir>/connections.json` from the pre-nested SSH shape to
+/// the nested one, once. Returns the backup's path when it rewrote the file,
+/// `None` when there was nothing to do (no file, or already nested — so a
+/// second run is a no-op that writes nothing).
+///
+/// Runs under the same in-process and cross-process locks as every other
+/// writer of this file. The original bytes are kept verbatim as
+/// `connections.json.pre-nested-ssh-<UTC timestamp>.bak`, written before the
+/// file is replaced; the replacement is atomic (temp file, fsync, rename).
+/// The migrated document must parse as `Vec<RemoteConnection>` before
+/// anything is written — otherwise the file is left exactly as it was and the
+/// error is returned. Every field of every entry (auth username, deploy mode,
+/// survive_secs, auto_update, unknown keys) is carried over untouched; secrets
+/// were never in this file, so the vault (passwords, pairing tokens) is not
+/// involved at all.
+pub(crate) fn migrate_legacy_connections_file(
+    config_dir: &Path,
+) -> Result<Option<PathBuf>, String> {
+    crate::config::ConfigFile::<Vec<RemoteConnection>>::at_path(config_dir.join(CONNECTIONS_FILE))
+        .with_locks(|path| {
+            let original = match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(format!("Failed to read {}: {e}", path.display())),
+            };
+            let mut doc: serde_json::Value = serde_json::from_slice(&original)
+                .map_err(|e| format!("Failed to parse {}: {e}", path.display()))?;
+            if !migrate_connections_document(&mut doc)? {
+                return Ok(None);
+            }
+            serde_json::from_value::<Vec<RemoteConnection>>(doc.clone()).map_err(|e| {
+                format!(
+                    "{} was left unmigrated: the rewritten document would not load: {e}",
+                    path.display()
+                )
+            })?;
+            let migrated = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+            crate::ssh_connection::legacy::backup_then_replace(path, &original, migrated.as_bytes())
+                .map(Some)
+        })
 }
 
 /// Validate then upsert `connection` into the store at `data_dir`.
@@ -354,6 +847,33 @@ pub(crate) fn pairing_token(id: &str) -> Result<Option<String>, String> {
     crate::credentials::get(crate::credentials::Credential::RemotePairingToken(id))
 }
 
+/// Delete a connection by id — the one path both the Tauri
+/// `delete_remote_connection` command and the HTTP
+/// `DELETE /config/remote-connections/{id}` route take, so they cannot drift.
+///
+/// Order matters: tear the runtime down first (`teardown_deleted` stops the
+/// tunnel by the id it recorded, and drops the poll, mirror, rows and session
+/// token — everything keyed by an id about to name nothing), then remove the
+/// record under `connections_lock` (publishing the settings change), then
+/// forget every vault entry: the key is the connection's fresh UUID, so a
+/// secret left behind is unreachable and permanent.
+///
+/// Returns whether a connection with this id existed. The vault entries are
+/// cleared either way.
+pub(crate) async fn delete_remote_connection_impl(
+    state: &Arc<crate::AppState>,
+    id: &str,
+) -> Result<bool, String> {
+    crate::remote_runtime::teardown_deleted(state, id);
+    let _guard = state.connections_lock.lock().await;
+    let removed = delete_connection_record(state, id, delete_connection_credentials)?;
+    if !removed {
+        // Idempotent credential cleanup even when the record is already absent.
+        delete_connection_credentials(id)?;
+    }
+    Ok(removed)
+}
+
 pub(crate) fn delete_connection_credentials(id: &str) -> Result<(), String> {
     use crate::credentials::{Credential, delete};
     let failures: Vec<String> = [
@@ -453,6 +973,13 @@ async fn request_session_token(
         .map_err(|e| format!("Token request failed: {}", e.without_url()))?;
     let status = response.status();
     if status == reqwest::StatusCode::UNAUTHORIZED {
+        // A Basic header was always sent, so the "Scan the QR code" body can
+        // only mean the daemon has no credentials configured; anything else
+        // (including an unreadable body) stays a plain rejection.
+        let body = response.text().await.unwrap_or_default();
+        if body.contains("Scan the QR code") {
+            return Err(REMOTE_PASSWORD_NOT_CONFIGURED.to_string());
+        }
         return Err("Authentication rejected by the remote daemon".to_string());
     }
     if !status.is_success() {
@@ -531,17 +1058,11 @@ pub async fn delete_remote_connection(
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     id: String,
 ) -> Result<(), String> {
-    // Before the store, not after: everything the runtime is holding for this
-    // connection — the poll, the mirror, its rows, the tunnel, the session token
-    // — is keyed by an id that is about to name nothing. Deleting the record
-    // first leaves all of it running with no way left to address it.
-    crate::remote_runtime::teardown_deleted(state.inner(), &id);
-    let _guard = state.connections_lock.lock().await;
-    if !delete_connection_record(&state, &id, delete_connection_credentials)? {
-        // Preserve IPC's idempotent credential cleanup even when metadata is already absent.
-        delete_connection_credentials(&id)?;
-    }
-    Ok(())
+    // A missing id is not an error here (it never was on this side); the HTTP
+    // route answers 404 for the same result.
+    delete_remote_connection_impl(state.inner(), &id)
+        .await
+        .map(|_| ())
 }
 
 #[cfg(feature = "desktop")]
@@ -598,17 +1119,24 @@ mod tests {
         assert!(decoded.enabled);
         match decoded.transport {
             RemoteTransport::Ssh {
-                ssh_host,
-                ssh_port,
-                ssh_user,
-                identity_file,
+                ssh,
                 remote_daemon_port,
+                start_if_not_running,
+                leave_running_on_disconnect,
+                instance_id,
             } => {
-                assert_eq!(ssh_host, "example.com");
-                assert_eq!(ssh_port, 22);
-                assert_eq!(ssh_user, "alice");
-                assert!(identity_file.is_none());
+                assert_eq!(ssh.host, "example.com");
+                assert_eq!(ssh.port, 22);
+                assert_eq!(ssh.user, "alice");
+                assert!(ssh.identity_file.is_none());
+                assert_eq!(
+                    ssh.strict_host_key_checking,
+                    StrictHostKeyChecking::AcceptNew
+                );
                 assert_eq!(remote_daemon_port, 9877);
+                assert!(!start_if_not_running);
+                assert!(!leave_running_on_disconnect);
+                assert!(instance_id.is_none());
             }
             other => panic!("expected Ssh, got {other:?}"),
         }
@@ -620,10 +1148,16 @@ mod tests {
         let json = serde_json::to_string(&conn).unwrap();
         let decoded: RemoteConnection = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.name, "office");
-        assert_eq!(decoded.auth_username, "bob");
+        assert_eq!(decoded.auth_username.as_deref(), Some("bob"));
         assert!(decoded.enabled);
         match decoded.transport {
-            RemoteTransport::Direct { url } => assert_eq!(url, "http://office:9877"),
+            RemoteTransport::Direct {
+                url,
+                tls_fingerprint,
+            } => {
+                assert_eq!(url, "http://office:9877");
+                assert!(tls_fingerprint.is_none());
+            }
             other => panic!("expected Direct, got {other:?}"),
         }
     }
@@ -639,6 +1173,70 @@ mod tests {
         let direct_json = serde_json::to_string(&direct).unwrap();
         let direct_val: serde_json::Value = serde_json::from_str(&direct_json).unwrap();
         assert_eq!(direct_val["transport"]["type"], "Direct");
+
+        let local = RemoteConnection::new_local_port("l", 9877);
+        let local_val = serde_json::to_value(&local).unwrap();
+        assert_eq!(local_val["transport"]["type"], "Local");
+    }
+
+    #[test]
+    fn local_instance_json_round_trip() {
+        let conn = RemoteConnection::new_local_instance("dev-instance", "dev-box");
+        let json = serde_json::to_string(&conn).unwrap();
+        let decoded: RemoteConnection = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.auth_username, None);
+        match decoded.transport {
+            RemoteTransport::Local { port, instance_id } => {
+                assert!(port.is_none());
+                assert_eq!(instance_id.as_deref(), Some("dev-box"));
+            }
+            other => panic!("expected Local, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_port_json_round_trip() {
+        let conn = RemoteConnection::new_local_port("debug-instance", 9877);
+        let json = serde_json::to_string(&conn).unwrap();
+        let decoded: RemoteConnection = serde_json::from_str(&json).unwrap();
+        match decoded.transport {
+            RemoteTransport::Local { port, instance_id } => {
+                assert_eq!(port, Some(9877));
+                assert!(instance_id.is_none());
+            }
+            other => panic!("expected Local, got {other:?}"),
+        }
+    }
+
+    /// The nested shape is the only one written: no flat key survives a save.
+    #[test]
+    fn an_ssh_transport_is_written_nested_only() {
+        let value = serde_json::to_value(RemoteConnection::new_ssh("s", "h", "u")).unwrap();
+        let transport = value["transport"].as_object().unwrap();
+        let mut keys: Vec<&str> = transport.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["remote_daemon_port", "ssh", "type"]);
+        assert_eq!(transport["ssh"]["host"], "h");
+    }
+
+    #[test]
+    fn missing_auth_username_defaults_to_none_and_null_is_accepted() {
+        let mut value =
+            serde_json::to_value(RemoteConnection::new_direct("d", "http://x", "u")).unwrap();
+        value["auth_username"] = serde_json::Value::Null;
+        let decoded: RemoteConnection = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(decoded.auth_username, None);
+        value.as_object_mut().unwrap().remove("auth_username");
+        let decoded: RemoteConnection = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.auth_username, None);
+    }
+
+    #[test]
+    fn an_ssh_transport_mixing_both_shapes_is_rejected() {
+        let mut value = serde_json::to_value(RemoteConnection::new_ssh("s", "h", "u")).unwrap();
+        value["transport"]["ssh_host"] = "other".into();
+        let err = serde_json::from_value::<RemoteConnection>(value).unwrap_err();
+        assert!(err.to_string().contains("both a nested"), "{err}");
     }
 
     #[test]
@@ -671,18 +1269,112 @@ mod tests {
         assert!(conn.enabled);
         match conn.transport {
             RemoteTransport::Ssh {
-                ssh_port,
+                ssh,
                 remote_daemon_port,
-                ssh_user,
-                ..
+                start_if_not_running,
+                leave_running_on_disconnect,
+                instance_id,
             } => {
-                assert_eq!(ssh_port, 22);
+                assert_eq!(ssh.port, 22);
                 assert_eq!(remote_daemon_port, 9877);
-                assert_eq!(ssh_user, "myuser");
+                assert_eq!(ssh.user, "myuser");
+                assert!(!start_if_not_running, "provisioning must default off");
+                assert!(!leave_running_on_disconnect);
+                assert!(instance_id.is_none());
             }
             other => panic!("expected Ssh, got {other:?}"),
         }
-        assert_eq!(conn.auth_username, "myuser");
+        assert_eq!(conn.auth_username.as_deref(), Some("myuser"));
+    }
+
+    /// A nested `Ssh` transport written before the provisioning fields existed
+    /// still reads, with every one of them off — additive, no migration.
+    #[test]
+    fn ssh_transport_without_provisioning_fields_still_deserializes() {
+        let json = serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "name": "pre-provisioning",
+            "transport": {
+                "type": "Ssh",
+                "ssh": {
+                    "host": "h", "port": 22, "user": "u", "identity_file": null,
+                    "server_alive_interval": 15, "server_alive_count_max": 3,
+                    "strict_host_key_checking": "AcceptNew",
+                },
+                "remote_daemon_port": 9877,
+            },
+            "enabled": true,
+        });
+        let decoded: RemoteConnection = serde_json::from_value(json).unwrap();
+        match decoded.transport {
+            RemoteTransport::Ssh {
+                start_if_not_running,
+                leave_running_on_disconnect,
+                instance_id,
+                ..
+            } => {
+                assert!(!start_if_not_running);
+                assert!(!leave_running_on_disconnect);
+                assert!(instance_id.is_none());
+            }
+            other => panic!("expected Ssh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ssh_provisioning_fields_round_trip_when_set() {
+        let mut conn = RemoteConnection::new_ssh("prov", "h", "u");
+        let RemoteTransport::Ssh {
+            start_if_not_running,
+            leave_running_on_disconnect,
+            instance_id,
+            ..
+        } = &mut conn.transport
+        else {
+            panic!("expected Ssh");
+        };
+        *start_if_not_running = true;
+        *leave_running_on_disconnect = true;
+        *instance_id = Some("dev-box".to_string());
+
+        let json = serde_json::to_string(&conn).unwrap();
+        let decoded: RemoteConnection = serde_json::from_str(&json).unwrap();
+        decoded.validate().unwrap();
+        match decoded.transport {
+            RemoteTransport::Ssh {
+                start_if_not_running,
+                leave_running_on_disconnect,
+                instance_id,
+                ..
+            } => {
+                assert!(start_if_not_running);
+                assert!(leave_running_on_disconnect);
+                assert_eq!(instance_id, Some("dev-box".to_string()));
+            }
+            other => panic!("expected Ssh, got {other:?}"),
+        }
+    }
+
+    /// `instance_id` reaches a remote shell as `--instance <id>`: anything that
+    /// is not a plain lowercase DNS label is refused at save time.
+    #[test]
+    fn ssh_instance_id_with_shell_syntax_is_refused() {
+        for hostile in [
+            "dev; rm -rf /",
+            "dev$(whoami)",
+            "dev`id`",
+            "dev box",
+            "UPPER",
+            "default",
+            "--set-password",
+            "",
+        ] {
+            let mut conn = RemoteConnection::new_ssh("prov", "h", "u");
+            if let RemoteTransport::Ssh { instance_id, .. } = &mut conn.transport {
+                *instance_id = Some(hostile.to_string());
+            }
+            assert!(conn.validate().is_err(), "{hostile:?} must be refused");
+        }
     }
 
     #[test]
@@ -793,8 +1485,10 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         server
             .mock("GET", "/api/auth/session-token")
+            // What `mcp_http::auth` answers a Basic header with the wrong
+            // password once a password IS configured.
             .with_status(401)
-            .with_body("Scan the QR code or authenticate with Basic Auth")
+            .with_body("Invalid credentials")
             .create_async()
             .await;
 
@@ -806,6 +1500,56 @@ mod tests {
             err.contains("Authentication rejected"),
             "expected a rejection, got: {err}"
         );
+        assert_ne!(err, REMOTE_PASSWORD_NOT_CONFIGURED);
+    }
+
+    /// A daemon with no password at all answers a Basic header with the
+    /// "Scan the QR code" body. That — and only that — is reported as
+    /// unconfigured, which is the one case `ssh_provision` may offer to set a
+    /// password for. A wrong password must never read as unconfigured.
+    #[tokio::test]
+    async fn session_token_request_tells_an_unconfigured_daemon_apart() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", "/api/auth/session-token")
+            .with_status(401)
+            .with_body("Scan the QR code or authenticate with Basic Auth")
+            .create_async()
+            .await;
+
+        let err = request_session_token(&server.url(), "vom", "s3cret")
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, REMOTE_PASSWORD_NOT_CONFIGURED);
+        assert!(!err.contains("s3cret"));
+    }
+
+    /// With `auth_username` absent the exchange sends an EMPTY username
+    /// (`remote_runtime::authenticate`); a daemon refuses it (see
+    /// `mcp_http::auth`'s `basic_auth_empty_username_fails_closed_*`), and the
+    /// refusal surfaces as a rejection, not a token.
+    #[tokio::test]
+    async fn session_token_request_with_no_username_fails_closed() {
+        let mut server = mockito::Server::new_async().await;
+        let route = server
+            .mock("GET", "/api/auth/session-token")
+            // Basic OnMzY3JldA== is ":s3cret".
+            .match_header("authorization", "Basic OnMzY3JldA==")
+            .with_status(401)
+            .create_async()
+            .await;
+
+        let err = request_session_token(&server.url(), "", "s3cret")
+            .await
+            .unwrap_err();
+
+        assert!(err.contains("Authentication rejected"), "{err}");
+        assert!(
+            !err.contains("s3cret"),
+            "password leaked into the error: {err}"
+        );
+        route.assert_async().await;
     }
 
     /// A daemon older than this route has no handler for it: the request falls
@@ -886,6 +1630,472 @@ mod tests {
         assert!(conn.validate().is_err());
     }
 
+    fn direct_with_pin(url: &str, pin: &str) -> RemoteConnection {
+        let mut conn = RemoteConnection::new_direct("d", url, "u");
+        conn.transport = RemoteTransport::Direct {
+            url: url.to_string(),
+            tls_fingerprint: Some(pin.to_string()),
+        };
+        conn
+    }
+
+    /// A pin is only ever a SHA-256 fingerprint on an https:// URL: anything
+    /// else is refused at save, so a garbled value can never stand in for one.
+    #[test]
+    fn validate_checks_a_pinned_certificate_fingerprint() {
+        let pin = "ab".repeat(32);
+        assert!(direct_with_pin("https://box:9877", &pin).validate().is_ok());
+        assert!(
+            direct_with_pin("https://box:9877", "nope")
+                .validate()
+                .is_err()
+        );
+        assert!(direct_with_pin("http://box:9877", &pin).validate().is_err());
+    }
+
+    /// The pin is additive: an unpinned Direct transport serializes exactly as
+    /// before (older builds read it unchanged), a pinned one round-trips, and
+    /// a file without the key reads as unpinned.
+    #[test]
+    fn tls_fingerprint_is_omitted_when_unset_and_round_trips_when_set() {
+        let plain = RemoteConnection::new_direct("d", "https://box:9877", "u");
+        let json = serde_json::to_value(&plain).unwrap();
+        assert_eq!(
+            json["transport"],
+            serde_json::json!({"type": "Direct", "url": "https://box:9877"})
+        );
+        let pinned = direct_with_pin("https://box:9877", &"cd".repeat(32));
+        let back: RemoteConnection =
+            serde_json::from_str(&serde_json::to_string(&pinned).unwrap()).unwrap();
+        assert!(matches!(
+            back.transport,
+            RemoteTransport::Direct { tls_fingerprint: Some(ref p), .. } if *p == "cd".repeat(32)
+        ));
+    }
+
+    #[test]
+    fn validate_ssh_connection_without_auth_username_is_ok() {
+        let mut conn = RemoteConnection::new_ssh("server", "host.example.com", "alice");
+        conn.auth_username = None;
+        assert!(conn.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_local_requires_port_or_instance_id() {
+        let mut conn = RemoteConnection::new_local_port("local", 9877);
+        conn.transport = RemoteTransport::Local {
+            port: None,
+            instance_id: None,
+        };
+        let err = conn.validate().unwrap_err();
+        assert!(err.contains("port or an instance_id"), "{err}");
+    }
+
+    #[test]
+    fn validate_local_rejects_both_port_and_instance_id() {
+        let mut conn = RemoteConnection::new_local_port("local", 9877);
+        conn.transport = RemoteTransport::Local {
+            port: Some(9877),
+            instance_id: Some("dev-box".to_string()),
+        };
+        let err = conn.validate().unwrap_err();
+        assert!(err.contains("not both"), "{err}");
+    }
+
+    #[test]
+    fn validate_local_port_and_instance_id_accepted() {
+        assert!(
+            RemoteConnection::new_local_port("l", 9877)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            RemoteConnection::new_local_instance("l", "dev-box")
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_local_zero_port_rejected() {
+        let err = RemoteConnection::new_local_port("l", 0)
+            .validate()
+            .unwrap_err();
+        assert!(err.contains("port must be in range"), "{err}");
+    }
+
+    #[test]
+    fn validate_local_blank_instance_id_treated_as_absent() {
+        let mut conn = RemoteConnection::new_local_port("local", 9877);
+        conn.transport = RemoteTransport::Local {
+            port: None,
+            instance_id: Some("   ".to_string()),
+        };
+        let err = conn.validate().unwrap_err();
+        assert!(err.contains("port or an instance_id"), "{err}");
+    }
+
+    // --- Pre-nested (flat) connections.json: reader + one-time migration -------
+
+    /// A `connections.json` exactly as the pre-nested build wrote it — one entry
+    /// per transport, every main-era field set to a non-default value — plus a
+    /// key this build does not know, to prove the migration moves keys instead
+    /// of re-serializing the typed struct.
+    fn legacy_connections_json() -> serde_json::Value {
+        serde_json::json!([
+            {
+                "id": "6a0f1c2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b",
+                "name": "vps",
+                "transport": {
+                    "type": "Ssh",
+                    "ssh_host": "vps.example.com",
+                    "ssh_port": 2222,
+                    "ssh_user": "deploy",
+                    "identity_file": "/home/deploy/.ssh/id_ed25519",
+                    "remote_daemon_port": 9877
+                },
+                "auth_username": "boss",
+                "enabled": false,
+                "auto_update": true,
+                "deploy": "on_connect",
+                "survive_secs": 600,
+                "future_field": {"kept": true}
+            },
+            {
+                "id": "7b1f2d3e-5c6d-4f70-9b8c-0d1e2f3a4b5c",
+                "name": "office",
+                "transport": {"type": "Direct", "url": "http://office:9877"},
+                "auth_username": "bob",
+                "enabled": true,
+                "auto_update": false,
+                "deploy": "installed",
+                "survive_secs": 1800
+            },
+            {
+                "id": "8c2a3e4f-6d7e-4081-8c9d-1e2f3a4b5c6d",
+                "name": "no-identity",
+                "transport": {
+                    "type": "Ssh",
+                    "ssh_host": "h",
+                    "ssh_port": 22,
+                    "ssh_user": "u",
+                    "identity_file": null,
+                    "remote_daemon_port": 9877
+                },
+                "auth_username": "u",
+                "enabled": true
+            },
+            {
+                "id": "9d3b4f50-7e8f-4192-9dae-2f3a4b5c6d7e",
+                "name": "behind-nat",
+                "transport": {"type": "Relay"},
+                "auth_username": "relay",
+                "enabled": true,
+                "auto_update": true,
+                "deploy": "never",
+                "survive_secs": 1800
+            }
+        ])
+    }
+
+    fn assert_is_the_legacy_vps(conn: &RemoteConnection) {
+        assert_eq!(conn.id, "6a0f1c2e-4b5d-4e6f-8a7b-9c0d1e2f3a4b");
+        assert_eq!(conn.name, "vps");
+        assert_eq!(conn.auth_username.as_deref(), Some("boss"));
+        assert!(!conn.enabled);
+        assert!(conn.auto_update);
+        assert_eq!(conn.deploy, DeployMode::OnConnect);
+        assert_eq!(conn.survive_secs, 600);
+        let RemoteTransport::Ssh {
+            ssh,
+            remote_daemon_port,
+            ..
+        } = &conn.transport
+        else {
+            panic!("expected Ssh, got {:?}", conn.transport);
+        };
+        assert_eq!(*remote_daemon_port, 9877);
+        assert_eq!(ssh.host, "vps.example.com");
+        assert_eq!(ssh.port, 2222);
+        assert_eq!(ssh.user, "deploy");
+        assert_eq!(
+            ssh.identity_file,
+            Some(PathBuf::from("/home/deploy/.ssh/id_ed25519"))
+        );
+        // What the flat shape actually ran with.
+        assert_eq!(ssh.server_alive_interval, 15);
+        assert_eq!(ssh.server_alive_count_max, 3);
+        assert_eq!(
+            ssh.strict_host_key_checking,
+            StrictHostKeyChecking::AcceptNew
+        );
+        assert!(ssh.compression);
+    }
+
+    #[test]
+    fn the_flat_pre_nested_shape_still_loads_with_every_field() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        std::fs::write(
+            dir.path().join(CONNECTIONS_FILE),
+            serde_json::to_vec_pretty(&legacy_connections_json()).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = RemoteConnectionStore::load(dir.path()).unwrap();
+
+        assert_eq!(loaded.len(), 4);
+        assert_is_the_legacy_vps(&loaded[0]);
+        assert!(
+            matches!(&loaded[1].transport, RemoteTransport::Direct { url, .. } if url == "http://office:9877")
+        );
+        assert_eq!(loaded[1].deploy, DeployMode::Installed);
+        // Main-era entry without the newer fields still gets their defaults.
+        assert_eq!(loaded[2].deploy, DeployMode::Never);
+        assert_eq!(loaded[2].survive_secs, 1_800);
+        assert!(matches!(loaded[3].transport, RemoteTransport::Relay));
+        assert_eq!(loaded[3].auth_username.as_deref(), Some("relay"));
+    }
+
+    /// Every record exactly as main's flat-model build writes `connections.json`
+    /// (Ssh flat, Direct without a pin, Relay) reads through the wire types,
+    /// re-serializes in the nested shape, and reads back as the same records.
+    /// A Relay transport stays exactly `{"type": "Relay"}` on the way out.
+    #[test]
+    fn main_written_connections_round_trip_through_the_wire_types() {
+        let main_shape = legacy_connections_json();
+        let first: Vec<RemoteConnection> = serde_json::from_value(main_shape.clone()).unwrap();
+        let written = serde_json::to_value(&first).unwrap();
+        let second: Vec<RemoteConnection> = serde_json::from_value(written.clone()).unwrap();
+
+        assert_eq!(written, serde_json::to_value(&second).unwrap());
+        assert_eq!(written[3]["transport"], serde_json::json!({"type": "Relay"}));
+        assert_eq!(written[1]["transport"]["url"], main_shape[1]["transport"]["url"]);
+        for (i, entry) in main_shape.as_array().unwrap().iter().enumerate() {
+            for key in ["id", "name", "auth_username", "enabled"] {
+                assert_eq!(written[i][key], entry[key], "entry {i} field {key}");
+            }
+            let flat = &entry["transport"];
+            if flat["type"] == "Ssh" {
+                let nested = &written[i]["transport"]["ssh"];
+                assert_eq!(nested["host"], flat["ssh_host"], "entry {i}");
+                assert_eq!(nested["port"], flat["ssh_port"], "entry {i}");
+                assert_eq!(nested["user"], flat["ssh_user"], "entry {i}");
+                assert_eq!(nested["identity_file"], flat["identity_file"], "entry {i}");
+                assert_eq!(
+                    written[i]["transport"]["remote_daemon_port"],
+                    flat["remote_daemon_port"]
+                );
+            }
+        }
+    }
+
+    /// A flat legacy Ssh record without `ssh_host` names that field, not the
+    /// nested `ssh` object the reader falls back from.
+    #[test]
+    fn a_flat_ssh_record_without_a_host_names_ssh_host() {
+        let mut entry = legacy_connections_json()[0].clone();
+        entry["transport"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ssh_host");
+        let err = serde_json::from_value::<RemoteConnection>(entry)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("missing field `ssh_host`"), "{err}");
+    }
+
+    /// Old file -> migrate -> load gives the same connections, the original
+    /// bytes are kept verbatim as a backup, unknown keys survive, and a second
+    /// run writes nothing.
+    #[test]
+    fn migrating_connections_json_round_trips_every_field_and_is_idempotent() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join(CONNECTIONS_FILE);
+        let original = serde_json::to_vec_pretty(&legacy_connections_json()).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let before = RemoteConnectionStore::load(dir.path()).unwrap();
+
+        let backup = migrate_legacy_connections_file(dir.path())
+            .unwrap()
+            .expect("a flat file is migrated");
+
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            original,
+            "backup must be the original bytes"
+        );
+        assert_eq!(backup.parent(), Some(dir.path()));
+        let raw: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        for entry in raw.as_array().unwrap() {
+            let transport = entry["transport"].as_object().unwrap();
+            for gone in ["ssh_host", "ssh_port", "ssh_user", "identity_file"] {
+                assert!(!transport.contains_key(gone), "{gone} survived: {entry}");
+            }
+        }
+        assert_eq!(raw[0]["future_field"], serde_json::json!({"kept": true}));
+        assert_eq!(raw[0]["transport"]["remote_daemon_port"], 9877);
+        assert!(raw[2]["transport"]["ssh"]["identity_file"].is_null());
+
+        let after = RemoteConnectionStore::load(dir.path()).unwrap();
+        assert_is_the_legacy_vps(&after[0]);
+        assert_eq!(
+            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(&after).unwrap(),
+            "the migrated file must load as exactly what the flat one loaded as"
+        );
+
+        let rewritten = std::fs::read(&path).unwrap();
+        assert_eq!(migrate_legacy_connections_file(dir.path()).unwrap(), None);
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            rewritten,
+            "second run must not write"
+        );
+        let backups = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".bak")
+            })
+            .count();
+        assert_eq!(
+            backups, 1,
+            "an idempotent run must not leave another backup"
+        );
+    }
+
+    #[test]
+    fn migration_is_a_no_op_without_a_file_or_on_a_nested_file() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        assert_eq!(migrate_legacy_connections_file(dir.path()).unwrap(), None);
+
+        RemoteConnectionStore::save(
+            dir.path(),
+            &[
+                RemoteConnection::new_ssh("s", "h", "u"),
+                RemoteConnection::new_local_port("l", 9877),
+            ],
+        )
+        .unwrap();
+        let bytes = std::fs::read(dir.path().join(CONNECTIONS_FILE)).unwrap();
+        assert_eq!(migrate_legacy_connections_file(dir.path()).unwrap(), None);
+        assert_eq!(
+            std::fs::read(dir.path().join(CONNECTIONS_FILE)).unwrap(),
+            bytes
+        );
+    }
+
+    /// A flat file the typed reader would reject after rewriting (here: a port
+    /// that is not a number) is left exactly as it was, with no backup.
+    #[test]
+    fn a_migration_that_would_not_load_writes_nothing() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join(CONNECTIONS_FILE);
+        let mut doc = legacy_connections_json();
+        doc[0]["transport"]["ssh_port"] = "not-a-port".into();
+        let original = serde_json::to_vec_pretty(&doc).unwrap();
+        std::fs::write(&path, &original).unwrap();
+
+        let err = migrate_legacy_connections_file(dir.path()).unwrap_err();
+
+        assert!(err.contains("left unmigrated"), "{err}");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(
+            std::fs::read_dir(dir.path()).unwrap().count(),
+            2,
+            "file + its .lock only"
+        );
+    }
+
+    // --- resolve_local_instance_port_at ---
+
+    #[test]
+    fn resolve_local_instance_port_missing_directory_is_not_found() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let err = resolve_local_instance_port_at("no-such-instance", None, &home).unwrap_err();
+        assert_eq!(err, LocalInstancePortError::InstanceNotFound);
+    }
+
+    #[test]
+    fn resolve_local_instance_port_invalid_id_is_not_found() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        // "default" is reserved by `AppInstance::named` and rejected outright.
+        let err = resolve_local_instance_port_at("default", None, &home).unwrap_err();
+        assert_eq!(err, LocalInstancePortError::InstanceNotFound);
+    }
+
+    fn instance_dir(home: &Path, id: &str) -> PathBuf {
+        let dir = crate::app_instance::AppInstance::named(id)
+            .unwrap()
+            .config_dir_from(None, home);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn resolve_local_instance_port_missing_config_file_is_unreadable() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let home = tmp.path().join("home");
+        instance_dir(&home, "dev-box");
+        let err = resolve_local_instance_port_at("dev-box", None, &home).unwrap_err();
+        assert!(matches!(err, LocalInstancePortError::Unreadable(_)));
+    }
+
+    #[test]
+    fn resolve_local_instance_port_corrupt_json_is_unreadable() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let home = tmp.path().join("home");
+        let dir = instance_dir(&home, "dev-box");
+        std::fs::write(dir.join("config.json"), "not valid json{{{").unwrap();
+        let err = resolve_local_instance_port_at("dev-box", None, &home).unwrap_err();
+        assert!(matches!(err, LocalInstancePortError::Unreadable(_)));
+    }
+
+    #[test]
+    fn resolve_local_instance_port_zero_port_is_unreadable() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let home = tmp.path().join("home");
+        let dir = instance_dir(&home, "dev-box");
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::json!({"services": {"server": {"port": 0}}}).to_string(),
+        )
+        .unwrap();
+        let err = resolve_local_instance_port_at("dev-box", None, &home).unwrap_err();
+        assert!(matches!(err, LocalInstancePortError::Unreadable(_)));
+    }
+
+    #[test]
+    fn resolve_local_instance_port_reads_the_real_port_ignoring_other_fields() {
+        let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let home = tmp.path().join("home");
+        let dir = instance_dir(&home, "dev-box");
+        std::fs::write(
+            dir.join("config.json"),
+            serde_json::json!({
+                "shell": "/bin/zsh",
+                "services": {
+                    "server": {"port": 9878, "enabled": true},
+                    "auth": {"username": "boss"},
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_local_instance_port_at("dev-box", None, &home).unwrap(),
+            9878
+        );
+    }
+
     // --- IPC/HTTP parity: shared save path enforces validate() (story 127-89ec) -
     // `upsert_remote_connection` is the single persist path behind both the Tauri
     // `save_remote_connection` command (which previously skipped validation) and
@@ -908,80 +2118,42 @@ mod tests {
         );
     }
 
-    // --- IPC/HTTP parity bug (see plan Phase 1): `delete_remote_connection` ---
-    //
-    // The HTTP route (`mcp_http::config_routes::delete_remote_connection`)
-    // calls `state.tunnel_manager.stop_if_running(&id)` before deleting the
-    // connection from `connections.json`. The IPC command right above
-    // (`delete_remote_connection` in this file) does not — verified by
-    // reading its source: it goes straight from loading the store to
-    // `retain`/`save`, with no `tunnel_manager` reference at all. The IPC
-    // side cannot be pinned by a direct call here for the same reason as
-    // `tunnels::tauri_commands`'s parity-bug tests: it takes
-    // `tauri::State<'_, Arc<AppState>>`, which has no public constructor
-    // outside a running Tauri app. Do not "fix" the test below when Phase 1
-    // makes the two sides agree; update it to assert the new, unified
-    // behavior (both sides stop a running tunnel, or neither does) instead.
-    //
-    // REBASE NOTE (wip -> main replay): the premise above is wip's code, not
-    // main's. On main both the IPC command and the HTTP route call the single
-    // `remote_runtime::teardown_deleted` path (#803-f875), and the old
-    // `stop_if_running(&connection_id)` was removed because a tunnel is keyed
-    // by its TunnelProfile's UUID, never by the connection id — so a manager
-    // entry seeded under the connection id is (correctly) not what teardown
-    // stops, and this assertion fails. Kept, ignored, until the SSH/remote
-    // consolidation replay (wip afc10a2c9) resolves this test against main's
-    // design.
-    #[tokio::test]
-    #[ignore = "wip-only premise: main tears a deleted connection down via remote_runtime::teardown_deleted (IPC and HTTP alike), not stop_if_running(connection id); resolve with the afc10a2c9 replay"]
-    async fn known_bug_http_delete_stops_a_running_tunnel_before_deleting() {
-        use crate::tunnels::profile::TunnelProfile;
-        use axum::body::Body;
-        use axum::extract::connect_info::ConnectInfo;
-        use axum::http::{Request, StatusCode};
-        use tower::ServiceExt;
+    // `known_bug_http_delete_stops_a_running_tunnel_before_deleting` (wip) is
+    // gone on purpose: its premise — HTTP delete stopping a tunnel keyed by the
+    // CONNECTION id — never held on this design, where IPC and HTTP both reach
+    // `teardown_deleted` through `delete_remote_connection_impl`. The HTTP
+    // half is covered by `config_routes::tests::deleting_a_connection_over_http_*`.
 
+    #[tokio::test]
+    async fn delete_remote_connection_impl_reports_a_missing_id() {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        assert!(
+            !delete_remote_connection_impl(&state, "does-not-exist")
+                .await
+                .unwrap()
+        );
+    }
+
+    /// Both vault entries go with the record — the password AND the pairing
+    /// token — on the one path both transports take.
+    #[tokio::test]
+    async fn delete_remote_connection_impl_forgets_password_and_pairing_token() {
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
         let conn = RemoteConnection::new_ssh("test", "127.0.0.1", "nobody");
         let id = conn.id.clone();
         upsert_remote_connection(&state.data_dir, None, conn).unwrap();
+        set_connection_password(&id, "hunter2").unwrap();
+        set_pairing_token(&id, "pair-secret").unwrap();
 
-        // Seed a "running" entry in the real `TunnelManager` under the same
-        // id, via its only public entry point (there is no test-only way to
-        // reach its private map from outside `tunnels::manager`). The
-        // profile's host/port don't need to actually be reachable — `start`
-        // publishes the entry into the manager's map synchronously, before
-        // its background supervision loop ever attempts a real connection.
-        let mut seed_profile = TunnelProfile::new("seed", "127.0.0.1", "nobody");
-        seed_profile.id = id.clone();
-        seed_profile.port = 1;
-        state
-            .tunnel_manager
-            .start(seed_profile)
-            .await
-            .expect("seeding a tunnel manager entry must succeed");
+        assert!(delete_remote_connection_impl(&state, &id).await.unwrap());
+
         assert!(
-            state.tunnel_manager.get_status(&id).is_some(),
-            "seed tunnel must be visible in the manager before delete"
+            RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .is_empty()
         );
-
-        let app = crate::mcp_http::build_router(state.clone(), false, true);
-        let mut req = Request::delete(format!("/config/remote-connections/{id}"))
-            .body(Body::empty())
-            .unwrap();
-        req.extensions_mut()
-            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
-        let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        // KNOWN BUG, see plan Phase 1: the IPC command does not do this — a
-        // tunnel started for a connection deleted over IPC would be left
-        // running, orphaned from the connection list that used to reference
-        // it.
-        assert!(
-            state.tunnel_manager.get_status(&id).is_none(),
-            "HTTP delete must stop the running tunnel for this connection id"
-        );
+        assert!(!connection_password_exists(&id).unwrap());
+        assert_eq!(pairing_token(&id).unwrap(), None);
     }
 
     #[test]

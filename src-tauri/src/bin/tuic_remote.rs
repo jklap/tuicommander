@@ -3,6 +3,9 @@ struct ParsedArgs {
     instance: Option<String>,
     credential_file: Option<std::path::PathBuf>,
     set_password: bool,
+    /// `--set-password-if-unset`: like `--set-password`, but refuses when the
+    /// daemon already has credentials (the mode remote provisioning uses).
+    set_password_if_unset: bool,
     build_info: bool,
     relay_pair: Option<tuicommander_lib::RelayPairOptions>,
     remote: tuicommander_lib::RemoteOptions,
@@ -17,6 +20,7 @@ where
     let mut instance = None;
     let mut credential_file = None;
     let mut set_password = false;
+    let mut set_password_if_unset = false;
     let mut build_info = false;
     let mut relay_pair: Option<tuicommander_lib::RelayPairOptions> = None;
     let mut relay_register_seen = false;
@@ -56,6 +60,12 @@ where
                     anyhow::bail!("--set-password may only be specified once");
                 }
                 set_password = true;
+            }
+            "--set-password-if-unset" => {
+                if set_password_if_unset {
+                    anyhow::bail!("--set-password-if-unset may only be specified once");
+                }
+                set_password_if_unset = true;
             }
             "--build-info" => {
                 if build_info {
@@ -152,10 +162,14 @@ where
             "--credential-file cannot be used with --set-password (file credentials are process-local)"
         );
     }
+    if set_password && set_password_if_unset {
+        anyhow::bail!("--set-password and --set-password-if-unset are mutually exclusive");
+
     Ok(ParsedArgs {
         instance,
         credential_file,
         set_password,
+        set_password_if_unset,
         build_info,
         relay_pair,
         remote,
@@ -197,6 +211,9 @@ fn main() -> anyhow::Result<()> {
 
     if parsed.set_password {
         return tuicommander_lib::set_password_interactive();
+    }
+    if parsed.set_password_if_unset {
+        return tuicommander_lib::set_password_if_unset_interactive();
     }
 
     if let Some(options) = parsed.relay_pair.take() {
@@ -298,6 +315,16 @@ mod tests {
         assert!(parse_args(["--relay-register"]).is_err());
         assert!(parse_args(["--relay-out", "x"]).is_err());
         assert!(parse_args(["--relay-pair"]).is_err());
+    }
+
+    #[test]
+    fn set_password_if_unset_is_its_own_mode() {
+        let parsed = parse_args(["--instance", "worker-a", "--set-password-if-unset"])
+            .expect("valid options");
+        assert!(parsed.set_password_if_unset);
+        assert!(!parsed.set_password);
+        assert!(parse_args(["--set-password", "--set-password-if-unset"]).is_err());
+        assert!(parse_args(["--set-password-if-unset", "--set-password-if-unset"]).is_err());
     }
 
     #[test]

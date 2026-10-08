@@ -1,5 +1,5 @@
 import { batch } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { settingsRefresh } from "../services/settingsRefresh";
 import { appLogger } from "./appLogger";
@@ -11,25 +11,17 @@ import { appLogger } from "./appLogger";
 export interface TunnelProfile {
 	id: string;
 	name: string;
+	/** Host/port/user/identity/keepalive config — shared shape with `RemoteTransport`'s `Ssh` variant. */
+	ssh: SshConnectionParams;
+	forwards: ForwardSpec[];
+	auto_connect: boolean;
+}
+
+export interface SshConnectionParams {
 	host: string;
 	port: number;
 	user: string;
 	identity_file: string | null;
-	forwards: ForwardSpec[];
-	options: ProfileOptions;
-	auto_connect: boolean;
-}
-
-export interface ForwardSpec {
-	type: "Local" | "Remote";
-	bind_port: number;
-	remote_host?: string;
-	remote_port?: number;
-	local_host?: string;
-	local_port?: number;
-}
-
-export interface ProfileOptions {
 	server_alive_interval: number;
 	server_alive_count_max: number;
 	strict_host_key_checking: "Yes" | "AcceptNew";
@@ -39,6 +31,15 @@ export interface ProfileOptions {
 	 * tunnelled client's frames are compressed here instead.
 	 */
 	compression: boolean;
+}
+
+export interface ForwardSpec {
+	type: "Local" | "Remote";
+	bind_port: number;
+	remote_host?: string;
+	remote_port?: number;
+	local_host?: string;
+	local_port?: number;
 }
 
 export type TunnelStatus =
@@ -103,7 +104,7 @@ function createTunnelsStore() {
 
 				batch(() => {
 					setState("profiles", profiles ?? []);
-					setState("activeTunnels", activeTunnelsMap);
+					setState("activeTunnels", reconcile(activeTunnelsMap));
 					setState("hydrated", true);
 				});
 
@@ -141,7 +142,11 @@ function createTunnelsStore() {
 				for (const tunnel of activeTunnels ?? []) {
 					activeTunnelsMap[tunnel.id] = tunnel;
 				}
-				setState("activeTunnels", activeTunnelsMap);
+				// `reconcile`, not a plain-object `setState`, which SolidJS store
+				// setters MERGE onto the existing key rather than replace — a tunnel
+				// the backend stopped reporting would otherwise linger in state
+				// forever (fixed, story: SSH Tunnels + Remote Servers consolidation).
+				setState("activeTunnels", reconcile(activeTunnelsMap));
 			} catch (err) {
 				appLogger.error("store", "Failed to refresh active tunnels", err);
 			}

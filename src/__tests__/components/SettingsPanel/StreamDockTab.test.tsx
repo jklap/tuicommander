@@ -60,6 +60,10 @@ describe("StreamDockTab", () => {
 		expect(rpc).toHaveBeenCalledWith("streamdock_list_devices");
 		expect(view.getByText("Disabled")).not.toBeNull();
 		expect(view.getByText("No StreamDock device currently detected.")).not.toBeNull();
+		// Neither running nor errored — the muted `.stopped` dot, not unstyled/invisible.
+		const dot = view.container.querySelector(".mcpStatusDot");
+		expect(dot?.className).toMatch(/\bstopped\b/);
+		expect(dot?.className).not.toMatch(/\brunning\b|\berror\b/);
 
 		view.unmount();
 	});
@@ -98,6 +102,8 @@ describe("StreamDockTab", () => {
 
 		expect(view.getByText("Connected — StreamDock M18")).not.toBeNull();
 		expect(view.getByText("Reconnected 2 time(s) since enabled.")).not.toBeNull();
+		const dot = view.container.querySelector(".mcpStatusDot");
+		expect(dot?.className).toMatch(/\brunning\b/);
 
 		view.unmount();
 	});
@@ -125,6 +131,11 @@ describe("StreamDockTab", () => {
 		await vi.advanceTimersByTimeAsync(0);
 
 		expect(view.getByText("device is claimed by another application (quit Mirabox Creator)")).not.toBeNull();
+		// last_error takes priority over the plain not-running state — the errored
+		// (red) dot, not the muted "waiting" one.
+		const dot = view.container.querySelector(".mcpStatusDot");
+		expect(dot?.className).toMatch(/\berror\b/);
+		expect(dot?.className).not.toMatch(/\brunning\b|\bstopped\b/);
 
 		view.unmount();
 	});

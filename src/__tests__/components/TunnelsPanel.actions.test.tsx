@@ -16,17 +16,17 @@ it("stops the active profile, opens its audit and closes on Escape", async () =>
 	const profile = {
 		id: "fixture",
 		name: "Fixture tunnel",
-		host: "host.example",
-		port: 22,
-		user: "dev",
-		identity_file: null,
-		forwards: [],
-		options: {
+		ssh: {
+			host: "host.example",
+			port: 22,
+			user: "dev",
+			identity_file: null,
 			server_alive_interval: 30,
 			server_alive_count_max: 3,
 			strict_host_key_checking: "Yes",
 			compression: true,
 		},
+		forwards: [],
 		auto_connect: false,
 	};
 	mockInvoke.mockImplementation(async (command: string) =>

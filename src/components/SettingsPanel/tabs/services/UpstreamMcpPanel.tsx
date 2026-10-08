@@ -19,6 +19,7 @@ import { Input } from "../../../ui/Input";
 import { Select } from "../../../ui/Select";
 import { Switch } from "../../../ui/Switch";
 import { ContextualHelp } from "../../ContextualHelp";
+import { ConnectionStatusBadge } from "../../../shared/ConnectionStatusBadge";
 import { MachineSelector } from "../../MachineSelector";
 import s from "../../Settings.module.css";
 import { SectionCard } from "../../SettingsPrimitives";
@@ -875,23 +876,26 @@ export const UpstreamMcpPanel: Component = () => {
 											{/* Status dot + label */}
 											<Show when={st()}>
 												{(entry) => (
-													<>
-														<span
-															style={{
-																display: "inline-block",
-																width: "7px",
-																height: "7px",
-																"border-radius": "50%",
-																background: statusColor(entry().status),
-															}}
-															title={statusLabel(entry().status)}
+													<Show
+														when={server.enabled && entry().status !== "disabled"}
+														fallback={
+															<span
+																style={{
+																	display: "inline-block",
+																	width: "7px",
+																	height: "7px",
+																	"border-radius": "50%",
+																	background: statusColor(entry().status),
+																}}
+																title={statusLabel(entry().status)}
+															/>
+														}
+													>
+														<ConnectionStatusBadge
+															color={statusColor(entry().status)}
+															label={statusLabel(entry().status)}
 														/>
-														<Show when={server.enabled && entry().status !== "disabled"}>
-															<span style={{ "font-size": "11px", color: statusColor(entry().status) }}>
-																{statusLabel(entry().status)}
-															</span>
-														</Show>
-													</>
+													</Show>
 												)}
 											</Show>
 											<Show when={!server.enabled}>
