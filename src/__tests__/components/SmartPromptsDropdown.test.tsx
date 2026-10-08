@@ -89,3 +89,42 @@ describe("SmartPromptsDropdown — disabled prompt", () => {
 		expect(mockExecuteSmartPrompt).not.toHaveBeenCalled();
 	});
 });
+
+describe("SmartPromptsDropdown — outside dismissal", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockCanExecute.mockReturnValue({ ok: true });
+		smartPromptsDropdownStore.open();
+	});
+
+	afterEach(() => {
+		cleanup();
+		smartPromptsDropdownStore.close();
+	});
+
+	// Catches: an invisible fixed inset:0 backdrop swallows the press (and wheel) meant for the UI underneath.
+	it("closes on an outside pointer press without swallowing it", async () => {
+		const onOutsidePress = vi.fn();
+		const { container } = render(() => (
+			<>
+				<aside onPointerDown={onOutsidePress}>Repositories</aside>
+				<SmartPromptsDropdown />
+			</>
+		));
+		await new Promise((r) => setImmediate(r));
+		expect(container.querySelector(".overlay")).toBeNull();
+		const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
+		container.querySelector("aside")!.dispatchEvent(event);
+		expect(smartPromptsDropdownStore.state.isOpen).toBe(false);
+		expect(onOutsidePress).toHaveBeenCalledOnce();
+		expect(event.defaultPrevented).toBe(false);
+	});
+
+	// Catches: pressing inside the dropdown is treated as an outside press.
+	it("stays open for a press inside the dropdown", async () => {
+		const { container } = render(() => <SmartPromptsDropdown />);
+		await new Promise((r) => setImmediate(r));
+		fireEvent.pointerDown(container.querySelector(".dropdown")!);
+		expect(smartPromptsDropdownStore.state.isOpen).toBe(true);
+	});
+});

@@ -1460,12 +1460,6 @@
 }
 
 /* ── Remote-only PR popover ── */
-.remoteOnlyOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-}
-
 .remoteOnlyPopover {
   position: fixed;
   left: var(--sidebar-width, 240px);
@@ -1743,16 +1737,9 @@
    Unified GitHub Panel (replaces RemoteOnlyPrPopover)
    --------------------------------------------------------------------------- */
 
-.ghPanelOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 200;
-  outline: none;
-  -webkit-app-region: no-drag;
-}
-
 .ghPanel {
   position: fixed;
+  -webkit-app-region: no-drag;
   left: var(--sidebar-width, 240px);
   top: 0;
   bottom: 0;

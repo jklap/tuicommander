@@ -696,6 +696,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   - The usage poll has no default provider: it stays silent until a Claude or Codex tab is focused, then follows that provider and stays on it while the active tab is a shell. A Codex-only install is therefore never shown a Claude reading (or a Claude "no token") it did not ask for
   - Codex windows are named by duration (`5h`, `7d`) because the API does not label them, and only the account limit is rendered. A plan whose account limit reports a single window shows a single reading; per-model limits stay in the dashboard, where their model name is visible
 - Shared ticker area: multi-source rotating messages from plugins with source labels, counter badge (1/3 ▸), click-to-cycle, right-click popover, and priority tiers (low/normal/urgent)
+- Non-modal popups (ticker popover, status info balloon, GitHub panel, Smart Prompts dropdown) have no backdrop: wheel and clicks reach the sidebar and terminal while they are open, and an outside press dismisses them without being consumed (shared `useOutsideDismiss` hook)
 - Update badge: "Update vX.Y.Z" (click to download & install), progress percentage during download
 
 ### 5.2 GitHub Section (center)
@@ -1088,7 +1089,7 @@ re-derived later.
 - Merge state: Ready to merge, Checks failing, Has conflicts, Behind base, Blocked, Draft
 - Review state: Approved, Changes requested, Review required
 - PR lifecycle rules: CLOSED PRs hidden from sidebar and status bar; MERGED PRs shown for 5 minutes of accumulated user activity then hidden
-- Auto-show PR popover filters out CLOSED and MERGED PRs (configurable in Settings > Git & GitHub > Pull Requests)
+- Auto-show PR popover filters out CLOSED and MERGED PRs (configurable in Settings > Git & GitHub > Pull Requests). The popover is non-modal: wheel scrolling over the sidebar keeps terminal keyboard focus; an outside press dismisses it and reaches the underlying control.
 
 ### 8.2 CI Checks
 - Ring indicator with proportional segments

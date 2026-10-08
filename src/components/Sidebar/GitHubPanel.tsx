@@ -1,5 +1,6 @@
 import { type Component, createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { executeCleanup } from "../../hooks/usePostMergeCleanup";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -263,6 +264,14 @@ export const GitHubPanel: Component<{
 
 	let panelRef: HTMLDivElement | undefined;
 
+	// The sidebar badge toggles the panel; its press must reach the toggle instead of closing first.
+	useOutsideDismiss({
+		inside: () => [panelRef],
+		onClose: props.onClose,
+		enabled: () => !cleanupCtx(),
+		ignoreSelector: "[data-gh-panel-trigger]",
+	});
+
 	// Keep the keyboard row in view without moving DOM focus.
 	createEffect(() => {
 		if (!activeRow()) return;
@@ -374,7 +383,6 @@ export const GitHubPanel: Component<{
 				)}
 			</Show>
 			<Show when={!cleanupCtx()}>
-				<div class={s.ghPanelOverlay} onClick={props.onClose} onKeyDown={handleKeyDown} tabIndex={-1} />
 				<div
 					class={s.ghPanel}
 					onKeyDown={handleKeyDown}
