@@ -325,6 +325,44 @@ describe("createBranchSelectionCoordinator", () => {
 			});
 		});
 
+		// Batch 40 review (PROBLEM 664c58d1f): with the manual Global Workspace
+		// showing, Add Terminal on another repo saved the WORKSPACE's layout under the
+		// outgoing branch's key — overwriting (here: deleting, since it is flat) the
+		// real split `globalWorkspaceStore.activate` had stashed for that branch.
+		it("keeps the outgoing branch's real split when Add Terminal leaves the Global Workspace", async () => {
+			await testInScope(async () => {
+				const { globalWorkspaceStore } = await import("../../stores/globalWorkspace");
+				const { paneLayoutKey } = await import("../../stores/savedPaneLayouts");
+				repositoriesStore.add({ path: "/Gits/alpha", displayName: "alpha" });
+				repositoriesStore.setWorkspace("/Gits/alpha", "main", { worktreePath: "/Gits/alpha" });
+				repositoriesStore.setActive("/Gits/alpha");
+				repositoriesStore.setActiveWorkspace("/Gits/alpha", "main");
+
+				const coordinator = makeCoordinator();
+				const t1 = await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main");
+				const t2 = await coordinator.handleAddTerminalToWorkspace("/Gits/alpha", "main");
+				const g1 = paneLayoutStore.createGroup();
+				paneLayoutStore.addTab(g1, { id: t1!, type: "terminal" });
+				const g2 = paneLayoutStore.split(g1, "vertical");
+				paneLayoutStore.addTab(g2!, { id: t2!, type: "terminal" });
+				expect(paneLayoutStore.isSplit()).toBe(true);
+
+				globalWorkspaceStore.promote(t1!);
+				globalWorkspaceStore.activate(paneLayoutKey("/Gits/alpha", "main"));
+				expect(globalWorkspaceStore.isManualWorkspaceActive()).toBe(true);
+				expect(paneLayoutStore.isSplit()).toBe(false); // the workspace's own flat view
+
+				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
+				repositoriesStore.setWorkspace("/Gits/beta", "main", { worktreePath: "/Gits/beta" });
+				await coordinator.handleAddTerminalToWorkspace("/Gits/beta", "main");
+
+				expect(globalWorkspaceStore.isActive()).toBe(false);
+				await coordinator.handleBranchSelectInner("/Gits/alpha", "main");
+				expect(paneLayoutStore.isSplit()).toBe(true);
+				expect(new Set(paneLayoutStore.getTerminalTabIds())).toEqual(new Set([t1, t2]));
+			});
+		});
+
 		// A terminal closed while its branch was off-screen never reaches the saved copy
 		// (the live-layout `onRemove` sweep only sees what's live). The whole split used to be
 		// discarded on return; now only that terminal's pane goes.
