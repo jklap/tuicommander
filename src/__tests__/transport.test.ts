@@ -1713,6 +1713,18 @@ describe("transport", () => {
 				workspaceId: "feat~a1b2c3d4",
 				keepWorktree: true,
 			});
+			const overridden = mapCommandToHttp("delete_local_branch", {
+				repoPath: "/r",
+				branchName: "feat",
+				workspaceId: "feat~a1b2c3d4",
+				overrideBusy: true,
+			});
+			expect(overridden.body).toEqual({
+				repoPath: "/r",
+				branchName: "feat",
+				workspaceId: "feat~a1b2c3d4",
+				overrideBusy: true,
+			});
 		});
 
 		it("maps update_from_base to POST", () => {

@@ -593,21 +593,36 @@ pub(super) async fn delete_local_branch_http(
         branch_name,
         workspace_id,
         keep_worktree,
+        override_busy,
     } = body;
+    let keep_worktree = keep_worktree.unwrap_or(false);
     let res = tokio::task::spawn_blocking(move || {
+        // Same live-session guard (and 409 body) as `DELETE /worktrees/{id}`
+        // when the checkout goes with the branch.
+        if let Err(busy) = crate::worktree::delete_local_branch_guard(
+            &state,
+            &repo_path,
+            &workspace_id,
+            keep_worktree,
+            override_busy.unwrap_or(false),
+        ) {
+            return Err(Err(busy));
+        }
         crate::worktree::delete_local_branch_impl(
             &repo_path,
             &branch_name,
             &workspace_id,
-            keep_worktree.unwrap_or(false),
-        )?;
+            keep_worktree,
+        )
+        .map_err(Ok)?;
         state.invalidate_repo_caches(&repo_path);
-        Ok::<(), String>(())
+        Ok(())
     })
     .await;
     match res {
         Ok(Ok(())) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
-        Ok(Err(e)) => err_500(&e),
+        Ok(Err(Err(busy))) => (StatusCode::CONFLICT, Json(busy.to_json())).into_response(),
+        Ok(Err(Ok(e))) => err_500(&e),
         Err(e) => err_500(&format!("Task failed: {e}")),
     }
 }
@@ -662,6 +677,7 @@ mod tests {
                 branch_name: "bare-branch".to_string(),
                 workspace_id: "bare-branch".to_string(),
                 keep_worktree: None,
+                override_busy: None,
             }),
         )
         .await;
@@ -679,6 +695,46 @@ mod tests {
         );
     }
 
+    /// B2.8: the HTTP twin answers the live-session refusal like
+    /// `DELETE /worktrees/{id}` — 409 with `code: worktree_busy` — and leaves the
+    /// worktree in place; `overrideBusy` lifts it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn delete_local_branch_http_refuses_to_take_a_busy_worktree_with_it() {
+        let repo = tuic_git::test_fixtures::setup_test_repo();
+        let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "busy-merged", false);
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session(&state, "pty-busy-merged");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "pty-busy-merged",
+            &worktree.to_string_lossy(),
+        );
+        let request = |override_busy: Option<bool>| GitDeleteLocalBranchRequest {
+            repo_path: repo.path().to_string_lossy().to_string(),
+            branch_name: "busy-merged".to_string(),
+            workspace_id: "busy-merged".to_string(),
+            keep_worktree: Some(false),
+            override_busy,
+        };
+
+        let response = delete_local_branch_http(State(state.clone()), Json(request(None))).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], "worktree_busy", "{body}");
+        assert!(
+            worktree.exists(),
+            "a refused delete must not remove the checkout"
+        );
+
+        let response =
+            delete_local_branch_http(State(state.clone()), Json(request(Some(true)))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
     #[tokio::test]
     async fn delete_local_branch_http_rejects_a_relative_repo_path() {
         let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
@@ -689,6 +745,7 @@ mod tests {
                 branch_name: "feature".to_string(),
                 workspace_id: "feature".to_string(),
                 keep_worktree: None,
+                override_busy: None,
             }),
         )
         .await;

@@ -291,7 +291,10 @@ a session whose live cwd is inside it OR that was spawned into it, excluding a s
 whose process already exited) are reported by the removal preview and block orphan
 cleanup. They also block the removal itself: `workspace_removal_guard` is the one
 backend guard IPC `remove_worktree`, HTTP `DELETE /worktrees/{id}` and MCP
-`repo worktree_remove` all call before git is asked to remove anything. A refusal starts
+`repo worktree_remove` all call before git is asked to remove anything — and so does a
+branch deletion that takes its worktree with it (IPC `delete_local_branch` / HTTP
+`POST /repo/delete-local-branch` with `keep_worktree` false, via
+`delete_local_branch_guard`; `override_busy` / `overrideBusy` lifts it the same way). A refusal starts
 with `worktree_busy:` (HTTP 409 with `code: "worktree_busy"` and `live_sessions`; the
 same body as the MCP `error`), and only the separate `override_busy` flag lifts it —
 never `force` or `override_lock`. A checkout that does not exist and the main checkout
