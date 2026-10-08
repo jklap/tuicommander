@@ -421,7 +421,9 @@ function createGlobalWorkspaceStore() {
 				const activeTab = activeGroup?.activeTabId;
 				const members = workspace().promoted;
 				const target = activeTab && members.has(activeTab) ? activeTab : [...members][0];
-				if (target) terminalsStore.setActive(target);
+				// No member to focus: clear rather than keep pointing at the PREVIOUS
+				// scope's terminal, whose content would otherwise stay on screen.
+				terminalsStore.setActive(target ?? null);
 			}
 		},
 
