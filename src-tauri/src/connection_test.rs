@@ -132,9 +132,30 @@ pub(crate) async fn test_connection_impl(request: &TestConnectionRequest) -> Con
                 }
             };
             let url = format!("http://127.0.0.1:{resolved_port}");
+            // The credential below is sent with the health request itself, so
+            // the instance's identity is proven first (same check as Connect).
+            if let Err(reason) = verify_local_target(&url, instance_id.as_deref()).await {
+                return ConnectionTestResult::Unreachable { reason };
+            }
             test_http_health(&url, username, password).await
         }
     }
+}
+
+/// Unauthenticated `/health` + `remote_runtime::verify_local_instance_identity`
+/// for a Local target, before any credential goes to it.
+async fn verify_local_target(url: &str, instance_id: Option<&str>) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_TEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {}", e.without_url()))?;
+    let health = crate::remote_runtime::read_health(&client, url).await?;
+    crate::remote_runtime::verify_local_instance_identity(
+        &health,
+        instance_id.map(str::trim).filter(|id| !id.is_empty()),
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -602,6 +623,39 @@ mod tests {
             test_connection_impl(&local(Some(port), None)).await,
             ConnectionTestResult::Unreachable { .. }
         ));
+    }
+
+    /// Test Connection sends the password WITH its health request, so a
+    /// Local port held by something that can't prove it is a TUICommander
+    /// instance of this user is reported Unreachable and gets no credential.
+    #[tokio::test]
+    async fn local_port_held_by_an_unverified_listener_gets_no_credential() {
+        let mut server = mockito::Server::new_async().await;
+        let _plain = server
+            .mock("GET", "/health")
+            .match_header("authorization", mockito::Matcher::Missing)
+            .with_body(r#"{"instance_id":"squatter","socket_path":"/tmp/nope.sock"}"#)
+            .create_async()
+            .await;
+        let with_credential = server
+            .mock("GET", "/health")
+            .match_header("authorization", mockito::Matcher::Any)
+            .with_body("{}")
+            .expect(0)
+            .create_async()
+            .await;
+        let port: u16 = server.url().rsplit(':').next().unwrap().parse().unwrap();
+        let mut request = local(Some(port), None);
+        request.auth_username = Some("boss".into());
+        request.password = Some("vault-secret".into());
+
+        match test_connection_impl(&request).await {
+            ConnectionTestResult::Unreachable { reason } => {
+                assert!(reason.contains("could not be verified"), "{reason}");
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+        with_credential.assert_async().await;
     }
 
     // --- test_connection_impl: Direct dispatch ---
