@@ -306,7 +306,7 @@ struct SubagentMetaInfo {
 /// means the caller falls back to the raw hex id and an unresolved turn.
 fn read_subagent_meta(transcript: &Path) -> SubagentMetaInfo {
     let meta_path = transcript.with_extension("meta.json");
-    let Ok(bytes) = std::fs::read(&meta_path) else {
+    let Some(bytes) = read_file_capped(&meta_path, MAX_SUBAGENT_META_BYTES) else {
         return SubagentMetaInfo::default();
     };
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
@@ -328,19 +328,132 @@ fn read_subagent_meta(transcript: &Path) -> SubagentMetaInfo {
     }
 }
 
+/// Largest `agent-<id>.meta.json` read. A real one is a few hundred bytes;
+/// anything bigger is not a meta file and is ignored rather than loaded.
+const MAX_SUBAGENT_META_BYTES: u64 = 64 * 1024;
+
+/// Largest `@v1` session-start backup read. Claude Code backs up source files
+/// it is about to edit; one past this is treated as "no backup" (the base
+/// falls back to the next resolution tier) instead of being pulled into memory
+/// — the backup's name comes from transcript content, and the review is built
+/// on every open of the Session Diff tab.
+const MAX_BACKUP_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read a regular file of at most `cap` bytes: `None` for a missing file, a
+/// non-regular file, or one larger than `cap` (checked on the opened handle
+/// before reading, and the read itself is bounded by `take`, so a file that
+/// grows in between still can't exceed it).
+fn read_file_capped(path: &Path, cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > cap {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(cap).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// A transcript-supplied `backupFileName` is only ever a bare file name
+/// inside `file-history/<session_id>/` (Claude Code writes `<hash>@v<n>`).
+/// Anything with a separator, a `.`/`..` component, a drive prefix, or a NUL
+/// is refused, so a crafted transcript can't make the review read (and a
+/// revert then write back) an arbitrary file's bytes.
+fn is_bare_backup_file_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0', ':'])
+}
+
 /// `~/.claude/file-history/<session_id>/<backup_file_name>` (or the
-/// `CLAUDE_CONFIG_DIR` equivalent).
+/// `CLAUDE_CONFIG_DIR` equivalent). `None` for a `backup_file_name` that
+/// isn't a bare file name (see `is_bare_backup_file_name`).
 fn backup_path(session_id: &str, backup_file_name: &str, cfg: Option<&str>) -> Option<PathBuf> {
-    let base = if let Some(dir) = cfg {
-        PathBuf::from(dir)
-    } else {
-        dirs::home_dir()?.join(".claude")
-    };
+    if !is_bare_backup_file_name(backup_file_name) {
+        return None;
+    }
+    let base = claude_config_base(cfg)?;
     Some(
         base.join("file-history")
             .join(session_id)
             .join(backup_file_name),
     )
+}
+
+/// `CLAUDE_CONFIG_DIR` when given, else `~/.claude`.
+fn claude_config_base(cfg: Option<&str>) -> Option<PathBuf> {
+    match cfg {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => Some(dirs::home_dir()?.join(".claude")),
+    }
+}
+
+/// The directories a revert may write into or delete from, canonicalized:
+/// the git repo/worktree containing `repo_path` (and, for a linked worktree,
+/// its main checkout), every registered repository, and Claude's own
+/// `plans/` directory (the out-of-repo file a session most often edits).
+fn revert_roots(repo_path: &str, cfg: Option<&str>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(repo) = Path::new(repo_path).canonicalize()
+        && let Some(git_root) = tuic_git::git::find_repo_root(&repo)
+    {
+        roots.push(tuic_git::git::canonical_repo_root(&git_root));
+        roots.push(git_root);
+    }
+    roots.extend(
+        crate::config::registered_repo_paths()
+            .into_iter()
+            .filter_map(|p| PathBuf::from(p).canonicalize().ok()),
+    );
+    if let Some(plans) = claude_config_base(cfg).and_then(|b| b.join("plans").canonicalize().ok()) {
+        roots.push(plans);
+    }
+    roots.retain(|r| r.parent().is_some()); // never `/` itself
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// Resolve the file a revert is about to write or delete, refusing anything
+/// outside `revert_roots` — the transcript names the path, so this is the
+/// line between "undo this session's edit" and "write/delete any file the
+/// user can". The caller has already checked that the path is one the
+/// transcript touched. Refuses a relative path, any `.`/`..` component, a
+/// symlink at the leaf (never written or deleted through), and a parent that
+/// resolves (through symlinks) outside every root. Returns the resolved
+/// `canonical_parent/name` the caller must operate on.
+pub(crate) fn resolve_revert_target(
+    repo_path: &str,
+    abs_path: &str,
+    cfg: Option<&str>,
+) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let refused =
+        || format!("Refusing to modify {abs_path}: outside the repository and allowed directories");
+    let path = Path::new(abs_path);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
+    {
+        return Err(refused());
+    }
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(refused());
+    };
+    let canonical_parent = parent.canonicalize().map_err(|_| refused())?;
+    if !revert_roots(repo_path, cfg)
+        .iter()
+        .any(|root| canonical_parent.starts_with(root))
+    {
+        return Err(refused());
+    }
+    let target = canonical_parent.join(name);
+    if let Ok(meta) = std::fs::symlink_metadata(&target)
+        && !meta.file_type().is_file()
+    {
+        return Err(format!("Refusing to modify {abs_path}: not a regular file"));
+    }
+    Ok(target)
 }
 
 // ─────────────────────────── Parsing ────────────────────────────────────────
@@ -1341,7 +1454,7 @@ fn build_session_review_full(
             .get(&path)
             .and_then(|b| b.backup_file_name.as_ref())
             .and_then(|name| backup_path(session_id, name, claude_config_dir))
-            .and_then(|p| std::fs::read(&p).ok());
+            .and_then(|p| read_file_capped(&p, MAX_BACKUP_BYTES));
         let backup_available = raw_backup_bytes.is_some();
         let backup_content = raw_backup_bytes.as_ref().and_then(|bytes| {
             (!is_binary_bytes(bytes)).then(|| String::from_utf8_lossy(bytes).into_owned())
@@ -2114,9 +2227,14 @@ fn drifted_result(abs_path: &str) -> RevertResult {
 /// substitution backwards against the file's *current* content, so a later,
 /// unrelated edit to the same file doesn't block this one — mirroring what
 /// `git apply --reverse`'s hunk-context matching gives the in-repo path.
-fn revert_step_via_substitution(edit: &RawEdit, dry_run: bool) -> Result<RevertResult, String> {
-    let path = PathBuf::from(&edit.file_path);
-    let current = std::fs::read_to_string(&path)
+///
+/// `path` is the already-authorized target (`resolve_revert_target`).
+fn revert_step_via_substitution(
+    edit: &RawEdit,
+    path: &Path,
+    dry_run: bool,
+) -> Result<RevertResult, String> {
+    let current = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
 
     match edit.kind {
@@ -2135,7 +2253,7 @@ fn revert_step_via_substitution(edit: &RawEdit, dry_run: bool) -> Result<RevertR
                 Err(_) => return Ok(no_match_result(&edit.file_path)),
             };
             if !dry_run {
-                std::fs::write(&path, &new_content)
+                std::fs::write(path, &new_content)
                     .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
             }
             Ok(RevertResult {
@@ -2151,7 +2269,7 @@ fn revert_step_via_substitution(edit: &RawEdit, dry_run: bool) -> Result<RevertR
                 return Ok(drifted_result(&edit.file_path));
             }
             if !dry_run {
-                std::fs::remove_file(&path)
+                std::fs::remove_file(path)
                     .map_err(|e| format!("Failed to delete {}: {e}", path.display()))?;
             }
             Ok(RevertResult {
@@ -2218,6 +2336,11 @@ pub(crate) async fn revert_session_step(
                 ));
             };
 
+            // Authorize the step's file before either revert mechanism runs —
+            // the path comes from the transcript.
+            let target =
+                resolve_revert_target(&repo_path, &step.abs_path, claude_config_dir.as_deref())?;
+
             let result = if step.in_repo {
                 if step.patch.trim().is_empty() {
                     RevertResult {
@@ -2254,7 +2377,7 @@ pub(crate) async fn revert_session_step(
                         "Could not re-locate step {tool_use_id} in the transcript"
                     ));
                 };
-                revert_step_via_substitution(&edit, dry_run)?
+                revert_step_via_substitution(&edit, &target, dry_run)?
             };
             Ok((result, transcript))
         })
@@ -2305,6 +2428,10 @@ pub(crate) async fn revert_file_to_session_start(
             let Some(file) = built.review.files.iter().find(|f| f.abs_path == abs_path) else {
                 return Err(format!("No file review entry for {abs_path} in this session"));
             };
+            // The transcript touched it; it must also be somewhere a revert
+            // may write. Every write/delete below goes to `target`.
+            let target =
+                resolve_revert_target(&repo_path, &abs_path, claude_config_dir.as_deref())?;
 
             if file.drifted_from_disk && !force {
                 return Ok((
@@ -2330,7 +2457,7 @@ pub(crate) async fn revert_file_to_session_start(
                 },
                 BaseSource::CreatedInSession => {
                     if !dry_run {
-                        let _ = std::fs::remove_file(&abs_path);
+                        let _ = std::fs::remove_file(&target);
                     }
                     RevertResult {
                         applied: !dry_run,
@@ -2342,7 +2469,7 @@ pub(crate) async fn revert_file_to_session_start(
                 BaseSource::Backup if built.backup_bytes.contains_key(&abs_path) => {
                     let bytes = &built.backup_bytes[&abs_path];
                     if !dry_run {
-                        std::fs::write(&abs_path, bytes).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
+                        std::fs::write(&target, bytes).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
                     }
                     RevertResult {
                         applied: !dry_run,
@@ -2354,7 +2481,7 @@ pub(crate) async fn revert_file_to_session_start(
                 _ => match built.file_bases.get(&abs_path) {
                     Some(base_text) => {
                         if !dry_run {
-                            std::fs::write(&abs_path, base_text).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
+                            std::fs::write(&target, base_text).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
                         }
                         RevertResult {
                             applied: !dry_run,
@@ -2435,6 +2562,14 @@ pub(crate) mod test_fixtures {
         }
 
         /// The `tool_use_id` generated by the Nth (0-based) edit/write call.
+        /// A file under this fixture's `CLAUDE_CONFIG_DIR/plans/` (created) —
+        /// the out-of-repo location a revert is allowed to write.
+        pub(crate) fn plans_file(&self, name: &str) -> String {
+            let dir = self.config_dir.path().join("plans");
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.join(name).to_string_lossy().to_string()
+        }
+
         pub(crate) fn tool_use_id(&self, n: usize) -> String {
             self.tool_use_ids[n].clone()
         }
@@ -3546,15 +3681,11 @@ mod tests {
     #[tokio::test]
     async fn revert_out_of_repo_step_uses_string_substitution() {
         let (_dir, repo) = fixture_repo();
-        let outside_dir = tempfile::tempdir().unwrap();
-        let abs = outside_dir
-            .path()
-            .join("plan.md")
-            .to_string_lossy()
-            .to_string();
-        std::fs::write(&abs, "line one\nline two changed\n").unwrap();
         let repo_str = repo.to_string_lossy().to_string();
         let tb = TranscriptBuilder::new(&repo_str);
+        // Out of the repo, in Claude's own plans dir (an allowed root).
+        let abs = tb.plans_file("plan.md");
+        std::fs::write(&abs, "line one\nline two changed\n").unwrap();
         let tb = tb.edit(&abs, "line two\n", "line two changed\n", false);
         let step_id = tb.last_tool_use_id();
         let (cfg, transcript) = tb.build();
@@ -3589,15 +3720,11 @@ mod tests {
         // logic) — this locks in that the replace_all branch still works
         // for the out-of-repo path after that refactor.
         let (_dir, repo) = fixture_repo();
-        let outside_dir = tempfile::tempdir().unwrap();
-        let abs = outside_dir
-            .path()
-            .join("notes.md")
-            .to_string_lossy()
-            .to_string();
-        std::fs::write(&abs, "NEW here, NEW there, NEW everywhere\n").unwrap();
         let repo_str = repo.to_string_lossy().to_string();
         let tb = TranscriptBuilder::new(&repo_str);
+        // Out of the repo, in Claude's own plans dir (an allowed root).
+        let abs = tb.plans_file("notes.md");
+        std::fs::write(&abs, "NEW here, NEW there, NEW everywhere\n").unwrap();
         let tb = tb.edit(&abs, "old", "NEW", true);
         let step_id = tb.last_tool_use_id();
         let (cfg, transcript) = tb.build();
@@ -3632,15 +3759,11 @@ mod tests {
         // of the file regardless of where the deletion actually happened.
         // This must report "not found" instead of silently corrupting.
         let (_dir, repo) = fixture_repo();
-        let outside_dir = tempfile::tempdir().unwrap();
-        let abs = outside_dir
-            .path()
-            .join("notes.md")
-            .to_string_lossy()
-            .to_string();
-        std::fs::write(&abs, "line one\nline three\n").unwrap();
         let repo_str = repo.to_string_lossy().to_string();
         let tb = TranscriptBuilder::new(&repo_str);
+        // Out of the repo, in Claude's own plans dir (an allowed root).
+        let abs = tb.plans_file("notes.md");
+        std::fs::write(&abs, "line one\nline three\n").unwrap();
         let tb = tb.edit(&abs, "line two\n", "", false);
         let step_id = tb.last_tool_use_id();
         let (cfg, transcript) = tb.build();
@@ -3856,6 +3979,270 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.contains("Invalid session id"), "got: {err}");
+    }
+
+    // ── Revert target authorization (Batch 16 review) ─────────────────────
+
+    fn session_id_of(transcript: &Path) -> String {
+        transcript
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// A file the transcript touched but which lies outside the repo, every
+    /// registered repo and Claude's plans dir must not be overwritten.
+    #[tokio::test]
+    async fn revert_file_refuses_a_touched_file_outside_the_allowed_roots() {
+        let (_dir, repo) = fixture_repo();
+        let outside = tempfile::tempdir().unwrap();
+        let abs = outside
+            .path()
+            .join("victim.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&abs, "important\n").unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        let (cfg, transcript) = TranscriptBuilder::new(&repo_str)
+            .backup(&abs, "attacker chosen\n")
+            .edit(&abs, "x\n", "important\n", false)
+            .build();
+
+        let result = revert_file_to_session_start(
+            repo_str,
+            session_id_of(&transcript),
+            abs.clone(),
+            Some(true),
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await;
+        assert!(result.is_err(), "must refuse, got {result:?}");
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "important\n");
+    }
+
+    #[tokio::test]
+    async fn revert_step_refuses_an_out_of_repo_file_outside_the_allowed_roots() {
+        let (_dir, repo) = fixture_repo();
+        let outside = tempfile::tempdir().unwrap();
+        let abs = outside
+            .path()
+            .join("victim.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&abs, "line two changed\n").unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        let tb =
+            TranscriptBuilder::new(&repo_str).edit(&abs, "line two\n", "line two changed\n", false);
+        let step_id = tb.last_tool_use_id();
+        let (cfg, transcript) = tb.build();
+
+        let result = revert_session_step(
+            repo_str,
+            session_id_of(&transcript),
+            step_id,
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await;
+        assert!(result.is_err(), "must refuse, got {result:?}");
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "line two changed\n");
+    }
+
+    /// A symlink inside the repo pointing outside it: restoring "the file"
+    /// must not write through the link to its target.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn revert_file_never_writes_through_a_symlink_in_the_repo() {
+        let (_dir, repo) = fixture_repo();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("target.txt");
+        std::fs::write(&target, "outside content\n").unwrap();
+        let link = repo.join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let abs = link.to_string_lossy().to_string();
+        let repo_str = repo.to_string_lossy().to_string();
+        let (cfg, transcript) = TranscriptBuilder::new(&repo_str)
+            .backup(&abs, "attacker chosen\n")
+            .edit(&abs, "x\n", "outside content\n", false)
+            .build();
+
+        let result = revert_file_to_session_start(
+            repo_str,
+            session_id_of(&transcript),
+            abs,
+            Some(true),
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await;
+        assert!(result.is_err(), "must refuse, got {result:?}");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "outside content\n"
+        );
+    }
+
+    /// `..` components in a transcript path must not walk out of the repo.
+    #[tokio::test]
+    async fn revert_file_refuses_a_dot_dot_path() {
+        let (_dir, repo) = fixture_repo();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim.txt");
+        std::fs::write(&victim, "important\n").unwrap();
+        let mut abs = repo.clone();
+        for _ in repo.components().skip(1) {
+            abs.push("..");
+        }
+        let abs = abs
+            .join(victim.strip_prefix("/").unwrap())
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            std::fs::read_to_string(&abs).unwrap(),
+            "important\n",
+            "fixture resolves"
+        );
+        let repo_str = repo.to_string_lossy().to_string();
+        let (cfg, transcript) = TranscriptBuilder::new(&repo_str)
+            .backup(&abs, "attacker chosen\n")
+            .edit(&abs, "x\n", "important\n", false)
+            .build();
+
+        let result = revert_file_to_session_start(
+            repo_str,
+            session_id_of(&transcript),
+            abs,
+            Some(true),
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await;
+        assert!(result.is_err(), "must refuse, got {result:?}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "important\n");
+    }
+
+    #[test]
+    fn resolve_revert_target_accepts_repo_and_plans_and_refuses_relative() {
+        let (_dir, repo) = fixture_repo();
+        let cfg = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cfg.path().join("plans")).unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        let cfg_str = cfg.path().to_string_lossy().to_string();
+        let in_repo = repo.join("new-file.txt").to_string_lossy().to_string();
+        assert!(resolve_revert_target(&repo_str, &in_repo, Some(&cfg_str)).is_ok());
+        let plan = cfg.path().join("plans/p.md").to_string_lossy().to_string();
+        assert!(resolve_revert_target(&repo_str, &plan, Some(&cfg_str)).is_ok());
+        assert!(resolve_revert_target(&repo_str, "relative.txt", Some(&cfg_str)).is_err());
+    }
+
+    /// A transcript-supplied backup name must be a bare file name: a
+    /// traversal or absolute name must never resolve to a path (it would be
+    /// read as the file's "session-start content" and written back by a
+    /// revert).
+    #[test]
+    fn backup_path_refuses_anything_but_a_bare_file_name() {
+        let sid = "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f";
+        assert!(backup_path(sid, "0123abcd@v1", Some("/cfg")).is_some());
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../../etc/passwd",
+            "/etc/passwd",
+            "a/b",
+            "a\\b",
+            "C:x",
+            "a\0b",
+        ] {
+            assert!(backup_path(sid, bad, Some("/cfg")).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_traversal_backup_name_in_the_transcript_is_not_read() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "a1\na2-changed\n").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "SECRET\n").unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        // A real backup for another file creates `file-history/<sid>/`, so
+        // the traversal below resolves on disk.
+        let tb = TranscriptBuilder::new(&repo_str)
+            .backup(&repo.join("other.txt").to_string_lossy(), "other\n");
+        // Enough `..` to climb out of any (deep, nextest-provided) TMPDIR.
+        let traversal = format!(
+            "{}{}",
+            "../".repeat(64).trim_end_matches('/'),
+            outside.path().join("secret").display()
+        );
+        let record = serde_json::json!({
+            "type": "file-history-delta",
+            "messageId": uuid::Uuid::new_v4().to_string(),
+            "snapshotMessageId": uuid::Uuid::new_v4().to_string(),
+            "trackingPath": abs,
+            "backup": {"backupFileName": traversal, "version": 1, "backupTime": "2026-09-14T21:00:00.000Z"},
+            "timestamp": "2026-09-14T21:00:00.000Z",
+        });
+        let (cfg, transcript) = tb
+            .raw_line(&record.to_string())
+            .edit(&abs, "a2\n", "a2-changed\n", false)
+            .build();
+        let built = build_session_review_full(
+            &repo,
+            &transcript,
+            &[],
+            &session_id_of(&transcript),
+            Some(&cfg.path().to_string_lossy()),
+            DiffOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            built.backup_bytes.is_empty(),
+            "the traversal target must not be read"
+        );
+        assert_ne!(built.review.files[0].base_source, BaseSource::Backup);
+    }
+
+    #[test]
+    fn read_file_capped_refuses_a_file_over_the_cap_without_reading_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = dir.path().join("big");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(MAX_BACKUP_BYTES + 1)
+            .unwrap();
+        assert!(read_file_capped(&big, MAX_BACKUP_BYTES).is_none());
+        let small = dir.path().join("small");
+        std::fs::write(&small, b"ok").unwrap();
+        assert_eq!(
+            read_file_capped(&small, MAX_BACKUP_BYTES).as_deref(),
+            Some(&b"ok"[..])
+        );
+    }
+
+    #[test]
+    fn subagent_meta_over_64_kib_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("agent-abc.jsonl");
+        let meta = serde_json::json!({
+            "name": "worker",
+            "pad": "x".repeat(MAX_SUBAGENT_META_BYTES as usize),
+        });
+        std::fs::write(transcript.with_extension("meta.json"), meta.to_string()).unwrap();
+        assert_eq!(read_subagent_meta(&transcript).display_name, None);
+        std::fs::write(
+            transcript.with_extension("meta.json"),
+            serde_json::json!({"name": "worker"}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            read_subagent_meta(&transcript).display_name.as_deref(),
+            Some("worker")
+        );
     }
 
     #[tokio::test]
