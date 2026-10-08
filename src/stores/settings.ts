@@ -23,7 +23,6 @@ import { settingNumberDefault } from "../services/settingsCatalogue";
 import { settingsRefresh } from "../services/settingsRefresh";
 import type { IssueFilterMode } from "../types";
 import { isAcpConfigured } from "../utils/acpAvailability";
-import { isValidEnvVarKey } from "../utils/envVars";
 import { runSerializedConfigWrite, updateAppConfig } from "../utils/updateAppConfig";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
@@ -55,25 +54,6 @@ export interface CustomLauncher {
 export interface CustomEnvVarEntry {
 	key: string;
 	value: string;
-}
-
-/** Drop malformed keys and collapse duplicate keys (first occurrence wins) from
- *  a hand-edited `config.json`'s `custom_pty_env` — same "revalidate on
- *  hydrate, not just on write" precedent as `sanitizeIndicatorOverrides`, since
- *  this is untrusted input reaching real process environment variables.
- *  Case-insensitive dedup: Windows env var names collide case-insensitively at
- *  the OS level, so "PATH" and "Path" as two separate entries would silently
- *  let one clobber the other at spawn time with no indication which. */
-function sanitizeCustomPtyEnv(entries: CustomEnvVarEntry[]): CustomEnvVarEntry[] {
-	const seen = new Set<string>();
-	const out: CustomEnvVarEntry[] = [];
-	for (const entry of entries) {
-		const normalized = entry.key.toLowerCase();
-		if (!isValidEnvVarKey(entry.key) || seen.has(normalized)) continue;
-		seen.add(normalized);
-		out.push({ key: entry.key, value: entry.value });
-	}
-	return out;
 }
 
 export type TrayIconPreference = "always" | "background_only" | "never";
@@ -625,9 +605,8 @@ function createSettingsStore() {
 			config.background?.webview_unload_minutes ?? settingNumberDefault("app.background.webview_unload_minutes");
 		values.customLaunchers = config.custom_launchers ?? [];
 		values.additionalReadableDirs = config.additional_readable_dirs ?? ["~/.claude/plans"];
-		// Revalidated here, not just on write — a hand-edited config.json is
-		// untrusted input reaching real process environment variables.
-		values.customPtyEnv = sanitizeCustomPtyEnv(config.custom_pty_env ?? []);
+		// The backend sanitizes on every load and save (`config::sanitize_custom_pty_env`).
+		values.customPtyEnv = config.custom_pty_env ?? [];
 		values.diffIgnoreLeadingWhitespace = config.diff_ignore_leading_whitespace ?? false;
 		values.diffIgnoreTrailingWhitespace = config.diff_ignore_trailing_whitespace ?? false;
 		values.diffIgnoreWhitespaceAmount = config.diff_ignore_whitespace_amount ?? false;
