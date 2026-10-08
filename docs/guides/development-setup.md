@@ -15,6 +15,13 @@
 pnpm install
 ```
 
+### Paired Tauri dependencies
+
+Update each Tauri Rust plugin and its npm counterpart together. Notification stays
+on `~2.4.0` and updater on `~2.11.0` in both manifests until their next minor
+versions are validated together. The direct `rfd` dependency must match the
+version and features used by `tauri-plugin-dialog`; dialog 2.8.1 uses `rfd 0.16`.
+
 ### Temporary dependency audit exception
 
 `pnpm-workspace.yaml` configures `auditConfig.ignoreGhsas` for
