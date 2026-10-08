@@ -462,6 +462,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Custom Environment Variables",
 		label: "Environment Variables",
 		labelKey: "terminal.label.customEnv",
+		expert: true,
+		configKey: "app.custom_pty_env",
 	},
 	{
 		tab: "terminal",

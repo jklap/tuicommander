@@ -18,7 +18,6 @@ import {
 } from "../indicators/validate";
 import { invoke } from "../invoke";
 import type { IssueFilterMode } from "../types";
-import { isValidEnvVarKey } from "../utils/envVars";
 import { runSerializedConfigWrite, updateAppConfig } from "../utils/updateAppConfig";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
@@ -50,25 +49,6 @@ export interface CustomLauncher {
 export interface CustomEnvVarEntry {
 	key: string;
 	value: string;
-}
-
-/** Drop malformed keys and collapse duplicate keys (first occurrence wins) from
- *  a hand-edited `config.json`'s `custom_pty_env` — same "revalidate on
- *  hydrate, not just on write" precedent as `sanitizeIndicatorOverrides`, since
- *  this is untrusted input reaching real process environment variables.
- *  Case-insensitive dedup: Windows env var names collide case-insensitively at
- *  the OS level, so "PATH" and "Path" as two separate entries would silently
- *  let one clobber the other at spawn time with no indication which. */
-function sanitizeCustomPtyEnv(entries: CustomEnvVarEntry[]): CustomEnvVarEntry[] {
-	const seen = new Set<string>();
-	const out: CustomEnvVarEntry[] = [];
-	for (const entry of entries) {
-		const normalized = entry.key.toLowerCase();
-		if (!isValidEnvVarKey(entry.key) || seen.has(normalized)) continue;
-		seen.add(normalized);
-		out.push({ key: entry.key, value: entry.value });
-	}
-	return out;
 }
 
 interface RustAppConfig {
@@ -790,7 +770,10 @@ function createSettingsStore() {
 				setState("egoExecutable", config.ego_executable ?? "");
 				setState("egoProfile", config.ego_profile ?? "");
 				setState("aiChatWorkspace", config.ai_chat_workspace ?? "");
-				setState("customPtyEnv", sanitizeCustomPtyEnv(config.custom_pty_env ?? []));
+				// Already sanitized by the backend on load and on every save
+				// (`config::sanitize_custom_pty_env`: malformed, reserved and
+				// case-insensitive duplicate keys dropped) — no second copy here.
+				setState("customPtyEnv", config.custom_pty_env ?? []);
 				setState("diffIgnoreLeadingWhitespace", config.diff_ignore_leading_whitespace ?? false);
 				setState("diffIgnoreTrailingWhitespace", config.diff_ignore_trailing_whitespace ?? false);
 				setState("diffIgnoreWhitespaceAmount", config.diff_ignore_whitespace_amount ?? false);

@@ -29,6 +29,7 @@ import { AppearanceTab } from "../../../components/SettingsPanel/tabs/Appearance
 import { GeneralTab } from "../../../components/SettingsPanel/tabs/GeneralTab";
 import { TerminalTab } from "../../../components/SettingsPanel/tabs/TerminalTab";
 import { settingsStore } from "../../../stores/settings";
+import { settingsExpertStore } from "../../../stores/settingsExpert";
 
 function invokeImpl(config: Record<string, unknown> = {}) {
 	return (cmd: string) => {
@@ -408,6 +409,17 @@ describe("TerminalTab placement", () => {
 			expect(queryByText(/already in the list/)).not.toBeNull();
 		});
 
+		it("refuses a reserved key (TUIC_*, ZDOTDIR, LD_*/DYLD_*) with a visible error", () => {
+			for (const key of ["TUIC_SESSION", "zdotdir", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES"]) {
+				const { getByPlaceholderText, getByText, queryByText, unmount } = render(() => <TerminalTab />);
+				fireEvent.input(getByPlaceholderText("KEY") as HTMLInputElement, { target: { value: key } });
+				fireEvent.click(getByText("Add"));
+				expect(setCustomPtyEnv).not.toHaveBeenCalled();
+				expect(queryByText(/^Reserved:/)).not.toBeNull();
+				unmount();
+			}
+		});
+
 		it("disables Add while the key field is blank", () => {
 			const { getByPlaceholderText, getByText } = render(() => <TerminalTab />);
 			const addButton = getByText("Add") as HTMLButtonElement;
@@ -416,5 +428,31 @@ describe("TerminalTab placement", () => {
 			fireEvent.input(getByPlaceholderText("KEY") as HTMLInputElement, { target: { value: "X" } });
 			expect(addButton.disabled).toBe(false);
 		});
+	});
+});
+
+describe("Custom Environment Variables is an expert setting", () => {
+	afterEach(() => {
+		settingsExpertStore._resetForTests();
+		cleanup();
+	});
+
+	it("is hidden in basic mode while the list is empty, shown once it has an entry", async () => {
+		const respond = (saved: Record<string, unknown>) => (cmd: string) => {
+			if (cmd === "get_config_defaults") return Promise.resolve({ app: { custom_pty_env: [] } });
+			if (cmd === "load_config") return Promise.resolve(saved);
+			return Promise.resolve(undefined);
+		};
+		mockInvoke.mockImplementation(respond({ custom_pty_env: [] }));
+		await settingsStore.hydrate();
+		await settingsExpertStore.open();
+		const empty = render(() => <TerminalTab />);
+		expect(headingExists(empty.container, "Custom Environment Variables")).toBe(false);
+		empty.unmount();
+
+		mockInvoke.mockImplementation(respond({ custom_pty_env: [{ key: "FOO", value: "1" }] }));
+		await settingsStore.hydrate();
+		const used = render(() => <TerminalTab />);
+		expect(headingExists(used.container, "Custom Environment Variables")).toBe(true);
 	});
 });
