@@ -24,6 +24,8 @@ vi.mock("../../components/Terminal/canvasTerminalTransport", async (importOrigin
 }));
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
+import { terminalsStore } from "../../stores/terminals";
+import { makeTerminal } from "../helpers/store";
 
 const matches = [0, 1, 2, 3].flatMap((row) => [0, 2, 4, 6].map((col) => ({ row, col_start: col, col_end: col + 1 })));
 
@@ -121,12 +123,12 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-async function open(query = "f") {
+async function open(query = "f", terminalId = "search-flicker") {
 	let ref: CanvasTerminalRef | undefined;
 	const view = render(() => (
 		<CanvasTerminal
 			sessionId="search-flicker"
-			terminalId="search-flicker"
+			terminalId={terminalId}
 			onRef={(value) => {
 				ref = value;
 			}}
@@ -212,4 +214,27 @@ describe("terminal search highlight continuity", () => {
 			terminal.view.unmount();
 		}
 	});
+});
+
+// Catches: recorded cursor-row prompt evidence painting the composer as a submitted prompt.
+it("paints no prompt strip for a terminal with recorded userPromptLines", async () => {
+	const id = terminalsStore.add(makeTerminal());
+	terminalsStore.update(id, { agentType: "claude" });
+	terminalsStore.addUserPromptLine(id, 0);
+	const terminal = await open("", id);
+	try {
+		expect(canvases.size).toBeGreaterThan(0);
+		const promptStrips = () =>
+			Array.from(terminal.view.container.querySelectorAll<HTMLElement>("div")).filter(
+				(div) => div.style.cssText.includes("--prompt-tint") || div.style.cssText.includes("--prompt-bar"),
+			);
+		expect(promptStrips()).toHaveLength(0);
+		terminalsStore.addUserPromptLine(id, 2);
+		transport.sink?.(frame());
+		await vi.advanceTimersByTimeAsync(200);
+		expect(promptStrips()).toHaveLength(0);
+	} finally {
+		terminal.view.unmount();
+		terminalsStore.remove(id);
+	}
 });
