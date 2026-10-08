@@ -203,7 +203,8 @@ authors and communities behind each project.
 | @solidjs/testing-library | 0.8.10 | MIT |
 | @stryker-mutator/core | 10.0.0 | Apache-2.0 |
 | @tauri-apps/cli | 2.11.4 | Apache-2.0 OR MIT |
-| @testing-library/jest-dom | 6.10.0 | MIT |
+| @testing-library/dom | 10.4.1 | MIT |
+| @testing-library/jest-dom | 7.0.1 | MIT |
 | @types/jsdom | 30.0.0 | MIT |
 | @types/qrcode | 1.5.6 | MIT |
 | @typescript/typescript6 | 6.0.2 | Apache-2.0 |
@@ -231,7 +232,7 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 | License | Count |
 |---------|-------|
 | MIT OR Apache-2.0 | 83 |
-| MIT | 66 |
+| MIT | 67 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 6 |
 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | 4 |
