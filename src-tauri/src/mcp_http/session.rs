@@ -953,6 +953,7 @@ pub(super) async fn create_session(
     }
     let shell = resolve_shell(body.shell);
 
+    let gate_state = state.clone();
     let spawn = tokio::task::spawn_blocking(move || {
         spawn_pty_session(
             state,
@@ -979,10 +980,21 @@ pub(super) async fn create_session(
         ))
     });
     match spawn {
-        Ok(session_id) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({"session_id": session_id})),
-        ),
+        Ok(session_id) => {
+            // Readiness gate (bounded, fail-open): the caller's next write must
+            // not race the shell's startup. See `gate_new_shell_session`.
+            super::mcp_transport::gate_new_shell_session(
+                &gate_state,
+                &session_id,
+                super::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+                "POST /sessions",
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({"session_id": session_id})),
+            )
+        }
         Err(err) => err,
     }
 }
@@ -1365,6 +1377,7 @@ pub(super) async fn create_session_with_worktree(
     let shell = resolve_shell(body.config.shell);
 
     let spawn_cwd = worktree_path_str.clone();
+    let gate_state = state.clone();
     let spawn = tokio::task::spawn_blocking(move || {
         spawn_pty_session(
             state,
@@ -1392,6 +1405,13 @@ pub(super) async fn create_session_with_worktree(
     });
     match spawn {
         Ok(session_id) => {
+            super::mcp_transport::gate_new_shell_session(
+                &gate_state,
+                &session_id,
+                super::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+                "POST /sessions/worktree",
+            )
+            .await;
             // setup_script/setup_script_error are no longer part of this
             // response — the setup script now runs in the background chain
             // kicked off right after worktree creation, above.
@@ -5653,5 +5673,134 @@ mod tests {
         let state = super::super::tests::test_state();
         crate::state::tests_support::insert_dummy_session(&state, "focus-me");
         focus_session_impl(&state, "focus-me").expect("a live session must be focusable");
+    }
+
+    // ── B2.1: shell-readiness gate on the plain-shell create routes ──────────
+
+    fn plain_create_request(shell: Option<String>) -> CreateSessionRequest {
+        CreateSessionRequest {
+            rows: None,
+            cols: None,
+            shell,
+            cwd: None,
+            session_id: None,
+            alias: None,
+            display_name: None,
+            display_name_is_custom: false,
+            user_initiated: false,
+        }
+    }
+
+    fn shell_state_of(state: &AppState, session_id: &str) -> Option<u8> {
+        state
+            .session_maps
+            .shell_states
+            .get(session_id)
+            .map(|v| v.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// `POST /sessions` must not return the id before the new shell reaches a
+    /// prompt — the caller's very next write (e.g. `tuic new` + `send`) would
+    /// otherwise race `.zshrc` startup. Without the gate the route returns the
+    /// instant the PTY is registered, with the shell still `SHELL_NULL`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_create_session_returns_only_after_the_shell_reaches_idle() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = create_session(State(state.clone()), Json(plain_create_request(None)))
+            .await
+            .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if status != StatusCode::CREATED {
+            eprintln!("Skipping: PTY not available in this environment ({body})");
+            return;
+        }
+        let session_id = body["session_id"].as_str().expect("session_id").to_string();
+        assert_eq!(
+            shell_state_of(&state, &session_id),
+            Some(crate::pty::SHELL_IDLE),
+            "POST /sessions must hold its response until the shell is idle"
+        );
+        close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// A shell TUIC injects no OSC 133 integration into (`/bin/sh`) still
+    /// becomes ready via the silence fallback — the gate must not wait out
+    /// its whole bound for it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_create_session_without_shell_integration_is_ready_well_before_the_timeout() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let started = std::time::Instant::now();
+        let response = create_session(
+            State(state.clone()),
+            Json(plain_create_request(Some("/bin/sh".to_string()))),
+        )
+        .await
+        .into_response();
+        let elapsed = started.elapsed();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if status != StatusCode::CREATED {
+            eprintln!("Skipping: PTY not available in this environment ({body})");
+            return;
+        }
+        let session_id = body["session_id"].as_str().expect("session_id").to_string();
+        assert_eq!(
+            shell_state_of(&state, &session_id),
+            Some(crate::pty::SHELL_IDLE),
+            "a shell without OSC 133 must still be gated (silence fallback)"
+        );
+        assert!(
+            elapsed
+                < std::time::Duration::from_millis(
+                    super::super::mcp_transport::SHELL_READINESS_TIMEOUT_MS
+                ),
+            "a no-integration shell waited out the whole readiness bound ({elapsed:?})"
+        );
+        close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// The worktree-creating twin route types into a shell the same way, so it
+    /// is gated too.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn http_create_session_with_worktree_returns_only_after_the_shell_reaches_idle() {
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = create_session_with_worktree(
+            State(state.clone()),
+            Json(CreateSessionWithWorktreeRequest {
+                config: plain_create_request(None),
+                base_repo: repo.path().to_string_lossy().to_string(),
+                branch_name: "readiness-gate-branch".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if status != StatusCode::CREATED {
+            eprintln!("Skipping: PTY/worktree not available in this environment ({body})");
+            return;
+        }
+        let session_id = body["session_id"].as_str().expect("session_id").to_string();
+        assert_eq!(
+            shell_state_of(&state, &session_id),
+            Some(crate::pty::SHELL_IDLE),
+            "POST /sessions/worktree must hold its response until the shell is idle"
+        );
+        close_session(State(state), axum::extract::Path(session_id)).await;
     }
 }

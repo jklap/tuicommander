@@ -834,7 +834,15 @@ fn cmd_new(name: Option<&str>, repo: Option<&str>) -> Result<String, String> {
         "cols": 80,
     });
 
-    let resp = ipc::post("/sessions", &body.to_string()).map_err(|e| e.to_string())?;
+    // `POST /sessions` holds its response for the server's shell-readiness gate
+    // (bounded at `SHELL_READINESS_TIMEOUT_MS`, 5s) — above the 3s default client
+    // timeout, so use the same 8s budget as the tmux shim's `materialize` call.
+    let resp = ipc::post_with_timeout(
+        "/sessions",
+        &body.to_string(),
+        std::time::Duration::from_secs(8),
+    )
+    .map_err(|e| e.to_string())?;
     if !resp.is_success() {
         return Err(format!("Failed to create session: {}", resp.body));
     }

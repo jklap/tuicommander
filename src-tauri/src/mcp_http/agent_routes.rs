@@ -743,6 +743,48 @@ mod tests {
         super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
     }
 
+    /// B2.1: agent spawns exec the binary directly, so they are NOT behind the
+    /// plain-shell readiness gate — a child that never goes quiet (never idle)
+    /// must still get its id back immediately, not after the gate's bound.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_agent_spawn_is_not_behind_the_shell_readiness_gate() {
+        let script = crate::test_support::fake_ssh_script(
+            "http-agent-never-idle",
+            "while :; do echo tick; sleep 0.05; done",
+            "set /p HOLD=",
+        );
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let body: SpawnAgentRequest = serde_json::from_value(serde_json::json!({
+            "prompt": "task",
+            "binary_path": script.to_string_lossy(),
+            "args": [],
+        }))
+        .unwrap();
+        let started = std::time::Instant::now();
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(body),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let session_id = response_json(response).await["session_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            elapsed
+                < std::time::Duration::from_millis(
+                    crate::mcp_http::mcp_transport::SHELL_READINESS_TIMEOUT_MS / 2
+                ),
+            "agent spawn waited like a gated shell create ({elapsed:?})"
+        );
+        super::super::session::close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
     async fn response_json(response: Response) -> serde_json::Value {
         let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await

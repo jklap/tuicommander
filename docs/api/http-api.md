@@ -339,7 +339,13 @@ Content-Type: application/json
 }
 ```
 
-Returns `{ "session_id": "..." }`.
+Returns `{ "session_id": "..." }` — only once the new shell is ready: the response is held
+until the shell reaches `SHELL_IDLE` (OSC 133 prompt, or the ~500 ms silence fallback for a
+shell without integration), bounded at `SHELL_READINESS_TIMEOUT_MS` (5 s) and fail-open (after
+the bound the id is returned anyway and a warning is logged). A caller can therefore write to
+the session immediately without racing `.zshrc`/Powerlevel10k startup. Clients with a short
+socket timeout must allow for that bound (`tuic new` uses 8 s). `POST /sessions/agent` is not
+gated (it execs the agent binary directly; there is no shell startup to wait out).
 
 When `cwd` is missing or names a file, the server returns `400` with `{ "error": "Working directory ..." }` before registering a PTY session.
 
@@ -368,7 +374,8 @@ Content-Type: application/json
 { "pty_config": { ... }, "worktree_config": { ... } }
 ```
 
-Creates a git worktree and a PTY session in one call.
+Creates a git worktree and a PTY session in one call. Like `POST /sessions`, the response
+waits (bounded, fail-open) for the new shell to reach a ready prompt.
 
 ### Spawn Agent Session
 
