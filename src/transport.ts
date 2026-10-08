@@ -72,6 +72,8 @@ export interface HttpMapping {
 	method: "GET" | "POST" | "PUT" | "DELETE";
 	path: string;
 	body?: unknown;
+	/** This route may return raw text as well as JSON (plugin data). */
+	allowText?: boolean;
 	/** Transform the HTTP response before returning (e.g. for can_spawn_session) */
 	transform?: (data: unknown) => unknown;
 	/**
@@ -975,6 +977,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			method: "GET",
 			path: `/api/plugins/${p("pluginId")}/data/${p("path")}`,
 			notFoundAsNull: true,
+			allowText: true,
 			transform: (data) => (data == null ? null : typeof data === "string" ? data : JSON.stringify(data)),
 		}),
 	},
@@ -2693,7 +2696,8 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 	if (connectionId && !baseUrl) {
 		throw new Error(`Remote connection ${connectionId} not connected`);
 	}
-	const url = withRemoteToken(buildHttpUrl(mapping.path, baseUrl), connectionId);
+	const requestUrl = buildHttpUrl(mapping.path, baseUrl);
+	const url = withRemoteToken(requestUrl, connectionId);
 
 	// No client-side deadline: Tauri invoke() has none, and a fixed cap here cut
 	// backend calls that own a longer deadline (ego initialize: 60 s) with
@@ -2735,12 +2739,19 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 			const detail = error instanceof Error ? `: ${error.message}` : "";
 			throw new Error(`RPC ${command}: invalid JSON response${detail}`);
 		}
+	} else if (mapping.allowText && (!contentType || contentType.toLowerCase().split(";")[0].trim() === "text/plain")) {
+		data = text;
 	} else {
-		// Try parsing as JSON anyway (some endpoints may not set content-type)
+		// Some JSON routes omit content-type. Never pass a failed decode to the
+		// consumer as a value: an HTML fallback is not a home directory.
 		try {
+			if (contentType) throw new Error("Unexpected content type");
 			data = JSON.parse(text);
 		} catch {
-			data = text;
+			// Use the URL before the connection token is attached.
+			throw new Error(
+				`RPC ${command}: expected JSON from ${requestUrl}, received ${contentType || "missing content-type"}`,
+			);
 		}
 	}
 
