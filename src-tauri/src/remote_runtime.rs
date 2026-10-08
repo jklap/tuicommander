@@ -719,6 +719,10 @@ pub(crate) struct Health {
     pub(crate) instance_id: Option<String>,
     pub(crate) session_count: Option<usize>,
     pub(crate) build: Option<crate::remote_deploy::assets::BuildIdentity>,
+    /// The daemon's own Unix IPC socket, as it reports it — used only by
+    /// `verify_local_instance_identity`, which never trusts it without
+    /// checking where it lives and who owns it.
+    pub(crate) socket_path: Option<String>,
 }
 
 /// Read `/health` — the one route served without a credential — to learn the
@@ -756,7 +760,210 @@ pub(crate) async fn read_health(
         build: body
             .get("build")
             .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        socket_path: body
+            .get("socket_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
     })
+}
+
+/// Prove that the daemon answering a Local connection's loopback port is a
+/// TUICommander instance of THIS user — and, for a named instance, that
+/// instance — before any credential is sent to it (Batch 30 review: Local
+/// Connect used to POST the vault password to whatever listened on the
+/// resolved port, so a stale port reused by another program, or a squatter,
+/// received it).
+///
+/// The TCP `/health` is unauthenticated and says anything its sender likes,
+/// so it is only a claim. The proof goes through the instance's Unix IPC
+/// socket, which the filesystem protects: the socket the TCP side names must
+/// sit where TUICommander puts one (`expected_unix_socket`), be a socket
+/// owned by this user, and answer `/health` over that socket with the SAME
+/// per-process `instance_id` the TCP port reported. Anything else fails
+/// closed with nothing sent.
+///
+/// Residual: an active local relay that forwards the real instance's TCP
+/// `/health` byte-for-byte passes this check (it is indistinguishable from
+/// the instance at the HTTP layer); defeating that needs the whole connection
+/// over the Unix socket. Windows (one shared named pipe, no per-instance
+/// socket) is not checked.
+#[cfg(unix)]
+pub(crate) async fn verify_local_instance_identity(
+    health: &Health,
+    instance_id: Option<&str>,
+) -> Result<(), String> {
+    #[cfg(test)]
+    {
+        let dirs = tests::LOCAL_IDENTITY_DIRS.lock().clone();
+        if let Some((temp, config)) = dirs {
+            return verify_local_instance_identity_in(health, instance_id, &temp, &config).await;
+        }
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let default_config_dir = crate::app_instance::AppInstance::default()
+        .config_dir_from(dirs::config_dir().as_deref(), &home);
+    verify_local_instance_identity_in(
+        health,
+        instance_id,
+        &std::env::temp_dir(),
+        &default_config_dir,
+    )
+    .await
+}
+
+#[cfg(not(unix))]
+pub(crate) async fn verify_local_instance_identity(
+    _health: &Health,
+    _instance_id: Option<&str>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+/// Where a TUICommander instance's Unix socket may legitimately live, per
+/// `mcp_http::resolve_socket_path`: a named instance at
+/// `<temp>/tuic-mcp-<hash(id)>.sock` (or `-<pid>.sock` when the primary was
+/// busy), the default instance at `<config>/mcp.sock` (or `mcp-<pid>.sock`).
+/// Without a named instance (a port-only Local connection) any of those
+/// shapes is acceptable — but always in one of those two directories.
+#[cfg(unix)]
+fn expected_unix_socket(
+    claimed: &std::path::Path,
+    instance_id: Option<&str>,
+    temp_dir: &std::path::Path,
+    default_config_dir: &std::path::Path,
+) -> bool {
+    let canonical = |p: &std::path::Path| p.canonicalize().ok();
+    let (Some(parent), Some(name)) = (
+        claimed.parent().and_then(canonical),
+        claimed.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return false;
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let stem_matches = |name: &str, stem: &str| {
+        name.strip_suffix(".sock").is_some_and(|rest| {
+            rest == stem
+                || rest
+                    .strip_prefix(stem)
+                    .and_then(|r| r.strip_prefix('-'))
+                    .is_some_and(digits)
+        })
+    };
+    let in_temp = canonical(temp_dir).is_some_and(|t| t == parent);
+    let in_default_config = canonical(default_config_dir).is_some_and(|c| c == parent);
+    match instance_id {
+        Some(id) => {
+            let primary = tuic_ipc::named_socket_path(id, temp_dir);
+            let stem = primary
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            in_temp && stem_matches(name, &stem)
+        }
+        None => {
+            let named_shape = name
+                .strip_prefix("tuic-mcp-")
+                .and_then(|rest| rest.strip_suffix(".sock"))
+                .is_some_and(|rest| {
+                    let (hash, pid) = rest.split_once('-').unwrap_or((rest, ""));
+                    hash.len() == 16
+                        && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                        && (pid.is_empty() || digits(pid))
+                });
+            (in_temp && named_shape) || (in_default_config && stem_matches(name, "mcp"))
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn verify_local_instance_identity_in(
+    health: &Health,
+    instance_id: Option<&str>,
+    temp_dir: &std::path::Path,
+    default_config_dir: &std::path::Path,
+) -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let not_verified = |why: &str| {
+        format!(
+            "The daemon on this port could not be verified as the expected TUICommander \
+             instance ({why}); nothing was sent to it."
+        )
+    };
+    let claimed_id = health
+        .instance_id
+        .as_deref()
+        .ok_or_else(|| not_verified("it reports no instance id"))?;
+    let socket = health
+        .socket_path
+        .as_deref()
+        .map(std::path::Path::new)
+        .ok_or_else(|| not_verified("it reports no IPC socket"))?;
+    if !expected_unix_socket(socket, instance_id, temp_dir, default_config_dir) {
+        return Err(not_verified(
+            "its IPC socket is not where that instance keeps one",
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(socket)
+        .map_err(|_| not_verified("its IPC socket does not exist"))?;
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    if !metadata.file_type().is_socket() || metadata.uid() != uid {
+        return Err(not_verified(
+            "its IPC socket is not a socket owned by this user",
+        ));
+    }
+    let socket_id = tokio::time::timeout(PROBE_TIMEOUT, read_unix_health_instance_id(socket))
+        .await
+        .map_err(|_| not_verified("its IPC socket did not answer in time"))?
+        .map_err(|e| not_verified(&e))?;
+    if socket_id != claimed_id {
+        return Err(not_verified(
+            "a different process answers the port than owns the instance's IPC socket",
+        ));
+    }
+    Ok(())
+}
+
+/// `GET /health` over a Unix socket; returns the reported `instance_id`.
+#[cfg(unix)]
+async fn read_unix_health_instance_id(socket: &std::path::Path) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+    let mut stream = tokio::net::UnixStream::connect(socket)
+        .await
+        .map_err(|e| format!("its IPC socket refused the connection: {e}"))?;
+    stream
+        .write_all(&tuic_ipc::http::request("GET", "/health", None, &[]))
+        .await
+        .map_err(|e| format!("IPC write failed: {e}"))?;
+    let mut decoder = tuic_ipc::http::ResponseDecoder::default();
+    let mut buf = [0u8; 8192];
+    let mut total = 0usize;
+    let response = loop {
+        let n = stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| format!("IPC read failed: {e}"))?;
+        total += n;
+        if total > MAX_RESPONSE_BYTES {
+            return Err("its IPC /health reply is too large".to_string());
+        }
+        decoder.push(&buf[..n]);
+        if let Some(response) = decoder
+            .response(n == 0)
+            .map_err(|e| format!("malformed IPC reply: {e}"))?
+        {
+            break response;
+        }
+    };
+    if !response.is_success() {
+        return Err(format!("its IPC /health answered {}", response.status));
+    }
+    serde_json::from_str::<serde_json::Value>(&response.body)
+        .ok()
+        .and_then(|v| v.get("instance_id")?.as_str().map(str::to_string))
+        .ok_or_else(|| "its IPC /health reports no instance id".to_string())
 }
 
 /// Outcome of a probe against a route that requires the credential.
@@ -1134,6 +1341,19 @@ async fn handshake(
             "{base_url} is this very TUICommander instance — a machine cannot mirror itself. \
              Point this connection at another machine's daemon."
         )));
+    }
+    // A Local connection's port is only a number another process may hold:
+    // prove it is the intended instance before the vault password goes out.
+    if let RemoteTransport::Local { instance_id, .. } = &connection.transport {
+        verify_local_instance_identity(
+            &health,
+            instance_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty()),
+        )
+        .await
+        .map_err(ConnectFailure::error)?;
     }
     update(state, id, |e| {
         e.protocol_version = health.protocol_version;
@@ -3428,6 +3648,223 @@ mod tests {
         version.assert_async().await;
     }
 
+    // --- Local Connect identity (Batch 30 review) ---
+
+    /// Test-only stand-in for the real temp/config dirs the Local identity
+    /// check trusts (nextest's per-test TMPDIR is too deep for a Unix socket
+    /// path). Tests that set it are `#[serial_test::serial(local_identity)]`.
+    pub(super) static LOCAL_IDENTITY_DIRS: parking_lot::Mutex<
+        Option<(std::path::PathBuf, std::path::PathBuf)>,
+    > = parking_lot::Mutex::new(None);
+
+    /// Makes the next Local connects in this test talk to a genuine-looking
+    /// instance: a Unix socket in a short fake config dir answering with
+    /// `instance_id`. Returns the guard dirs, the server and the `/health`
+    /// body fields the TCP mock must report.
+    #[cfg(unix)]
+    struct FakeLocalInstance {
+        _temp: tempfile::TempDir,
+        _config: tempfile::TempDir,
+        _server: tokio::task::JoinHandle<()>,
+        health_body: String,
+    }
+
+    #[cfg(unix)]
+    impl FakeLocalInstance {
+        fn start(instance_id: &str) -> Self {
+            let temp = short_socket_dir();
+            let config = short_socket_dir();
+            let socket = config.path().join("mcp.sock");
+            let server = serve_unix_health(&socket, instance_id);
+            *LOCAL_IDENTITY_DIRS.lock() =
+                Some((temp.path().to_path_buf(), config.path().to_path_buf()));
+            let health_body = serde_json::json!({
+                "protocol_version": 1,
+                "instance_id": instance_id,
+                "socket_path": socket.display().to_string(),
+            })
+            .to_string();
+            Self {
+                _temp: temp,
+                _config: config,
+                _server: server,
+                health_body,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for FakeLocalInstance {
+        fn drop(&mut self) {
+            *LOCAL_IDENTITY_DIRS.lock() = None;
+        }
+    }
+
+    /// A Local connection whose port is held by something that is not the
+    /// intended instance must fail BEFORE the vault password is sent.
+    #[tokio::test]
+    async fn local_connect_to_a_squatting_listener_sends_no_credential() {
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_body(
+                r#"{"protocol_version":4,"instance_id":"squatter","socket_path":"/tmp/not-a-tuic.sock"}"#,
+            )
+            .create_async()
+            .await;
+        let token_exchange = server
+            .mock("GET", "/api/auth/session-token")
+            .with_body(r#"{"token":"t"}"#)
+            .expect(0)
+            .create_async()
+            .await;
+        let version = server
+            .mock("GET", "/api/version")
+            .with_body("{}")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let state = test_state();
+        let port: u16 = server.url().rsplit(':').next().unwrap().parse().unwrap();
+        let connection = crate::remote_connection::RemoteConnection::new_local_port("local", port);
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        crate::remote_connection::set_connection_password(&id, "vault-secret").unwrap();
+
+        let error = connect(&state, &id)
+            .await
+            .expect_err("an unverified port must fail");
+        assert!(error.contains("could not be verified"), "{error}");
+        assert!(state.remote.token(&id).is_none());
+        token_exchange.assert_async().await;
+        version.assert_async().await;
+    }
+
+    /// Serves `GET /health` with `instance_id` on a Unix socket at `path`.
+    #[cfg(unix)]
+    fn serve_unix_health(path: &std::path::Path, instance_id: &str) -> tokio::task::JoinHandle<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::UnixListener::bind(path).unwrap();
+        let body = format!(r#"{{"instance_id":"{instance_id}"}}"#);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await;
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        })
+    }
+
+    /// A short directory under `/tmp`: a Unix socket path must fit SUN_LEN,
+    /// which nextest's deep per-test TMPDIR does not.
+    #[cfg(unix)]
+    fn short_socket_dir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("tuicv")
+            .tempdir_in("/tmp")
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn health_claiming(instance_id: &str, socket: &std::path::Path) -> Health {
+        Health {
+            instance_id: Some(instance_id.to_string()),
+            socket_path: Some(socket.display().to_string()),
+            ..Health::default()
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_identity_is_verified_through_the_instances_own_socket() {
+        let temp = short_socket_dir();
+        let config = short_socket_dir();
+        let socket = config.path().join("mcp.sock");
+        let _server = serve_unix_health(&socket, "real-instance");
+
+        let genuine = health_claiming("real-instance", &socket);
+        verify_local_instance_identity_in(&genuine, None, temp.path(), config.path())
+            .await
+            .expect("the instance that owns the socket is verified");
+
+        // A squatter on the port that names the real instance's socket but
+        // reports its own id is refused.
+        let squatter = health_claiming("squatter", &socket);
+        let err = verify_local_instance_identity_in(&squatter, None, temp.path(), config.path())
+            .await
+            .unwrap_err();
+        assert!(err.contains("different process"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_identity_refuses_a_socket_outside_tuic_locations_or_missing() {
+        let temp = short_socket_dir();
+        let config = short_socket_dir();
+        let elsewhere = short_socket_dir();
+        let socket = elsewhere.path().join("mcp.sock");
+        let _server = serve_unix_health(&socket, "attacker");
+        // Its own socket, its own id — but not where a TUIC instance keeps one.
+        let claim = health_claiming("attacker", &socket);
+        assert!(
+            verify_local_instance_identity_in(&claim, None, temp.path(), config.path())
+                .await
+                .is_err()
+        );
+        let no_socket = Health {
+            instance_id: Some("x".into()),
+            ..Health::default()
+        };
+        assert!(
+            verify_local_instance_identity_in(&no_socket, None, temp.path(), config.path())
+                .await
+                .is_err()
+        );
+        let no_id = Health {
+            socket_path: Some(config.path().join("mcp.sock").display().to_string()),
+            ..Health::default()
+        };
+        assert!(
+            verify_local_instance_identity_in(&no_id, None, temp.path(), config.path())
+                .await
+                .is_err()
+        );
+    }
+
+    /// A named-instance connection only accepts THAT instance's socket.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_local_identity_requires_that_instances_socket() {
+        let temp = short_socket_dir();
+        let config = short_socket_dir();
+        let dev = tuic_ipc::named_socket_path("dev-box", temp.path());
+        let _dev = serve_unix_health(&dev, "dev-process");
+        let other = tuic_ipc::named_socket_path("other-box", temp.path());
+        let _other = serve_unix_health(&other, "other-process");
+
+        let dev_claim = health_claiming("dev-process", &dev);
+        verify_local_instance_identity_in(&dev_claim, Some("dev-box"), temp.path(), config.path())
+            .await
+            .expect("dev-box's own socket");
+        let other_claim = health_claiming("other-process", &other);
+        assert!(
+            verify_local_instance_identity_in(
+                &other_claim,
+                Some("dev-box"),
+                temp.path(),
+                config.path()
+            )
+            .await
+            .is_err(),
+            "another instance on the port is not dev-box"
+        );
+    }
+
     #[tokio::test]
     async fn a_daemon_that_rejects_the_password_leaves_no_route_and_no_poll() {
         let mut server = mockito::Server::new_async().await;
@@ -3622,12 +4059,16 @@ mod tests {
 
     /// A Local connection by port is a plain loopback connection with the same
     /// handshake as any other: health, then the authenticated probe.
+    #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial(local_identity)]
     async fn a_local_connection_by_port_connects_over_loopback() {
+        // The port must prove it is a TUICommander instance of this user.
+        let instance = FakeLocalInstance::start("local-daemon");
         let mut server = mockito::Server::new_async().await;
         let _health = server
             .mock("GET", "/health")
-            .with_body(r#"{"protocol_version":1}"#)
+            .with_body(&instance.health_body)
             .create_async()
             .await;
         let version = server
@@ -3652,12 +4093,16 @@ mod tests {
 
     /// Loopback is not a credential: a Local daemon that answers 401 leaves the
     /// connection unauthenticated, with no route — never connected without auth.
+    #[cfg(unix)]
     #[tokio::test]
+    #[serial_test::serial(local_identity)]
     async fn a_local_daemon_that_demands_auth_is_not_connected_without_it() {
+        // The port must prove it is a TUICommander instance of this user.
+        let instance = FakeLocalInstance::start("local-daemon");
         let mut server = mockito::Server::new_async().await;
         let _health = server
             .mock("GET", "/health")
-            .with_body(r#"{"protocol_version":1}"#)
+            .with_body(&instance.health_body)
             .create_async()
             .await;
         let _version = server
