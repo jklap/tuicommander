@@ -2687,7 +2687,8 @@ Settings → **Remote Servers** (it replaced the separate **Remote Machines** pa
   checksummed deployment with `--instance <id>` and per-instance PID/log files,
   then connects; set-password pipes the saved credentials on stdin to
   `tuic-remote --set-password-if-unset`, which refuses to overwrite. Disconnect
-  stops a daemon started this way unless "Leave it running" is set, only after
+  stops a daemon started this way unless "Leave it running" is set or it still
+  has live sessions (then it is left running, logged), only after
   the PID file is proven to name a running `tuic-remote`
 
 ### 24.5 Remote Repositories and Terminals

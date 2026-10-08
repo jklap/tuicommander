@@ -276,6 +276,11 @@ impl RemoteRuntime {
         self.provisioned.insert(id.to_string(), ());
     }
 
+    /// Whether this app started `id`'s daemon in this run, without forgetting it.
+    pub(crate) fn is_provisioned(&self, id: &str) -> bool {
+        self.provisioned.contains_key(id)
+    }
+
     /// Forget the mark, returning whether it was there.
     pub(crate) fn take_provisioned(&self, id: &str) -> bool {
         self.provisioned.remove(id).is_some()
@@ -1709,6 +1714,9 @@ pub(crate) fn disconnect(state: &Arc<AppState>, id: &str) {
 /// to leave the daemon alive for a cheap reconnect within `survive_secs`.
 pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
     crate::ssh_provision::stop_after_disconnect(state, id);
+    // A daemon left running for its live sessions stays "ours" on Disconnect;
+    // a deleted connection has nothing left to stop it later.
+    state.remote.forget_provisioned(id);
     stop_deleted_ephemeral(state, id);
     teardown(state, id);
     state.remote.attempted_updates.remove(id);
