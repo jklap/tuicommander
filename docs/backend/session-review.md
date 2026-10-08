@@ -266,7 +266,9 @@ transcripts live). Ref-counted per `(project_dir, session_id)`: multiple
 subscribers to the same session share one underlying `notify` watcher, and
 the last `unwatch_session_review` tears it down. Bounded: at most
 `MAX_SESSION_REVIEW_WATCHERS` (64) distinct watchers and
-`MAX_SESSION_REVIEW_WATCH_REFS` (32) subscribers per watcher — past either, a
+`MAX_SESSION_REVIEW_WATCH_REFS` (32) subscribers per watcher (the watcher cap is
+a slot reserved atomically before the OS watcher is built and released on
+teardown, so concurrent first watches can't overshoot it) — past either, a
 `watch` is refused and takes no ref (the frontend then never unwatches for it,
 and an unwatch with no ref behind it is a no-op rather than stealing another
 subscriber's). Debounced ~400ms (shorter
