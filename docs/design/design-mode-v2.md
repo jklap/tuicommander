@@ -1,6 +1,6 @@
 # Design Mode v2
 
-Status: draft for Boss review. Research only; no code changed. Date: 2026-10-08.
+Status: Boss decisions of 2026-10-08 folded in (§14). Plan only; no code changed. Date: 2026-10-08.
 Location note: the brief asked for `plans/design-mode-v2.md`, but `plans/` is a gitignored symlink to the main checkout, so it cannot be committed on a branch. This plan lives in `docs/design/`.
 Inputs: Boss direction (MDKB `design-mode-ux-boss-1008`), MDKB `design-mode-native-chrome`, `design-mode-panel-open-decision`, `docs/user-guide/design-mode.md`, Orca source (stablyai/orca, MIT, branch `main`, read with `gh api`; installed build 1.4.207 at `/Applications/Orca.app`, asar extracted to `~/Gits/.tmp/design-mode-plan/orca-asar`, Orca not launched), coordinator prior-art mails (2026-10-08), tauri 2.11.5 / wry 0.55.1 / chromey 2.58.2 sources in `~/.cargo/registry`.
 
@@ -14,6 +14,7 @@ Design Mode v1 (`df9ea5f70`) is unusable:
 4. Nothing closes the loop after the agent edits the code.
 5. It needs a URL (`Dev Server URL` in Repo Settings); otherwise `about:blank`.
 6. **The "controlled by automated test software" banner has a cause in our code.** `browser.rs:104-110` launches through `chromey` and appends `.args([...])` without `disable_default_args()`. chromey then prepends `DEFAULT_ARGS` (`chromey-2.58.2/src/browser.rs:1578-1608`), which include `--enable-automation`, `--disable-extensions`, `--disable-blink-features=AutomationControlled`, `--disable-sync`, `--use-mock-keychain`. The banner is the effect of `--enable-automation`; `--disable-extensions` would also block any extension in that profile. Boss's screenshot shows Edge with the banner. This Mac has only Microsoft Edge 154.0.4258.62 in `/Applications`; no Google Chrome (`chrome_candidates()` falls back to Edge).
+   **Update (story 1593-987f, merged `2aabe9a9c`):** the v1 browser launch no longer passes `--enable-automation` or `--disable-extensions`. This was a prerequisite for loading the extension in the TUIC-launched browser. The v1 launch still uses CDP.
 
 Target (Boss): Design Mode starts only from a web page, never from a terminal tab. Picks go to a sidebar: collected data, a comment, the target agent (same hand-off as Markdown "Send to agent"). When the agent has made the change the page reloads. The user can always reach a page, also when no URL was printed.
 
@@ -114,12 +115,12 @@ TUIC plugins are JS modules in the TUIC webview (`docs/plugins.md`: Activity Cen
  +---------------------------------------------+  + mcp.sock)+---------------------------------------+
 ```
 
-### 5.1 Channel to TUIC: native messaging first, loopback HTTP as the alternative
+### 5.1 Channel to TUIC: native messaging (decided, Q2); loopback HTTP is the fallback
 
 TUIC has no always-on TCP listener. The local API is a Unix socket `<config_dir>/mcp.sock` with no auth (`docs/api/http-api.md`); the TCP listener exists only with Remote access enabled, with Basic Auth or `?token=`; every request checks Host and Origin and rejects foreign origins (`request_boundary.rs`, `cors()` at 187). A browser extension cannot use the Unix socket.
 
-- **Native messaging (recommended).** The browser starts a host binary over stdio; the binary relays to `mcp.sock` (the shipped `tuic-bridge-*` sidecar relays the socket for MCP, but is not directly usable: it frames by newline and rejects extra arguments, `src-tauri/crates/tuic-bridge/src/main.rs:902-906,986-994`, whereas native messaging uses 4-byte length framing and passes the extension origin as an argument. Needs a length-framed adapter with an explicit instance handshake; never guess sockets). No port, no token on the wire, pinned by `allowed_origins: ["chrome-extension://<id>/"]` in the host manifest, so only our extension ID can launch it. Pages cannot reach it. No new network trust boundary. Costs: the host manifest is installed per browser (Chrome, Edge, Brave, Chromium each have a `NativeMessagingHosts` directory); its `path` goes stale when the app moves; the per-instance socket (`--instance`) must be selectable. For a custom profile, Chromium reads `<user-data-dir>/NativeMessagingHosts` (from memory of Chromium's `DIR_USER_NATIVE_MESSAGING`; unverified, S0). An open native port keeps the MV3 service worker alive (from memory; S0).
-- **Loopback HTTP/SSE with pairing token (Boss's proposal).** Needs a new listener on `127.0.0.1:<random>`, Origin allowlist `chrome-extension://<fixed id>` (fixed through the manifest `key`), bearer token delivered by a file in the extension directory TUIC materialises, rotated per start. Any local process that reads the token can call it; the service worker sleeps after ~30 s unless SSE traffic keeps it alive. It is a new trust boundary that native messaging avoids. Keep as fallback if S0 finds native messaging unreliable in Edge.
+- **Native messaging (decided by Boss, Q2).** The browser starts a host binary over stdio; the binary relays to `mcp.sock` (the shipped `tuic-bridge-*` sidecar relays the socket for MCP, but is not directly usable: it frames by newline and rejects extra arguments, `src-tauri/crates/tuic-bridge/src/main.rs:902-906,986-994`, whereas native messaging uses 4-byte length framing and passes the extension origin as an argument. Needs a length-framed adapter with an explicit instance handshake; never guess sockets). No port, no token on the wire, pinned by `allowed_origins: ["chrome-extension://<id>/"]` in the host manifest, so only our extension ID can launch it. Pages cannot reach it. No new network trust boundary. Costs: the host manifest is installed per browser (Chrome, Edge, Brave, Chromium each have a `NativeMessagingHosts` directory); its `path` goes stale when the app moves; the per-instance socket (`--instance`) must be selectable. For a custom profile, Chromium reads `<user-data-dir>/NativeMessagingHosts` (from memory of Chromium's `DIR_USER_NATIVE_MESSAGING`; unverified, S0). An open native port keeps the MV3 service worker alive (from memory; S0).
+- **Loopback HTTP/SSE with pairing token (earlier proposal).** Needs a new listener on `127.0.0.1:<random>`, Origin allowlist `chrome-extension://<fixed id>` (fixed through the manifest `key`), bearer token delivered by a file in the extension directory TUIC materialises, rotated per start. Any local process that reads the token can call it; the service worker sleeps after ~30 s unless SSE traffic keeps it alive. It is a new trust boundary that native messaging avoids. Not chosen. Keep as fallback only if S0 finds native messaging unreliable in Edge.
 
 Messages (extension to TUIC): `hello{repo hint, version}`, `list_agents`, `list_dev_servers`, `pick{payload}`, `send{pickIds, comments, sessionId}`. TUIC to extension: `agents`, `dev_servers`, `pick_ack`, `reload{tabId}`, `agent_state`.
 
@@ -158,7 +159,7 @@ Global panel with per-tab state keyed by `tabId`; Edge's "not re-shown on tab sw
 
 Chosen: **dev-server discovery served by TUIC, shown in the extension side panel, plus the browser's own address bar** (always present: the universal floor, nothing to build). Candidates TUIC returns for a repo, in order:
 
-1. Explicit **Dev Server URL** in Repo Settings (`repoSettings.ts:38`), if set, labelled "configured". Explicit beats heuristics only for ordering; a fresh validated PTY URL on a different port is shown next to it (Vite increments busy ports). Candidates are deduplicated, never auto-opened when ambiguous, and monorepo apps / exact worktrees are distinguished (Codex review, point 1).
+1. Explicit **Dev Server URL** in Repo Settings (`repoSettings.ts:38`), if set, labelled "configured". Explicit beats heuristics only for ordering; a fresh validated PTY URL on a different port is shown next to it (Vite increments busy ports). Candidates are deduplicated, never auto-opened when ambiguous, and monorepo apps / exact worktrees are distinguished (Codex review, point 1). Decided by Boss (Q7): the configured URL is first. A fresh PTY URL on a different port is shown beside it with a label, so a stale setting cannot send the user to the wrong port unnoticed.
 2. **Listening loopback TCP ports whose process cwd (or command line) is inside the repo or one of its worktrees**, deepest path wins (Orca `local-workspace-port-attribution.ts`). macOS/Linux: `lsof -nP -iTCP -sTCP:LISTEN -Fpcn`, then `lsof -a -p <pid> -d cwd -Fn` (TUIC already uses `lsof` in `tunnels/port.rs:24`); Windows `netstat -ano` + process cwd (to verify).
 3. **URL printed in the repo's PTY output**, validated against a live listener (Orca `advertised-url-watcher.ts`): gives scheme, host alias, path.
 4. **Recents** for the repo (last URLs opened by Design Mode).
@@ -174,7 +175,7 @@ The side panel lists them on any tab (also `chrome://newtab`, where no content s
 | `package.json`/vite config parsing | Rejected | Guesses a port that differs from the running one; one parser per framework. |
 | Address bar | Free floor | Provided by the browser. |
 
-Remote/SSH repos: the scan runs where the repo lives; reaching the URL needs the tunnel layer. Out of scope for v2.0 (Q8).
+Remote/SSH repos: the scan runs where the repo lives; reaching the URL needs the tunnel layer. Out of scope for v2.0; a later slice (decided by Boss, Q8).
 
 ## 7. Sidebar, comment, agent picker (reusing the Markdown path)
 
@@ -189,7 +190,7 @@ Design feedback on <page url path>. Apply each change in the source, then stop.
    Evidence (untrusted page content): <bounded snippet, styles, tokens>
 ```
 
-- Behaviour change from v1 (paste without Enter): v2 queues through the idle gate; the sidebar is the review step. Q3.
+- Behaviour change from v1 (paste without Enter): v2 queues through the idle gate; the sidebar is the review step. Decided by Boss (Q3): the text goes at once when the agent is idle, else when its turn ends.
 
 ## 8. Reload loop
 
@@ -202,14 +203,17 @@ State (service worker, keyed by `tabId`): after `send` returns, record `{session
 
 The trigger is computed in TUIC (it owns the idle gate and works with the UI closed); the action runs in the browser.
 
-**Amended after the Codex review (point 5):** `enqueue` returning is not a completion signal. The trigger correlates command id → actual delivery (typed) → turn epoch → confirmed completion, and ignores timer-only idle (`pty.rs:4759` is a heuristic); `awaiting_input` is permanently true for a ready Codex prompt (`pty.rs:8536-8542`, the gate is `question_confident`). HMR traffic is not proof of a successful update. Default reload is a normal reload that preserves dirty forms (skip and notify when a form field is dirty); `bypassCache` only on explicit user action. Mid-typing: do not reload, notify (Q4 changes accordingly).
+**Amended after the Codex review (point 5):** `enqueue` returning is not a completion signal. The trigger correlates command id → actual delivery (typed) → turn epoch → confirmed completion, and ignores timer-only idle (`pty.rs:4759` is a heuristic); `awaiting_input` is permanently true for a ready Codex prompt (`pty.rs:8536-8542`, the gate is `question_confident`). HMR traffic is not proof of a successful update. Default reload is a normal reload that preserves dirty forms (skip and notify when a form field is dirty); `bypassCache` only on explicit user action. Mid-typing: do not reload, notify (Q4).
+
+**Dirty form (decided, Q4):** if the page holds unsaved form input, TUIC does not reload. The side panel shows a notice with a **Reload** button. A reload would erase the input, and a prompt every time interrupts the user.
 
 ## 9. Browser launch, install, the banner
 
-- **Dedicated profile (existing idea, fixed).** TUIC launches one browser per repo with `--user-data-dir=<config>/design-mode/<repo-key>`, as a plain process: no `chromey` launch, no `--remote-debugging-*`, no `--enable-automation`. If chromey stays for anything, call `.disable_default_args()`. No banner.
-- **Extension install.** One-time **Load unpacked** from a folder TUIC materialises (`<config>/design-mode/extension/`, fixed `key` in `manifest.json` ⇒ stable ID ⇒ stable `allowed_origins`), with a guided first-run page that links `chrome://extensions`. On Chromium or Chrome for Testing `--load-extension` works without a click; on branded Chrome 137+ it does not; on Edge 154 unverified. A Web Store / Edge Add-ons listing is a later slice and the only way to avoid developer-mode friction in the user's own browser.
+- **Browser choice (decided by Boss, Q9).** The user chooses the browser. Default: TUIC opens an Edge or Chrome window with its own profile per repository. Option: the user's everyday Edge or Chrome with the extension installed there. Safari is not in v2.0 and is not planned: the extension targets Chrome and Edge, and TUIC opens Edge or Chrome whatever the system default is. Safari would need a signed macOS app, a sidebar in a separate window and a different channel (sources: [Apple, messaging in a Safari web extension](https://developer.apple.com/documentation/safariservices/messaging-between-the-app-and-javascript-in-a-safari-web-extension), [side panel support across browsers](https://mv3-extension.com/uiux-patterns-interactive-components/side-panel-devtools-interfaces/side-panel-support-across-browsers/), [w3c/webextensions #517](https://github.com/w3c/webextensions/issues/517)).
+- **Dedicated profile (default).** TUIC launches one browser per repo with `--user-data-dir=<config>/design-mode/<repo-key>`, as a plain process: no `chromey` launch, no `--remote-debugging-*`, no `--enable-automation`. If chromey stays for anything, call `.disable_default_args()`. No banner.
+- **Extension install.** One-time **Load unpacked** from a folder TUIC materialises (`<config>/design-mode/extension/`, fixed `key` in `manifest.json` ⇒ stable ID ⇒ stable `allowed_origins`), with a guided first-run page that links `chrome://extensions`. On Chromium or Chrome for Testing `--load-extension` works without a click; on branded Chrome 137+ it does not; on Edge 154 unverified. Decided by Boss (Q6): "Load unpacked" once per profile during the pilot, then an unlisted Web Store / Edge Add-ons listing (slice S7), the only way to avoid developer-mode friction in the user's own browser.
 - **Native messaging host manifest** written by TUIC for the chosen browser, `path` pointing at the bundled bridge, refreshed at each TUIC start if the app path changed.
-- **User's own Chrome/Edge.** Same extension, host manifest in that browser's directory; no dedicated profile.
+- **User's own Chrome/Edge (optional, Q9).** Same extension, host manifest in that browser's directory; no dedicated profile.
 
 ## 10. PWA / mobile
 
@@ -229,7 +233,7 @@ The browser always opens on the host (as v1). A browser/PWA client of TUIC sees 
 ## 12. Removal of the terminal-tab entry and of the CDP backend
 
 - Remove now: `TabBar.tsx:72-73,382-389,882,972`, `TabViews.tsx:92,164-173`, `useCommandPaletteActions.ts:7,26,141-152`, i18n `tabBar.*DesignMode*`, related tests (updated, not deleted), docs. `design_mode::start(session_id)` (derived from an agent session) becomes repo-scoped.
-- After the extension works: `browser.rs`, the CDP parts of `manager.rs` (`Overlay`, `Debugger`, `DOM`, `Input`), the `chromey` Design Mode use, the "Attach browser automation to the same Chrome" guide section and `DevToolsActivePort` handling are dead. Keep `extract.js`, `payload.rs`, `source.rs`. **Deleting the CDP backend needs Boss's explicit permission** (Q5); recommended after S4.
+- After the extension works: `browser.rs`, the CDP parts of `manager.rs` (`Overlay`, `Debugger`, `DOM`, `Input`), the `chromey` Design Mode use, the "Attach browser automation to the same Chrome" guide section and `DevToolsActivePort` handling are dead. Keep `extract.js`, `payload.rs`, `source.rs`. **Decided (Q1 + Q5, coordinator):** build the extension. The CDP code stays until spike S0 proves that the extension finds source maps without CDP (today source maps come only from CDP, `manager.rs:481`). Removal is slice S6 and still needs Boss's explicit permission, because it deletes code.
 
 ## 13. Slices (future stories) and validation
 
@@ -243,20 +247,26 @@ Build policy: one targeted run at the end per story, through build-slot. Browser
 | S3 | Agent picker + Send via `enqueue_agent_command`; shared `reviewAgents`. | Vitest: only same-repo agents, default first, busy agent queues (`typed=false`), failed send keeps cards. |
 | S4 | Dev-server discovery + side-panel list + launch command + Start dev server. | Rust tests with `lsof` output fixtures **recorded on this Mac** (not hand-written): two worktrees (deepest match), two servers, dead listener, a process whose command line merely contains a path-like substring. |
 | S5 | Reload loop (TUIC `agent_state` + HMR probe + `tabs.reload`). | State-machine test with fake lifecycle events: busy→idle reloads once; HMR message after send skips; no busy within 30 s drops; queued sends coalesce. Named bugs: double reload, reload during HMR, no reload after a queued send. |
-| S6 | Remove terminal-tab entry, drop the `--enable-automation` launcher path, delete CDP backend (with Boss's permission), docs (`design-mode.md`, FEATURES, tauri-commands, http-api, sync-matrix), i18n. | `rg` shows no `startDesignMode` in TabBar/palette; docs build; no test deleted without Boss. |
-| S7 | Distribution: Web Store / Edge Add-ons listing, update channel. | Store review outcome; outside the first release. |
+| S6 | Remove terminal-tab entry, drop the `--enable-automation` launcher path, delete CDP backend only after S0 proves source maps without CDP (with Boss's permission), docs (`design-mode.md`, FEATURES, tauri-commands, http-api, sync-matrix), i18n. | `rg` shows no `startDesignMode` in TabBar/palette; docs build; no test deleted without Boss. |
+| S7 | Distribution: unlisted Web Store / Edge Add-ons listing after the pilot, update channel. | Store review outcome; outside the first release. |
 
-## 14. Open questions for Boss (with recommendation)
+## 14. Decisions (Boss, 2026-10-08)
 
-1. **Extension as the primary route (X-A), CDP backend retired?** Recommend yes, gated by S0.
-2. **Channel:** native messaging (recommend: no port, pinned extension ID) or loopback HTTP + pairing token (your proposal; new listener)?
-3. **Send behaviour:** queue through the idle gate like Markdown instead of "paste without Enter"? Recommend queue.
-4. **Auto-reload while the user is typing in the page:** reload anyway with a notice (recommend) or ask?
-5. **Delete `browser.rs` / CDP parts of `manager.rs` after S4?** Recommend yes; needs your explicit permission.
-6. **Install friction:** accept "Load unpacked" once (branded Chrome 137+, possibly Edge) until a store listing exists? Recommend yes; `--load-extension` works only on Chromium / Chrome for Testing, neither installed here.
-7. **Initial URL precedence:** Repo Settings URL over detected ports (recommend), or the reverse?
-8. **Remote/SSH repos:** later slice (recommend) or blocked in v2.0?
-9. **Default browser:** dedicated profile launched by TUIC (recommend; isolated), own Chrome as opt-in?
+**Decided by Boss:**
+
+- Q2 Channel: native messaging. The browser starts a small TUIC program that forwards the messages, and no network port is opened.
+- Q3 Send: queued through the idle gate, like the Markdown review notes. The text goes at once when the agent is idle, else when its turn ends.
+- Q6 Install: "Load unpacked" once per profile during the pilot, then an unlisted store listing.
+- Q8 Remote/SSH repos: a later slice, not in v2.0.
+- Q9 Browser: the user chooses. Default: TUIC opens an Edge or Chrome window with its own profile per repository. Option: the user's everyday Edge or Chrome with the extension installed there. No Safari.
+
+**Decided by the coordinator (one logical answer):**
+
+- Q1 + Q5, primary route and the CDP code: build the extension. The CDP code (`browser.rs`, the CDP parts of `manager.rs`) stays until spike S0 proves source maps without CDP. Removal in S6 needs Boss's permission.
+- Q4 Reload while a form holds unsaved input: no reload; a notice with a **Reload** button.
+- Q7 URL order: the configured URL first; a fresh PTY URL beside it, labelled.
+
+**Open questions:** none. S0 may still change a decision (for example Edge 154 behaviour); in that case the plan returns to Boss.
 
 ## 15. Codex review
 
