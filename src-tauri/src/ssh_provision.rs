@@ -449,51 +449,109 @@ pub(crate) async fn stop_daemon(state: &Arc<AppState>, id: &str) -> Result<bool,
 }
 
 /// Whether Disconnect stops the daemon: only one this app started through a
-/// confirmed Start plan in this run, and only when the connection does not ask
-/// to leave it running. A daemon somebody else started is never touched.
-pub(crate) fn should_stop_on_disconnect(started_here: bool, leave_running: bool) -> bool {
-    started_here && !leave_running
+/// confirmed Start plan in this run, only when the connection does not ask to
+/// leave it running, and only when it has NO live sessions (Batch 32 review
+/// #3). A daemon somebody else started is never touched, and stopping one that
+/// still runs terminals or agents would kill them with no warning — so it is
+/// left running instead (it exits by itself `survive_secs` after its last
+/// client leaves). Conservative on purpose: the cost of the wrong answer here
+/// is a daemon idling until its survive timer, not lost work.
+pub(crate) fn should_stop_on_disconnect(
+    started_here: bool,
+    leave_running: bool,
+    live_sessions: usize,
+) -> bool {
+    started_here && !leave_running && live_sessions == 0
 }
 
-/// Called by Disconnect and delete before the runtime is torn down: forget the
-/// "started here" mark and, when [`should_stop_on_disconnect`] says so, stop
-/// the daemon in the background (bounded by `remote_deploy::STOP_TIMEOUT`).
-pub(crate) fn stop_after_disconnect(state: &Arc<AppState>, id: &str) {
-    let started_here = state.remote.take_provisioned(id);
-    if !started_here {
-        return;
+/// What [`stop_after_disconnect`] stops, if anything, and the mark it updates:
+/// the mark is forgotten when the daemon is stopped or the user asked to leave
+/// it running, and KEPT when live sessions held the stop back, so a later
+/// Disconnect (or the stop route) can still stop the daemon this app started.
+fn disconnect_stop_target(
+    state: &Arc<AppState>,
+    id: &str,
+) -> Option<(crate::tunnels::profile::TunnelProfile, Option<String>)> {
+    if !state.remote.is_provisioned(id) {
+        return None;
     }
-    let Ok(connection) = crate::remote_runtime::load_connection(state, id) else {
-        return;
-    };
-    stop_started_here(&connection, started_here);
+    let connection = crate::remote_runtime::load_connection(state, id).ok();
+    stop_target_for(state, id, connection.as_ref())
+}
+
+/// [`disconnect_stop_target`]'s decision for a record the caller already
+/// holds (`None` = the record is gone): live sessions hold the stop back and
+/// keep the mark; a stop, a "leave it running" or a missing record forgets it.
+fn stop_target_for(
+    state: &Arc<AppState>,
+    id: &str,
+    connection: Option<&crate::remote_connection::RemoteConnection>,
+) -> Option<(crate::tunnels::profile::TunnelProfile, Option<String>)> {
+    let live_sessions = crate::remote_mirror::live_session_count(state, id);
+    let target = connection.and_then(|connection| {
+        let target = ssh_target(connection).ok()?;
+        let leave_running = target.leave_running_on_disconnect;
+        let instance = target.instance_id.map(str::to_string);
+        let profile = crate::remote_runtime::ssh_profile(connection)?;
+        Some((leave_running, profile, instance))
+    });
+    match target {
+        Some((leave_running, profile, instance)) => {
+            if should_stop_on_disconnect(true, leave_running, live_sessions) {
+                state.remote.forget_provisioned(id);
+                Some((profile, instance))
+            } else {
+                if !leave_running {
+                    tracing::warn!(
+                        source = "remote",
+                        connection = id,
+                        live_sessions,
+                        "Leaving the remote daemon this app started running: it still has live sessions"
+                    );
+                } else {
+                    state.remote.forget_provisioned(id);
+                }
+                None
+            }
+        }
+        None => {
+            state.remote.forget_provisioned(id);
+            None
+        }
+    }
+}
+
+/// Called by Disconnect (and a delete whose record is already gone) before the
+/// runtime is torn down: when [`should_stop_on_disconnect`] says so, stop the
+/// daemon this app started in the background (bounded by
+/// `remote_deploy::STOP_TIMEOUT`).
+pub(crate) fn stop_after_disconnect(state: &Arc<AppState>, id: &str) {
+    if let Some((profile, instance)) = disconnect_stop_target(state, id) {
+        spawn_stop(id, profile, instance);
+    }
 }
 
 /// [`stop_after_disconnect`] for a deletion that already holds the record
 /// (the settings-store delete path, `remote_runtime::teardown_deleted_record`),
-/// so the daemon is still stopped once the record is no longer on disk.
+/// so the daemon is still stopped once the record is no longer on disk. Same
+/// live-session rule; the "started here" mark is forgotten either way, since a
+/// deleted connection has nothing left to stop a held-back daemon later (it
+/// exits by itself `survive_secs` after its last client leaves).
 pub(crate) fn stop_after_delete(
     state: &Arc<AppState>,
     connection: &crate::remote_connection::RemoteConnection,
 ) {
-    let started_here = state.remote.take_provisioned(&connection.id);
-    if started_here {
-        stop_started_here(connection, started_here);
+    if !state.remote.is_provisioned(&connection.id) {
+        return;
+    }
+    let target = stop_target_for(state, &connection.id, Some(connection));
+    state.remote.forget_provisioned(&connection.id);
+    if let Some((profile, instance)) = target {
+        spawn_stop(&connection.id, profile, instance);
     }
 }
 
-fn stop_started_here(connection: &crate::remote_connection::RemoteConnection, started_here: bool) {
-    let id = connection.id.as_str();
-    let Ok(target) = ssh_target(connection) else {
-        return;
-    };
-    if !should_stop_on_disconnect(started_here, target.leave_running_on_disconnect) {
-        return;
-    }
-    let instance = target.instance_id.map(str::to_string);
-    let Some(profile) = crate::remote_runtime::ssh_profile(connection) else {
-        return;
-    };
+fn spawn_stop(id: &str, profile: crate::tunnels::profile::TunnelProfile, instance: Option<String>) {
     let id = id.to_string();
     tokio::spawn(async move {
         match crate::remote_deploy::stop_ephemeral_for(&profile, instance.as_deref()).await {
@@ -809,10 +867,64 @@ mod tests {
 
     #[test]
     fn disconnect_stops_only_a_daemon_started_here_unless_asked_to_leave_it() {
-        assert!(should_stop_on_disconnect(true, false));
-        assert!(!should_stop_on_disconnect(true, true));
-        assert!(!should_stop_on_disconnect(false, false));
-        assert!(!should_stop_on_disconnect(false, true));
+        assert!(should_stop_on_disconnect(true, false, 0));
+        assert!(!should_stop_on_disconnect(true, true, 0));
+        assert!(!should_stop_on_disconnect(false, false, 0));
+        assert!(!should_stop_on_disconnect(false, true, 0));
+        assert!(!should_stop_on_disconnect(true, false, 1));
+    }
+
+    /// Batch 32 review #3: Disconnect stopped a daemon this app started even
+    /// while it ran live remote sessions, killing them with no warning. It is
+    /// now left running (and stays "ours" for a later stop); with no sessions
+    /// it is stopped as before, under the connection's own instance.
+    #[tokio::test]
+    async fn disconnect_leaves_a_daemon_with_live_sessions_running() {
+        let mut connection = provisioned_connection();
+        set_instance(&mut connection, "dev-box");
+        let (state, _dir) = state_with(&connection);
+        let id = connection.id.clone();
+        state.remote.mark_provisioned(&id);
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            &id,
+            vec![crate::mcp_http::types::SessionInfo {
+                session_id: "remote-1".into(),
+                ..Default::default()
+            }],
+        );
+
+        assert!(disconnect_stop_target(&state, &id).is_none());
+        assert!(state.remote.is_provisioned(&id), "still ours to stop later");
+
+        crate::remote_mirror::store_seed_for_test(&state, &id, Vec::new());
+        let (_, instance) = disconnect_stop_target(&state, &id).expect("no sessions: stop");
+        assert_eq!(instance.as_deref(), Some("dev-box"));
+        assert!(!state.remote.is_provisioned(&id));
+    }
+
+    /// The settings-store delete path holds the record itself
+    /// (`stop_after_delete`): live sessions hold the stop back there too, and
+    /// the mark is forgotten anyway because nothing can stop it later.
+    #[tokio::test]
+    async fn delete_with_live_sessions_leaves_the_daemon_and_forgets_the_mark() {
+        let connection = provisioned_connection();
+        let (state, _dir) = state_with(&connection);
+        let id = connection.id.clone();
+        state.remote.mark_provisioned(&id);
+        crate::remote_mirror::store_seed_for_test(
+            &state,
+            &id,
+            vec![crate::mcp_http::types::SessionInfo {
+                session_id: "remote-1".into(),
+                ..Default::default()
+            }],
+        );
+        assert!(stop_target_for(&state, &id, Some(&connection)).is_none());
+        assert!(state.remote.is_provisioned(&id));
+
+        stop_after_delete(&state, &connection);
+        assert!(!state.remote.is_provisioned(&id));
     }
 
     fn state_with(connection: &RemoteConnection) -> (Arc<AppState>, ()) {

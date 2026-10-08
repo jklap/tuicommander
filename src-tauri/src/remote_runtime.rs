@@ -284,6 +284,11 @@ impl RemoteRuntime {
         self.provisioned.insert(id.to_string(), ());
     }
 
+    /// Whether this app started `id`'s daemon in this run, without forgetting it.
+    pub(crate) fn is_provisioned(&self, id: &str) -> bool {
+        self.provisioned.contains_key(id)
+    }
+
     /// Forget the mark, returning whether it was there.
     pub(crate) fn take_provisioned(&self, id: &str) -> bool {
         self.provisioned.remove(id).is_some()
@@ -1942,6 +1947,9 @@ pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
     }
     // No record to act on: still forget any "started here" mark.
     crate::ssh_provision::stop_after_disconnect(state, id);
+    // A daemon left running for its live sessions stays "ours" on Disconnect;
+    // a deleted connection has nothing left to stop it later.
+    state.remote.forget_provisioned(id);
     teardown(state, id);
     state.remote.attempted_updates.remove(id);
 }
@@ -1949,7 +1957,8 @@ pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
 /// Settings removal retains this record across persistence instead of rereading a deleted row.
 pub(crate) fn teardown_deleted_record(state: &Arc<AppState>, connection: &RemoteConnection) {
     // A daemon a confirmed `ssh_provision` Start launched is stopped like on
-    // Disconnect (unless the connection says to leave it running).
+    // Disconnect (unless the connection says to leave it running or it still
+    // has live sessions); the "started here" mark is forgotten either way.
     crate::ssh_provision::stop_after_delete(state, connection);
     stop_deleted_ephemeral(connection);
     teardown(state, &connection.id);
