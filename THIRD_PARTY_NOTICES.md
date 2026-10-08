@@ -38,11 +38,11 @@ authors and communities behind each project.
 | deunicode | 1.6.2 | BSD-3-Clause |
 | dirs | 6.0.0 | MIT OR Apache-2.0 |
 | drag | 2.1.1 | Apache-2.0 OR MIT |
-| flate2 | 1.1.9 | MIT OR Apache-2.0 |
+| flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
 | gh-token | 0.1.8 | MIT OR Apache-2.0 |
 | gix | 0.85.0 | MIT OR Apache-2.0 |
-| glob | 0.3.3 | MIT OR Apache-2.0 |
+| glob | 0.3.4 | MIT OR Apache-2.0 |
 | grep-matcher | 0.1.9 | Unlicense OR MIT |
 | grep-regex | 0.1.14 | Unlicense OR MIT |
 | grep-searcher | 0.1.17 | Unlicense OR MIT |
@@ -89,18 +89,18 @@ authors and communities behind each project.
 | ssh2-config | 0.7.2 | MIT |
 | stop-words | 0.9.0 | MIT OR Apache-2.0 |
 | tar | 0.4.46 | MIT OR Apache-2.0 |
-| tauri | 2.11.5 | Apache-2.0 OR MIT |
-| tauri-build | 2.6.3 | Apache-2.0 OR MIT |
-| tauri-plugin-clipboard-manager | 2.3.2 | Apache-2.0 OR MIT |
-| tauri-plugin-deep-link | 2.4.9 | Apache-2.0 OR MIT |
-| tauri-plugin-dialog | 2.7.2 | Apache-2.0 OR MIT |
-| tauri-plugin-global-shortcut | 2.3.2 | Apache-2.0 OR MIT |
+| tauri | 2.12.1 | Apache-2.0 OR MIT |
+| tauri-build | 2.7.1 | Apache-2.0 OR MIT |
+| tauri-plugin-clipboard-manager | 2.4.1 | Apache-2.0 OR MIT |
+| tauri-plugin-deep-link | 2.6.1 | Apache-2.0 OR MIT |
+| tauri-plugin-dialog | 2.8.1 | Apache-2.0 OR MIT |
+| tauri-plugin-global-shortcut | 2.4.0 | Apache-2.0 OR MIT |
 | tauri-plugin-notification | 2.4.0 | Apache-2.0 OR MIT |
-| tauri-plugin-opener | 2.5.4 | Apache-2.0 OR MIT |
-| tauri-plugin-process | 2.3.1 | Apache-2.0 OR MIT |
-| tauri-plugin-single-instance | 2.4.3 | Apache-2.0 OR MIT |
+| tauri-plugin-opener | 2.7.0 | Apache-2.0 OR MIT |
+| tauri-plugin-process | 2.4.0 | Apache-2.0 OR MIT |
+| tauri-plugin-single-instance | 2.5.2 | Apache-2.0 OR MIT |
 | tauri-plugin-updater | 2.11.0 | Apache-2.0 OR MIT |
-| tauri-plugin-window-state | 2.4.1 | Apache-2.0 OR MIT |
+| tauri-plugin-window-state | 2.5.0 | Apache-2.0 OR MIT |
 | tempfile | 3.27.0 | MIT OR Apache-2.0 |
 | tokenizers | 0.22.2 | Apache-2.0 |
 | tokio | 1.53.1 | MIT |
@@ -116,8 +116,8 @@ authors and communities behind each project.
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 |
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 |
 | url | 2.5.8 | MIT OR Apache-2.0 |
-| uuid | 1.24.0 | Apache-2.0 OR MIT |
-| web-push-native | 0.4.0 | MIT OR Apache-2.0 |
+| uuid | 1.27.0 | Apache-2.0 OR MIT |
+| web-push-native | 0.5.0 | MIT OR Apache-2.0 |
 | webrtc-audio-processing | 2.1.0 | BSD-3-Clause |
 | whichlang | 0.1.1 | MIT |
 | whisper-rs | 0.16.0 | Unlicense |
@@ -178,12 +178,12 @@ authors and communities behind each project.
 | @lezer/highlight | 1.2.3 | MIT |
 | @replit/codemirror-css-color-picker | 6.3.0 | MIT |
 | @tanstack/solid-virtual | 3.13.38 | MIT |
-| @tauri-apps/api | 2.11.1 | Apache-2.0 OR MIT |
-| @tauri-apps/plugin-deep-link | 2.4.10 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-dialog | 2.7.3 | MIT OR Apache-2.0 |
+| @tauri-apps/api | 2.12.1 | Apache-2.0 OR MIT |
+| @tauri-apps/plugin-deep-link | 2.6.1 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-dialog | 2.8.1 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-notification | 2.4.0 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-opener | 2.5.5 | MIT OR Apache-2.0 |
-| @tauri-apps/plugin-process | 2.3.1 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-opener | 2.7.0 | MIT OR Apache-2.0 |
+| @tauri-apps/plugin-process | 2.4.0 | MIT OR Apache-2.0 |
 | @tauri-apps/plugin-updater | 2.11.0 | MIT OR Apache-2.0 |
 | ansi-to-html | 0.7.2 | MIT |
 | dompurify | 3.4.16 | MPL-2.0 OR Apache-2.0 |
@@ -202,7 +202,7 @@ authors and communities behind each project.
 | @biomejs/biome | 2.5.13 | MIT OR Apache-2.0 |
 | @solidjs/testing-library | 0.8.10 | MIT |
 | @stryker-mutator/core | 10.0.0 | Apache-2.0 |
-| @tauri-apps/cli | 2.11.4 | Apache-2.0 OR MIT |
+| @tauri-apps/cli | 2.12.1 | Apache-2.0 OR MIT |
 | @testing-library/dom | 10.4.1 | MIT |
 | @testing-library/jest-dom | 7.0.1 | MIT |
 | @types/jsdom | 30.0.0 | MIT |
@@ -231,7 +231,7 @@ Counts below collapse equivalent SPDX expressions (`MIT OR Apache-2.0` ≡ `Apac
 <!-- BEGIN GENERATED:summary -->
 | License | Count |
 |---------|-------|
-| MIT OR Apache-2.0 | 83 |
+| MIT OR Apache-2.0 | 81 |
 | MIT | 67 |
 | Apache-2.0 | 8 |
 | Unlicense OR MIT | 6 |
