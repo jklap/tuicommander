@@ -6964,7 +6964,9 @@ mod tests {
         use base64::Engine;
         let dir = std::env::temp_dir().join(format!("tuic-grid-test-tt-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("raw.bin");
+        // Kitty spec: only a file named with `tty-graphics-protocol` is
+        // ever deleted (real clients always name it so).
+        let path = dir.join("tty-graphics-protocol-raw.bin");
         let raw_rgb = vec![7u8; 3 * 2 * 2];
         std::fs::write(&path, &raw_rgb).unwrap();
         let path_b64 = base64::engine::general_purpose::STANDARD.encode(path.to_str().unwrap());
@@ -6998,8 +7000,46 @@ mod tests {
         assert_eq!(grid.image_bytes(1), None, "decode must still have failed");
         assert_eq!(
             grid.drain_pty_write_events(),
-            vec!["\x1b_Gi=1;ENOENT:could not read the requested file\x1b\\".to_string()]
+            vec![
+                "\x1b_Gi=1;ENOENT:could not load the image from the requested medium\x1b\\"
+                    .to_string()
+            ]
         );
+    }
+
+    /// The synchronous PNG-auto-size path (`f=100`, no `c=`/`r=`) must not
+    /// answer `OK` for an arbitrary local file, nor a reply that differs
+    /// from a missing file's — either would let a remote sender probe
+    /// local file existence through the PTY reply.
+    #[test]
+    fn kitty_t_equals_f_png_reply_does_not_reveal_whether_a_file_exists() {
+        use base64::Engine;
+        let dir =
+            std::env::temp_dir().join(format!("tuic-grid-test-oracle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, b"plain text, definitely not a PNG").unwrap();
+
+        let reply_for = |p: &str| {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(p);
+            let mut grid = TerminalGrid::new(24, 80, 0);
+            grid.process(format!("\x1b_Gi=7,a=T,t=f,f=100;{b64}\x1b\\").as_bytes());
+            let _ = grid.drain_and_run_pending_kitty_decode_jobs();
+            grid.drain_pty_write_events()
+        };
+        let existing = reply_for(path.to_str().unwrap());
+        let missing = reply_for("/no/such/path/at/all.png");
+        assert_eq!(
+            existing,
+            vec![
+                "\x1b_Gi=7;ENOENT:could not load the image from the requested medium\x1b\\"
+                    .to_string()
+            ]
+        );
+        assert_eq!(existing, missing);
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir(&dir).ok();
     }
 
     #[cfg(unix)]

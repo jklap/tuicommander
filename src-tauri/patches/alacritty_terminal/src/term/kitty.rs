@@ -64,11 +64,62 @@ pub enum Medium {
     File,
     /// `t=t`: a temp file the terminal must delete after reading — same
     /// reader as `File`, with `delete_after=true`; the actual delete-after-
-    /// read guard (only within the system temp dir) lives in the app crate.
+    /// read guard (the Kitty spec's `tty-graphics-protocol` name, regular
+    /// file, inside a temp dir) lives in the embedding app.
     TempFile,
     /// `t=s`: POSIX/Windows shared memory — read via
     /// `EventListener::read_shm_medium`.
     SharedMemory,
+}
+
+/// The single error every failed `t=f`/`t=t`/`t=s` transmission replies
+/// with, whatever actually went wrong (missing path, not a regular file,
+/// over a size cap, wrong length for `s=`/`v=`, bad zlib, over the
+/// per-session byte cap, ...). The reply is written back into the PTY, so
+/// any program on the other end of it — including remote SSH output, which
+/// names a path on THIS machine — could otherwise tell "no such file" apart
+/// from "exists but isn't an image of that shape" and probe local file
+/// existence and size. Direct (`t=d`) transmissions keep their specific
+/// errors: their bytes came from the sender, so nothing local is revealed.
+pub const MEDIUM_ERROR: (&str, &str) = (
+    "ENOENT",
+    "could not load the image from the requested medium",
+);
+
+impl Medium {
+    /// The `(code, message)` to reply with for a failure on this medium —
+    /// `MEDIUM_ERROR` for every local medium, the specific error otherwise.
+    pub fn reply_error(
+        self,
+        code: &'static str,
+        message: &'static str,
+    ) -> (&'static str, &'static str) {
+        match self {
+            Medium::Direct => (code, message),
+            Medium::File | Medium::TempFile | Medium::SharedMemory => MEDIUM_ERROR,
+        }
+    }
+
+    /// Refuse a decoded `f=100` payload from a LOCAL medium that isn't
+    /// actually a PNG/GIF with real dimensions. `finish_decode` accepts any
+    /// bytes as `f=100` (a direct sender gets to send whatever it likes),
+    /// so without this an `f=100,t=f` transmission would answer `OK` for
+    /// any non-empty file and turn the reply into a file-existence oracle.
+    pub fn check_decoded(
+        self,
+        format: Format,
+        payload: &DecodedImagePayload,
+    ) -> Result<(), KittyDecodeError> {
+        let local = self != Medium::Direct;
+        if local
+            && format == Format::Png
+            && (payload.intrinsic_width == 0 || payload.intrinsic_height == 0)
+        {
+            let (code, message) = MEDIUM_ERROR;
+            return Err(KittyDecodeError { code, message });
+        }
+        Ok(())
+    }
 }
 
 /// One Kitty control-data key=value set — the part of an APC payload

@@ -47,6 +47,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Kitty image file/shared-memory transmissions are locked down** — `t=t` now deletes only a regular file named with `tty-graphics-protocol` inside a temp directory (never through a symlink), as the Kitty spec requires; `t=s` unlinks such segments after reading and no longer risks a crash if a segment shrinks mid-copy on Linux; and every failure on a local medium returns one generic reply, so terminal output (e.g. over SSH) can no longer probe which files exist on this machine.
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 
 - Return from captured Windows background launches before the command exits, and resolve Git in Windows worktree hooks.

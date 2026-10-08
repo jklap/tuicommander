@@ -1729,28 +1729,25 @@ impl<T: EventListener> Term<T> {
                         let delete_after = control.medium == kitty::Medium::TempFile;
                         let Some(bytes) = self.event_proxy.read_file_medium(&decoded, delete_after)
                         else {
-                            self.kitty_respond_error(
-                                &control,
-                                "ENOENT",
-                                "could not read the requested file",
-                            );
+                            let (code, message) = kitty::MEDIUM_ERROR;
+                            self.kitty_respond_error(&control, code, message);
                             return;
                         };
                         bytes
                     }
                     kitty::Medium::SharedMemory => {
                         let Some(bytes) = self.event_proxy.read_shm_medium(&decoded) else {
-                            self.kitty_respond_error(
-                                &control,
-                                "ENOENT",
-                                "could not read the requested shared memory segment",
-                            );
+                            let (code, message) = kitty::MEDIUM_ERROR;
+                            self.kitty_respond_error(&control, code, message);
                             return;
                         };
                         bytes
                     }
                 };
 
+                // Every failure after a local medium was read replies with
+                // the same generic error (`Medium::reply_error`): a specific
+                // decode error would tell the sender the path exists.
                 let payload = match kitty::finish_decode(
                     control.format,
                     control.compressed,
@@ -1760,10 +1757,15 @@ impl<T: EventListener> Term<T> {
                 ) {
                     Ok(payload) => payload,
                     Err(err) => {
-                        self.kitty_respond_error(&control, err.code, err.message);
+                        let (code, message) = control.medium.reply_error(err.code, err.message);
+                        self.kitty_respond_error(&control, code, message);
                         return;
                     }
                 };
+                if let Err(err) = control.medium.check_decoded(control.format, &payload) {
+                    self.kitty_respond_error(&control, err.code, err.message);
+                    return;
+                }
 
                 let client_id = (control.image_id != 0).then_some(control.image_id);
                 let Some(image) = self.event_proxy.store_image(
@@ -1773,11 +1775,10 @@ impl<T: EventListener> Term<T> {
                     payload.intrinsic_width,
                     payload.intrinsic_height,
                 ) else {
-                    self.kitty_respond_error(
-                        &control,
-                        "ENOSPC",
-                        "over the per-session image byte cap",
-                    );
+                    let (code, message) = control
+                        .medium
+                        .reply_error("ENOSPC", "over the per-session image byte cap");
+                    self.kitty_respond_error(&control, code, message);
                     return;
                 };
 
