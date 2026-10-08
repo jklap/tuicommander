@@ -38,11 +38,11 @@ authors and communities behind each project.
 | deunicode | 1.6.2 | BSD-3-Clause |
 | dirs | 6.0.0 | MIT OR Apache-2.0 |
 | drag | 2.1.1 | Apache-2.0 OR MIT |
-| flate2 | 1.1.9 | MIT OR Apache-2.0 |
+| flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | futures-util | 0.3.33 | MIT OR Apache-2.0 |
 | gh-token | 0.1.8 | MIT OR Apache-2.0 |
 | gix | 0.85.0 | MIT OR Apache-2.0 |
-| glob | 0.3.3 | MIT OR Apache-2.0 |
+| glob | 0.3.4 | MIT OR Apache-2.0 |
 | grep-matcher | 0.1.9 | Unlicense OR MIT |
 | grep-regex | 0.1.14 | Unlicense OR MIT |
 | grep-searcher | 0.1.17 | Unlicense OR MIT |
@@ -116,7 +116,7 @@ authors and communities behind each project.
 | unicode-segmentation | 1.13.3 | MIT OR Apache-2.0 |
 | unicode-width | 0.2.2 | MIT OR Apache-2.0 |
 | url | 2.5.8 | MIT OR Apache-2.0 |
-| uuid | 1.24.0 | Apache-2.0 OR MIT |
+| uuid | 1.27.0 | Apache-2.0 OR MIT |
 | web-push-native | 0.4.0 | MIT OR Apache-2.0 |
 | webrtc-audio-processing | 2.1.0 | BSD-3-Clause |
 | whichlang | 0.1.1 | MIT |
