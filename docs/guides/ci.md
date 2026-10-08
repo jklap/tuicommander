@@ -1,13 +1,22 @@
 # Continuous Integration
 
-Four GitHub Actions workflows compile Rust:
+Five GitHub Actions workflows compile Rust:
 
 | Workflow | Trigger | What it compiles |
 |---|---|---|
 | [`ci.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/ci.yml) | pull request, push to `main` | clippy + `cargo nextest` + doctests on Linux, `tuic-remote` without the desktop feature, macOS and Windows builds on push |
 | [`release.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/release.yml) | version tag | the signed artifacts users install |
+| [`remote-daemon.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/remote-daemon.yml) | called by `release.yml` and `nightly.yml` | `tuic-remote` and `tuic-bridge` for Linux x64/ARM64, Windows x64 and macOS ARM64, uploaded to the `v*` release or to the rolling `nightly` release |
 | [`nightly.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/nightly.yml) | push to `main` | the rolling `nightly` release |
 | [`audit.yml`](https://github.com/sstraus/tuicommander/blob/main/.github/workflows/audit.yml) | Monday 09:00 UTC | nothing — a prebuilt `cargo-audit` runs the advisory scan; accepted advisories live in `src-tauri/.cargo/audit.toml` |
+
+## Nightly release ordering
+
+The cleanup job moves the `nightly` tag, deletes the old release and recreates an
+empty prerelease before the desktop and daemon matrices start. Successful daemon
+builds can publish even if every desktop build fails. `tauri-action` reuses the
+release with that tag and alone writes `latest.json`; daemon uploads contain only
+`tuic-remote` and `tuic-bridge` binaries.
 
 ## The Rust toolchain is pinned
 
@@ -54,8 +63,8 @@ months uses the same compiler.
 
    Fix whatever the new compiler flags. This is the work the pin defers to a
    deliberate moment instead of ambushing the next push.
-3. Raise `RUST_VERSION` in **all four** workflows — `ci.yml`, `release.yml`,
-   `nightly.yml`, `audit.yml` — in a single commit.
+3. Raise `RUST_VERSION` in **all five** workflows — `ci.yml`, `release.yml`,
+   `remote-daemon.yml`, `nightly.yml`, `audit.yml` — in a single commit.
 4. Push. CI runs on the new toolchain as part of that commit, so any breakage
    lands on its author and is bisectable.
 

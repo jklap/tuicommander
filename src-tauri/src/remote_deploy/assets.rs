@@ -191,10 +191,15 @@ pub(crate) fn require_target(uname: &str) -> Result<&'static str, String> {
     target_for(uname).ok_or_else(|| format!("unsupported remote host: {uname}"))
 }
 
+/// A nightly desktop (`1.8.0-nightly.<date>.t<time>`) has no release of its own:
+/// nightly.yml publishes its daemons to the rolling `nightly` release.
 pub(crate) fn asset_url(version: &str, target: &str) -> String {
-    format!(
-        "https://github.com/sstraus/tuicommander/releases/download/v{version}/tuic-remote-{target}"
-    )
+    let tag = if version.contains("-nightly") {
+        "nightly".to_string()
+    } else {
+        format!("v{version}")
+    };
+    format!("https://github.com/sstraus/tuicommander/releases/download/{tag}/tuic-remote-{target}")
 }
 
 async fn ensure_local_from_url(
@@ -384,6 +389,14 @@ mod tests {
                 "https://github.com/sstraus/tuicommander/releases/download/v{}/tuic-remote-aarch64-apple-darwin",
                 env!("CARGO_PKG_VERSION")
             )
+        );
+    }
+
+    #[test]
+    fn nightly_version_resolves_to_the_rolling_nightly_release() {
+        assert_eq!(
+            asset_url("1.8.0-nightly.20261008.t1200", "x86_64-unknown-linux-gnu"),
+            "https://github.com/sstraus/tuicommander/releases/download/nightly/tuic-remote-x86_64-unknown-linux-gnu"
         );
     }
 

@@ -8,8 +8,8 @@ on:
 permissions:
   issues: write
 
-# RUST_VERSION pins the compiler; bump it in lockstep with ci.yml, release.yml and
-# nightly.yml — see the note in ci.yml and docs/guides/ci.md.
+# RUST_VERSION pins the compiler; bump it in lockstep with ci.yml, release.yml,
+# remote-daemon.yml and nightly.yml — see the note in ci.yml and docs/guides/ci.md.
 env:
   RUST_VERSION: "1.98.0"
 

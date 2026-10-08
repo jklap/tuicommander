@@ -17,8 +17,8 @@ concurrency:
 # stable turns fresh clippy lints and rustfmt reflows into a red main for whoever
 # pushes next, which has now happened three times (7db734f9, 20e58629, and the
 # 1.98 lints cleared on 2026-08-31 while CI was still green on an older stable).
-# To bump: raise the version HERE and in release.yml, nightly.yml and audit.yml in
-# one commit, after `cargo clippy --all-targets -- -D warnings` and
+# To bump: raise the version HERE and in release.yml, nightly.yml, remote-daemon.yml
+# and audit.yml in one commit, after `cargo clippy --all-targets -- -D warnings` and
 # `cargo fmt --check` pass locally on that toolchain. CI then runs on the new
 # compiler as part of that commit, so a breakage lands on its author.
 # See docs/guides/ci.md.
