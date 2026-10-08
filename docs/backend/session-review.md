@@ -192,6 +192,25 @@ appended file naturally lands at the end of the list.
   expresses. Refuses when `drifted_from_disk` unless `force: true`; refuses
   outright when `base_source == Unknown` (never write a guess).
 
+**Where a revert may write (both paths).** The transcript names every path,
+so a path being in the session's touched-file set is necessary but not
+sufficient: `resolve_revert_target` also requires an absolute path with no
+`.`/`..` component whose canonicalized parent lies inside an allowed root —
+the git repo/worktree containing `repo_path` (plus a linked worktree's main
+checkout), every registered repository, or `<CLAUDE_CONFIG_DIR or
+~/.claude>/plans/` — and refuses a symlink at the leaf (never written or
+deleted through). Anything else is an error, and nothing is touched. The
+write/delete then goes to the resolved `canonical_parent/name`, not the raw
+transcript string. A session's out-of-repo edit to a file outside those roots
+is still reviewable, just not revertable from here.
+
+**Bounded reads of transcript-named files.** A `backupFileName` must be a
+bare file name (no separator, `.`/`..`, `:` or NUL) inside
+`file-history/<session_id>/`; anything else counts as "no backup". The backup
+read is capped at `MAX_BACKUP_BYTES` (16 MiB) and a subagent's
+`agent-<id>.meta.json` at `MAX_SUBAGENT_META_BYTES` (64 KiB); past either the
+file is ignored (the base falls back to the next tier / the hex id).
+
 Both revert paths call `git::bump_working_tree_epoch` so the sidebar/Changes
 tab refresh, exactly as `git_discard_files` already does, and evict any
 cached review for that transcript (see Caching below) so a re-fetch right

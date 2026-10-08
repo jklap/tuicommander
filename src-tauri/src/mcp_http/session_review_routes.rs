@@ -1,17 +1,29 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::Json;
-use axum::extract::{Query, State};
+use axum::extract::{ConnectInfo, Query, State};
 use axum::response::{IntoResponse, Response};
+use axum::{Extension, Json};
 
+use super::guards::{Authenticated, require_local_or_auth};
 use super::types::*;
 use super::{json_result, validate_repo_path};
 use crate::AppState;
 
+// The four mutating routes below (watch/unwatch hold OS file watchers;
+// revert-step/revert-file WRITE and DELETE working-tree files) are gated by
+// `require_local_or_auth` like their siblings `/worktrees/run-script` and
+// `/fs/write-external`; the two read routes keep the router's own auth.
+
 pub(super) async fn watch_session_review_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
     State(state): State<Arc<AppState>>,
     Json(body): Json<SessionReviewWatchRequest>,
 ) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
     if let Err(e) = validate_repo_path(&body.path) {
         return e.into_response();
     }
@@ -30,9 +42,14 @@ pub(super) async fn watch_session_review_http(
 }
 
 pub(super) async fn unwatch_session_review_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
     State(state): State<Arc<AppState>>,
     Json(body): Json<SessionReviewWatchRequest>,
 ) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
     if let Err(e) = validate_repo_path(&body.path) {
         return e.into_response();
     }
@@ -98,7 +115,14 @@ pub(super) async fn get_review_http(
     json_result(result)
 }
 
-pub(super) async fn revert_step_http(Json(body): Json<RevertStepRequest>) -> Response {
+pub(super) async fn revert_step_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<RevertStepRequest>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
     if let Err(e) = validate_repo_path(&body.path) {
         return e.into_response();
     }
@@ -114,7 +138,14 @@ pub(super) async fn revert_step_http(Json(body): Json<RevertStepRequest>) -> Res
     )
 }
 
-pub(super) async fn revert_file_http(Json(body): Json<RevertFileRequest>) -> Response {
+pub(super) async fn revert_file_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<RevertFileRequest>,
+) -> Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
     if let Err(e) = validate_repo_path(&body.path) {
         return e.into_response();
     }
@@ -360,26 +391,102 @@ mod tests {
 
     #[tokio::test]
     async fn revert_step_http_rejects_a_relative_path() {
-        let response = revert_step_http(Json(RevertStepRequest {
-            path: "relative/path".to_string(),
-            session_id: "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f".to_string(),
-            tool_use_id: "toolu_x".to_string(),
-            dry_run: Some(true),
-        }))
+        let response = revert_step_http(
+            loopback(),
+            None,
+            Json(RevertStepRequest {
+                path: "relative/path".to_string(),
+                session_id: "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f".to_string(),
+                tool_use_id: "toolu_x".to_string(),
+                dry_run: Some(true),
+            }),
+        )
         .await;
         assert_ne!(response.status(), axum::http::StatusCode::OK);
     }
 
     #[tokio::test]
     async fn revert_file_http_rejects_a_relative_path() {
-        let response = revert_file_http(Json(RevertFileRequest {
-            path: "relative/path".to_string(),
-            session_id: "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f".to_string(),
-            abs_path: "/some/file.ts".to_string(),
-            force: None,
-            dry_run: Some(true),
-        }))
+        let response = revert_file_http(
+            loopback(),
+            None,
+            Json(RevertFileRequest {
+                path: "relative/path".to_string(),
+                session_id: "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f".to_string(),
+                abs_path: "/some/file.ts".to_string(),
+                force: None,
+                dry_run: Some(true),
+            }),
+        )
         .await;
         assert_ne!(response.status(), axum::http::StatusCode::OK);
+    }
+
+    fn loopback() -> ConnectInfo<SocketAddr> {
+        ConnectInfo("127.0.0.1:1".parse().unwrap())
+    }
+    fn lan() -> ConnectInfo<SocketAddr> {
+        ConnectInfo("192.168.1.2:1".parse().unwrap())
+    }
+
+    /// The revert routes write and delete working-tree files and the watch
+    /// routes hold OS file watchers: an unauthenticated LAN caller gets 403
+    /// before anything else runs (Batch 16/43/44 reviews).
+    #[tokio::test]
+    async fn mutating_session_review_routes_refuse_unauthenticated_lan_callers() {
+        let sid = "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f".to_string();
+        let forbidden = axum::http::StatusCode::FORBIDDEN;
+        let step = revert_step_http(
+            lan(),
+            None,
+            Json(RevertStepRequest {
+                path: "/tmp".to_string(),
+                session_id: sid.clone(),
+                tool_use_id: "toolu_x".to_string(),
+                dry_run: Some(false),
+            }),
+        )
+        .await;
+        assert_eq!(step.status(), forbidden);
+        let file = revert_file_http(
+            lan(),
+            None,
+            Json(RevertFileRequest {
+                path: "/tmp".to_string(),
+                session_id: sid.clone(),
+                abs_path: "/tmp/x".to_string(),
+                force: Some(true),
+                dry_run: Some(false),
+            }),
+        )
+        .await;
+        assert_eq!(file.status(), forbidden);
+        let body = || {
+            Json(SessionReviewWatchRequest {
+                path: "/tmp".to_string(),
+                session_id: sid.clone(),
+            })
+        };
+        let watch = watch_session_review_http(lan(), None, State(test_state()), body()).await;
+        assert_eq!(watch.status(), forbidden);
+        let unwatch = unwatch_session_review_http(lan(), None, State(test_state()), body()).await;
+        assert_eq!(unwatch.status(), forbidden);
+    }
+
+    #[tokio::test]
+    async fn authenticated_lan_callers_pass_the_session_review_guard() {
+        let resp = revert_step_http(
+            lan(),
+            Some(Extension(Authenticated)),
+            Json(RevertStepRequest {
+                path: "relative/path".to_string(),
+                session_id: "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f".to_string(),
+                tool_use_id: "toolu_x".to_string(),
+                dry_run: Some(true),
+            }),
+        )
+        .await;
+        // Past the guard: the relative path is what refuses it now.
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
     }
 }
