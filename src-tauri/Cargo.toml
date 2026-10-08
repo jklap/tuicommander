@@ -211,7 +211,8 @@ hex = "0.4"
 ring = "0.17"
 dirs = "6"
 tauri-plugin-dialog = { version = "2.7", optional = true }
-tauri-plugin-notification = { version = "2", optional = true }
+# Keep the Rust/npm notification pair on the tested 2.4 line.
+tauri-plugin-notification = { version = "~2.4.0", optional = true }
 # Direct, because the file pickers must run inside OUR main-thread closure — see
 # native_dialog.rs. Version and features are copied from tauri-plugin-dialog's own
 # rfd dependency on purpose: a mismatch forks the lockfile into two rfd builds.
@@ -247,6 +248,7 @@ libc = "0.2"
 notify = "8"
 gh-token = "0.1"
 keepawake = "0.6"
+# Keep the Rust/npm updater pair on the tested 2.11 line.
 tauri-plugin-updater = { version = "~2.11.0", optional = true }
 tauri-plugin-process = { version = "2", optional = true }
 tauri-plugin-deep-link = { version = "2", optional = true }
@@ -274,11 +276,11 @@ sha2 = "0.11"
 hkdf = "0.13"
 axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
 axum-server-dual-protocol = { version = "0.7", default-features = false }
-web-push-native = { version = "0.4", default-features = false }
+web-push-native = { version = "0.5", default-features = false }
 rand_core = { version = "0.6", features = ["getrandom"] }
 base64ct = { version = "1", features = ["alloc"] }
 anyhow = "1"
-oauth2 = "5"
+oauth2 = { version = "5", default-features = false }
 bm25 = "2.3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tracing = "0.1"
