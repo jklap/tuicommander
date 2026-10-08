@@ -3208,8 +3208,8 @@ mod tests {
             .uri("/streamdock/devices")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut()
-            .insert(ConnectInfo(std::net::SocketAddr::from(([192, 168, 1, 2], 1))));
+        let lan: std::net::SocketAddr = "192.168.1.2:1".parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(lan));
         let response = build_router(test_state(), false, true)
             .oneshot(req)
             .await
