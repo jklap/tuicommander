@@ -1192,6 +1192,7 @@ pub(super) async fn set_session_visible(
     );
     #[cfg(unix)]
     if body.visible
+        && body.wake.unwrap_or(true)
         && let Err(e) = crate::pty::wake_session(&state, &session_id)
     {
         tracing::warn!(session_id, error = %e, "Wake on focus failed");
@@ -5802,5 +5803,38 @@ mod tests {
             "POST /sessions/worktree must hold its response until the shell is idle"
         );
         close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// B2.3: the frontend's periodic keep-alive sends `wake: false` — it must
+    /// refresh the assertion WITHOUT waking (SIGCONT-ing) a parked session; an
+    /// ordinary visible:true (a real focus) still wakes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_visible_with_wake_false_does_not_wake_a_parked_session() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state
+            .session_maps
+            .standby_sessions
+            .insert("parked".to_string(), 0);
+        let body: SessionVisibleRequest = serde_json::from_value(
+            serde_json::json!({"visible": true, "viewer_id": "v", "wake": false}),
+        )
+        .unwrap();
+        let _ = set_session_visible(State(state.clone()), Path("parked".to_string()), Json(body))
+            .await
+            .into_response();
+        assert!(
+            state.session_maps.standby_sessions.contains_key("parked"),
+            "a keep-alive must not wake a parked session"
+        );
+        let body: SessionVisibleRequest =
+            serde_json::from_value(serde_json::json!({"visible": true, "viewer_id": "v"})).unwrap();
+        let _ = set_session_visible(State(state.clone()), Path("parked".to_string()), Json(body))
+            .await
+            .into_response();
+        assert!(
+            !state.session_maps.standby_sessions.contains_key("parked"),
+            "a real focus (no `wake` field) still wakes"
+        );
     }
 }

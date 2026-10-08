@@ -1429,6 +1429,13 @@ describe("transport", () => {
 			expect(result.method).toBe("POST");
 			expect(result.path).toBe("/sessions/s1/visible");
 			expect(result.body).toEqual({ visible: false, viewer_id: "c1" });
+			const keepAlive = mapCommandToHttp("set_session_visible", {
+				sessionId: "s1",
+				visible: true,
+				viewerId: "c1",
+				wake: false,
+			});
+			expect(keepAlive.body).toEqual({ visible: true, viewer_id: "c1", wake: false });
 		});
 
 		it("maps get_process_stats to GET /process/stats", () => {

@@ -587,13 +587,21 @@ GET  /sessions/:id/last-prompt                         -> { "prompt": string|nul
 GET  /sessions/:id/input-buffer                        -> { "content": string }
 GET  /sessions/:id/leaf-pid                            -> { "pid": number|null }
 GET  /sessions/:id/has-foreground                      -> { "process": string|null }
-POST /sessions/:id/visible              { "visible": bool }   -> { "ok": true }
+POST /sessions/:id/visible              { "visible": bool, "viewer_id"?: string, "wake"?: bool }   -> { "ok": true }
 GET  /sessions/:id/terminal/selection-text?startRow=&startCol=&endRow=&endCol=&historyBase=  -> { "text": string }
 GET  /sessions/:id/terminal/logical-line?row=N         -> [logicalStartRow, text]
 GET  /sessions/:id/terminal/hyperlink-span?row=R&col=C -> [startCol, endCol, url] | null
 GET  /sessions/:id/terminal/styled-rows?start=N&count=N -> application/octet-stream (packed rows)
 GET  /process/stats                                    -> ProcessStats[]
 ```
+
+`/sessions/:id/visible` records one viewer's assertion (`viewer_id`, the client's
+`CLIENT_INSTANCE_ID`; omitted = a shared legacy viewer) with a 90 s TTL; `visible: false`
+drops it at once. `visible: true` also wakes (SIGCONT) a session parked in standby unless
+`wake: false` — the frontend's 30 s keep-alive sends `wake: false`, skips while its document
+is hidden or its window unfocused, sends `visible: false` when the document hides and a waking
+`visible: true` on focus, so a minimised client's session can still reach standby. The desktop
+`set_session_visible` command takes the same optional `wake`.
 
 The `/agents/map`, `/agents/map/data` and `/agents/map/prompt` routes were
 removed on 2026-09-23. The Progress Flow view (`/progress/flow`, see Project

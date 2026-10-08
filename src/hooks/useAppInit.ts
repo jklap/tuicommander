@@ -322,17 +322,56 @@ function assignSessionToRepoBranch(
 	}
 }
 
+function activeSessionId(): string | null {
+	const activeId = terminalsStore.state.activeId;
+	return (activeId ? terminalsStore.get(activeId)?.sessionId : null) ?? null;
+}
+
+/** Whether the user can actually be looking at this client's active terminal. */
+function windowIsSeen(): boolean {
+	return !document.hidden && document.hasFocus();
+}
+
 /** Re-assert that this client still shows its active terminal's session.
  *  Visibility is per viewer and an assertion expires after
  *  `SESSION_VISIBILITY_TTL_MS` (90 s, `state.rs`), while `terminalsStore.setActive`
  *  only asserts on a tab switch — without this a tab the user keeps looking at
  *  would count as hidden after 90 s and the standby sweeper could SIGSTOP it.
- *  Rides the 30 s snapshot timer, well inside the TTL. */
+ *  Rides the 30 s snapshot timer, well inside the TTL.
+ *
+ *  Skipped while the document is hidden or the window unfocused: a minimised
+ *  window or background browser tab is not being looked at, so its session must
+ *  be allowed to expire into standby. `wake: false` — a periodic keep-alive must
+ *  never SIGCONT a parked session; only a real return (focus/visibility, a tab
+ *  switch) wakes it. */
 function reassertActiveSessionVisible(): void {
-	const activeId = terminalsStore.state.activeId;
-	const sessionId = activeId ? terminalsStore.get(activeId)?.sessionId : null;
+	if (!windowIsSeen()) return;
+	const sessionId = activeSessionId();
 	if (!sessionId) return;
-	rpc("set_session_visible", { sessionId, visible: true, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
+	rpc("set_session_visible", { sessionId, visible: true, viewerId: CLIENT_INSTANCE_ID, wake: false }).catch(() => {});
+}
+
+/** Follow the window's own visibility: drop this viewer's assertion the moment
+ *  the document is hidden, and assert (and wake) again when the user comes back. */
+function installWindowVisibilityTracking(): () => void {
+	const report = (visible: boolean) => {
+		const sessionId = activeSessionId();
+		if (!sessionId) return;
+		rpc("set_session_visible", { sessionId, visible, viewerId: CLIENT_INSTANCE_ID }).catch(() => {});
+	};
+	const onVisibilityChange = () => {
+		if (document.hidden) report(false);
+		else if (document.hasFocus()) report(true);
+	};
+	const onFocus = () => {
+		if (!document.hidden) report(true);
+	};
+	document.addEventListener("visibilitychange", onVisibilityChange);
+	window.addEventListener("focus", onFocus);
+	return () => {
+		document.removeEventListener("visibilitychange", onVisibilityChange);
+		window.removeEventListener("focus", onFocus);
+	};
 }
 
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
@@ -442,6 +481,7 @@ export async function initApp(deps: AppInitDeps) {
 	// Periodic terminal snapshot — ensures savedTerminals is always fresh
 	// so app restart recovers terminals even if beforeunload fails.
 	const SNAPSHOT_INTERVAL_MS = 30_000;
+	const stopVisibilityTracking = installWindowVisibilityTracking();
 	const snapshotTimer = setInterval(() => {
 		const snapshots = collectTerminalSnapshots();
 		if (snapshots.size > 0) {
@@ -453,6 +493,7 @@ export async function initApp(deps: AppInitDeps) {
 	// Snapshot terminal metadata, flush pending saves, and close PTY sessions on app exit
 	window.addEventListener("beforeunload", () => {
 		clearInterval(snapshotTimer);
+		stopVisibilityTracking();
 		// Every debounced persist has to land here: the timer dies with the
 		// WebView, so a preference toggled inside its window is simply lost.
 		activityStore.flushSave();
