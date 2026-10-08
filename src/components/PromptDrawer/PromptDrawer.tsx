@@ -276,7 +276,9 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
 		// the same read as the text and gets swallowed as a newline instead of submitting,
 		// so it looks like nothing sent and the cursor ends up mid-composer instead of
 		// where the user expects.
-		const check = smartPrompts.canExecute(prompt);
+		// With the caller's submit choice: a double-click / dialog Execute submits
+		// even an `autoExecute: false` prompt, so it must face the busy gate too.
+		const check = smartPrompts.canExecute(prompt, submitOverride);
 		if (!check.ok) {
 			appLogger.warn("prompts", `Cannot execute "${prompt.name}": ${check.reason}`);
 			toastsStore.add(`"${prompt.name}" failed`, check.reason ?? "Cannot execute prompt", "error");
