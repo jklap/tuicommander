@@ -751,15 +751,10 @@ pub(super) async fn delete_remote_connection(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    // `stop_if_running(&id)` stood here and did nothing: the tunnel is keyed by
-    // the TunnelProfile's own UUID, not by the connection's, so the call could
-    // only ever miss. Teardown stops it by the id the runtime recorded, and
-    // takes the poll, the mirror, its rows and the session token with it.
-    crate::remote_runtime::teardown_deleted(&state, &id);
-    let _guard = state.connections_lock.lock().await;
-    match crate::remote_connection::delete_connection_record(&state, &id, |id| {
-        crate::remote_connection::set_connection_password(id, "")
-    }) {
+    // The one delete path the IPC command takes too: runtime teardown, the
+    // record, then BOTH vault entries (this route used to forget only the
+    // password and leave the pairing token behind).
+    match crate::remote_connection::delete_remote_connection_impl(&state, &id).await {
         Ok(true) => Json(serde_json::json!({"ok": true})).into_response(),
         Ok(false) => (
             StatusCode::NOT_FOUND,
@@ -924,7 +919,7 @@ pub(super) async fn delete_remote_connection_connect(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp.into_response();
     }
-    crate::remote_runtime::teardown(&state, &id);
+    crate::remote_runtime::disconnect(&state, &id);
     super::json_result(Ok::<_, String>(serde_json::json!({ "ok": true })))
 }
 
@@ -954,6 +949,136 @@ pub(super) async fn delete_remote_connection_install(
     super::upstream_json_result(
         crate::remote_deploy::service::uninstall_remote_daemon_shared(&state, &id).await,
     )
+}
+
+// --- SSH remote daemon provisioning (`ssh_provision`) ---
+//
+// Every handler takes a STORED connection id and nothing else that reaches the
+// remote host: host, user, port, instance and credentials come from
+// `connections.json` and the vault. All four can run commands over SSH (or, for
+// the plan, read which ones would run), so all four are gated like the other
+// privileged remote-connection routes; the gate runs before the store is even
+// read.
+
+#[derive(serde::Deserialize)]
+pub(super) struct ProvisionPlanQuery {
+    action: crate::ssh_provision::ProvisionAction,
+}
+
+/// `GET /config/ssh-daemon/{id}/plan?action=start|set_password` — what an
+/// accepted offer would run, with the digest the execute call must echo.
+pub(super) async fn get_ssh_daemon_plan(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<ProvisionPlanQuery>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::ssh_provision::plan_for(&state, &id, query.action))
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct ProvisionExecuteRequest {
+    plan_digest: String,
+}
+
+/// `POST /config/ssh-daemon/{id}/start` — run an accepted Start plan, then
+/// connect. Refused when the stored connection no longer matches the digest.
+pub(super) async fn post_ssh_daemon_start(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<ProvisionExecuteRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(
+        crate::ssh_provision::start_daemon(&state, &id, &request.plan_digest).await,
+    )
+}
+
+/// `POST /config/ssh-daemon/{id}/stop` — stop the connection's daemon,
+/// PID-file verified. Answers whether a `tuic-remote` was signalled.
+pub(super) async fn post_ssh_daemon_stop(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(crate::ssh_provision::stop_daemon(&state, &id).await)
+}
+
+/// `POST /config/remote-connections/{id}/configure-ssh-password` — run an
+/// accepted SetPassword plan: the saved username and password go to
+/// `tuic-remote --set-password-if-unset` on stdin over SSH. The request body
+/// carries the digest only — never a credential.
+pub(super) async fn post_configure_ssh_daemon_password(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(request): Json<ProvisionExecuteRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    super::upstream_json_result(
+        crate::ssh_provision::configure_password(&state, &id, &request.plan_digest).await,
+    )
+}
+
+/// POST /config/remote-connections/test — Test Connection (story: SSH
+/// Tunnels + Remote Servers consolidation, Phase 2). Shared with the Tauri
+/// `test_connection` command via `connection_test::test_connection_impl`.
+/// Guarded the same way as `put_remote_connection`/`delete_remote_connection`
+/// above: it accepts a plaintext password (never persisted) and can make the
+/// backend open outbound SSH/HTTP connections to an arbitrary
+/// caller-supplied host, so an unauthenticated remote caller must never
+/// reach it.
+pub(super) async fn test_connection_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(request): Json<crate::connection_test::TestConnectionRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    Json(crate::connection_test::test_connection_impl(&request).await).into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct ProbeDirectTlsRequest {
+    url: String,
+    #[serde(default)]
+    tls_fingerprint: Option<String>,
+}
+
+/// `POST /config/remote-connections/probe-direct-tls` — what certificate a
+/// Direct `https://` URL presents (`direct_proxy::probe_direct_tls`), so the
+/// UI can show a fingerprint before the user pins it. Read-only and
+/// credential-free, but it dials a caller-supplied host, so it is gated exactly
+/// like `test_connection_http`.
+pub(super) async fn probe_direct_tls_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(request): Json<ProbeDirectTlsRequest>,
+) -> impl IntoResponse {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(
+        crate::direct_proxy::probe_direct_tls(&request.url, request.tls_fingerprint.as_deref())
+            .await,
+    )
+    .into_response()
 }
 
 // --- Story 066: config / themes / notes / misc stateless parity (loopback router) ---
@@ -1491,6 +1616,465 @@ mod tests {
             0,
             "non-desktop builds report no audio devices"
         );
+    }
+
+    // ── delete_remote_connection ─────────────────────────────
+    //
+    // Thin wiring tests: the actual logic (runtime teardown, removal, vault
+    // cleanup, not-found handling) is shared with the Tauri command via
+    // `remote_connection::delete_remote_connection_impl` and tested directly
+    // there — these confirm this route maps that shared result to the right
+    // HTTP status/body, and that it now forgets the pairing token too.
+
+    #[tokio::test]
+    async fn delete_remote_connection_http_returns_404_for_a_missing_connection() {
+        let state = super::super::tests::test_state();
+        let resp = delete_remote_connection(
+            ConnectInfo(loopback()),
+            None,
+            State(state),
+            Path("does-not-exist".to_string()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_remote_connection_http_removes_an_existing_connection() {
+        let state = super::super::tests::test_state();
+        let conn = crate::remote_connection::RemoteConnection::new_ssh("t", "h", "u");
+        let id = conn.id.clone();
+        crate::remote_connection::upsert_remote_connection(&state.data_dir, None, conn).unwrap();
+
+        let resp = delete_remote_connection(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Path(id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// Replaces wip's `known_bug_http_delete_stops_a_running_tunnel_before_deleting`
+    /// (its premise never held here — see `deleting_a_connection_over_http_tears_the_live_one_down`):
+    /// the HTTP route used to forget only the password, so a deployed
+    /// daemon's pairing token outlived the connection under a UUID nothing
+    /// could ever name again.
+    #[tokio::test]
+    async fn deleting_a_connection_over_http_also_forgets_its_pairing_token() {
+        let state = super::super::tests::test_state();
+        let conn = crate::remote_connection::RemoteConnection::new_ssh("t", "h", "u");
+        let id = conn.id.clone();
+        crate::remote_connection::upsert_remote_connection(&state.data_dir, None, conn).unwrap();
+        crate::remote_connection::set_connection_password(&id, "s3cret").unwrap();
+        crate::remote_connection::set_pairing_token(&id, "pair-secret").unwrap();
+
+        let resp = delete_remote_connection(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Path(id.clone()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(!crate::remote_connection::connection_password_exists(&id).unwrap());
+        assert_eq!(
+            crate::remote_connection::pairing_token(&id).unwrap(),
+            None,
+            "HTTP delete left the pairing token in the vault"
+        );
+    }
+
+    /// The route keeps its own auth gate: deleting from a public address without
+    /// credentials is refused before anything is torn down or removed.
+    #[tokio::test]
+    async fn deleting_a_connection_over_http_still_requires_auth_from_a_public_address() {
+        let state = super::super::tests::test_state();
+        let conn = crate::remote_connection::RemoteConnection::new_direct("d", "http://x", "u");
+        let id = conn.id.clone();
+        crate::remote_connection::upsert_remote_connection(&state.data_dir, None, conn).unwrap();
+
+        let resp = delete_remote_connection(
+            ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 9], 4000))),
+            None,
+            State(state.clone()),
+            Path(id),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            crate::remote_connection::RemoteConnectionStore::load(&state.data_dir)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    // ── remote connection password routes ─────────────────────
+    //
+    // Thin wiring tests: the keyring CRUD is shared with the Tauri commands
+    // (`remote_connection::set_connection_password` /
+    // `connection_password_exists`) — these confirm both routes are auth-gated
+    // and that an empty password over HTTP forgets the stored one.
+
+    #[tokio::test]
+    async fn remote_connection_password_routes_require_local_or_auth() {
+        crate::credentials::reset_test_faults();
+        let not_local = std::net::SocketAddr::from(([203, 0, 113, 5], 12345));
+        let id = uuid::Uuid::new_v4().to_string();
+
+        let resp =
+            get_remote_connection_password_exists(ConnectInfo(not_local), None, Path(id.clone()))
+                .await
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+        let resp = put_remote_connection_password(
+            ConnectInfo(not_local),
+            None,
+            State(super::super::tests::test_state()),
+            Path(id.clone()),
+            Json(RemoteConnectionPasswordRequest {
+                password: "x".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(!crate::remote_connection::connection_password_exists(&id).unwrap());
+    }
+
+    #[tokio::test]
+    async fn remote_connection_password_http_round_trips() {
+        crate::credentials::reset_test_faults();
+        let id = uuid::Uuid::new_v4().to_string();
+
+        async fn exists_body(id: &str) -> Vec<u8> {
+            let resp = get_remote_connection_password_exists(
+                ConnectInfo(loopback()),
+                None,
+                Path(id.to_string()),
+            )
+            .await
+            .into_response();
+            axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec()
+        }
+
+        assert_eq!(exists_body(&id).await, b"false");
+
+        let resp = put_remote_connection_password(
+            ConnectInfo(loopback()),
+            None,
+            State(super::super::tests::test_state()),
+            Path(id.clone()),
+            Json(RemoteConnectionPasswordRequest {
+                password: "hunter2".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(exists_body(&id).await, b"true");
+
+        // An empty password is the "forget it" request on this route.
+        let resp = put_remote_connection_password(
+            ConnectInfo(loopback()),
+            None,
+            State(super::super::tests::test_state()),
+            Path(id.clone()),
+            Json(RemoteConnectionPasswordRequest {
+                password: String::new(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(exists_body(&id).await, b"false");
+    }
+
+    // ── test_connection_http ─────────────────────────────────
+    //
+    // Thin wiring test: the actual classification logic (SSH one-shot check,
+    // HTTP health-check dispatch, Local instance-id resolution) is shared
+    // with the Tauri command via `connection_test::test_connection_impl` and
+    // tested directly there (`connection_test::tests`) — this just confirms
+    // the route deserializes the request body and returns that shared
+    // result as JSON (plan Phase 2, mirrors `delete_remote_connection_http`'s
+    // own "thin wiring" test comment above).
+
+    #[tokio::test]
+    async fn test_connection_http_returns_the_shared_classification_as_json() {
+        // Port 1 is reserved and nothing listens there — a fast, reliable
+        // Unreachable classification with no real network dependency.
+        let resp = test_connection_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(crate::connection_test::TestConnectionRequest {
+                transport: crate::remote_connection::RemoteTransport::Local {
+                    port: Some(1),
+                    instance_id: None,
+                },
+                auth_username: None,
+                password: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(json["type"], "Unreachable");
+    }
+
+    /// Test Connection makes this machine dial an arbitrary host and accepts a
+    /// plaintext password: from a public address without credentials it is
+    /// refused before any of that happens.
+    #[tokio::test]
+    async fn test_connection_http_requires_auth_from_a_public_address() {
+        let mut target = mockito::Server::new_async().await;
+        let never = target.mock("GET", "/health").expect(0).create_async().await;
+        let resp = test_connection_http(
+            ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 9], 4000))),
+            None,
+            Json(crate::connection_test::TestConnectionRequest {
+                transport: crate::remote_connection::RemoteTransport::Direct {
+                    url: target.url(),
+                    tls_fingerprint: None,
+                },
+                auth_username: Some("alice".to_string()),
+                password: Some("hunter2".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        never.assert_async().await;
+    }
+
+    /// The certificate probe dials a caller-supplied host: from a public
+    /// address without credentials it is refused before any connection.
+    #[tokio::test]
+    async fn probe_direct_tls_http_requires_auth_from_a_public_address() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("https://{}", listener.local_addr().unwrap());
+        let resp = probe_direct_tls_http(
+            ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 9], 4000))),
+            None,
+            Json(ProbeDirectTlsRequest {
+                url,
+                tls_fingerprint: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(
+            listener.accept().is_err(),
+            "a refused probe must not have dialled the target"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_direct_tls_http_answers_the_shared_classification() {
+        let resp = probe_direct_tls_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(ProbeDirectTlsRequest {
+                url: "http://127.0.0.1:1".to_string(),
+                tls_fingerprint: None,
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+        assert_eq!(json["type"], "NoTlsNeeded");
+    }
+
+    /// The response is the classification only — no echo of the request's
+    /// password or URL.
+    #[tokio::test]
+    async fn test_connection_http_never_echoes_the_password() {
+        let mut target = mockito::Server::new_async().await;
+        let _mock = target
+            .mock("GET", "/health")
+            .with_status(401)
+            .with_body("Invalid credentials")
+            .create_async()
+            .await;
+        let resp = test_connection_http(
+            ConnectInfo(loopback()),
+            None,
+            Json(crate::connection_test::TestConnectionRequest {
+                transport: crate::remote_connection::RemoteTransport::Direct {
+                    url: target.url(),
+                    tls_fingerprint: None,
+                },
+                auth_username: Some("alice".to_string()),
+                password: Some("PASSWORD_SECRET_1457".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert_eq!(text, r#"{"type":"AuthFailed"}"#);
+    }
+
+    /// A stored SSH connection whose host is a listener nobody else uses, so a
+    /// test can prove no SSH connection was ever opened to it.
+    fn ssh_provisioning_fixture() -> (Arc<AppState>, String, std::net::TcpListener) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut connection =
+            crate::remote_connection::RemoteConnection::new_ssh("box", "127.0.0.1", "boss");
+        if let crate::remote_connection::RemoteTransport::Ssh {
+            ssh,
+            start_if_not_running,
+            ..
+        } = &mut connection.transport
+        {
+            ssh.port = listener.local_addr().unwrap().port();
+            *start_if_not_running = true;
+        }
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::remote_connection::RemoteConnectionStore::save(
+            &state.data_dir,
+            std::slice::from_ref(&connection),
+        )
+        .unwrap();
+        (state, connection.id, listener)
+    }
+
+    /// Every provisioning route runs (or describes) commands over SSH: from a
+    /// public address without credentials each one is refused, and the stored
+    /// host is never dialled.
+    #[tokio::test]
+    async fn ssh_daemon_provisioning_routes_refuse_a_public_caller_without_dialling() {
+        let (state, id, listener) = ssh_provisioning_fixture();
+        let public = || ConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 5], 12345)));
+        let digest = || {
+            Json(ProvisionExecuteRequest {
+                plan_digest: "0".repeat(64),
+            })
+        };
+        let responses = [
+            get_ssh_daemon_plan(
+                public(),
+                None,
+                State(state.clone()),
+                Path(id.clone()),
+                axum::extract::Query(ProvisionPlanQuery {
+                    action: crate::ssh_provision::ProvisionAction::Start,
+                }),
+            )
+            .await,
+            post_ssh_daemon_start(
+                public(),
+                None,
+                State(state.clone()),
+                Path(id.clone()),
+                digest(),
+            )
+            .await,
+            post_ssh_daemon_stop(public(), None, State(state.clone()), Path(id.clone())).await,
+            post_configure_ssh_daemon_password(
+                public(),
+                None,
+                State(state.clone()),
+                Path(id.clone()),
+                digest(),
+            )
+            .await,
+        ];
+        for resp in responses {
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        }
+        assert!(
+            listener.accept().is_err(),
+            "a refused provisioning call must not have opened an SSH connection"
+        );
+    }
+
+    /// From an allowed caller, a plan is a read; an execute with a digest that
+    /// does not match the stored connection's plan runs nothing.
+    #[tokio::test]
+    async fn ssh_daemon_start_with_a_stale_digest_runs_nothing() {
+        let (state, id, listener) = ssh_provisioning_fixture();
+        let plan = get_ssh_daemon_plan(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Path(id.clone()),
+            axum::extract::Query(ProvisionPlanQuery {
+                action: crate::ssh_provision::ProvisionAction::Start,
+            }),
+        )
+        .await;
+        assert_eq!(plan.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(plan.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let plan: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(plan["action"], "start");
+        assert_eq!(plan["digest"].as_str().unwrap().len(), 64);
+
+        let resp = post_ssh_daemon_start(
+            ConnectInfo(loopback()),
+            None,
+            State(state.clone()),
+            Path(id),
+            Json(ProvisionExecuteRequest {
+                plan_digest: "0".repeat(64),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("nothing was run"));
+        assert!(listener.accept().is_err(), "nothing may be dialled");
+    }
+
+    /// The routes take a stored id only: an id that names no connection is an
+    /// error, never something to dial.
+    #[tokio::test]
+    async fn ssh_daemon_routes_refuse_an_unknown_connection() {
+        let (state, _id, listener) = ssh_provisioning_fixture();
+        let resp = post_ssh_daemon_stop(
+            ConnectInfo(loopback()),
+            None,
+            State(state),
+            Path("not-a-connection".to_string()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+        assert!(listener.accept().is_err());
     }
 }
 

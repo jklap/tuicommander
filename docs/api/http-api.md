@@ -972,7 +972,7 @@ What is compressed on a remote connection, and by what:
 |---|---|---|
 | HTTP request and response bodies over 860 bytes | `CompressionLayer` (gzip/br/deflate, from `Accept-Encoding`) | `mcp_http::build_router` |
 | Stream WebSocket frames, direct remote peer | raw deflate per frame, level 6, this option | `mcp_http::ws_compression` |
-| Stream WebSocket frames, SSH-tunnelled peer | `ssh -C` on the tunnel channel | `tunnels::command`, `ProfileOptions::compression` |
+| Stream WebSocket frames, SSH-tunnelled peer | `ssh -C` on the tunnel channel | `tunnels::command`, `SshConnectionParams::compression` |
 | Stream WebSocket frames, local peer | nothing — there is no link to save | — |
 
 The WebSocket half needs its own mechanism because `CompressionLayer` is an HTTP
@@ -1782,6 +1782,8 @@ Load/save notes (opaque JSON, shape defined by frontend).
 GET    /config/remote-connections
 PUT    /config/remote-connections
 DELETE /config/remote-connections/{id}
+POST   /config/remote-connections/test
+POST   /config/remote-connections/probe-direct-tls
 PUT    /config/remote-connections/{id}/password
 PUT    /config/remote-connections/{id}/relay-pairing
 GET    /config/remote-connections/{id}/password
@@ -1790,6 +1792,10 @@ POST   /config/remote-connections/{id}/install
 DELETE /config/remote-connections/{id}/install
 GET    /config/remote-connections/{id}/update
 POST   /config/remote-connections/{id}/update
+POST   /config/remote-connections/{id}/configure-ssh-password
+GET    /config/ssh-daemon/{id}/plan?action=start|set_password
+POST   /config/ssh-daemon/{id}/start
+POST   /config/ssh-daemon/{id}/stop
 ```
 
 The configured remote machines and their vault password. The password is write
@@ -1810,6 +1816,68 @@ connection status of a `relay` connection carries `relay_failure`
 `PUT /config/remote-connections` takes `{ "base": null, "connection": {...} }`
 for a new machine, or the loaded connection as `base` when editing. The server
 merges only changed fields into that connection's latest locked record.
+
+A connection is
+`{ id, name, transport, auth_username, enabled, auto_update, deploy, survive_secs }`.
+`transport` is internally tagged by `type`:
+
+| `type` | Fields |
+|--------|--------|
+| `Ssh` | `ssh: { host, port, user, identity_file, server_alive_interval, server_alive_count_max, strict_host_key_checking: "Yes" \| "AcceptNew", compression }`, `remote_daemon_port`, and optionally `start_if_not_running` (bool), `leave_running_on_disconnect` (bool), `instance_id` (lowercase DNS label, not `default`) — omitted while unset, so a connection that never uses provisioning keeps the older shape |
+| `Direct` | `url`, `tls_fingerprint` (optional: SHA-256 hex of a pinned self-signed certificate; omitted when unset) |
+| `Local` | `port`, `instance_id` — exactly one set (a whitespace-only `instance_id` counts as unset). Connect resolves `instance_id` from that instance's `config.json` on every attempt and connects to `http://127.0.0.1:<port>` with the normal token handshake; an unresolvable instance fails before anything is contacted. Before any credential is sent (Connect and `POST /config/remote-connections/test`), the port's `/health` `instance_id` must match what the instance's own Unix IPC socket (`/health.socket_path`, which must sit in that instance's socket location and be owned by this user) reports — otherwise it fails closed (Unix only). Update refuses it (`Update & restart is not available for a Local connection…`); deploy is SSH-only |
+
+The `ssh` object is the same `SshConnectionParams` a tunnel profile carries. The
+runtime always opens the tunnel with `StrictHostKeyChecking=accept-new`, whatever
+`strict_host_key_checking` says. **Shape change:** before the nested model the SSH
+fields were flat on the transport (`ssh_host`, `ssh_port`, `ssh_user`,
+`identity_file`) and `auth_username` was a required string. Responses now carry
+only the nested shape and `auth_username` may be `null`; requests in the old flat
+shape are still accepted (a transport mixing both shapes is rejected as
+unprocessable). `connections.json` itself is
+rewritten once at startup (see `docs/backend/config.md`).
+
+`auth_username` is optional. With a stored password and no username the token
+exchange sends an empty username, which every daemon refuses — a missing
+username fails closed, it never authenticates as anybody.
+
+`POST /config/remote-connections/test` (Test Connection) checks a connection that
+may not be saved yet and persists nothing. Body:
+`{ "transport": {...}, "auth_username": "alice" | null, "password": "..." | null }`
+— the password is plaintext for this one call only: never stored, never logged,
+never echoed. Answers 200 with
+`{ "type": "Reachable" | "AuthFailed" | "NotConfigured" | "InstanceNotFound" }` or
+`{ "type": "Unreachable", "reason": "..." }` (the reason never contains the URL
+or the password). SSH runs a one-shot `ssh … -- user@host true` with the tunnel's
+options, `ConnectTimeout=5` and `ControlPath=none` (so it never rides a live
+multiplexed master); Direct/Local send one `GET <base>/health` that follows no
+redirects, with Basic Auth when a username or password is given (a password with
+no username is sent as `:<password>` and refused, like Connect). `Local` resolves
+`instance_id` from that instance's `config.json` first. Guarded by
+`require_local_or_auth` (403 from a public address without credentials) because
+it makes this machine dial an arbitrary host. Against a headless `tuic-remote`,
+whose `/health` is public, a 2xx is `Reachable` whatever the credentials.
+
+`POST /config/remote-connections/probe-direct-tls` reports what certificate a
+Direct URL presents, so the UI can show a fingerprint before the user pins it.
+Body `{ "url": "https://host:9877", "tls_fingerprint": "<hex>" | null }`; answers
+200 with `{ "type": "NoTlsNeeded" }` (an `http://` URL — nothing is contacted),
+`{ "type": "Trusted" }` (the OS root store vouches for it),
+`{ "type": "NeedsConfirmation", "fingerprint": "<64 hex>" }` (self-signed/untrusted,
+nothing pinned), `{ "type": "PinnedMatch" }`, or
+`{ "type": "PinnedMismatch", "presented_fingerprint": "<64 hex>" }`; 500 with
+`{ "error": "Unreachable: …" }` when no TLS handshake completes within 10 s. It
+persists nothing and sends no application data; it is guarded by
+`require_local_or_auth` because it dials a caller-supplied host. Pinning itself is
+an ordinary `PUT /config/remote-connections` that sets `transport.tls_fingerprint`
+(validated: 64 hex digits, `https://` URL only). On connect, an unpinned
+`https://` daemon the OS does not trust fails closed with its fingerprint in the
+status error; a pinned one is reached through a backend-owned loopback relay that
+accepts only that certificate (the status `base_url` is then
+`http://127.0.0.1:<port>`), and a changed certificate fails with
+`Certificate changed: …` — it is never re-pinned automatically. The relay carries
+no credentials; the daemon's own token check still applies. There is no route to
+start or stop a relay.
 
 The install pair is SSH-only. `POST .../install` stages the matching release
 binary, installs and starts a systemd user unit or launchd agent, and persists
@@ -1833,7 +1901,34 @@ rewrites the store: status poll, mirror task, mirrored session rows, SSH tunnel
 and session token all go, through the same `remote_runtime::teardown` the
 disconnect route uses. Deleting a connected machine therefore needs no
 disconnect first — and must not be given one, because the tunnel is keyed by the
-profile the delete is about to remove.
+profile the delete is about to remove. It then forgets BOTH vault entries, the
+password and the pairing token (it used to leave the pairing token behind), via
+the same `remote_connection::delete_remote_connection_impl` the desktop command
+calls. A missing id answers 404 (the vault entries are cleared either way).
+
+#### SSH daemon provisioning
+
+`GET /config/ssh-daemon/{id}/plan?action=start|set_password` answers what
+accepting a connection's `provision_offer` would run:
+`{ connection_id, connection_name, action, destination: "user@host:port", summary, steps: [{ description, command? }], digest }`
+— `command` is the exact remote shell command, `digest` a SHA-256 over the
+whole plan. It contacts nothing. `POST /config/ssh-daemon/{id}/start` and
+`POST /config/remote-connections/{id}/configure-ssh-password` take
+`{ "plan_digest": "<digest>" }` and nothing else: the plan is rebuilt from the
+STORED connection and a different digest is refused (502, "nothing was run")
+before any SSH. Start runs the same pinned, checksummed deployment as
+`deploy = "on_connect"` (Windows hosts refused), honours `instance_id`
+(`--instance <id>`, own PID/log file), requires `start_if_not_running`, then
+connects; it answers `null`. Set-password pipes the saved username and password
+on stdin to `tuic-remote [--instance <id>] --set-password-if-unset`, which
+refuses when the daemon already has credentials (a password is never
+overwritten, never sent over HTTP, never in a command line or response), and
+answers the follow-up message as a JSON string. `POST /config/ssh-daemon/{id}/stop`
+stops the ephemeral daemon only when its PID file names a running `tuic-remote`,
+answering `true` when one was signalled. All four are guarded by
+`require_local_or_auth` (403 from a public address before the store is read) and
+answer 502 for any failure. There is no route that takes a caller-supplied host,
+user or credential.
 
 ### Remote Connection Runtime
 
@@ -1844,18 +1939,26 @@ DELETE /config/remote-connections/{id}/connect
 ```
 
 Live state, not configuration: `GET .../status` answers with one object per
-connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, live_sessions?, update_notice?, update_in_progress?, error?, retry_after_secs?, step? }`,
+connection — `{ id, status, base_url?, token?, protocol_version?, build?, out_of_date?, live_sessions?, update_notice?, update_in_progress?, error?, retry_after_secs?, step?, provision_offer? }`,
 where `status` is `disconnected | connecting | deploying | connected |
 unauthenticated | error`. `error` is shown only for settled failures.
 `retry_after_secs` is the rounded-up delay of a scheduled retry, present only
 while waiting after a failure; it is omitted when a new attempt starts. `step` is present while deploying. `base_url`, `token`
 and `protocol_version` are present **only** while
 connected; `update_in_progress` is present as `true` while a manual or unattended update
-owns the connection. The route and token fields answer "where do I send a call", and a
+owns the connection. `provision_offer` (`"start"` or `"set_password"`) is present
+only while NOT connected, when the backend can offer one of the SSH daemon
+provisioning plans above for this failure: an SSH connection with
+`start_if_not_running` and `deploy = "never"` found nothing answering, or the
+daemon has no password configured at all (never for a wrong password). For a
+Local connection, `update_notice` names both versions when the other instance
+runs a different one. The route and token fields answer "where do I send a call", and a
 connection that is not connected has no such answer.
 
 `POST .../connect` brings a connection up and `DELETE .../connect` takes it
-down. Neither returns the new status: every transition is pushed as a
+down; taking it down also stops a daemon this app started through a confirmed
+Start plan in this run, PID-file verified, unless `leave_running_on_disconnect`
+is set. Neither returns the new status: every transition is pushed as a
 `remote-connection-status` event on `/events` SSE (and to the desktop window),
 so one client connecting is visible to all of them.
 
@@ -1869,6 +1972,24 @@ reconnect the user has to ask for.
 These three routes are desktop-only — they are registered on `build_router`, not
 in `shared_routes()`. A `tuic-remote` daemon is the far end of a remote
 connection; it does not hold connections of its own.
+
+### Tunnel Profiles
+
+```
+GET    /tunnels/profiles
+POST   /tunnels/profiles
+DELETE /tunnels/profiles/{id}
+```
+
+A profile is `{ id, name, ssh, forwards, auto_connect }`, where `ssh` is the
+`SshConnectionParams` object described under Remote Connections (`compression`
+defaults to `true`). **Shape change:** the SSH fields used to be flat (`host`,
+`port`, `user`, `identity_file` plus an `options` object); responses now carry
+only `ssh`, and the flat shape is still accepted on input. `POST` mints a UUID
+when `id` is empty or missing — as the desktop command always did — and answers
+`{ "id": ... }`; a validation failure is a 400. `DELETE` stops a running tunnel
+and answers `{ "deleted": true }`, or 404 for a missing profile (the desktop
+command now errors for the same case).
 
 ### SSH Discovered Hosts
 

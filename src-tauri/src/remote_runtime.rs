@@ -23,7 +23,6 @@
 //!   no base URL in the snapshot, so `rpcImpl` refuses rather than retrying a
 //!   401 on a widening backoff.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -142,6 +141,11 @@ pub(crate) struct RemoteConnectionStatus {
     /// `pairing_rejected` or `link_lost`. Only present beside `error`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) relay_failure: Option<&'static str>,
+    /// What this app can offer to do about the failure over SSH — start the
+    /// daemon, or give an unconfigured one its password. Only an offer: it runs
+    /// after the user accepts the exact plan (`ssh_provision`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) provision_offer: Option<crate::ssh_provision::ProvisionAction>,
 }
 
 /// Live state for one connection. Never serialized as-is: `snapshot` builds the
@@ -160,6 +164,7 @@ struct Entry {
     update_in_progress: Option<u64>,
     error: Option<String>,
     retry_after_secs: Option<u64>,
+    provision_offer: Option<crate::ssh_provision::ProvisionAction>,
     tunnel_id: Option<String>,
     /// The relay attachment of a relay connection; dropping it closes the
     /// loopback port and ends the tunnel.
@@ -214,6 +219,7 @@ impl Entry {
             relay_failure: matches!(status, RemoteStatus::Error | RemoteStatus::Unauthenticated)
                 .then_some(self.relay_failure)
                 .flatten(),
+            provision_offer: (!connected).then_some(self.provision_offer).flatten(),
         }
     }
 }
@@ -256,6 +262,15 @@ pub(crate) struct RemoteRuntime {
     /// Who this process is on the wire; a daemon answering with it is ourselves.
     /// A field rather than a call so a test can run the daemon in-process.
     identity: String,
+    /// Pinned loopback relays for Direct connections to a self-signed daemon,
+    /// keyed by connection id — the Direct transport's analogue of the SSH
+    /// tunnel an entry records in `tunnel_id`. Stopped wherever that tunnel is.
+    direct_proxies: crate::direct_proxy::DirectProxies,
+    /// Connections whose daemon this app started through a confirmed
+    /// `ssh_provision` Start plan in this run — the only daemons Disconnect may
+    /// stop (`ssh_provision::stop_after_disconnect`). Never persisted: after a
+    /// restart nothing here is "ours" any more.
+    provisioned: DashMap<String, ()>,
 }
 
 impl Default for RemoteRuntime {
@@ -272,6 +287,8 @@ impl Default for RemoteRuntime {
                 "the default HTTP client must build — Client::new panics on the same failure",
             ),
             identity: crate::app_instance::instance_identity().to_owned(),
+            direct_proxies: Default::default(),
+            provisioned: DashMap::new(),
         }
     }
 }
@@ -280,6 +297,20 @@ impl RemoteRuntime {
     #[cfg(test)]
     pub(crate) fn set_identity_for_test(&mut self, identity: &str) {
         self.identity = identity.to_owned();
+    }
+
+    /// Record that this app started `id`'s daemon (confirmed Start plan).
+    pub(crate) fn mark_provisioned(&self, id: &str) {
+        self.provisioned.insert(id.to_string(), ());
+    }
+
+    /// Forget the mark, returning whether it was there.
+    pub(crate) fn take_provisioned(&self, id: &str) -> bool {
+        self.provisioned.remove(id).is_some()
+    }
+
+    pub(crate) fn forget_provisioned(&self, id: &str) {
+        self.provisioned.remove(id);
     }
 
     /// The shared HTTP client. Cloning is an `Arc` bump, not a new pool.
@@ -536,6 +567,24 @@ fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
     let state = state.clone();
     let id = id.to_string();
     let task = tokio::spawn(async move {
+        // A Local connection is another instance on this machine: there is no
+        // release asset to select and nothing this app may install over it, so
+        // the comparison is the version alone and the notice says what to do.
+        if let Ok(connection) = load_connection(&state, &id)
+            && matches!(connection.transport, RemoteTransport::Local { .. })
+        {
+            let remote_version = state
+                .remote
+                .entries
+                .get(&id)
+                .and_then(|entry| entry.build.as_ref().map(|b| b.version.clone()));
+            let notice = local_version_notice(remote_version.as_deref(), env!("CARGO_PKG_VERSION"));
+            update_connected(&state, &id, |entry| {
+                entry.out_of_date = Some(notice.is_some());
+                entry.update_notice = notice;
+            });
+            return;
+        }
         let Some(build) = state
             .remote
             .entries
@@ -640,6 +689,22 @@ fn spawn_build_comparison(state: &Arc<AppState>, id: &str) {
     }
 }
 
+/// The warning a Local connection shows when the other instance runs a
+/// different version than this app — informational only: Update & restart
+/// refuses Local (`LOCAL_TRANSPORT_UPDATE_UNSUPPORTED`). `None` when the
+/// versions match; an instance too old to report its build gets a notice too.
+fn local_version_notice(remote_version: Option<&str>, local_version: &str) -> Option<String> {
+    match remote_version {
+        Some(remote) if remote == local_version => None,
+        Some(remote) => Some(format!(
+            "Version mismatch: this app is v{local_version}, the local instance runs v{remote}. Update that install directly."
+        )),
+        None => Some(format!(
+            "The local instance does not report its version (this app is v{local_version}). Update that install directly."
+        )),
+    }
+}
+
 /// Dual-emit. Nothing forwards the bus to the desktop window, so the window
 /// listener is fed here and the bus feeds `/events` SSE — the IPC/HTTP parity
 /// rule in AGENTS.md. Both carry the same payload.
@@ -724,6 +789,10 @@ pub(crate) struct Health {
     pub(crate) instance_id: Option<String>,
     pub(crate) session_count: Option<usize>,
     pub(crate) build: Option<crate::remote_deploy::assets::BuildIdentity>,
+    /// The daemon's own Unix IPC socket, as it reports it — used only by
+    /// `verify_local_instance_identity`, which never trusts it without
+    /// checking where it lives and who owns it.
+    pub(crate) socket_path: Option<String>,
 }
 
 /// Inspect the complete cause chain without exposing URLs or credentials.
@@ -883,6 +952,10 @@ async fn parse_health_response(
         build: body
             .get("build")
             .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        socket_path: body
+            .get("socket_path")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -923,6 +996,205 @@ where
     };
     let health = parse_health_response(response, &effective).await?;
     Ok((effective, health))
+}
+
+/// Prove that the daemon answering a Local connection's loopback port is a
+/// TUICommander instance of THIS user — and, for a named instance, that
+/// instance — before any credential is sent to it (Batch 30 review: Local
+/// Connect used to POST the vault password to whatever listened on the
+/// resolved port, so a stale port reused by another program, or a squatter,
+/// received it).
+///
+/// The TCP `/health` is unauthenticated and says anything its sender likes,
+/// so it is only a claim. The proof goes through the instance's Unix IPC
+/// socket, which the filesystem protects: the socket the TCP side names must
+/// sit where TUICommander puts one (`expected_unix_socket`), be a socket
+/// owned by this user, and answer `/health` over that socket with the SAME
+/// per-process `instance_id` the TCP port reported. Anything else fails
+/// closed with nothing sent.
+///
+/// Residual: an active local relay that forwards the real instance's TCP
+/// `/health` byte-for-byte passes this check (it is indistinguishable from
+/// the instance at the HTTP layer); defeating that needs the whole connection
+/// over the Unix socket. Windows (one shared named pipe, no per-instance
+/// socket) is not checked.
+#[cfg(unix)]
+pub(crate) async fn verify_local_instance_identity(
+    health: &Health,
+    instance_id: Option<&str>,
+) -> Result<(), String> {
+    #[cfg(test)]
+    {
+        let dirs = tests::LOCAL_IDENTITY_DIRS.lock().clone();
+        if let Some((temp, config)) = dirs {
+            return verify_local_instance_identity_in(health, instance_id, &temp, &config).await;
+        }
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let default_config_dir = crate::app_instance::AppInstance::default()
+        .config_dir_from(dirs::config_dir().as_deref(), &home);
+    verify_local_instance_identity_in(
+        health,
+        instance_id,
+        &std::env::temp_dir(),
+        &default_config_dir,
+    )
+    .await
+}
+
+#[cfg(not(unix))]
+pub(crate) async fn verify_local_instance_identity(
+    _health: &Health,
+    _instance_id: Option<&str>,
+) -> Result<(), String> {
+    Ok(())
+}
+
+/// Where a TUICommander instance's Unix socket may legitimately live, per
+/// `mcp_http::resolve_socket_path`: a named instance at
+/// `<temp>/tuic-mcp-<hash(id)>.sock` (or `-<pid>.sock` when the primary was
+/// busy), the default instance at `<config>/mcp.sock` (or `mcp-<pid>.sock`).
+/// Without a named instance (a port-only Local connection) any of those
+/// shapes is acceptable — but always in one of those two directories.
+#[cfg(unix)]
+fn expected_unix_socket(
+    claimed: &std::path::Path,
+    instance_id: Option<&str>,
+    temp_dir: &std::path::Path,
+    default_config_dir: &std::path::Path,
+) -> bool {
+    let canonical = |p: &std::path::Path| p.canonicalize().ok();
+    let (Some(parent), Some(name)) = (
+        claimed.parent().and_then(canonical),
+        claimed.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return false;
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let stem_matches = |name: &str, stem: &str| {
+        name.strip_suffix(".sock").is_some_and(|rest| {
+            rest == stem
+                || rest
+                    .strip_prefix(stem)
+                    .and_then(|r| r.strip_prefix('-'))
+                    .is_some_and(digits)
+        })
+    };
+    let in_temp = canonical(temp_dir).is_some_and(|t| t == parent);
+    let in_default_config = canonical(default_config_dir).is_some_and(|c| c == parent);
+    match instance_id {
+        Some(id) => {
+            let primary = tuic_ipc::named_socket_path(id, temp_dir);
+            let stem = primary
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            in_temp && stem_matches(name, &stem)
+        }
+        None => {
+            let named_shape = name
+                .strip_prefix("tuic-mcp-")
+                .and_then(|rest| rest.strip_suffix(".sock"))
+                .is_some_and(|rest| {
+                    let (hash, pid) = rest.split_once('-').unwrap_or((rest, ""));
+                    hash.len() == 16
+                        && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                        && (pid.is_empty() || digits(pid))
+                });
+            (in_temp && named_shape) || (in_default_config && stem_matches(name, "mcp"))
+        }
+    }
+}
+
+#[cfg(unix)]
+async fn verify_local_instance_identity_in(
+    health: &Health,
+    instance_id: Option<&str>,
+    temp_dir: &std::path::Path,
+    default_config_dir: &std::path::Path,
+) -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let not_verified = |why: &str| {
+        format!(
+            "The daemon on this port could not be verified as the expected TUICommander \
+             instance ({why}); nothing was sent to it."
+        )
+    };
+    let claimed_id = health
+        .instance_id
+        .as_deref()
+        .ok_or_else(|| not_verified("it reports no instance id"))?;
+    let socket = health
+        .socket_path
+        .as_deref()
+        .map(std::path::Path::new)
+        .ok_or_else(|| not_verified("it reports no IPC socket"))?;
+    if !expected_unix_socket(socket, instance_id, temp_dir, default_config_dir) {
+        return Err(not_verified(
+            "its IPC socket is not where that instance keeps one",
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(socket)
+        .map_err(|_| not_verified("its IPC socket does not exist"))?;
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    if !metadata.file_type().is_socket() || metadata.uid() != uid {
+        return Err(not_verified(
+            "its IPC socket is not a socket owned by this user",
+        ));
+    }
+    let socket_id = tokio::time::timeout(PROBE_TIMEOUT, read_unix_health_instance_id(socket))
+        .await
+        .map_err(|_| not_verified("its IPC socket did not answer in time"))?
+        .map_err(|e| not_verified(&e))?;
+    if socket_id != claimed_id {
+        return Err(not_verified(
+            "a different process answers the port than owns the instance's IPC socket",
+        ));
+    }
+    Ok(())
+}
+
+/// `GET /health` over a Unix socket; returns the reported `instance_id`.
+#[cfg(unix)]
+async fn read_unix_health_instance_id(socket: &std::path::Path) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+    let mut stream = tokio::net::UnixStream::connect(socket)
+        .await
+        .map_err(|e| format!("its IPC socket refused the connection: {e}"))?;
+    stream
+        .write_all(&tuic_ipc::http::request("GET", "/health", None, &[]))
+        .await
+        .map_err(|e| format!("IPC write failed: {e}"))?;
+    let mut decoder = tuic_ipc::http::ResponseDecoder::default();
+    let mut buf = [0u8; 8192];
+    let mut total = 0usize;
+    let response = loop {
+        let n = stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| format!("IPC read failed: {e}"))?;
+        total += n;
+        if total > MAX_RESPONSE_BYTES {
+            return Err("its IPC /health reply is too large".to_string());
+        }
+        decoder.push(&buf[..n]);
+        if let Some(response) = decoder
+            .response(n == 0)
+            .map_err(|e| format!("malformed IPC reply: {e}"))?
+        {
+            break response;
+        }
+    };
+    if !response.is_success() {
+        return Err(format!("its IPC /health answered {}", response.status));
+    }
+    serde_json::from_str::<serde_json::Value>(&response.body)
+        .ok()
+        .and_then(|v| v.get("instance_id")?.as_str().map(str::to_string))
+        .ok_or_else(|| "its IPC /health reports no instance id".to_string())
 }
 
 /// Outcome of a probe against a route that requires the credential.
@@ -969,10 +1241,13 @@ async fn authenticate(
     if !crate::remote_connection::connection_password_exists(&connection.id)? {
         return Ok(None);
     }
+    // An absent username is sent as an empty one: no daemon has an empty
+    // username configured, so the exchange fails closed with "Authentication
+    // rejected" rather than authenticating as anybody.
     crate::remote_connection::fetch_connection_token(
         &connection.id,
         base_url,
-        &connection.auth_username,
+        connection.auth_username.as_deref().unwrap_or_default(),
     )
     .await
     .map(Some)
@@ -1000,6 +1275,7 @@ struct ConnectFailure {
     message: String,
     /// The typed reason of a relay connection.
     relay_failure: Option<&'static str>,
+    offer: Option<crate::ssh_provision::ProvisionAction>,
 }
 
 impl ConnectFailure {
@@ -1009,6 +1285,7 @@ impl ConnectFailure {
             status: RemoteStatus::Error,
             message,
             relay_failure: None,
+            offer: None,
         }
     }
 
@@ -1018,6 +1295,7 @@ impl ConnectFailure {
             status: RemoteStatus::Unauthenticated,
             message,
             relay_failure: None,
+            offer: None,
         }
     }
 
@@ -1033,6 +1311,42 @@ impl ConnectFailure {
         out.relay_failure = Some(failure.code());
         out
     }
+    fn with_offer(mut self, offer: Option<crate::ssh_provision::ProvisionAction>) -> Self {
+        self.offer = offer;
+        self
+    }
+}
+
+/// A Connect that found nothing answering may offer to start the daemon — only
+/// for an SSH connection that opted in and does not deploy by itself (the
+/// other deploy modes already do, unattended, by the user's earlier choice).
+fn start_offer(connection: &RemoteConnection) -> Option<crate::ssh_provision::ProvisionAction> {
+    let opted_in = matches!(
+        &connection.transport,
+        RemoteTransport::Ssh {
+            start_if_not_running: true,
+            ..
+        }
+    );
+    (opted_in && connection.deploy == DeployMode::Never)
+        .then_some(crate::ssh_provision::ProvisionAction::Start)
+}
+
+/// A token exchange refused because the daemon has NO password configured —
+/// never a wrong one — may offer to set the saved one over SSH, for an SSH
+/// connection that has a username to set.
+fn password_offer(
+    connection: &RemoteConnection,
+    error: &str,
+) -> Option<crate::ssh_provision::ProvisionAction> {
+    let unconfigured = error == crate::remote_connection::REMOTE_PASSWORD_NOT_CONFIGURED;
+    let ssh = matches!(connection.transport, RemoteTransport::Ssh { .. });
+    let has_username = connection
+        .auth_username
+        .as_deref()
+        .is_some_and(|u| !u.is_empty());
+    (unconfigured && ssh && has_username)
+        .then_some(crate::ssh_provision::ProvisionAction::SetPassword)
 }
 
 /// Bring a connection up: resolve where it answers, prove it is reachable,
@@ -1157,6 +1471,9 @@ async fn attempt(
                 failure.relay_failure,
             );
             crate::remote_mirror::drop_connection(state, id);
+            if failure.offer.is_some() {
+                update(state, id, |e| e.provision_offer = failure.offer);
+            }
             Err(failure.message)
         }
     }
@@ -1207,6 +1524,7 @@ fn claim_and_supervise(
             entry.error = None;
             entry.relay_failure = None;
             entry.retry_after_secs = None;
+            entry.provision_offer = None;
             Some(entry.snapshot(id))
         }
     };
@@ -1266,13 +1584,14 @@ async fn handshake(
     };
 
     let mut deployed = false;
-    let health =
-        if deploy_reason(connection, first_health.as_ref().map_err(String::as_str)).is_some() {
-            deployed = true;
-            deploy_and_wait(state, id, connection, &client, &base_url).await?
-        } else {
-            first_health.map_err(ConnectFailure::error)?
-        };
+    let health = if deploy_reason(connection, first_health.as_ref().map_err(String::as_str))
+        .is_some()
+    {
+        deployed = true;
+        deploy_and_wait(state, id, connection, &client, &base_url).await?
+    } else {
+        first_health.map_err(|e| ConnectFailure::error(e).with_offer(start_offer(connection)))?
+    };
 
     if connection.deploy != DeployMode::Never
         && health.protocol_version != Some(REMOTE_PROTOCOL_VERSION)
@@ -1298,6 +1617,19 @@ async fn handshake(
              Point this connection at another machine's daemon."
         )));
     }
+    // A Local connection's port is only a number another process may hold:
+    // prove it is the intended instance before the vault password goes out.
+    if let RemoteTransport::Local { instance_id, .. } = &connection.transport {
+        verify_local_instance_identity(
+            &health,
+            instance_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty()),
+        )
+        .await
+        .map_err(ConnectFailure::error)?;
+    }
     update(state, id, |e| {
         e.protocol_version = health.protocol_version;
         e.build = health.build.clone();
@@ -1308,9 +1640,10 @@ async fn handshake(
     // no password to trade for one.
     let mut token = match relay_token {
         Some(token) => Some(token),
-        None => authenticate(connection, &base_url)
-            .await
-            .map_err(ConnectFailure::unauthenticated)?,
+        None => authenticate(connection, &base_url).await.map_err(|e| {
+            let offer = password_offer(connection, &e);
+            ConnectFailure::unauthenticated(e).with_offer(offer)
+        })?,
     };
 
     let mut probe = probe_authenticated(&client, &base_url, token.as_deref()).await;
@@ -1355,7 +1688,9 @@ async fn deploy_and_wait(
         ConnectFailure::error("deployment requires an SSH connection".to_string())
     })?;
     let RemoteTransport::Ssh {
-        remote_daemon_port, ..
+        remote_daemon_port,
+        instance_id,
+        ..
     } = &connection.transport
     else {
         unreachable!("ssh_profile only returns Some for SSH transports")
@@ -1369,11 +1704,12 @@ async fn deploy_and_wait(
         });
         entry.error = None;
     });
-    crate::remote_deploy::deploy_ephemeral(
+    crate::remote_deploy::deploy_ephemeral_for(
         &profile,
         *remote_daemon_port,
         &token,
         connection.survive_secs,
+        instance_id.as_deref(),
     )
     .await
     .map_err(|error| ConnectFailure::error(format!("installing daemon: {error}")))?;
@@ -1425,6 +1761,7 @@ fn stop_tunnel(state: &Arc<AppState>, id: &str) {
     if let Some(tunnel_id) = tunnel_id {
         state.tunnel_manager.stop_if_running(&tunnel_id);
     }
+    state.remote.direct_proxies.stop(id);
 }
 
 /// Where the daemon answers.
@@ -1439,9 +1776,15 @@ async fn resolve_base_url(
     connection: &RemoteConnection,
 ) -> Result<String, String> {
     match &connection.transport {
-        RemoteTransport::Direct { url } => Ok(url.trim_end_matches('/').to_string()),
+        RemoteTransport::Direct {
+            url,
+            tls_fingerprint,
+        } => resolve_direct_base_url(state, &connection.id, url, tls_fingerprint.as_deref()).await,
         // `handshake` attaches a relay itself: it needs the daemon token too.
         RemoteTransport::Relay => Err("a relay connection attaches through attach_relay".into()),
+        RemoteTransport::Local { port, instance_id } => {
+            resolve_local_base_url(*port, instance_id.as_deref())
+        }
         RemoteTransport::Ssh {
             remote_daemon_port, ..
         } => {
@@ -1545,31 +1888,96 @@ fn watch_relay(
     });
 }
 
+/// Where a Local connection answers: another TUICommander instance on this
+/// machine, always plain HTTP on loopback (never TLS, never a relay).
+///
+/// A named instance's port is read from its own `config.json` on every connect
+/// (`resolve_local_instance_port`) — a restarted instance may have landed on a
+/// different port of the 9876→9877→9878 chain. A whitespace-only
+/// `instance_id` counts as absent, as in `validate` and Test Connection. Every
+/// failure is an error: nothing is contacted without a resolved port. Auth is
+/// the same as every transport's — `authenticate` trades the vault password
+/// for the instance's token and `/api/version` decides — so a Local
+/// connection is never treated as trusted just because it is loopback; the
+/// self-connection guard in `handshake` refuses this very instance.
+fn resolve_local_base_url(port: Option<u16>, instance_id: Option<&str>) -> Result<String, String> {
+    let port = match instance_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => crate::remote_connection::resolve_local_instance_port(id)
+            .map_err(|e| format!("Local instance {id:?}: {e}"))?,
+        None => port
+            .filter(|p| *p != 0)
+            .ok_or("Local connection has neither an instance id nor a port")?,
+    };
+    Ok(format!("http://127.0.0.1:{port}"))
+}
+
+/// Where a Direct connection answers, after deciding whether its certificate
+/// can be trusted. Fails closed: an `https://` daemon nobody vouches for is
+/// refused until the user has pinned its fingerprint, and a pinned one that now
+/// presents a different certificate is refused outright — never re-pinned here.
+///
+/// * `http://`, or `https://` the OS trusts: the URL itself, as before.
+/// * `https://` with a pin that still matches: a loopback relay
+///   (`direct_proxy::DirectProxies`) that accepts only the pinned certificate,
+///   so `reqwest` and the WebView both reach the daemon through it, the same way
+///   an SSH connection's traffic goes through its tunnel. The relay carries no
+///   credential: the daemon still demands the token `authenticate` obtains.
+async fn resolve_direct_base_url(
+    state: &Arc<AppState>,
+    id: &str,
+    url: &str,
+    tls_fingerprint: Option<&str>,
+) -> Result<String, String> {
+    use crate::direct_proxy::{ProbeResult, https_target, normalize_fingerprint, probe_direct_tls};
+    let url = url.trim().trim_end_matches('/');
+    let Some(target) = https_target(url)? else {
+        return Ok(url.to_string());
+    };
+    match probe_direct_tls(url, tls_fingerprint).await? {
+        ProbeResult::NoTlsNeeded | ProbeResult::Trusted => Ok(url.to_string()),
+        ProbeResult::NeedsConfirmation { fingerprint } => Err(format!(
+            "{}'s certificate is not trusted by this system (SHA-256 {fingerprint}). \
+             Press Connect in Settings → Remote Servers to compare and pin it; \
+             nothing was sent to the server.",
+            target.host
+        )),
+        ProbeResult::PinnedMismatch {
+            presented_fingerprint,
+        } => Err(format!(
+            "Certificate changed: pinned SHA-256 {}, {} now presents {presented_fingerprint}. \
+             Refusing to connect. Verify the server, then forget the pinned certificate \
+             in the connection editor to pin the new one.",
+            tls_fingerprint.unwrap_or_default(),
+            target.host
+        )),
+        ProbeResult::PinnedMatch => {
+            let pin = tls_fingerprint
+                .and_then(normalize_fingerprint)
+                .ok_or("stored certificate pin is not a SHA-256 fingerprint")?;
+            let port = state.remote.direct_proxies.start(id, target, &pin).await?;
+            Ok(format!("http://127.0.0.1:{port}"))
+        }
+    }
+}
+
 pub(crate) fn ssh_profile(
     connection: &RemoteConnection,
 ) -> Option<crate::tunnels::profile::TunnelProfile> {
-    let RemoteTransport::Ssh {
-        ssh_host,
-        ssh_port,
-        ssh_user,
-        identity_file,
-        ..
-    } = &connection.transport
-    else {
+    let RemoteTransport::Ssh { ssh, .. } = &connection.transport else {
         return None;
     };
-    use crate::tunnels::profile::{ProfileOptions, StrictHostKeyChecking, TunnelProfile};
+    use crate::ssh_connection::StrictHostKeyChecking;
+    use crate::tunnels::profile::TunnelProfile;
     let mut profile = TunnelProfile::new(
         format!("remote connection {}", connection.name),
-        ssh_host.clone(),
-        ssh_user.clone(),
+        ssh.host.clone(),
+        ssh.user.clone(),
     );
-    profile.port = *ssh_port;
-    profile.identity_file = identity_file.as_ref().map(PathBuf::from);
-    profile.options = ProfileOptions {
-        strict_host_key_checking: StrictHostKeyChecking::AcceptNew,
-        ..ProfileOptions::default()
-    };
+    // The connection's own SSH settings — the struct a tunnel profile carries
+    // too — with one exception: this tunnel is created on the user's behalf,
+    // so a first connection cannot stop to ask about a fingerprint.
+    profile.ssh = ssh.clone();
+    profile.ssh.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
     Some(profile)
 }
 
@@ -1661,6 +2069,14 @@ pub(crate) fn credentials_changed(state: &Arc<AppState>, id: &str) {
     });
 }
 
+/// An explicit Disconnect: stop a daemon this app started for the connection
+/// when it is not to be left running (`ssh_provision::stop_after_disconnect`),
+/// then [`teardown`]. Both transports' disconnect calls come here.
+pub(crate) fn disconnect(state: &Arc<AppState>, id: &str) {
+    crate::ssh_provision::stop_after_disconnect(state, id);
+    teardown(state, id);
+}
+
 /// Delete-specific teardown: clear local runtime state immediately, then make
 /// one bounded best-effort attempt to stop the ephemeral daemon this saved
 /// connection owns. Disconnect deliberately does not do this — it is allowed
@@ -1677,12 +2093,15 @@ pub(crate) fn teardown_deleted(state: &Arc<AppState>, id: &str) {
             tracing::warn!(source = "remote", connection = id, %error, "Could not inspect deleted connection for ephemeral cleanup")
         }
     }
+    // No record left to read the stop plan from: only forget the mark.
+    state.remote.forget_provisioned(id);
     teardown(state, id);
     state.remote.attempted_updates.remove(id);
 }
 
 /// Settings removal retains this record across persistence instead of rereading a deleted row.
 pub(crate) fn teardown_deleted_record(state: &Arc<AppState>, connection: &RemoteConnection) {
+    crate::ssh_provision::stop_after_delete(state, connection);
     stop_deleted_ephemeral(connection);
     teardown(state, &connection.id);
     state.remote.attempted_updates.remove(&connection.id);
@@ -1729,6 +2148,7 @@ fn dispose(state: &Arc<AppState>, id: &str, mut entry: Entry) {
     if entry.status == Some(RemoteStatus::Connected) {
         let _ = state.mcp.tools_changed.send(());
     }
+    state.remote.direct_proxies.stop(id);
     // The entry is gone, so there is nothing left for `update` to diff against:
     // the departure is announced by hand, and only when the connection was not
     // already sitting at `Disconnected`.
@@ -2051,7 +2471,7 @@ pub async fn disconnect_remote_connection(
     state: tauri::State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    teardown(&state.inner().clone(), &id);
+    disconnect(&state.inner().clone(), &id);
     Ok(())
 }
 
@@ -3064,6 +3484,7 @@ mod tests {
             retry_after_secs: None,
             step: Some("asset".into()),
             relay_failure: None,
+            provision_offer: None,
         });
 
         assert_eq!(payload["status"], "deploying");
@@ -3116,6 +3537,96 @@ mod tests {
             deploy_reason(&connection, Err("Unreachable: refused")),
             None
         );
+    }
+
+    #[test]
+    fn start_is_offered_only_to_an_opted_in_ssh_connection_that_does_not_deploy() {
+        use crate::ssh_provision::ProvisionAction;
+        let mut connection = RemoteConnection::new_ssh("vps", "h", "u");
+        assert_eq!(start_offer(&connection), None, "opt-in is off by default");
+        if let RemoteTransport::Ssh {
+            start_if_not_running,
+            ..
+        } = &mut connection.transport
+        {
+            *start_if_not_running = true;
+        }
+        assert_eq!(start_offer(&connection), Some(ProvisionAction::Start));
+        connection.deploy = DeployMode::OnConnect;
+        assert_eq!(
+            start_offer(&connection),
+            None,
+            "OnConnect deploys by itself"
+        );
+        connection.deploy = DeployMode::Installed;
+        assert_eq!(start_offer(&connection), None);
+        let direct = RemoteConnection::new_direct("d", "http://h", "u");
+        assert_eq!(start_offer(&direct), None);
+    }
+
+    /// Only a daemon with NO password is offered one; a wrong password (or any
+    /// other refusal) never is.
+    #[test]
+    fn a_password_is_offered_only_to_an_unconfigured_daemon() {
+        use crate::remote_connection::REMOTE_PASSWORD_NOT_CONFIGURED;
+        use crate::ssh_provision::ProvisionAction;
+        let mut connection = RemoteConnection::new_ssh("vps", "h", "boss");
+        assert_eq!(
+            password_offer(&connection, REMOTE_PASSWORD_NOT_CONFIGURED),
+            Some(ProvisionAction::SetPassword)
+        );
+        assert_eq!(
+            password_offer(&connection, "Authentication rejected by the remote daemon"),
+            None
+        );
+        assert_eq!(password_offer(&connection, REJECTED_CREDENTIALS), None);
+        connection.auth_username = None;
+        assert_eq!(
+            password_offer(&connection, REMOTE_PASSWORD_NOT_CONFIGURED),
+            None
+        );
+        let direct = RemoteConnection::new_direct("d", "http://h", "boss");
+        assert_eq!(
+            password_offer(&direct, REMOTE_PASSWORD_NOT_CONFIGURED),
+            None
+        );
+    }
+
+    #[test]
+    fn an_offer_is_published_only_while_not_connected() {
+        use crate::ssh_provision::ProvisionAction;
+        let mut entry = Entry {
+            status: Some(RemoteStatus::Error),
+            provision_offer: Some(ProvisionAction::Start),
+            ..Entry::default()
+        };
+        let payload = remote_connection_status_payload(&entry.snapshot("vps"));
+        assert_eq!(payload["provision_offer"], "start");
+        entry.status = Some(RemoteStatus::Connected);
+        let payload = remote_connection_status_payload(&entry.snapshot("vps"));
+        assert!(payload.get("provision_offer").is_none());
+        let none = remote_connection_status_payload(&Entry::default().snapshot("vps"));
+        assert!(none.get("provision_offer").is_none());
+    }
+
+    #[test]
+    fn a_local_instance_on_another_version_is_warned_about() {
+        assert_eq!(local_version_notice(Some("1.7.7"), "1.7.7"), None);
+        let notice = local_version_notice(Some("1.7.6"), "1.7.7").unwrap();
+        assert!(
+            notice.contains("v1.7.7") && notice.contains("v1.7.6"),
+            "{notice}"
+        );
+        assert!(notice.contains("Update that install directly"));
+        assert!(local_version_notice(None, "1.7.7").is_some());
+    }
+
+    #[test]
+    fn disconnect_forgets_that_this_app_started_the_daemon() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.remote.mark_provisioned("vps");
+        disconnect(&state, "vps");
+        assert!(!state.remote.take_provisioned("vps"));
     }
 
     #[test]
@@ -3752,7 +4263,7 @@ mod tests {
                     "example.invalid",
                     "boss",
                 ),
-                PathBuf::from("/nonexistent/ssh"),
+                std::path::PathBuf::from("/nonexistent/ssh"),
             )
             .await
             .expect("the manager records a tunnel before its ssh child matters")
@@ -3887,6 +4398,223 @@ mod tests {
         version.assert_async().await;
     }
 
+    // --- Local Connect identity (Batch 30 review) ---
+
+    /// Test-only stand-in for the real temp/config dirs the Local identity
+    /// check trusts (nextest's per-test TMPDIR is too deep for a Unix socket
+    /// path). Tests that set it are `#[serial_test::serial(local_identity)]`.
+    pub(super) static LOCAL_IDENTITY_DIRS: parking_lot::Mutex<
+        Option<(std::path::PathBuf, std::path::PathBuf)>,
+    > = parking_lot::Mutex::new(None);
+
+    /// Makes the next Local connects in this test talk to a genuine-looking
+    /// instance: a Unix socket in a short fake config dir answering with
+    /// `instance_id`. Returns the guard dirs, the server and the `/health`
+    /// body fields the TCP mock must report.
+    #[cfg(unix)]
+    struct FakeLocalInstance {
+        _temp: tempfile::TempDir,
+        _config: tempfile::TempDir,
+        _server: tokio::task::JoinHandle<()>,
+        health_body: String,
+    }
+
+    #[cfg(unix)]
+    impl FakeLocalInstance {
+        fn start(instance_id: &str) -> Self {
+            let temp = short_socket_dir();
+            let config = short_socket_dir();
+            let socket = config.path().join("mcp.sock");
+            let server = serve_unix_health(&socket, instance_id);
+            *LOCAL_IDENTITY_DIRS.lock() =
+                Some((temp.path().to_path_buf(), config.path().to_path_buf()));
+            let health_body = serde_json::json!({
+                "protocol_version": 1,
+                "instance_id": instance_id,
+                "socket_path": socket.display().to_string(),
+            })
+            .to_string();
+            Self {
+                _temp: temp,
+                _config: config,
+                _server: server,
+                health_body,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for FakeLocalInstance {
+        fn drop(&mut self) {
+            *LOCAL_IDENTITY_DIRS.lock() = None;
+        }
+    }
+
+    /// A Local connection whose port is held by something that is not the
+    /// intended instance must fail BEFORE the vault password is sent.
+    #[tokio::test]
+    async fn local_connect_to_a_squatting_listener_sends_no_credential() {
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_body(
+                r#"{"protocol_version":4,"instance_id":"squatter","socket_path":"/tmp/not-a-tuic.sock"}"#,
+            )
+            .create_async()
+            .await;
+        let token_exchange = server
+            .mock("GET", "/api/auth/session-token")
+            .with_body(r#"{"token":"t"}"#)
+            .expect(0)
+            .create_async()
+            .await;
+        let version = server
+            .mock("GET", "/api/version")
+            .with_body("{}")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let state = test_state();
+        let port: u16 = server.url().rsplit(':').next().unwrap().parse().unwrap();
+        let connection = crate::remote_connection::RemoteConnection::new_local_port("local", port);
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        crate::remote_connection::set_connection_password(&id, "vault-secret").unwrap();
+
+        let error = connect(&state, &id)
+            .await
+            .expect_err("an unverified port must fail");
+        assert!(error.contains("could not be verified"), "{error}");
+        assert!(state.remote.token(&id).is_none());
+        token_exchange.assert_async().await;
+        version.assert_async().await;
+    }
+
+    /// Serves `GET /health` with `instance_id` on a Unix socket at `path`.
+    #[cfg(unix)]
+    fn serve_unix_health(path: &std::path::Path, instance_id: &str) -> tokio::task::JoinHandle<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::UnixListener::bind(path).unwrap();
+        let body = format!(r#"{{"instance_id":"{instance_id}"}}"#);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await;
+                let reply = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        })
+    }
+
+    /// A short directory under `/tmp`: a Unix socket path must fit SUN_LEN,
+    /// which nextest's deep per-test TMPDIR does not.
+    #[cfg(unix)]
+    fn short_socket_dir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("tuicv")
+            .tempdir_in("/tmp")
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn health_claiming(instance_id: &str, socket: &std::path::Path) -> Health {
+        Health {
+            instance_id: Some(instance_id.to_string()),
+            socket_path: Some(socket.display().to_string()),
+            ..Health::default()
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_identity_is_verified_through_the_instances_own_socket() {
+        let temp = short_socket_dir();
+        let config = short_socket_dir();
+        let socket = config.path().join("mcp.sock");
+        let _server = serve_unix_health(&socket, "real-instance");
+
+        let genuine = health_claiming("real-instance", &socket);
+        verify_local_instance_identity_in(&genuine, None, temp.path(), config.path())
+            .await
+            .expect("the instance that owns the socket is verified");
+
+        // A squatter on the port that names the real instance's socket but
+        // reports its own id is refused.
+        let squatter = health_claiming("squatter", &socket);
+        let err = verify_local_instance_identity_in(&squatter, None, temp.path(), config.path())
+            .await
+            .unwrap_err();
+        assert!(err.contains("different process"), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_identity_refuses_a_socket_outside_tuic_locations_or_missing() {
+        let temp = short_socket_dir();
+        let config = short_socket_dir();
+        let elsewhere = short_socket_dir();
+        let socket = elsewhere.path().join("mcp.sock");
+        let _server = serve_unix_health(&socket, "attacker");
+        // Its own socket, its own id — but not where a TUIC instance keeps one.
+        let claim = health_claiming("attacker", &socket);
+        assert!(
+            verify_local_instance_identity_in(&claim, None, temp.path(), config.path())
+                .await
+                .is_err()
+        );
+        let no_socket = Health {
+            instance_id: Some("x".into()),
+            ..Health::default()
+        };
+        assert!(
+            verify_local_instance_identity_in(&no_socket, None, temp.path(), config.path())
+                .await
+                .is_err()
+        );
+        let no_id = Health {
+            socket_path: Some(config.path().join("mcp.sock").display().to_string()),
+            ..Health::default()
+        };
+        assert!(
+            verify_local_instance_identity_in(&no_id, None, temp.path(), config.path())
+                .await
+                .is_err()
+        );
+    }
+
+    /// A named-instance connection only accepts THAT instance's socket.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn named_local_identity_requires_that_instances_socket() {
+        let temp = short_socket_dir();
+        let config = short_socket_dir();
+        let dev = tuic_ipc::named_socket_path("dev-box", temp.path());
+        let _dev = serve_unix_health(&dev, "dev-process");
+        let other = tuic_ipc::named_socket_path("other-box", temp.path());
+        let _other = serve_unix_health(&other, "other-process");
+
+        let dev_claim = health_claiming("dev-process", &dev);
+        verify_local_instance_identity_in(&dev_claim, Some("dev-box"), temp.path(), config.path())
+            .await
+            .expect("dev-box's own socket");
+        let other_claim = health_claiming("other-process", &other);
+        assert!(
+            verify_local_instance_identity_in(
+                &other_claim,
+                Some("dev-box"),
+                temp.path(),
+                config.path()
+            )
+            .await
+            .is_err(),
+            "another instance on the port is not dev-box"
+        );
+    }
+
     #[tokio::test]
     async fn a_daemon_that_rejects_the_password_leaves_no_route_and_no_poll() {
         let mut server = mockito::Server::new_async().await;
@@ -3924,6 +4652,261 @@ mod tests {
             supervisor_finishes(&state, &id).await,
             "a rejected connection must not keep probing"
         );
+    }
+
+    /// A daemon serving `/health` + `/api/version` over HTTPS with a throwaway
+    /// self-signed certificate — what a remote `selfsigned.rs` serves. Returns
+    /// its `https://` URL, the certificate's fingerprint and a request counter.
+    async fn self_signed_daemon() -> (
+        String,
+        String,
+        Arc<std::sync::atomic::AtomicUsize>,
+        axum_server::Handle<std::net::SocketAddr>,
+    ) {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+        let fingerprint = crate::direct_proxy::cert_fingerprint_sha256(cert.der());
+        let tls = axum_server::tls_rustls::RustlsConfig::from_der(
+            vec![cert.der().to_vec()],
+            signing_key.serialize_der(),
+        )
+        .await
+        .unwrap();
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (h1, h2) = (Arc::clone(&hits), Arc::clone(&hits));
+        let app = axum::Router::new()
+            .route(
+                "/health",
+                axum::routing::get(move || {
+                    h1.fetch_add(1, Ordering::SeqCst);
+                    async { r#"{"protocol_version":1}"# }
+                }),
+            )
+            .route(
+                "/api/version",
+                axum::routing::get(move || {
+                    h2.fetch_add(1, Ordering::SeqCst);
+                    async { "{}" }
+                }),
+            );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("https://{}", listener.local_addr().unwrap());
+        let handle = axum_server::Handle::new();
+        tokio::spawn(
+            axum_server::from_tcp_rustls(listener, tls)
+                .unwrap()
+                .handle(handle.clone())
+                .serve(app.into_make_service()),
+        );
+        (url, fingerprint, hits, handle)
+    }
+
+    fn pinned_direct_connection(state: &Arc<AppState>, url: &str, pin: Option<&str>) -> String {
+        let mut connection = RemoteConnection::new_direct("self-signed", url, "boss");
+        connection.transport = RemoteTransport::Direct {
+            url: url.to_string(),
+            tls_fingerprint: pin.map(str::to_string),
+        };
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        id
+    }
+
+    /// Trust on first use means the FIRST use asks: an unpinned self-signed
+    /// daemon is refused with its fingerprint, before any HTTP request.
+    #[tokio::test]
+    async fn an_unpinned_self_signed_daemon_is_refused_with_its_fingerprint() {
+        let (url, fingerprint, hits, handle) = self_signed_daemon().await;
+        let state = test_state();
+        let id = pinned_direct_connection(&state, &url, None);
+
+        let err = connect(&state, &id).await.unwrap_err();
+
+        assert!(
+            err.contains(&fingerprint),
+            "the user must see what to compare: {err}"
+        );
+        assert!(err.contains("not trusted"), "{err}");
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        assert!(state.remote.base_url(&id).is_none());
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "no request may reach an unverified daemon"
+        );
+        teardown(&state, &id);
+        handle.shutdown();
+    }
+
+    /// A pinned daemon is reached through the pinned loopback relay — by the
+    /// backend's own probes here, and by the WebView through the same base URL.
+    #[tokio::test]
+    async fn a_pinned_self_signed_daemon_connects_through_the_pinned_relay() {
+        let (url, fingerprint, hits, handle) = self_signed_daemon().await;
+        let state = test_state();
+        let id = pinned_direct_connection(&state, &url, Some(&fingerprint));
+
+        connect(&state, &id).await.unwrap();
+
+        let base = state.remote.base_url(&id).expect("connected");
+        assert!(base.starts_with("http://127.0.0.1:"), "{base}");
+        assert_ne!(base, url);
+        assert!(
+            hits.load(Ordering::SeqCst) >= 2,
+            "health + version went through the relay"
+        );
+        assert!(state.remote.direct_proxies.port_for(&id).is_some());
+
+        teardown(&state, &id);
+        assert!(
+            state.remote.direct_proxies.port_for(&id).is_none(),
+            "teardown stops the relay like it stops a tunnel"
+        );
+        handle.shutdown();
+    }
+
+    /// A changed certificate is a hard stop, never a silent re-pin.
+    #[tokio::test]
+    async fn a_pinned_daemon_presenting_another_certificate_is_refused() {
+        let (url, fingerprint, hits, handle) = self_signed_daemon().await;
+        let state = test_state();
+        let id = pinned_direct_connection(&state, &url, Some(&"0".repeat(64)));
+
+        let err = connect(&state, &id).await.unwrap_err();
+
+        assert!(err.contains("Certificate changed"), "{err}");
+        assert!(err.contains(&fingerprint), "{err}");
+        assert!(state.remote.base_url(&id).is_none());
+        assert!(state.remote.direct_proxies.port_for(&id).is_none());
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        let stored = load_connection(&state, &id).unwrap();
+        assert!(
+            matches!(stored.transport, RemoteTransport::Direct { tls_fingerprint: Some(ref p), .. } if *p == "0".repeat(64)),
+            "the pin is never rewritten by a connect"
+        );
+        teardown(&state, &id);
+        handle.shutdown();
+    }
+
+    fn local_connection(
+        state: &Arc<AppState>,
+        port: Option<u16>,
+        instance_id: Option<&str>,
+    ) -> String {
+        let connection = crate::remote_connection::RemoteConnection {
+            transport: RemoteTransport::Local {
+                port,
+                instance_id: instance_id.map(str::to_string),
+            },
+            auth_username: None,
+            ..crate::remote_connection::RemoteConnection::new_direct("local", "http://x", "u")
+        };
+        let id = connection.id.clone();
+        RemoteConnectionStore::save(&state.data_dir, &[connection]).unwrap();
+        id
+    }
+
+    /// A Local connection by port is a plain loopback connection with the same
+    /// handshake as any other: health, then the authenticated probe.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial(local_identity)]
+    async fn a_local_connection_by_port_connects_over_loopback() {
+        // The port must prove it is a TUICommander instance of this user.
+        let instance = FakeLocalInstance::start("local-daemon");
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_body(&instance.health_body)
+            .create_async()
+            .await;
+        let version = server
+            .mock("GET", "/api/version")
+            .with_body("{}")
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let port = server.socket_address().port();
+        let state = test_state();
+        let id = local_connection(&state, Some(port), None);
+
+        connect(&state, &id).await.unwrap();
+
+        assert_eq!(
+            state.remote.base_url(&id).as_deref(),
+            Some(format!("http://127.0.0.1:{port}").as_str())
+        );
+        version.assert_async().await;
+        teardown(&state, &id);
+    }
+
+    /// Loopback is not a credential: a Local daemon that answers 401 leaves the
+    /// connection unauthenticated, with no route — never connected without auth.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial(local_identity)]
+    async fn a_local_daemon_that_demands_auth_is_not_connected_without_it() {
+        // The port must prove it is a TUICommander instance of this user.
+        let instance = FakeLocalInstance::start("local-daemon");
+        let mut server = mockito::Server::new_async().await;
+        let _health = server
+            .mock("GET", "/health")
+            .with_body(&instance.health_body)
+            .create_async()
+            .await;
+        let _version = server
+            .mock("GET", "/api/version")
+            .with_status(401)
+            .create_async()
+            .await;
+        let state = test_state();
+        let id = local_connection(&state, Some(server.socket_address().port()), None);
+
+        connect(&state, &id).await.unwrap_err();
+
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Unauthenticated);
+        assert!(state.remote.base_url(&id).is_none());
+        assert!(state.remote.token(&id).is_none());
+        teardown(&state, &id);
+    }
+
+    /// An instance id that resolves to nothing fails closed: no port is
+    /// guessed and nothing is contacted.
+    #[tokio::test]
+    async fn a_local_instance_that_does_not_exist_fails_closed() {
+        let state = test_state();
+        // "default" is reserved by `AppInstance::named`, so it never resolves.
+        let id = local_connection(&state, None, Some("default"));
+        let mut events = state.event_bus.subscribe();
+
+        let err = connect(&state, &id).await.unwrap_err();
+
+        assert!(err.contains("Local instance \"default\""), "{err}");
+        assert_eq!(
+            drain_statuses(&mut events).first().map(String::as_str),
+            Some("connecting")
+        );
+        assert_eq!(state.remote.status_of(&id), RemoteStatus::Error);
+        assert!(state.remote.base_url(&id).is_none());
+        assert!(state.tunnel_manager.list().is_empty());
+        teardown(&state, &id);
+    }
+
+    #[test]
+    fn local_base_url_prefers_a_real_instance_id_and_rejects_nothing_to_resolve() {
+        assert_eq!(
+            resolve_local_base_url(Some(9877), None).unwrap(),
+            "http://127.0.0.1:9877"
+        );
+        // Whitespace-only id is absent, so the port is used.
+        assert_eq!(
+            resolve_local_base_url(Some(9878), Some("  ")).unwrap(),
+            "http://127.0.0.1:9878"
+        );
+        assert!(resolve_local_base_url(None, None).is_err());
+        assert!(resolve_local_base_url(Some(0), None).is_err());
+        assert!(resolve_local_base_url(Some(9877), Some("default")).is_err());
     }
 
     #[tokio::test]
@@ -4120,7 +5103,7 @@ mod tests {
         let mut connection = RemoteConnection::new_ssh("vps", "host", "boss");
         connection.deploy = DeployMode::OnConnect;
         let profile = delete_stop_profile(&connection).expect("ephemeral daemon");
-        assert_eq!(profile.host, "host");
+        assert_eq!(profile.ssh.host, "host");
 
         connection.deploy = DeployMode::Installed;
         assert!(delete_stop_profile(&connection).is_none());
@@ -4143,8 +5126,16 @@ mod tests {
         let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
         let cache = dir.path().join(".cache/tuic");
         std::fs::create_dir_all(&cache).unwrap();
-        let mut daemon = tokio::process::Command::new("sh")
-            .args(["-c", "exec sleep 120"])
+        // The stop command PID-verifies its target, so the stand-in daemon must
+        // be named `tuic-remote`.
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .expect("a sleep binary");
+        let fake_daemon = dir.path().join("tuic-remote");
+        std::fs::copy(sleep, &fake_daemon).unwrap();
+        let mut daemon = tokio::process::Command::new(&fake_daemon)
+            .arg("120")
             .kill_on_drop(true)
             .spawn()
             .unwrap();
@@ -4160,7 +5151,7 @@ mod tests {
         let ssh = crate::test_support::fake_ssh_script("removed_record_stop", &script, "exit /b 0");
         let profile =
             delete_stop_profile(&connection).expect("retained record owns ephemeral SSH authority");
-        crate::remote_deploy::stop_ephemeral_with_binary(&profile, &ssh)
+        crate::remote_deploy::stop_ephemeral_with_binary(&profile, None, &ssh)
             .await
             .unwrap();
         let status = tokio::time::timeout(std::time::Duration::from_secs(15), daemon.wait())
@@ -4605,6 +5596,7 @@ mod tests {
                 retry_after_secs: None,
                 step: None,
                 relay_failure: None,
+                provision_offer: None,
             });
             assert_eq!(payload["id"], "abc");
             assert!(payload.get("status").is_some());

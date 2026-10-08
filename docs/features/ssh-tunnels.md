@@ -13,7 +13,7 @@ TunnelManager
 
 The **TunnelManager** orchestrates multiple **TunnelSupervisor** instances, one per active tunnel profile. Each supervisor owns an SSH child process and runs a supervision loop:
 
-1. Validate the profile (fields, port ranges, duplicate bind ports)
+1. Validate the profile (fields, port ranges, duplicate bind ports). Host and user (`SshConnectionParams::validate`, shared with Remote Server — SSH connections) must not start with `-`, contain `@`, whitespace or control characters; the user must not contain `:`, and the host may contain `:` only as a bare IPv6 address (`2001:db8::1`, `fe80::1%en0` — scp gets it bracketed). This keeps the displayed `user@host` and scp's `host:path` unambiguous
 2. Check local port availability for all `-L` forwards
 3. Spawn `ssh` with constructed arguments (including agent forwarding if `SSH_AUTH_SOCK` is found)
 4. Require SSH to survive 500 ms and wait up to 30 seconds for every local `-L` forward to accept TCP connections; classify an SSH exit immediately
@@ -43,11 +43,17 @@ Profiles are TOML files with this structure:
 ```toml
 id = "550e8400-e29b-41d4-a716-446655440000"
 name = "prod-db-tunnel"
+auto_connect = true
+
+[ssh]
 host = "bastion.example.com"
 port = 2222
 user = "deploy"
 identity_file = "/home/deploy/.ssh/id_ed25519"
-auto_connect = true
+server_alive_interval = 15
+server_alive_count_max = 3
+strict_host_key_checking = "Yes"
+compression = true
 
 [[forwards]]
 type = "Local"
@@ -60,12 +66,15 @@ type = "Remote"
 bind_port = 9090
 local_host = "127.0.0.1"
 local_port = 9090
-
-[options]
-server_alive_interval = 15
-server_alive_count_max = 3
-strict_host_key_checking = "Yes"
 ```
+
+`[ssh]` is `SshConnectionParams` (`src-tauri/src/ssh_connection.rs`), the same
+struct a remote connection's SSH transport carries. Profiles written by older
+builds kept `host`/`port`/`user`/`identity_file` at the top level and the rest in
+`[options]`; they still load, and global profiles are rewritten to `[ssh]` once at
+startup with the original kept as `<id>.toml.pre-nested-ssh-<UTC>.bak`
+(per-repo profiles are read in either shape but not rewritten). See
+`docs/backend/config.md`.
 
 ### Storage Scopes
 
@@ -159,40 +168,49 @@ Indexed on `tunnel_id` and `timestamp`.
 
 ## UI Components
 
-### TunnelsPanel
+Create/edit lives in **Settings → Remote Servers** (story: SSH Tunnels + Remote Servers consolidation) — the standalone `TunnelsPanel` overlay is status/control-only now (Start/Stop/Log/Del + an "Edit in Settings" link); it no longer has its own "+ New Tunnel" entry point or per-row Edit button.
 
-Main panel listing all tunnel profiles with:
+### TunnelProfileList
+
+Extracted from `TunnelsPanel.tsx` so it renders identically in two places: the `TunnelsPanel` overlay (no `onEdit` — Settings owns editing) and the "SSH Tunnel" kind section of Settings → Remote Servers (`onEdit` opens the merged editor pre-filled). Lists all tunnel profiles with:
 - Profile name and host
 - TunnelStatusBadge showing current state
 - Start/Stop toggle button
-- Edit button opening TunnelEditorModal
+- Optional Edit button (Settings context only)
+- Log (inline audit-event timeline) and Del
 
-### TunnelEditorModal
+### RemoteConnectionEditor (the merged connection editor)
 
-Form for creating and editing profiles:
-- Name, host, port, user, identity file fields
-- Port forwards list with add/remove and type-aware endpoint fields: Local forwards save `remote_host`/`remote_port`, Remote forwards save `local_host`/`local_port`
-- Options section (keepalive, host key checking)
+One form — Name + a Kind dropdown (SSH Tunnel / Remote Server — SSH / Remote Server — Direct / Remote Server — Local) — used for both tunnel profiles and remote-server connections. For Kind "SSH Tunnel":
+- Name, then the shared `SshConnectionFields` component (host with `~/.ssh/config` autocomplete, port, user, identity file with Browse, live agent detection including each key's fingerprint, ServerAliveInterval, ServerAliveCountMax, StrictHostKeyChecking — fixed to AcceptNew with a hint for a Remote Server kind, whose runtime always uses it — and the compression toggle; Browse is desktop-only)
+- `PortForwardsEditor` (extracted from the old `TunnelEditorModal`): add/remove and type-aware endpoint fields — Local forwards save `remote_host`/`remote_port`, Remote forwards save `local_host`/`local_port`
+- "Connect automatically on startup" checkbox
+- A Test Connection button (one-shot SSH connectivity check, no forwards, before Save)
 - Validation errors shown inline
 
-### TunnelStatusBadge
+`SshConnectionFields` and `PortForwardsEditor` are also used by `TunnelEditorModal.tsx`, which still exists and is still fully tested, but nothing in the live app opens it anymore — Settings owns tunnel editing end to end now.
 
-Color-coded status indicator:
+### TunnelStatusBadge / ConnectionStatusBadge
+
+`TunnelStatusBadge` is now a thin wrapper around a shared `ConnectionStatusBadge` presentation component (also used by the Remote Servers connection list, which has its own disconnected/connecting/deploying/connected/unauthenticated/error vocabulary) — one status-dot-plus-label implementation instead of two independently-drifting copies. Color-coded status indicator:
 - Green: Connected
 - Blue (pulsing): Starting
 - Orange: Reconnecting (shows attempt number)
 - Red: Error
 - Grey: Stopped
 
-## Integration with Remote Connection Manager
+## Integration with Remote Servers
 
-When creating an SSH remote connection (`RemoteConnection` with `RemoteTransport::Ssh`), a tunnel profile is automatically created to forward the daemon port. The tunnel supervisor manages the SSH connection, and the remote connection routes API calls through the forwarded port.
+When a "Remote Server — SSH" connection (`RemoteConnection` with `RemoteTransport::Ssh`) connects, the runtime creates a tunnel profile from the connection's own SSH settings (StrictHostKeyChecking forced to accept-new) to forward the daemon port. The tunnel supervisor manages the SSH connection, and the remote connection routes API calls through the forwarded port.
+
+A failed connect can carry a confirmed provisioning offer (`provision_offer`, built in `remote_runtime.rs`, executed by `ssh_provision.rs` only after the user accepts the exact plan — see [Remote Access](../user-guide/remote-access.md)). The **Set remote password** offer appears only for a daemon with no credentials configured at all, never for a wrong password. That distinction does not rely on the 401 body alone: `mcp_http/auth.rs`'s `validate_basic_auth` returns the same "Scan the QR code…" body for `AuthResult::NotConfigured` and `AuthResult::MissingHeader`, so an unauthenticated request could not tell "no password set" from "a password is set, none was sent". `remote_connection::request_session_token` therefore ALWAYS sends a Basic header, and `validate_basic_auth` checks for an empty configured username/hash before it looks at the header — so on this path the body can only be `NotConfigured`'s ("Scan the QR code…" → `REMOTE_PASSWORD_NOT_CONFIGURED`) or `Invalid`'s ("Invalid credentials" → a plain rejection); `MissingHeader` is unreachable. `remote_runtime::password_offer` acts only on `REMOTE_PASSWORD_NOT_CONFIGURED`.
 
 ## Module Map
 
 | Module | Responsibility |
 |--------|---------------|
-| `tunnels/profile.rs` | Data model: TunnelProfile, ForwardSpec, ProfileOptions |
+| `tunnels/profile.rs` | Data model: TunnelProfile, ForwardSpec; legacy flat-shape reader + `migrate_legacy_toml` |
+| `ssh_connection.rs` | `SshConnectionParams` (shared with remote connections), boot-time shape migration |
 | `tunnels/command.rs` | Build SSH command-line arguments from a profile |
 | `tunnels/classifier.rs` | Classify SSH exit reasons from stderr/exit code |
 | `tunnels/agent.rs` | Discover SSH_AUTH_SOCK for agent forwarding |
@@ -204,6 +222,7 @@ When creating an SSH remote connection (`RemoteConnection` with `RemoteTransport
 | `tunnels/manager.rs` | Orchestrate multiple supervisors |
 | `tunnels/tauri_commands.rs` | Tauri IPC command handlers (desktop) |
 | `tunnels/commands.rs` | HTTP command handlers (browser mode) |
+| `ssh_provision.rs` | Confirmed remote-daemon provisioning for Remote Server — SSH: start plan / set-password plan, digest-bound execution, PID-verified stop on disconnect (runs over `tunnels::exec`) |
 
 ## Auto-Connect
 

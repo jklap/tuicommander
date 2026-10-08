@@ -301,21 +301,27 @@ Hold Send with a finger or mouse, then select **Queue** to hold your current age
 
 ## SSH Tunnel Management
 
-TUICommander can manage persistent SSH tunnels with automatic reconnection, port forwarding, and audit logging.
+TUICommander can manage persistent SSH tunnels with automatic reconnection, port forwarding, and audit logging. A tunnel **profile** is a standalone, reusable SSH forward you set up yourself; it is a separate thing from the tunnel a [remote connection](#remote-connection-manager) opens for itself on Connect. Tunnels are no longer behind the Experimental Features flag.
+
+### Where to create and edit tunnels
+
+**Settings (`Cmd+,`) → Remote Servers.** That page owns tunnel create, edit and delete through the same merged editor remote connections use — pick **Kind: SSH Tunnel**. Its **SSH Port-Forwarding Tunnels** section lists every profile with Start/Stop, Edit, Log and Del. The **Tunnels Panel** overlay (Command Palette → "tunnels", or the sidebar shield icon) is for live status, start/stop and the audit log only; its **Edit in Settings** link closes it and opens the Remote Servers page.
 
 ### Creating a Tunnel Profile
 
-1. Turn on **Experimental Features** in **Settings** → **General**, then open the **SSH Tunnels** panel (command palette → "SSH Tunnels")
-2. Click **+ New Tunnel** to open the editor
+1. Open **Settings → Remote Servers** and click **Add Connection**
+2. Leave **Kind** on **SSH Tunnel** (the default)
 3. Configure:
    - **Name** — A descriptive label (e.g., "prod-db-tunnel")
-   - **Host** — Remote SSH host
+   - **Host** — Remote SSH host; autocompletes from the host aliases in your `~/.ssh/config`
    - **Port** — SSH port (default 22)
    - **User** — SSH username
-   - **Identity File** — Optional path to SSH private key (use the Browse button to select)
-   - **Port Forwards** — Local or remote port forwarding rules (e.g., local 8080 → remote 80). Local forwards target `remote_host`/`remote_port`; Remote forwards target `local_host`/`local_port`. The remote host is pre-populated from the tunnel host when adding a Local forward
-   - **Options** — ServerAliveInterval (default 15s), ServerAliveCountMax (default 3), StrictHostKeyChecking (Yes or AcceptNew), Compression (default on)
-4. Save the profile
+   - **Identity / Authentication** — Optional path to an SSH private key; leave empty to use your SSH agent. On the desktop app **Browse…** opens a file picker at `~/.ssh`. The detected agent and its loaded keys, with each key's fingerprint, show underneath (see [SSH Agent Detection](#ssh-agent-detection))
+   - **Port Forwards** — click **+ Add** per rule, choose **Local** or **Remote**, and fill in the bind port and the paired host:port. Local forwards target `remote_host`/`remote_port`; Remote forwards target `local_host`/`local_port`. A new Local forward's remote host defaults to the tunnel's Host
+   - **ServerAliveInterval** (default 15s), **ServerAliveCountMax** (default 3), **StrictHostKeyChecking** (`Yes` or `AcceptNew`) and **Compress the channel (ssh -C)** (default on)
+   - **Connect automatically on startup** (persisted as `auto_connect`)
+4. Optionally click **Test Connection** — a one-shot, no-forwards SSH check that reports reachable, authentication failed or unreachable before you save
+5. Save
 
 **Compression** is `ssh -C` on the tunnel channel, and it is on by default because
 a tunnel usually carries a terminal stream, which deflates to a few percent of
@@ -329,18 +335,16 @@ A tunnel shows **Connected** only after SSH survives its initial 500 ms. With lo
 
 ### Auto-Connect
 
-Enable **Auto-Connect** on a tunnel profile to have it start automatically when TUICommander launches. Useful for tunnels you always need (database access, internal services).
+Enable **Connect automatically on startup** on a tunnel profile to have it start automatically when TUICommander launches. Useful for tunnels you always need (database access, internal services). Profiles marked with auto-connect are started during app hydration before you interact with the UI.
 
-Toggle auto-connect in the tunnel editor — profiles marked with auto-connect are started during app hydration before you interact with the UI.
+### Sidebar Shield Indicator
 
-### Statusbar Indicator
+The sidebar footer (next to the Help button) shows a shield icon once at least one tunnel profile exists:
 
-The status bar shows a shield icon for SSH tunnels:
+- **Muted icon, no badge** — you have tunnel profiles configured but none are currently connected
+- **Accent-colored icon with a count badge** — the number of connected tunnels
 
-- **Grey shield** — You have tunnel profiles configured but none are currently connected
-- **Green shield with badge** — Shows the number of active tunnel connections
-
-Click the shield to open the Tunnels Panel.
+Click it to open the Tunnels Panel.
 
 ### Command Palette
 
@@ -348,21 +352,22 @@ Open the command palette (`Cmd+P` / `Ctrl+P`) and type "tunnels" to toggle the T
 
 ### Starting and Stopping Tunnels
 
-- In the **Tunnels Panel**, click the **Start** button next to a profile to launch the SSH tunnel
-- The **TunnelStatusBadge** shows the current state: Starting, Connected, Reconnecting, Stopped, or Error
+- In the **Tunnels Panel** (or the SSH Port-Forwarding Tunnels list on Settings → Remote Servers), click **Start** next to a profile to launch the SSH tunnel
+- The status badge next to it shows the current state: Starting, Connected, Reconnecting, Stopped, or Error
+- **Edit** (Settings only) reopens the merged editor on that profile; **Log** expands the last 20 audit events; **Del** removes the profile
 - Click **Stop** to gracefully terminate the SSH process (SIGTERM with 5s grace period, then SIGKILL)
 - On app exit, all active tunnels are automatically stopped — no orphaned SSH processes
 
 ### SSH Agent Detection
 
-TUICommander automatically detects your SSH agent and shows the agent type and loaded keys in the tunnel editor. Supported agents:
+TUICommander detects your SSH agent from `SSH_AUTH_SOCK` and shows the agent type and loaded keys inside the shared SSH fields of the connection editor (both the SSH Tunnel and Remote Server — SSH kinds). Supported agents:
 
 - **1Password** — Detected via the 1Password SSH agent socket
 - **Secretive** — Detected via the Secretive agent socket
 - **GPG Agent** — Detected via gpg-agent socket
 - **Generic SSH Agent** — Any other `SSH_AUTH_SOCK` value
 
-The key listing shows fingerprint, comment, and key type for each loaded key, helping you verify that the correct identity is available before connecting.
+The key listing shows each loaded key's comment, key type and fingerprint (from `ssh-add -l`), so you can check the right identity is available before connecting.
 
 ### Automatic Reconnection
 
@@ -402,28 +407,55 @@ The supervisor classifies SSH process exits to determine whether retry is approp
 
 Remote connections let you manage `tuic-remote` daemons running on other machines. TUICommander routes API calls to the correct host based on which repo/session is active.
 
+They live on **Settings → Remote Servers** (the separate Remote Machines page merged into it; an old `remote-machines` deep link opens it). **Add Connection** opens the merged editor: a **Name** and a **Kind** — **SSH Tunnel** (a tunnel profile, see above), **Remote Server — SSH**, **Remote Server — Direct**, **Remote Server — Local** or **Remote Server — Relay**. Editing an existing item fixes its Kind; its Name stays editable. The page's **Remote Machines** section lists the connections, the SSH hosts discovered from your SSH config and `known_hosts` (click one to open the editor prefilled with it, or **Probe** it), and each row's Connect, Update, Install, Edit and Remove actions.
+
 ### Adding an SSH Connection
 
-1. Open **Settings** → **Remote Machines** and click **+**
-2. Select **SSH** transport
-3. Type a host or choose **Probe SSH hosts** to see the hosts from your SSH
-   config and whether each accepts a shell login
-4. Configure the port (default 22), user, and optional identity file
+1. Open **Settings** → **Remote Servers** and click **Add Connection** (or click a
+   discovered host under **Remote Machines** — **Probe config hosts** shows which
+   accept a shell login)
+2. Set **Kind** to **Remote Server — SSH**
+3. Configure the host, port (default 22), user and optional identity file — the
+   same SSH fields as a tunnel. **StrictHostKeyChecking** is fixed to
+   `AcceptNew` here: the tunnel TUICommander opens on your behalf always accepts a
+   new host's key on first contact and refuses a changed one
+4. Set the remote daemon port (default 9877)
 5. Choose **Never deploy**, **Deploy on connect**, or **Installed service**, and
    set how many minutes an ephemeral daemon should survive with no client
-6. Set the remote daemon port (default 9877)
-7. Set the auth username and password the daemon was configured with
-8. Save, then click **Connect**
+6. Optionally set an **Instance ID** — passed as `--instance <id>` whenever
+   TUICommander starts the remote daemon or sets its password (see
+   [Start a daemon or set its password, with confirmation](#start-a-daemon-or-set-its-password-with-confirmation)).
+   It is never used to discover a port; it must be a lowercase DNS label
+7. With **Never deploy**, optionally check **Offer to start the remote daemon if
+   it is not running**, and then **Leave it running on disconnect** if a daemon
+   TUICommander starts should outlive the connection
+8. Set the auth username and password the daemon was configured with
+9. Optionally click **Test Connection**, then Save, then click **Connect**
 
 For an installed service, Connect waits for the SSH forwarding port and retries the daemon health check during startup before reporting it unavailable.
 
 ### Adding a Direct Connection
 
-1. Open **Settings** → **Remote Machines** and click **+**
-2. Select **Direct** transport
+1. Open **Settings** → **Remote Servers** and click **Add Connection**
+2. Set **Kind** to **Remote Server — Direct**
 3. Enter the URL of the remote daemon (e.g., `http://10.0.0.5:9877`)
 4. Set the auth username and password
-5. Save — health polling begins immediately
+5. Optionally click **Test Connection**, then Save, then click **Connect**
+
+**Self-signed HTTPS.** An `https://` daemon whose certificate no authority your
+system trusts (typically its own self-signed one, see **Self-Signed HTTPS**
+above) is checked when you press **Connect**: a **Verify certificate** dialog
+shows its SHA-256 fingerprint. Compare it with the fingerprint the remote
+machine shows under **Settings → Remote Access → Self-Signed HTTPS**, then
+**Accept and connect** to pin it (trust on first use). From then on TUICommander
+talks to that daemon only through a local relay that accepts exactly the pinned
+certificate; if the certificate ever changes, Connect fails with
+"Certificate changed" instead of trusting the new one. After a legitimate
+certificate change, open the connection's editor and click **Forget pinned
+certificate** (changing the URL forgets it too); the next Connect asks again.
+Automatic reconnects never pin anything: an unpinned self-signed daemon stays in
+error until you confirm it. Test Connection does not use the pin and reports a
+self-signed target as unreachable.
 
 A URL that points back at the TUICommander you are configuring is refused with
 "this very TUICommander instance — a machine cannot mirror itself". The check
@@ -437,10 +469,35 @@ Use this when the remote machine accepts no inbound connection.
 1. On the remote machine run `tuic-remote --relay-pair <relay-url> --relay-register`, or set `TUIC_RELAY_TOKEN` instead of `--relay-register`. Add `--relay-out <file>` to write the bundle to a private file.
 2. Restart `tuic-remote` so it registers with the relay.
 3. Copy the printed `tuic-pair-v1:` bundle to this machine over a trusted channel. It holds the end-to-end secret.
-4. Open **Settings** → **Remote Machines**, click **+**, and select **Relay**.
+4. Open **Settings** → **Remote Servers**, click **Add Connection**, and select the Kind **Remote Server — Relay**.
 5. Paste the bundle and save, then click **Connect**.
 
 If the status shows `pairing_rejected`, the daemon was paired again: import the new bundle. `daemon_offline` means the daemon is not connected to the relay. After `link_lost` or `relay_unreachable` TUICommander reconnects by itself. Running `--relay-pair` again replaces the pairing.
+
+### Adding a Local Connection
+
+**Remote Server — Local** points at another TUICommander instance on the same
+machine (`tuic-remote --instance <id>` or `TUIC_APP_INSTANCE=<id>`): either a
+**Named instance** (its port is read from that instance's own config when used,
+never cached) or a **Manual port** for an unnamed one. **Connect** reaches it
+at `http://127.0.0.1:<port>` and authenticates exactly like any other
+connection: set the auth username and password the other instance expects —
+being on the same machine is not treated as a credential, and a rejected or
+missing password leaves it **unauthenticated**. A named instance that cannot be
+found (never started, typo) fails Connect without contacting anything. Pointing
+it at the instance you are configuring is refused like a Direct self-connection.
+Before any password is sent (Connect and Test Connection), the process on that
+port must prove it is a TUICommander instance of your user — and, for a Named
+instance, that instance: its `/health` must name an IPC socket in the place that
+instance keeps one, owned by you, and that socket must report the same instance
+id. A port taken over by another program (a stale port after a restart, or a
+squatter) fails with "could not be verified … nothing was sent to it". (Not
+checked on Windows; a local relay that forwards the real instance's `/health`
+verbatim is not detected.)
+**Update & restart** is not offered for a Local connection's binary: update
+that install directly. When the other instance runs a different version than this
+app, the row shows **Remote out of date** with a "Version mismatch" notice naming
+both versions.
 
 ### Connect or Install
 
@@ -464,6 +521,48 @@ path also uses `tuic-remote.pid`; deleting an on-connect machine sends a
 best-effort stop, while deleting an installed connection deliberately leaves its
 service alone. The daemon is launched with `--no-agent-configs`, so deploying it
 does not rewrite the host's Claude, Codex, or other agent configuration.
+
+### Start a daemon or set its password, with confirmation
+
+Two situations get an **offer** on the connection's row instead of a bare error.
+Nothing on the remote host changes until you accept the exact plan.
+
+- **Start remote daemon…** — a **Never deploy** connection with **Offer to start
+  the remote daemon if it is not running** found nothing answering on its daemon
+  port.
+- **Set remote password…** — the daemon answered, but it has **no password
+  configured at all** (never a wrong one: a wrong password stays a plain
+  "rejected credentials" error), and this connection has an auth username and a
+  saved password.
+
+Either button opens a confirmation listing the destination (`user@host:port`)
+and every command that will run there, in order, exactly as it will be sent.
+**Accept and run** runs it; Cancel, Escape or a click outside runs nothing. If
+the connection is edited between the dialog and the accept, the plan is refused
+and must be reviewed again.
+
+Starting uses the same path as **Deploy on connect**: the release asset pinned to
+this app's version, checked against its published SHA-256 (512 MiB limit, 300 s
+timeout; Windows hosts are refused), copied only when the installed binary's
+hash differs, and launched on `127.0.0.1` with a pairing token read from stdin.
+With an **Instance ID** the daemon is launched as `--instance <id>` and keeps its
+own `~/.cache/tuic/tuic-remote-<id>.pid` and `.log`. After starting, the
+connection connects.
+
+Setting the password runs `tuic-remote [--instance <id>] --set-password-if-unset`
+over the same SSH connection, with the saved username and password on stdin —
+never in a command line, a log or a response. The daemon itself refuses when it
+already has credentials, so an existing password is never overwritten; a saved
+password with a line break or leading/trailing whitespace is refused rather than
+altered. A running daemon reads its password at startup: restart it afterwards.
+A daemon too old to know `--set-password-if-unset` refuses too, and nothing
+changes.
+
+**Disconnect** stops a daemon TUICommander started this way in this run, unless
+**Leave it running on disconnect** is checked. The stop is PID-file verified: the
+file must name a process that `ps` reports as `tuic-remote`, otherwise nothing is
+signalled — a stale PID is never killed and nothing is stopped by name. A daemon
+somebody else started is never touched.
 
 ### Update and restart a remote machine
 
@@ -525,7 +624,13 @@ A connection without credentials therefore reaches `/health` and nothing else.
 The password is kept in the OS credential vault, keyed by the connection's UUID.
 `connections.json` holds the username only, and neither the vault entry nor the
 daemon's token ever appears in `GET /config`. Deleting a connection deletes its
-vault entry with it.
+vault entries with it — the password and, for a deployed daemon, the pairing
+token — over the desktop app and over HTTP alike.
+
+The username is optional: a LAN desktop with `lan_auth_bypass`, or a daemon
+TUICommander deployed (pairing token), needs none. If you store a password but
+leave the username blank, the daemon refuses the login — it never signs you in
+as "any user".
 
 For a manually managed daemon, TUICommander trades the password for the daemon's
 session token over `GET /api/auth/session-token` (Basic Auth). For Connect and
@@ -591,7 +696,15 @@ Once a remote connection is configured:
 - **Open terminal** — Terminals on remote repos connect via WebSocket to the remote daemon. A failed launch displays its error in the terminal pane; a failed stream connection, a missing initial frame after 15 seconds, or an unreadable compressed frame shows a persistent error toast. The client retries the stream and replays the current viewport on reconnect; the toast remains until dismissed. An idle terminal whose viewport or explicit empty replay has arrived is not treated as stalled
 - **Health monitoring** — Connection health is polled periodically. Disconnected connections show a warning badge in the sidebar
 
-Connections are stored in `<config_dir>/connections.json` with SSH and Direct transport types.
+Connections are stored in `<config_dir>/connections.json` with SSH, Direct and
+Local transport types. An SSH connection keeps its SSH settings (host, port,
+user, identity file, keepalive, host-key policy, compression) in the same nested
+`ssh` block a tunnel profile uses. A `connections.json` or tunnel profile written
+by an older build is upgraded once at startup; the original is kept beside it as
+`<file>.pre-nested-ssh-<timestamp>.bak` (restore it if you go back to an older
+build, which cannot read the new shape). **Local** — another TUICommander
+instance on this same machine, by port or by instance id — connects over
+loopback HTTP with the usual authentication.
 
 #### Remote agent notices
 
@@ -741,6 +854,10 @@ subsequent launch:
 ./tuic-remote --instance build-host --set-password
 ./tuic-remote --instance build-host
 ```
+
+`--set-password-if-unset` reads the same two lines but refuses — before reading
+anything, and again before writing — when the instance already has a username or
+password. It is the mode TUICommander's **Set remote password…** uses.
 
 An instance ID is one lowercase ASCII DNS label: 1–63 characters, letters or
 digits at both ends, with hyphens allowed internally. `default` is reserved;

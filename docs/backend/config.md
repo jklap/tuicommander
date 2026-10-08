@@ -207,6 +207,43 @@ Remote pairing tokens use the credential vault key
 `remote/connection/<uuid>/pairing-token`; they never live in either directory or
 in `connections.json`.
 Each connection stores `auto_update` there. Missing values default to `false`.
+A Direct transport may carry `tls_fingerprint` (SHA-256 hex of a self-signed
+certificate the user pinned; `direct_proxy.rs`). It is additive: absent means
+unpinned, it is written only when set (an unpinned connection keeps the exact
+older shape), older builds ignore it, and no migration is involved. A save
+rejects a value that is not 64 hex digits or that sits on an `http://` URL.
+An SSH transport may carry `start_if_not_running`, `leave_running_on_disconnect`
+(booleans) and `instance_id` (a lowercase DNS label, validated on save) for
+confirmed daemon provisioning (`ssh_provision.rs`). Same contract: additive,
+written only when set, defaulted when absent, no migration.
+
+**Nested SSH shape and its one-time migration.** An SSH connection in
+`connections.json` and every `tunnels/*.toml` profile keep their SSH settings in
+one nested `ssh` object/table (`SshConnectionParams`: `host`, `port`, `user`,
+`identity_file`, `server_alive_interval`, `server_alive_count_max`,
+`strict_host_key_checking`, `compression`). Older builds wrote them flat. Both
+readers accept either shape; at boot (`ssh_connection::legacy::migrate_persisted_shapes`,
+desktop and `tuic-remote` alike) a flat file is rewritten once:
+
+| Old (flat) | New (nested) |
+|------------|--------------|
+| `connections.json` transport `ssh_host` / `ssh_port` / `ssh_user` / `identity_file` | `transport.ssh.host` / `.port` / `.user` / `.identity_file` |
+| (not stored) | `transport.ssh.server_alive_interval = 15`, `server_alive_count_max = 3`, `strict_host_key_checking = "AcceptNew"`, `compression = true` — what the runtime always ran an SSH connection with |
+| `tunnels/<id>.toml` top-level `host` / `port` / `user` / `identity_file` | `[ssh] host` / `port` / `user` / `identity_file` |
+| `tunnels/<id>.toml` `[options]` (every key) | `[ssh]` (`compression = true` if it was absent) |
+
+Keys are moved on the untyped document, so every other field (`auth_username`,
+`deploy`, `survive_secs`, `auto_update`, `enabled`, `forwards`, `auto_connect`,
+unknown keys) is untouched; secrets were never in these files, so vault entries
+(passwords, pairing tokens) are not involved. The original bytes are kept next
+to the file as `<file>.pre-nested-ssh-<UTC timestamp>.bak` before an atomic
+(temp + fsync + rename) replace; `connections.json` is rewritten under the same
+in-process and cross-process locks as its other writers. A rewrite that would
+not load is skipped and logged, and the file keeps being read in its old shape.
+An already-nested file is never touched, so the step is idempotent. Per-repo
+`<repo>/.tuic/tunnels/*.toml` profiles are read in either shape but not
+rewritten (they live in the user's repository). Builds older than this change
+cannot read a migrated file; restore the `.bak` to downgrade.
 
 ## Core Functions
 

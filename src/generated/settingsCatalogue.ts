@@ -5232,15 +5232,21 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 9,
+      "order": 18,
       "path": "/connections/{id}/auth_username",
       "labelKey": "settings.catalogue.connections.connections.{id}.auth_username.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.auth_username.help",
       "label": "auth username",
       "schema": {
-        "type": "string"
+        "description": "The Basic Auth username, optional: a desktop TUICommander on the LAN\nwith `lan_auth_bypass`, or a deployed daemon reached by pairing token,\nneeds none. When a password IS stored and this is absent, the token\nexchange sends an empty username, which every daemon rejects — so a\nmissing username fails closed rather than authenticating as anybody.\nThe password half lives in the vault, never here\n(`Credential::RemoteConnection`).",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       },
-      "nullable": false,
+      "nullable": true,
+      "default": null,
       "availability": {
         "status": "available"
       },
@@ -5250,7 +5256,8 @@ export const settingsCatalogue = {
       "effect": "Updates auth username for the current owner.",
       "operations": [
         "get",
-        "set"
+        "set",
+        "reset"
       ],
       "confirmationClass": "ordinary"
     },
@@ -5260,7 +5267,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 11,
+      "order": 20,
       "path": "/connections/{id}/auto_update",
       "labelKey": "settings.catalogue.connections.connections.{id}.auto_update.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.auto_update.help",
@@ -5291,7 +5298,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 12,
+      "order": 21,
       "path": "/connections/{id}/deploy",
       "labelKey": "settings.catalogue.connections.connections.{id}.deploy.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.deploy.help",
@@ -5334,7 +5341,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 10,
+      "order": 19,
       "path": "/connections/{id}/enabled",
       "labelKey": "settings.catalogue.connections.connections.{id}.enabled.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.enabled.help",
@@ -5417,7 +5424,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 13,
+      "order": 22,
       "path": "/connections/{id}/survive_secs",
       "labelKey": "settings.catalogue.connections.connections.{id}.survive_secs.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.survive_secs.help",
@@ -5444,18 +5451,19 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.connections.{id}.transport.identity_file": {
-      "id": "connections.connections.{id}.transport.identity_file",
+    "connections.connections.{id}.transport.instance_id": {
+      "id": "connections.connections.{id}.transport.instance_id",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 5,
-      "path": "/connections/{id}/transport/identity_file",
-      "labelKey": "settings.catalogue.connections.connections.{id}.transport.identity_file.label",
-      "helpKey": "settings.catalogue.connections.connections.{id}.transport.identity_file.help",
-      "label": "identity file",
+      "order": 13,
+      "path": "/connections/{id}/transport/instance_id",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.instance_id.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.instance_id.help",
+      "label": "instance id",
       "schema": {
+        "description": "TUICommander instance id (a lowercase DNS label) this connection targets.",
         "type": [
           "string",
           "null"
@@ -5467,9 +5475,74 @@ export const settingsCatalogue = {
         "status": "available"
       },
       "choices": null,
-      "sensitivity": "private",
+      "sensitivity": "public",
       "apply": "live",
-      "effect": "Updates identity file for the current owner.",
+      "effect": "Updates instance id for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "execution_authority"
+    },
+    "connections.connections.{id}.transport.leave_running_on_disconnect": {
+      "id": "connections.connections.{id}.transport.leave_running_on_disconnect",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 12,
+      "path": "/connections/{id}/transport/leave_running_on_disconnect",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.leave_running_on_disconnect.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.leave_running_on_disconnect.help",
+      "label": "leave running on disconnect",
+      "schema": {
+        "description": "Keep a daemon started through that offer running on Disconnect.\nWhen false, Disconnect stops it again — PID-file verified, and only\na daemon this app started in this run.",
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates leave running on disconnect for the current owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "connections.connections.{id}.transport.port": {
+      "id": "connections.connections.{id}.transport.port",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 17,
+      "path": "/connections/{id}/transport/port",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.port.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.port.help",
+      "label": "port",
+      "schema": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint16",
+        "minimum": 0,
+        "maximum": 65535
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates port for the current owner.",
       "operations": [
         "get",
         "set",
@@ -5483,7 +5556,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 6,
+      "order": 10,
       "path": "/connections/{id}/transport/remote_daemon_port",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.remote_daemon_port.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.remote_daemon_port.help",
@@ -5508,17 +5581,49 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.connections.{id}.transport.ssh_host": {
-      "id": "connections.connections.{id}.transport.ssh_host",
+    "connections.connections.{id}.transport.ssh.compression": {
+      "id": "connections.connections.{id}.transport.ssh.compression",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 9,
+      "path": "/connections/{id}/transport/ssh/compression",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh.compression.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.compression.help",
+      "label": "compression",
+      "schema": {
+        "description": "`ssh -C`. On by default, and the reason the WebSocket layer refuses to\ndeflate a loopback peer: a tunnelled client reaches this machine through\nthe local ssh process, so its address is loopback and its link is\nalready compressed here. Turn it off for a link that is fast and a CPU\nthat is not — a tunnel to another machine on the same LAN.",
+        "type": "boolean",
+        "default": true
+      },
+      "nullable": false,
+      "default": true,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates compression for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "connections.connections.{id}.transport.ssh.host": {
+      "id": "connections.connections.{id}.transport.ssh.host",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
       "group": "connections",
       "order": 2,
-      "path": "/connections/{id}/transport/ssh_host",
-      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh_host.label",
-      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh_host.help",
-      "label": "ssh host",
+      "path": "/connections/{id}/transport/ssh/host",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh.host.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.host.help",
+      "label": "host",
       "schema": {
         "type": "string"
       },
@@ -5529,24 +5634,57 @@ export const settingsCatalogue = {
       "choices": null,
       "sensitivity": "private",
       "apply": "live",
-      "effect": "Updates ssh host for the current owner.",
+      "effect": "Updates host for the current owner.",
       "operations": [
         "get",
         "set"
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.connections.{id}.transport.ssh_port": {
-      "id": "connections.connections.{id}.transport.ssh_port",
+    "connections.connections.{id}.transport.ssh.identity_file": {
+      "id": "connections.connections.{id}.transport.ssh.identity_file",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 5,
+      "path": "/connections/{id}/transport/ssh/identity_file",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh.identity_file.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.identity_file.help",
+      "label": "identity file",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates identity file for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "connections.connections.{id}.transport.ssh.port": {
+      "id": "connections.connections.{id}.transport.ssh.port",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
       "group": "connections",
       "order": 3,
-      "path": "/connections/{id}/transport/ssh_port",
-      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh_port.label",
-      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh_port.help",
-      "label": "ssh port",
+      "path": "/connections/{id}/transport/ssh/port",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh.port.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.port.help",
+      "label": "port",
       "schema": {
         "type": "integer",
         "format": "uint16",
@@ -5560,24 +5698,124 @@ export const settingsCatalogue = {
       "choices": null,
       "sensitivity": "public",
       "apply": "live",
-      "effect": "Updates ssh port for the current owner.",
+      "effect": "Updates port for the current owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "execution_authority"
+    },
+    "connections.connections.{id}.transport.ssh.server_alive_count_max": {
+      "id": "connections.connections.{id}.transport.ssh.server_alive_count_max",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 7,
+      "path": "/connections/{id}/transport/ssh/server_alive_count_max",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh.server_alive_count_max.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.server_alive_count_max.help",
+      "label": "server alive count max",
+      "schema": {
+        "type": "integer",
+        "format": "uint16",
+        "minimum": 0,
+        "maximum": 65535
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates server alive count max for the current owner.",
       "operations": [
         "get",
         "set"
       ],
       "confirmationClass": "ordinary"
     },
-    "connections.connections.{id}.transport.ssh_user": {
-      "id": "connections.connections.{id}.transport.ssh_user",
+    "connections.connections.{id}.transport.ssh.server_alive_interval": {
+      "id": "connections.connections.{id}.transport.ssh.server_alive_interval",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 6,
+      "path": "/connections/{id}/transport/ssh/server_alive_interval",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh.server_alive_interval.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.server_alive_interval.help",
+      "label": "server alive interval",
+      "schema": {
+        "type": "integer",
+        "format": "uint16",
+        "minimum": 0,
+        "maximum": 65535
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates server alive interval for the current owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "connections.connections.{id}.transport.ssh.strict_host_key_checking": {
+      "id": "connections.connections.{id}.transport.ssh.strict_host_key_checking",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 8,
+      "path": "/connections/{id}/transport/ssh/strict_host_key_checking",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh.strict_host_key_checking.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.strict_host_key_checking.help",
+      "label": "strict host key checking",
+      "schema": {
+        "type": "string",
+        "enum": [
+          "Yes",
+          "AcceptNew"
+        ]
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": {
+        "kind": "static",
+        "values": [
+          "Yes",
+          "AcceptNew"
+        ]
+      },
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates strict host key checking for the current owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "connections.connections.{id}.transport.ssh.user": {
+      "id": "connections.connections.{id}.transport.ssh.user",
       "store": "connections",
       "owner": "machine",
       "area": "connections",
       "group": "connections",
       "order": 4,
-      "path": "/connections/{id}/transport/ssh_user",
-      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh_user.label",
-      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh_user.help",
-      "label": "ssh user",
+      "path": "/connections/{id}/transport/ssh/user",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.ssh.user.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.user.help",
+      "label": "user",
       "schema": {
         "type": "string"
       },
@@ -5588,12 +5826,75 @@ export const settingsCatalogue = {
       "choices": null,
       "sensitivity": "private",
       "apply": "live",
-      "effect": "Updates ssh user for the current owner.",
+      "effect": "Updates user for the current owner.",
       "operations": [
         "get",
         "set"
       ],
       "confirmationClass": "ordinary"
+    },
+    "connections.connections.{id}.transport.start_if_not_running": {
+      "id": "connections.connections.{id}.transport.start_if_not_running",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 11,
+      "path": "/connections/{id}/transport/start_if_not_running",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.start_if_not_running.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.start_if_not_running.help",
+      "label": "start if not running",
+      "schema": {
+        "description": "Offer to start `tuic-remote` on the remote host when a Connect finds\nnothing answering (`DeployMode::Never` only — the other modes deploy\nby themselves). Never acts on its own: the offer is published on the\nconnection's status and runs only after the user accepts the exact\nplan (`ssh_provision`), with `remote_deploy`'s pinned, checksummed\nbinary. Omitted from the file while off (as are the two fields\nbelow while unset), so a connection that never uses provisioning\nkeeps the exact shape older builds wrote.",
+        "type": "boolean"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates start if not running for the current owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "execution_authority"
+    },
+    "connections.connections.{id}.transport.tls_fingerprint": {
+      "id": "connections.connections.{id}.transport.tls_fingerprint",
+      "store": "connections",
+      "owner": "machine",
+      "area": "connections",
+      "group": "connections",
+      "order": 16,
+      "path": "/connections/{id}/transport/tls_fingerprint",
+      "labelKey": "settings.catalogue.connections.connections.{id}.transport.tls_fingerprint.label",
+      "helpKey": "settings.catalogue.connections.connections.{id}.transport.tls_fingerprint.help",
+      "label": "tls fingerprint",
+      "schema": {
+        "description": "SHA-256 fingerprint (lowercase hex) of a pinned self-signed/\nuntrusted certificate, set only after the user explicitly confirms\nit (`direct_proxy::probe_direct_tls` → `NeedsConfirmation`). When\nset, Connect talks to the daemon only through a relay that accepts\nexactly this certificate (`direct_proxy::DirectProxies`). `None` for\n`http://`, a CA-trusted `https://`, or a target not yet confirmed —\nand then an untrusted certificate fails Connect closed. Omitted from\nthe file when `None`, so an unpinned connection keeps the exact shape\nolder builds wrote (they ignore the key when present).",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates tls fingerprint for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "execution_authority"
     },
     "connections.connections.{id}.transport.type": {
       "id": "connections.connections.{id}.transport.type",
@@ -5601,7 +5902,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 7,
+      "order": 14,
       "path": "/connections/{id}/transport/type",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.type.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.type.help",
@@ -5611,7 +5912,8 @@ export const settingsCatalogue = {
         "enum": [
           "Ssh",
           "Direct",
-          "Relay"
+          "Relay",
+          "Local"
         ]
       },
       "nullable": false,
@@ -5623,7 +5925,8 @@ export const settingsCatalogue = {
         "values": [
           "Ssh",
           "Direct",
-          "Relay"
+          "Relay",
+          "Local"
         ]
       },
       "sensitivity": "public",
@@ -5641,7 +5944,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "connections",
       "group": "connections",
-      "order": 8,
+      "order": 15,
       "path": "/connections/{id}/transport/url",
       "labelKey": "settings.catalogue.connections.connections.{id}.transport.url.label",
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.url.help",
@@ -10974,7 +11277,7 @@ export const settingsCatalogue = {
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 6,
+      "order": 10,
       "path": "/profiles/{id}/forwards",
       "labelKey": "settings.catalogue.tunnels.profiles.{id}.forwards.label",
       "helpKey": "settings.catalogue.tunnels.profiles.{id}.forwards.help",
@@ -11060,34 +11363,6 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "execution_authority"
     },
-    "tunnels.profiles.{id}.host": {
-      "id": "tunnels.profiles.{id}.host",
-      "store": "tunnels",
-      "owner": "machine",
-      "area": "tunnels",
-      "group": "profiles",
-      "order": 2,
-      "path": "/profiles/{id}/host",
-      "labelKey": "settings.catalogue.tunnels.profiles.{id}.host.label",
-      "helpKey": "settings.catalogue.tunnels.profiles.{id}.host.help",
-      "label": "host",
-      "schema": {
-        "type": "string"
-      },
-      "nullable": false,
-      "availability": {
-        "status": "available"
-      },
-      "choices": null,
-      "sensitivity": "private",
-      "apply": "live",
-      "effect": "Updates host for the current owner.",
-      "operations": [
-        "get",
-        "set"
-      ],
-      "confirmationClass": "ordinary"
-    },
     "tunnels.profiles.{id}.id": {
       "id": "tunnels.profiles.{id}.id",
       "store": "tunnels",
@@ -11112,39 +11387,6 @@ export const settingsCatalogue = {
       "effect": "Updates id for the current owner.",
       "operations": [
         "get"
-      ],
-      "confirmationClass": "ordinary"
-    },
-    "tunnels.profiles.{id}.identity_file": {
-      "id": "tunnels.profiles.{id}.identity_file",
-      "store": "tunnels",
-      "owner": "machine",
-      "area": "tunnels",
-      "group": "profiles",
-      "order": 5,
-      "path": "/profiles/{id}/identity_file",
-      "labelKey": "settings.catalogue.tunnels.profiles.{id}.identity_file.label",
-      "helpKey": "settings.catalogue.tunnels.profiles.{id}.identity_file.help",
-      "label": "identity file",
-      "schema": {
-        "type": [
-          "string",
-          "null"
-        ]
-      },
-      "nullable": true,
-      "default": null,
-      "availability": {
-        "status": "available"
-      },
-      "choices": null,
-      "sensitivity": "private",
-      "apply": "live",
-      "effect": "Updates identity file for the current owner.",
-      "operations": [
-        "get",
-        "set",
-        "reset"
       ],
       "confirmationClass": "ordinary"
     },
@@ -11176,16 +11418,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.profiles.{id}.options.compression": {
-      "id": "tunnels.profiles.{id}.options.compression",
+    "tunnels.profiles.{id}.ssh.compression": {
+      "id": "tunnels.profiles.{id}.ssh.compression",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 10,
-      "path": "/profiles/{id}/options/compression",
-      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.compression.label",
-      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.compression.help",
+      "order": 9,
+      "path": "/profiles/{id}/ssh/compression",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.ssh.compression.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.compression.help",
       "label": "compression",
       "schema": {
         "description": "`ssh -C`. On by default, and the reason the WebSocket layer refuses to\ndeflate a loopback peer: a tunnelled client reaches this machine through\nthe local ssh process, so its address is loopback and its link is\nalready compressed here. Turn it off for a link that is fast and a CPU\nthat is not — a tunnel to another machine on the same LAN.",
@@ -11208,16 +11450,108 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.profiles.{id}.options.server_alive_count_max": {
-      "id": "tunnels.profiles.{id}.options.server_alive_count_max",
+    "tunnels.profiles.{id}.ssh.host": {
+      "id": "tunnels.profiles.{id}.ssh.host",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 8,
-      "path": "/profiles/{id}/options/server_alive_count_max",
-      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_count_max.label",
-      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_count_max.help",
+      "order": 2,
+      "path": "/profiles/{id}/ssh/host",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.ssh.host.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.host.help",
+      "label": "host",
+      "schema": {
+        "type": "string"
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates host for the current owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "tunnels.profiles.{id}.ssh.identity_file": {
+      "id": "tunnels.profiles.{id}.ssh.identity_file",
+      "store": "tunnels",
+      "owner": "machine",
+      "area": "tunnels",
+      "group": "profiles",
+      "order": 5,
+      "path": "/profiles/{id}/ssh/identity_file",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.ssh.identity_file.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.identity_file.help",
+      "label": "identity file",
+      "schema": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "private",
+      "apply": "live",
+      "effect": "Updates identity file for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
+    "tunnels.profiles.{id}.ssh.port": {
+      "id": "tunnels.profiles.{id}.ssh.port",
+      "store": "tunnels",
+      "owner": "machine",
+      "area": "tunnels",
+      "group": "profiles",
+      "order": 3,
+      "path": "/profiles/{id}/ssh/port",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.ssh.port.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.port.help",
+      "label": "port",
+      "schema": {
+        "type": "integer",
+        "format": "uint16",
+        "minimum": 0,
+        "maximum": 65535
+      },
+      "nullable": false,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates port for the current owner.",
+      "operations": [
+        "get",
+        "set"
+      ],
+      "confirmationClass": "execution_authority"
+    },
+    "tunnels.profiles.{id}.ssh.server_alive_count_max": {
+      "id": "tunnels.profiles.{id}.ssh.server_alive_count_max",
+      "store": "tunnels",
+      "owner": "machine",
+      "area": "tunnels",
+      "group": "profiles",
+      "order": 7,
+      "path": "/profiles/{id}/ssh/server_alive_count_max",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.ssh.server_alive_count_max.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.server_alive_count_max.help",
       "label": "server alive count max",
       "schema": {
         "type": "integer",
@@ -11239,16 +11573,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.profiles.{id}.options.server_alive_interval": {
-      "id": "tunnels.profiles.{id}.options.server_alive_interval",
+    "tunnels.profiles.{id}.ssh.server_alive_interval": {
+      "id": "tunnels.profiles.{id}.ssh.server_alive_interval",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 7,
-      "path": "/profiles/{id}/options/server_alive_interval",
-      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_interval.label",
-      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.server_alive_interval.help",
+      "order": 6,
+      "path": "/profiles/{id}/ssh/server_alive_interval",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.ssh.server_alive_interval.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.server_alive_interval.help",
       "label": "server alive interval",
       "schema": {
         "type": "integer",
@@ -11270,16 +11604,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.profiles.{id}.options.strict_host_key_checking": {
-      "id": "tunnels.profiles.{id}.options.strict_host_key_checking",
+    "tunnels.profiles.{id}.ssh.strict_host_key_checking": {
+      "id": "tunnels.profiles.{id}.ssh.strict_host_key_checking",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
-      "order": 9,
-      "path": "/profiles/{id}/options/strict_host_key_checking",
-      "labelKey": "settings.catalogue.tunnels.profiles.{id}.options.strict_host_key_checking.label",
-      "helpKey": "settings.catalogue.tunnels.profiles.{id}.options.strict_host_key_checking.help",
+      "order": 8,
+      "path": "/profiles/{id}/ssh/strict_host_key_checking",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.ssh.strict_host_key_checking.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.strict_host_key_checking.help",
       "label": "strict host key checking",
       "schema": {
         "type": "string",
@@ -11308,47 +11642,16 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
-    "tunnels.profiles.{id}.port": {
-      "id": "tunnels.profiles.{id}.port",
-      "store": "tunnels",
-      "owner": "machine",
-      "area": "tunnels",
-      "group": "profiles",
-      "order": 3,
-      "path": "/profiles/{id}/port",
-      "labelKey": "settings.catalogue.tunnels.profiles.{id}.port.label",
-      "helpKey": "settings.catalogue.tunnels.profiles.{id}.port.help",
-      "label": "port",
-      "schema": {
-        "type": "integer",
-        "format": "uint16",
-        "minimum": 0,
-        "maximum": 65535
-      },
-      "nullable": false,
-      "availability": {
-        "status": "available"
-      },
-      "choices": null,
-      "sensitivity": "public",
-      "apply": "live",
-      "effect": "Updates port for the current owner.",
-      "operations": [
-        "get",
-        "set"
-      ],
-      "confirmationClass": "execution_authority"
-    },
-    "tunnels.profiles.{id}.user": {
-      "id": "tunnels.profiles.{id}.user",
+    "tunnels.profiles.{id}.ssh.user": {
+      "id": "tunnels.profiles.{id}.ssh.user",
       "store": "tunnels",
       "owner": "machine",
       "area": "tunnels",
       "group": "profiles",
       "order": 4,
-      "path": "/profiles/{id}/user",
-      "labelKey": "settings.catalogue.tunnels.profiles.{id}.user.label",
-      "helpKey": "settings.catalogue.tunnels.profiles.{id}.user.help",
+      "path": "/profiles/{id}/ssh/user",
+      "labelKey": "settings.catalogue.tunnels.profiles.{id}.ssh.user.label",
+      "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.user.help",
       "label": "user",
       "schema": {
         "type": "string"
@@ -11358,7 +11661,7 @@ export const settingsCatalogue = {
         "status": "available"
       },
       "choices": null,
-      "sensitivity": "public",
+      "sensitivity": "private",
       "apply": "live",
       "effect": "Updates user for the current owner.",
       "operations": [
@@ -13675,27 +13978,64 @@ export const settingsCatalogue = {
             "type": "string"
           },
           "transport": {
-            "description": "Transport layer for a remote connection.",
+            "description": "Transport layer for a remote connection.\n\nSerialized internally tagged (`\"type\": \"Ssh\" | \"Direct\" | \"Local\"`) with\nthe SSH settings nested under `ssh`. Deserialization goes through\n[`RemoteTransportWire`], which also accepts the pre-nested flat SSH shape.\n\nThe catalogue schema (`schemars(!try_from)`) describes the shape this type\nserializes, not the wire type it also reads.",
             "oneOf": [
               {
                 "type": "object",
                 "properties": {
-                  "ssh_host": {
-                    "type": "string"
-                  },
-                  "ssh_port": {
-                    "type": "integer",
-                    "format": "uint16",
-                    "minimum": 0,
-                    "maximum": 65535
-                  },
-                  "ssh_user": {
-                    "type": "string"
-                  },
-                  "identity_file": {
-                    "type": [
-                      "string",
-                      "null"
+                  "ssh": {
+                    "description": "Host/port/user/identity/keepalive config — shared with\n`tunnels::profile::TunnelProfile` via `SshConnectionParams`.\n`strict_host_key_checking` is stored but the runtime always uses\n`AcceptNew` for the tunnel it opens on the user's behalf\n(`remote_runtime::ssh_profile`).",
+                    "type": "object",
+                    "properties": {
+                      "host": {
+                        "type": "string"
+                      },
+                      "port": {
+                        "type": "integer",
+                        "format": "uint16",
+                        "minimum": 0,
+                        "maximum": 65535
+                      },
+                      "user": {
+                        "type": "string"
+                      },
+                      "identity_file": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "server_alive_interval": {
+                        "type": "integer",
+                        "format": "uint16",
+                        "minimum": 0,
+                        "maximum": 65535
+                      },
+                      "server_alive_count_max": {
+                        "type": "integer",
+                        "format": "uint16",
+                        "minimum": 0,
+                        "maximum": 65535
+                      },
+                      "strict_host_key_checking": {
+                        "type": "string",
+                        "enum": [
+                          "Yes",
+                          "AcceptNew"
+                        ]
+                      },
+                      "compression": {
+                        "description": "`ssh -C`. On by default, and the reason the WebSocket layer refuses to\ndeflate a loopback peer: a tunnelled client reaches this machine through\nthe local ssh process, so its address is loopback and its link is\nalready compressed here. Turn it off for a link that is fast and a CPU\nthat is not — a tunnel to another machine on the same LAN.",
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "host",
+                      "port",
+                      "user",
+                      "server_alive_interval",
+                      "server_alive_count_max",
+                      "strict_host_key_checking"
                     ]
                   },
                   "remote_daemon_port": {
@@ -13704,6 +14044,21 @@ export const settingsCatalogue = {
                     "minimum": 0,
                     "maximum": 65535
                   },
+                  "start_if_not_running": {
+                    "description": "Offer to start `tuic-remote` on the remote host when a Connect finds\nnothing answering (`DeployMode::Never` only — the other modes deploy\nby themselves). Never acts on its own: the offer is published on the\nconnection's status and runs only after the user accepts the exact\nplan (`ssh_provision`), with `remote_deploy`'s pinned, checksummed\nbinary. Omitted from the file while off (as are the two fields\nbelow while unset), so a connection that never uses provisioning\nkeeps the exact shape older builds wrote.",
+                    "type": "boolean"
+                  },
+                  "leave_running_on_disconnect": {
+                    "description": "Keep a daemon started through that offer running on Disconnect.\nWhen false, Disconnect stops it again — PID-file verified, and only\na daemon this app started in this run.",
+                    "type": "boolean"
+                  },
+                  "instance_id": {
+                    "description": "TUICommander instance id (a lowercase DNS label) this connection targets.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "type": {
                     "type": "string",
                     "const": "Ssh"
@@ -13711,9 +14066,7 @@ export const settingsCatalogue = {
                 },
                 "required": [
                   "type",
-                  "ssh_host",
-                  "ssh_port",
-                  "ssh_user",
+                  "ssh",
                   "remote_daemon_port"
                 ]
               },
@@ -13722,6 +14075,13 @@ export const settingsCatalogue = {
                 "properties": {
                   "url": {
                     "type": "string"
+                  },
+                  "tls_fingerprint": {
+                    "description": "SHA-256 fingerprint (lowercase hex) of a pinned self-signed/\nuntrusted certificate, set only after the user explicitly confirms\nit (`direct_proxy::probe_direct_tls` → `NeedsConfirmation`). When\nset, Connect talks to the daemon only through a relay that accepts\nexactly this certificate (`direct_proxy::DirectProxies`). `None` for\n`http://`, a CA-trusted `https://`, or a target not yet confirmed —\nand then an untrusted certificate fails Connect closed. Omitted from\nthe file when `None`, so an unpinned connection keeps the exact shape\nolder builds wrote (they ignore the key when present).",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "type": {
                     "type": "string",
@@ -13745,11 +14105,44 @@ export const settingsCatalogue = {
                 "required": [
                   "type"
                 ]
+              },
+              {
+                "description": "Another named/isolated TUICommander instance running on this same\nmachine (`tuic-remote --instance <id>`, or `TUIC_APP_INSTANCE=<id>`\nfor the desktop app). Exactly one of `port`/`instance_id` is set:\nwhen `instance_id` is set, the real port is resolved by reading that\ninstance's own `config.json` off disk at connect time (see\n`resolve_local_instance_port`), never cached, so a restarted instance\nthat landed on a different port via the 9876→9877→9878 retry chain\ndoesn't leave a stale port behind. `port` alone covers the unnamed\ncase (e.g. a plain `make dev` second debug instance on 9877, which\nhas no `instances/<id>/` directory to discover).\n\nConnect resolves it to `http://127.0.0.1:<port>` with the ordinary\ntoken handshake; update refuses it with\n[`LOCAL_TRANSPORT_UPDATE_UNSUPPORTED`] and deployment (SSH only) refuses\nit too.",
+                "type": "object",
+                "properties": {
+                  "port": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  },
+                  "instance_id": {
+                    "description": "TUICommander instance id (a lowercase DNS label) this connection targets.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "type": "string",
+                    "const": "Local"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
               }
             ]
           },
           "auth_username": {
-            "type": "string"
+            "description": "The Basic Auth username, optional: a desktop TUICommander on the LAN\nwith `lan_auth_bypass`, or a deployed daemon reached by pairing token,\nneeds none. When a password IS stored and this is absent, the token\nexchange sends an empty username, which every daemon rejects — so a\nmissing username fails closed rather than authenticating as anybody.\nThe password half lives in the vault, never here\n(`Credential::RemoteConnection`).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "enabled": {
             "type": "boolean"
@@ -13775,7 +14168,6 @@ export const settingsCatalogue = {
           "id",
           "name",
           "transport",
-          "auth_username",
           "enabled"
         ]
       },
@@ -13790,6 +14182,7 @@ export const settingsCatalogue = {
       "path": "/profiles",
       "key": "id",
       "schema": {
+        "description": "A port-forwarding profile.\n\nSerialized with the SSH settings nested under `ssh`. Deserialization also\naccepts the older flat shape (`host`/`port`/`user`/`identity_file` at the top\nlevel plus an `[options]` table) — that is what every profile written before\nthe nested model looks like, and what an older HTTP client still sends — via\n[`TunnelProfileWire`]. The one-time file rewrite is [`migrate_legacy_toml`].\n\nThe catalogue schema (`schemars(!try_from)`) describes the nested shape this\ntype serializes, not the wire type it also reads.",
         "type": "object",
         "properties": {
           "id": {
@@ -13798,22 +14191,59 @@ export const settingsCatalogue = {
           "name": {
             "type": "string"
           },
-          "host": {
-            "type": "string"
-          },
-          "port": {
-            "type": "integer",
-            "format": "uint16",
-            "minimum": 0,
-            "maximum": 65535
-          },
-          "user": {
-            "type": "string"
-          },
-          "identity_file": {
-            "type": [
-              "string",
-              "null"
+          "ssh": {
+            "description": "SSH host/port/user/identity/keepalive config — shared with\n`RemoteTransport::Ssh` via `ssh_connection::SshConnectionParams`, so\nthe two can never present different capabilities again.",
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "user": {
+                "type": "string"
+              },
+              "identity_file": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "server_alive_interval": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "server_alive_count_max": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0,
+                "maximum": 65535
+              },
+              "strict_host_key_checking": {
+                "type": "string",
+                "enum": [
+                  "Yes",
+                  "AcceptNew"
+                ]
+              },
+              "compression": {
+                "description": "`ssh -C`. On by default, and the reason the WebSocket layer refuses to\ndeflate a loopback peer: a tunnelled client reaches this machine through\nthe local ssh process, so its address is loopback and its link is\nalready compressed here. Turn it off for a link that is fast and a CPU\nthat is not — a tunnel to another machine on the same LAN.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "host",
+              "port",
+              "user",
+              "server_alive_interval",
+              "server_alive_count_max",
+              "strict_host_key_checking"
             ]
           },
           "forwards": {
@@ -13883,39 +14313,6 @@ export const settingsCatalogue = {
               ]
             }
           },
-          "options": {
-            "type": "object",
-            "properties": {
-              "server_alive_interval": {
-                "type": "integer",
-                "format": "uint16",
-                "minimum": 0,
-                "maximum": 65535
-              },
-              "server_alive_count_max": {
-                "type": "integer",
-                "format": "uint16",
-                "minimum": 0,
-                "maximum": 65535
-              },
-              "strict_host_key_checking": {
-                "type": "string",
-                "enum": [
-                  "Yes",
-                  "AcceptNew"
-                ]
-              },
-              "compression": {
-                "description": "`ssh -C`. On by default, and the reason the WebSocket layer refuses to\ndeflate a loopback peer: a tunnelled client reaches this machine through\nthe local ssh process, so its address is loopback and its link is\nalready compressed here. Turn it off for a link that is fast and a CPU\nthat is not — a tunnel to another machine on the same LAN.",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "server_alive_interval",
-              "server_alive_count_max",
-              "strict_host_key_checking"
-            ]
-          },
           "auto_connect": {
             "type": "boolean"
           }
@@ -13923,11 +14320,8 @@ export const settingsCatalogue = {
         "required": [
           "id",
           "name",
-          "host",
-          "port",
-          "user",
-          "forwards",
-          "options"
+          "ssh",
+          "forwards"
         ]
       },
       "operations": [

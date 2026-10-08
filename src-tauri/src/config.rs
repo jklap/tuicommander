@@ -3446,6 +3446,19 @@ where
         Ok(result)
     }
 
+    /// Run `f` on this file's path while holding both of `update`'s locks, for a
+    /// caller that must read and rewrite the raw document rather than `T` — a
+    /// one-time shape migration that has to keep keys `T` does not model. `f`
+    /// does its own (atomic) writing.
+    pub(crate) fn with_locks<R, F>(&self, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&std::path::Path) -> Result<R, String>,
+    {
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock()?;
+        f(&self.path)
+    }
+
     /// Read authoritative safety state without quarantining malformed input. Repeated
     /// ownership checks must not turn the first read error into an empty default.
     pub(crate) fn read_preserving_invalid(&self) -> Result<T, String> {

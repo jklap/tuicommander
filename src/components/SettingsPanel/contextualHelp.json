@@ -570,17 +570,17 @@
     "text": "When to change: Replace when registering or rotating relay access.\n\nIf wrong: A wrong token prevents relay authentication; it does not provide end-to-end secrecy."
   },
   {
-    "page": "remote-machines",
+    "page": "remote-servers",
     "label": "Deployment and lifetime",
     "text": "When to change: Enable deployment or updates only for the daemon you intend to manage.\n\nIf wrong: The wrong lifetime can stop an unattended daemon; updates wait for no live PTY sessions.\n\nDefault: Deploy never; survive 1800 seconds; auto-update off."
   },
   {
-    "page": "remote-machines",
+    "page": "remote-servers",
     "label": "SSH discovery",
     "text": "When to change: Use a discovered host as a starting point for a connection.\n\nIf wrong: Discovery does not establish a successful login or a running daemon.\n\nDefault: Read-only discovery; no probe by this mock."
   },
   {
-    "page": "remote-machines",
+    "page": "remote-servers",
     "label": "User",
     "text": "When to change: Choose the account that owns the daemon and repositories.\n\nIf wrong: A wrong user can fail login or select another home directory.\n\nDefault: Host-specific SSH configuration; no account default verified."
   },
