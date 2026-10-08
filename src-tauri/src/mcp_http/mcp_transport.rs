@@ -146,6 +146,8 @@ pub(super) use super::mcp_transport_peer::local_peer_call;
 pub(crate) use super::mcp_transport_peer::local_peer_call_with_message_id;
 use super::mcp_transport_peer::managed_parent_cwd_from_header;
 #[cfg(test)]
+use super::mcp_transport_peer::now_unix_ms;
+#[cfg(test)]
 use super::mcp_transport_peer::pending_parent_id;
 pub(super) use super::mcp_transport_peer::refresh_mcp_session;
 #[cfg(test)]
@@ -155,6 +157,8 @@ use super::mcp_transport_peer::takeover_rejection_report;
 #[cfg(test)]
 use super::mcp_transport_peer::task_owner_identity;
 use super::mcp_transport_peer::{apply_initialize_identity, identity_from_client_ancestry};
+#[cfg(test)]
+pub(crate) use super::mcp_transport_session_agent::DeferredPromptTimings;
 #[cfg(test)]
 use super::mcp_transport_session_agent::INFERRED_PTY_DESCRIPTION_MAX_CHARS;
 #[cfg(test)]
@@ -200,6 +204,7 @@ use super::mcp_transport_session_agent::is_direct_codex_executable;
 use super::mcp_transport_session_agent::merge_mcp_params_into_args;
 #[cfg(test)]
 use super::mcp_transport_session_agent::parse_pty_description;
+pub(crate) use super::mcp_transport_session_agent::register_spawned_peer;
 #[cfg(all(test, unix))]
 use super::mcp_transport_session_agent::resolve_effective_spawn_cwd;
 #[cfg(test)]
@@ -214,6 +219,8 @@ use super::mcp_transport_session_agent::session_wait_met;
 pub(crate) use super::mcp_transport_session_agent::should_defer_prompt_for_mcp_bind;
 pub(crate) use super::mcp_transport_session_agent::spawn_deferred_prompt_delivery;
 #[cfg(test)]
+pub(crate) use super::mcp_transport_session_agent::spawn_deferred_prompt_delivery_with;
+#[cfg(test)]
 use super::mcp_transport_session_agent::spawn_response;
 #[cfg(test)]
 use super::mcp_transport_session_agent::substitute_prompt_in_args;
@@ -225,6 +232,8 @@ use super::mcp_transport_session_agent::translate_special_key;
 use super::mcp_transport_session_agent::uses_agent_command_injection;
 #[cfg(test)]
 use super::mcp_transport_session_agent::wait_for_mcp_identity_bound;
+#[cfg(test)]
+use super::mcp_transport_session_agent::wait_for_pty_quiet;
 pub(crate) use super::mcp_transport_session_agent::wait_for_shell_idle;
 
 /// Serialize a value to JSON, returning a structured error on failure instead of silent null.
