@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Launch the Design Mode browser without chromey's `--enable-automation` and `--disable-extensions`, so it shows no automation infobar and can load extensions (#1593-987f).
+
 - Remove terminal-grid prompt tint because recorded cursor rows can identify the composer or tool output; keep prompt colours in Chat (#1595-22b1).
 
 - Reject HTML responses to remote JSON RPCs with the endpoint and content type, so Add Repository shows the error instead of an HTML home path (#1594-f297).
