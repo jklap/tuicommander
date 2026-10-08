@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
 ### Added
+- Add an all-repositories toggle to the Ideas panel header: it lists every repository's ideas for cross-repo work (in memory, resets on reload). The badge and "clear completed" follow the visible list, so clearing in a single-repository view no longer deletes other repositories' completed ideas; ideas added in all-mode stay tagged with the active repository (#1598-c0a0).
 - Add a headless agent capture scenario driver with explicit fixture promotion and ordered replay expectations; record real Codex and pi turns; Claude (expired login) and goose (its banner prints the home directory) stay unverified, and a test rejects fixtures that embed `/Users/` or `/home/` paths.
 
 - Telegram draft Stop interrupts only its bound agent turn; replacement input retires stale Stop requests before writing.

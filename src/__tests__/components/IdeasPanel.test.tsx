@@ -141,3 +141,89 @@ describe("IdeasPanel — queue to the agent's Compose queue", () => {
 		expect(ideasStore.state.ideas[0].usedAt).toBeGreaterThan(0);
 	});
 });
+
+describe("IdeasPanel — all-repositories toggle", () => {
+	const REPO_A = "/repos/alpha";
+	const REPO_B = "/repos/beta";
+
+	beforeEach(() => {
+		for (const note of [...ideasStore.state.ideas]) {
+			ideasStore.removeIdea(note.id);
+		}
+		ideasStore.addIdea("alpha idea", REPO_A, "alpha");
+		ideasStore.addIdea("beta idea", REPO_B, "beta");
+		ideasStore.addIdea("global idea", null, null);
+		mockInvoke.mockClear();
+	});
+
+	function renderForRepo() {
+		return render(() => <IdeasPanel visible={true} repoPath={REPO_A} onClose={noop} onSendToTerminal={noop} />);
+	}
+
+	function toggle(container: HTMLElement): HTMLButtonElement {
+		return container.querySelector<HTMLButtonElement>('button[title="Show ideas from all repositories"]')!;
+	}
+
+	it("lists another repository's ideas after the toggle is pressed", () => {
+		const { container } = renderForRepo();
+		expect(container.textContent).not.toContain("beta idea");
+
+		fireEvent.click(toggle(container));
+
+		expect(container.textContent).toContain("beta idea");
+		expect(container.textContent).toContain("alpha idea");
+		expect(container.textContent).toContain("global idea");
+	});
+
+	it("flips the tooltip and aria-pressed, and a second press restores the repo filter", () => {
+		const { container } = renderForRepo();
+		const btn = toggle(container);
+		expect(btn.getAttribute("aria-pressed")).toBe("false");
+
+		fireEvent.click(btn);
+		expect(btn.getAttribute("aria-pressed")).toBe("true");
+		expect(btn.title).toBe("Show this repository only");
+
+		fireEvent.click(btn);
+		expect(container.textContent).not.toContain("beta idea");
+	});
+
+	it("keeps the badge equal to the pending ideas in the visible list", () => {
+		const { container } = renderForRepo();
+		const badge = () => container.querySelector("[class*=fileCountBadge]")?.textContent;
+		expect(badge()).toBe("2");
+
+		fireEvent.click(toggle(container));
+		expect(badge()).toBe("3");
+	});
+
+	it("tags an idea added in all-mode with the active repository", () => {
+		const { container } = renderForRepo();
+		fireEvent.click(toggle(container));
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		fireEvent.input(textarea, { target: { value: "added in all mode" } });
+		fireEvent.keyDown(textarea, { key: "Enter" });
+
+		const added = ideasStore.state.ideas.find((i) => i.text === "added in all mode");
+		expect(added?.repoPath).toBe(REPO_A);
+		expect(added?.repoDisplayName).toBe("alpha");
+	});
+
+	it("clears only the completed ideas of the visible list", () => {
+		for (const i of ideasStore.state.ideas) ideasStore.markUsed(i.id);
+		const { container } = renderForRepo();
+		const clearBtn = container.querySelector<HTMLButtonElement>('button[title="Clear completed ideas"]')!;
+		fireEvent.click(clearBtn);
+
+		expect(ideasStore.state.ideas.map((i) => i.text)).toEqual(["beta idea"]);
+	});
+
+	it("clears every repository's completed ideas in all-mode", () => {
+		for (const i of ideasStore.state.ideas) ideasStore.markUsed(i.id);
+		const { container } = renderForRepo();
+		fireEvent.click(toggle(container));
+		fireEvent.click(container.querySelector<HTMLButtonElement>('button[title="Clear completed ideas"]')!);
+
+		expect(ideasStore.state.ideas).toEqual([]);
+	});
+});
