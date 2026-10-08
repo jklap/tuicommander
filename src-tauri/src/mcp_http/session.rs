@@ -4063,11 +4063,11 @@ mod tests {
             .await
             .unwrap();
             tokio::time::timeout(std::time::Duration::from_secs(30), async {
-                while !state
+                while state
                     .session_maps
                     .pty_event_channels
                     .get(sid)
-                    .is_some_and(|tx| tx.receiver_count() > 0)
+                    .is_none_or(|tx| tx.receiver_count() == 0)
                 {
                     tokio::task::yield_now().await;
                 }

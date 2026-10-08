@@ -777,6 +777,20 @@ mod tests {
     }
 
     #[test]
+    fn pty_title_has_matching_sse_name_and_payload() {
+        let event = AppEvent::PtyTitle {
+            session_id: "session-1".into(),
+            title: "Claude Code".into(),
+        };
+
+        assert_eq!(event_type_name(&event), "pty-title");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({"session_id": "session-1", "title": "Claude Code"})
+        );
+    }
+
+    #[test]
     fn pty_description_changed_has_matching_sse_name_and_payload() {
         let event = AppEvent::PtyDescriptionChanged {
             session_id: "session-1".into(),

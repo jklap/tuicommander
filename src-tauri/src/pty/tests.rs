@@ -21975,15 +21975,6 @@ fn remote_title_parser_publishes_title_and_reset() {
         .filter_map(|event| match event {
             crate::state::AppEvent::PtyTitle { session_id, title } => {
                 assert_eq!(session_id, sid);
-                assert_eq!(
-                    crate::mcp_http::sse_routes::event_type_name_for_test(
-                        &crate::state::AppEvent::PtyTitle {
-                            session_id: session_id.clone(),
-                            title: title.clone()
-                        }
-                    ),
-                    "pty-title"
-                );
                 Some(title)
             }
             _ => None,
