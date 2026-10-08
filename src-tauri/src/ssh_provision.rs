@@ -149,24 +149,58 @@ fn redact(text: &str, secret: &str) -> String {
     }
 }
 
+/// Per-process key for [`secret_fingerprint`]. Random at startup, never stored:
+/// a plan's digest only has to survive from plan to execute in the same run.
+static PLAN_SECRET_KEY: std::sync::LazyLock<[u8; 32]> = std::sync::LazyLock::new(|| {
+    let mut key = [0u8; 32];
+    rand::fill(&mut key);
+    key
+});
+
+/// A keyed fingerprint of a secret, so the digest changes when the saved
+/// password does without the digest (which `GET .../plan` returns) being an
+/// offline-guessable hash of it.
+fn secret_fingerprint(secret: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(*PLAN_SECRET_KEY);
+    hasher.update(secret.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// SHA-256 over the displayed plan AND every stored input that changes what
+/// runs or where: the whole transport (host, port, user, `identity_file`,
+/// keepalive, compression, host-key policy, daemon port, instance, the
+/// start/leave-running flags), the deploy mode, `survive_secs`, the Auth
+/// username, and — for SetPassword — a keyed fingerprint of the saved password
+/// (Batch 32 review #2). Swapping the key file or the password between plan and
+/// execute is therefore a changed plan, not a silent substitution.
 fn digest_of(
-    connection_id: &str,
+    connection: &RemoteConnection,
     action: ProvisionAction,
     destination: &str,
     summary: &str,
     steps: &[ProvisionStep],
+    password_fingerprint: Option<&str>,
 ) -> String {
-    let body = serde_json::to_vec(&(connection_id, action, destination, summary, steps))
+    let inputs = serde_json::json!({
+        "transport": connection.transport,
+        "deploy": connection.deploy,
+        "survive_secs": connection.survive_secs,
+        "auth_username": connection.auth_username,
+        "password": password_fingerprint,
+    });
+    let body = serde_json::to_vec(&(&connection.id, action, destination, summary, steps, inputs))
         .expect("plan parts always serialize");
     hex::encode(Sha256::digest(&body))
 }
 
-/// Build the plan for one stored connection. Pure: nothing is contacted and no
-/// secret is read.
+/// Build the plan for one stored connection. Pure: nothing is contacted. The
+/// saved password (SetPassword only) is passed in by the caller and only its
+/// keyed fingerprint enters the digest; it never appears in the plan.
 pub(crate) fn build_plan(
     connection: &RemoteConnection,
     action: ProvisionAction,
-    password_saved: bool,
+    saved_password: Option<&str>,
 ) -> Result<ProvisionPlan, String> {
     connection.validate()?;
     let target = ssh_target(connection)?;
@@ -233,7 +267,7 @@ pub(crate) fn build_plan(
                 .as_deref()
                 .filter(|u| !u.is_empty())
                 .ok_or("this connection has no Auth username to set")?;
-            if !password_saved {
+            if saved_password.is_none_or(str::is_empty) {
                 return Err("this connection has no saved password to set".to_string());
             }
             (
@@ -255,7 +289,18 @@ pub(crate) fn build_plan(
             )
         }
     };
-    let digest = digest_of(&connection.id, action, &destination, &summary, &steps);
+    let password_fingerprint = match action {
+        ProvisionAction::SetPassword => saved_password.map(secret_fingerprint),
+        ProvisionAction::Start => None,
+    };
+    let digest = digest_of(
+        connection,
+        action,
+        &destination,
+        &summary,
+        &steps,
+        password_fingerprint.as_deref(),
+    );
     Ok(ProvisionPlan {
         connection_id: connection.id.clone(),
         connection_name: connection.name.clone(),
@@ -285,11 +330,15 @@ pub(crate) fn plan_for(
     action: ProvisionAction,
 ) -> Result<ProvisionPlan, String> {
     let connection = crate::remote_runtime::load_connection(state, id)?;
-    let password_saved = match action {
-        ProvisionAction::SetPassword => crate::remote_connection::connection_password_exists(id)?,
-        ProvisionAction::Start => false,
+    let saved_password = match action {
+        ProvisionAction::SetPassword => saved_password(id)?,
+        ProvisionAction::Start => None,
     };
-    build_plan(&connection, action, password_saved)
+    build_plan(&connection, action, saved_password.as_deref())
+}
+
+fn saved_password(id: &str) -> Result<Option<String>, String> {
+    crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))
 }
 
 /// Run an accepted Start plan, then connect.
@@ -302,7 +351,7 @@ pub(crate) async fn start_daemon(
     plan_digest: &str,
 ) -> Result<(), String> {
     let connection = crate::remote_runtime::load_connection(state, id)?;
-    let plan = build_plan(&connection, ProvisionAction::Start, false)?;
+    let plan = build_plan(&connection, ProvisionAction::Start, None)?;
     check_digest(&plan, plan_digest)?;
     let target = ssh_target(&connection)?;
     let profile = crate::remote_runtime::ssh_profile(&connection)
@@ -335,13 +384,12 @@ pub(crate) async fn configure_password(
     plan_digest: &str,
 ) -> Result<String, String> {
     let connection = crate::remote_runtime::load_connection(state, id)?;
-    let password_saved = crate::remote_connection::connection_password_exists(id)?;
-    let plan = build_plan(&connection, ProvisionAction::SetPassword, password_saved)?;
+    // Read once: the digest binds THIS value, and it is the one sent.
+    let password = saved_password(id)?.ok_or("this connection has no saved password to set")?;
+    let plan = build_plan(&connection, ProvisionAction::SetPassword, Some(&password))?;
     check_digest(&plan, plan_digest)?;
     let target = ssh_target(&connection)?;
     let username = connection.auth_username.clone().unwrap_or_default();
-    let password = crate::credentials::get(crate::credentials::Credential::RemoteConnection(id))?
-        .ok_or("this connection has no saved password to set")?;
     let stdin = set_password_stdin(&username, &password)?;
     let command = set_password_command(target.instance_id)?;
     let profile = crate::remote_runtime::ssh_profile(&connection)
@@ -514,7 +562,7 @@ mod tests {
     fn the_start_plan_shows_exactly_the_commands_remote_deploy_sends() {
         let mut connection = provisioned_connection();
         set_instance(&mut connection, "dev-box");
-        let plan = build_plan(&connection, ProvisionAction::Start, false).unwrap();
+        let plan = build_plan(&connection, ProvisionAction::Start, None).unwrap();
         let commands: Vec<&str> = plan
             .steps
             .iter()
@@ -537,15 +585,15 @@ mod tests {
     #[test]
     fn start_needs_the_connection_to_opt_in() {
         let connection = RemoteConnection::new_ssh("box", "h", "u");
-        let err = build_plan(&connection, ProvisionAction::Start, false).unwrap_err();
+        let err = build_plan(&connection, ProvisionAction::Start, None).unwrap_err();
         assert!(err.contains("Start remote daemon if not running"), "{err}");
     }
 
     #[test]
     fn non_ssh_connections_have_no_plan() {
         let connection = RemoteConnection::new_direct("d", "http://h:9877", "u");
-        assert!(build_plan(&connection, ProvisionAction::Start, false).is_err());
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, true).is_err());
+        assert!(build_plan(&connection, ProvisionAction::Start, None).is_err());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).is_err());
     }
 
     /// The digest binds an accept to one plan: any stored field that changes
@@ -553,12 +601,12 @@ mod tests {
     #[test]
     fn the_digest_follows_every_field_that_changes_what_runs() {
         let base = provisioned_connection();
-        let digest = build_plan(&base, ProvisionAction::Start, false)
+        let digest = build_plan(&base, ProvisionAction::Start, None)
             .unwrap()
             .digest;
         assert_eq!(
             digest,
-            build_plan(&base, ProvisionAction::Start, false)
+            build_plan(&base, ProvisionAction::Start, None)
                 .unwrap()
                 .digest,
             "stable for an unchanged connection"
@@ -583,11 +631,65 @@ mod tests {
         let mut c = base.clone();
         c.survive_secs = 60;
         changed.push(c);
+        // Batch 32 review #2: fields that change HOW it runs, not just where.
+        type SshEdit = fn(&mut crate::ssh_connection::SshConnectionParams);
+        let ssh_edits: [SshEdit; 5] = [
+            |ssh| ssh.identity_file = Some("/home/boss/.ssh/other_key".into()),
+            |ssh| ssh.server_alive_interval = 99,
+            |ssh| ssh.server_alive_count_max = 9,
+            |ssh| ssh.compression = !ssh.compression,
+            |ssh| {
+                use crate::ssh_connection::StrictHostKeyChecking::{AcceptNew, Yes};
+                ssh.strict_host_key_checking = match ssh.strict_host_key_checking {
+                    Yes => AcceptNew,
+                    AcceptNew => Yes,
+                }
+            },
+        ];
+        for edit in ssh_edits {
+            let mut c = base.clone();
+            if let RemoteTransport::Ssh { ssh, .. } = &mut c.transport {
+                edit(ssh);
+            }
+            changed.push(c);
+        }
+        let mut c = base.clone();
+        c.deploy = crate::remote_connection::DeployMode::Installed;
+        changed.push(c);
+        let mut c = base.clone();
+        if let RemoteTransport::Ssh {
+            leave_running_on_disconnect,
+            ..
+        } = &mut c.transport
+        {
+            *leave_running_on_disconnect = true;
+        }
+        changed.push(c);
         for c in changed {
-            let plan = build_plan(&c, ProvisionAction::Start, false).unwrap();
+            let plan = build_plan(&c, ProvisionAction::Start, None).unwrap();
             assert_ne!(plan.digest, digest);
             assert_eq!(check_digest(&plan, &digest).unwrap_err(), PLAN_CHANGED);
         }
+    }
+
+    /// A different saved password (or Auth username) is a different
+    /// SetPassword plan, and the digest is not a plain hash of the password.
+    #[test]
+    fn the_set_password_digest_binds_the_saved_secret_without_exposing_it() {
+        let mut connection = provisioned_connection();
+        connection.auth_username = Some("boss".into());
+        let plan = build_plan(&connection, ProvisionAction::SetPassword, Some("pw-one")).unwrap();
+        let other = build_plan(&connection, ProvisionAction::SetPassword, Some("pw-two")).unwrap();
+        assert_ne!(plan.digest, other.digest);
+        assert_eq!(
+            check_digest(&other, &plan.digest).unwrap_err(),
+            PLAN_CHANGED
+        );
+        assert_ne!(plan.digest, hex::encode(Sha256::digest(b"pw-one")));
+        connection.auth_username = Some("someone-else".into());
+        let renamed =
+            build_plan(&connection, ProvisionAction::SetPassword, Some("pw-one")).unwrap();
+        assert_ne!(plan.digest, renamed.digest);
     }
 
     #[test]
@@ -595,7 +697,7 @@ mod tests {
         for hostile in ["a; reboot", "$(id)", "a`id`", "A", "default", "a b"] {
             let mut connection = provisioned_connection();
             set_instance(&mut connection, hostile);
-            assert!(build_plan(&connection, ProvisionAction::Start, false).is_err());
+            assert!(build_plan(&connection, ProvisionAction::Start, None).is_err());
             assert!(set_password_command(Some(hostile)).is_err());
         }
     }
@@ -613,7 +715,7 @@ mod tests {
     fn the_set_password_plan_carries_no_secret() {
         let mut connection = provisioned_connection();
         connection.auth_username = Some("boss".into());
-        let plan = build_plan(&connection, ProvisionAction::SetPassword, true).unwrap();
+        let plan = build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).unwrap();
         let text = serde_json::to_string(&plan).unwrap();
         assert!(text.contains("--set-password-if-unset"));
         assert!(text.contains("\\\"boss\\\""));
@@ -624,12 +726,12 @@ mod tests {
     fn set_password_needs_a_username_and_a_saved_password() {
         let mut connection = provisioned_connection();
         connection.auth_username = None;
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, true).is_err());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).is_err());
         connection.auth_username = Some(String::new());
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, true).is_err());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).is_err());
         connection.auth_username = Some("boss".into());
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, false).is_err());
-        assert!(build_plan(&connection, ProvisionAction::SetPassword, true).is_ok());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, None).is_err());
+        assert!(build_plan(&connection, ProvisionAction::SetPassword, Some("pw")).is_ok());
     }
 
     #[test]
