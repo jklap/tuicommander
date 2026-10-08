@@ -129,6 +129,24 @@ describe("globalWorkspaceStore scopes", () => {
 		});
 	});
 
+	// Batch 45/46 review: with zero members in the new scope there is nothing to
+	// reconcile to, and activeId used to keep naming the OLD scope's terminal —
+	// whose content TerminalArea's single-pane path keeps showing.
+	it("clears the active terminal when switching (while showing) to a scope with no members", () => {
+		testInScope(() => {
+			const repoTerm = terminalsStore.add(makeTerminal({ name: "wt-1" }));
+			store.syncScopeMembers("/repo/a", [repoTerm]);
+			store.setScope("/repo/a");
+			store.activate();
+			expect(terminalsStore.state.activeId).toBe(repoTerm);
+
+			store.setScope("/repo/empty");
+
+			expect(store.getPromotedIds()).toEqual([]);
+			expect(terminalsStore.state.activeId).toBeNull();
+		});
+	});
+
 	it("forgets a closed terminal in whichever scope holds it", () => {
 		testInScope(() => {
 			// Real terminals here: this path runs through terminalsStore.onRemove,
