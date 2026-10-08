@@ -48,7 +48,9 @@ describe("chat answer shapes follow the CLI grid extent", () => {
 
 	// Catches: streaming a second answer onto a finished one leaving a raw 💬 or a stale "end" mark.
 	it("re-marks each answer when a second one streams in", async () => {
-		const [entries, setEntries] = createSignal<AcpTranscriptEntry[]>([{ id: "a", kind: "agent", text: "💬 One.\n\nMore." }]);
+		const [entries, setEntries] = createSignal<AcpTranscriptEntry[]>([
+			{ id: "a", kind: "agent", text: "💬 One.\n\nMore." },
+		]);
 		const { container } = render(() => <Transcript entries={entries} busy={() => false} emptyMessage="Empty" />);
 		await Promise.resolve();
 		setEntries([{ id: "a", kind: "agent", text: "💬 One.\n\nMore.\n\n💬 Two.\n\nEnd." }]);
