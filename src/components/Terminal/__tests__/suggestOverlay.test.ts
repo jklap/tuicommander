@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { DecodedRow } from "../canvasTerminalUtils";
 import { rowText } from "../canvasTerminalUtils";
 import {
+	answerBlockRanges,
 	answerExtent,
+	type ChatBlock,
 	continuationRowsAfterSuggest,
 	isSuggestBlock,
 	paintOverlayBlocks,
@@ -344,5 +346,66 @@ describe("paintOverlayBlocks", () => {
 		paintOverlayBlocks(container, [{ row: 0, kind: "answer" }], 20, "#000");
 		paintOverlayBlocks(container, [], 20, "#000");
 		expect(container.children.length).toBe(0);
+	});
+});
+
+describe("answerBlockRanges", () => {
+	const p = (text: string, marker = false): ChatBlock => ({ kind: "paragraph", text, marker });
+	const code = (text: string): ChatBlock => ({ kind: "code", text, marker: false });
+	const other = (text: string): ChatBlock => ({ kind: "other", text, marker: false });
+
+	// Catches: the tint stopping at the marker paragraph, or a second answer swallowed into the first.
+	it("spans each answer from its marker to the next marker or the end", () => {
+		const blocks = [p("intro"), p("A", true), other("- x"), p("B", true), other("- y"), p("tail")];
+		expect(answerBlockRanges(blocks)).toEqual([
+			[1, 2],
+			[3, 5],
+		]);
+	});
+
+	// Catches: a literal 💬 line inside a code block ending the answer, as the grid never does.
+	it("keeps a code block that shows a marker inside the answer", () => {
+		expect(answerBlockRanges([p("A", true), code("💬 example"), p("after")])).toEqual([[0, 2]]);
+	});
+});
+
+describe("submitted prompt highlight", () => {
+	const turn = rows([
+		["> a long question that wraps", false],
+		["onto a second row", true],
+		["● Bash(ls)", false],
+		["  ⎿ output", false],
+		["❯ half-typed reply", false],
+	]);
+	const plan = (promptRows: number[]) => planSuggestOverlay(5, turn, (row) => promptRows.includes(row));
+
+	// Catches: only the first row of a wrapped question coloured.
+	it("colours the prompt row and the rows it wraps onto", () => {
+		expect(plan([0]).blocks).toEqual([
+			{ row: 0, kind: "prompt" },
+			{ row: 1, kind: "prompt" },
+		]);
+	});
+
+	// Catches: the composer glyph or tool output coloured as if it were a submitted prompt.
+	it("never colours the composer or tool output", () => {
+		expect(plan([0]).blocks.map((block) => block.row)).not.toContain(4);
+		expect(plan([0]).blocks.map((block) => block.row)).not.toContain(3);
+		expect(planSuggestOverlay(5, turn).blocks).toEqual([]);
+	});
+
+	// Catches: the overlay not repainting when a prompt appears on rows whose text did not change.
+	it("changes the plan key when the prompt set changes", () => {
+		expect(plan([0]).key).not.toBe(plan([]).key);
+	});
+
+	// Catches: a hard-coded prompt colour that ignores the theme.
+	it("paints the prompt with theme tokens, distinct from the answer green", () => {
+		const container = document.createElement("div");
+		paintOverlayBlocks(container, [{ row: 0, kind: "prompt" }], 20, "#000");
+		const strip = container.firstElementChild as HTMLElement;
+		expect(strip.style.cssText).toContain("var(--prompt-tint)");
+		expect(strip.style.cssText).toContain("var(--prompt-bar)");
+		expect(strip.style.cssText).not.toContain("94,190,140");
 	});
 });
