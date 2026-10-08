@@ -191,7 +191,7 @@ authors and communities behind each project.
 | mermaid | 11.17.2 | MIT |
 | qrcode | 1.5.4 | MIT |
 | solid-codemirror | 2.3.3 | MIT |
-| solid-js | 1.9.15 | MIT |
+| solid-js | 1.9.17 | MIT |
 <!-- END GENERATED:js -->
 
 ### JavaScript Dev Dependencies

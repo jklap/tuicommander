@@ -29,6 +29,12 @@ content. Remove the exception when a patch becomes available, and review it
 by the expiry date; pnpm does not enforce the date automatically.
 No other advisory is ignored. `pnpm-workspace.yaml` pins DOMPurify 3.4.16
 for the application and Mermaid, and the development-only `qs` to 6.16.0.
+Rechecked on 2026-10-09: npm still publishes 3.0.3 as latest, and the advisory
+still lists no patch. The dependency tree still has only the build path above;
+retain the existing exception and its expiry. The frontend audit now requires
+Seroval >=1.6.3 and source-map-js >=1.2.2. KaTeX 0.16.47 remains under
+Mermaid 11; its patched >=0.18.2 line requires the separate Mermaid upgrade
+and browser compatibility review. No KaTeX advisory is ignored.
 pnpm 11 ignores the legacy `pnpm.auditConfig` field in `package.json`.
 
 ## Development
