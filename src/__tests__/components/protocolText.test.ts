@@ -42,6 +42,13 @@ describe("AI Chat protocol text", () => {
 		const text = "- one\n- two\n\nAfter the list.\n\nintent: Working (Status)\nLast.";
 		expect(projectChatProtocolText(text).body).toBe("- one\n- two\n\nAfter the list.\n\nLast.");
 	});
+
+	// Catches: a 💬 line glued under a list item or paragraph stays inside it, so it is never tinted as an answer.
+	it("starts a paragraph at a 💬 line that has no blank line before it, outside code", () => {
+		expect(projectChatProtocolText("- item\n💬 Answer").body).toBe("- item\n\n💬 Answer");
+		expect(projectChatProtocolText("💬 One\n💬 Two").body).toBe("💬 One\n\n💬 Two");
+		expect(projectChatProtocolText("```text\nx\n💬 literal\n```").body).toBe("```text\nx\n💬 literal\n```");
+	});
 });
 
 // Catches: malformed marker parentheses silently consume an ambiguous reply.
