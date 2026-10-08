@@ -54,6 +54,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Custom Environment Variables can't override TUICommander's own environment** — `TUIC_*`, `ZDOTDIR` and dynamic-loader variables (`LD_PRELOAD`, `DYLD_*`, ...) are refused (and dropped from a hand-edited config), validation now lives in the backend only, and the section is an expert setting.
 - **SSH hosts and users are validated strictly** — `@`, whitespace and control characters are refused in either, `:` in the user, and `:` in the host unless it is a bare IPv6 address (which scp now receives bracketed), so the destination shown is the one dialled and `host:path` can't be mis-parsed.
 - **`tuic agent type` no longer wipes text you are typing** — it now submits atomically through the backend (nothing can splice into the clear/text/Enter sequence) and refuses when the agent's input box already holds text; `--no-clear` sends just the text and Enter.
+- **`GET /streamdock/devices` requires loopback or authentication** — it lists the connected macropads' USB serial numbers.
 - Start sidebar agents when shell readiness arrives before launch preparation or the remote terminal subscription.
 
 - Return from captured Windows background launches before the command exits, and resolve Git in Windows worktree hooks.

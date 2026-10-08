@@ -1024,7 +1024,12 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/ui/action", post(session::run_ui_action))
         .route("/sessions/{id}", delete(session::close_session))
         // tmux compat shim topology (see tmux_routes.rs; backs `tuic`-as-`tmux`'s
-        // split-window/new-window/list-panes/etc.)
+        // split-window/new-window/list-panes/etc.). No per-handler
+        // `require_local_or_auth`, deliberately — consistent with the session
+        // routes around them (`POST /sessions`, `/sessions/{id}/write`,
+        // `DELETE /sessions/{id}`), which they only compose: a remote caller
+        // already passes the router's Basic Auth, and these grant nothing the
+        // session routes don't (Batch 18 review, checked and kept).
         .route("/tmux/topology", get(tmux_routes::get_topology))
         .route("/tmux/sessions", post(tmux_routes::create_tmux_session))
         .route(
@@ -1564,6 +1569,23 @@ async fn agent_wrap_prompt_response_http(
             Json(serde_json::json!({ "error": e })),
         ),
     }
+}
+
+/// `GET /streamdock/devices` — the connected macropads' USB serial numbers
+/// are hardware identifiers, so (unlike `/streamdock/status`, which only names
+/// the product) the listing is loopback-or-authenticated only (Batch 18
+/// review). Same body as the `streamdock_list_devices` IPC command.
+#[cfg(feature = "desktop")]
+async fn streamdock_list_devices_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<guards::Authenticated>>,
+) -> Response {
+    if let Err(resp) = guards::require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    crate::streamdock::commands::list_devices()
+        .await
+        .into_response()
 }
 
 /// Resolve a pending MCP confirmation and tell every client to dismiss it.
@@ -2277,10 +2299,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         get(crate::streamdock::commands::get_status),
     );
     #[cfg(feature = "desktop")]
-    let routes = routes.route(
-        "/streamdock/devices",
-        get(crate::streamdock::commands::list_devices),
-    );
+    let routes = routes.route("/streamdock/devices", get(streamdock_list_devices_http));
 
     // Dictation — desktop-only: `crate::dictation` owns the audio capture and
     // the whisper model, both gated on the opt-in `dictation` feature.
@@ -3178,6 +3197,24 @@ mod tests {
         state.config.write().disabled_native_tools = Vec::new();
         mcp_transport::rebuild_tool_search_index(&state);
         state
+    }
+
+    #[cfg(feature = "desktop")]
+    #[tokio::test]
+    async fn streamdock_devices_refuse_an_unauthenticated_lan_caller() {
+        // Through the real router (no remote-auth layer, like a LAN-bypass
+        // setup), so the registration itself is what is tested.
+        let mut req = Request::builder()
+            .uri("/streamdock/devices")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([192, 168, 1, 2], 1))));
+        let response = build_router(test_state(), false, true)
+            .oneshot(req)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     /// Batch 36 review: an agent outside the allow-list is a bad request,

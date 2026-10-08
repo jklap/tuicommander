@@ -3212,6 +3212,9 @@ GET /streamdock/devices  -> [ { "product_name": "StreamDock M18", "serial_number
 
 Enumerates currently-connected StreamDock-family devices, independent of whether the
 integration is enabled — listing should work while still deciding whether to turn it on.
+Requires loopback or an authenticated caller (`require_local_or_auth`, 403 otherwise): USB
+serial numbers are hardware identifiers. `GET /streamdock/status` names only the product and
+keeps the router's own auth.
 
 ## Tauri-Only Commands (No HTTP Route)
 
