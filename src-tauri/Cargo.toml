@@ -278,7 +278,7 @@ web-push-native = { version = "0.4", default-features = false }
 rand_core = { version = "0.6", features = ["getrandom"] }
 base64ct = { version = "1", features = ["alloc"] }
 anyhow = "1"
-oauth2 = "5"
+oauth2 = { version = "5", default-features = false }
 bm25 = "2.3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tracing = "0.1"
