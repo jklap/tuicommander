@@ -235,6 +235,118 @@ describe("createWorktreeRemovalCoordinator", () => {
 		});
 	});
 
+	// The backend's live-session guard (wip 9586bf02c) refuses a checkout a
+	// session still works in even when no terminal of this workspace is
+	// attached (a shell that only `cd`'d in). The refusal must surface the same
+	// Cancel-by-default "in use" question with the sessions the backend names,
+	// and only an explicit yes may retry with overrideBusy.
+	it("asks the in-use question on worktree_busy, naming the backend's sessions, then overrides only the busy refusal", async () => {
+		await testInScopeAsync(async () => {
+			setupWorkspace();
+			const { coordinator, removeWorktree, getWorkspaceLifecycle, confirmRemoveBusyWorktree } = makeCoordinator();
+			removeWorktree
+				.mockRejectedValueOnce(new Error("worktree_busy: 1 live session(s) in this worktree: zsh [pty-9]."))
+				.mockResolvedValueOnce({});
+			getWorkspaceLifecycle
+				.mockResolvedValueOnce(SAFE_LIFECYCLE)
+				.mockResolvedValueOnce({ ...SAFE_LIFECYCLE, liveSessions: [{ sessionId: "pty-9", name: "zsh" }] });
+
+			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
+
+			expect(confirmRemoveBusyWorktree).toHaveBeenCalledTimes(1);
+			expect(confirmRemoveBusyWorktree).toHaveBeenCalledWith(
+				WORKSPACE,
+				expect.objectContaining({
+					terminalCount: 1,
+					isBusy: true,
+					terminals: [{ id: "pty-9", agentType: "session", label: "zsh" }],
+				}),
+				{ liveSessions: true },
+			);
+			expect(removeWorktree).toHaveBeenLastCalledWith(REPO, WORKSPACE, true, false, false, undefined, undefined, true);
+			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]).toBeUndefined();
+		});
+	});
+
+	it("declining the worktree_busy question keeps the workspace and never overrides", async () => {
+		await testInScopeAsync(async () => {
+			setupWorkspace();
+			const { coordinator, removeWorktree, confirmRemoveBusyWorktree } = makeCoordinator();
+			removeWorktree.mockRejectedValueOnce(
+				new Error("worktree_busy: 2 live session(s) in this worktree: a [1], b [2]."),
+			);
+			confirmRemoveBusyWorktree.mockResolvedValue(false);
+
+			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
+
+			expect(removeWorktree).toHaveBeenCalledTimes(1);
+			expect(confirmRemoveBusyWorktree).toHaveBeenCalledWith(WORKSPACE, expect.objectContaining({ terminalCount: 2 }), {
+				liveSessions: true,
+			});
+			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]?.isRemoving).toBe(false);
+		});
+	});
+
+	it("never overrides worktree_busy when no in-use dialog is wired", async () => {
+		await testInScopeAsync(async () => {
+			setupWorkspace();
+			const { coordinator, removeWorktree } = makeCoordinator({ dialogs: { confirmRemoveBusyWorktree: undefined } });
+			removeWorktree.mockRejectedValueOnce(new Error("worktree_busy: 1 live session(s) in this worktree: a [1]."));
+
+			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
+
+			expect(removeWorktree).toHaveBeenCalledTimes(1);
+			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]).toBeDefined();
+		});
+	});
+
+	// Over HTTP (browser/remote) the rejection is an HttpRpcError whose message
+	// is "RPC remove_worktree failed: 409 {...}"; the refusal prefix lives in
+	// the body's `error` field, so matching `err.message` would miss it.
+	it("recognizes the worktree_busy refusal from an HTTP 409 body", async () => {
+		await testInScopeAsync(async () => {
+			const { HttpRpcError } = await import("../../transport");
+			setupWorkspace();
+			const { coordinator, removeWorktree, confirmRemoveBusyWorktree } = makeCoordinator();
+			removeWorktree
+				.mockRejectedValueOnce(
+					new HttpRpcError(
+						"remove_worktree",
+						409,
+						JSON.stringify({
+							error: "worktree_busy: 1 live session(s) in this worktree: a [1].",
+							code: "worktree_busy",
+						}),
+					),
+				)
+				.mockResolvedValueOnce({});
+
+			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
+
+			expect(confirmRemoveBusyWorktree).toHaveBeenCalledTimes(1);
+			expect(removeWorktree).toHaveBeenCalledTimes(2);
+			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]).toBeUndefined();
+		});
+	});
+
+	it("handles a lock and a busy refusal in turn, keeping both overrides for the final retry", async () => {
+		await testInScopeAsync(async () => {
+			setupWorkspace();
+			const { coordinator, removeWorktree, confirmRemoveLockedWorktree, confirmRemoveBusyWorktree } = makeCoordinator();
+			removeWorktree
+				.mockRejectedValueOnce(new Error("worktree_busy: 1 live session(s) in this worktree: a [1]."))
+				.mockRejectedValueOnce(new Error("worktree_locked:fatal: locked"))
+				.mockResolvedValueOnce({});
+
+			await coordinator.handleRemoveWorkspace(REPO, WORKSPACE);
+
+			expect(confirmRemoveBusyWorktree).toHaveBeenCalledTimes(1);
+			expect(confirmRemoveLockedWorktree).toHaveBeenCalledTimes(1);
+			expect(removeWorktree).toHaveBeenLastCalledWith(REPO, WORKSPACE, true, false, true, undefined, undefined, true);
+			expect(repositoriesStore.get(REPO)?.workspaces[WORKSPACE]).toBeUndefined();
+		});
+	});
+
 	it("forces a requires_force removal only with the confirmed lifecycle fingerprint", async () => {
 		await testInScopeAsync(async () => {
 			setupWorkspace();

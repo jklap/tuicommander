@@ -422,6 +422,24 @@ describe("useConfirmDialog", () => {
 			expect(await promise).toBe(true);
 		});
 
+		it("describes backend-reported live sessions (worktree_busy) without promising to close them", async () => {
+			const promise = dialog.confirmRemoveBusyWorktree(
+				"feature-z",
+				{ terminalCount: 1, isBusy: true, terminals: [{ id: "pty-9", agentType: "session", label: "zsh" }] },
+				{ liveSessions: true },
+			);
+
+			const state = dialog.dialogState();
+			expect(state?.title).toBe('"feature-z" is in use');
+			expect(state?.message).toContain("1 live session(s) still work in");
+			expect(state?.message).toContain("session — zsh");
+			expect(state?.message).not.toContain("will close them");
+			expect(state?.defaultButton).toBe("cancel");
+
+			dialog.handleClose();
+			expect(await promise).toBe(false);
+		});
+
 		it("returns false when the user cancels", async () => {
 			const promise = dialog.confirmRemoveBusyWorktree("feature-y", {
 				terminalCount: 1,

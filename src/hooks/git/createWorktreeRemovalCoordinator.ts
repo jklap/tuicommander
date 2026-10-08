@@ -3,6 +3,7 @@ import { appLogger } from "../../stores/appLogger";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { repositoriesStore } from "../../stores/repositories";
 import type { WorkspaceLifecycleStatus } from "../../stores/workspaceIdentity";
+import { HttpRpcError } from "../../transport";
 import { branchActivitySummary } from "../../utils/activitySnapshot";
 import type { RemoveWorktreeResult } from "../useRepository";
 
@@ -16,6 +17,7 @@ interface WorktreeRemovalCoordinatorDeps {
 			overrideLock?: boolean,
 			expectedFingerprint?: string,
 			confirmMissingCheckout?: boolean,
+			overrideBusy?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		getWorkspaceLifecycle: (repoPath: string, workspaceId: string) => Promise<WorkspaceLifecycleStatus>;
 	};
@@ -29,6 +31,7 @@ interface WorktreeRemovalCoordinatorDeps {
 		confirmRemoveBusyWorktree?: (
 			branchName: string,
 			summary: ReturnType<typeof branchActivitySummary>,
+			options?: { liveSessions?: boolean },
 		) => Promise<boolean>;
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
@@ -155,103 +158,138 @@ export function createWorktreeRemovalCoordinator(deps: WorktreeRemovalCoordinato
 			deleteBranch,
 		});
 
+		/** The backend refused because live sessions still work in the checkout
+		 *  (`worktree_busy:`) — sessions the attached-terminal question above
+		 *  cannot see, e.g. a shell that only `cd`'d in. Ask the same
+		 *  Cancel-by-default "in use" question, naming the sessions the backend
+		 *  reports, before overriding. Without a dialog wired, never override. */
+		const confirmLiveSessions = async (reason: string): Promise<boolean> => {
+			if (!deps.dialogs.confirmRemoveBusyWorktree) return false;
+			let sessions: Array<{ sessionId: string; name: string }> = [];
+			try {
+				sessions = (await deps.repo.getWorkspaceLifecycle(repoPath, workspaceId)).liveSessions ?? [];
+			} catch (err) {
+				appLogger.warn("git", `handleRemoveWorkspace: live-session lookup failed for ${workspaceId}`, err);
+			}
+			const reported = Number(/^worktree_busy:\s*(\d+)/.exec(reason)?.[1] ?? 0);
+			return await deps.dialogs.confirmRemoveBusyWorktree(
+				branchName,
+				{
+					terminalCount: Math.max(sessions.length, reported, 1),
+					isBusy: true,
+					terminals: sessions.map((session) => ({ id: session.sessionId, agentType: "session", label: session.name })),
+				},
+				{ liveSessions: true },
+			);
+		};
+
 		// Tracks whether to remove the branch from the store at the end.
-		// Set to true on success or non-fatal non-lock errors (old "remove from UI" behavior).
-		// Stays false when: locked+cancelled, or force-remove failed (worktree still in git).
+		// Set to true on success; stays false on every refusal or failure.
 		let shouldRemoveFromStore = false;
 		let shouldClearBranchLabel = true;
-		const removeConfirmed = (overrideLock: boolean) => {
-			if (lifecycle.removalSafety === "requires_force") {
-				if (lifecycle.missingCheckout) {
-					return deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, true, overrideLock, undefined, true);
-				}
-				if (!lifecycle.dirtyFingerprint) {
-					throw new Error("Cannot verify the confirmed worktree state");
-				}
+		const removeConfirmed = (overrideLock: boolean, overrideBusy: boolean) => {
+			const force = lifecycle.removalSafety === "requires_force";
+			if (force && !lifecycle.missingCheckout && !lifecycle.dirtyFingerprint) {
+				throw new Error("Cannot verify the confirmed worktree state");
+			}
+			const fingerprint = force && !lifecycle.missingCheckout ? lifecycle.dirtyFingerprint : undefined;
+			const confirmMissing = force && lifecycle.missingCheckout ? true : undefined;
+			// The trailing overrides are passed only when set, so a plain removal
+			// keeps the exact call shape it always had.
+			if (overrideBusy) {
 				return deps.repo.removeWorktree(
 					repoPath,
 					workspaceId,
 					deleteBranch,
-					true,
+					force,
 					overrideLock,
-					lifecycle.dirtyFingerprint,
+					fingerprint,
+					confirmMissing,
+					true,
 				);
+			}
+			if (confirmMissing) {
+				return deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, true, overrideLock, undefined, true);
+			}
+			if (fingerprint) {
+				return deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, true, overrideLock, fingerprint);
 			}
 			return overrideLock
 				? deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, false, true)
 				: deps.repo.removeWorktree(repoPath, workspaceId, deleteBranch, false);
 		};
-		try {
-			// The user confirmed knowing the count, so the backend guard would only
-			// bounce a decision that has already been made.
-			const outcome = await removeConfirmed(false);
-			appLogger.info("git", `handleRemoveWorkspace: remove_worktree SUCCESS`, { workspaceId });
-			shouldRemoveFromStore = true;
-			shouldClearBranchLabel = !outcome?.branch_delete_warning;
-			deps.setStatusInfo(describeRemoveWorktreeSuccess(branchName, outcome));
-		} catch (err) {
-			const reason = err instanceof Error ? err.message : String(err);
-			if (reason.startsWith("worktree_locked:")) {
-				// Worktree is locked by an agent — ask for a separate lock override.
-				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
-				appLogger.warn("git", `handleRemoveWorkspace: worktree locked — showing confirmation dialog`, {
+		// Each refusal (lock, live sessions) is asked about once, in whatever order
+		// the backend reports them, and its override is kept for the retry.
+		let overrideLock = false;
+		let overrideBusy = false;
+		for (;;) {
+			try {
+				const outcome = await removeConfirmed(overrideLock, overrideBusy);
+				appLogger.info("git", `handleRemoveWorkspace: remove_worktree SUCCESS`, {
 					workspaceId,
-					reason,
+					overrideLock,
+					overrideBusy,
 				});
-				// Pass deleteBranch so the dialog can describe the requested cleanup.
-				// Catch dialog rejection so the removingBranches
-				// lock is released even when the modal subsystem errors out.
-				let forceConfirmed = false;
-				try {
-					forceConfirmed = await (deps.dialogs.confirmRemoveLockedWorktree?.(branchName, deleteBranch) ?? false);
-				} catch (dialogErr) {
-					appLogger.error("git", `handleRemoveWorkspace: confirmRemoveLockedWorktree threw`, {
-						workspaceId,
-						error: dialogErr instanceof Error ? dialogErr.message : String(dialogErr),
-					});
-					deps.setStatusInfo(`Failed to confirm force-remove for ${branchName}`);
-					clearLock();
-					return;
-				}
-				if (!forceConfirmed) {
-					appLogger.info("git", `handleRemoveWorkspace: user cancelled force removal of locked worktree`, {
-						workspaceId,
-					});
-					clearLock();
-					return;
-				}
-				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: true });
-				try {
-					const outcome = await removeConfirmed(true);
-					appLogger.info("git", `handleRemoveWorkspace: force remove_worktree SUCCESS`, { workspaceId });
-					shouldRemoveFromStore = true;
-					shouldClearBranchLabel = !outcome?.branch_delete_warning;
-					deps.setStatusInfo(describeRemoveWorktreeSuccess(branchName, outcome));
-				} catch (forceErr) {
-					const forceReason = forceErr instanceof Error ? forceErr.message : String(forceErr);
-					appLogger.error("git", `handleRemoveWorkspace: force remove_worktree FAILED`, {
-						workspaceId,
-						reason: forceReason,
-					});
-					deps.setStatusInfo(`Failed to remove ${branchName}: ${forceReason}`);
+				shouldRemoveFromStore = true;
+				shouldClearBranchLabel = !outcome?.branch_delete_warning;
+				deps.setStatusInfo(describeRemoveWorktreeSuccess(branchName, outcome));
+				break;
+			} catch (err) {
+				// Over HTTP the backend's message is the error body's `error` field.
+				const reason = err instanceof HttpRpcError ? err.detail : err instanceof Error ? err.message : String(err);
+				const refusal =
+					!overrideLock && reason.startsWith("worktree_locked:")
+						? "locked"
+						: !overrideBusy && reason.startsWith("worktree_busy:")
+							? "busy"
+							: null;
+				if (refusal) {
 					repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
-					clearLock();
-					return;
+					appLogger.warn("git", `handleRemoveWorkspace: worktree ${refusal} — showing confirmation dialog`, {
+						workspaceId,
+						reason,
+					});
+					// Catch dialog rejection so the removingBranches lock is released
+					// even when the modal subsystem errors out.
+					let confirmedOverride = false;
+					try {
+						confirmedOverride =
+							refusal === "locked"
+								? await (deps.dialogs.confirmRemoveLockedWorktree?.(branchName, deleteBranch) ?? false)
+								: await confirmLiveSessions(reason);
+					} catch (dialogErr) {
+						appLogger.error("git", `handleRemoveWorkspace: ${refusal} override dialog threw`, {
+							workspaceId,
+							error: dialogErr instanceof Error ? dialogErr.message : String(dialogErr),
+						});
+						deps.setStatusInfo(`Failed to confirm force-remove for ${branchName}`);
+						clearLock();
+						return;
+					}
+					if (!confirmedOverride) {
+						appLogger.info("git", `handleRemoveWorkspace: user cancelled the ${refusal} override`, { workspaceId });
+						clearLock();
+						return;
+					}
+					if (refusal === "locked") overrideLock = true;
+					else overrideBusy = true;
+					repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: true });
+					continue;
 				}
-			} else if (reason.startsWith("worktree_is_main:")) {
-				appLogger.warn("git", `handleRemoveWorkspace: branch is in main worktree — cannot remove as worktree`, {
-					workspaceId,
-				});
-				deps.setStatusInfo(`Cannot remove ${branchName}: branch is in the main worktree, not a linked worktree`);
-				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
-				clearLock();
-				return;
-			} else {
-				appLogger.error("git", `handleRemoveWorkspace: remove_worktree FAILED — workspace kept`, {
-					workspaceId,
-					reason,
-				});
-				deps.setStatusInfo(`Failed to remove ${branchName}: ${reason}`);
+				if (reason.startsWith("worktree_is_main:")) {
+					appLogger.warn("git", `handleRemoveWorkspace: branch is in main worktree — cannot remove as worktree`, {
+						workspaceId,
+					});
+					deps.setStatusInfo(`Cannot remove ${branchName}: branch is in the main worktree, not a linked worktree`);
+				} else {
+					appLogger.error("git", `handleRemoveWorkspace: remove_worktree FAILED — workspace kept`, {
+						workspaceId,
+						reason,
+						overrideLock,
+						overrideBusy,
+					});
+					deps.setStatusInfo(`Failed to remove ${branchName}: ${reason}`);
+				}
 				repositoriesStore.setWorkspace(repoPath, workspaceId, { isRemoving: false });
 				clearLock();
 				return;
