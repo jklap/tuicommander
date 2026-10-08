@@ -65,6 +65,44 @@ export function answerExtent(start: number, totalRows: number, getRow: (i: numbe
 	return last;
 }
 
+/** A rendered top-level block of a chat message, reduced to what the answer rule reads. */
+export interface ChatBlock {
+	kind: "paragraph" | "code" | "other";
+	text: string;
+	/** The block opens a 💬 answer. Only a paragraph can. */
+	marker: boolean;
+}
+
+/**
+ * Block ranges `[first, last]` of the answers in a rendered chat message, by the
+ * same rule as the grid: the blocks are laid out as the grid rows of an agent
+ * reply (indented under the bullet, a blank row between blocks) and `answerExtent`
+ * decides where each answer ends.
+ */
+export function answerBlockRanges(blocks: readonly ChatBlock[]): [number, number][] {
+	const rows: RowSnapshot[] = [];
+	const owner: number[] = [];
+	const push = (text: string, block: number) => {
+		rows.push({ text, isWrapped: false });
+		owner.push(block);
+	};
+	const firstRow: number[] = [];
+	blocks.forEach((block, index) => {
+		if (index > 0) push("", index);
+		firstRow.push(rows.length);
+		if (block.kind === "code") for (const line of ["```", ...block.text.split("\n"), "```"]) push(`  ${line}`, index);
+		else push(block.kind === "paragraph" ? `  ${block.marker ? "💬 " : ""}${block.text}` : `  - ${block.text}`, index);
+	});
+	const ranges: [number, number][] = [];
+	for (let index = 0; index < blocks.length; index++) {
+		if (!blocks[index].marker) continue;
+		const last = owner[answerExtent(firstRow[index], rows.length, (r) => rows[r] ?? null)];
+		ranges.push([index, last]);
+		index = last;
+	}
+	return ranges;
+}
+
 /** Match a NEW `suggest:` anchor for stop-detection during a continuation
  *  walk. Does NOT require `|` on the same row — the Rust parser allows the
  *  first `|` to arrive on a wrapped continuation line, so a row like
@@ -141,7 +179,7 @@ export function isSuggestBlock(
 /** One row the overlay masks, and why. */
 export interface OverlayBlock {
 	row: number;
-	kind: "suggest" | "continuation" | "intent" | "answer";
+	kind: "suggest" | "continuation" | "intent" | "answer" | "prompt";
 }
 
 /**
@@ -157,6 +195,7 @@ export interface OverlayBlock {
 export function planSuggestOverlay(
 	totalRows: number,
 	getRow: (i: number) => RowSnapshot | null,
+	isPromptRow: (i: number) => boolean = () => false,
 ): { key: string; blocks: OverlayBlock[] } {
 	const blocks: OverlayBlock[] = [];
 	const parts: string[] = [];
@@ -165,7 +204,16 @@ export function planSuggestOverlay(
 		if (!snapshot) continue;
 		const text = snapshot.text;
 
-		if (SUGGEST_ANCHOR_RE.test(text) && isSuggestBlock(row, totalRows, getRow)) {
+		if (!snapshot.isWrapped && isPromptRow(row)) {
+			// A submitted prompt: its row and the rows it wraps onto. The composer is never one.
+			blocks.push({ row, kind: "prompt" });
+			parts.push(`p${row}`);
+			while (row + 1 < totalRows && getRow(row + 1)?.isWrapped) {
+				row++;
+				blocks.push({ row, kind: "prompt" });
+				parts.push(`p${row}`);
+			}
+		} else if (SUGGEST_ANCHOR_RE.test(text) && isSuggestBlock(row, totalRows, getRow)) {
 			blocks.push({ row, kind: "suggest" });
 			parts.push(`s${row}`);
 			const hiddenRows = continuationRowsAfterSuggest(row, totalRows, getRow);
@@ -200,8 +248,8 @@ function overlayDiv(top: number, height: number, background: string): HTMLDivEle
 /**
  * Replace the contents of `container` with one absolutely positioned strip per
  * planned block. Masks (`suggest`, `continuation`) paint the terminal
- * background over the row; `intent` and `answer` are translucent tints, so the
- * row's text stays readable underneath. An answer also gets a solid gutter bar.
+ * background over the row; `intent`, `answer` and `prompt` are translucent tints, so the
+ * row's text stays readable underneath. An answer or prompt also gets a solid gutter bar.
  */
 export function paintOverlayBlocks(
 	container: HTMLElement,
@@ -215,6 +263,11 @@ export function paintOverlayBlocks(
 		if (block.kind === "answer") {
 			const div = overlayDiv(top, cellHeight, "rgba(94,190,140,0.14)");
 			div.style.boxShadow = "inset 3px 0 0 rgba(94,190,140,0.9)";
+			container.appendChild(div);
+		} else if (block.kind === "prompt") {
+			// Theme tokens (global.css), shared with the chat view's user message.
+			const div = overlayDiv(top, cellHeight, "var(--prompt-tint)");
+			div.style.boxShadow = "inset 3px 0 0 var(--prompt-bar)";
 			container.appendChild(div);
 		} else {
 			container.appendChild(overlayDiv(top, cellHeight, block.kind === "intent" ? "rgba(181,147,90,0.12)" : bg));
