@@ -74,7 +74,8 @@ export function projectChatProtocolText(text: string): ChatProtocolText {
 				continue;
 			}
 		}
-		if (line) body.push(line);
+		// Blank lines stay: they separate a paragraph from the list before it.
+		body.push(line);
 	}
 	return { body: body.join("\n").replace(/^\n+|\n+$/g, ""), intent, suggestions };
 }

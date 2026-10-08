@@ -305,11 +305,23 @@
   white-space: normal;
 }
 
-/* Same answer tint and left rule as Terminal/suggestOverlay and AnswersPanel. */
-.assistantMsg :global(p[data-tuic-answer]) {
+/* Same answer tint and left rule as Terminal/suggestOverlay and AnswersPanel. The blocks of one
+   answer touch: a transparent border carries the tint (and the rule) across the paragraph gap. */
+.assistantMsg :global(#markdown-content [data-tuic-answer]) {
+  margin-bottom: 0;
+  border-bottom: 16px solid transparent;
+  background:
+    linear-gradient(rgba(94,190,140,0.9), rgba(94,190,140,0.9)) left top / 3px 100% no-repeat border-box,
+    rgba(94,190,140,0.14);
+}
+
+.assistantMsg :global(#markdown-content [data-tuic-answer="end"]) {
+  margin-bottom: 16px;
+  border-bottom: 0;
+}
+
+.assistantMsg :global(#markdown-content p[data-tuic-answer]) {
   padding: 2px 0 2px 8px;
-  border-left: 3px solid rgba(94,190,140,0.9);
-  background: rgba(94,190,140,0.14);
 }
 
 .agentIntent {
