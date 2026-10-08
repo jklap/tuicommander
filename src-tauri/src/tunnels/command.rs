@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use super::profile::{ForwardSpec, StrictHostKeyChecking, TunnelProfile};
+use super::profile::{ForwardSpec, TunnelProfile};
+use crate::ssh_connection::{SshConnectionParams, StrictHostKeyChecking};
 
 /// Directory containing the multiplexed SSH control sockets owned by TUIC.
 pub(crate) fn ssh_control_dir() -> std::path::PathBuf {
@@ -20,23 +21,27 @@ pub(crate) fn ensure_ssh_control_dir() -> std::io::Result<()> {
 /// compatible. `%C` keeps the Unix-domain socket name fixed-size and avoids
 /// putting the remote host in the local filesystem.
 pub(crate) fn build_ssh_base_args(profile: &TunnelProfile) -> Vec<String> {
+    build_ssh_base_args_for(&profile.ssh)
+}
+
+/// [`build_ssh_base_args`] from bare `SshConnectionParams` — what a remote
+/// connection's Test Connection has before any profile exists, so its check
+/// runs with exactly the options a real tunnel would.
+pub(crate) fn build_ssh_base_args_for(ssh: &SshConnectionParams) -> Vec<String> {
     let mut args = Vec::new();
 
     args.push("-o".to_string());
     args.push("BatchMode=yes".to_string());
 
     args.push("-o".to_string());
-    args.push(format!(
-        "ServerAliveInterval={}",
-        profile.options.server_alive_interval
-    ));
+    args.push(format!("ServerAliveInterval={}", ssh.server_alive_interval));
     args.push("-o".to_string());
     args.push(format!(
         "ServerAliveCountMax={}",
-        profile.options.server_alive_count_max
+        ssh.server_alive_count_max
     ));
 
-    let shk_value = match profile.options.strict_host_key_checking {
+    let shk_value = match ssh.strict_host_key_checking {
         StrictHostKeyChecking::Yes => "yes",
         StrictHostKeyChecking::AcceptNew => "accept-new",
     };
@@ -48,15 +53,11 @@ pub(crate) fn build_ssh_base_args(profile: &TunnelProfile) -> Vec<String> {
     args.push("-o".to_string());
     args.push(format!(
         "Compression={}",
-        if profile.options.compression {
-            "yes"
-        } else {
-            "no"
-        }
+        if ssh.compression { "yes" } else { "no" }
     ));
 
     args.push("-o".to_string());
-    args.push(format!("Port={}", profile.port));
+    args.push(format!("Port={}", ssh.port));
 
     args.push("-o".to_string());
     args.push("ControlMaster=auto".to_string());
@@ -69,7 +70,7 @@ pub(crate) fn build_ssh_base_args(profile: &TunnelProfile) -> Vec<String> {
     // acts as the shared master for concurrent one-shot commands.
     args.push("ControlPersist=no".to_string());
 
-    if let Some(identity) = &profile.identity_file {
+    if let Some(identity) = &ssh.identity_file {
         args.push("-i".to_string());
         args.push(identity.to_string_lossy().into_owned());
     }
@@ -117,8 +118,35 @@ pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
 
     // Destination — must be last; `--` keeps a user starting with `-` from being an option
     args.push("--".to_string());
-    args.push(format!("{}@{}", profile.user, profile.host));
+    args.push(format!("{}@{}", profile.ssh.user, profile.ssh.host));
 
+    args
+}
+
+/// Build a one-shot, no-forwards SSH connectivity check (Test Connection):
+/// connect, authenticate, run `true`, exit. No argv[0] — callers spawn `ssh`
+/// with these args, like `exec::ssh_exec`.
+///
+/// Shares every option with a real tunnel through [`build_ssh_base_args_for`],
+/// with two additions that come FIRST because ssh keeps the first value it
+/// sees for an option: `ConnectTimeout=5` bounds the network phase, and
+/// `ControlPath=none` keeps the check off any live multiplexed master — riding
+/// an already-authenticated tunnel would report Reachable without testing the
+/// credentials at all. `--` keeps a user or host starting with `-` from being
+/// read as an option.
+pub(crate) fn build_ssh_test_args(ssh: &SshConnectionParams) -> Vec<String> {
+    let mut args = vec![
+        "-o".to_string(),
+        "ConnectTimeout=5".to_string(),
+        "-o".to_string(),
+        "ControlPath=none".to_string(),
+    ];
+    args.extend(build_ssh_base_args_for(ssh));
+    args.push("-T".to_string());
+    args.push("-n".to_string());
+    args.push("--".to_string());
+    args.push(format!("{}@{}", ssh.user, ssh.host));
+    args.push("true".to_string());
     args
 }
 
@@ -140,18 +168,15 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
-    use crate::tunnels::profile::{ProfileOptions, StrictHostKeyChecking, TunnelProfile};
+    use crate::ssh_connection::SshConnectionParams;
+    use crate::tunnels::profile::TunnelProfile;
 
     fn base_profile() -> TunnelProfile {
         TunnelProfile {
             id: uuid::Uuid::new_v4().to_string(),
             name: "test".to_string(),
-            host: "example.com".to_string(),
-            port: 22,
-            user: "alice".to_string(),
-            identity_file: None,
+            ssh: SshConnectionParams::new("example.com", "alice"),
             forwards: Vec::new(),
-            options: ProfileOptions::default(),
             auto_connect: false,
         }
     }
@@ -185,7 +210,7 @@ mod tests {
     #[test]
     fn compression_off_is_said_out_loud_rather_than_omitted() {
         let mut profile = base_profile();
-        profile.options.compression = false;
+        profile.ssh.compression = false;
 
         // Not "absent": ssh would then read `Compression` from the user's
         // ssh_config, and the operator who turned it off here would get it back
@@ -222,7 +247,7 @@ mod tests {
     #[test]
     fn tunnel_destination_follows_double_dash() {
         let mut profile = base_profile();
-        profile.user = "-oProxyCommand=evil".to_string();
+        profile.ssh.user = "-oProxyCommand=evil".to_string();
         let args = build_ssh_args(&profile);
         let n = args.len();
         assert_eq!(args[n - 2], "--", "{args:?}");
@@ -315,7 +340,7 @@ mod tests {
     #[test]
     fn with_identity_file() {
         let mut profile = base_profile();
-        profile.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
+        profile.ssh.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
 
         let args = build_ssh_args(&profile);
 
@@ -361,7 +386,7 @@ mod tests {
     #[test]
     fn strict_host_key_checking_accept_new() {
         let mut profile = base_profile();
-        profile.options.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
+        profile.ssh.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
 
         let args = build_ssh_args(&profile);
 
@@ -371,6 +396,71 @@ mod tests {
             Some("StrictHostKeyChecking=accept-new"),
             "AcceptNew must map to 'accept-new'"
         );
+    }
+
+    // --- build_ssh_test_args (Test Connection's one-shot SSH check) ---
+
+    #[test]
+    fn test_args_run_a_trivial_remote_command_instead_of_dash_n() {
+        let ssh = SshConnectionParams::new("example.com", "alice");
+        let args = build_ssh_test_args(&ssh);
+
+        assert_flag_absent(&args, "-N");
+        assert_eq!(
+            args.last().unwrap(),
+            "true",
+            "must run a real remote command so the process exits on its own"
+        );
+        assert_eq!(args[args.len() - 2], "alice@example.com");
+        assert_eq!(args[args.len() - 3], "--", "{args:?}");
+    }
+
+    #[test]
+    fn test_args_bound_the_connect_and_never_ride_a_live_master() {
+        let ssh = SshConnectionParams::new("example.com", "alice");
+        let args = build_ssh_test_args(&ssh);
+        assert_eq!(
+            find_option(&args, "ConnectTimeout="),
+            Some("ConnectTimeout=5")
+        );
+        // ssh keeps the FIRST ControlPath it sees.
+        assert_eq!(find_option(&args, "ControlPath="), Some("ControlPath=none"));
+        assert_eq!(find_option(&args, "BatchMode="), Some("BatchMode=yes"));
+    }
+
+    #[test]
+    fn test_args_share_keepalive_host_key_policy_and_port_with_tunnel_args() {
+        let mut ssh = SshConnectionParams::new("example.com", "alice");
+        ssh.server_alive_interval = 42;
+        ssh.server_alive_count_max = 7;
+        ssh.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
+        ssh.port = 2222;
+
+        let test_args = build_ssh_test_args(&ssh);
+        for expected in [
+            "ServerAliveInterval=42",
+            "ServerAliveCountMax=7",
+            "StrictHostKeyChecking=accept-new",
+            "ForwardAgent=no",
+            "Port=2222",
+        ] {
+            let key = &expected[..=expected.find('=').unwrap()];
+            assert_eq!(find_option(&test_args, key), Some(expected));
+        }
+    }
+
+    #[test]
+    fn test_args_include_identity_file_only_when_set() {
+        let mut ssh = SshConnectionParams::new("example.com", "alice");
+        assert_flag_absent(&build_ssh_test_args(&ssh), "-i");
+        ssh.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
+        let args = build_ssh_test_args(&ssh);
+        let i_pos = args
+            .iter()
+            .position(|a| a == "-i")
+            .expect("-i must be present");
+        assert_eq!(args[i_pos + 1], "/home/alice/.ssh/id_ed25519");
+        assert_flag_absent(&args, "-A");
     }
 
     #[test]

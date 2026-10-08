@@ -9,11 +9,12 @@ import { HelpPanel } from "../../components/HelpPanel/HelpPanel";
 import { MarkdownPanel } from "../../components/MarkdownPanel/MarkdownPanel";
 import { PromptDrawer } from "../../components/PromptDrawer/PromptDrawer";
 import { CloseDialog } from "../../components/QuitDialog/CloseDialog";
+import { defaultSsh } from "../../components/SettingsPanel/tabs/services/RemoteConnectionEditor";
 import { StoriesDialog } from "../../components/StoriesDialog/StoriesDialog";
+import { SshConnectionFields } from "../../components/shared/SshConnectionFields";
 import { TaskField } from "../../components/Tasks/detail/TaskField";
 import { roadmapDemo } from "../../components/Tasks/roadmap/demo";
 import { TasksRoadmap } from "../../components/Tasks/roadmap/TasksRoadmap";
-import { TunnelEditorModal } from "../../components/TunnelsPanel/TunnelEditorModal";
 import { DiffViewer } from "../../components/ui/DiffViewer";
 import { WorktreeManager } from "../../components/WorktreeManager/WorktreeManager";
 import { BottomTabs } from "../../mobile/components/BottomTabs";
@@ -22,7 +23,10 @@ import { commandPaletteStore } from "../../stores/commandPalette";
 import { promptLibraryStore } from "../../stores/promptLibrary";
 import { worktreeManagerStore } from "../../stores/worktreeManager";
 
-vi.mock("../../invoke", () => ({ invoke: vi.fn().mockResolvedValue(null) }));
+vi.mock("../../invoke", () => ({
+	invoke: vi.fn().mockResolvedValue(null),
+	listen: vi.fn().mockResolvedValue(() => {}),
+}));
 vi.mock("../../stores/appLogger", () => ({
 	appLogger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }));
@@ -184,9 +188,19 @@ describe("visual review layout regressions", () => {
 
 	it("catches tunnel sibling fields receiving unequal top margins", () => {
 		css("src/components/SettingsPanel/Settings.module.css", "src/components/TunnelsPanel/TunnelEditorModal.module.css");
-		const { container } = render(() => <TunnelEditorModal onClose={noop} />);
-		const host = container.querySelector('[data-setting-id="tunnels.profiles.{id}.host"]')!;
-		const port = container.querySelector('[data-setting-id="tunnels.profiles.{id}.port"]')!;
+		// TunnelEditorModal is gone; this mounts its SshConnectionFields usage (layout `.body` + `.field` reset).
+		const { container } = render(() => (
+			<div class="body">
+				<SshConnectionFields
+					value={defaultSsh()}
+					onChange={noop}
+					settingIdPrefix="tunnels.profiles.{id}.ssh"
+					fieldClass="field"
+				/>
+			</div>
+		));
+		const host = container.querySelector('[data-setting-id="tunnels.profiles.{id}.ssh.host"]')!;
+		const port = container.querySelector('[data-setting-id="tunnels.profiles.{id}.ssh.port"]')!;
 		const top = (element: Element) => getComputedStyle(element.parentElement!).marginTop || "0px";
 		expect(top(port)).toBe(top(host));
 	});

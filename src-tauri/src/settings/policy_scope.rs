@@ -30,7 +30,7 @@ pub(super) fn adds_authority(fields: &[&Field], latest: &Value, next: &Value) ->
             }
             (
                 "tunnels",
-                "/profiles/{id}/port" | "/profiles/{id}/auto_connect" | "/profiles/{id}/forwards",
+                "/profiles/{id}/ssh/port" | "/profiles/{id}/auto_connect" | "/profiles/{id}/forwards",
             ) => tunnel_widened(latest, next),
             (
                 "upstreams",

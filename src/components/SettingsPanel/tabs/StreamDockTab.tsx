@@ -2,6 +2,7 @@ import { type Component, createSignal, For, onCleanup, onMount, Show } from "sol
 import { appLogger } from "../../../stores/appLogger";
 import { terminalsStore } from "../../../stores/terminals";
 import { rpc } from "../../../transport";
+import { cx } from "../../../utils";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
 import { SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -41,11 +42,11 @@ const DEFAULT_STREAMDOCK: StreamDockConfig = {
 	pinned_sessions: [],
 };
 
-function statusColor(status: StreamDockStatus | null): string {
-	if (!status) return "var(--text-secondary)";
-	if (status.last_error) return "var(--error-color, #c43b3b)";
-	if (status.running) return "var(--success-color, #2e9e5b)";
-	return "var(--text-secondary)";
+/** `.mcpStatusDot` modifier class for the current status. */
+function statusDotClass(status: StreamDockStatus | null): "running" | "error" | "stopped" {
+	if (status?.last_error) return "error";
+	if (status?.running) return "running";
+	return "stopped";
 }
 
 function statusLabel(status: StreamDockStatus | null): string {
@@ -138,18 +139,9 @@ export const StreamDockTab: Component = () => {
 
 			<div class={s.group}>
 				<label>StreamDock status</label>
-				<div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-					<span
-						style={{
-							display: "inline-block",
-							width: "10px",
-							height: "10px",
-							"border-radius": "50%",
-							background: statusColor(status()),
-							"flex-shrink": "0",
-						}}
-					/>
-					<span>{statusLabel(status())}</span>
+				<div class={s.mcpStatusRow}>
+					<span class={cx(s.mcpStatusDot, s[statusDotClass(status())])} />
+					<span class={s.mcpStatusText}>{statusLabel(status())}</span>
 				</div>
 				<Show when={status() && status()!.restarts > 0}>
 					<p class={s.hint}>Reconnected {status()!.restarts} time(s) since enabled.</p>
