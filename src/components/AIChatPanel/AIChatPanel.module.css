@@ -318,15 +318,26 @@
   margin-bottom: 0;
 }
 
+/* The tint sits under the block's own content; the rule sits over it, so a table with opaque
+   cells keeps an unbroken left rule. Each pseudo-element has its own rules: a grouped
+   pseudo-element selector is lowered to :is(), which cannot match one. */
 .assistantMsg :global(#markdown-content [data-tuic-answer]::before) {
   content: "";
   position: absolute;
-  z-index: -1;
   inset: 0;
+  z-index: -1;
   pointer-events: none;
-  background:
-    linear-gradient(rgba(94,190,140,0.9), rgba(94,190,140,0.9)) left top / 3px 100% no-repeat,
-    rgba(94,190,140,0.14);
+  background: rgba(94,190,140,0.14);
+}
+
+.assistantMsg :global(#markdown-content [data-tuic-answer]::after) {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 3px;
+  pointer-events: none;
+  background: rgba(94,190,140,0.9);
 }
 
 .assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-start])) {
@@ -337,7 +348,12 @@
   top: -8px;
 }
 
-.assistantMsg :global(#markdown-content p[data-tuic-answer]) {
+.assistantMsg :global(#markdown-content [data-tuic-answer]:not([data-tuic-answer-start])::after) {
+  top: -8px;
+}
+
+/* Text blocks sit clear of the rule; lists, code, tables and quotes bring their own inset. */
+.assistantMsg :global(#markdown-content [data-tuic-answer]:not(ul):not(ol):not(pre):not(table):not(blockquote):not(hr)) {
   padding: 2px 0 2px 8px;
 }
 
