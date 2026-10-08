@@ -4029,7 +4029,7 @@ fn run_shell_script(
     let path = windows_hook_path(&path);
     cmd.env("PATH", path);
     tuic_core::cli::apply_no_window(&mut cmd);
-    crate::git_cli::output_with_deadline(&mut cmd, timeout).map_err(|e| match e {
+    crate::git_cli::output_with_deadline_tree(&mut cmd, timeout).map_err(|e| match e {
         crate::git_cli::GitError::TimedOut { after } => format!(
             "Script timed out after {:.0}s and was killed",
             after.as_secs_f64()
@@ -6287,6 +6287,74 @@ branch refs/heads/feat
         assert!(
             waited < Duration::from_secs(5),
             "must not wait for the script; waited {waited:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn pid_is_alive(pid: &str) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    /// Batch 17 review (restores wip's group-kill test): a timeout used to
+    /// kill only `sh`, so whatever the script started (here a backgrounded
+    /// `sleep`, in real life `npm`'s workers) kept running after the deadline.
+    #[cfg(unix)]
+    #[test]
+    fn run_shell_script_timeout_kills_the_whole_process_group() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = dir.path().join("child.pid");
+        let script = format!("sleep 30 & echo $! > '{}'; wait", pid_file.display());
+
+        let err = run_shell_script(&script, dir.path(), Duration::from_millis(500), &[])
+            .expect_err("the script outlives its deadline");
+        assert!(err.contains("timed out"), "{err}");
+
+        let pid = std::fs::read_to_string(&pid_file).expect("child wrote its pid");
+        let pid = pid.trim();
+        let gone_by = std::time::Instant::now() + Duration::from_secs(5);
+        while pid_is_alive(pid) && std::time::Instant::now() < gone_by {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let alive = pid_is_alive(pid);
+        if alive {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", pid])
+                .status();
+        }
+        assert!(
+            !alive,
+            "the backgrounded grandchild {pid} survived the timeout"
+        );
+    }
+
+    /// Batch 17 review: a script that exits while something it backgrounded
+    /// still holds stdout used to block the success path until that child
+    /// exited — past the deadline, forever for a server. Its output is
+    /// returned promptly and the straggler is left alone.
+    #[cfg(unix)]
+    #[test]
+    fn run_shell_script_returns_when_a_backgrounded_child_holds_stdout() {
+        let dir = TempDir::new().expect("temp dir");
+        let pid_file = dir.path().join("straggler.pid");
+        let script = format!("sleep 30 & echo $! > '{}'; echo done", pid_file.display());
+
+        let started = std::time::Instant::now();
+        let result = run_shell_script(&script, dir.path(), Duration::from_secs(60), &[]);
+        let waited = started.elapsed();
+        if let Ok(pid) = std::fs::read_to_string(&pid_file) {
+            let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+        }
+
+        let out = result.expect("the script itself succeeded");
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "done");
+        assert!(
+            waited < Duration::from_secs(10),
+            "blocked on the straggler's pipe for {waited:?}"
         );
     }
 

@@ -227,14 +227,104 @@ impl GitCmd {
 /// joining would reintroduce exactly the unbounded wait the deadline exists to
 /// prevent. They exit on their own once the last writer closes.
 ///
-/// Not git-specific: the owner probe below runs `lsof` through it, and
-/// `worktree.rs` runs the user's setup scripts through it.
+/// Kills the direct child only: right for git and `lsof`. A user script,
+/// which can start children of its own, goes through
+/// [`output_with_deadline_tree`] instead.
 pub fn output_with_deadline(
     cmd: &mut Command,
     timeout: Duration,
 ) -> Result<std::process::Output, GitError> {
-    use std::io::Read;
+    run_with_deadline(cmd, timeout, false)
+}
 
+/// How long a script's process group gets between SIGTERM and SIGKILL.
+const TREE_KILL_GRACE: Duration = Duration::from_secs(2);
+
+/// How long a script's output is still collected after the script itself
+/// exited, for a child it backgrounded that still holds stdout/stderr open.
+const TREE_DRAIN_GRACE: Duration = Duration::from_secs(2);
+
+/// [`output_with_deadline`] for a command that starts processes of its own —
+/// the Setup/Archive/Run scripts `worktree.rs` runs through `sh -c` / `cmd /C`.
+///
+/// - **Timeout kills the whole tree.** The child leads its own process group
+///   (Unix), and a timeout signals the GROUP: SIGTERM, up to
+///   [`TREE_KILL_GRACE`] for the shell to go, then SIGKILL — so `npm`'s workers
+///   or a backgrounded job do not outlive the deadline. On Windows the tree is
+///   ended with `taskkill /T /F`. A process that deliberately left the group
+///   (`setsid`, a double-forked daemon) is beyond reach, as with any shell.
+/// - **A finished script never blocks on a straggler.** When the shell exits
+///   but something it backgrounded still holds stdout/stderr, the output is
+///   collected for at most [`TREE_DRAIN_GRACE`] more and returned; the
+///   straggler is left running (a script may start a server on purpose), and
+///   the reader threads exit when it closes the pipe.
+pub fn output_with_deadline_tree(
+    cmd: &mut Command,
+    timeout: Duration,
+) -> Result<std::process::Output, GitError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    run_with_deadline(cmd, timeout, true)
+}
+
+/// One pipe drained into a shared buffer, so the bytes read so far can be
+/// taken without joining a reader that may never finish.
+struct PipeReader {
+    buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    done: std::sync::mpsc::Receiver<()>,
+}
+
+impl PipeReader {
+    fn spawn(mut pipe: impl std::io::Read + Send + 'static) -> Self {
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx, done) = std::sync::mpsc::channel();
+        let sink = std::sync::Arc::clone(&buffer);
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => sink
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .extend_from_slice(&chunk[..n]),
+                }
+            }
+            let _ = tx.send(());
+        });
+        Self { buffer, done }
+    }
+
+    /// Wait for EOF until `deadline` (forever when `None`), then hand over
+    /// whatever was read.
+    fn finish(self, deadline: Option<Instant>) -> Vec<u8> {
+        match deadline {
+            None => {
+                let _ = self.done.recv();
+            }
+            Some(deadline) => {
+                let _ = self
+                    .done
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()));
+            }
+        }
+        std::mem::take(
+            &mut *self
+                .buffer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+}
+
+fn run_with_deadline(
+    cmd: &mut Command,
+    timeout: Duration,
+    tree: bool,
+) -> Result<std::process::Output, GitError> {
     // `Command::output()` nulls stdin; `spawn()` inherits it. Match `output()`,
     // or a deadlined child could park on a read of the app's stdin — the exact
     // unbounded wait this function exists to bound.
@@ -244,18 +334,8 @@ pub fn output_with_deadline(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(GitError::SpawnFailed)?;
-    let mut out_pipe = child.stdout.take().expect("stdout piped above");
-    let mut err_pipe = child.stderr.take().expect("stderr piped above");
-    let out_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = out_pipe.read_to_end(&mut buf);
-        buf
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = err_pipe.read_to_end(&mut buf);
-        buf
-    });
+    let out_reader = PipeReader::spawn(child.stdout.take().expect("stdout piped above"));
+    let err_reader = PipeReader::spawn(child.stderr.take().expect("stderr piped above"));
 
     let deadline = Instant::now() + timeout;
     // Backs off from 1ms to 50ms so a fast command is not delayed by the poll
@@ -267,11 +347,11 @@ pub fn output_with_deadline(
             None => {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
-                    // DEFERRED (2026-09-25) — kill/reap covers the direct child only.
-                    // Killing a whole process tree needs process groups on
-                    // Unix and Job Objects on Windows; the reader threads are
-                    // deliberately not joined if a grandchild holds a pipe.
-                    let _ = child.kill();
+                    if tree {
+                        kill_tree(&mut child);
+                    } else {
+                        let _ = child.kill();
+                    }
                     // Reap it, so a timeout never leaves a zombie behind.
                     let _ = child.wait();
                     return Err(GitError::TimedOut { after: timeout });
@@ -282,11 +362,40 @@ pub fn output_with_deadline(
         }
     };
 
+    let drain = tree.then(|| Instant::now() + TREE_DRAIN_GRACE);
     Ok(std::process::Output {
         status,
-        stdout: out_reader.join().unwrap_or_default(),
-        stderr: err_reader.join().unwrap_or_default(),
+        stdout: out_reader.finish(drain),
+        stderr: err_reader.finish(drain),
     })
+}
+
+/// Bounded tree kill for [`output_with_deadline_tree`]'s timeout path. Every
+/// wait in here is bounded by [`TREE_KILL_GRACE`]; the caller reaps.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pgid = child.id();
+        tuic_core::process_tree::terminate_process_group(pgid);
+        let grace = Instant::now() + TREE_KILL_GRACE;
+        while Instant::now() < grace {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Unconditional: the shell going is no proof its children did. If
+        // the leader was already reaped above, this follows within
+        // microseconds — the window for its id to be reused as an unrelated
+        // group is not a realistic one.
+        tuic_core::process_tree::kill_process_group(pgid);
+        let _ = child.kill();
+    }
+    #[cfg(windows)]
+    {
+        tuic_core::process_tree::kill_process_tree(child.id());
+        let _ = child.kill();
+    }
 }
 
 /// Deadline for every `git fetch` in the app.

@@ -87,7 +87,7 @@ Two deadlines are in force:
 | Constant | Value | Applies to |
 |----------|-------|------------|
 | `git_cli::FETCH_TIMEOUT` | 180s | Every `git fetch`: `conflict_assist.rs` (base refspec + PR head), `github.rs` `local_pr_diff` (base, `refs/pull/N/head`, head fallback), `worktree.rs` `fetch_if_remote` |
-| `worktree::SCRIPT_TIMEOUT` | 900s | The user's worktree setup and archive/delete scripts, via `run_shell_script` |
+| `worktree::SCRIPT_TIMEOUT` | 900s | The user's worktree setup and archive/delete scripts, via `run_shell_script` → `git_cli::output_with_deadline_tree` (timeout kills the script's whole process group / Windows process tree; a finished script returns after at most a 2 s drain even if a backgrounded child still holds its output) |
 
 Both are deliberately generous. A fetch is the only git call that waits on something
 off this machine (`GIT_TERMINAL_PROMPT=0` stops git's own prompt but not a blocking

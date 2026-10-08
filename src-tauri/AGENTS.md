@@ -1565,12 +1565,14 @@ snapshot was taken is simply left alone (picked up by a later call) rather than 
 remove over iterate-then-clear whenever the map can be mutated by another task/thread between the
 two steps.**
 
-**Reuse note, not fixed:** the worktree Setup/Archive Script runner has the identical problem (a
-spawned child's own grandchild surviving a single-PID signal) and does NOT solve it yet: tuic-git's
-`git_cli::output_with_deadline` kills only the direct `sh`/`cmd` child on timeout (marked DEFERRED
-there — see "Script timeouts must drain stdout/stderr" above). When that gap is closed, share
-`graceful_kill`'s group-signal/wait/SIGKILL-escalation sequence rather than writing a second copy
-that can drift (grace period, PID-overflow fallback, reap confirmation).
+**Same shape, fixed 2026-10-08 for the worktree Setup/Archive/Run Script runner:** tuic-git's
+`git_cli::output_with_deadline_tree` (used by `run_shell_script`) starts the script as the leader
+of its own process group and, on timeout, signals the GROUP — SIGTERM, a bounded 2 s grace, then
+SIGKILL — or `taskkill /T /F` on Windows, then reaps. `graceful_kill` itself could not be shared:
+it is async and lives in the app crate, which tuic-git must not depend on. The group-signal
+primitive is `tuic_core::process_tree` instead (`terminate_process_group`/`kill_process_group`/
+`kill_process_tree`), where `graceful_kill` can adopt it too. Plain `output_with_deadline` (git,
+`lsof`) still kills only the direct child — those do not start children that must die with them.
 
 ## Notification Sound Playback (`rodio` decoder features, custom-file fallback)
 
@@ -1643,9 +1645,11 @@ bare `spawn()` + `try_wait()` loop.** A loop that doesn't actively drain the chi
 pipes deadlocks the instant the child writes past the OS pipe buffer (16 KiB on
 macOS) — `npm install` blows past this immediately. tuic-git's `run_shell_script`
 (`crates/tuic-git/src/worktree.rs`, fixed 900 s `SCRIPT_TIMEOUT` via
-`git_cli::output_with_deadline`) already does this. On timeout it kills only the
-`sh`/`cmd` child, not its process group — `npm`'s own children keep running; the
-process-tree kill is marked DEFERRED there.
+`git_cli::output_with_deadline_tree`) already does this. On timeout it kills the
+script's whole process group (`npm`'s own children too), and a script that exits
+while something it backgrounded still holds stdout/stderr returns after a bounded
+2 s drain instead of blocking on that straggler (which is left running) — see
+"Killing a Child Process" below.
 
 **Post-create order is CoW warm → file sync → Setup Script, all in one background
 chain the caller never awaits (`worktree::spawn_worktree_setup_chain`).** The sync
