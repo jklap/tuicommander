@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import { AGENT_DISPLAY } from "../../agents";
 import { useGitHub } from "../../hooks/useGitHub";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
@@ -147,9 +148,17 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 	// Pendulum ticker: detect overflow on notification text
 	let infoContainerRef: HTMLSpanElement | undefined;
 	let infoTextRef: HTMLSpanElement | undefined;
+	let infoBalloonRef: HTMLDivElement | undefined;
 	const [tickerActive, setTickerActive] = createSignal(false);
 	const [infoBalloonOpen, setInfoBalloonOpen] = createSignal(false);
 	const [infoPulse, setInfoPulse] = createSignal(false);
+
+	// The info text toggles the balloon, so it counts as inside.
+	useOutsideDismiss({
+		inside: () => [infoBalloonRef, infoContainerRef],
+		onClose: () => setInfoBalloonOpen(false),
+		enabled: infoBalloonOpen,
+	});
 
 	// Close balloon on Escape
 	onMount(() => {
@@ -277,8 +286,9 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 						</span>
 					</span>
 					<Show when={infoBalloonOpen()}>
-						<div class={s.infoBalloonOverlay} onClick={() => setInfoBalloonOpen(false)} />
-						<div class={s.infoBalloon}>{props.statusInfo}</div>
+						<div ref={infoBalloonRef} class={s.infoBalloon}>
+							{props.statusInfo}
+						</div>
 					</Show>
 				</Show>
 				<Show when={cwdParts()}>

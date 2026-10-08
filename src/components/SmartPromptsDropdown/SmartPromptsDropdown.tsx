@@ -1,4 +1,5 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { appLogger } from "../../stores/appLogger";
 import { promptLibraryStore, type SavedPrompt } from "../../stores/promptLibrary";
@@ -113,17 +114,8 @@ export const SmartPromptsDropdown: Component<SmartPromptsDropdownProps> = (props
 		onCleanup(() => document.removeEventListener("keydown", handler));
 	});
 
-	/** Close on outside click */
-	createEffect(() => {
-		if (!open()) return;
-		const handler = (e: MouseEvent) => {
-			if (wrapperRef && !wrapperRef.contains(e.target as Node)) {
-				close();
-			}
-		};
-		document.addEventListener("mousedown", handler);
-		onCleanup(() => document.removeEventListener("mousedown", handler));
-	});
+	/** Close on outside press (the wrapper holds the trigger, dropdown and variable dialog) */
+	useOutsideDismiss({ inside: () => [wrapperRef], onClose: close, enabled: open });
 
 	const handleItemClick = async (prompt: SavedPrompt) => {
 		const check = smartPrompts.canExecute(prompt);
@@ -164,7 +156,6 @@ export const SmartPromptsDropdown: Component<SmartPromptsDropdownProps> = (props
 			</button>
 
 			<Show when={open()}>
-				<div class={s.overlay} onClick={close} />
 				<div class={s.dropdown}>
 					<div class={s.searchWrapper}>
 						<input

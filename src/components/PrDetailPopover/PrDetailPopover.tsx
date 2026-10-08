@@ -1,5 +1,6 @@
 import { type Component, createMemo, createSignal, onCleanup, onMount, Show } from "solid-js";
 import type { AgentType } from "../../agents";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { executeCleanup } from "../../hooks/usePostMergeCleanup";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -285,12 +286,8 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 		}
 	};
 
-	// This popover is non-modal: a full-window backdrop would intercept wheel
-	// hit-testing over the sidebar even while the terminal keeps keyboard focus.
-	const handleOutsidePointerDown = (e: PointerEvent) => {
-		if (cleanupCtx() || !popoverEl || !(e.target instanceof Node) || popoverEl.contains(e.target)) return;
-		props.onClose();
-	};
+	// Non-modal: see useOutsideDismiss. The cleanup dialog replaces the popover, so it is not an outside press.
+	useOutsideDismiss({ inside: () => [popoverEl], onClose: props.onClose, enabled: () => !cleanupCtx() });
 
 	// Flip to top-anchor when the bottom-anchored popover would overflow the
 	// viewport top (clipping the repo/title header). Monotonic: only ever flips
@@ -302,7 +299,6 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 
 	onMount(() => {
 		document.addEventListener("keydown", handleKeyDown);
-		document.addEventListener("pointerdown", handleOutsidePointerDown, true);
 		if (!props.anchor) {
 			requestAnimationFrame(evaluateAnchor);
 			// CI check details and the AI-review section load/expand async after
@@ -316,7 +312,6 @@ export const PrDetailPopover: Component<PrDetailPopoverProps> = (props) => {
 
 	onCleanup(() => {
 		document.removeEventListener("keydown", handleKeyDown);
-		document.removeEventListener("pointerdown", handleOutsidePointerDown, true);
 		resizeObs?.disconnect();
 	});
 

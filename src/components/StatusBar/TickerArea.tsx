@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { statusBarTicker, URGENT_PRIORITY } from "../../stores/statusBarTicker";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils/cx";
@@ -12,6 +13,7 @@ import s from "./StatusBar.module.css";
 export const TickerArea: Component = () => {
 	const [popoverOpen, setPopoverOpen] = createSignal(false);
 	let tickerRef: HTMLSpanElement | undefined;
+	let popoverRef: HTMLDivElement | undefined;
 
 	// Close popover on Escape
 	const handleKeyDown = (e: KeyboardEvent) => {
@@ -19,6 +21,13 @@ export const TickerArea: Component = () => {
 			setPopoverOpen(false);
 		}
 	};
+
+	// The ticker itself is inside: right-click on it toggles, so it must not count as an outside press.
+	useOutsideDismiss({
+		inside: () => [popoverRef, tickerRef],
+		onClose: () => setPopoverOpen(false),
+		enabled: popoverOpen,
+	});
 
 	onMount(() => document.addEventListener("keydown", handleKeyDown));
 	onCleanup(() => document.removeEventListener("keydown", handleKeyDown));
@@ -104,8 +113,7 @@ export const TickerArea: Component = () => {
 
 			{/* Popover listing all active tickers */}
 			<Show when={popoverOpen()}>
-				<div class={s.tickerOverlay} onClick={() => setPopoverOpen(false)} />
-				<div class={s.tickerPopover}>
+				<div ref={popoverRef} class={s.tickerPopover}>
 					<div class={s.tickerPopoverHeader}>
 						Active Tickers
 						<button class={s.tickerPopoverClose} onClick={() => setPopoverOpen(false)}>

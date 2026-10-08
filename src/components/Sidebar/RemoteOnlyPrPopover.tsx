@@ -1,4 +1,5 @@
 import { type Component, createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { useOutsideDismiss } from "../../hooks/useOutsideDismiss";
 import { executeCleanup } from "../../hooks/usePostMergeCleanup";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -121,6 +122,9 @@ export const RemoteOnlyPrPopover: Component<{
 	const handleCleanupSkip = () => {
 		setCleanupCtx(null);
 	};
+
+	let popoverRef: HTMLDivElement | undefined;
+	useOutsideDismiss({ inside: () => [popoverRef], onClose: props.onClose, enabled: () => !cleanupCtx() });
 
 	const visiblePrs = createMemo(() => props.prs.filter((pr) => !dismissedPrs().has(pr.number)));
 
@@ -262,8 +266,7 @@ export const RemoteOnlyPrPopover: Component<{
 				)}
 			</Show>
 			<Show when={!cleanupCtx()}>
-				<div class={s.remoteOnlyOverlay} onClick={props.onClose} onKeyDown={handleKeyDown} tabIndex={-1} />
-				<div class={s.remoteOnlyPopover} onKeyDown={handleKeyDown} tabIndex={-1}>
+				<div ref={popoverRef} class={s.remoteOnlyPopover} onKeyDown={handleKeyDown} tabIndex={-1}>
 					<div class={s.remoteOnlyHeader}>
 						<span>{t("sidebar.remoteOnlyPrs", "Remote-only PRs")}</span>
 						<Show when={dismissedCount() > 0}>
