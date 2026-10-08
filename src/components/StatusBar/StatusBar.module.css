@@ -212,12 +212,6 @@
 }
 
 /* Ticker popover (right-click) */
-.tickerOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-}
-
 .tickerPopover {
   position: fixed;
   bottom: calc(var(--status-height) + 8px);
@@ -320,12 +314,6 @@
 }
 
 /* Info balloon (click on truncated status info) */
-.infoBalloonOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-}
-
 .infoBalloon {
   position: fixed;
   bottom: calc(var(--status-height) + 8px);
