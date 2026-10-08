@@ -390,6 +390,10 @@ pub(super) struct RemoveWorktreeQuery {
     pub expected_fingerprint: Option<String>,
     #[serde(rename = "confirmMissingCheckout", default)]
     pub confirm_missing_checkout: Option<bool>,
+    /// Explicit confirmation to remove a checkout live sessions still work in
+    /// (`worktree_busy:` refusal). Independent of `force` and `overrideLock`.
+    #[serde(rename = "overrideBusy", default)]
+    pub override_busy: Option<bool>,
 }
 
 #[derive(Deserialize)]

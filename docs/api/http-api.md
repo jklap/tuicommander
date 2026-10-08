@@ -2956,6 +2956,7 @@ Query parameters:
 - `overrideLock` (optional, default `false`) -- explicit authorization to override a locked worktree during removal
 - `expectedFingerprint` (required with `force=true` for an existing checkout) -- lifecycle fingerprint shown at force confirmation; removal refuses if checkout status, HEAD, or submodule refs changed
 - `confirmMissingCheckout` (required with `force=true` for a missing registered checkout) -- confirms the lifecycle result without inventing a fingerprint; removal refuses if the checkout reappears
+- `overrideBusy` (optional, default `false`) -- explicit authorization to remove a checkout live sessions still work in. Without it such a removal is refused, even for a clean checkout, with **409** `{ "error": "worktree_busy: N live session(s) in this worktree: …", "code": "worktree_busy", "live_sessions": [{ "session_id", "name" }] }` and nothing is removed. A session counts when its live cwd is inside the checkout or it was spawned there, and its process has not exited. Independent of `force` and `overrideLock`.
 
 The path segment is the opaque workspace id from `GET /worktrees/paths`, not a branch name.
 

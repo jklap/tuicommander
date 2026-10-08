@@ -1595,6 +1595,16 @@ describe("transport", () => {
 			expect(result.path).toBe("/worktrees/locked?repoPath=%2Fr&deleteBranch=true&force=true&overrideLock=true");
 		});
 
+		it("forwards an explicit live-session override (overrideBusy) independently of force and the lock", () => {
+			const result = mapCommandToHttp("remove_worktree", {
+				repoPath: "/r",
+				workspaceId: "busy",
+				deleteBranch: true,
+				overrideBusy: true,
+			});
+			expect(result.path).toBe("/worktrees/busy?repoPath=%2Fr&deleteBranch=true&overrideBusy=true");
+		});
+
 		it("forwards the confirmed worktree fingerprint to the HTTP removal route", () => {
 			const result = mapCommandToHttp("remove_worktree", {
 				repoPath: "/r",

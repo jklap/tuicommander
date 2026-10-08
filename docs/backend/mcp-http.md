@@ -1299,6 +1299,11 @@ optional `delete_branch` flag defaults to `true` for a normal removal and
 branch safety proof and may return a branch-retained warning. Unlocking a
 locked worktree requires the separate `override_lock=true` flag and user
 confirmation. Only an explicit lock override sends Git two `--force` flags.
+A worktree a live session still works in (its cwd is inside, or it was spawned
+there) is refused with `{"error": "worktree_busy: N live session(s) …",
+"code": "worktree_busy", "live_sessions": [{session_id, name}]}` before
+anything is removed, even when it is clean; `override_busy=true`, set only after
+the user confirmed those sessions may be interrupted, lifts that refusal alone.
 Use `repo action=worktree_lifecycle` to obtain the fresh verdict and commit counts. The required `expected_fingerprint` binds force to that lifecycle snapshot; a
 changed checkout status, HEAD, or submodule ref then stops removal. Initialized
 submodule refs are preserved before Git removes the worktree.

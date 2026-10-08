@@ -1577,6 +1577,7 @@ fn native_tool_definitions(prefer_spawning: bool, prefer_messaging: bool) -> ser
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
                 "override_lock": { "type": "boolean", "description": "action=worktree_remove optional, default false. Override a locked worktree only after explicit user confirmation." },
+                "override_busy": { "type": "boolean", "description": "action=worktree_remove optional, default false. A worktree live sessions still work in is refused (worktree_busy:, live_sessions); set only after the user confirmed those sessions may be interrupted." },
                 "expected_fingerprint": { "type": "string", "description": "action=worktree_remove: lifecycle fingerprint shown at force confirmation. Removal refuses if the worktree changed." },
                 "branch": { "type": "string", "description": "Local branch name (required for worktree_lifecycle, worktree_remove, worktree_setup_status and branch_delete; optional for worktree_create)" },
                 "worktree_path": { "type": "string", "description": "action=worktree_remove: absolute path of a detached (orphan) checkout, instead of branch" },
@@ -4664,6 +4665,7 @@ async fn handle_worktree(
             let force = args["force"].as_bool().unwrap_or(false);
             let delete_branch = args["delete_branch"].as_bool().unwrap_or(!force);
             let override_lock = args["override_lock"].as_bool().unwrap_or(false);
+            let override_busy = args["override_busy"].as_bool().unwrap_or(false);
             let expected_fingerprint = args["expected_fingerprint"].as_str().map(str::to_owned);
             if force && expected_fingerprint.is_none() {
                 return serde_json::json!({"error": "force requires expected_fingerprint from worktree_lifecycle after user confirmation"});
@@ -4672,6 +4674,14 @@ async fn handle_worktree(
             let workspace_id_for_remove = workspace_id.clone();
             let preview_state = Arc::clone(state);
             let result = tokio::task::spawn_blocking(move || {
+                if let Err(busy) = crate::worktree::workspace_removal_guard(
+                    &preview_state,
+                    &path_for_remove,
+                    &workspace_id_for_remove,
+                    override_busy,
+                ) {
+                    return Err(busy.to_json());
+                }
                 let warnings = crate::worktree::inspect_worktree_removal(
                     &preview_state,
                     std::path::Path::new(&path_for_remove),
@@ -4687,8 +4697,9 @@ async fn handle_worktree(
                     force,
                     override_lock,
                     expected_fingerprint.as_deref(),
-                )?;
-                Ok::<_, String>((outcome, warnings))
+                )
+                .map_err(|e| serde_json::json!({"error": e}))?;
+                Ok::<_, serde_json::Value>((outcome, warnings))
             })
             .await;
             match result {
@@ -4705,7 +4716,7 @@ async fn handle_worktree(
                     response["warnings"] = serde_json::json!(warnings);
                     response
                 }
-                Ok(Err(e)) => serde_json::json!({"error": e}),
+                Ok(Err(error_body)) => error_body,
                 Err(e) => serde_json::json!({
                     "error": format!("worktree removal task failed to complete: {e}")
                 }),
@@ -11077,6 +11088,51 @@ mod tests {
         }
         assert!(failures.is_empty(), "{}", failures.join("; "));
         assert!(linked.exists(), "a checked-out worktree must remain");
+    }
+
+    /// Catches: MCP `worktree_remove` deleting a CLEAN worktree a live session
+    /// still works in (wip 9586bf02c; Batch 8 review), and `override_busy`
+    /// not reaching the removal.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mcp_worktree_remove_refuses_a_worktree_with_a_live_session() {
+        let config = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tuic_git::test_fixtures::setup_test_repo();
+        let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "busy", false);
+        let state = test_state();
+        crate::state::tests_support::insert_dummy_session(&state, "pty-mcp");
+        crate::state::tests_support::set_session_cwd(
+            &state,
+            "pty-mcp",
+            &worktree.to_string_lossy(),
+        );
+        let repo_path = repo.path().to_string_lossy().into_owned();
+
+        let refused = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "branch": "busy", "delete_branch": false}),
+            false,
+        )
+        .await;
+        assert!(
+            refused["error"]
+                .as_str()
+                .is_some_and(|error| error.starts_with(crate::worktree::BUSY_WORKTREE_PREFIX)),
+            "{refused}"
+        );
+        assert_eq!(refused["code"], "worktree_busy");
+        assert_eq!(refused["live_sessions"][0]["session_id"], "pty-mcp");
+        assert!(worktree.exists());
+
+        let removed = handle_worktree(
+            &state,
+            &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "branch": "busy", "delete_branch": false, "override_busy": true}),
+            false,
+        )
+        .await;
+        assert_eq!(removed["ok"], true, "{removed}");
+        assert!(!worktree.exists());
     }
 
     #[tokio::test]
