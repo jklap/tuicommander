@@ -17,6 +17,8 @@ use super::mcp_transport_catalogue::UI_ACTIONS;
 use super::mcp_transport_catalogue::VOICE_ACTIONS;
 use super::mcp_transport_catalogue::validate_mcp_repo_path;
 use super::mcp_transport_peer::PEER_IDENTITY_BIND_LOCK;
+use super::mcp_transport_session_agent::SHELL_READINESS_TIMEOUT_MS;
+use super::mcp_transport_session_agent::gate_new_shell_session;
 use super::mcp_transport_session_agent::handle_session;
 use super::mcp_transport_session_agent::require_action;
 use super::mcp_transport_session_agent::require_path;
@@ -353,6 +355,13 @@ async fn handle_worktree_with_caller(
                     if args["spawn_session"].as_bool().unwrap_or(false) {
                         match create_session_in_dir(state, &wt_path) {
                             Ok(sid) => {
+                                gate_new_shell_session(
+                                    state,
+                                    &sid,
+                                    SHELL_READINESS_TIMEOUT_MS,
+                                    "MCP worktree_create spawn_session",
+                                )
+                                .await;
                                 response["session_id"] = serde_json::json!(sid);
                             }
                             Err(e) => {

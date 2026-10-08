@@ -790,11 +790,22 @@ future second readiness-gate call site would likely duplicate yet another ad
 hoc constant instead of reusing one." (On the pre-rebase branch the gate was
 also extended to a shared `pty::spawn_session_for_agent`; that function and its
 callers — the `ai_terminal_*` MCP tools, the cron scheduler, the PR-review
-watcher — do not exist on this codebase, and today's agent spawns exec the agent
-binary directly rather than typing into a shell, so `materialize` is the only
-server-side spawn-then-write path that needs it.) If you add a new server path
-that spawns a shell and writes into it right away, gate it with
-`wait_for_shell_idle` + that constant.
+watcher — do not exist on this codebase.) Since 2026-10-08 the plain-shell create
+paths whose caller types into the new shell right away are gated too, through
+`mcp_transport::gate_new_shell_session` (same primitive + constant, fail-open with a
+warning log, skips a session that can never signal readiness): MCP `session
+action=create`, MCP `repo worktree_create spawn_session=true`
+(`create_session_in_dir`), HTTP `POST /sessions` and `POST /sessions/worktree`.
+Agent spawns (`POST /sessions/agent`, MCP `agent action=spawn`, desktop
+`spawn_agent`) are deliberately NOT gated — they exec the agent binary directly,
+there is no shell startup to wait out. A shell with no OSC 133 integration is not
+skipped: the 500 ms silence fallback still reaches `SHELL_IDLE` quickly (test
+`http_create_session_without_shell_integration_is_ready_well_before_the_timeout`);
+the one setting that used to disable zsh's integration and make every gate wait its
+full bound, `ZDOTDIR` in `custom_pty_env`, is rejected. `tuic new` posts
+`/sessions` with an 8 s client timeout for the reason in the previous paragraph.
+If you add a new server path that spawns a shell and writes into it right away,
+gate it with `gate_new_shell_session` + that constant.
 
 **A test that subscribes to the event bus after a real materialized pane and
 expects a specific event type to be the very next message is fragile the
