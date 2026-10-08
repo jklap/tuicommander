@@ -1,13 +1,13 @@
 # Design Mode v2 — sintesi in italiano
 
-Bozza per Boss, 2026-10-08. Solo ricerca, nessun codice modificato. Documento completo (inglese): `design-mode-v2.md`. Il brief indicava `plans/`, ma `plans/` è un symlink gitignorato verso il checkout principale: il piano sta in `docs/design/`.
+Decisioni di Boss del 2026-10-08 integrate (§13). Solo piano, nessun codice modificato. Documento completo (inglese): `design-mode-v2.md`. Il brief indicava `plans/`, ma `plans/` è un symlink gitignorato verso il checkout principale: il piano sta in `docs/design/`.
 
 ## 1. Problema
 
 - L'ispezione Overlay di Chrome è sempre attiva e si mangia ogni click: la pagina non è navigabile.
 - Parte da qualsiasi tab terminale; il grab finisce nella riga dell'agente senza revisione, commento per pick o scelta dell'agente.
 - Nessun ciclo di ritorno dopo la modifica dell'agente; serve un URL (Repo Settings) altrimenti `about:blank`.
-- **Il banner "controllato da software di test automatico" è colpa nostra:** `browser.rs:104-110` lancia tramite `chromey` senza `disable_default_args()`, e chromey aggiunge `--enable-automation` e `--disable-extensions` (`chromey-2.58.2/src/browser.rs:1578-1608`). Su questo Mac c'è solo Edge 154, niente Google Chrome.
+- **Il banner "controllato da software di test automatico" è colpa nostra:** `browser.rs:104-110` lancia tramite `chromey` senza `disable_default_args()`, e chromey aggiunge `--enable-automation` e `--disable-extensions` (`chromey-2.58.2/src/browser.rs:1578-1608`). Su questo Mac c'è solo Edge 154, niente Google Chrome. **Aggiornamento (story 1593-987f, merge `2aabe9a9c`):** il lancio v1 non passa più `--enable-automation` né `--disable-extensions`; era un prerequisito per caricare l'estensione. Il lancio v1 usa ancora CDP.
 
 ## 2. Cosa abbiamo già deciso (non si ripropone)
 
@@ -39,25 +39,25 @@ Fatti verificati online: Chrome 137+ non onora più `--load-extension` (resta su
 
 - Content script in MAIN world, `all_frames`, `document_start`, solo host loopback di default: overlay in Shadow DOM chiuso, `extract.js` esistente, sonda HMR (wrapper di `WebSocket`), screenshot con `captureVisibleTab` + crop.
 - Side panel = sidebar: bottoni Pick / Multi-pick / Stop, card per pick (dati, commento, elimina), selettore agente, Send.
-- Canale con TUIC: **native messaging** (raccomandato: nessuna porta, ID estensione fissato in `allowed_origins`, host che inoltra a `mcp.sock`, riuso del sidecar `tuic-bridge`). Alternativa: HTTP loopback + token (nuovo listener, nuovo confine di fiducia). TUIC oggi non ha listener TCP sempre attivo.
+- Canale con TUIC: **native messaging** (deciso da Boss, Q2: nessuna porta, ID estensione fissato in `allowed_origins`, host che inoltra a `mcp.sock`, adattatore con framing a lunghezza, vedi §14). Alternativa di riserva: HTTP loopback + token (nuovo listener, nuovo confine di fiducia). TUIC oggi non ha listener TCP sempre attivo.
 
 ## 6. Ingresso e caso senza URL
 
 Ingressi: icona dell'estensione (un click), comando **Open in Design Mode browser** a livello repo (palette/menu) e pulsante sulle tab URL. Eliminati: voce nel menu delle tab terminale, voce palette sul terminale attivo, badge `D`.
 
-Senza URL, scelta: **scoperta dei dev server servita da TUIC e mostrata nel side panel, più la barra indirizzi del browser come base**. Ordine: URL esplicito in Repo Settings > porte in ascolto su loopback attribuite per cwd/command line (deepest match) > URL stampato nel PTY convalidato > recenti > pulsante "Start dev server". Parsing di config scartato (indovina una porta diversa da quella reale).
+Senza URL, scelta: **scoperta dei dev server servita da TUIC e mostrata nel side panel, più la barra indirizzi del browser come base**. Ordine (Q7, deciso): URL esplicito in Repo Settings per primo, con accanto etichettato un URL PTY fresco su altra porta (Vite sposta 5173→5174); poi porte in ascolto su loopback attribuite per cwd/command line (deepest match) > URL stampato nel PTY convalidato > recenti > pulsante "Start dev server". Parsing di config scartato (indovina una porta diversa da quella reale).
 
 ## 7. Sidebar, commento, agente
 
-Stessa regola agenti di Markdown (`reviewAgents`: stesso repo, primo come default), estratta in una funzione condivisa. Invio con `enqueue_agent_command` (idle gate): subito se idle, altrimenti al prossimo busy→idle. Cambio rispetto a v1: non più "incolla senza Invio", la sidebar è lo step di revisione.
+Stessa regola agenti di Markdown (`reviewAgents`: stesso repo, primo come default), estratta in una funzione condivisa. Invio in coda con `enqueue_agent_command` (idle gate, deciso Q3): subito se idle, altrimenti al prossimo busy→idle. Cambio rispetto a v1: non più "incolla senza Invio", la sidebar è lo step di revisione.
 
 ## 8. Reload
 
-TUIC calcola il busy→idle dopo l'invio e lo notifica all'estensione. Dopo la revisione Codex: nessun segnale basato su `enqueue`; si correla id comando → consegna → epoca turno → completamento confermato, ignorando idle a timer e `awaiting_input` di Codex pronto. Reload normale (non bypassCache) che salta e avvisa se c'è un form sporco; HMR non prova un aggiornamento riuscito. Coalescenza, toggle auto-reload, pulsante manuale.
+TUIC calcola il busy→idle dopo l'invio e lo notifica all'estensione. Dopo la revisione Codex: nessun segnale basato su `enqueue`; si correla id comando → consegna → epoca turno → completamento confermato, ignorando idle a timer e `awaiting_input` di Codex pronto. Reload normale (non bypassCache) che con un form sporco non ricarica e mostra un avviso con pulsante **Reload** (deciso Q4); HMR non prova un aggiornamento riuscito. Coalescenza, toggle auto-reload, pulsante manuale.
 
 ## 9. Lancio, installazione, banner
 
-Profilo dedicato per repo, lanciato come processo normale: niente `--remote-debugging-*`, niente `--enable-automation`. Estensione: "Load unpacked" una volta da cartella materializzata da TUIC (chiave fissa ⇒ ID stabile); store come slice successiva. Manifest dell'host native messaging scritto da TUIC per il browser scelto.
+Browser scelto dall'utente (Q9): predefinito una finestra Edge/Chrome con profilo proprio per repository, lanciata come processo normale; opzionale l'Edge/Chrome di tutti i giorni con l'estensione installata; niente Safari (non in v2.0 né pianificato: servirebbe app macOS firmata, sidebar in finestra separata, canale diverso). TUIC apre Edge o Chrome qualunque sia il browser di sistema. Lancio: niente `--remote-debugging-*`, niente `--enable-automation`. Estensione: "Load unpacked" una volta per profilo durante il pilota (deciso Q6), poi scheda store non in elenco (S7), da cartella materializzata da TUIC (chiave fissa ⇒ ID stabile). Manifest dell'host native messaging scritto da TUIC per il browser scelto.
 
 ## 10. PWA / mobile
 
@@ -69,19 +69,25 @@ La pagina è input non fidato. Le pagine non parlano mai con TUIC; solo l'estens
 
 ## 12. Slice e validazione
 
-S0 spike (Edge 154: load-extension, sidePanel, NativeMessagingHosts in profilo custom, vita del service worker, pick in iframe cross-origin, captureVisibleTab, HMR); S1 estensione + pick + card; S2 host native messaging + installazione; S3 agent picker + invio; S4 scoperta dev server (fixture `lsof` registrate su questo Mac); S5 ciclo reload (macchina a stati con eventi finti); S6 rimozione ingresso terminale e backend CDP (serve permesso esplicito di Boss); S7 distribuzione store.
+S0 spike (Edge 154: load-extension, sidePanel, NativeMessagingHosts in profilo custom, vita del service worker, pick in iframe cross-origin, captureVisibleTab, HMR); S1 estensione + pick + card; S2 host native messaging + installazione; S3 agent picker + invio; S4 scoperta dev server (fixture `lsof` registrate su questo Mac); S5 ciclo reload (macchina a stati con eventi finti); S6 rimozione ingresso terminale e backend CDP (solo dopo che S0 prova le source map senza CDP; serve permesso esplicito di Boss); S7 distribuzione store non in elenco dopo il pilota.
 
-## 13. Domande aperte per Boss (con raccomandazione)
+## 13. Decisioni (Boss, 2026-10-08)
 
-1. Estensione come via primaria e CDP ritirato? Sì, dopo S0.
-2. Canale: native messaging (consigliato) o HTTP loopback + token?
-3. Invio in coda con idle gate come Markdown invece di "incolla senza Invio"? Sì.
-4. Auto-reload mentre l'utente scrive nella pagina: ricarica comunque con avviso (consigliato) o chiede?
-5. Cancellare `browser.rs` e le parti CDP di `manager.rs` dopo S4? Sì, serve il tuo permesso.
-6. Accettare "Load unpacked" una volta finché non c'è uno store? Sì.
-7. Precedenza URL: Repo Settings sopra le porte rilevate? Sì.
-8. Repo remoti/SSH: slice successiva?
-9. Browser predefinito: profilo dedicato lanciato da TUIC, Chrome proprio opt-in?
+**Decise da Boss:**
+
+- Q2 Canale: native messaging (il browser avvia un piccolo programma TUIC che inoltra i messaggi; nessuna porta di rete).
+- Q3 Invio: in coda con idle gate, come le note di review di Markdown (subito se l'agente è idle, altrimenti a fine turno).
+- Q6 Installazione: "Load unpacked" una volta per profilo durante il pilota, poi scheda store non in elenco.
+- Q8 Repo remoti/SSH: slice successiva, non in v2.0.
+- Q9 Browser: sceglie l'utente. Predefinito: finestra Edge/Chrome con profilo proprio per repository. Opzione: l'Edge/Chrome di tutti i giorni con l'estensione. Niente Safari.
+
+**Decise dal coordinatore:**
+
+- Q1 + Q5: si costruisce l'estensione. Il codice CDP (`browser.rs`, parti CDP di `manager.rs`) resta finché lo spike S0 non prova le source map senza CDP; la rimozione in S6 richiede il permesso di Boss.
+- Q4: con un form sporco niente reload, avviso con pulsante **Reload**.
+- Q7: prima l'URL configurato; accanto, etichettato, un URL PTY fresco.
+
+**Domande ancora aperte:** nessuna. Se S0 smentisce un'ipotesi (per esempio il comportamento di Edge 154), il piano torna a Boss.
 
 ## 14. Revisione Codex
 
