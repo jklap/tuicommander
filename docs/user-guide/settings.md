@@ -591,7 +591,7 @@ tree (e.g. `node_modules`), which is exactly why it doesn't block opening the wo
 - **Archive Script** — Runs before a worktree is archived or deleted; non-zero exit (including a timeout) blocks the operation
 - **Dev Server URL** — Optional address of this repository's development server. Design Mode opens it in a dedicated Chrome window; with no URL, Chrome opens `about:blank` so you can navigate manually. See [Design Mode](design-mode.md).
 
-All three scripts run with a `TUIC_*` environment injected (main checkout path, branch, base ref, worktree name, etc. — see the Terminals guide's Environment Variables section) and a fixed 15-minute (900 s) timeout.
+All three scripts run with a `TUIC_*` environment injected (main checkout path, branch, base ref, worktree name, etc. — see the Terminals guide's Environment Variables section) and a fixed 15-minute (900 s) timeout. A script that hits the timeout is stopped together with everything it started (on macOS/Linux its whole process group, on Windows its process tree); a script that finishes but leaves a background job holding its output returns within a couple of seconds, leaving that job running.
 
 ### Repo-Local Config (`.tuic.json`)
 
