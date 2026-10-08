@@ -1116,6 +1116,10 @@ pub(super) struct SessionVisibleRequest {
     /// `LEGACY_VIEWER_ID`.
     #[serde(default)]
     pub viewer_id: Option<String>,
+    /// `false` = refresh the assertion without SIGCONT-ing a parked session (the
+    /// frontend's periodic keep-alive). Absent/`true` keeps the wake-on-focus.
+    #[serde(default)]
+    pub wake: Option<bool>,
 }
 
 #[derive(Deserialize)]

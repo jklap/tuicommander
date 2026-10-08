@@ -1452,6 +1452,7 @@ pub(crate) async fn set_session_visible(
     session_id: String,
     visible: bool,
     viewer_id: Option<String>,
+    wake: Option<bool>,
 ) -> Result<(), String> {
     let viewer_id = viewer_id.filter(|v| !v.is_empty());
     state.set_session_visible(
@@ -1462,7 +1463,10 @@ pub(crate) async fn set_session_visible(
         visible,
     );
     #[cfg(unix)]
-    if visible && let Err(e) = wake_session(&state, &session_id) {
+    if visible
+        && wake.unwrap_or(true)
+        && let Err(e) = wake_session(&state, &session_id)
+    {
         tracing::warn!(session_id, error = %e, "Wake on focus failed");
     }
     Ok(())

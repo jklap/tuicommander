@@ -111,6 +111,7 @@ describe("initApp", () => {
 	// Visibility is per viewer with a 90 s TTL (B.8); only a tab switch asserted
 	// it, so a tab the user kept looking at went "hidden" and could be parked.
 	it("re-asserts the active session's visibility on the 30 s snapshot timer", async () => {
+		vi.spyOn(document, "hasFocus").mockReturnValue(true);
 		await initApp(createMockDeps());
 		const id = terminalsStore.add(makeTerminal({ sessionId: "sess-visible" }));
 		terminalsStore.setActive(id);
@@ -118,10 +119,59 @@ describe("initApp", () => {
 
 		await vi.advanceTimersByTimeAsync(30_000);
 
+		// `wake: false`: the keep-alive must never SIGCONT a parked session.
 		expect(mockRpc).toHaveBeenCalledWith(
 			"set_session_visible",
-			expect.objectContaining({ sessionId: "sess-visible", visible: true, viewerId: expect.any(String) }),
+			expect.objectContaining({ sessionId: "sess-visible", visible: true, viewerId: expect.any(String), wake: false }),
 		);
+	});
+
+	// Batch 23 review: a minimised window / background tab must be allowed to
+	// reach standby, so the timer must not keep asserting visible:true.
+	it("skips the visibility re-assert while the document is hidden or the window unfocused", async () => {
+		const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+		await initApp(createMockDeps());
+		const id = terminalsStore.add(makeTerminal({ sessionId: "sess-hidden" }));
+		terminalsStore.setActive(id);
+		mockRpc.mockClear();
+
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(mockRpc).not.toHaveBeenCalledWith("set_session_visible", expect.anything());
+
+		hidden.mockReturnValue(false);
+		hasFocus.mockReturnValue(false);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(mockRpc).not.toHaveBeenCalledWith("set_session_visible", expect.anything());
+	});
+
+	it("sends visible:false when the document hides and visible:true (waking) on focus", async () => {
+		vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+		await initApp(createMockDeps());
+		const id = terminalsStore.add(makeTerminal({ sessionId: "sess-follow" }));
+		terminalsStore.setActive(id);
+		mockRpc.mockClear();
+
+		hidden.mockReturnValue(true);
+		document.dispatchEvent(new Event("visibilitychange"));
+		expect(mockRpc).toHaveBeenCalledWith(
+			"set_session_visible",
+			expect.objectContaining({ sessionId: "sess-follow", visible: false }),
+		);
+
+		mockRpc.mockClear();
+		hidden.mockReturnValue(false);
+		window.dispatchEvent(new Event("focus"));
+		expect(mockRpc).toHaveBeenCalledWith(
+			"set_session_visible",
+			expect.objectContaining({ sessionId: "sess-follow", visible: true }),
+		);
+		// A real return wakes: no `wake: false` on this call.
+		const focusCall = mockRpc.mock.calls.find(([name]) => name === "set_session_visible");
+		const focusArgs = focusCall ? (focusCall[1] as { wake?: boolean }) : undefined;
+		expect(focusArgs).toBeDefined();
+		expect(focusArgs?.wake).toBeUndefined();
 	});
 
 	it("logs the navigation type and document start at each initialization", async () => {
