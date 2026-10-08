@@ -294,6 +294,7 @@ pub(crate) async fn install_remote_daemon_shared(
     state: &std::sync::Arc<crate::AppState>,
     id: &str,
 ) -> Result<(), String> {
+    let _daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = load_connection(state, id)?;
     let token = pairing_token(state, id)?;
     let (profile, port) = connection_profile(&connection)?;
@@ -306,6 +307,7 @@ pub(crate) async fn uninstall_remote_daemon_shared(
     state: &std::sync::Arc<crate::AppState>,
     id: &str,
 ) -> Result<(), String> {
+    let _daemon_ops = state.remote.lock_daemon_ops(id).await;
     let connection = load_connection(state, id)?;
     let (profile, _) = connection_profile(&connection)?;
     uninstall(&profile).await?;
