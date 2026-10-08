@@ -580,14 +580,34 @@ implement the protocol itself.
   `read_shm_medium`, implemented in `terminal_image_transmission.rs`) —
   the vendored crate only base64-decodes the wire payload into a path/name
   string and hands it off, never touching the filesystem or a shared-memory
-  API itself. `t=t`'s delete-after-read only proceeds if the canonicalized
-  path resolves inside `std::env::temp_dir()` — the arbitrary-file-deletion
-  guard the color-tools plan's Architecture section calls for (reading
-  itself isn't access-restricted beyond that, since the process driving
-  these sequences already runs as this user in this PTY). `t=s` never
+  API itself. Policy (`terminal_image_transmission.rs`): a file is read
+  only from an absolute path, opened non-blocking and checked with `fstat`
+  on the opened handle (a non-empty regular file no larger than
+  `MAX_SESSION_IMAGE_BYTES`, read through `take(len)`; FIFOs, devices,
+  directories and zero-length `/proc`-style files are refused). `t=t`'s
+  delete-after-read follows the Kitty spec's guard: the file NAME must
+  contain `tty-graphics-protocol`, the path must be a regular file (never
+  a symlink, which is neither followed nor removed), and its canonicalized
+  parent must lie inside `std::env::temp_dir()`, `/tmp` or `/dev/shm`;
+  otherwise the image still displays and nothing is deleted. Reading itself
+  isn't access-restricted beyond that, since the process driving these
+  sequences already runs as this user in this PTY. **Replies don't reveal
+  local files:** every failure on a local medium (missing path, wrong
+  shape for `s=`/`v=`, bad zlib, an `f=100` payload that isn't a real
+  PNG/GIF, over the session byte cap) answers the single
+  `ENOENT:could not load the image from the requested medium`
+  (`kitty::MEDIUM_ERROR`), because remote SSH output names paths on this
+  machine. Residual (same as real Kitty): a successful `OK` still tells the
+  sender a decodable image of that shape exists at the path. `t=s` never
   trusts the client's claimed `S=`/`v=` size over the OS-reported segment
-  size (`fstat`/`VirtualQuery`), and only ever opens/reads an existing
-  segment — it is never the creator or unlinker/closer-of-record. **The
+  size (`fstat`/`VirtualQuery`) and only opens an existing segment. On
+  Linux/BSD the segment is copied out with `read(2)` (a segment shrunk
+  mid-copy just comes up short, no SIGBUS); macOS can only `mmap` shm, which
+  is safe there because a macOS segment's size can't change once set. After
+  reading, a segment whose name contains `tty-graphics-protocol` is
+  unlinked (the Kitty spec's terminal-side unlink); any other name is left
+  alone so escape-sequence output can't remove another program's segment.
+  Windows only closes its handle (per spec). **The
   Windows `t=s` path is written against documented Win32 semantics but
   has not been compiled or run on Windows** (this repo is developed on
   macOS/Linux) — see `to-test.md`.
