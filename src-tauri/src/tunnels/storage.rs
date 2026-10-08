@@ -87,6 +87,69 @@ impl ProfileStore {
         Ok(false)
     }
 
+    /// Rewrite every global `<app_data_dir>/tunnels/*.toml` still in the
+    /// pre-nested flat shape (`host`/`port`/`user`/`identity_file` + `[options]`)
+    /// to the nested `[ssh]` one, once. Returns the backups it wrote, one per
+    /// rewritten profile; an already-nested profile is never touched, so a
+    /// second run returns nothing and writes nothing.
+    ///
+    /// Each original is kept verbatim as `<id>.toml.pre-nested-ssh-<UTC>.bak`
+    /// (not `*.toml`, so it is never loaded as a profile) before the profile is
+    /// atomically replaced. A rewrite that would not parse as a `TunnelProfile`
+    /// is skipped and reported, leaving that file as it was; the readers still
+    /// accept the flat shape, so a skipped file keeps working.
+    ///
+    /// Per-repo `<repo>/.tuic/tunnels/*.toml` profiles are deliberately NOT
+    /// rewritten here: they live inside the user's repository (possibly
+    /// committed and shared with older builds), so they stay as they are until
+    /// someone saves them.
+    pub fn migrate_legacy_global_profiles(app_data_dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+        let dir = app_data_dir.join("tunnels");
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let mut backups = Vec::new();
+        let mut failures = Vec::new();
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("reading tunnels dir {:?}", dir))?
+        {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("toml") {
+                continue;
+            }
+            match Self::migrate_legacy_profile_file(&path) {
+                Ok(Some(backup)) => backups.push(backup),
+                Ok(None) => {}
+                Err(e) => failures.push(format!("{}: {e}", path.display())),
+            }
+        }
+        if !failures.is_empty() {
+            anyhow::bail!(
+                "{} tunnel profile(s) left unmigrated: {}",
+                failures.len(),
+                failures.join("; ")
+            );
+        }
+        Ok(backups)
+    }
+
+    fn migrate_legacy_profile_file(
+        path: &Path,
+    ) -> std::result::Result<Option<std::path::PathBuf>, String> {
+        let original = std::fs::read(path).map_err(|e| format!("read failed: {e}"))?;
+        let text = std::str::from_utf8(&original).map_err(|e| format!("not UTF-8: {e}"))?;
+        let mut doc: toml::Table =
+            toml::from_str(text).map_err(|e| format!("parse failed: {e}"))?;
+        if !super::profile::migrate_legacy_toml(&mut doc)? {
+            return Ok(None);
+        }
+        let migrated = toml::to_string(&doc).map_err(|e| format!("serialize failed: {e}"))?;
+        toml::from_str::<TunnelProfile>(&migrated)
+            .map_err(|e| format!("the rewritten profile would not load: {e}"))?;
+        crate::ssh_connection::legacy::backup_then_replace(path, &original, migrated.as_bytes())
+            .map(Some)
+    }
+
     fn read_profile(path: &Path) -> Result<TunnelProfile> {
         let content =
             std::fs::read_to_string(path).with_context(|| format!("reading profile {:?}", path))?;
@@ -140,8 +203,8 @@ mod tests {
         let app = app_data(&tmp);
 
         let mut profile = make_profile("staging");
-        profile.port = 2222;
-        profile.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
+        profile.ssh.port = 2222;
+        profile.ssh.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
 
         ProfileStore::save(&app, &profile).unwrap();
         let profiles = ProfileStore::load_all(&app, None).unwrap();
@@ -150,10 +213,10 @@ mod tests {
         let loaded = &profiles[0];
         assert_eq!(loaded.id, profile.id);
         assert_eq!(loaded.name, profile.name);
-        assert_eq!(loaded.host, profile.host);
-        assert_eq!(loaded.port, profile.port);
-        assert_eq!(loaded.user, profile.user);
-        assert_eq!(loaded.identity_file, profile.identity_file);
+        assert_eq!(loaded.ssh.host, profile.ssh.host);
+        assert_eq!(loaded.ssh.port, profile.ssh.port);
+        assert_eq!(loaded.ssh.user, profile.ssh.user);
+        assert_eq!(loaded.ssh.identity_file, profile.ssh.identity_file);
     }
 
     #[test]
@@ -246,5 +309,105 @@ mod tests {
         assert_eq!(profiles[0].name, "alpha");
         assert_eq!(profiles[1].name, "beta");
         assert_eq!(profiles[2].name, "gamma");
+    }
+
+    /// A global profile exactly as the pre-nested build wrote it.
+    const LEGACY_GLOBAL_PROFILE: &str = r#"id = "550e8400-e29b-41d4-a716-446655440000"
+name = "prod-db-tunnel"
+host = "bastion.example.com"
+port = 2222
+user = "deploy"
+identity_file = "/home/deploy/.ssh/id_ed25519"
+forwards = []
+auto_connect = true
+
+[options]
+server_alive_interval = 30
+server_alive_count_max = 5
+strict_host_key_checking = "AcceptNew"
+compression = false
+"#;
+
+    #[test]
+    fn legacy_global_profiles_are_migrated_once_with_a_backup() {
+        let tmp = TempDir::new().unwrap();
+        let app = app_data(&tmp);
+        let dir = app.join("tunnels");
+        std::fs::create_dir_all(&dir).unwrap();
+        let legacy_path = dir.join("550e8400-e29b-41d4-a716-446655440000.toml");
+        std::fs::write(&legacy_path, LEGACY_GLOBAL_PROFILE).unwrap();
+        let nested = make_profile("already-nested");
+        ProfileStore::save(&app, &nested).unwrap();
+        let nested_path = dir.join(format!("{}.toml", nested.id));
+        let nested_bytes = std::fs::read(&nested_path).unwrap();
+        let before = ProfileStore::load_all(&app, None).unwrap();
+
+        let backups = ProfileStore::migrate_legacy_global_profiles(&app).unwrap();
+
+        assert_eq!(backups.len(), 1, "only the flat profile is rewritten");
+        assert_eq!(
+            std::fs::read_to_string(&backups[0]).unwrap(),
+            LEGACY_GLOBAL_PROFILE
+        );
+        assert_eq!(std::fs::read(&nested_path).unwrap(), nested_bytes);
+        let rewritten = std::fs::read_to_string(&legacy_path).unwrap();
+        assert!(
+            rewritten.contains("[ssh]") && !rewritten.contains("[options]"),
+            "{rewritten}"
+        );
+
+        // The backup is not a `*.toml`, so it never loads as a second profile,
+        // and the migrated profile loads as exactly what the flat one did.
+        let mut after = ProfileStore::load_all(&app, None).unwrap();
+        let mut before = before;
+        after.sort_by(|a, b| a.id.cmp(&b.id));
+        before.sort_by(|a, b| a.id.cmp(&b.id));
+        assert_eq!(
+            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(&after).unwrap()
+        );
+        let migrated = after.iter().find(|p| p.name == "prod-db-tunnel").unwrap();
+        assert_eq!(migrated.ssh.port, 2222);
+        assert_eq!(migrated.ssh.server_alive_interval, 30);
+        assert!(!migrated.ssh.compression);
+        assert!(migrated.auto_connect);
+
+        assert!(
+            ProfileStore::migrate_legacy_global_profiles(&app)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(std::fs::read_to_string(&legacy_path).unwrap(), rewritten);
+    }
+
+    #[test]
+    fn a_profile_that_would_not_load_after_migration_is_left_alone() {
+        let tmp = TempDir::new().unwrap();
+        let app = app_data(&tmp);
+        let dir = app.join("tunnels");
+        std::fs::create_dir_all(&dir).unwrap();
+        let broken = LEGACY_GLOBAL_PROFILE.replace("port = 2222", "port = \"not-a-port\"");
+        let path = dir.join("broken.toml");
+        std::fs::write(&path, &broken).unwrap();
+
+        let err = ProfileStore::migrate_legacy_global_profiles(&app).unwrap_err();
+
+        assert!(err.to_string().contains("left unmigrated"), "{err}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no backup for a skipped file"
+        );
+    }
+
+    #[test]
+    fn migrating_without_a_tunnels_dir_is_a_no_op() {
+        let tmp = TempDir::new().unwrap();
+        assert!(
+            ProfileStore::migrate_legacy_global_profiles(&app_data(&tmp))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

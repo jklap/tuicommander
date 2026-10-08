@@ -962,7 +962,7 @@ export const TIPS: Tip[] = [
 	{
 		feature: "Remote Machine Deploy",
 		description:
-			"Choose Deploy on connect in Settings > Remote Machines to stage and launch the matching daemon over SSH automatically.",
+			"Choose Deploy on connect in Settings > Remote Servers to stage and launch the matching daemon over SSH automatically.",
 		shortcut: null,
 	},
 	{
@@ -1039,12 +1039,6 @@ export const TIPS: Tip[] = [
 		feature: "Session Diff Review",
 		description:
 			"Search 'Session diff review' in the Command Palette to step through everything a Claude Code session changed — grouped by file or in chronological order, with per-step or per-file revert.",
-		shortcut: null,
-	},
-	{
-		feature: "Additional Readable Directories",
-		description:
-			"Settings → Remote Access → File Access lets browser/remote clients read files outside your registered repositories — ~/.claude/plans is enabled by default, so clicking an agent's plan-file link just works.",
 		shortcut: null,
 	},
 	{
