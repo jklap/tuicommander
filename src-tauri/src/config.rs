@@ -1225,25 +1225,75 @@ pub(crate) struct CustomEnvVarEntry {
     pub(crate) value: String,
 }
 
-/// Structural validation only — no name denylist (no blocked `PATH`/`LD_PRELOAD`/etc).
-/// `AppConfig`/`config.json` has no `.tuic.json`/repo tier at all (unlike
-/// `copy_paths`/`additional_readable_dirs`, which specifically avoid a repo-file
-/// tier a committed branch could abuse), so "any env var the user wants" is
-/// honored literally. This setting is reachable the same way every other
-/// `AppConfig` field already is — a local caller, or an authenticated remote one
-/// through the same `require_local_or_auth` gate `save_config`'s route uses — and
-/// `AgentRunConfig::env`/`AgentSettings::env_flags` already grant an equal or
-/// broader capability (zero validation at all) through that identical gate, so
-/// this doesn't cross any new trust boundary. Rejects what the OS itself cannot
-/// represent as an env var name, not what a policy might want to discourage — do
-/// not add a denylist here without a concrete new exploitation path.
+/// Whether `key` may be set through `custom_pty_env`: a well-formed env var
+/// name (ASCII letter or `_`, then ASCII alphanumerics/`_`) that is not
+/// reserved (`reserved_custom_env_key`).
+///
+/// `AppConfig` has no repo tier (a committed `.tuic.json` can't reach this
+/// list), and `AgentRunConfig::env` grants a similar capability through the
+/// same `require_local_or_auth` gate — but this list is applied AFTER every
+/// spawn site's own env, to every PTY, so a few names are reserved because
+/// overriding them breaks TUIC itself or silently changes what runs
+/// (Batch 35 review): see `reserved_custom_env_key`.
+///
+/// `PATH` is deliberately allowed and applied as written: it REPLACES the
+/// inherited `PATH` rather than prepending to it (the Settings hint says so).
 pub(crate) fn valid_custom_env_key(key: &str) -> bool {
     let mut chars = key.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
         _ => return false,
     }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_') && reserved_custom_env_key(key).is_none()
+}
+
+/// Why `key` may not be set through `custom_pty_env`, or `None`. Compared
+/// case-insensitively (Windows env names are case-insensitive):
+///
+/// - `TUIC_*` — TUIC's own identity/integration env (`TUIC_SESSION`,
+///   `TUIC_CONFIG_DIR`, `TUIC_WRAP_USER_FN_*`, ...): overriding it rebinds a
+///   tab's identity or forges integration state.
+/// - `ZDOTDIR` — the zsh shell integration is injected through it; an
+///   override silently kills OSC 133 (every tmux `materialize` then waits out
+///   its full readiness gate).
+/// - `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `DYLD_*` — dynamic-loader
+///   control: code injected into every process every tab starts.
+pub(crate) fn reserved_custom_env_key(key: &str) -> Option<&'static str> {
+    let upper = key.to_ascii_uppercase();
+    if upper.starts_with("TUIC_") {
+        Some("TUIC_* variables are reserved for TUICommander's own session identity")
+    } else if upper == "ZDOTDIR" {
+        Some("ZDOTDIR is how TUICommander's zsh integration is loaded")
+    } else if matches!(
+        upper.as_str(),
+        "LD_PRELOAD" | "LD_LIBRARY_PATH" | "LD_AUDIT"
+    ) || upper.starts_with("DYLD_")
+    {
+        Some("dynamic-loader variables would inject code into every process")
+    } else {
+        None
+    }
+}
+
+/// Drop entries `apply_custom_pty_env` would refuse anyway (malformed or
+/// reserved key, NUL in the value) and collapse case-insensitive duplicate
+/// keys (first wins — Windows env names collide case-insensitively). Run on
+/// every load of `config.json` (a hand edit) and on every save, so the
+/// Settings UI, `GET /config` and the file only ever hold what is applied.
+pub(crate) fn sanitize_custom_pty_env(entries: Vec<CustomEnvVarEntry>) -> Vec<CustomEnvVarEntry> {
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .into_iter()
+        .filter(|entry| {
+            let keep = valid_custom_env_key(&entry.key)
+                && valid_custom_env_value(&entry.value)
+                && seen.insert(entry.key.to_ascii_uppercase());
+            if !keep {
+                tracing::warn!(key = %entry.key, "Dropping custom_pty_env entry: invalid, reserved or duplicate");
+            }
+            keep
+        })
+        .collect()
 }
 
 /// An env value can be any string except one containing a NUL byte, which no
@@ -3060,8 +3110,9 @@ fn commit_config_change_locked(
     let mut next_json = serde_json::to_value(&latest)
         .map_err(|e| format!("Could not serialize current config: {e}"))?;
     apply_json_merge_delta(&mut next_json, &delta);
-    let next: AppConfig =
+    let mut next: AppConfig =
         serde_json::from_value(next_json).map_err(|e| format!("Invalid config: {e}"))?;
+    next.custom_pty_env = sanitize_custom_pty_env(std::mem::take(&mut next.custom_pty_env));
 
     let effects = ConfigSaveEffects {
         tools_changed: cached.disabled_native_tools != next.disabled_native_tools
@@ -3255,8 +3306,10 @@ fn read_app_config_unlocked(
     };
     migrate_flat_services(&mut val);
     migrate_retired_scrollbar_marks(&mut val);
-    match serde_json::from_value(val) {
+    match serde_json::from_value::<AppConfig>(val) {
         Ok(mut config) => {
+            config.custom_pty_env =
+                sanitize_custom_pty_env(std::mem::take(&mut config.custom_pty_env));
             let migrated_secret = hydrate_app_config_secrets(&mut config);
             let migrated_duration = migrate_legacy_session_token_duration(&mut config);
             Ok((config, migrated_secret || migrated_duration))
@@ -5982,6 +6035,78 @@ mod tests {
         assert!(
             !valid_custom_env_key("FOO-BAR"),
             "a key must not contain a hyphen"
+        );
+    }
+
+    /// Batch 35 review: TUIC's own identity env, ZDOTDIR and the dynamic
+    /// loader can't be overridden through custom_pty_env (any case).
+    #[test]
+    fn valid_custom_env_key_rejects_reserved_names() {
+        for key in [
+            "TUIC_SESSION",
+            "tuic_config_dir",
+            "TUIC_WRAP_USER_FN_CLAUDE",
+            "ZDOTDIR",
+            "zdotdir",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_AUDIT",
+            "DYLD_INSERT_LIBRARIES",
+            "dyld_library_path",
+        ] {
+            assert!(!valid_custom_env_key(key), "{key} must be reserved");
+            assert!(reserved_custom_env_key(key).is_some(), "{key}");
+        }
+        // PATH stays allowed (documented: it replaces, not prepends).
+        assert!(valid_custom_env_key("PATH"));
+        assert!(valid_custom_env_key("TUICX"));
+        assert!(valid_custom_env_key("MY_TUIC_VAR"));
+    }
+
+    /// The sanitizer the frontend used to run on hydrate now lives here and
+    /// runs on load and save: malformed, reserved, NUL-valued and
+    /// case-insensitive duplicate entries are dropped, first one wins.
+    #[test]
+    fn sanitize_custom_pty_env_drops_invalid_reserved_and_duplicate_entries() {
+        let entry = |k: &str, v: &str| CustomEnvVarEntry {
+            key: k.to_string(),
+            value: v.to_string(),
+        };
+        let out = sanitize_custom_pty_env(vec![
+            entry("GOOD_KEY", "1"),
+            entry("1BAD_START", "dropped"),
+            entry("GOOD_KEY", "duplicate dropped"),
+            entry("Path", "first"),
+            entry("PATH", "case duplicate dropped"),
+            entry("TUIC_SESSION", "reserved"),
+            entry("NUL", "a\0b"),
+        ]);
+        assert_eq!(out, vec![entry("GOOD_KEY", "1"), entry("Path", "first")]);
+    }
+
+    #[test]
+    fn a_hand_edited_config_json_loads_with_reserved_env_dropped() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(tmp.path().to_path_buf());
+        let entry = |k: &str, v: &str| CustomEnvVarEntry {
+            key: k.to_string(),
+            value: v.to_string(),
+        };
+        let cfg = AppConfig {
+            custom_pty_env: vec![entry("ZDOTDIR", "/tmp/x"), entry("KEEP", "1")],
+            ..AppConfig::default()
+        };
+        std::fs::write(
+            tmp.path().join(APP_CONFIG_FILE),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_custom_pty_env(),
+            vec![CustomEnvVarEntry {
+                key: "KEEP".to_string(),
+                value: "1".to_string(),
+            }]
         );
     }
 
