@@ -308,11 +308,6 @@ impl RemoteRuntime {
         self.provisioned.contains_key(id)
     }
 
-    /// Forget the mark, returning whether it was there.
-    pub(crate) fn take_provisioned(&self, id: &str) -> bool {
-        self.provisioned.remove(id).is_some()
-    }
-
     pub(crate) fn forget_provisioned(&self, id: &str) {
         self.provisioned.remove(id);
     }
@@ -3326,7 +3321,7 @@ mod tests {
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         state.remote.mark_provisioned("vps");
         disconnect(&state, "vps");
-        assert!(!state.remote.take_provisioned("vps"));
+        assert!(!state.remote.is_provisioned("vps"));
     }
 
     #[test]

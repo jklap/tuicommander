@@ -913,7 +913,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, PLAN_CHANGED);
-        assert!(!state.remote.take_provisioned(&connection.id));
+        assert!(!state.remote.is_provisioned(&connection.id));
     }
 
     /// Batch 32 review #5b: concurrent Start/Stop/Update/configure-password
