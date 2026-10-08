@@ -638,6 +638,7 @@ pub(super) fn native_tool_definitions(
                 "force": { "type": "boolean", "description": "action=worktree_remove optional, default false. Explicitly permits discarding dirty workspace state; obtain user confirmation before setting it." },
                 "delete_branch": { "type": "boolean", "description": "action=worktree_remove optional. Defaults to true unless force is true; an explicit true still requires branch safety proof." },
                 "override_lock": { "type": "boolean", "description": "action=worktree_remove optional, default false. Override a locked worktree only after explicit user confirmation." },
+                "override_busy": { "type": "boolean", "description": "action=worktree_remove optional, default false. A worktree live sessions still work in is refused (worktree_busy:, live_sessions); set only after the user confirmed those sessions may be interrupted." },
                 "expected_fingerprint": { "type": "string", "description": "action=worktree_remove: lifecycle fingerprint shown at force confirmation. Removal refuses if the worktree changed." },
                 "branch": { "type": "string", "description": "Local branch name (required for worktree_lifecycle, worktree_remove, worktree_setup_status and branch_delete; optional for worktree_create)" },
                 "worktree_path": { "type": "string", "description": "action=worktree_remove: absolute path of a detached (orphan) checkout, instead of branch" },
