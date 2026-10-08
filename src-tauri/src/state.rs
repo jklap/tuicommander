@@ -224,12 +224,13 @@ pub enum AppEvent {
     /// Working directory reported by the shell through OSC 7.
     #[serde(rename = "pty-cwd")]
     PtyCwd { session_id: String, cwd: String },
+    /// Terminal title set (or reset to empty) through OSC 0/2.
+    #[serde(rename = "pty-title")]
+    PtyTitle { session_id: String, title: String },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
     /// [`crate::pty::ACTIVITY_PULSE_WINDOW`] for why dropping pulses is sound.
-    #[serde(rename = "pty-title")]
-    PtyTitle { session_id: String, title: String },
     #[serde(rename = "pty-activity")]
     PtyActivity { session_id: String },
     /// Assembled PTY lines for the plugin OutputWatchers, carrying the ids Rust
