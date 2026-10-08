@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { DecodedRow } from "../canvasTerminalUtils";
 import { rowText } from "../canvasTerminalUtils";
 import {
+	answerBlockRanges,
 	answerExtent,
+	type ChatBlock,
 	continuationRowsAfterSuggest,
 	isSuggestBlock,
 	paintOverlayBlocks,
@@ -344,5 +346,25 @@ describe("paintOverlayBlocks", () => {
 		paintOverlayBlocks(container, [{ row: 0, kind: "answer" }], 20, "#000");
 		paintOverlayBlocks(container, [], 20, "#000");
 		expect(container.children.length).toBe(0);
+	});
+});
+
+describe("answerBlockRanges", () => {
+	const p = (text: string, marker = false): ChatBlock => ({ kind: "paragraph", text, marker });
+	const code = (text: string): ChatBlock => ({ kind: "code", text, marker: false });
+	const other = (text: string): ChatBlock => ({ kind: "other", text, marker: false });
+
+	// Catches: the tint stopping at the marker paragraph, or a second answer swallowed into the first.
+	it("spans each answer from its marker to the next marker or the end", () => {
+		const blocks = [p("intro"), p("A", true), other("- x"), p("B", true), other("- y"), p("tail")];
+		expect(answerBlockRanges(blocks)).toEqual([
+			[1, 2],
+			[3, 5],
+		]);
+	});
+
+	// Catches: a literal 💬 line inside a code block ending the answer, as the grid never does.
+	it("keeps a code block that shows a marker inside the answer", () => {
+		expect(answerBlockRanges([p("A", true), code("💬 example"), p("after")])).toEqual([[0, 2]]);
 	});
 });

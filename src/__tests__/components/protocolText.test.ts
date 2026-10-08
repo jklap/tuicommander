@@ -36,6 +36,12 @@ describe("AI Chat protocol text", () => {
 		const text = "```text\nintent: Chatting (Chat)Hello there\n```\n    intent: Chatting (Chat)Hello there";
 		expect(projectChatProtocolText(text)).toEqual({ intent: null, body: text, suggestions: [] });
 	});
+
+	// Catches: blank lines dropped, so a paragraph after a list becomes a lazy continuation of its last item.
+	it("keeps the blank line between a list and the paragraph after it", () => {
+		const text = "- one\n- two\n\nAfter the list.\n\nintent: Working (Status)\nLast.";
+		expect(projectChatProtocolText(text).body).toBe("- one\n- two\n\nAfter the list.\n\nLast.");
+	});
 });
 
 // Catches: malformed marker parentheses silently consume an ambiguous reply.
