@@ -533,3 +533,49 @@ async fn frontend_plugin_actions_reach_keybinding_owner_choices() {
         "runtime registrations must not look like durable settings edits"
     );
 }
+
+// Catches: the typed settings write storing custom env entries a spawn refuses to apply
+// (reserved TUIC_*/ZDOTDIR/loader names, case-insensitive duplicates), unlike every other
+// config write path, which runs `config::sanitize_custom_pty_env` before persisting.
+#[tokio::test]
+async fn custom_pty_env_settings_write_stores_only_what_a_spawn_applies() {
+    let (dir, _guard, state) = super::accounts_tests::isolated();
+    let get = json!({"action":"get","target":{"kind":"machine"},"store":"app","paths":["/custom_pty_env"]});
+    let initial = api::execute(&state, get, Caller::native()).await;
+    let mut edit = json!({"action":"set","target":{"kind":"machine"},"store":"app","path":"/custom_pty_env",
+        "value":[
+            {"key":"TUIC_SESSION","value":"hijack"},
+            {"key":"zdotdir","value":"/elsewhere"},
+            {"key":"DYLD_INSERT_LIBRARIES","value":"/x.dylib"},
+            {"key":"MY_FLAG","value":"1"},
+            {"key":"my_flag","value":"2"}
+        ],
+        "expectedRevision":initial["revision"]});
+    let mut reply = api::execute(&state, edit.clone(), Caller::native()).await;
+    if reply["error"]["code"] == "confirmation_required" {
+        let id = reply["error"]["proposalId"].as_str().unwrap().to_owned();
+        state
+            .settings_policy
+            .begin_confirmation(&Caller::native(), &id)
+            .unwrap();
+        state
+            .settings_policy
+            .finish_confirmation(&Caller::native(), &id, true)
+            .unwrap();
+        edit["approval"] = json!(id);
+        reply = api::execute(&state, edit, Caller::native()).await;
+    }
+    assert!(reply.get("error").is_none(), "{reply}");
+    let expected = vec![crate::config::CustomEnvVarEntry {
+        key: "MY_FLAG".into(),
+        value: "1".into(),
+    }];
+    assert_eq!(state.config.read().custom_pty_env, expected);
+    let disk: Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("config.json")).unwrap()).unwrap();
+    assert_eq!(
+        disk["custom_pty_env"],
+        json!([{"key":"MY_FLAG","value":"1"}]),
+        "{disk}"
+    );
+}

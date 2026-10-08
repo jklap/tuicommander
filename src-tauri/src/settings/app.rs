@@ -121,8 +121,14 @@ impl Store for AppSettingsStore {
         let latest = self.latest(&file)?;
         let json = serde_json::to_value(&latest).map_err(|_| Error::new("app", "store_failed"))?;
         let Prepared { value, mut reply } = prepare(&json)?;
-        let next: AppConfig =
+        let mut next: AppConfig =
             serde_json::from_value(value).map_err(|_| Error::new("app", "invalid_type"))?;
+        // Same backend rule as `commit_config_change` and every config load: the
+        // cache and the file only ever hold the custom env entries a spawn applies
+        // (reserved TUIC_*/ZDOTDIR/loader names, NUL values and case-insensitive
+        // duplicates are dropped), so the stored revision matches what runs.
+        next.custom_pty_env =
+            crate::config::sanitize_custom_pty_env(std::mem::take(&mut next.custom_pty_env));
         let canonical =
             serde_json::to_value(&next).map_err(|_| Error::new("app", "store_failed"))?;
         reply.revision = crate::settings::transaction::revision(&canonical)?;
