@@ -656,3 +656,18 @@ Rich parent terminal rows show N agents in each other repository containing live
 ### Browser repository picker
 
 `ApplicationOverlays` uses `RemoteRepoPicker` for browser **Add Repository** as well as connected daemon folders. An omitted `connectionId` browses the serving TUIC with the existing `get_home_directory` and `list_directory` RPCs; an explicit ID browses that daemon. Selection and cancellation resolve the existing path prompt. Native desktop selection still uses the OS dialog.
+
+### AutomationsDialog
+
+`src/components/AutomationsDialog/` provides a machine-local scheduled-run dialog.
+`AutomationsHost` loads it on demand from the command palette. The searchable
+list shows the stored zone, next occurrence and last status, including overlap
+skips. The editor supports literal prompts, run config, workspace, precheck,
+limits, backend cadence presets and backend schedule previews. Once uses
+`once_local` plus the stored zone, without browser timezone conversion. Pause, Run now,
+save, confirmed deletion and recent history share one adapter. Deletion retains
+saved history. Escape uses the modal stack; Tab stays in the dialog.
+
+The Step 8 API is a separate integration dependency. `transportAdapter.ts` is the
+only provisional command-envelope boundary; tests inject `AutomationAdapter`.
+No schedules or launch decisions are calculated in TypeScript.
