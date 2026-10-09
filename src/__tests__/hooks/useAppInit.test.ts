@@ -1247,6 +1247,73 @@ describe("initApp", () => {
 			expect(emptyBranch ? savedTerminalsFor(emptyBranch) : []).toHaveLength(0);
 		});
 
+		describe("tabs that must not auto-restore", () => {
+			const twoSessions = () =>
+				createMockDeps({
+					pty: {
+						listActiveSessions: vi.fn().mockResolvedValue([
+							{ session_id: "keep", cwd: "/repo" },
+							{ session_id: "drop", cwd: "/repo" },
+						]),
+						close: vi.fn().mockResolvedValue(undefined),
+					},
+				});
+
+			const setup = async () => {
+				repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+				repositoriesStore.setWorkspace("/repo", "main", { worktreePath: "/repo" });
+				await initApp(twoSessions());
+				const [keepId, dropId] = terminalsStore.getIds();
+				terminalsStore.update(keepId, { name: "keep-me" });
+				terminalsStore.update(dropId, { name: "drop-me" });
+				return { keepId, dropId };
+			};
+
+			const savedNames = () => {
+				const branch = repositoriesStore.get("/repo")?.workspaces["main"];
+				return (branch ? savedTerminalsFor(branch) : []).map((s) => s.name);
+			};
+
+			it("does not save an exited tab that lingers for review", async () => {
+				const { dropId } = await setup();
+				terminalsStore.update(dropId, { shellState: "exited" });
+
+				window.dispatchEvent(new Event("beforeunload"));
+
+				expect(savedNames()).toEqual(["keep-me"]);
+			});
+
+			it("does not save an agent-created (isRemote) tab such as a subagent pane", async () => {
+				const { dropId } = await setup();
+				terminalsStore.update(dropId, { isRemote: true });
+
+				window.dispatchEvent(new Event("beforeunload"));
+
+				expect(savedNames()).toEqual(["keep-me"]);
+			});
+
+			it("still saves a restored placeholder that has no session yet", async () => {
+				const { dropId } = await setup();
+				terminalsStore.update(dropId, { sessionId: null, shellState: null });
+
+				window.dispatchEvent(new Event("beforeunload"));
+
+				expect(savedNames().sort()).toEqual(["drop-me", "keep-me"]);
+			});
+
+			it("overwrites a stale snapshot when every remaining tab is excluded", async () => {
+				const { keepId, dropId } = await setup();
+				window.dispatchEvent(new Event("beforeunload"));
+				expect(savedNames().sort()).toEqual(["drop-me", "keep-me"]);
+
+				terminalsStore.update(keepId, { shellState: "exited" });
+				terminalsStore.update(dropId, { isRemote: true });
+				window.dispatchEvent(new Event("beforeunload"));
+
+				expect(savedNames()).toEqual([]);
+			});
+		});
+
 		it("flushes activityStore, uiStore, and paneLayoutStore before snapshotting", async () => {
 			const deps = createMockDeps();
 			await initApp(deps);

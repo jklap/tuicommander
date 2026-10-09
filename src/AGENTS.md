@@ -132,6 +132,33 @@ if a future ghost-attachment bug shows up again, fix it the same way: filter
 by live `shellState` in the specific consumer that cares about liveness,
 never by mutating branch membership.
 
+**The restart-recovery snapshot is one of those consumers.** Found 2026-10-09:
+tabs the user had already closed (a finished subagent's `squad-churn` pane, plus
+exited tabs left "for review") came back after a restart as sessionless
+placeholders, and kept coming back. `collectTerminalSnapshots`
+(`hooks/useAppInit.ts`) used to save every id in `branch.terminals` that still
+existed in `terminalsStore`, so a lingering exited tab was persisted into
+`savedTerminalsByClient`, restored by `createBranchSelectionCoordinator.ts` as an
+agent tab with a resume banner, and then re-saved by the 30s timer — a loop.
+It now skips a tab when `shellState === "exited"` (it lingers only so the user
+can review it, never to be restored) or `isRemote` (agent-created via
+MCP/tmux-shim/HTTP — a subagent/teammate pane is respawned by its lead, so
+there is nothing to resume). `branch.terminals` membership is still untouched.
+
+Two details that are easy to get wrong:
+- **A never-spawned restore placeholder (`sessionId` null, `shellState` null)
+  must still be saved.** It is a real tab the user simply hasn't clicked yet;
+  excluding it would lose it if they quit first. Don't "fix" the ghost problem
+  by filtering on `sessionId == null`.
+- **A branch whose tabs were all excluded must still write an empty snapshot**
+  (`excluded > 0`, not just `saved.length > 0`). Skipping the write leaves the
+  previous snapshot, which may contain exactly the tabs just excluded, on disk
+  to be restored.
+
+`isRemote` is broader than "subagent": it also covers a tab an orchestrator
+opened deliberately. If that ever needs to survive a restart, add a narrower
+teammate marker rather than loosening the exited/`isRemote` filter.
+
 
 ## `paneLayoutStore` Ghost Tabs Can Permanently Wedge A Split, And Global Workspace Has Its Own Independent Stale-Layout Cache
 

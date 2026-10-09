@@ -156,9 +156,21 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 			if (branch.terminals.length === 0) continue;
 
 			const saved: SavedTerminal[] = [];
+			let excluded = 0;
 			for (const termId of branch.terminals) {
 				const t = terminalsStore.get(termId);
 				if (!t) continue;
+				// Never persist a tab that must not auto-restore: an exited tab lingers
+				// in `branch.terminals` only so the user can review it, and an
+				// agent-created tab (`isRemote`: MCP/tmux-shim/HTTP, e.g. a subagent or
+				// teammate pane) is respawned by its lead, so restoring it yields a
+				// sessionless ghost. Never-spawned restore placeholders (`sessionId`
+				// null, state null) are NOT excluded — they are real tabs the user
+				// simply hasn't clicked yet.
+				if (t.shellState === "exited" || t.isRemote) {
+					excluded++;
+					continue;
+				}
 				saved.push({
 					name: t.name,
 					cwd: t.cwd,
@@ -172,7 +184,9 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 				});
 			}
 
-			if (saved.length > 0) {
+			// An empty list is still recorded when tabs were deliberately excluded —
+			// otherwise the previous snapshot (which may contain them) would survive.
+			if (saved.length > 0 || excluded > 0) {
 				if (!snapshots.has(repoPath)) {
 					snapshots.set(repoPath, new Map());
 				}
