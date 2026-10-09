@@ -397,7 +397,10 @@ pub(crate) fn live_bg_runner_commands() -> Option<Vec<String>> {
 }
 
 #[cfg(not(windows))]
-pub(super) fn parse_process_tree_snapshot(success: bool, text: &str) -> Option<Vec<ProcessTreeEntry>> {
+pub(super) fn parse_process_tree_snapshot(
+    success: bool,
+    text: &str,
+) -> Option<Vec<ProcessTreeEntry>> {
     if !success {
         return None;
     }
@@ -498,7 +501,12 @@ pub(super) fn valid_process_snapshot(
     (enumeration_succeeded && !processes.is_empty()).then_some(processes)
 }
 
-pub(super) fn emit_suggest_event(state: &AppState, session_id: &str, turn_epoch: u64, items: Vec<String>) {
+pub(super) fn emit_suggest_event(
+    state: &AppState,
+    session_id: &str,
+    turn_epoch: u64,
+    items: Vec<String>,
+) {
     let parsed = ParsedEvent::Suggest { items };
     if let Ok(mut json) = serde_json::to_value(&parsed) {
         if let Some(object) = json.as_object_mut() {
@@ -715,7 +723,11 @@ pub(super) fn invalidate_background_probe_boundary_locked(state: &AppState, sess
     session.background_probe_satisfied_turn_epoch = None;
 }
 
-pub(super) fn arm_explicit_idle_background_probe(state: &AppState, session_id: &str, turn_epoch: u64) {
+pub(super) fn arm_explicit_idle_background_probe(
+    state: &AppState,
+    session_id: &str,
+    turn_epoch: u64,
+) {
     let Some(mut session) = state.session_maps.session_states.get_mut(session_id) else {
         return;
     };
@@ -1284,7 +1296,10 @@ pub(super) fn screen_classify_calls() -> usize {
 }
 
 #[cfg(test)]
-pub(super) fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
+pub(super) fn detect_agent_screen_activity(
+    agent_type: Option<&str>,
+    rows: &[String],
+) -> AgentScreenActivity {
     detect_agent_screen_activity_at(agent_type, rows, None)
 }
 

@@ -529,7 +529,8 @@ pub(crate) fn classify_shell(cmd: &str) -> ShellFamily {
 /// How long the agent must be silent after printing a `?`-ending line before
 /// we treat it as a question waiting for input. 10s is long enough to avoid
 /// false positives from AI agents that pause while thinking between API calls.
-pub(super) const SILENCE_QUESTION_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(10);
+pub(super) const SILENCE_QUESTION_THRESHOLD: std::time::Duration =
+    std::time::Duration::from_secs(10);
 
 /// An idle shell may still be receiving a streamed intent. Wait one quiet tick.
 pub(super) const SILENCE_INTENT_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(1);
@@ -543,7 +544,8 @@ const STALE_QUESTION_CHUNKS: u32 = 10;
 /// we treat it as a turn-ending error (fire `playError()`). Shorter than the
 /// question threshold because tool errors are typically followed by immediate
 /// turn end (no retry) — 5s is enough to rule out a same-chunk recovery.
-pub(super) const SILENCE_TOOL_ERROR_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(5);
+pub(super) const SILENCE_TOOL_ERROR_THRESHOLD: std::time::Duration =
+    std::time::Duration::from_secs(5);
 
 /// How long a retry line ("Retrying … attempt N/M", "Unable to connect to API")
 /// holds the agent BUSY after it was last seen. During an API connection-retry
@@ -633,7 +635,8 @@ const ORCHESTRATOR_WAKE_UNCERTAIN_RETRY: std::time::Duration = std::time::Durati
 pub(super) const AGENT_READY_CONFIRM: std::time::Duration = std::time::Duration::from_millis(1500);
 /// Escape hatch for a launch-instrumented agent whose terminal-ready screen
 /// remains stable after its authoritative completion signal was lost.
-pub(super) const PROTOCOL_STALE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+pub(super) const PROTOCOL_STALE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(5 * 60);
 
 /// Interrupt intent is only a hint: Ctrl-C/Escape may be ignored or handled
 /// asynchronously. Keep it long enough to correlate the subsequent explicit
@@ -1322,7 +1325,11 @@ impl SilenceState {
         self.accept_intent(text, None)
     }
 
-    pub(super) fn accept_intent(&mut self, text: String, title: Option<String>) -> Option<ParsedEvent> {
+    pub(super) fn accept_intent(
+        &mut self,
+        text: String,
+        title: Option<String>,
+    ) -> Option<ParsedEvent> {
         let value = (text, title);
         if self.last_intent.as_ref() == Some(&value) {
             return None;
@@ -2417,7 +2424,10 @@ pub(super) fn now_epoch_ms() -> u64 {
 /// Conditions: last real output > threshold ago AND no active sub-tasks.
 /// Agent sessions use a longer threshold (AGENT_IDLE_MS) because AI agents
 /// produce output in bursts with natural thinking pauses between them.
-pub(super) fn should_transition_idle(state: &crate::state::AppState, session_id: &str) -> IdleDecision {
+pub(super) fn should_transition_idle(
+    state: &crate::state::AppState,
+    session_id: &str,
+) -> IdleDecision {
     should_transition_idle_with_hook(state, session_id, || {})
 }
 
@@ -2594,7 +2604,11 @@ pub(crate) fn note_submitted_input(state: &AppState, session_id: &str) {
     note_submitted_input_with_hook(state, session_id, || {});
 }
 
-pub(super) fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &str, after_epoch: F) {
+pub(super) fn note_submitted_input_with_hook<F: FnOnce()>(
+    state: &AppState,
+    session_id: &str,
+    after_epoch: F,
+) {
     let agent_type = state
         .session_maps
         .session_states
@@ -2665,7 +2679,11 @@ pub(super) fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, sess
 }
 
 /// Emit a ShellState parsed event via both event bus and Tauri IPC.
-pub(super) fn emit_shell_state(state: &crate::state::AppState, session_id: &str, shell_state: &str) {
+pub(super) fn emit_shell_state(
+    state: &crate::state::AppState,
+    session_id: &str,
+    shell_state: &str,
+) {
     let agent_type = state
         .session_maps
         .session_states
