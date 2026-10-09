@@ -6186,6 +6186,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.connections.connections.{id}.transport.ssh.strict_host_key_checking.help",
       "label": "strict host key checking",
       "schema": {
+        "description": "ssh's `StrictHostKeyChecking`, honoured as stored by every tunnel and\nremote-server SSH command. Stored as `\"Yes\"` / `\"AcceptNew\"`; any other\nvalue (a hand-edited `connections.json` or `tunnels/*.toml`, a future\nvariant read by an older build) loads as the strictest policy, `Yes`,\ninstead of failing the whole file or silently trusting a new host key.",
         "type": "string",
         "enum": [
           "Yes",
@@ -12044,6 +12045,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.tunnels.profiles.{id}.ssh.strict_host_key_checking.help",
       "label": "strict host key checking",
       "schema": {
+        "description": "ssh's `StrictHostKeyChecking`, honoured as stored by every tunnel and\nremote-server SSH command. Stored as `\"Yes\"` / `\"AcceptNew\"`; any other\nvalue (a hand-edited `connections.json` or `tunnels/*.toml`, a future\nvariant read by an older build) loads as the strictest policy, `Yes`,\ninstead of failing the whole file or silently trusting a new host key.",
         "type": "string",
         "enum": [
           "Yes",
@@ -14497,7 +14499,7 @@ export const settingsCatalogue = {
                 "type": "object",
                 "properties": {
                   "ssh": {
-                    "description": "Host/port/user/identity/keepalive config — shared with\n`tunnels::profile::TunnelProfile` via `SshConnectionParams`.\n`strict_host_key_checking` is stored but the runtime always uses\n`AcceptNew` for the tunnel it opens on the user's behalf\n(`remote_runtime::ssh_profile`).",
+                    "description": "Host/port/user/identity/keepalive config — shared with\n`tunnels::profile::TunnelProfile` via `SshConnectionParams`.\n`strict_host_key_checking` is honoured as stored by every SSH\ncommand run for this connection (`remote_runtime::ssh_profile`);\na new connection defaults to `AcceptNew` (`new_ssh`).",
                     "type": "object",
                     "properties": {
                       "host": {
@@ -14531,6 +14533,7 @@ export const settingsCatalogue = {
                         "maximum": 65535
                       },
                       "strict_host_key_checking": {
+                        "description": "ssh's `StrictHostKeyChecking`, honoured as stored by every tunnel and\nremote-server SSH command. Stored as `\"Yes\"` / `\"AcceptNew\"`; any other\nvalue (a hand-edited `connections.json` or `tunnels/*.toml`, a future\nvariant read by an older build) loads as the strictest policy, `Yes`,\ninstead of failing the whole file or silently trusting a new host key.",
                         "type": "string",
                         "enum": [
                           "Yes",
@@ -14724,6 +14727,7 @@ export const settingsCatalogue = {
                 "maximum": 65535
               },
               "strict_host_key_checking": {
+                "description": "ssh's `StrictHostKeyChecking`, honoured as stored by every tunnel and\nremote-server SSH command. Stored as `\"Yes\"` / `\"AcceptNew\"`; any other\nvalue (a hand-edited `connections.json` or `tunnels/*.toml`, a future\nvariant read by an older build) loads as the strictest policy, `Yes`,\ninstead of failing the whole file or silently trusting a new host key.",
                 "type": "string",
                 "enum": [
                   "Yes",

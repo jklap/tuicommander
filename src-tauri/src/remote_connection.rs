@@ -110,9 +110,9 @@ pub(crate) enum RemoteTransport {
     Ssh {
         /// Host/port/user/identity/keepalive config — shared with
         /// `tunnels::profile::TunnelProfile` via `SshConnectionParams`.
-        /// `strict_host_key_checking` is stored but the runtime always uses
-        /// `AcceptNew` for the tunnel it opens on the user's behalf
-        /// (`remote_runtime::ssh_profile`).
+        /// `strict_host_key_checking` is honoured as stored by every SSH
+        /// command run for this connection (`remote_runtime::ssh_profile`);
+        /// a new connection defaults to `AcceptNew` (`new_ssh`).
         #[schemars(extend("x-setting" = {"sensitivity":"private","apply":"live","effect":"Updates ssh for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
         ssh: SshConnectionParams,
         #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates remote daemon port for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
