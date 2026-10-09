@@ -1,3 +1,43 @@
+## Dropped-items actions batch 2 (dropped-items-review #16/#22/#23/#31/#41-#44, #21 fix, 2026-10-09) — Rust restart required
+
+Unit/integration tests cover the logic; these need a running app (isolated `make dev`) and real agents.
+
+- [ ] **Injected text is appended, never cleared (#16).** In a Claude Code tab type `half` in the
+  composer (don't press Enter), then click a suggestion chip / run a "send immediately" Smart
+  Prompt: the composer shows `half` + the injected text (nothing wiped), and Enter submits the
+  combined line. Repeat in a zsh tab and in Codex. `session action=submit` / `tuic agent type`
+  against a composer holding text is still refused ("partial_composer"), and
+  `tuic agent type --no-clear` appends. On Windows (cmd/PowerShell) a Smart Prompt no longer
+  shows a literal `^U`/`§`.
+- [ ] **Renames are live in other windows/clients (#22).** Open the same instance in the desktop
+  window and a browser tab (`http://127.0.0.1:9877/`). Rename a tab in the desktop window: the
+  browser tab bar/sidebar update within a second, and vice versa. No flicker/ping-pong (watch
+  the tab title for 10 s and CPU stays flat); an agent's OSC title still renames an unpinned tab.
+- [ ] **tmux shim title clearing (#23).** In a Claude swarm (tuic-as-tmux), `tmux select-pane -t
+  %N -T build` names the teammate tab live in both clients; `tmux select-pane -t %N -T ""` drops
+  the pin (the agent's own OSC title can rename it again); a plain `tmux select-pane -t %N`
+  changes nothing. A tab you renamed yourself survives `-T ""`.
+- [ ] **Agent spawn pixel size (#31).** Spawn an agent via MCP/`POST /sessions/agent` running
+  `sh -c 'stty size; printf "\e[14t"; sleep 5'` or a Kitty-graphics tool (`timg`, `kitten icat`)
+  before any client attaches: the tool sizes its image instead of reporting a 0x0 window.
+- [ ] **Session Diff "ask" toast (#41).** With Settings › General › Diffs › Auto-open = Ask, let a
+  Claude session edit a file: a "Session made changes" toast appears (above the terminal input,
+  not over it) with "Open Session Diff", and the same notice is in the bell once; several
+  sessions at once collapse into at most two cards.
+- [ ] **Ask AI with AI Chat disabled (#42).** Turn experimental AI Chat off, Alt+double-click a
+  match whose rule's default action is Ask AI: a warning toast "AI Chat is disabled", no panel
+  flag flips (turning AI Chat back on does not pop the panel open).
+- [ ] **Fold at viewport after eviction (#43).** Fill scrollback past the cap with long command
+  output so the oldest block's prompt is evicted; scroll to the top and press Cmd+Shift+.: it
+  folds the first visible block (or nothing), never an invisible evicted one.
+- [ ] **Native dialogs (#44).** A plugin with `ui:file-picker` (`host.pickFile`) and Settings ›
+  Smart Selection/Smart Prompts › Export… open the native Open/Save panels (filter "JSON",
+  suggested file name pre-filled); after a sleep/wake cycle they still open without crashing.
+- [ ] **Wrap after a dismiss (#21 fix).** Define `claude() { command claude "$@"; }` in `.zshrc`;
+  open a terminal, dismiss the wrap prompt; set Settings › Agents › Claude › "If your shell
+  already defines its own function" to Wrap; open a new terminal: the prompt appears again and
+  "Wrap my function" wraps it (the launched claude carries TUIC's `--settings`).
+
 ## Dropped-items actions batch 1 (dropped-items-review D1/#2/#4, 2026-10-09) — Rust restart required
 
 Unit/integration tests cover the logic; these need a running app (isolated `make dev`).
