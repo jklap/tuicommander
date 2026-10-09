@@ -11,6 +11,11 @@
 //!   (`tunnels::exec::ssh_check`, args from `tunnels::command::build_ssh_test_args`
 //!   — the same options a real tunnel uses, off any multiplexed master),
 //!   classified through the existing `tunnels::classifier::classify_exit`.
+//! - **Direct, `https://`:** the certificate is judged first, the way Connect
+//!   judges it (`direct_proxy::probe_direct_tls`): a pinned certificate that
+//!   still matches is tested through a one-shot pinned relay; an unpinned
+//!   certificate nobody vouches for, or a pin the server no longer matches,
+//!   reports `Unreachable` before any request (or credential) is sent.
 //! - **Direct / Local:** a single `GET <base>/health` via a short-lived
 //!   `reqwest::Client` that follows no redirects, with Basic Auth attached when
 //!   a username or password was given. Classified by status code and, for a
@@ -108,10 +113,10 @@ pub(crate) async fn test_connection_impl(request: &TestConnectionRequest) -> Con
         RemoteTransport::Ssh { ssh, .. } => {
             classify_ssh_result(crate::tunnels::exec::ssh_check(ssh, SSH_TEST_TIMEOUT).await)
         }
-        // A pinned self-signed certificate is honoured by Connect (the pinned
-        // relay in `direct_proxy`), not here: such a target reports
-        // Unreachable with the TLS error, exactly as before pinning existed.
-        RemoteTransport::Direct { url, .. } => test_http_health(url, username, password).await,
+        RemoteTransport::Direct {
+            url,
+            tls_fingerprint,
+        } => test_direct(url, tls_fingerprint.as_deref(), username, password).await,
         RemoteTransport::Local { port, instance_id } => {
             let resolved_port = match (port, instance_id) {
                 (_, Some(id)) if !id.trim().is_empty() => match resolve_local_instance_port(id) {
@@ -156,6 +161,97 @@ async fn verify_local_target(url: &str, instance_id: Option<&str>) -> Result<(),
         instance_id.map(str::trim).filter(|id| !id.is_empty()),
     )
     .await
+}
+
+// ---------------------------------------------------------------------------
+// Direct (certificate trust first, then the HTTP health check)
+// ---------------------------------------------------------------------------
+
+/// Direct: decide whether the URL's certificate can be trusted exactly the way
+/// Connect does (`remote_runtime::resolve_direct_base_url`), and only then send
+/// the health request — and the credentials with it.
+///
+/// * `http://`, or `https://` the OS trusts: the URL itself.
+/// * `https://` pinned and still presenting the pin: through a one-shot pinned
+///   relay (`direct_proxy::DirectProxies`), the same verifier and the same
+///   loopback base URL Connect hands out — so a pinned self-signed daemon tests
+///   as reachable instead of failing on the system trust store.
+/// * Fails closed, before anything is sent: an `https://` certificate nobody
+///   vouches for and nothing pins, a pin the server no longer matches, or a
+///   garbled pin.
+async fn test_direct(
+    url: &str,
+    tls_fingerprint: Option<&str>,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> ConnectionTestResult {
+    use crate::direct_proxy::{ProbeResult, https_target, normalize_fingerprint, probe_direct_tls};
+    let url = url.trim().trim_end_matches('/');
+    let target = match https_target(url) {
+        Ok(Some(target)) => target,
+        Ok(None) => return test_http_health(url, username, password).await,
+        Err(reason) => return ConnectionTestResult::Unreachable { reason },
+    };
+    let probe = match probe_direct_tls(url, tls_fingerprint).await {
+        Ok(probe) => probe,
+        Err(reason) => {
+            let reason = reason
+                .strip_prefix("Unreachable: ")
+                .map(str::to_string)
+                .unwrap_or(reason);
+            return ConnectionTestResult::Unreachable { reason };
+        }
+    };
+    match probe {
+        ProbeResult::NoTlsNeeded | ProbeResult::Trusted => {
+            test_http_health(url, username, password).await
+        }
+        ProbeResult::NeedsConfirmation { fingerprint } => ConnectionTestResult::Unreachable {
+            reason: format!(
+                "certificate not trusted by this system (SHA-256 {fingerprint}); \
+                 Connect lets you compare and pin it. Nothing was sent to the server."
+            ),
+        },
+        ProbeResult::PinnedMismatch {
+            presented_fingerprint,
+        } => ConnectionTestResult::Unreachable {
+            reason: format!(
+                "certificate changed: pinned SHA-256 {}, the server now presents \
+                 {presented_fingerprint}. Nothing was sent to the server.",
+                tls_fingerprint.unwrap_or_default()
+            ),
+        },
+        ProbeResult::PinnedMatch => {
+            let Some(pin) = tls_fingerprint.and_then(normalize_fingerprint) else {
+                return ConnectionTestResult::Unreachable {
+                    reason: "stored certificate pin is not a SHA-256 fingerprint".to_string(),
+                };
+            };
+            let relay = OneShotRelay::default();
+            let port = match relay.0.start(OneShotRelay::ID, target, &pin).await {
+                Ok(port) => port,
+                Err(reason) => return ConnectionTestResult::Unreachable { reason },
+            };
+            // The bare relay origin, exactly what `resolve_direct_base_url`
+            // hands Connect, so the test sees what Connect will see.
+            test_http_health(&format!("http://127.0.0.1:{port}"), username, password).await
+        }
+    }
+}
+
+/// A pinned relay that lives exactly as long as one Test Connection call —
+/// stopped on drop, so a cancelled request cannot leave its accept loop behind.
+#[derive(Default)]
+struct OneShotRelay(crate::direct_proxy::DirectProxies);
+
+impl OneShotRelay {
+    const ID: &'static str = "test-connection";
+}
+
+impl Drop for OneShotRelay {
+    fn drop(&mut self) {
+        self.0.stop(Self::ID);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -656,6 +752,161 @@ mod tests {
             other => panic!("expected Unreachable, got {other:?}"),
         }
         with_credential.assert_async().await;
+    }
+
+    // --- test_connection_impl: Direct over https with a self-signed cert ---
+
+    /// An HTTPS `/health` server on 127.0.0.1 presenting a throwaway
+    /// self-signed certificate (what a daemon's `selfsigned.rs` serves). It
+    /// answers 200 to every request and records each request's head, so a
+    /// test can prove whether — and with which credential — anything was sent.
+    struct SelfSignedHealthServer {
+        url: String,
+        fingerprint: String,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for SelfSignedHealthServer {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    impl SelfSignedHealthServer {
+        fn requests(&self) -> Vec<String> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    async fn start_self_signed_health_server() -> SelfSignedHealthServer {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+        let fingerprint = crate::direct_proxy::cert_fingerprint_sha256(cert.der());
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(signing_key.serialize_der().into());
+        let config = rustls::ServerConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert.der().clone()], key)
+        .unwrap();
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    continue;
+                };
+                let acceptor = acceptor.clone();
+                let recorded = recorded.clone();
+                tokio::spawn(async move {
+                    let Ok(mut tls) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                        match tls.read(&mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => head.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&head).into_owned());
+                    let _ = tls
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok",
+                        )
+                        .await;
+                    let _ = tls.shutdown().await;
+                });
+            }
+        });
+        SelfSignedHealthServer {
+            url: format!("https://{addr}"),
+            fingerprint,
+            requests,
+            task,
+        }
+    }
+
+    fn direct(url: &str, pin: Option<&str>) -> TestConnectionRequest {
+        TestConnectionRequest {
+            transport: RemoteTransport::Direct {
+                url: url.to_string(),
+                tls_fingerprint: pin.map(str::to_string),
+            },
+            auth_username: Some("boss".to_string()),
+            password: Some("vault-secret".to_string()),
+        }
+    }
+
+    /// Catches: Test Connection ignoring the pin and judging a pinned
+    /// self-signed daemon by the system trust store (always "TLS error").
+    #[tokio::test]
+    async fn a_pinned_self_signed_daemon_is_reachable_through_the_pin() {
+        let server = start_self_signed_health_server().await;
+        let pin = server.fingerprint.to_ascii_uppercase();
+        assert_eq!(
+            test_connection_impl(&direct(&server.url, Some(&pin))).await,
+            ConnectionTestResult::Reachable
+        );
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        assert!(requests[0].starts_with("GET /health "), "{requests:?}");
+    }
+
+    /// A pin the server no longer matches fails closed: a clear "certificate
+    /// changed" naming both fingerprints, and not one byte of HTTP is sent.
+    #[tokio::test]
+    async fn a_pin_mismatch_is_reported_as_changed_and_sends_nothing() {
+        let server = start_self_signed_health_server().await;
+        let wrong = "0".repeat(64);
+        match test_connection_impl(&direct(&server.url, Some(&wrong))).await {
+            ConnectionTestResult::Unreachable { reason } => {
+                assert!(reason.starts_with("certificate changed"), "{reason}");
+                assert!(reason.contains(&wrong), "{reason}");
+                assert!(reason.contains(&server.fingerprint), "{reason}");
+                assert!(!reason.contains("vault-secret"), "{reason}");
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+        assert!(server.requests().is_empty(), "{:?}", server.requests());
+    }
+
+    /// Unpinned self-signed: reported as not trusted, with the fingerprint to
+    /// compare, and no request (so no credential) reaches the server.
+    #[tokio::test]
+    async fn an_unpinned_self_signed_daemon_is_untrusted_and_gets_nothing() {
+        let server = start_self_signed_health_server().await;
+        match test_connection_impl(&direct(&server.url, None)).await {
+            ConnectionTestResult::Unreachable { reason } => {
+                assert!(reason.contains("not trusted"), "{reason}");
+                assert!(reason.contains(&server.fingerprint), "{reason}");
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+        assert!(server.requests().is_empty(), "{:?}", server.requests());
+    }
+
+    #[tokio::test]
+    async fn a_garbled_pin_fails_closed_instead_of_falling_back_to_first_use() {
+        let server = start_self_signed_health_server().await;
+        match test_connection_impl(&direct(&server.url, Some("not-a-pin"))).await {
+            ConnectionTestResult::Unreachable { reason } => {
+                assert!(reason.contains("not a SHA-256 fingerprint"), "{reason}");
+            }
+            other => panic!("expected Unreachable, got {other:?}"),
+        }
+        assert!(server.requests().is_empty(), "{:?}", server.requests());
     }
 
     // --- test_connection_impl: Direct dispatch ---
