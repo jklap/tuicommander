@@ -304,6 +304,10 @@ fn validate_manifest(manifest: &PluginManifest, dir_name: &str) -> Result<(), St
             return Err(format!("unknown capability: \"{cap}\""));
         }
     }
+    if manifest.capabilities.iter().any(|cap| cap == "net:http") && manifest.allowed_urls.is_empty()
+    {
+        return Err("net:http requires a non-empty allowedUrls list".into());
+    }
     // Validate declared binaries
     for binary in &manifest.binaries {
         if binary.contains('/') || binary.contains('\\') || binary.contains("..") {
@@ -1558,6 +1562,33 @@ mod tests {
             agent_types: vec![],
             binaries: vec![],
         }
+    }
+
+    #[test]
+    fn loading_http_manifest_without_allowed_urls_fails() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let plugin_dir = dir.path().join("plugins/http-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        let mut manifest = valid_manifest("http-plugin");
+        manifest.capabilities = vec!["net:http".into()];
+        let write_manifest = |manifest: &PluginManifest| {
+            std::fs::write(
+                plugin_dir.join("manifest.json"),
+                serde_json::to_vec(manifest).unwrap(),
+            )
+            .unwrap();
+        };
+        write_manifest(&manifest);
+        let error = read_single_manifest("http-plugin").unwrap_err();
+        assert!(error.contains("allowedUrls"), "unexpected error: {error}");
+        manifest.allowed_urls = vec!["https://api.example.com/*".into()];
+        write_manifest(&manifest);
+        assert!(read_single_manifest("http-plugin").is_ok());
+        manifest.capabilities.clear();
+        manifest.allowed_urls.clear();
+        write_manifest(&manifest);
+        assert!(read_single_manifest("http-plugin").is_ok());
     }
 
     #[test]
