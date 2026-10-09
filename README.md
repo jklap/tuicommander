@@ -286,6 +286,8 @@ TUICommander isn't a black box. Everything you click, you can also drive from a 
 
 **[Download the latest release](https://github.com/sstraus/tuicommander/releases/latest)** — macOS builds are signed and notarized.
 
+The macOS desktop app requires **macOS 12 Monterey or later**, with system WebKit updated to **Safari 17.4 or later** for Mermaid diagrams. Older WebKit versions are unsupported. Windows uses WebView2; Linux uses WebKitGTK.
+
 Install via terminal:
 
 ```bash

@@ -4865,3 +4865,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] After the next manual `make dev` restart, verify scheduler integration dispatches every Reserved decision returned by a tick; a failed batch must leave no reservation or consumed cursor. Admission rollback is covered by the targeted scheduler regression (#1613-67f3). Rust changes require a restart to load.
 - [ ] After a manual `make dev` restart or `make build`, switch a busy Claude terminal to Chat and confirm mid-turn human follow-ups appear once between replies (#1632-ec84). Rust does not hot-reload.
 - [ ] Automations dialog: after story 1617 API integration, verify create/update/pause/Run now/delete and backend previews against the real scheduler. The current peer verifies the injectable frontend boundary only.
+## Mermaid 12 (1590-7c6b)
+
+- [x] Render flowchart, sequence, class, state, gantt and KaTeX math through the real ContentRenderer in headless Chrome before and after upgrading. All six render; Mermaid 12 changes layout and shadows while keeping content and the dark theme. Evidence: `~/Gits/.tmp/tuic-deps/night-c3/before/` and `after/`.
+- [ ] After Boss's next packaged `make build`, confirm the macOS bundle declares `LSMinimumSystemVersion` 12.0. Mermaid diagrams require system WebKit updated to Safari 17.4+; the OS version alone does not guarantee that update. No desktop instance was launched in this lane.
