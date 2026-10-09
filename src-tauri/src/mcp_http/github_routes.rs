@@ -481,6 +481,13 @@ pub(super) async fn github_poll_login(
     json_result(crate::github_auth::github_poll_login_impl(&state, body.device_code).await)
 }
 
+pub(super) async fn github_poll_add_account(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<GithubPollLoginRequest>,
+) -> Response {
+    json_result(crate::github_auth::github_poll_add_account_impl(&state, body.device_code).await)
+}
+
 pub(super) async fn github_logout(State(state): State<Arc<AppState>>) -> Response {
     json_result(crate::github_auth::github_logout_impl(&state).await)
 }
