@@ -1193,3 +1193,28 @@ files and abort that operation. Semantic errors leave the original document in
 place. No independent unattended-permission flag exists: the run config owns
 permissions. Step 2 adds cron/IANA validation and the local-zone creation default;
 the storage foundation alone does not make a schedule executable.
+
+### Automation run ledger
+
+`automations/store.rs` stores execution history in the selected instance's
+`automation_runs.sqlite3` (schema version 1). WAL and a five-second busy timeout
+serialize reservations. A unique index on automation ID and UTC occurrence
+prevents duplicate scheduled reservations; manual runs get separate UUIDs.
+History stores a definition snapshot and survives definition deletion.
+
+The runtime must acquire `RunOwner` before dispatch. Its adjacent `.owner.lock`
+file stays on disk so every process locks the same inode. Reader handles cannot
+reserve or mutate runs. Ownership acquisition interrupts all open records in one
+transaction without retrying them. Reserved, prechecking, running and needs-you
+are open; completed, failed, unknown, timed-out, interrupted and each skip reason
+are final. The first final transition is immutable. Opening history does not
+interrupt a live runtime. Unsupported schema versions fail closed.
+
+Saved stdout, stderr and both precheck streams each retain at most 256 KiB at a
+UTF-8 boundary with a truncation flag. History is paginated newest first. Summary
+windows are elapsed UTC 24 hours and seven days, based on reservation time.
+Retention defaults to 90 days after finalization and never removes open records.
+Notification attempts are deduplicated by run, transition and channel and settle
+as confirmed or unknown independently of execution. Boot marks outstanding
+attempts unknown; it does not replay them. Saved output remains the canonical
+report. Scheduler boot and public transports are wired in later plan steps.
