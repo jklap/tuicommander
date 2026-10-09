@@ -57,6 +57,7 @@ export function useTerminalCompletionNotifications(options: TerminalCompletionNo
 			const reason = getCompletionSuppression({
 				isActiveTerminal: terminalsStore.state.activeId === id,
 				isDebouncedBusy: !!terminalsStore.state.debouncedBusy[id],
+				declaredBackgroundWork: terminal.declaredBackgroundWork,
 				activeSubTasks: terminal.activeSubTasks,
 				awaitingInput: terminal.awaitingInput,
 				durationMs,

@@ -11,6 +11,7 @@ function baseCtx(overrides: Partial<CompletionContext> = {}): CompletionContext 
 	return {
 		isActiveTerminal: false,
 		isDebouncedBusy: false,
+		declaredBackgroundWork: false,
 		activeSubTasks: 0,
 		awaitingInput: null,
 		durationMs: 10_000,
@@ -99,6 +100,14 @@ describe("getCompletionSuppression", () => {
 
 		it("suppresses when sub-tasks are active", () => {
 			expect(getCompletionSuppression(baseCtx({ activeSubTasks: 1 }))).toBe("active-sub-tasks");
+		});
+
+		it("suppresses while the agent has declared background work outstanding (shell idle by silence, agent still working)", () => {
+			expect(getCompletionSuppression(baseCtx({ declaredBackgroundWork: true }))).toBe("declared-background-work");
+		});
+
+		it("fires once declared background work has cleared", () => {
+			expect(getCompletionSuppression(baseCtx({ declaredBackgroundWork: false }))).toBeNull();
 		});
 	});
 
