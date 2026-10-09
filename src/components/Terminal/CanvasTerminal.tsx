@@ -10,7 +10,6 @@ import { settingsStore } from "../../stores/settings";
 import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
 import { rowAnchoredBlocks, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
-import { uiStore } from "../../stores/ui";
 import { getSessionConnection } from "../../transportRuntime";
 import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
 import { pickBlock } from "../../utils/blockNav";
@@ -26,7 +25,7 @@ import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
 import { getShellFamily, sendCommand, shouldAutoSubmitSuggestion } from "../../utils/sendCommand";
 import { stripAnswerMarkers } from "../../utils/stripAnswerMarkers";
 import { applyPinchFontDelta } from "../../utils/terminalZoom";
-import { aiChatDraft } from "../AIChatPanel/draft";
+import { askAiAboutText } from "../AIChatPanel/contextMenuActions";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { AnswersPanel } from "./AnswersPanel";
 import { type AnswersTurn, newTurnCache, readAnswersHistory, readTurnRows, sameAnswersHistory } from "./answersTurn";
@@ -483,9 +482,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			},
 			// Main's AI Chat (ego over ACP) is bound to a repository, not this terminal,
 			// and connects lazily — so, like "Explain with AI", draft the text rather than send it.
+			// Refuses (with a toast) while AI Chat is disabled.
 			askAi: (text) => {
-				aiChatDraft.append(text);
-				uiStore.setAiChatPanelVisible(true);
+				askAiAboutText(text);
 			},
 			onBlockedUrl: (url) => {
 				toastsStore.add("Blocked URL", `Disallowed scheme: ${url.slice(0, 80)}`, "warn");
