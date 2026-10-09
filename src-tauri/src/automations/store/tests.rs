@@ -155,6 +155,7 @@ fn restart_interrupts_every_open_state_and_keeps_all_final_states_immutable() {
         RunStatus::SkippedOverlap,
         RunStatus::SkippedConcurrency,
         RunStatus::SkippedExpired,
+        RunStatus::SkippedMissed,
     ] {
         let run = manual(owner.store(), 1);
         let finished = owner

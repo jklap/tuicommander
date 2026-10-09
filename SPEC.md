@@ -629,6 +629,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Font selection setting
 - [x] Tab bar with keyboard navigation
 - [x] Density modes for readability
+- [x] Terminal Find routes to the visible CLI buffer or Chat transcript; Chat supports next/previous selected matches and switching views closes search and clears highlights (#1633-f2cc).
 - [x] Terminal Chat uses focused, docked Compose input with existing send/queue semantics; CLI open/pin preferences and shared unsent drafts survive view switches. Permission prompts remain in CLI.
 - [x] Terminal selection copy unwraps soft-wrapped rows, removes coherent Claude visual gutters and composer margins, and preserves literal block characters, pasted prompt glyphs, and short typed line breaks
 - [x] Status bar with branch and PR info
@@ -686,10 +687,14 @@ Some frontend-only stores persist to localStorage:
 - [x] Inter-Agent Messaging (`messaging` MCP tool: register, list_peers, send, inbox with channel push + polling fallback)
 - [x] Smart Prompts (29 built-in AI prompts with context variable resolution, shell/inject/headless-CLI execution, toolbar dropdown, SmartButtonStrip, Command Palette integration). The `api` execution mode runs one unattended ego turn over ACP (#787-ee50): a session with no MCP server, every question refused, the final text routed to the prompt's output target. Its old executor — a direct provider call from TUICommander — went with the embedded engine (#784-0aec) and did not come back
 - [x] AI Chat panel (`Cmd+Alt+A`) — ego over ACP (#785-58ca), bound to a repository and ACP session rather than a terminal. TUICommander renders the journal, permissions, elicitation forms, plans and session controls while carrying no LLM client or provider API key of its own. The selected session is saved per root and restored after restart; the picker lists ego's durable sessions by title and activity time (#1071-46c9)
+- [x] AI Chat image paste before connection — discover image capability on first paste, and share Finder/text clipboard selection with Ideas and Compose.
+
 - [x] AI Chat image paste — supported images stage removable previews and become ACP image content blocks when the agent advertises image prompts
 - [x] AI Chat session details — ACP title updates rename the header and picker; context-window use and reported cost appear in the footer; a session settings dialog labels every select option and the one-row control bar summarizes the model's short name and mode beside named icon actions
 - [x] AI Chat transcript and tabs — selectable messages, with message Copy on hover or keyboard focus; sent prompts reconciled with ego's chunked echo; copyable code and tool output; trailing `suggest:` tokens rendered as reply buttons; terminal-shared web and file link handlers; parallel ACP sessions with independent drafts and transcripts; only running tool calls pulse
 - [x] AI Chat transcript polish — collapsed tool rows show short names, message Copy keeps its own space, and streaming follows the bottom until the reader scrolls up
+- [x] Desktop AI Chat composer actions reuse the terminal composer pin/play icons and button sizes; tooltips and accessible names distinguish Send, Queue and parked drafts.
+
 - [x] AI Chat composer polish — text grows to a bounded height and pastes over 200 words stay compact until the full text is sent
 - [x] AI Chat prompt parking — Ctrl+S or the composer control parks text and images per chat tab, swaps or restores them, and returns the parked draft after the next Send
 - [~] AI Agent loop (ReAct) — shipped, then deleted in #784-0aec with no TUICommander-side successor. ego runs its own tool loop and reaches terminals from outside, through the `session` MCP tool family, exactly as Claude Code does
@@ -814,3 +819,21 @@ Plans and Stories run history contains a read-only incident projection owned by 
 ### Conversation-specific AI Chat launch (implemented)
 
 Custom conversations snapshot executable/profile/workspace overrides in `ai_chat_launches`, keyed by ego session id, and retain a host-issued peer identity. Each has its own ACP connection; default chats continue on the shared default connection. The header shows saved launch values. `acp_chat_open` and `POST /acp/chat/open` create or reopen the same conversation. MCP inbox reads emit content-free INFO audit events with protocol caller, bound peer/owner and returned message ids.
+
+### Automation Once schedule foundation
+
+The Rust core supports one local date-time in a stored IANA timezone, alongside
+cron. Creation rejects elapsed instants and spring gaps; folds use the earlier
+instant. Once has one scheduled occurrence, a completed state after consumption,
+and a retained definition. The scheduler uses durable occurrence reservation to
+prevent restart/catch-up duplicates. Public API and UI integration follow the
+[Automations plan](plans/automations-scheduler.md).
+## Automations Dialog — Frontend verified, API integration pending (#1618-685b)
+
+The machine-local command-palette dialog edits cron or Once definitions and
+displays backend zone-aware previews and recent run evidence. Pause and Resume
+mutate only enabled by id, preserving concurrent agent edits and unsaved drafts.
+Once keeps `once_local` as a wall time; the backend owns timezone resolution and
+completed-occurrence evidence. One injectable adapter isolates Step 8 envelopes.
+Targeted frontend tests verify this boundary; real scheduler integration remains
+a separate requirement before the feature is available.

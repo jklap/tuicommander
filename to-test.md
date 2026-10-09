@@ -1,3 +1,13 @@
+## Claude MCP launch profiles (1637-d6e1) — Rust restart required
+
+- [ ] After landing and Boss's planned `make dev` restart or `make build`, confirm startup repairs a stale Claude private/run-profile TUIC bridge path and a fresh Claude session receives the TUIC MCP instructions. Targeted tests cover default/private/inherited/run-config roots, disabled integrations, custom transports and missing-path warnings. The backend change does not hot-reload; this lane does not restart desktop.
+## Automations MCP (1630-cbfa) — Rust restart required
+
+- [ ] After Boss's planned `make dev` restart or `make build`, use the `automations` MCP tool from a bound agent to create/get/list/update/pause/resume/delete a definition. Confirm invalid edits return the same definition validation errors and the saved creator remains unchanged. Step 8 owns HTTP/IPC/CLI wiring. Rust does not hot-reload; no desktop instance was launched by this peer.
+## Automations Once (1629-2262) — Rust restart required
+
+- [ ] After API/UI integration and Boss’s next planned `make dev` restart or `make build`, create a Once run in an IANA zone, confirm one preview instant and completed status after its scheduled run, retain the definition, and confirm restart/catch-up does not launch it twice. Rust does not hot-reload; this lane does not launch desktop.
+
 ## Automation prechecks (1614-7e8f) — Rust restart required
 
 - [ ] After dispatcher/API integration and Boss's next planned `make dev` restart or `make build`, run an automation whose precheck exits 0, exits nonzero and times out; confirm dispatch only for exit 0 and saved `skipped_precheck` diagnostics otherwise. Confirm Run Now records a bypass and does not execute the precheck. The standalone helper has targeted shell/process tests; runtime persistence belongs to Step 6. Rust does not hot-reload; this lane does not launch desktop.
@@ -4842,3 +4852,12 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] In a disposable agent session on the phone PWA, compare typing `/` and tapping the keybar `/`: both must show the same live agent commands and navigation. Insert `/` within an unsent draft and confirm surrounding text survives without submission.
 
 - [ ] After a manual `make dev` restart or `make build`, verify that Claude terminal Chat follows appends after transcript replacement, with no subagents directory, and after rapid CLI/Chat remounts and that failed refreshes/stopped tickers appear as WARN logs (#1635-3db2). Rust backend changes require a restart; do not restart live sessions automatically.
+- [ ] Terminal Chat search: Cmd/Ctrl+F finds visible conversation text; Enter/Shift+Enter navigate, Escape clears the selection, and switching CLI/Chat closes search.
+- [x] Desktop AI Chat: pin/play icon controls match terminal Compose in light/dark themes, with Send/Queue tooltips and highlighted parked drafts (#1636-0d08). _(verified: shared ComposeActionIcons/ComposeActions, 158 targeted tests, and inspected headless idle/busy/parked screenshots in both themes.)_
+
+- [x] AI Chat: paste a PNG before the first connection and a Finder image copy; preview and send the image, while ordinary text still pastes as text (#1639-f474). _(verified: Composer.stageImage and pastedImageFiles, recorded RED/GREEN with 160 targeted tests, and inspected headless pasted-image preview.)_
+- [ ] Automations admission (#1613-67f3): after scheduler runtime is wired and Boss restarts `make dev`, verify a missed wake reserves only the latest in-grace occurrence; Run Now while paused respects overlap/cap. The Rust admission change requires a restart to load.
+
+- [ ] After the next manual `make dev` restart, verify scheduler integration dispatches every Reserved decision returned by a tick; a failed batch must leave no reservation or consumed cursor. Admission rollback is covered by the targeted scheduler regression (#1613-67f3). Rust changes require a restart to load.
+- [ ] After a manual `make dev` restart or `make build`, switch a busy Claude terminal to Chat and confirm mid-turn human follow-ups appear once between replies (#1632-ec84). Rust does not hot-reload.
+- [ ] Automations dialog: after story 1617 API integration, verify create/update/pause/Run now/delete and backend previews against the real scheduler. The current peer verifies the injectable frontend boundary only.

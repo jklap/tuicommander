@@ -51,7 +51,7 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 
 ### CLI / Chat view
 
-A terminal that runs Claude Code shows a **CLI | Chat** switch in its top-right corner. **Chat** replaces the grid with the conversation read from Claude's own session file: your prompts as bubbles, Claude's replies as text, and tool calls folded into one compact card each. Plumbing (hook output, system reminders) and empty thinking blocks are left out. Compose opens and receives focus below the conversation. Reply with **Ctrl+Enter**, or queue follow-up work with **Shift+Ctrl+Enter**. Switch back to **CLI** to answer a permission prompt. The grid keeps running while hidden, so scrollback and selection are unchanged. Prompts have a theme-coloured background and gutter in Chat; the CLI grid does not tint submitted prompts.
+A terminal that runs Claude Code shows a **CLI | Chat** switch in its top-right corner. **Chat** replaces the grid with the conversation read from Claude's own session file: your prompts as bubbles (including follow-ups typed while Claude is busy), Claude's replies as text, and tool calls folded into one compact card each. Plumbing (hook output, system reminders) and empty thinking blocks are left out. Compose opens and receives focus below the conversation. Reply with **Ctrl+Enter**, or queue follow-up work with **Shift+Ctrl+Enter**. Switch back to **CLI** to answer a permission prompt. The grid keeps running while hidden, so scrollback and selection are unchanged. Prompts have a theme-coloured background and gutter in Chat; the CLI grid does not tint submitted prompts.
 
 Harness inbox and interruption notices appear as small system notes. Images without retained image data appear as attachment chips. Consecutive thinking blocks share one disclosure, and marked answers use the CLI's green highlight. Historical tool cards show status without a duration: the transcript does not provide execution timestamps. Copy appears beside a reply when you hover or focus it. The Compose handle is available in CLI view.
 
@@ -241,7 +241,7 @@ Search within terminal output with `Cmd+F`:
 5. Match counter shows "N of M" results
 6. Press `Escape` to close the search and refocus the terminal
 
-Search is integrated directly with the terminal grid for accurate match highlighting.
+In **CLI**, search is integrated directly with the terminal grid for accurate match highlighting. In **Chat**, **Cmd/Ctrl+F** opens the transcript search: enter text and press **Enter** / **Shift+Enter**, or use **Next** / **Previous**, to select and scroll to matches. Matches span inline Markdown formatting within a paragraph; collapsed thinking bodies are skipped until opened. **Escape** closes search, including after clicking the navigation buttons. Switching CLI/Chat closes the search and clears its highlight.
 
 ## Cross-Terminal Search
 
