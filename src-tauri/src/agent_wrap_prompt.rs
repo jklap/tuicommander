@@ -391,6 +391,57 @@ mod tests {
         );
     }
 
+    /// Item #21 check: after a dismiss (snooze), choosing "Wrap" in Settings
+    /// must let the next shell's detection prompt again — otherwise Settings
+    /// says "Wrap" and nothing is ever wrapped until the app restarts. The
+    /// Settings save stores no fingerprint (the prompt does), so the prompt is
+    /// the only way to the actual wrap.
+    #[test]
+    #[serial_test::serial]
+    fn a_settings_wrap_choice_lifts_the_snooze_so_detection_prompts_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let state = test_state();
+        request(&state, "claude", FP);
+        let id = pending_id(&state, "claude");
+        resolve(&state, &id, "claude", None).unwrap();
+        assert!(state.agent_wrap_snoozed.contains("claude"));
+
+        crate::agent_hook_commands::apply_agent_wrap_user_function(
+            &state,
+            "claude".to_string(),
+            Some(true),
+        )
+        .unwrap();
+
+        assert!(!state.agent_wrap_snoozed.contains("claude"));
+        assert_eq!(stored("claude"), (Some(true), None));
+        request(&state, "claude", FP);
+        assert!(
+            state.agent_wrap_pending.contains_key("claude"),
+            "a Settings Wrap choice must reopen the consent prompt this run"
+        );
+    }
+
+    /// An unsupported agent is refused and leaves any snooze alone.
+    #[test]
+    #[serial_test::serial]
+    fn a_rejected_settings_choice_keeps_the_snooze() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = tuic_core::config_dir::set_override(dir.path().to_path_buf());
+        let state = test_state();
+        state.agent_wrap_snoozed.insert("aider".to_string());
+        assert!(
+            crate::agent_hook_commands::apply_agent_wrap_user_function(
+                &state,
+                "aider".to_string(),
+                Some(true),
+            )
+            .is_err()
+        );
+        assert!(state.agent_wrap_snoozed.contains("aider"));
+    }
+
     #[test]
     #[serial_test::serial]
     fn resolve_true_persists_with_the_fingerprint_and_clears_pending() {
