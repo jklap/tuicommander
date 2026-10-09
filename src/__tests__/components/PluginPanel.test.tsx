@@ -169,7 +169,9 @@ describe("PluginPanel", () => {
 		const frame = container.querySelector("iframe")!.contentWindow!;
 		// Execute the shipped SDK in its real receiving window, then deliver the
 		// mounted host channel's postMessage output across that window boundary.
-		frame.eval(TUIC_SDK_SCRIPT.replace(/^<script[^>]*>/, "").replace(/<\/script>$/, ""));
+		(frame as Window & typeof globalThis).eval(
+			TUIC_SDK_SCRIPT.replace(/^<script[^>]*>/, "").replace(/<\/script>$/, ""),
+		);
 		const received: unknown[] = [];
 		(frame as unknown as { tuic: { onMessage: (cb: (data: unknown) => void) => void } }).tuic.onMessage((data) =>
 			received.push(data),
@@ -190,9 +192,13 @@ describe("PluginPanel", () => {
 		let received: { type: string; payload: { type: string; buffer: ArrayBuffer } } | undefined;
 		// happy-dom does not transfer ownership; use the native clone operation
 		// at the iframe boundary so dropping the transfer list fails this test.
-		vi.spyOn(iframe!.contentWindow!, "postMessage").mockImplementation((data, _target, transfer) => {
-			received = structuredClone(data, { transfer });
-		});
+		vi.spyOn(iframe!.contentWindow!, "postMessage").mockImplementation(
+			(data: unknown, target?: string | WindowPostMessageOptions, transfer?: Transferable[]) => {
+				received = structuredClone(data as NonNullable<typeof received>, {
+					transfer: typeof target === "object" ? target.transfer : transfer,
+				});
+			},
+		);
 		const send = vi.mocked(pluginRegistry.registerPanelSendChannel).mock.calls.at(-1)?.[1];
 		const buffer = new ArrayBuffer(4);
 		new Uint8Array(buffer).set([1, 2, 3, 4]);
