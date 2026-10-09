@@ -3506,7 +3506,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const path = e.dataTransfer?.getData("application/x-tuic-path");
 				if (!path) return;
 				e.preventDefault();
-				const quoted = `'${path.replace(/'/g, "'\\''")}' `;
+				const quoted = `'${path.replaceAll("'", "'\\''")}' `;
 				writePty(quoted);
 				keyInputRef.focus({ preventScroll: true });
 			}}

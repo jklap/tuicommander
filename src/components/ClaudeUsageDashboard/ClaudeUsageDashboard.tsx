@@ -579,7 +579,7 @@ export const ClaudeUsageDashboard: Component<{ sessionId?: string | (() => strin
 	/** Pretty-print a claim key like "seven_day_sonnet" → "7-Day Sonnet". */
 	const claimLabel = (key: string): string => {
 		const match = rateBuckets().find((b) => b.key === key);
-		return match ? match.label : key.replace(/_/g, " ");
+		return match ? match.label : key.replaceAll("_", " ");
 	};
 
 	/** Format a number with thousand separators (no decimal for integers). */
