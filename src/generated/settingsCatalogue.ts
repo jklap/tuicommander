@@ -9045,7 +9045,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "after_merge",
-      "order": 14,
+      "order": 16,
       "path": "/after_merge",
       "labelKey": "settings.catalogue.repo_defaults.after_merge.label",
       "helpKey": "settings.catalogue.repo_defaults.after_merge.help",
@@ -9112,13 +9112,49 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "repo_defaults.archive_script_timeout_secs": {
+      "id": "repo_defaults.archive_script_timeout_secs",
+      "store": "repo_defaults",
+      "owner": "instance",
+      "area": "repo_defaults",
+      "group": "archive_script_timeout_secs",
+      "order": 8,
+      "path": "/archive_script_timeout_secs",
+      "labelKey": "settings.catalogue.repo_defaults.archive_script_timeout_secs.label",
+      "helpKey": "settings.catalogue.repo_defaults.archive_script_timeout_secs.help",
+      "label": "archive script timeout secs",
+      "schema": {
+        "description": "Expert, config-file-only: the same for an Archive Script, which blocks\nthe archive/remove it runs before. Absent (or 0) keeps 900 s; see\n[`archive_script_timeout`].",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates archive script timeout secs for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "repo_defaults.auto_archive_merged": {
       "id": "repo_defaults.auto_archive_merged",
       "store": "repo_defaults",
       "owner": "instance",
       "area": "repo_defaults",
       "group": "auto_archive_merged",
-      "order": 10,
+      "order": 12,
       "path": "/auto_archive_merged",
       "labelKey": "settings.catalogue.repo_defaults.auto_archive_merged.label",
       "helpKey": "settings.catalogue.repo_defaults.auto_archive_merged.help",
@@ -9149,7 +9185,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "auto_delete_on_pr_close",
-      "order": 16,
+      "order": 18,
       "path": "/auto_delete_on_pr_close",
       "labelKey": "settings.catalogue.repo_defaults.auto_delete_on_pr_close.label",
       "helpKey": "settings.catalogue.repo_defaults.auto_delete_on_pr_close.help",
@@ -9193,7 +9229,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "auto_fetch_interval_minutes",
-      "order": 15,
+      "order": 17,
       "path": "/auto_fetch_interval_minutes",
       "labelKey": "settings.catalogue.repo_defaults.auto_fetch_interval_minutes.label",
       "helpKey": "settings.catalogue.repo_defaults.auto_fetch_interval_minutes.help",
@@ -9320,7 +9356,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "delete_branch_on_remove",
-      "order": 9,
+      "order": 11,
       "path": "/delete_branch_on_remove",
       "labelKey": "settings.catalogue.repo_defaults.delete_branch_on_remove.label",
       "helpKey": "settings.catalogue.repo_defaults.delete_branch_on_remove.help",
@@ -9351,7 +9387,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "orphan_cleanup",
-      "order": 11,
+      "order": 13,
       "path": "/orphan_cleanup",
       "labelKey": "settings.catalogue.repo_defaults.orphan_cleanup.label",
       "helpKey": "settings.catalogue.repo_defaults.orphan_cleanup.help",
@@ -9393,7 +9429,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "orphan_cleanup_countdown_seconds",
-      "order": 12,
+      "order": 14,
       "path": "/orphan_cleanup_countdown_seconds",
       "labelKey": "settings.catalogue.repo_defaults.orphan_cleanup_countdown_seconds.label",
       "helpKey": "settings.catalogue.repo_defaults.orphan_cleanup_countdown_seconds.help",
@@ -9426,7 +9462,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "pr_merge_strategy",
-      "order": 13,
+      "order": 15,
       "path": "/pr_merge_strategy",
       "labelKey": "settings.catalogue.repo_defaults.pr_merge_strategy.label",
       "helpKey": "settings.catalogue.repo_defaults.pr_merge_strategy.help",
@@ -9470,7 +9506,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "prompt_on_create",
-      "order": 8,
+      "order": 10,
       "path": "/prompt_on_create",
       "labelKey": "settings.catalogue.repo_defaults.prompt_on_create.label",
       "helpKey": "settings.catalogue.repo_defaults.prompt_on_create.help",
@@ -9557,6 +9593,42 @@ export const settingsCatalogue = {
       ],
       "confirmationClass": "ordinary"
     },
+    "repo_defaults.setup_script_timeout_secs": {
+      "id": "repo_defaults.setup_script_timeout_secs",
+      "store": "repo_defaults",
+      "owner": "instance",
+      "area": "repo_defaults",
+      "group": "setup_script_timeout_secs",
+      "order": 7,
+      "path": "/setup_script_timeout_secs",
+      "labelKey": "settings.catalogue.repo_defaults.setup_script_timeout_secs.label",
+      "helpKey": "settings.catalogue.repo_defaults.setup_script_timeout_secs.help",
+      "label": "setup script timeout secs",
+      "schema": {
+        "description": "Expert, config-file-only (no Settings UI): seconds after which a Setup\nScript's whole process tree is killed. Absent (or 0) keeps tuic-git's\nbuilt-in 900 s; see [`setup_script_timeout`].",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
+      },
+      "nullable": true,
+      "default": null,
+      "availability": {
+        "status": "available"
+      },
+      "choices": null,
+      "sensitivity": "public",
+      "apply": "live",
+      "effect": "Updates setup script timeout secs for the current owner.",
+      "operations": [
+        "get",
+        "set",
+        "reset"
+      ],
+      "confirmationClass": "ordinary"
+    },
     "repo_defaults.warm_ignored_directories": {
       "id": "repo_defaults.warm_ignored_directories",
       "store": "repo_defaults",
@@ -9595,7 +9667,7 @@ export const settingsCatalogue = {
       "owner": "instance",
       "area": "repo_defaults",
       "group": "worktree_storage",
-      "order": 7,
+      "order": 9,
       "path": "/worktree_storage",
       "labelKey": "settings.catalogue.repo_defaults.worktree_storage.label",
       "helpKey": "settings.catalogue.repo_defaults.worktree_storage.help",

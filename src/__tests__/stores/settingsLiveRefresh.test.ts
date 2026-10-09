@@ -178,6 +178,36 @@ describe("settings live refresh", () => {
 		}
 	});
 
+	// Catches: a config-file-only repo default (the script timeouts, no Settings
+	// control) edited on disk being saved back as a deletion, or reverted to its
+	// hydrate-time value, by the next Settings edit after a live refresh.
+	it("keeps_an_externally_edited_config_file_only_repo_default_through_refresh_and_save", async () => {
+		let persisted: Record<string, unknown> = { base_branch: "automatic", setup_script_timeout_secs: 1200 };
+		io.invoke.mockImplementation((command: string, args?: { config: Record<string, unknown> }) => {
+			if (command === "load_repo_defaults") return Promise.resolve(structuredClone(persisted));
+			if (command === "save_repo_defaults") persisted = structuredClone(args!.config);
+			return Promise.resolve(undefined);
+		});
+		const defaults = (await import("../../stores/repoDefaults")).repoDefaultsStore;
+		await defaults.hydrate();
+		const stopDefaults = defaults.startRemoteSync();
+		try {
+			await flush();
+			persisted = { ...persisted, setup_script_timeout_secs: 300, archive_script_timeout_secs: 60 };
+			handlers["settings-changed"]({ section: "repo_defaults", generation: 1, persisted: true, applied: true });
+			await flush();
+			defaults.setBaseBranch("main");
+			await flush();
+			expect(persisted).toMatchObject({
+				base_branch: "main",
+				setup_script_timeout_secs: 300,
+				archive_script_timeout_secs: 60,
+			});
+		} finally {
+			stopDefaults();
+		}
+	});
+
 	// Catches: the agent owner's custom save transport dropping its second
 	// immediate edit when the first write's event arrives before its response.
 	it("persists_a_queued_agent_edit_after_its_own_refresh", async () => {
