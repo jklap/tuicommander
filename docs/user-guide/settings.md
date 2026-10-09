@@ -99,7 +99,7 @@ never all expert: in basic mode it would show an empty page.
 | **Ignore whitespace amount** | Runs of whitespace compare equal regardless of how many characters they contain — catches reindentation/retabbing with no other content change. |
 | **Ignore case** | Case-insensitive line comparison. |
 | **Soft-wrap long lines** | Wrap long diff lines instead of scrolling horizontally. |
-| **Auto-open Session Diff Review** | When TUIC detects a Claude Code session editing files in a repo: **Off** (never open it automatically), **Ask** (a notice in the notification bell with an "Open Session Diff" action), or **Auto** (open the tab in the background, without switching to it). Skipped if a tab for that session is already open. |
+| **Auto-open Session Diff Review** | When TUIC detects a Claude Code session editing files in a repo: **Off** (never open it automatically), **Ask** (a brief toast plus a notice in the notification bell, both with an "Open Session Diff" action), or **Auto** (open the tab in the background, without switching to it). Skipped if a tab for that session is already open. |
 | **Truncate long changes** | Collapse a single change's diff above this many lines behind a "Show all N more lines" button. 0 = never truncate. |
 | **Automatically check for updates** | Check for new versions on startup |
 | **Update Channel** | Choose which release channel to receive updates from |

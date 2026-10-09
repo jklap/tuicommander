@@ -926,17 +926,22 @@ export async function initApp(deps: AppInitDeps) {
 				diffTabsStore.addSessionReview(repo_path, claude_session_id, false);
 				return;
 			}
-			// "ask": a backend-originated notice, so it goes to the bell (never a
-			// transient toast over the active input — see the MCP toast listener
-			// above); the bell item carries the "Open Session Diff" action.
-			toastsStore.addToBell(
-				"Session made changes",
-				"A Claude Code session edited files in this repo.",
-				"info",
-				repo_path,
-				{ label: "Open Session Diff", onClick: () => diffTabsStore.addSessionReview(repo_path, claude_session_id) },
-				tuic_session_id ?? undefined,
-			);
+			// "ask": the user opted into being ASKED, so — unlike other backend
+			// notices, which stay bell-only (see the MCP toast listener above) — this
+			// one is also a transient toast (user decision, dropped-items #41). It
+			// still honours #1397's constraints: transient cards are anchored above
+			// the terminal input (never over it) and bursts collapse into at most two
+			// cards. The bell item is always added (not left to the "Keep toasts in
+			// the bell" setting), so the offer outlives the toast.
+			const title = "Session made changes";
+			const message = "A Claude Code session edited files in this repo.";
+			const action = {
+				label: "Open Session Diff",
+				onClick: () => diffTabsStore.addSessionReview(repo_path, claude_session_id),
+			};
+			const sessionId = tuic_session_id ?? undefined;
+			toastsStore.addToBell(title, message, "info", repo_path, action, sessionId);
+			toastsStore.add(title, message, "info", false, action, undefined, repo_path, sessionId, false);
 		},
 	).catch((err) => appLogger.error("app", "Failed to register agent-edit-observed listener", err));
 

@@ -4169,9 +4169,35 @@ describe("initApp", () => {
 			expect(activityStore.getForSection("messages")).toHaveLength(0);
 		});
 
-		// A backend-originated notice: it lands in the bell (main's rule — never a
-		// transient toast over the active input), carrying the open action.
-		it("ask: adds a bell notice whose action opens Session Diff Review for that session", async () => {
+		// "ask" means the user wants to be asked: a transient toast (user decision,
+		// dropped-items #41) PLUS a bell notice that outlives it, both carrying the
+		// open action.
+		it("ask: shows a toast and a bell notice whose actions open Session Diff Review", async () => {
+			settingsStore.setSessionDiffAutoOpen("ask");
+			const { getCallback } = captureAgentEditObserved();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({ payload: { tuic_session_id: "tuic-1", claude_session_id: "sess-1", repo_path: "/repo" } });
+
+			expect(diffTabsStore.getForRepo("/repo").length).toBe(0);
+			const toast = toastsStore.toasts.find((t) => t.title === "Session made changes");
+			expect(toast).toBeTruthy();
+			expect(toast?.repoPath).toBe("/repo");
+			expect(toast?.sessionId).toBe("tuic-1");
+			expect(toast?.action?.label).toBe("Open Session Diff");
+			// Exactly one bell item: the toast does not mirror a duplicate.
+			expect(
+				activityStore.getForSection("messages").filter((item) => item.title === "Session made changes"),
+			).toHaveLength(1);
+
+			toast?.action?.onClick();
+			expect(
+				diffTabsStore.getForRepo("/repo").find((t) => t.scope === SESSION_SCOPE && t.sessionId === "sess-1"),
+			).toBeTruthy();
+		});
+
+		it("ask: the bell notice's action opens Session Diff Review for that session", async () => {
 			settingsStore.setSessionDiffAutoOpen("ask");
 			const { getCallback } = captureAgentEditObserved();
 			const deps = createMockDeps();
@@ -4180,7 +4206,6 @@ describe("initApp", () => {
 			getCallback()!({ payload: { tuic_session_id: null, claude_session_id: "sess-1", repo_path: "/repo" } });
 
 			expect(diffTabsStore.getForRepo("/repo").length).toBe(0);
-			expect(toastsStore.toasts.find((t) => t.title === "Session made changes")).toBeUndefined();
 			const notice = activityStore.getForSection("messages").find((item) => item.title === "Session made changes");
 			expect(notice).toBeTruthy();
 			expect(notice?.repoPath).toBe("/repo");
