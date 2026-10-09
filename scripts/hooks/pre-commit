@@ -133,7 +133,10 @@ hunk_contexts() {
 
 offenders=()                     # "path — symbol symbol" lines to report
 
-[ -n "$(code_changes "$(staged_diff "$chrome_file")")" ] && offenders+=("$chrome_file — bottom-zone cutoff")
+# Assigned on its own line so a classifier refusal (nonzero exit) blocks the
+# commit under `set -e`; inside the `[ -n "$(...)" ]` below it read as "no diff".
+chrome_diff="$(staged_diff "$chrome_file")"
+[ -n "$(code_changes "$chrome_diff")" ] && offenders+=("$chrome_file — bottom-zone cutoff")
 
 for f in $scoped_files; do
   d="$(staged_diff "$f")"
