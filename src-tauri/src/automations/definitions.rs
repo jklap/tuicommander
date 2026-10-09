@@ -1,0 +1,96 @@
+//! Per-definition edits under ConfigFile's process and cross-process locks.
+
+use super::model::{AutomationDefinition, AutomationsConfig};
+use crate::config::ConfigFile;
+use std::path::PathBuf;
+
+pub struct DefinitionStore {
+    file: ConfigFile<AutomationsConfig>,
+}
+
+impl DefinitionStore {
+    /// Use the selected application instance's configuration directory.
+    pub fn new() -> Self {
+        Self {
+            file: ConfigFile::new("automations.json"),
+        }
+    }
+
+    /// Use an explicit document, including isolated test documents.
+    pub fn at_path(path: PathBuf) -> Self {
+        Self {
+            file: ConfigFile::at_path(path),
+        }
+    }
+
+    /// Read validated definitions without creating or rewriting the document.
+    pub fn load(&self) -> Result<AutomationsConfig, String> {
+        self.file.update_with_strict(|latest| {
+            latest.validate()?;
+            Ok((latest.clone(), false))
+        })
+    }
+
+    /// Create one definition without replacing another writer's edits.
+    pub fn create(&self, definition: AutomationDefinition) -> Result<(), String> {
+        definition.validate()?;
+        self.file.update_with_strict(|latest| {
+            latest.validate()?;
+            if latest
+                .definitions
+                .iter()
+                .any(|item| item.id == definition.id)
+            {
+                return Err("Automation id already exists".into());
+            }
+            latest.definitions.push(definition);
+            Ok(((), true))
+        })
+    }
+
+    /// Replace only the named definition; identity cannot change in an edit.
+    pub fn update(&self, id: &str, definition: AutomationDefinition) -> Result<(), String> {
+        definition.validate()?;
+        if definition.id != id {
+            return Err("Automation id cannot change".into());
+        }
+        self.file.update_with_strict(|latest| {
+            latest.validate()?;
+            let item = latest
+                .definitions
+                .iter_mut()
+                .find(|item| item.id == id)
+                .ok_or("Automation not found")?;
+            let changed = *item != definition;
+            *item = definition;
+            Ok(((), changed))
+        })
+    }
+
+    /// Remove one definition; run history is owned by a separate store.
+    pub fn remove(&self, id: &str) -> Result<(), String> {
+        self.file.update_with_strict(|latest| {
+            latest.validate()?;
+            let position = latest
+                .definitions
+                .iter()
+                .position(|item| item.id == id)
+                .ok_or("Automation not found")?;
+            latest.definitions.remove(position);
+            Ok(((), true))
+        })
+    }
+
+    /// Change the global limit while retaining the latest definitions.
+    pub fn set_concurrency(&self, limit: u32) -> Result<(), String> {
+        if limit == 0 {
+            return Err("Automation concurrency must be greater than zero".into());
+        }
+        self.file.update_with_strict(|latest| {
+            latest.validate()?;
+            let changed = latest.max_concurrent_runs != limit;
+            latest.max_concurrent_runs = limit;
+            Ok(((), changed))
+        })
+    }
+}

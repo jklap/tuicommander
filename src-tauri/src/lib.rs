@@ -28,6 +28,11 @@ pub(crate) use tuic_terminal::chrome;
 pub(crate) mod circleci;
 pub(crate) mod claude_usage;
 pub(crate) use tuic_core::cli;
+#[expect(
+    dead_code,
+    reason = "Automation runtime and API consumers follow in plan steps 2–8"
+)]
+pub(crate) mod automations;
 pub(crate) mod cli_usage_rpc;
 pub(crate) mod codex_usage;
 pub(crate) mod config;
