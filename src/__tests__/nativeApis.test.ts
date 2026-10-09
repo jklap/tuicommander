@@ -34,4 +34,7 @@ describe("ES2024 native API conventions", () => {
 		expect(matches(/new Promise(?:<[^>]+>)?\(\(resolve\) => \{\s*\w+(?:Resolve|Resolver) = resolve/g)).toEqual([]);
 		expect(sources["../components/Terminal/canvasTerminalTransport.ts"]).not.toMatch(/rejectConnect = reject/);
 	});
+	it("prevents JSON round trips for the plain IPC-loaded app config", () => {
+		expect(sources["../utils/updateAppConfig.ts"]).not.toMatch(/JSON\.parse\(JSON\.stringify/);
+	});
 });
