@@ -3142,7 +3142,8 @@ mod tests {
                 StatusCode::PAYLOAD_TOO_LARGE,
             ),
         ] {
-            let mut request = Request::post("/remote/update?token=update-secret")
+            let mut request = Request::post("/remote/update")
+                .header(header::COOKIE, "tui-session=update-secret")
                 .header(header::HOST, "127.0.0.1:9876")
                 .header("x-tuic-target", target)
                 .header("x-tuic-sha256", sha256)
@@ -3193,7 +3194,8 @@ mod tests {
                 bytes.as_slice(),
             ),
         ] {
-            let mut request = Request::post("/remote/update?token=update-secret")
+            let mut request = Request::post("/remote/update")
+                .header(header::COOKIE, "tui-session=update-secret")
                 .header(header::HOST, "127.0.0.1:9876")
                 .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
                 .header("x-tuic-sha256", hash)
@@ -3211,7 +3213,8 @@ mod tests {
             assert_eq!(std::fs::read(&executable).unwrap(), contents);
             assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
         }
-        let mut duplicate = Request::post("/remote/update?token=update-secret")
+        let mut duplicate = Request::post("/remote/update")
+            .header(header::COOKIE, "tui-session=update-secret")
             .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header("x-tuic-sha256", good_hash)
@@ -3261,7 +3264,8 @@ mod tests {
             first_released.await.unwrap();
             Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"replacement"))
         }));
-        let mut first = Request::post("/remote/update?token=update-secret")
+        let mut first = Request::post("/remote/update")
+            .header(header::COOKIE, "tui-session=update-secret")
             .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
@@ -3280,7 +3284,8 @@ mod tests {
         let first_task = tokio::spawn(app.clone().oneshot(first));
         first_chunk_received.await.unwrap();
 
-        let mut second = Request::post("/remote/update?token=update-secret")
+        let mut second = Request::post("/remote/update")
+            .header(header::COOKIE, "tui-session=update-secret")
             .header(header::HOST, "127.0.0.1:9876")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
@@ -3357,7 +3362,8 @@ mod tests {
         });
         let client = reqwest::Client::new();
         let response = client
-            .post(format!("{first_url}/remote/update?token=first-secret"))
+            .post(format!("{first_url}/remote/update"))
+            .header("cookie", "tui-session=first-secret")
             .header("x-tuic-target", env!("TUIC_TARGET_TRIPLE"))
             .header(
                 "x-tuic-sha256",

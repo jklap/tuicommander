@@ -4611,6 +4611,68 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn removing_a_worktree_with_an_unsearchable_ignored_directory_restores_access_before_descent() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let (temp, repo, _workspaces) = workspace_fixture();
+        let path = add_worktree(&repo, "unsearchable-build-removal");
+        commit_file(&path, ".gitignore", "target/\n");
+        let blocked = path.join("target/repo/x");
+        fs::create_dir_all(blocked.join("nested")).unwrap();
+        fs::write(blocked.join("nested/result.txt"), "ignored output\n").unwrap();
+        let outside = temp.path().join("outside-store");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "external evidence\n").unwrap();
+        fs::set_permissions(outside.join("keep.txt"), fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o555)).unwrap();
+        symlink(&outside, blocked.join("store-link")).unwrap();
+        symlink(outside.join("missing"), blocked.join("dangling-link")).unwrap();
+        // Recorded from the live failed checkout: repo/x is uid-owned mode 0644.
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o644)).unwrap();
+        let worktree = WorktreeInfo {
+            name: "unsearchable-build-removal".into(),
+            path: path.clone(),
+            branch: Some("unsearchable-build-removal".into()),
+            base_repo: repo.clone(),
+        };
+
+        let result = remove_worktree_internal(&worktree, false);
+        let outside_mode = fs::metadata(&outside).unwrap().permissions().mode() & 0o777;
+        let file_mode = fs::metadata(outside.join("keep.txt"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        // Restore only fixture paths so a failed assertion cannot strand scratch data.
+        if blocked.exists() {
+            fs::set_permissions(&blocked, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(outside.join("keep.txt"), fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(
+            result.is_ok(),
+            "unsearchable worktree removal failed: {result:?}"
+        );
+        assert!(!path.exists(), "successful removal left a checkout remnant");
+        assert!(
+            registered_worktree_admin_dir(&repo, &path)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            outside_mode, 0o555,
+            "removal chmodded a symlink target directory"
+        );
+        assert_eq!(file_mode, 0o444, "removal chmodded an external store file");
+        assert_eq!(
+            fs::read_to_string(outside.join("keep.txt")).unwrap(),
+            "external evidence\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn removing_a_worktree_with_read_only_build_evidence_deletes_every_file_itview_067() {
         use std::os::unix::fs::PermissionsExt;
 

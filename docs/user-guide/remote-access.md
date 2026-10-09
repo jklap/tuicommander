@@ -330,9 +330,12 @@ For a development build, build the headless binary with
 desktop-feature sibling is a stub. The preview names that cause and command.
 
 Direct updates stream the binary over the authenticated connection. The daemon
-accepts the session cookie and the legacy URL token for binary and file uploads.
-This release keeps the URL form for older clients; the next release will migrate
-the update client to the cookie and remove the legacy query form. The daemon
+accepts only the session cookie for binary and file uploads, and the update
+client sends it in the `Cookie` header; credentials never appear in the upload
+URL. A daemon from this release rejects an update from an older desktop with
+401, and a newer desktop cannot update an older daemon that still expects the
+URL token. Update desktop and daemon from the same release, or deploy the older
+daemon over SSH. The daemon
 verifies its target, size (512 MiB maximum), SHA-256 and confirmed session
 count, stages it in its own install directory, then starts the new build. SSH
 updates use the existing SCP deployment path. TUICommander waits for `/health`

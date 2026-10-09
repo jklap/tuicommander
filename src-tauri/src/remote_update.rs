@@ -5,7 +5,7 @@ use crate::remote_connection::{DeployMode, RemoteTransport};
 use crate::remote_deploy::assets::{BuildIdentity, resolve_update_asset};
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, Uri};
+use axum::http::{HeaderMap, StatusCode};
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 
@@ -84,9 +84,8 @@ pub(crate) async fn update_and_restart(
     perform_update_and_restart(state, id, confirmed_sessions, expected_sha256).await
 }
 
-/// POST the binary to the daemon. The token stays in the query because the
-/// daemon's `/remote/update` route accepts only the query token; the error is
-/// stripped of the URL so the token never reaches the UI.
+/// POST the binary to the daemon. The token travels only in the `tui-session`
+/// cookie, never in the URL; the error is stripped of the URL regardless.
 async fn send_binary_upload(
     client: &reqwest::Client,
     base_url: &str,
@@ -99,7 +98,10 @@ async fn send_binary_upload(
         UPLOAD_TIMEOUT,
         client
             .post(format!("{}/remote/update", base_url.trim_end_matches('/')))
-            .query(&[("token", token)])
+            .header(
+                reqwest::header::COOKIE,
+                format!("{}={token}", crate::mcp_http::auth::SESSION_COOKIE),
+            )
             .header("x-tuic-target", &build.target)
             .header("x-tuic-sha256", &build.sha256)
             .header("x-tuic-confirmed-sessions", confirmed_sessions)
@@ -277,12 +279,10 @@ pub(crate) struct RemoteUpdateState {
 
 pub(crate) async fn upload(
     State(state): State<Arc<crate::AppState>>,
-    uri: Uri,
     headers: HeaderMap,
     body: Body,
 ) -> (StatusCode, String) {
-    if !crate::mcp_http::auth::has_valid_session_token(&uri, &headers, &state.session_token.read())
-    {
+    if !crate::mcp_http::auth::has_valid_session_token(&headers, &state.session_token.read()) {
         return (
             StatusCode::UNAUTHORIZED,
             "remote session token required".to_string(),
@@ -528,24 +528,19 @@ mod tests {
     }
 
     // Catches: the upload handler rejects a cookie already admitted by middleware,
-    // or the migration breaks a previous-release query client.
+    // or a stray query token overrides the cookie decision.
     #[cfg(not(windows))]
     #[tokio::test]
-    async fn daemon_upload_credentials_cookie_and_legacy_query_install_the_binary() {
+    async fn daemon_upload_credentials_cookie_installs_the_binary() {
         use tower::ServiceExt;
         for (path, cookie) in [
             (
                 "/remote/update",
                 Some("other=value; tui-session=update-secret; last=value"),
             ),
-            ("/remote/update?token=update-secret", None),
             (
                 "/remote/update?token=wrong",
                 Some("tui-session=update-secret"),
-            ),
-            (
-                "/remote/update?token=update-secret",
-                Some("tui-session=wrong"),
             ),
         ] {
             let directory = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
@@ -572,9 +567,10 @@ mod tests {
         }
     }
 
-    // Catches: shared upload auth drops cookie/query support, or accepts bad credentials.
+    // Catches: the shared middleware still admits a query-only token on
+    // /fs/upload-copy (the release N compatibility path), or rejects the cookie.
     #[tokio::test]
-    async fn daemon_upload_credentials_copy_reaches_validation_only_with_a_valid_token() {
+    async fn daemon_upload_credentials_copy_reaches_validation_only_with_a_valid_cookie() {
         use tower::ServiceExt;
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         *state.session_token.write() = "update-secret".to_string();
@@ -586,9 +582,19 @@ mod tests {
                 StatusCode::BAD_REQUEST,
             ),
             (
+                "/fs/upload-copy?token=wrong",
+                Some("tui-session=update-secret"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
                 "/fs/upload-copy?token=update-secret",
                 None,
-                StatusCode::BAD_REQUEST,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "/fs/upload-copy?token=update-secret",
+                Some("tui-session=wrong"),
+                StatusCode::UNAUTHORIZED,
             ),
             ("/fs/upload-copy", None, StatusCode::UNAUTHORIZED),
             (
@@ -603,12 +609,12 @@ mod tests {
                 .oneshot(daemon_upload_request(path, cookie))
                 .await
                 .unwrap();
-            assert_eq!(response.status(), expected);
+            assert_eq!(response.status(), expected, "{path} {cookie:?}");
         }
     }
 
-    // Catches: Basic auth accidentally replaces the update token requirement, or
-    // an empty/retired token authorizes an executable replacement.
+    // Catches: Basic auth or a valid query token accidentally replaces the cookie
+    // requirement, or an empty/retired token authorizes an executable replacement.
     #[tokio::test]
     async fn daemon_upload_credentials_missing_wrong_empty_and_rotated_tokens_are_401() {
         use base64::Engine;
@@ -625,6 +631,11 @@ mod tests {
         for (path, cookie) in [
             ("/remote/update", None),
             ("/remote/update?token=wrong", None),
+            ("/remote/update?token=update-secret", None),
+            (
+                "/remote/update?token=update-secret",
+                Some("tui-session=wrong"),
+            ),
             ("/remote/update", Some("tui-session=wrong")),
             ("/remote/update?token=wrong", Some("tui-session=wrong")),
             ("/remote/update?token=", Some("tui-session=")),
@@ -648,10 +659,7 @@ mod tests {
             }
         }
         *state.session_token.write() = "rotated-secret".to_string();
-        let request = daemon_upload_request(
-            "/remote/update?token=update-secret",
-            Some("tui-session=update-secret"),
-        );
+        let request = daemon_upload_request("/remote/update", Some("tui-session=update-secret"));
         assert_eq!(
             app.clone().oneshot(request).await.unwrap().status(),
             StatusCode::UNAUTHORIZED
@@ -740,7 +748,8 @@ mod tests {
                     let installed = installed.clone();
                     let upload_seen = upload_seen.clone();
                     async move {
-                        assert_eq!(uri.query(), Some("token=test-token"));
+                        assert_eq!(uri.query(), None);
+                        assert_eq!(headers["cookie"], "tui-session=test-token");
                         assert_eq!(headers["x-tuic-confirmed-sessions"], "0");
                         assert_eq!(headers["x-tuic-target"], env!("TUIC_TARGET_TRIPLE"));
                         assert_eq!(body.as_ref(), b"remote binary");
