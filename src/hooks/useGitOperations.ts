@@ -70,6 +70,7 @@ export interface GitOperationsDeps {
 			expectedFingerprint?: string,
 			confirmMissingCheckout?: boolean,
 			permanentDelete?: boolean,
+			overrideBusy?: boolean,
 		) => Promise<RemoveWorktreeResult | undefined>;
 		createWorktree: (
 			baseRepo: string,
@@ -157,10 +158,13 @@ export interface GitOperationsDeps {
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		/** Terminals are attached to this worktree — shown after the removal
 		 *  confirmation and BEFORE any terminal is closed (using the terminals
-		 *  inside the checkout by live cwd). See `createWorktreeRemovalCoordinator`. */
+		 *  inside the checkout by live cwd), and again with `liveSessions` when the backend
+		 *  refuses with `worktree_busy:` (sessions working in the checkout that
+		 *  the terminal list does not show). See `createWorktreeRemovalCoordinator`. */
 		confirmRemoveBusyWorktree?: (
 			branchName: string,
 			summary: import("../utils/activitySnapshot").BranchActivitySummary,
+			options?: { liveSessions?: boolean },
 		) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (
