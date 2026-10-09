@@ -64,12 +64,39 @@ const INITIAL_DEFAULTS: RepoDefaults = {
 
 const repoDefaultsWriter = createConfigDeltaWriter<Record<string, unknown>>("save_repo_defaults");
 
+/** Keys this store owns (edits in Settings). Anything else `load_repo_defaults`
+ * returns — e.g. the config-file-only `setup_script_timeout_secs` /
+ * `archive_script_timeout_secs` expert settings — is carried through every save
+ * unchanged: the delta writer's base is the whole loaded document, so a key
+ * missing from `desired` would otherwise be saved as a deletion. */
+const OWNED_KEYS = new Set([
+	"base_branch",
+	"copy_ignored_files",
+	"copy_untracked_files",
+	"warm_ignored_directories",
+	"setup_script",
+	"run_script",
+	"archive_script",
+	"worktree_storage",
+	"prompt_on_create",
+	"delete_branch_on_remove",
+	"auto_archive_merged",
+	"orphan_cleanup",
+	"orphan_cleanup_countdown_seconds",
+	"pr_merge_strategy",
+	"after_merge",
+	"auto_fetch_interval_minutes",
+	"auto_delete_on_pr_close",
+]);
+let unownedFields: Record<string, unknown> = {};
+
 function createRepoDefaultsStore() {
 	const [state, setState] = createStore<RepoDefaults>({ ...INITIAL_DEFAULTS });
 
 	function save(): void {
 		repoDefaultsWriter
 			.save({
+				...unownedFields,
 				base_branch: state.baseBranch,
 				copy_ignored_files: state.copyIgnoredFiles,
 				copy_untracked_files: state.copyUntrackedFiles,
@@ -116,6 +143,7 @@ function createRepoDefaultsStore() {
 					auto_delete_on_pr_close?: AutoDeleteOnPrClose;
 				} | null>("load_repo_defaults");
 				repoDefaultsWriter.loaded(loaded ?? {});
+				unownedFields = Object.fromEntries(Object.entries(loaded ?? {}).filter(([key]) => !OWNED_KEYS.has(key)));
 				if (loaded) {
 					setState({
 						baseBranch: loaded.base_branch ?? INITIAL_DEFAULTS.baseBranch,

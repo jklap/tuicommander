@@ -2099,6 +2099,16 @@ pub(crate) struct RepoDefaultsConfig {
     pub(crate) run_script: String,
     #[serde(default)]
     pub(crate) archive_script: String,
+    /// Expert, config-file-only (no Settings UI): seconds after which a Setup
+    /// Script's whole process tree is killed. Absent (or 0) keeps tuic-git's
+    /// built-in 900 s; see [`setup_script_timeout`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) setup_script_timeout_secs: Option<u64>,
+    /// Expert, config-file-only: the same for an Archive Script, which blocks
+    /// the archive/remove it runs before. Absent (or 0) keeps 900 s; see
+    /// [`archive_script_timeout`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) archive_script_timeout_secs: Option<u64>,
     // -- Worktree settings --
     #[serde(default)]
     pub(crate) worktree_storage: WorktreeStorage,
@@ -2134,6 +2144,8 @@ impl Default for RepoDefaultsConfig {
             setup_script: String::new(),
             run_script: String::new(),
             archive_script: String::new(),
+            setup_script_timeout_secs: None,
+            archive_script_timeout_secs: None,
             worktree_storage: WorktreeStorage::default(),
             prompt_on_create: true,
             delete_branch_on_remove: true,
@@ -2146,6 +2158,28 @@ impl Default for RepoDefaultsConfig {
             auto_delete_on_pr_close: AutoDeleteOnPrClose::default(),
         }
     }
+}
+
+/// Longest configurable script deadline (one day). Larger values are clamped:
+/// `Instant + Duration` panics on overflow, and nothing legitimate needs more.
+const MAX_SCRIPT_TIMEOUT_SECS: u64 = 24 * 60 * 60;
+
+/// A configured `*_script_timeout_secs` as the deadline tuic-git takes: `None`
+/// (tuic-git's built-in `SCRIPT_TIMEOUT`) when unset or 0, else clamped to
+/// [`MAX_SCRIPT_TIMEOUT_SECS`].
+fn script_timeout_from(secs: Option<u64>) -> Option<std::time::Duration> {
+    secs.filter(|&s| s > 0)
+        .map(|s| std::time::Duration::from_secs(s.min(MAX_SCRIPT_TIMEOUT_SECS)))
+}
+
+/// The Setup Script deadline from `repo-defaults.json` (global only).
+pub(crate) fn setup_script_timeout() -> Option<std::time::Duration> {
+    script_timeout_from(load_repo_defaults().setup_script_timeout_secs)
+}
+
+/// The Archive Script deadline from `repo-defaults.json` (global only).
+pub(crate) fn archive_script_timeout() -> Option<std::time::Duration> {
+    script_timeout_from(load_repo_defaults().archive_script_timeout_secs)
 }
 
 fn default_orphan_cleanup_countdown_seconds() -> u32 {
@@ -6227,6 +6261,35 @@ mod tests {
         migrate_retired_scrollbar_marks(&mut on);
         let config: AppConfig = serde_json::from_value(on).unwrap();
         assert!(config.show_block_marks && config.show_prompt_marks);
+    }
+
+    /// Catches: the expert script-timeout fields being written into every
+    /// repo-defaults.json (they are config-file-only, absent = built-in 900 s),
+    /// a configured value not round-tripping, or 0 / huge values producing a
+    /// deadline that kills instantly or overflows.
+    #[test]
+    fn script_timeouts_default_to_unset_and_honour_a_configured_value() {
+        let defaults = serde_json::to_value(RepoDefaultsConfig::default()).unwrap();
+        assert!(defaults.get("setup_script_timeout_secs").is_none());
+        assert!(defaults.get("archive_script_timeout_secs").is_none());
+        let loaded: RepoDefaultsConfig = serde_json::from_value(serde_json::json!({
+            "setup_script_timeout_secs": 1200,
+            "archive_script_timeout_secs": 60,
+        }))
+        .unwrap();
+        assert_eq!(loaded.setup_script_timeout_secs, Some(1200));
+        assert_eq!(loaded.archive_script_timeout_secs, Some(60));
+        let empty: RepoDefaultsConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(empty.setup_script_timeout_secs, None);
+
+        let secs = std::time::Duration::from_secs;
+        assert_eq!(script_timeout_from(None), None);
+        assert_eq!(script_timeout_from(Some(0)), None);
+        assert_eq!(script_timeout_from(Some(120)), Some(secs(120)));
+        assert_eq!(
+            script_timeout_from(Some(u64::MAX)),
+            Some(secs(MAX_SCRIPT_TIMEOUT_SECS))
+        );
     }
 
     /// Catches: a pre-`block_timestamp_mode` config with timestamps turned off

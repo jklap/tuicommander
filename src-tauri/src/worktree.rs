@@ -287,6 +287,7 @@ pub(crate) fn remove_worktree_by_workspace_id_with_confirmation(
         archive_script.map(|script| UserScript {
             script,
             env: &archive_script_env,
+            timeout: crate::config::archive_script_timeout(),
         }),
         force,
         override_lock,
@@ -317,6 +318,7 @@ pub(crate) fn remove_worktree_with_presence_confirmation(
         archive_script.map(|script| UserScript {
             script,
             env: &archive_script_env,
+            timeout: crate::config::archive_script_timeout(),
         }),
         force,
         override_lock,
@@ -2327,6 +2329,7 @@ pub(crate) fn archive_worktree(
         archive_script.map(|script| UserScript {
             script,
             env: &archive_script_env,
+            timeout: crate::config::archive_script_timeout(),
         }),
     )
 }
@@ -2337,10 +2340,15 @@ pub(crate) fn archive_worktree(
 /// the same variables.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn run_setup_script(script: String, cwd: String) -> Result<serde_json::Value, String> {
-    tuic_git::worktree::run_setup_script_with_env(script, cwd, &|cwd| {
-        crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Setup, cwd)
-            .std_pairs()
-    })
+    tuic_git::worktree::run_setup_script_with_env(
+        script,
+        cwd,
+        &|cwd| {
+            crate::script_env::ScriptContext::derive(crate::script_env::ScriptKind::Setup, cwd)
+                .std_pairs()
+        },
+        crate::config::setup_script_timeout(),
+    )
 }
 
 #[cfg(test)]
@@ -3910,6 +3918,48 @@ mod tests {
         )
         .expect("should succeed");
         assert_eq!(result["stdout"].as_str().unwrap().trim(), "UNSET");
+    }
+
+    /// Catches: the config-file-only `setup_script_timeout_secs` /
+    /// `archive_script_timeout_secs` (dropped-items-review #4) being ignored —
+    /// a hung script would then run for tuic-git's full 900 s default.
+    #[cfg(unix)]
+    #[test]
+    fn configured_script_timeouts_are_honoured_for_setup_and_archive() {
+        let config_dir = TempDir::new().expect("temp dir");
+        let _guard = crate::config::set_config_dir_override(config_dir.path().to_path_buf());
+        crate::config::save_repo_defaults(
+            crate::config::RepoDefaultsConfig::default(),
+            crate::config::RepoDefaultsConfig {
+                setup_script_timeout_secs: Some(1),
+                archive_script_timeout_secs: Some(1),
+                ..crate::config::RepoDefaultsConfig::default()
+            },
+        )
+        .expect("save repo defaults");
+
+        let started = std::time::Instant::now();
+        let dir = TempDir::new().expect("temp dir");
+        let setup = run_setup_script("sleep 30".to_string(), dir.path().to_string_lossy().into())
+            .expect_err("a setup script past its configured deadline must fail");
+        assert!(setup.contains("timed out after 1s"), "{setup}");
+
+        let repo = setup_test_repo();
+        let config = WorktreeConfig {
+            task_name: "archive-timeout".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("archive-timeout".to_string()),
+            create_branch: true,
+        };
+        create_worktree_internal(&repo.path().join("worktrees"), &config, None)
+            .expect("create worktree");
+        let archive = archive_worktree(repo.path(), "archive-timeout", Some("sleep 30"))
+            .expect_err("an archive script past its configured deadline must fail");
+        assert!(archive.contains("timed out after 1s"), "{archive}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "both must give up at the configured 1 s, not the 900 s default"
+        );
     }
 
     #[cfg(unix)]

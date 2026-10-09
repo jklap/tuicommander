@@ -2998,7 +2998,7 @@ Runs the script through `sh -c` (Unix) or `cmd /C` (Windows) in `cwd` and return
 `{ "exit_code": number, "stdout": string, "stderr": string }` — the same function
 and shape as the `run_setup_script` command, with the `TUIC_*` environment
 injected (`script_env::ScriptContext`: main checkout path, branch, base ref,
-worktree name, …) and the fixed 900 s script deadline. This is arbitrary shell
+worktree name, …) and the Setup Script deadline (900 s, or `repo-defaults.json` `setup_script_timeout_secs`). This is arbitrary shell
 execution, so the handler itself requires a loopback or authenticated request
 (`require_local_or_auth`; 403 otherwise). `cwd` accepts `~`; after expansion it
 must be absolute with no `..` (400 otherwise). A `cwd` that does not exist, or a
