@@ -3447,6 +3447,10 @@ fn spawn_daemon_background_tasks(state: &Arc<AppState>) {
     //
     // - `webview_recovery::spawn` — `#[cfg(feature = "desktop")]`, so it does
     //   not exist in this build. There is no WebView whose document can be lost.
+    // - `AppState::spawn_desktop_event_bridge` — `#[cfg(feature = "desktop")]`,
+    //   so it does not exist in this build either. It forwards bus-only events
+    //   to the desktop window; the daemon has no window, and its remote clients
+    //   already receive every bus event over `/events` SSE.
     // - `ai_agent::knowledge::spawn_persist_task` — `build_remote_router`
     //   serves no route that exposes command knowledge. Deleting the embedded
     //   AI engine (#784-0aec) took its last reader too, so the desktop build
