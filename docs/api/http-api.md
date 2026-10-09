@@ -1040,7 +1040,7 @@ the server is back to the filter the connection was opened with.
 | `pty-clipboard-store` | `{session_id, text}` | OSC 52 clipboard-store sequence seen in the PTY stream. Never relayed off the host (see `relay_client.rs`'s `is_relayable` exclusion) |
 | `session-review-changed` | `{repo_path, session_id}` | A watched Claude Code session's transcript (or one of its subagent transcripts) changed on disk — see `POST /repo/session-review/watch` above. Receiver should invalidate any cached `SessionReview` for `session_id` and re-fetch if it's currently displayed |
 | `review-sessions-changed` | `{repo_path}` | A new Claude Code session `.jsonl` appeared in `repo_path`'s project directory while its session list was being watched — receiver should re-list sessions for this repo |
-| `agent-edit-observed` | `{tuic_session_id, claude_session_id, repo_path}` — `tuic_session_id` is `null` on SSE (omitted on the desktop window event) when no TUIC session is known | The live watcher observed the first change to a Claude Code session's transcript since it started being watched. Fires once per session — a "this session made an edit" signal for an auto-open/notification feature (see the `session_diff_auto_open` setting) |
+| `agent-edit-observed` | `{tuic_session_id, claude_session_id, repo_path}` — `tuic_session_id` is `null` when no TUIC session is known — on both transports, since `emit_dual` builds the desktop event and the SSE event from the same `event_payload` | The live watcher observed the first change to a Claude Code session's transcript since it started being watched. Fires once per session — a "this session made an edit" signal for an auto-open/notification feature (see the `session_diff_auto_open` setting) |
 
 ### MCP Streamable HTTP
 
@@ -2631,12 +2631,19 @@ drift.
 POST /system/notification-sound
 Content-Type: application/json
 
-{ "sound": "question", "volume": 0.5, "device": "Studio Display Speakers" }
+{ "sound": "question", "volume": 0.5, "device": "Studio Display Speakers",
+  "choice": { "preset": "attention" } }
 ```
 
 `sound` is one of `question`, `completion`, `error`, `warning`, `info`,
 `attention`. `device` is the chosen audio output; `null` or omitted uses the
-system default. Returns `null`, matching the command.
+system default. `choice` is the same optional field as the desktop
+`play_notification_sound` command's (`{ preset, custom_path? }`): omitted or
+`"default"` plays the sound's own tone, and another sound's name borrows that
+preset. A `"custom"` preset (a file path) is **refused over HTTP** and falls
+back to the default tone — the path is a native filesystem path and only the
+desktop UI's native file picker may choose one (`http_sound_choice`,
+`system_routes.rs`). Returns `null`, matching the command.
 
 ### Check Update Channel
 

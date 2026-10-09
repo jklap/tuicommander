@@ -348,7 +348,7 @@ label row above its pages, and the configured repositories follow under
   - **Voice** (`DictationSettings`) — see below
   - **Smart Prompts** (`SmartPromptsTab`)
 - **Integrations**
-  - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel`) — HTTP API server status, TUIC tools, upstream MCP servers
+  - **MCP** (`LocalMcpPanel` + `UpstreamMcpPanel` + `McpIntegrationsSection`) — HTTP API server status, TUIC tools, upstream MCP servers, and the list of every MCP bridge entry TUICommander wrote into other clients' configs with a per-client remove (moved here from the Agents tab)
   - **Remote Access** (`RemoteAccessPanel`) — Remote access, Tailscale HTTPS, QR/connect URL, cloud relay
   - **Remote Servers** (`RemoteServersTab`) — one merged editor (`RemoteConnectionEditor`: Kind SSH Tunnel / Remote Server — SSH / Direct / Local), then SSH Port-Forwarding Tunnels (`SshTunnelsSection` → `TunnelProfileList`) and Remote Machines (`RemoteMachinesTab` → `RemoteMachinesPanel`: discovered hosts, status, Connect/Update/Install/Edit/Remove). The retired `remote-machines` key opens it
   - **Plugins** (`PluginsTab`) — Plugin management, enable/disable, log viewer
