@@ -41,4 +41,47 @@ describe("transcript search critic regressions", () => {
 		expect(disclosure === null || disclosure?.open).toBe(true);
 		expect(view.getByText("deployment visible answer")).toBeTruthy();
 	});
+	it("keeps inline-code and nested-emphasis phrases selectable through forward/backward wraparound", async () => {
+		const view = await search(
+			[{ id: "answer", kind: "agent", text: "Use **git `rebase`** carefully. Use *git rebase* again." }],
+			"Use git rebase",
+		);
+		const first = window.getSelection()?.anchorNode;
+		expect(window.getSelection()?.toString()).toBe("Use git rebase");
+		fireEvent.click(view.getByRole("button", { name: "Next" }));
+		expect(window.getSelection()?.toString()).toBe("Use git rebase");
+		expect(window.getSelection()?.anchorNode).not.toBe(first);
+		fireEvent.click(view.getByRole("button", { name: "Next" }));
+		expect(window.getSelection()?.anchorNode).toBe(first);
+		fireEvent.click(view.getByRole("button", { name: "Previous" }));
+		expect(window.getSelection()?.anchorNode).not.toBe(first);
+	});
+
+	it("does not invent a phrase by concatenating different paragraphs", async () => {
+		await search([{ id: "answer", kind: "agent", text: "Use git\n\nrebase carefully." }], "gitrebase");
+		expect(window.getSelection()?.toString()).toBe("");
+	});
+
+	it("searches expanded thinking bodies and visible collapsed summaries", async () => {
+		const view = await search([{ id: "reasoning", kind: "thought", text: "deployment reasoning" }], "Thinking");
+		expect(window.getSelection()?.toString()).toBe("Thinking");
+		const details = view.container.querySelector("details");
+		if (!details) throw new Error("Missing thinking disclosure");
+		details.open = true;
+		const input = view.getByRole("textbox", { name: "Find in chat" });
+		fireEvent.input(input, { target: { value: "deployment" } });
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(window.getSelection()?.toString()).toBe("deployment");
+		expect(window.getSelection()?.anchorNode?.parentElement?.closest("details")).toBe(details);
+	});
+
+	it("closes search on Escape after navigation moves focus to a button", async () => {
+		const view = await search([{ id: "answer", kind: "agent", text: "Use **git rebase** carefully." }], "git rebase");
+		const next = view.getByRole("button", { name: "Next" });
+		next.focus();
+		fireEvent.click(next);
+		fireEvent.keyDown(next, { key: "Escape" });
+		expect(view.queryByRole("textbox", { name: "Find in chat" })).toBeNull();
+		expect(window.getSelection()?.toString()).toBe("");
+	});
 });

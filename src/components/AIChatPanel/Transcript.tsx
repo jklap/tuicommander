@@ -436,17 +436,51 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	});
 	const findNext = (direction = 1) => {
 		if (!container || !query()) return;
-		const needle = query().toLocaleLowerCase();
+		const pattern = new RegExp(query().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
 		const matches: Range[] = [];
+		const blocks: { element: Element | null; text: string; nodes: { node: Node; start: number; end: number }[] }[] = [];
+		let current: (typeof blocks)[number] | undefined;
 		const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
 		while (walker.nextNode()) {
 			const node = walker.currentNode;
-			if (node.parentElement?.closest("button, input, ." + s.findBar)) continue;
-			const text = node.textContent?.toLocaleLowerCase() ?? "";
-			for (let at = text.indexOf(needle); at >= 0; at = text.indexOf(needle, at + needle.length)) {
+			const parent = node.parentElement;
+			let hidden = false;
+			for (
+				let disclosure = parent?.closest("details:not([open])");
+				disclosure;
+				disclosure = disclosure.parentElement?.closest("details:not([open])")
+			) {
+				if (!disclosure.querySelector(":scope > summary")?.contains(node)) hidden = true;
+			}
+			if (hidden || parent?.closest("button, input, ." + s.findBar)) {
+				current = undefined;
+				continue;
+			}
+			// Inline Markdown belongs to one searchable block, but separate messages,
+			// paragraphs and table cells must never produce a synthetic phrase.
+			const element = parent?.closest("p, h1, h2, h3, h4, h5, h6, pre, li, td, th, div, summary, blockquote") ?? null;
+			if (!current || current.element !== element) {
+				current = { element, text: "", nodes: [] };
+				blocks.push(current);
+			}
+			const start = current.text.length;
+			current.text += node.textContent ?? "";
+			current.nodes.push({ node, start, end: current.text.length });
+		}
+		for (const block of blocks) {
+			let firstIndex = 0;
+			let lastIndex = 0;
+			for (const match of block.text.matchAll(pattern)) {
+				const at = match.index;
+				const end = at + match[0].length;
+				while (block.nodes[firstIndex]?.end <= at) firstIndex++;
+				while (block.nodes[lastIndex]?.end < end) lastIndex++;
+				const first = block.nodes[firstIndex];
+				const last = block.nodes[lastIndex];
+				if (!first || !last) continue;
 				const range = document.createRange();
-				range.setStart(node, at);
-				range.setEnd(node, at + needle.length);
+				range.setStart(first.node, at - first.start);
+				range.setEnd(last.node, end - last.start);
 				matches.push(range);
 			}
 		}
@@ -465,6 +499,12 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 		matches[matchIndex].startContainer.parentElement?.scrollIntoView?.({ block: "center" });
 	};
 	const onKeyDown = (event: KeyboardEvent) => {
+		if (event.key === "Escape" && finding()) {
+			event.preventDefault();
+			event.stopPropagation();
+			closeSearch();
+			return;
+		}
 		if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) return;
 		if (event.target === searchInput) return;
 		const key = event.key.toLowerCase();
