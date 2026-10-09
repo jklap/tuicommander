@@ -2,12 +2,13 @@ import { EditorView } from "@codemirror/view";
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const pending = vi.hoisted(() => ({ send: vi.fn() }));
+const pending = vi.hoisted(() => ({ send: vi.fn(), queue: vi.fn() }));
 
 vi.mock("../../../hooks/usePty", () => ({
 	usePty: () => ({
 		createSession: vi.fn().mockResolvedValue("sess-toggle"),
 		sendCommand: pending.send,
+		enqueueCommand: pending.queue,
 		resize: vi.fn(),
 		close: vi.fn(),
 		getKittyFlags: vi.fn().mockResolvedValue(0),
@@ -64,59 +65,64 @@ afterEach(async () => {
 });
 
 describe("Chat send completion during editor initialization", () => {
-	it("does_not_restore_submitted_text_when_send_settles_before_reopened_editor_initializes", async () => {
-		let finish!: () => void;
-		pending.send.mockImplementation(
-			() =>
-				new Promise<void>((resolve) => {
-					finish = resolve;
-				}),
-		);
-		const id = terminalsStore.add({
-			sessionId: "live-session",
-			cwd: "/repo",
-			repoPath: "/repo",
-			name: "claude",
-			fontSize: 13,
-			awaitingInput: null,
-		});
-		terminalsStore.update(id, { agentType: "claude", agentSessionId: "uuid" });
-		const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
-		terminalsStore.setViewMode(id, "chat");
-		await waitFor(() => expect(view.container.querySelector(".cm-editor")).not.toBeNull());
-		await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-		const editor = EditorView.findFromDOM(view.container.querySelector<HTMLElement>(".cm-editor")!)!;
-		editor.dispatch({ changes: { from: 0, insert: "Sent message" } });
-		fireEvent.click(view.getByTitle("Send (Ctrl+Enter)"));
-		editor.dispatch({ changes: { from: editor.state.doc.length, insert: "\nNext unsent message" } });
-		terminalsStore.setViewMode(id, "cli");
-
-		// A backend acknowledgement can arrive between reopening and its two initialization frames.
-		const frames = new Map<number, FrameRequestCallback>();
-		let frameId = 0;
-		const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-			frames.set(++frameId, callback);
-			return frameId;
-		});
-		const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
-			frames.delete(id);
-		});
-		try {
+	it.each([false, true])(
+		"does_not_restore_submitted_text_when_queue_%s_settles_before_reopened_editor_initializes",
+		async (queue) => {
+			let finish!: () => void;
+			(queue ? pending.queue : pending.send).mockImplementation(
+				() =>
+					new Promise<undefined | { queued: number }>((resolve) => {
+						finish = () => resolve(queue ? { queued: 1 } : undefined);
+					}),
+			);
+			const id = terminalsStore.add({
+				sessionId: "live-session",
+				cwd: "/repo",
+				repoPath: "/repo",
+				name: "claude",
+				fontSize: 13,
+				awaitingInput: null,
+			});
+			terminalsStore.update(id, { agentType: "claude", agentSessionId: "uuid" });
+			const view = render(() => <Terminal id={id} cwd="/repo" alwaysVisible />);
 			terminalsStore.setViewMode(id, "chat");
 			await waitFor(() => expect(view.container.querySelector(".cm-editor")).not.toBeNull());
-			finish();
-			await new Promise<void>((resolve) => setImmediate(resolve));
-			for (let frame = 0; frame < 2; frame++) {
-				const callbacks = [...frames.values()];
-				frames.clear();
-				for (const callback of callbacks) callback(performance.now());
+			await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+			const editor = EditorView.findFromDOM(view.container.querySelector<HTMLElement>(".cm-editor")!)!;
+			editor.dispatch({ changes: { from: 0, insert: "Sent message" } });
+			fireEvent.click(
+				view.getByTitle(queue ? "Queue for the next idle moment (Shift+Ctrl+Enter)" : "Send (Ctrl+Enter)"),
+			);
+			editor.dispatch({ changes: { from: editor.state.doc.length, insert: "\nNext unsent message" } });
+			terminalsStore.setViewMode(id, "cli");
+
+			// A backend acknowledgement can arrive between reopening and its two initialization frames.
+			const frames = new Map<number, FrameRequestCallback>();
+			let frameId = 0;
+			const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+				frames.set(++frameId, callback);
+				return frameId;
+			});
+			const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+				frames.delete(id);
+			});
+			try {
+				terminalsStore.setViewMode(id, "chat");
+				await waitFor(() => expect(view.container.querySelector(".cm-editor")).not.toBeNull());
+				finish();
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				for (let frame = 0; frame < 2; frame++) {
+					const callbacks = [...frames.values()];
+					frames.clear();
+					for (const callback of callbacks) callback(performance.now());
+				}
+				const reopened = EditorView.findFromDOM(view.container.querySelector<HTMLElement>(".cm-editor")!)!;
+				expect(reopened.state.doc.toString()).toBe("Next unsent message");
+			} finally {
+				cleanup();
+				raf.mockRestore();
+				cancel.mockRestore();
 			}
-			const reopened = EditorView.findFromDOM(view.container.querySelector<HTMLElement>(".cm-editor")!)!;
-			expect(reopened.state.doc.toString()).toBe("Next unsent message");
-		} finally {
-			cleanup();
-			raf.mockRestore();
-			cancel.mockRestore();
-		}
-	});
+		},
+	);
 });
