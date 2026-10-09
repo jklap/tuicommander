@@ -2,6 +2,7 @@ import { createStore, produce } from "solid-js/store";
 import { invoke, listen } from "../invoke";
 import type { AcpSessionUpdate } from "../types/acp";
 import { acpTranscript } from "./acpTranscript";
+import { appLogger } from "./appLogger";
 import type { TerminalData } from "./terminals";
 
 /**
@@ -67,6 +68,13 @@ function isNotBound(error: unknown): string | null {
 	return match ? match[1].trim() : null;
 }
 
+function warnRefresh(sessionId: string, error: unknown): void {
+	appLogger.warn("terminal", "Chat view refresh failed", {
+		sessionId,
+		error: error instanceof Error ? error.message : String(error),
+	});
+}
+
 async function readOnce(sessionId: string): Promise<void> {
 	const key = chatViewKey(sessionId);
 	const cursor = state.cursors[sessionId];
@@ -82,6 +90,7 @@ async function readOnce(sessionId: string): Promise<void> {
 	} catch (error) {
 		const reason = isNotBound(error);
 		if (reason === null) throw error;
+		warnRefresh(sessionId, error);
 		setState("unavailable", sessionId, reason);
 		return;
 	}
@@ -143,6 +152,9 @@ export const chatViewStore = {
 				run.again = false;
 				await readOnce(sessionId);
 			} while (run.again);
+		} catch (error) {
+			warnRefresh(sessionId, error);
+			throw error;
 		} finally {
 			inFlight.delete(sessionId);
 		}
@@ -152,7 +164,10 @@ export const chatViewStore = {
 	async watch(sessionId: string): Promise<() => void> {
 		setState("cursors", sessionId, { epoch: null, nextSeq: 0 });
 		const unlisten = await listen<{ session_id: string }>("chat-view-changed", (event) => {
-			if (event.payload.session_id === sessionId) void chatViewStore.refresh(sessionId).catch(() => {});
+			if (event.payload.session_id === sessionId) {
+				// refresh logs the failure; a later wake/keepalive retries it.
+				void chatViewStore.refresh(sessionId).catch(() => {});
+			}
 		});
 		return () => {
 			unlisten();

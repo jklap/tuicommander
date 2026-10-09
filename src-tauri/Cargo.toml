@@ -246,6 +246,8 @@ tower-http = { version = "0.7", features = ["cors", "compression-gzip", "compres
 rand = "0.10"
 libc = "0.2"
 notify = "8"
+# Stable identity for a transcript replaced at the same path, on all platforms.
+same-file = "1.0.6"
 gh-token = "0.1"
 keepawake = "0.6"
 # Keep the Rust/npm updater pair on the tested 2.11 line.

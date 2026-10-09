@@ -4840,3 +4840,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Mobile slash button parity (story 1609-9faa)
 
 - [ ] In a disposable agent session on the phone PWA, compare typing `/` and tapping the keybar `/`: both must show the same live agent commands and navigation. Insert `/` within an unsent draft and confirm surrounding text survives without submission.
+
+- [ ] After a manual `make dev` restart or `make build`, verify that Claude terminal Chat follows appends after transcript replacement and that failed refreshes/stopped tickers appear as WARN logs (#1635-3db2). Rust backend changes require a restart; do not restart live sessions automatically.
