@@ -29,6 +29,7 @@ pub enum RunStatus {
     SkippedOverlap,
     SkippedConcurrency,
     SkippedExpired,
+    SkippedMissed,
 }
 
 impl RunStatus {
