@@ -674,9 +674,10 @@ then B. A listener that feeds both into the same `update()` a local rename/recol
 each change back (`set_session_name`/`set_session_accent_color`). Because A and B are different
 values, each hop looks like a genuine change to whichever side receives it next. On this tree
 `set_session_accent_color` re-emits every change, so the accent color can bounce forever;
-`set_session_name` never emits (backend renames go through `AppState::rename_session_from_backend`),
-so a name echo cannot loop, but it is still a redundant round trip that can briefly write a stale
-name back over a newer one.
+`set_session_name` emits `session-renamed` only once per real change (`AppState::rename_session_from_frontend`,
+so other windows/clients see a frontend rename live — dropped-items #22), so a name echo cannot loop
+on its own, but echoing it is still a redundant round trip that can briefly write a stale name back
+over a newer one.
 
 **The fix is not a better guard on the shared write path — it's a second, non-echoing path for
 backend-pushed events.** `applyBackendRename`/`applyBackendAccentColor` (`terminals.ts`) apply a

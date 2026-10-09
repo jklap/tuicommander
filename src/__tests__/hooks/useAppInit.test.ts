@@ -1392,6 +1392,28 @@ describe("initApp", () => {
 			expect(terminalsStore.get(id)).toMatchObject({ name: "Foo", nameIsCustom: true });
 		});
 
+		// IPC/HTTP set_session_name now emits, so a rename made in another window
+		// arrives here; a null name (cleared) must not blank the tab or echo back.
+		it("applies a cleared (null-name) session-renamed without blanking the tab or echoing", async () => {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { session_id: string; name: string | null; is_custom: boolean } }) => void) | null =
+				null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "session-renamed") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			await initApp(createMockDeps());
+			const id = terminalsStore.add(makeTerminal({ name: "Pinned" }));
+			terminalsStore.setSessionId(id, "sess-cleared");
+			terminalsStore.update(id, { nameIsCustom: true }, { echo: false });
+			mockRpc.mockClear();
+
+			cb!({ payload: { session_id: "sess-cleared", name: null, is_custom: false } });
+
+			expect(terminalsStore.get(id)).toMatchObject({ name: "Pinned", nameIsCustom: false });
+			expect(mockRpc.mock.calls.filter(([cmd]) => cmd === "set_session_name")).toHaveLength(0);
+		});
+
 		describe("session-suspend-requested", () => {
 			async function initWithSuspendListener() {
 				let cb: ((event: { payload: { session_id: string; request_id: string } }) => void) | null = null;

@@ -843,10 +843,10 @@ function createTerminalsStore() {
 			// Echoing a backend-pushed accent color is a real ping-pong: two
 			// backend writes racing (A then B) each look like a genuine change
 			// to whichever side receives them next, and `set_session_accent_color`
-			// re-emits every change — forever. `set_session_name` never emits
-			// (backend renames go through `rename_session_from_backend`), so a
-			// name echo cannot loop, but it is still a redundant round trip that
-			// can briefly write a stale name back over a newer one.
+			// re-emits every change — forever. `set_session_name` emits
+			// `session-renamed` once per real change (so other windows see a
+			// rename live); echoing that back would be a redundant round trip
+			// that can briefly write a stale name back over a newer one.
 			// The unchanged-value check below (`prevName`/`prevIsCustom`) is a
 			// second, independent guard against re-echoing a genuine no-op call —
 			// it does not by itself stop the race above.
@@ -923,11 +923,16 @@ function createTerminalsStore() {
 		 *  back via `update()`'s `set_session_name` sync — a `session-renamed`
 		 *  payload IS the backend's authoritative state, so there's nothing to
 		 *  round-trip. See `update()`'s echo-guard comment for the ping-pong this
-		 *  prevents. */
-		applyBackendRename(sessionId: string, name: string, isCustom: boolean): void {
+		 *  prevents. This is also how a rename made in ANOTHER window/client
+		 *  arrives (IPC/HTTP `set_session_name` emits once per real change), and
+		 *  the originating window's own copy is a no-op here.
+		 *  A `null` name means the backend cleared its explicit name (e.g. an empty
+		 *  tmux `select-pane -T`): keep the tab's current label and apply only
+		 *  `isCustom`, so OSC titles may take the tab over again. */
+		applyBackendRename(sessionId: string, name: string | null, isCustom: boolean): void {
 			const termId = sessionToTerminal.get(sessionId);
 			if (!termId || !has(termId)) return;
-			actions.update(termId, { name, nameIsCustom: isCustom }, { echo: false });
+			actions.update(termId, { ...(name != null ? { name } : {}), nameIsCustom: isCustom }, { echo: false });
 		},
 
 		/** Apply a `session-accent-color-changed` event straight from the backend.

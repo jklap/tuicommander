@@ -1035,9 +1035,11 @@ export async function initApp(deps: AppInitDeps) {
 
 	// An MCP rename starts in the backend and is applied here without an IPC
 	// echo; even an echo could not loop, since `set_session_name` never emits.
-	listen<{ session_id: string; name: string; is_custom: boolean }>("session-renamed", (event) => {
+	listen<{ session_id: string; name: string | null; is_custom: boolean }>("session-renamed", (event) => {
 		// Never echoed back to the backend — a `session-renamed` payload IS the
-		// backend's authoritative state. See `applyBackendRename`'s doc comment.
+		// backend's authoritative state. Carries backend renames (MCP, tmux, OSC
+		// titles) AND renames made in another window/client; `name: null` is a
+		// cleared name. See `applyBackendRename`'s doc comment.
 		const { session_id, name, is_custom } = event.payload;
 		terminalsStore.applyBackendRename(session_id, name, is_custom);
 	}).catch((err) => appLogger.error("app", "Failed to register session-renamed listener", err));

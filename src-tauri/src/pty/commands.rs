@@ -814,10 +814,10 @@ pub(crate) fn set_session_name(
     if !state.session_maps.sessions.contains_key(&session_id) {
         return Err(format!("Session not found: {session_id}"));
     }
-    // Storage + no-op guard live once on `AppState` — see
-    // `set_session_display_name`'s doc comment (no emit: this rename started
-    // in the frontend).
-    state.set_session_display_name(&session_id, name, is_custom.unwrap_or(true));
+    // Storage, no-op guard and the `session-renamed` emit (so other windows
+    // and clients see the rename live) live once on `AppState` — shared with
+    // the HTTP twin.
+    state.rename_session_from_frontend(&session_id, name, is_custom.unwrap_or(true));
     Ok(())
 }
 
