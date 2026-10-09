@@ -320,3 +320,74 @@ fn once_waits_for_due_time_and_remains_consumed_after_restart_and_retention() {
     assert!(preview.completed);
     assert!(preview.occurrences.is_empty());
 }
+
+mod critic_failure {
+    use crate::automations::{
+        model::{AutomationDefinition, AutomationsConfig},
+        scheduler::tick,
+        store::RunOwner,
+    };
+    use chrono::{TimeZone, Utc};
+    use serde_json::json;
+
+    // Catches: a later SQLite write failure discarding already committed dispatch decisions.
+    #[test]
+    fn later_ledger_failure_must_not_strand_an_earlier_reserved_run() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join("runs.sqlite3");
+        let now = Utc.with_ymd_and_hms(2026, 10, 9, 12, 0, 0).unwrap();
+        let owner = RunOwner::acquire_at(&path, now.timestamp_millis()).unwrap();
+        let definition = |id| -> AutomationDefinition {
+            serde_json::from_value(json!({
+                "id": id, "name": "Review", "prompt": "Review repository",
+                "run_config": "codex", "repository": "/project",
+                "workspace": {"mode": "existing"},
+                "cron": "* * * * *", "timezone": "UTC", "enabled": true,
+                "grace_secs": 60, "overlap": "skip", "max_duration_secs": 3600,
+                "precheck": null
+            }))
+            .unwrap()
+        };
+        let config = AutomationsConfig {
+            definitions: vec![definition("first"), definition("second")],
+            ..AutomationsConfig::default()
+        };
+        // Deterministically inject the later write error, as disk/IO failures can
+        // occur between independent per-definition transactions in one tick.
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_second BEFORE INSERT ON automation_runs
+             WHEN NEW.automation_id = 'second'
+             BEGIN SELECT RAISE(ABORT, 'injected later ledger write failure'); END;",
+        )
+        .unwrap();
+        let result = tick(owner.store(), &config, now);
+        let dispatchable = owner.store().open_runs().unwrap();
+        match result {
+            Ok(decisions) => {
+                for run in dispatchable {
+                    assert!(
+                        decisions.iter().any(|decision| decision.id == run.id),
+                        "committed reservation must reach the caller for dispatch"
+                    );
+                }
+            }
+            Err(error) => {
+                assert!(
+                    error.contains("injected later ledger write failure"),
+                    "{error}"
+                );
+                assert!(
+                    dispatchable.is_empty(),
+                    "tick returned only Err but left {} committed reservation(s) with no dispatch decision",
+                    dispatchable.len()
+                );
+                assert_eq!(
+                    owner.store().scheduled_cursor("first").unwrap(),
+                    None,
+                    "an undispatched occurrence must remain eligible for the next tick"
+                );
+            }
+        }
+    }
+}
