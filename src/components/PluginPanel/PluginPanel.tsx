@@ -423,7 +423,7 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 				// srcdoc iframes have an opaque ("null") origin — use "*" but rely on
 				// event.source === iframeRef.contentWindow check in handleMessage above
 				// to ensure only our iframe receives the message.
-				iframeRef.contentWindow.postMessage(data, "*", transfer ?? []);
+				iframeRef.contentWindow.postMessage({ type: "tuic:host-message", payload: data }, "*", transfer ?? []);
 			}
 		});
 		onCleanup(() => pluginRegistry.unregisterPanelSendChannel(tabId));
