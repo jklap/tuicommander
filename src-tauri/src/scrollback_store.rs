@@ -9,9 +9,9 @@
 //! independently of the ephemeral PTY session id.
 
 use crate::state::{AppState, LogLine};
-use tuic_terminal::vt_log::log_lines_to_ansi;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use tuic_terminal::vt_log::log_lines_to_ansi;
 
 const SCROLLBACK_DIR: &str = "scrollback";
 const CURRENT_VERSION: u32 = 1;

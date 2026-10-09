@@ -3184,9 +3184,11 @@ impl AppState {
     /// The event is dual-emitted for desktop Tauri listeners and browser/SSE
     /// clients, and is suppressed when the value did not change.
     pub(crate) fn set_pty_description(&self, session_id: &str, description: Option<String>) {
-        let MirrorUpdate::Changed(description) =
-            set_or_clear_string_mirror(&self.session_maps.pty_descriptions, session_id, description)
-        else {
+        let MirrorUpdate::Changed(description) = set_or_clear_string_mirror(
+            &self.session_maps.pty_descriptions,
+            session_id,
+            description,
+        ) else {
             return;
         };
         self.emit_pty_event(AppEvent::PtyDescriptionChanged {
@@ -4253,7 +4255,8 @@ impl AppState {
     /// Used to capture a session's scrollback under its stable identity right
     /// before `unbind_live_pty` drops the mapping on close.
     pub(crate) fn tuic_session_for_live_pty(&self, session_id: &str) -> Option<String> {
-        self.session_maps.live_pty_by_tuic_session
+        self.session_maps
+            .live_pty_by_tuic_session
             .iter()
             .find(|entry| entry.value() == session_id)
             .map(|entry| entry.key().clone())

@@ -1406,7 +1406,8 @@ async fn handle_remote_update(
 /// as the default multi-agent path.
 fn agent_tool_definition(prefer_spawning: bool, prefer_messaging: bool) -> serde_json::Value {
     let header = match (prefer_spawning, prefer_messaging) {
-        (true, true) => "AI agent orchestration. There is no separate swarm action: use these \
+        (true, true) => {
+            "AI agent orchestration. There is no separate swarm action: use these \
             agent/session primitives to spawn and coordinate managed peers. For a host with its \
             own native multi-agent/teammate feature (e.g. Claude Code's agent-teams), a peer \
             spawned here IS that host's teammate — not a different, unrelated kind of thing — \
@@ -1414,8 +1415,10 @@ fn agent_tool_definition(prefer_spawning: bool, prefer_messaging: bool) -> serde
             not your own built-in agent-spawning tool — whenever the peer should be observable, \
             messageable, and visible as a tab in TUICommander; reserve your own native subagent \
             tool for throwaway, single-shot in-process work that doesn't need its own TUIC \
-            session.",
-        (true, false) => "AI agent orchestration (spawning only). There is no separate swarm \
+            session."
+        }
+        (true, false) => {
+            "AI agent orchestration (spawning only). There is no separate swarm \
             action. This host has its own native cross-agent messaging — prefer that over \
             `register`/`list_peers`/`send`/`inbox` here. Use `spawn` to launch a peer as its own \
             independently observable TUICommander pane — for a host with its own native \
@@ -1423,18 +1426,23 @@ fn agent_tool_definition(prefer_spawning: bool, prefer_messaging: bool) -> serde
             teammate, not a separate concept. Use this — not your own built-in agent-spawning \
             tool — whenever the peer should be observable and visible as a tab in \
             TUICommander; reserve your own native subagent tool for throwaway, single-shot \
-            in-process work that doesn't need its own TUIC session.",
-        (false, true) => "AI agent messaging + peer administration. There is no separate swarm \
+            in-process work that doesn't need its own TUIC session."
+        }
+        (false, true) => {
+            "AI agent messaging + peer administration. There is no separate swarm \
             action. This host has its own native subagent/team spawning — prefer that over \
             `spawn` here. Use these primitives to message and coordinate peers once they exist, \
             or to spawn one only when it specifically needs its own independently observable \
-            TUICommander pane.",
-        (false, false) => "AI agent peer administration. There is no separate swarm action. \
+            TUICommander pane."
+        }
+        (false, false) => {
+            "AI agent peer administration. There is no separate swarm action. \
             This host has its own native subagent/team spawning and cross-agent messaging — \
             prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here. Use this \
             tool's spawn/messaging actions only when a peer specifically needs its own \
             independently observable, messageable TUICommander pane, not as the default \
-            multi-agent path.",
+            multi-agent path."
+        }
     };
 
     let mut steps: Vec<String> = Vec::new();
@@ -1464,7 +1472,10 @@ fn agent_tool_definition(prefer_spawning: bool, prefer_messaging: bool) -> serde
             .map(|(i, s)| format!("{}. {s}", i + 1))
             .collect::<Vec<_>>()
             .join("\n");
-        format!("\n\nOrchestration in {} line{plural}:\n{numbered}", steps.len())
+        format!(
+            "\n\nOrchestration in {} line{plural}:\n{numbered}",
+            steps.len()
+        )
     };
 
     let description = format!("{header}{walkthrough}\n\nActions:\n{AGENT_ACTIONS_DESCRIPTION}");
@@ -3184,8 +3195,11 @@ pub(crate) fn spawn_deferred_prompt_delivery_with(
         {
             return;
         }
-        let outcome =
-            crate::pty::deliver_notice_to_managed_pty(&state, &pty_session, crate::pty::PEER_MAIL_WAKE);
+        let outcome = crate::pty::deliver_notice_to_managed_pty(
+            &state,
+            &pty_session,
+            crate::pty::PEER_MAIL_WAKE,
+        );
         crate::pty::settle_terminal_delivery(&state, &peer_identity, &msg_id, outcome);
 
         // Watchdog. The wake notice only points at the inbox; if it landed before
@@ -21438,14 +21452,7 @@ mod tests {
             desc.contains("prefer those over `spawn`/`register`/`list_peers`/`send`/`inbox` here")
         );
         // Every action bullet — and the schema itself — is still fully intact.
-        for action in &[
-            "spawn",
-            "wait",
-            "register",
-            "list_peers",
-            "send",
-            "inbox",
-        ] {
+        for action in &["spawn", "wait", "register", "list_peers", "send", "inbox"] {
             assert!(
                 desc.contains(&format!("- {action}:")),
                 "action bullet for '{action}' must survive even with both preferences off"
@@ -21544,7 +21551,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg)
+            .unwrap();
 
         let state = test_state();
         let mcp_sid = "mcp-agent-tool-gating-test";
@@ -22261,8 +22269,10 @@ mod tests {
 
         let state = test_state();
         let listed = |state: &Arc<AppState>| {
-            tool_names(&serde_json::Value::Array(filtered_native_tools(state, true, true)))
-                .contains(&"progress".to_string())
+            tool_names(&serde_json::Value::Array(filtered_native_tools(
+                state, true, true,
+            )))
+            .contains(&"progress".to_string())
         };
 
         state.config.write().progress_tracking = true;
@@ -23297,7 +23307,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg)
+            .unwrap();
 
         assert!(!resolve_prefer_tuic_messaging(Some("claude-code")));
         // A different, unconfigured agent type is unaffected.
@@ -23318,7 +23329,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg)
+            .unwrap();
 
         let state = test_state();
         let out = build_mcp_instructions(&state, Some("claude-code"));
@@ -23365,7 +23377,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg)
+            .unwrap();
 
         assert!(!resolve_prefer_tuic_spawning(Some("claude-code")));
         assert!(resolve_prefer_tuic_messaging(Some("claude-code")));
@@ -23387,7 +23400,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg)
+            .unwrap();
 
         let state = test_state();
         let out = build_mcp_instructions(&state, Some("claude-code"));
@@ -23462,7 +23476,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg)
+            .unwrap();
 
         let state = test_state();
         let out = build_mcp_instructions(&state, Some("claude-code"));
@@ -23501,7 +23516,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg).unwrap();
+        crate::config::save_agents_config(crate::config::AgentsConfig::default(), agents_cfg)
+            .unwrap();
 
         let state = test_state();
         state.config.write().disabled_native_tools = vec!["agent".to_string()];
