@@ -4851,6 +4851,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] In a disposable agent session on the phone PWA, compare typing `/` and tapping the keybar `/`: both must show the same live agent commands and navigation. Insert `/` within an unsent draft and confirm surrounding text survives without submission.
 
+- [ ] After a manual `make dev` restart or `make build`, verify that Claude terminal Chat follows appends after transcript replacement, with no subagents directory, and after rapid CLI/Chat remounts and that failed refreshes/stopped tickers appear as WARN logs (#1635-3db2). Rust backend changes require a restart; do not restart live sessions automatically.
 - [ ] Terminal Chat search: Cmd/Ctrl+F finds visible conversation text; Enter/Shift+Enter navigate, Escape clears the selection, and switching CLI/Chat closes search.
 - [x] Desktop AI Chat: pin/play icon controls match terminal Compose in light/dark themes, with Send/Queue tooltips and highlighted parked drafts (#1636-0d08). _(verified: shared ComposeActionIcons/ComposeActions, 158 targeted tests, and inspected headless idle/busy/parked screenshots in both themes.)_
 
