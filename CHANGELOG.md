@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Keep the selected workspace's active tab and pane layout consistent when saved tabs are restored to another workspace by cwd (#1999-95b0).
 ### Added
 
+- Warn (without failing) when a frontend entry reaches 98% of its gzip budget in `scripts/report-frontend-bundles.mjs --check`, so shrinking headroom is visible before the hard cap breaks the build.
+
 - Publish read-only GitHub credential-source provenance and document GitHub/Ego startup ownership, confirmation and recovery; interactive Ego login and account enumeration remain explicit onboarding gaps (#1790-1011).
 
 - Add a typed **All settings (Expert)** inspector, catalogue identities on native Settings controls, descriptor-owned enum choices, resource-limit controls and runtime plugin shortcut discovery (#1789-796d).
