@@ -756,9 +756,8 @@
   animation: progressIndeterminateSweep 1.2s linear infinite;
 }
 
-/* Same band width/speed as SessionCard.module.css and
-   SessionDetailScreen.module.css's indeterminate sweeps — keep all three in
-   sync if this ever changes. */
+/* Same band width/speed as SessionCard.module.css's indeterminate sweep —
+   keep both in sync if this ever changes. */
 @keyframes progressIndeterminateSweep {
   0% { background-position: 100% 0; }
   100% { background-position: 0% 0; }
