@@ -170,7 +170,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 	const [ptyInputLine, setPtyInputLine] = createSignal<string | null>(null);
 
 	// Registered by CommandInput so TerminalKeybar can trigger slash mode
-	let slashTrigger: (() => void) | undefined;
+	let insertComposerText: ((text: string) => void) | undefined;
 
 	// Live countdown for rate limit retry_after_ms
 	const [retryRemaining, setRetryRemaining] = createSignal(0);
@@ -448,7 +448,7 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				questionConfident={sessionState()?.question_confident}
 				sessionExists={props.sessionExists}
 				onCommandWidgetOpen={() => setCommandWidgetOpen(true)}
-				onSlashRequest={() => slashTrigger?.()}
+				onSlashRequest={() => insertComposerText?.("/")}
 			/>
 			<CommandInput
 				sessionId={props.session.session_id}
@@ -461,8 +461,8 @@ export function SessionDetailScreen(props: SessionDetailScreenProps) {
 				slashItems={sessionState()?.slash_menu_items}
 				choicePrompt={sessionState()?.choice_prompt}
 				codexQuestionOpen={codexQuestionOpen()}
-				onRegisterTrigger={(fn) => {
-					slashTrigger = fn;
+				onRegisterInsertText={(fn) => {
+					insertComposerText = fn;
 				}}
 			/>
 			<Show when={commandWidgetOpen()}>
