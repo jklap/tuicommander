@@ -205,10 +205,19 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// for this terminal, so send and Esc leave it open.
 	const [composePinned, setComposePinned] = createSignal(false);
 	const [composeFocusRequest, setComposeFocusRequest] = createSignal(0);
+	const [composeTextRequest, setComposeTextRequest] = createSignal(0);
+	// Chat owns its input slot without changing this tab's CLI Compose preferences.
+	const composeVisible = () => chatActive() || composeOpen();
+	const composeDocked = () => chatActive() || composePinned();
+	createEffect(
+		on(chatActive, (active) => {
+			if (active) setComposeFocusRequest((n) => n + 1);
+		}),
+	);
 	/** After a send, an unpinned composer is done; a pinned one keeps the caret. */
 	const finishCompose = () => {
 		setPendingComposeText("");
-		if (composePinned()) return;
+		if (composeDocked()) return;
 		setComposeOpen(false);
 		canvasTerminalRef()?.focus();
 	};
@@ -960,7 +969,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				// Never steal the caret from a field the user is typing in — the search
 				// bar and the compose panel live inside this same terminal wrapper.
 				if (terminalsStore.state.activeId === props.id && !focusIsInsideOwnInput(document.activeElement, props.id)) {
-					canvasTerminalRef()?.focus();
+					if (chatActive()) setComposeFocusRequest((n) => n + 1);
+					else canvasTerminalRef()?.focus();
 				}
 			});
 
@@ -1052,6 +1062,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		},
 		refresh: () => canvasTerminalRef()?.refresh(),
 		focus: () => {
+			if (chatActive()) {
+				setComposeFocusRequest((n) => n + 1);
+				return;
+			}
 			const ref = canvasTerminalRef();
 			if (ref) ref.focus();
 			else pendingCanvasFocus = true;
@@ -1060,6 +1074,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		openSearch: () => openSearchBar(),
 		closeSearch: () => closeSearchBar(),
 		toggleCompose: () => {
+			if (chatActive()) {
+				setComposeFocusRequest((n) => n + 1);
+				return;
+			}
 			if (composePinned()) {
 				// Pinned stays open: the shortcut moves the caret between the two inputs.
 				if (focusIsInsideOwnInput(document.activeElement, props.id)) canvasTerminalRef()?.focus();
@@ -1084,7 +1102,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		},
 		openComposeWithText: (text: string) => {
 			setPendingComposeText(text);
-			setComposeOpen(true);
+			if (!chatActive()) setComposeOpen(true);
+			setComposeTextRequest((n) => n + 1);
 		},
 		searchBuffer: (query: string) => {
 			if (!sessionId) return [];
@@ -1415,13 +1434,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					Compose {keyFor("toggle-compose-panel")}
 				</div>
 			</Show>
-			<Show when={composeOpen() && !chatActive()}>
+			<Show when={composeVisible()}>
 				<Suspense>
 					<ComposePanel
-						isOpen={composeOpen}
+						isOpen={composeVisible}
 						initialText={pendingComposeText}
 						onTextChange={setPendingComposeText}
-						pinned={composePinned}
+						pinned={composeDocked}
+						persistent={chatActive}
 						onTogglePin={() => setComposePinned(!composePinned())}
 						onDismiss={() => {
 							setComposePinned(false);
@@ -1429,6 +1449,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							canvasTerminalRef()?.focus();
 						}}
 						focusRequest={composeFocusRequest}
+						textRequest={composeTextRequest}
 						canEnqueue={() => !!terminalsStore.get(props.id)?.agentType}
 						queuedCount={() => terminalsStore.get(props.id)?.queuedCommands ?? 0}
 						onClearQueue={async () => {
@@ -1471,7 +1492,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							finishCompose();
 						}}
 						onClose={() => {
-							if (!composePinned()) setComposeOpen(false);
+							if (chatActive()) terminalsStore.setViewMode(props.id, "cli");
+							else if (!composePinned()) setComposeOpen(false);
 							canvasTerminalRef()?.focus();
 						}}
 						onSend={async (text) => {

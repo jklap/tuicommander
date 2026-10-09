@@ -61,11 +61,15 @@ export interface ComposePanelProps {
 	/** Pinned: the panel stays open after send and Esc, and takes its own slot
 	 *  under the terminal instead of overlaying it. */
 	pinned: Accessor<boolean>;
+	/** The host requires this input: hide controls that would close or undock it. */
+	persistent?: Accessor<boolean>;
 	onTogglePin: () => void;
 	/** The close button: closes the panel even when pinned, unlike Esc. */
 	onDismiss: () => void;
 	/** Bumped to move the caret into the editor while the panel stays open. */
 	focusRequest: Accessor<number>;
+	/** Explicit host replacement (for example a smart prompt), independent of typing. */
+	textRequest?: Accessor<number>;
 }
 
 /** Who parked a queue entry, for the entries that are not the operator's own. */
@@ -229,6 +233,23 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 		),
 	);
 
+	createEffect(
+		on(
+			() => props.textRequest?.(),
+			() => {
+				const view = editorView();
+				if (!view) return;
+				const text = props.initialText();
+				view.dispatch({
+					changes: { from: 0, to: view.state.doc.length, insert: text },
+					selection: { anchor: text.length },
+				});
+				view.focus();
+			},
+			{ defer: true },
+		),
+	);
+
 	// Pull the caret back when it wanders off — but not while pinned: a pinned
 	// panel sits beside a terminal the user must be able to click into.
 	createEffect(() => {
@@ -351,17 +372,19 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 							</svg>
 						</button>
 					</Show>
-					<button
-						class={cx(s.pinButton, props.pinned() && s.pinButtonActive)}
-						onClick={() => props.onTogglePin()}
-						title={props.pinned() ? "Unpin from the terminal bottom" : "Pin to the terminal bottom"}
-						aria-pressed={props.pinned()}
-					>
-						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-							<path d="M10.5 1.5l4 4-1 1-.8-.3-2.6 2.6.4 2.7-1 1-2.8-2.8L3 13.4l-.4-.4 3.7-3.7-2.8-2.8 1-1 2.7.4 2.6-2.6-.3-.8z" />
-						</svg>
-					</button>
-					<span class={s.divider} aria-hidden="true" />
+					<Show when={!props.persistent?.()}>
+						<button
+							class={cx(s.pinButton, props.pinned() && s.pinButtonActive)}
+							onClick={() => props.onTogglePin()}
+							title={props.pinned() ? "Unpin from the terminal bottom" : "Pin to the terminal bottom"}
+							aria-pressed={props.pinned()}
+						>
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+								<path d="M10.5 1.5l4 4-1 1-.8-.3-2.6 2.6.4 2.7-1 1-2.8-2.8L3 13.4l-.4-.4 3.7-3.7-2.8-2.8 1-1 2.7.4 2.6-2.6-.3-.8z" />
+							</svg>
+						</button>
+						<span class={s.divider} aria-hidden="true" />
+					</Show>
 					<Show when={props.canEnqueue()}>
 						<button
 							class={s.queueButton}
@@ -378,17 +401,19 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 							<path d="M4 2l10 6-10 6V2z" />
 						</svg>
 					</button>
-					<span class={s.divider} aria-hidden="true" />
-					<button
-						class={s.closeButton}
-						onClick={() => props.onDismiss()}
-						title="Close compose panel"
-						aria-label="Close compose panel"
-					>
-						<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-							<path d="M4.3 3.3l8.4 8.4-1 1-8.4-8.4zM12.7 4.3l-8.4 8.4-1-1 8.4-8.4z" />
-						</svg>
-					</button>
+					<Show when={!props.persistent?.()}>
+						<span class={s.divider} aria-hidden="true" />
+						<button
+							class={s.closeButton}
+							onClick={() => props.onDismiss()}
+							title="Close compose panel"
+							aria-label="Close compose panel"
+						>
+							<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+								<path d="M4.3 3.3l8.4 8.4-1 1-8.4-8.4zM12.7 4.3l-8.4 8.4-1-1 8.4-8.4z" />
+							</svg>
+						</button>
+					</Show>
 				</div>
 			</div>
 		</div>
