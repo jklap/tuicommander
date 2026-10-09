@@ -139,8 +139,10 @@ async function open(query = "f") {
 	transport.sink?.(frame());
 	await vi.advanceTimersByTimeAsync(32);
 	await ref.searchFind(query);
-	const canvas = view.container.querySelectorAll("canvas").item(2);
-	const output = canvases.get(canvas);
+	// The overlay (cursor, selection, search highlights) is the LAST canvas in the stage;
+	// the layers before it (overscan, base, below-text image, glyph, image) have grown over time.
+	const canvas = Array.from(view.container.querySelectorAll("canvas")).at(-1);
+	const output = canvas && canvases.get(canvas);
 	if (!output) throw new Error("overlay canvas unavailable");
 	const highlights = () => output.fills.filter((fill) => fill.colour === "rgba(255, 180, 50, 0.2)");
 	return { view, ref, highlights };
