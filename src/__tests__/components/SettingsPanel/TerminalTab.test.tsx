@@ -29,6 +29,8 @@ import { AppearanceTab } from "../../../components/SettingsPanel/tabs/Appearance
 import { GeneralTab } from "../../../components/SettingsPanel/tabs/GeneralTab";
 import { TerminalTab } from "../../../components/SettingsPanel/tabs/TerminalTab";
 import { settingsStore } from "../../../stores/settings";
+import { settingsExpertStore } from "../../../stores/settingsExpert";
+import { loadThemes } from "../../../themes";
 
 function invokeImpl(config: Record<string, unknown> = {}) {
 	return (cmd: string) => {
@@ -263,6 +265,92 @@ describe("TerminalTab placement", () => {
 		expect(savedConfigs().at(-1)?.osc1337_focus_attention).toBe(true);
 	});
 
+	function selectByLabel(container: HTMLElement, label: string): HTMLSelectElement {
+		const el = Array.from(container.querySelectorAll("label")).find((l) => l.textContent === label);
+		const select = el?.parentElement?.querySelector("select");
+		if (!select) throw new Error(`select "${label}" not found`);
+		return select as HTMLSelectElement;
+	}
+
+	// Dropped-items-review #51: wip's mock-based "calls setX when its control
+	// changes" tests, re-done in this file's real-store style — change the
+	// control, then assert the persisted config key.
+	it("persists the Copy on select toggle under copy_on_select", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ copy_on_select: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const toggle = toggleByLabel(container, "Copy on select");
+		expect(toggle.checked).toBe(false);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggle, { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.copyOnSelect).toBe(true);
+		expect(savedConfigs().at(-1)?.copy_on_select).toBe(true);
+	});
+
+	it("persists the OSC 52 clipboard toggle under osc52_clipboard", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ osc52_clipboard: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const toggle = toggleByLabel(container, "Allow OSC 52 clipboard writes");
+		expect(toggle.checked).toBe(false);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggle, { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.osc52Clipboard).toBe(true);
+		expect(savedConfigs().at(-1)?.osc52_clipboard).toBe(true);
+	});
+
+	// Dropped-items-review #53: wip's AppearanceTab "calls setTheme when the
+	// theme select changes", re-pointed at the tab the select moved to (Story 858).
+	it("persists the Terminal Theme select under theme", async () => {
+		vi.useFakeTimers();
+		const theme = (key: string) => ({
+			key,
+			name: key,
+			terminal: { background: "#000000", foreground: "#ffffff", cursor: "#ffffff", ansi: [] },
+			app_chrome: {},
+		});
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "list_themes" ? Promise.resolve([theme("commander"), theme("nord")]) : invokeImpl()(cmd),
+		);
+		await loadThemes();
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const select = selectByLabel(container, "Terminal Theme");
+		const other = Array.from(select.options).find((o) => o.value !== select.value)?.value;
+		if (!other) throw new Error("Terminal Theme select offers a single theme");
+		mockInvoke.mockClear();
+
+		fireEvent.change(select, { target: { value: other } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.theme).toBe(other);
+		expect(savedConfigs().at(-1)?.theme).toBe(other);
+	});
+
+	it("persists the Cursor Style select under cursor_style", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ cursor_style: "bar" }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const select = selectByLabel(container, "Cursor Style");
+		expect(select.value).toBe("bar");
+		mockInvoke.mockClear();
+
+		fireEvent.change(select, { target: { value: "underline" } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.cursorStyle).toBe("underline");
+		expect(savedConfigs().at(-1)?.cursor_style).toBe("underline");
+	});
+
 	describe("modifier-symbol-dependent label/hint text", () => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
 
@@ -407,6 +495,17 @@ describe("TerminalTab placement", () => {
 			expect(queryByText(/already in the list/)).not.toBeNull();
 		});
 
+		it("refuses a reserved key (TUIC_*, ZDOTDIR, LD_*/DYLD_*) with a visible error", () => {
+			for (const key of ["TUIC_SESSION", "zdotdir", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES"]) {
+				const { getByPlaceholderText, getByText, queryByText, unmount } = render(() => <TerminalTab />);
+				fireEvent.input(getByPlaceholderText("KEY") as HTMLInputElement, { target: { value: key } });
+				fireEvent.click(getByText("Add"));
+				expect(setCustomPtyEnv).not.toHaveBeenCalled();
+				expect(queryByText(/^Reserved:/)).not.toBeNull();
+				unmount();
+			}
+		});
+
 		it("disables Add while the key field is blank", () => {
 			const { getByPlaceholderText, getByText } = render(() => <TerminalTab />);
 			const addButton = getByText("Add") as HTMLButtonElement;
@@ -415,5 +514,31 @@ describe("TerminalTab placement", () => {
 			fireEvent.input(getByPlaceholderText("KEY") as HTMLInputElement, { target: { value: "X" } });
 			expect(addButton.disabled).toBe(false);
 		});
+	});
+});
+
+describe("Custom Environment Variables is an expert setting", () => {
+	afterEach(() => {
+		settingsExpertStore._resetForTests();
+		cleanup();
+	});
+
+	it("is hidden in basic mode while the list is empty, shown once it has an entry", async () => {
+		const respond = (saved: Record<string, unknown>) => (cmd: string) => {
+			if (cmd === "get_config_defaults") return Promise.resolve({ app: { custom_pty_env: [] } });
+			if (cmd === "load_config") return Promise.resolve(saved);
+			return Promise.resolve(undefined);
+		};
+		mockInvoke.mockImplementation(respond({ custom_pty_env: [] }));
+		await settingsStore.hydrate();
+		await settingsExpertStore.open();
+		const empty = render(() => <TerminalTab />);
+		expect(headingExists(empty.container, "Custom Environment Variables")).toBe(false);
+		empty.unmount();
+
+		mockInvoke.mockImplementation(respond({ custom_pty_env: [{ key: "FOO", value: "1" }] }));
+		await settingsStore.hydrate();
+		const used = render(() => <TerminalTab />);
+		expect(headingExists(used.container, "Custom Environment Variables")).toBe(true);
 	});
 });

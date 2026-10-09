@@ -185,9 +185,9 @@ describe("AppearanceTab", () => {
 		expect(mockDeleteGroup).toHaveBeenCalledWith("g1");
 	});
 
-	it("calls resetLayout when Reset Panel Sizes is clicked", () => {
+	it("calls resetLayout when Reset Sidebar Widths is clicked", () => {
 		const { getByText } = render(() => <AppearanceTab />);
-		fireEvent.click(getByText("Reset Panel Sizes"));
+		fireEvent.click(getByText("Reset Sidebar Widths"));
 		expect(mockResetLayout).toHaveBeenCalledOnce();
 	});
 
