@@ -41,6 +41,9 @@ pub struct AutomationDefinition {
     pub overlap: Overlap,
     pub max_duration_secs: u64,
     pub precheck: Option<Precheck>,
+    /// Host-issued identity of the agent that created this definition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_session: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
