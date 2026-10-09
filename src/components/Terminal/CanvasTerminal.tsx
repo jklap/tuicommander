@@ -10,7 +10,7 @@ import { reclaimParkedTerminal } from "../../stores/terminalOwnership";
 import { rowAnchoredBlocks, terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
 import { getSessionConnection } from "../../transportRuntime";
-import { findBlockAtViewport, foldRange } from "../../utils/blockFold";
+import { findBlockAtViewport, findFoldTargetAtViewport, foldRange } from "../../utils/blockFold";
 import { pickBlock } from "../../utils/blockNav";
 import { filterMatchesToBlock, resolveScopedBlock } from "../../utils/blockSearchFilter";
 import { writeClipboard, writeClipboardAsync } from "../../utils/clipboard";
@@ -4237,7 +4237,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const blocks = rowAnchoredBlocks(
 				[...term.commandBlocks, term.activeBlock].filter(Boolean) as import("../../stores/terminals").CommandBlock[],
 			);
-			const current = findBlockAtViewport(blocks, viewTop, lastResizeRows >> 1);
+			const current = findFoldTargetAtViewport(blocks, currentFrame.historyBase, viewTop, lastResizeRows >> 1);
 			if (!current) return;
 			toggleFoldForBlock(current);
 		}
