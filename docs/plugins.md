@@ -1,6 +1,6 @@
 # Plugin Authoring Guide
 
-TUICommander uses an Obsidian-style plugin system. Plugins extend the Activity Center (bell dropdown), watch terminal output, and interact with app state. Plugins can be **built-in** (compiled with the app) or **external** (loaded at runtime from the user's plugins directory).
+TUICommander uses an Obsidian-style plugin system. Plugins extend the Activity Center (bell dropdown), watch terminal output, and interact with app state. Plugins are external ES modules loaded at runtime from the user's plugins directory in the desktop app. The native agent usage feature is initialized separately; there is no built-in plugin registration list.
 
 ## Quick Start: External Plugin
 
@@ -59,7 +59,7 @@ export default {
 };
 ```
 
-4. Save the file — hot reload picks it up. Adding a brand-new plugin directory or symlink while the app is running is also discovered live, so no restart is needed.
+4. In the desktop app, save a `.js`, `.mjs`, or `.json` code file outside `data/` to trigger hot reload. New top-level plugin directories and symlinks are discovered live. The watcher does not follow symlink targets, so edits within a linked target may need an explicit reload or restart. Browser/PWA clients do not load these external packages or run this watcher.
 
 ## Architecture
 
@@ -109,7 +109,7 @@ Tauri OutputParser --> pluginRegistry.dispatchStructuredEvent(type, payload, ses
 5. **Register** — `pluginRegistry.register(plugin, capabilities)` calls `plugin.onload(host)`
 6. **Active** — Plugin receives PTY lines, structured events, and can use the PluginHost API
 7. **Hot reload** — File changes emit `plugin-changed` events; the plugin is unregistered and re-imported. Creating a new top-level plugin directory or symlink after startup also emits the event (the watcher does not descend into symlink targets, so the create of the link itself is the trigger), and the new plugin is discovered and loaded without a restart
-8. **Unload** — `plugin.onunload()` is called, then all registrations are auto-disposed
+8. **Unload** — `plugin.onunload()` is called, then tracked registrations are disposed and `openPanel` tabs close. Timers, DOM listeners and other resources created directly by the plugin remain its responsibility.
 
 ### Crash Safety
 
@@ -139,7 +139,7 @@ File: `~/.config/com.tuic.commander/plugins/{id}/manifest.json`
 | `description` | string | no | Short description |
 | `author` | string | no | Author name |
 | `capabilities` | string[] | no | Tier 3/4 capabilities needed (defaults to `[]`) |
-| `allowedUrls` | string[] | no | URL patterns allowed for `net:http` (e.g. `["https://api.example.com/*"]`) |
+| `allowedUrls` | string[] | for `net:http` | Non-empty URL patterns required for HTTP access (e.g. `["https://api.example.com/*"]`) |
 | `agentTypes` | string[] | no | Agent types this plugin targets (e.g. `["claude"]`). Omit or `[]` for universal plugins. |
 | `binaries` | string[] | no | CLI binaries this plugin may execute via `exec:cli` (e.g. `["rtk", "mdkb"]`) |
 
@@ -182,7 +182,7 @@ Errors thrown inside `onload`, `onunload`, output watchers, and structured event
 
 ### Tier 1: Activity Center + Watchers + Providers (always available)
 
-All `register*()` methods return a `Disposable` with a `dispose()` method. You do **not** need to call `dispose()` manually — all registrations are automatically disposed when `onunload()` is called (including during hot reload). Only call `dispose()` if you need to dynamically remove a registration while the plugin is still running.
+All `register*()` methods return a `Disposable` with a `dispose()` method. You do **not** need to call `dispose()` manually — all registrations are automatically disposed when `onunload()` is called (including during hot reload). Panels opened through `openPanel` also close on unload, and their message, visibility and close bridges are removed. Resources created directly by plugin code, such as timers or DOM listeners, must be released by `onunload()`. Only call `dispose()` if you need to dynamically remove a registration while the plugin is still running.
 
 #### host.registerSection(section) -> Disposable
 
@@ -391,11 +391,17 @@ Register a callback for terminal/branch state changes. Fires on agent start/stop
 ```typescript
 const sub = host.onStateChange((event) => {
   // event.type: "agent-started" | "agent-stopped" | "branch-changed"
-  //           | "shell-state-changed" | "awaiting-input-changed"
-  // event.sessionId, event.terminalId, event.detail (branch name for branch-changed)
+  //           | "repo-changed" | "shell-state-changed" | "awaiting-input-changed"
+  // event.detail: new branch, repo path, shell state or awaiting-input kind; undefined when cleared
+  // Branch/repo events describe active navigation (sessionId: null, terminalId: "").
+  // Shell/awaiting events identify the changed terminal and its session.
 });
 // sub.dispose() to unsubscribe
 ```
+
+State events report changes after the runtime starts; use snapshot getters for initial values. Terminal events observe existing terminal sessions, including remote updates. Branch events describe the active workspace's branch, not every repository HEAD in the background.
+
+When teardown clears a session and changes its final shell or awaiting-input state together, those events retain the old session ID. A replacement session establishes a new baseline without replaying its initial state.
 
 ### Tier 2b: Git Read (capability-gated)
 
@@ -693,13 +699,7 @@ Remove a ticker message by id. **Requires `"ui:ticker"` capability.**
 host.clearTicker("my-status");
 ```
 
-#### host.postTickerMessage(options) -> void *(legacy)*
-
-Alias for `setTicker` without `label` support. Prefer `setTicker` for new plugins.
-
-#### host.removeTickerMessage(id) -> void *(legacy)*
-
-Alias for `clearTicker`.
+The removed `postTickerMessage` and `removeTickerMessage` aliases are not supported. Use `setTicker` and `clearTicker`.
 
 ### Tier 3d: Panel UI (capability-gated)
 
@@ -805,7 +805,7 @@ panel.close();
 </style>
 ```
 
-**Dashboard layout classes.** For analytics/status dashboards, the base stylesheet also ships a `.dashboard`/`.dash-*` class family that mirrors the built-in Claude Usage dashboard. Use them instead of inventing layout CSS — see [`docs/plugins-style.md`](./plugins-style.md) for the full guide, checklist, and class reference.
+**Dashboard layout classes.** For analytics/status dashboards, the base stylesheet also ships a `.dashboard`/`.dash-*` class family that mirrors the native Claude Usage dashboard. Use them instead of inventing layout CSS — see [`docs/plugins-style.md`](./plugins-style.md) for the full guide, checklist, and class reference.
 
 #### host.openEditorTab(filePath, repoPath, opts?)
 
@@ -903,7 +903,7 @@ All standard elements (buttons, inputs, tables) will look correct automatically.
 | `--text-on-error` | Text on error backgrounds |
 | `--text-on-success` | Text on success backgrounds |
 
-**Security:** The iframe uses `sandbox="allow-scripts"` without `allow-same-origin`, blocking access to Tauri IPC and the parent page DOM. The `close-panel` message type is handled as a system message; all other messages are routed to the `onMessage` callback.
+**Security:** The iframe uses `sandbox="allow-scripts allow-same-origin"`. This permits scripts and same-origin access; it is not an isolation boundary from the host DOM. Plugin modules also execute in the host JavaScript realm. The `close-panel` message type is handled as a system message; all other messages are routed to the `onMessage` callback.
 
 #### TUIC SDK (`window.tuic`)
 
@@ -1141,7 +1141,7 @@ if (credJson) {
 
 Make an HTTP request. Non-2xx status codes are returned normally (not thrown as errors). **Requires `"net:http"` capability.**
 
-External plugins can only fetch URLs matching their manifest's `allowedUrls` patterns.
+Plugins can only fetch URLs matching their manifest's `allowedUrls` patterns. A manifest declaring `net:http` with empty or omitted `allowedUrls` is rejected. An empty list never grants unrestricted access, including localhost or private destinations.
 
 ```typescript
 const resp = await host.httpFetch("https://api.example.com/data", {
@@ -1167,7 +1167,7 @@ interface HttpResponse {
 - `file://`, `data://`, `ftp://` schemes are blocked
 - 30-second timeout, 10 MB response limit, max 5 redirects
 - Localhost (`localhost`, `127.0.0.1`, `::1`, `[::1]`, `0.0.0.0`) is blocked unless explicitly declared in `allowedUrls`
-- Built-in plugins (no `capabilities` array) can fetch any `http://` or `https://` URL without restrictions
+- Every HTTP request must match a declared pattern; an empty list permits no requests
 
 **`allowedUrls` pattern matching:**
 - Patterns use prefix matching with an optional trailing `*` wildcard
@@ -1288,7 +1288,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `ui:panel` | `host.openPanel()` | Can render arbitrary HTML in sandboxed iframe |
 | `ui:ticker` | `host.setTicker()`, `host.clearTicker()` | Can post messages to the shared status bar ticker |
 | `credentials:read` | `host.readCredential()` | Can read system credentials (consent dialog shown) |
-| `net:http` | `host.httpFetch()` | Can make HTTP requests (scoped to `allowedUrls`) |
+| `net:http` | `host.httpFetch()` | Requires a non-empty `allowedUrls` list; requests must match a declared pattern |
 | `invoke:read_file` | `host.invoke("read_file", ...)` | Can read files on disk |
 | `invoke:list_markdown_files` | `host.invoke("list_markdown_files", ...)` | Can list directory contents |
 | `fs:read` | `host.readFile()`, `host.readFiles()`, `host.readFileBase64()`, `host.readFileTail()` | Can read files within `$HOME` (10 MiB default; binary reads may request up to the 512 MiB host ceiling) |
@@ -1436,8 +1436,8 @@ The Settings panel has a **Plugins** tab with two sub-tabs:
 
 ### Installed
 
-- Lists all plugins (built-in and external) with toggle, logs, and uninstall buttons
-- Built-in plugins show a "Built-in" badge and cannot be toggled or uninstalled
+- Lists external plugins with toggle, logs, and uninstall buttons; native agent usage is managed in Settings > Agents
+- The UI retains a legacy "Built-in" badge path, but no built-in plugin packages are registered by the current startup code
 - Error count badges appear on plugins with recent errors
 - "Logs" button opens an expandable log viewer showing the plugin's ring buffer
 - "Install from file..." button opens a file dialog accepting `.zip` archives
@@ -1507,7 +1507,7 @@ code from the desktop configuration directory.
 
 See `examples/plugins/report-watcher/` for a template showing how to extract terminal output into Activity Center items with a markdown viewer.
 
-To create a built-in plugin, add it to `BUILTIN_PLUGINS` in `src/plugins/index.ts`.
+Create new plugins as external packages with a manifest and ES module entry point. `src/plugins/index.ts` initializes native agent usage and loads external packages; it has no `BUILTIN_PLUGINS` list.
 
 ## Testing
 

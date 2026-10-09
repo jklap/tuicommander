@@ -1729,7 +1729,7 @@ describe("transport", () => {
 			expect(poll.body).toEqual({ deviceCode: "abc" });
 			const addPoll = mapCommandToHttp("github_poll_add_account", { deviceCode: "def" });
 			expect(addPoll.method).toBe("POST");
-			expect(addPoll.path).toBe("/github/auth/poll");
+			expect(addPoll.path).toBe("/github/accounts/poll");
 			expect(addPoll.body).toEqual({ deviceCode: "def" });
 			expect(mapCommandToHttp("github_logout", {}).path).toBe("/github/auth/logout");
 			expect(mapCommandToHttp("github_disconnect", {}).path).toBe("/github/auth/disconnect");
@@ -3936,4 +3936,12 @@ describe("Telegram Settings transport", () => {
 			body: { change },
 		});
 	});
+});
+
+// Add-account must never select the default-login HTTP handler.
+it("add-account polling uses a separate HTTP endpoint", () => {
+	const add = mapCommandToHttp("github_poll_add_account", { deviceCode: "additional" });
+	const login = mapCommandToHttp("github_poll_login", { deviceCode: "default" });
+	expect(add).toEqual({ method: "POST", path: "/github/accounts/poll", body: { deviceCode: "additional" } });
+	expect(login).toEqual({ method: "POST", path: "/github/auth/poll", body: { deviceCode: "default" } });
 });

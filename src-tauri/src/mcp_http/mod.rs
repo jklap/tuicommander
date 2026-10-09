@@ -1653,6 +1653,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(github_routes::github_start_login),
         )
         .route("/github/auth/poll", post(github_routes::github_poll_login))
+        .route(
+            "/github/accounts/poll",
+            post(github_routes::github_poll_add_account),
+        )
         .route("/github/auth/logout", post(github_routes::github_logout))
         .route(
             "/github/auth/disconnect",
