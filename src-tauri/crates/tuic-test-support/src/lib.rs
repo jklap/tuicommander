@@ -26,6 +26,50 @@ fn install_test_temp_root() {
         // creates its worker threads. No test can read the environment yet.
         unsafe { std::env::set_var(key, &root) };
     }
+    isolate_git_config(&root);
+}
+
+/// The only git configuration a test process sees besides each fixture
+/// repo's own `.git/config`.
+const TEST_GITCONFIG: &str = "\
+# Written by tuic-test-support: tests never read the developer's git config.
+[user]
+\tname = TUIC Test
+\temail = tests@tuic.invalid
+[init]
+\tdefaultBranch = main
+[commit]
+\tgpgSign = false
+[tag]
+\tgpgSign = false
+[core]
+\tautocrlf = false
+";
+
+/// Point every git process this test binary starts — the fixtures' own `git`
+/// calls and the production code under test alike — at [`TEST_GITCONFIG`]
+/// instead of the developer's global and system config. A global
+/// `merge.ff = only` turned the fixtures' diverged merges into refusals, and a
+/// `url.<base>.insteadOf` made `git remote get-url` disagree with the raw
+/// `.git/config` read it is compared against; rerere, hooks paths, excludes
+/// files and signing settings leak in the same way. A test that needs a
+/// specific global setting still sets `GIT_CONFIG_GLOBAL` itself, after this.
+fn isolate_git_config(root: &std::path::Path) {
+    let path = root.join("gitconfig");
+    // Every test process of a nextest run writes this at once: write a private
+    // copy and rename it into place, so no git ever reads a half-written file.
+    let staging = root.join(format!("gitconfig.{}.tmp", std::process::id()));
+    std::fs::write(&staging, TEST_GITCONFIG).expect("write the test gitconfig");
+    std::fs::rename(&staging, &path).expect("install the test gitconfig");
+    // SAFETY: called from the process constructor, before libtest starts threads.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_GLOBAL", &path);
+        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
+        std::env::remove_var("GIT_CONFIG_SYSTEM");
+        // Command-scope config an invoking `git -c …` or shell may export.
+        std::env::remove_var("GIT_CONFIG_PARAMETERS");
+        std::env::remove_var("GIT_CONFIG_COUNT");
+    }
 }
 
 /// Scratch space for Rust tests, overridable by the test runner.
@@ -300,4 +344,49 @@ pub fn read_http_request(reader: &mut impl std::io::Read) -> std::io::Result<Htt
         headers,
         body,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    fn git_config_get(cwd: &std::path::Path, key: &str) -> Option<String> {
+        let out = std::process::Command::new("git")
+            .args(["config", "--get", key])
+            .current_dir(cwd)
+            .output()
+            .expect("run git config");
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    /// The constructor's config is the one git reads, whatever the invoking
+    /// shell's `GIT_CONFIG_GLOBAL` or `~/.gitconfig` says. Run it under a
+    /// global config that sets `merge.ff = only` to see it bite.
+    #[test]
+    fn git_in_a_test_process_reads_only_the_test_gitconfig() {
+        let dir = tempfile::tempdir_in(super::test_temp_root()).expect("temp dir");
+        // Its own repo: the temp root sits inside this checkout, whose local
+        // config would otherwise answer.
+        let init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .expect("run git init");
+        assert!(init.success(), "git init failed");
+        assert_eq!(
+            git_config_get(dir.path(), "user.email").as_deref(),
+            Some("tests@tuic.invalid")
+        );
+        assert_eq!(
+            git_config_get(dir.path(), "init.defaultBranch").as_deref(),
+            Some("main")
+        );
+        for leaked in ["merge.ff", "pull.rebase", "rerere.enabled"] {
+            assert_eq!(
+                git_config_get(dir.path(), leaked),
+                None,
+                "{leaked} leaked in from the developer's git config"
+            );
+        }
+    }
 }
