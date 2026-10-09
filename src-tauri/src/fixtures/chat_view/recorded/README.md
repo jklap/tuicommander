@@ -75,3 +75,9 @@ unrelated rows omitted. Payloads use the same equal-character-length `x`
 sanitation as the corpus above; source paths and prose are absent.
 The full-load/live-tail regression checks that only the human attachment adds a
 user entry, between the two assistant messages. Queue operations add no entries.
+
+`queued-human-image.jsonl` records one real human queued prompt with text and
+image blocks from the same reported transcript (source row 643). Non-schema
+strings use equal-character-length `x` payloads; the image data is replaced
+with `eA==` to avoid retaining binary content. The regression catches image
+prompts disappearing when the adapter accepts only string prompt payloads.
