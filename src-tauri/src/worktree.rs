@@ -1650,6 +1650,21 @@ fn cleanup_needs_lifecycle_confirmation(
         || (require_merged && preview.lifecycle.commit_status != WorkspaceCommitStatus::Merged)
 }
 
+/// Merge/finalize cleanup removes or moves the checkout, so it takes the same
+/// live-session refusal as a plain removal. `force` lifts only the dirty-file
+/// confirmation (see [`cleanup_needs_lifecycle_confirmation`]), never this.
+fn refuse_cleanup_with_live_sessions(
+    state: &AppState,
+    repo_path: &str,
+    workspace_id: &str,
+    action: &str,
+) -> Result<(), String> {
+    if action != "archive" && action != "delete" {
+        return Ok(());
+    }
+    workspace_removal_guard(state, repo_path, workspace_id, false).map_err(|busy| busy.message())
+}
+
 pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
     state: &Arc<AppState>,
     repo_path: String,
@@ -1689,6 +1704,7 @@ pub(crate) fn finalize_merged_worktree_impl_with_confirmation(
             branch_delete_warning: None,
         });
     }
+    refuse_cleanup_with_live_sessions(state, &repo_path, &workspace_id, &action)?;
 
     match action.as_str() {
         "archive" => {
@@ -1864,6 +1880,9 @@ pub(crate) fn merge_and_archive_worktree_impl_with_confirmation(
             branch_delete_warning: None,
         });
     }
+
+    // Before the merge: refusing afterwards would leave it merged but uncleaned.
+    refuse_cleanup_with_live_sessions(state, &repo_path, &workspace_id, &after_merge)?;
 
     // 1. Ensure we're on the target branch in the base repo
     git_cmd(&base_repo)
@@ -2659,6 +2678,60 @@ mod tests {
             archived.join("scratch.txt").exists(),
             "uncommitted work moved to the archive instead of being deleted"
         );
+    }
+
+    // Catches: `force=true` skipping the live-session refusal on the merge
+    // cleanup path, so a clean worktree with a terminal in it was removed.
+    #[test]
+    fn merge_and_archive_with_force_still_refuses_a_worktree_with_a_live_session() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let wt = worktree_with(repo.path(), "feat-live", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session(&state, "pty-live");
+        crate::state::tests_support::set_session_cwd(&state, "pty-live", &wt.to_string_lossy());
+
+        for action in ["archive", "delete"] {
+            let err = merge_and_archive_worktree_impl(
+                &state,
+                repo.path().to_string_lossy().to_string(),
+                "feat-live".to_string(),
+                "feat-live".to_string(),
+                base.clone(),
+                action.to_string(),
+                true,
+            )
+            .err()
+            .expect("a live session refuses even with force");
+            assert!(err.starts_with(BUSY_WORKTREE_PREFIX), "{err}");
+            assert!(wt.exists(), "{action}: the worktree is untouched");
+        }
+    }
+
+    // Catches: the same gap on post-merge finalization.
+    #[test]
+    fn finalize_with_force_still_refuses_a_worktree_with_a_live_session() {
+        let (_cfg, _guard) = isolated_config();
+        let repo = setup_test_repo();
+        let wt = worktree_with(repo.path(), "feat-live-fin", true);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        crate::state::tests_support::insert_dummy_session(&state, "pty-live-fin");
+        crate::state::tests_support::set_session_cwd(&state, "pty-live-fin", &wt.to_string_lossy());
+
+        for action in ["archive", "delete"] {
+            let err = finalize_merged_worktree_impl(
+                &state,
+                repo.path().to_string_lossy().to_string(),
+                "feat-live-fin".to_string(),
+                action.to_string(),
+                true,
+            )
+            .err()
+            .expect("a live session refuses even with force");
+            assert!(err.starts_with(BUSY_WORKTREE_PREFIX), "{err}");
+            assert!(wt.exists(), "{action}: the worktree is untouched");
+        }
     }
 
     #[test]
