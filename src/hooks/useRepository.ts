@@ -156,6 +156,7 @@ export function useRepository() {
 		expectedFingerprint?: string,
 		confirmMissingCheckout?: boolean,
 		permanentDelete?: boolean,
+		overrideBusy?: boolean,
 	): Promise<RemoveWorktreeResult> {
 		return await invoke<RemoveWorktreeResult>("remove_worktree", {
 			repoPath,
@@ -166,6 +167,8 @@ export function useRepository() {
 			...(expectedFingerprint ? { expectedFingerprint } : {}),
 			...(confirmMissingCheckout ? { confirmMissingCheckout: true } : {}),
 			...(permanentDelete ? { permanentDelete: true } : {}),
+			// Lifts only the live-session refusal (`worktree_busy:`), never dirt or a lock.
+			...(overrideBusy ? { overrideBusy: true } : {}),
 		});
 	}
 
