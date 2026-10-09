@@ -1,3 +1,7 @@
+## Automations MCP (1630-cbfa) — Rust restart required
+
+- [ ] After Boss's planned `make dev` restart or `make build`, use the `automations` MCP tool from a bound agent to create/get/list/update/pause/resume/delete a definition. Confirm invalid edits return the same definition validation errors and the saved creator remains unchanged. Step 8 owns HTTP/IPC/CLI wiring. Rust does not hot-reload; no desktop instance was launched by this peer.
+
 ## Automation prechecks (1614-7e8f) — Rust restart required
 
 - [ ] After dispatcher/API integration and Boss's next planned `make dev` restart or `make build`, run an automation whose precheck exits 0, exits nonzero and times out; confirm dispatch only for exit 0 and saved `skipped_precheck` diagnostics otherwise. Confirm Run Now records a bypass and does not execute the precheck. The standalone helper has targeted shell/process tests; runtime persistence belongs to Step 6. Rust does not hot-reload; this lane does not launch desktop.

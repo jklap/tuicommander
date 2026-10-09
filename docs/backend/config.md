@@ -1260,3 +1260,8 @@ reports incomplete capture as an error. Manual Run Now returns a persistable
 
 This helper is the Step 5 foundation; Step 6 owns run-ledger persistence and
 runtime dispatch integration. No scheduler is started by this module.
+
+Automation definitions may contain `created_by_session`, the host-issued identity
+of their creating agent. Older definitions omit it. Shared definition actions
+ignore client-supplied creator provenance on creation and preserve the original
+value on update. Pause and resume change only `enabled` under the definition lock.

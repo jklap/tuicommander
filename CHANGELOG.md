@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Add the `automations` MCP tool for definition management, with bound creator provenance and atomic pause/resume.
+
 ### Fixed
 - Keep mobile AI Chat within the phone width and use the session composer styles with labelled icon actions (#1625-c04f).
 - Give the mobile update banner AA text contrast in both themes and place it below the header, away from the status edge (#1626-9529).
