@@ -8,7 +8,7 @@ import {
 	type SmartSelectionRule,
 	type WordSelectionMode,
 } from "../components/Terminal/smartSelectionTypes";
-import { setLocale } from "../i18n";
+import { setLocale } from "../i18n/locale";
 import type { IndicatorOverride } from "../indicators/registry";
 import {
 	isSafeIndicatorAnimationId,
