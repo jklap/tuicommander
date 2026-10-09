@@ -16013,6 +16013,7 @@ fn tuic_osc_state_unknown_verb_ignored() {
     );
 }
 
+#[test]
 fn heuristic_synthesizes_block_when_no_tuic_state_integration() {
     let state = crate::state::tests_support::make_test_app_state();
     let session_id = "test-heuristic-active";
