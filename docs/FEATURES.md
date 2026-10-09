@@ -950,7 +950,10 @@ one configured ego binary and speaks ACP to it, per
   numbered markers until Send restores the full text
 - `Ctrl+S` in the composer parks text and image previews with a visible chip;
   pressing it again restores or swaps drafts. Sending an intervening prompt
-  restores the parked draft. The same control is tappable in mobile AI Chat.
+  restores the parked draft. Mobile AI Chat uses a labelled archive icon above the input for this action.
+- Mobile AI Chat shares session composer styles, auto-grow, Enter/send behaviour,
+  right-side attachment and round Send icons. Suggestions and long text wrap;
+  wide tables scroll inside the transcript block.
 - Mobile AI Chat transcript links open resolved files or directories in the
   **Files** screen, using the chat workspace as the path base.
 - **Permission requests** are answered with one of the option ids ego published.

@@ -84,7 +84,7 @@ describe("mobile ego chat", () => {
 		expect(send.textContent?.trim()).toBe("");
 		expect(send.querySelector("svg path")?.getAttribute("d")).toBe("M2.01 21L23 12 2.01 3 2 10l15 2-15 2z");
 		const attach = screen.getByRole("button", { name: "Attach file" });
-		expect(textarea?.compareDocumentPosition(attach) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect((textarea?.compareDocumentPosition(attach) ?? 0) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		const park = screen.getByRole("button", { name: "Park draft" });
 		expect(park.textContent?.trim()).toBe("");
 		expect(park.querySelector("svg")).toBeTruthy();
@@ -270,7 +270,7 @@ describe("mobile ego chat", () => {
 		fireEvent.input(textarea, { target: { value: "Phone draft" } });
 		fireEvent.click(screen.getByRole("button", { name: "Park draft" }));
 		expect(textarea.value).toBe("");
-		expect(screen.getByText("Parked draft")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Restore parked draft" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Restore parked draft" }));
 		expect(textarea.value).toBe("Phone draft");
 	});
