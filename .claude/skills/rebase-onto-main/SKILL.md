@@ -152,6 +152,9 @@ is easy to miss because it looks like giving up on "doing it properly," but
 it is sometimes strictly the right call, and knowing that *before* sinking
 hours into a rebase attempt is the whole point of this step.
 
+A fourth shape, **Strategy D (pure commit-by-commit replay)**, applies when the user forbids
+merge and squash; it is described just before Step 2.5.
+
 **Ledger-noise-dominated, few real conflicts** (the `please-review-the-new-elegant-widget.md`
 shape — e.g. 6 conflicting files, ~45 more that are pure repeated noise from
 append-only files getting replayed commit-by-commit):
@@ -286,6 +289,50 @@ single accumulated resolution doesn't already give you):
 
 If you're not sure which shape you're in, run Step 1's reconnaissance (and
 1.5's touch-count check) first — it tells you directly.
+
+### Strategy D — pure commit-by-commit replay (the user forbids merge and squash)
+
+Use when the user explicitly wants every commit preserved ("rebase, not merge, not squash").
+First done for `wip` (276 commits) onto a `main` that had restructured the codebase
+(new crates, workspace model, split settings); it worked, but cost many sessions. Shape that held up:
+
+- **Dedicated worktree** (`repo worktree_create` with an explicit `base_ref`), backup ref + raw hash first (Step 3),
+  `git -c submodule.recurse=false -c rerere.enabled=false rebase main` with a `break` after every pick.
+  Back up `git-rebase-todo` before editing it and re-verify the pick count afterwards.
+- **Batches of picks resolved by a subagent** (Opus for resolution), then a **read-only reviewer on a different model**
+  (Sonnet) per batch. Agents get a standing rules file (git flags, forbidden commands, logging format) and a
+  **binding-decisions file**. Ask the user the architectural questions ONCE, early (hook design, policy sections,
+  SSH/nested models, budgets), and record each answer as a USER DECISION that every later agent reads.
+- **Dual-landed features** (both sides built the same thing): adopt MAIN's design, port only wip's genuine delta,
+  and log exactly what was NOT carried over, verified against main's code and tests, not commit subjects.
+  Never silently drop wip work; never resurrect what main deliberately removed.
+- **"Clean" picks break about 1 in 4** (stale tests against a changed store/API, moved functions, headless-build breaks).
+  Spot-compile every pick (`cargo check -p <crate>`, targeted vitest, `tsc`), not just the conflicted ones.
+- **Resolve forward.** Do not skip+requeue, `reset`, `amend` or bulk `checkout --ours`/`restore`: the permission
+  classifier blocks them and variations are worse. Amend only your own new picks. If a command is denied, stop and report.
+- **Fix review findings as NEW fixup commits on top** (each small, red-green tested, citing the review finding), so each is
+  separately reviewable and droppable. Reword messages only once, as the LAST history operation (see Step 11a).
+- **Ledger files:** the union merge driver can garble DELETIONS in CHANGELOG/to-test/todo. After every pick check
+  `git show --numstat` for those files and re-apply the pick's own deletions.
+- Keep a per-commit resolution log (`plans/<name>/rebase-log.md`: conflicted files, resolution kind, rationale,
+  "wip behaviour NOT carried over") and a findings ledger; both feed Step 9.
+
+## Step 2.5 — Pre-flight the environment (before the first pick)
+
+Each of these silently invalidated work on the `wip` replay:
+
+- **Do hooks actually run?** `ls -l .git/hooks/` (or the worktree's hooks path): a dangling symlink to a deleted
+  worktree means pre-commit never ran, and agents' "hook passed" claims were all false. Re-run the repo's installer
+  (`scripts/hooks/install-hooks.sh`) with the user's OK, then prove it with a deliberately failing commit in a scratch repo.
+- **Global git config:** `git config --show-origin -l | grep -E 'merge.ff|submodule.recurse|rerere'`. `merge.ff=only`
+  breaks merges and several tests; `submodule.recurse=true` breaks `git grep <ref>` (use `--no-recurse-submodules`
+  or `:!plugins`) and makes tree commands touch the submodule.
+- **Disk:** a long replay plus cargo builds can hit ENOSPC mid-batch and wedge every Bash call. Check `df -h` first and
+  at each batch; nothing the agent did not create gets deleted to make room (ask).
+- **Subagent model aliases:** make sure the requested model name resolves (a Bedrock-style ID in
+  `~/.claude/settings.json` made every Opus subagent fail with `model_not_found`). Test one trivial subagent first.
+- **Toolchain for the final gate:** list what `make check` needs (e.g. `meson` for tuic-dictation) and tell the user
+  what is missing BEFORE the end, so the install decision is not made at the finish line.
 
 ## Step 3 — Safety net (before rewriting anything)
 
@@ -601,6 +648,15 @@ submodule reporting zero tests) — `check-gate.sh` calls both out itself. A
 gate step that runs commit-by-commit history checks (item 1/5/6 of Step 6)
 doesn't apply if you landed as a single merge commit — see Step 2.
 
+**When the full gate cannot run on this machine** (a build dependency is missing and the user declines to install it):
+run each step of the `make check` chain individually, redirecting every step to its own log and recording its OWN exit
+code (`cmd > log 2>&1; echo EXIT=$? >> log`; never read a pipeline's status), excluding the unbuildable crate
+explicitly (`--exclude tuic-dictation`). Use a clean env (`env -i`, no `TUIC_*` vars). Re-run every failing test ALONE
+and classify it: environment-only (identity-probe "Killed: 9", socket-path length, stale daemon socket, global git
+config such as `merge.ff=only`) versus real. Treat a test that hangs only when a tool is absent from PATH as a possible
+real bug (this found `tuic alias` falling through to an osascript admin prompt without tmux). State in the final report
+exactly which steps were NOT verified.
+
 ## Step 9 (optional, for a large/long-lived rebase) — Full post-rebase branch audit
 
 For a branch that's been diverging and accumulating fix-ups over weeks (not
@@ -619,6 +675,18 @@ than rewriting the original commits again. **Not meaningful if you landed as
 a single merge commit** — there's no per-commit range to review; rely on
 Step 7's file-by-file semantic audit instead.
 
+**Dropped-behaviour audit (do this before landing a large replay).** Replay logs are written by the same agents that
+might have forgotten something, so verify independently: split the original commit range into ~40-commit chunks, one
+read-only Opus auditor per chunk plus one whole-tree sweep (files, Rust fns, routes, COMMAND_TABLE keys, test names,
+i18n/settings keys, docs headings present in the original but absent now). Each finding is classed
+(A) accidentally missing, (B) intentionally dropped (cite log line / USER DECISION), (C) replaced by main (name it, say
+whether wip's extra delta survived). Gotchas: grep with `--no-recurse-submodules`; match replayed commits by subject, not
+hash; subagents cannot write report files, so have them RETURN the text and save it yourself; audit claims are often
+wrong in detail (about 1 in 8 were), so a second pass that verifies each dropped item against code is worth it.
+Consolidate into one list with, per item: original hash, replacement hash, `git show <ref>:<path>` commands, log line
+links, rationale, cost to restore, recommendation. Restore the genuinely accidental ones as small commits; put the
+intentional ones in front of the user to decide before Step 10.
+
 ## Step 10 — Get explicit confirmation on how to land it
 
 Before Step 11, confirm with the user which shape actually happened, even if
@@ -631,6 +699,19 @@ should make, informed by the *real*, empirically-observed cost (Step 2's
 Phase 2 spot-check), not the a priori estimate from Step 1.
 
 ## Step 11 — Land it
+
+**Step 11a — rewording stale commit messages (user-approved, LAST history operation).** After a replay plus fixups,
+some messages no longer match their content. Record `PRE_TREE=$(git rev-parse HEAD^{tree})` and a backup ref
+(`git update-ref refs/backup/<branch>-pre-reword <tip>`; a ref, not a branch). Reword with a non-interactive
+`git rebase -i main` (`GIT_SEQUENCE_EDITOR` flips `pick`→`reword` for the mapped hashes; `GIT_EDITOR` looks up the commit by
+original hash and writes the mapped message). If the pre-commit gate would block a reword (e.g. the agent-state fixture
+gate on a commit that originally skipped it), do NOT bypass: write the new commit with
+`git commit-tree <old>^{tree} -p <old>^ -F msg` (preserve author/committer name, email, dates via env), then
+`git rebase --onto <new> <old>`; picks do not run pre-commit. Verify: tip tree equals `PRE_TREE`; commit count unchanged;
+no merges; for every old/new pair the tree, author, author date and subject match (messages differ only for the mapped
+commits); only the known submodule pointer shows as modified. Save an old→new hash map next to the logs, because every
+hash after the first reworded commit changes and the logs cite the old ones. A `fixup!` commit whose target subject
+changed stops matching `--autosquash`; note it.
 
 **If you completed a full commit-by-commit rebase:**
 
@@ -653,6 +734,12 @@ out from under anything that might be watching the filesystem.
 git reset --hard <new-tip>                         # from the primary checkout
 git push --force-with-lease origin <branch>         # NEVER a bare --force
 ```
+
+**Before landing a replay, tell the user about untracked-binary and submodule side effects:** a commit that untracks a
+committed binary (here the sidecar `src-tauri/binaries/tuic-aarch64-apple-darwin`) makes the reset/checkout delete the
+on-disk file in the primary checkout (regenerate with the repo's build script). Never stage or move the submodule
+pointer unless the user decided the pin. Keep the backup refs until the push is verified, and never touch the original
+branch ref until the user says to land.
 
 Either way:
 
