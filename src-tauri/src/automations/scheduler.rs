@@ -17,27 +17,27 @@ pub fn tick(
     now: DateTime<Utc>,
 ) -> Result<Vec<AutomationRun>, String> {
     config.validate()?;
-    let mut decisions = Vec::new();
+    let mut candidates = Vec::new();
     for definition in config
         .definitions
         .iter()
         .filter(|definition| definition.enabled)
     {
         let schedule = definition.schedule()?;
-        if let Some(occurrence) = schedule.latest_due(now, None)?
-            && let Some(run) = store.admit(
+        if let Some(occurrence) = schedule.latest_due(now, None)? {
+            candidates.push((
                 definition,
                 RunTrigger::Scheduled {
                     occurrence_ms: occurrence.timestamp_millis(),
                 },
-                config.max_concurrent_runs,
-                now.timestamp_millis(),
-            )?
-        {
-            decisions.push(run);
+            ));
         }
     }
-    Ok(decisions)
+    store.admit_batch(
+        &candidates,
+        config.max_concurrent_runs,
+        now.timestamp_millis(),
+    )
 }
 
 /// Run Now ignores enabled state and prechecks (the dispatcher branches on

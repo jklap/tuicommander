@@ -10,6 +10,8 @@ still run. Older latest occurrences become `skipped_missed`; intervening
 occurrences are covered by the cursor rather than materialized as a backlog.
 
 SQLite `IMMEDIATE` admission transactions serialize scheduled and manual calls.
+Each tick commits all decisions and cursors together. If any admission fails, the
+whole tick rolls back, so no reservation can be left without a dispatch decision.
 A durable per-definition high-water cursor, refusal/final record, overlap check
 and capacity check commit before dispatch. Cursors survive retention and
 restart, so clock rollback and repeated ticks cannot replay old occurrences.
@@ -29,4 +31,4 @@ row is pruned or interrupted at restart. Manual runs never consume a Once schedu
 
 `RunStore::scheduled_cursor(id)` exposes the consumed scheduled UTC milliseconds
 for preview/completed-state consumers. Readers may inspect it without ownership;
-manual runs are excluded. Convert it to UTC DateTime for `preview_definition`.
+manual runs are excluded. Convert it to UTC DateTime for `schedule::once::preview_definition`.
