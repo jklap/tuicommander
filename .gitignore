@@ -142,3 +142,11 @@ ORCHESTRATOR.md
 /.stryker-tmp/
 
 .obsidian/
+
+# Personal Claude Code state (`.claude/` itself is tracked: agents, hooks, skills).
+# The hook debug log rotates to dated names (`hook-debug.log.YYYY-MM-DD`) that
+# `*.log` does not match, and has reached 1.6 GB in a day.
+.claude/hook-debug.log*
+.claude/settings.local.json
+.claude/worktrees/
+.claude/*.lock

@@ -33,9 +33,9 @@ worktree and every session. This skill reads it safely.
 
 - **Never `cat`, `grep`, `Read` or `tail -f` the whole log.** It was 1.6 GB after a day. Always go
   through a byte offset: `scripts/hooklog.py mark` first, act, then `--since <offset>`.
-- **The path is the main checkout's**, whichever worktree you are in (`debug-log.sh` uses a fixed
-  absolute path on purpose). The script resolves it via `git rev-parse --git-common-dir`;
-  override with `HOOK_DEBUG_LOG=/path`.
+- **The path is the main checkout's**, whichever worktree you are in (`debug-log.sh` writes one
+  shared log on purpose). Both `debug-log.sh` and this skill's script resolve it via
+  `git rev-parse --git-common-dir`; override both with `HOOK_DEBUG_LOG=/path`.
 - **Entries from all sessions interleave.** Filter with `--session <TUIC_SESSION prefix>` (the
   terminal) or `--claude-session <payload session_id prefix>` (the Claude conversation). A
   **teammate is its own Claude session in its own TUIC terminal** — two different ids on both axes.
