@@ -354,6 +354,16 @@ panes.
 
 Key names are translated: `Enter`, `Space`, `Tab`, `Escape`, `C-c`, `C-d`, `C-z`, etc.
 
+**Where a new pane starts** (`new-session`, `new-window`, `split-window`): an explicit `-c`
+wins; otherwise a `new-window`/`split-window` pane starts where the existing pane it extends
+started (so a split from a `-c` pane lands there, and every pane of one swarm agrees); otherwise
+the directory the calling terminal is LIVE in (its shell's last reported directory — a `cd`
+typed at that prompt counts, a lead agent started in a subdirectory starts its swarm there);
+only when that is unknown, the terminal's spawn-time worktree/repo root
+(`TUIC_WORKTREE_PATH`, then `TUIC_MAIN_REPO_PATH`), and outside TUICommander the shell's own
+current directory, like real tmux. A `cd` inside a command the agent runs (a one-off script)
+never moves the swarm.
+
 `-t` targets accept the usual tmux forms: a pane id (`%3`), window id (`@1`), session id (`$0`),
 a bare session name, or a compound `session:window.pane` path. A target that doesn't resolve
 against tracked tmux topology falls back to the same session name/uuid/prefix matching `tuic send`
