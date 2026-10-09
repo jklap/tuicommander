@@ -101,15 +101,15 @@ impl AutomationDefinition {
         if self.grace_secs == 0 || self.max_duration_secs == 0 {
             return Err("Automation grace and maximum duration must be greater than zero".into());
         }
-        if let Workspace::NewPerRun { base_branch } = &self.workspace {
-            if base_branch.trim().is_empty() {
-                return Err("Automation base branch must not be blank".into());
-            }
+        if let Workspace::NewPerRun { base_branch } = &self.workspace
+            && base_branch.trim().is_empty()
+        {
+            return Err("Automation base branch must not be blank".into());
         }
-        if let Some(precheck) = &self.precheck {
-            if precheck.command.trim().is_empty() || precheck.timeout_secs == 0 {
-                return Err("Automation precheck needs a command and positive timeout".into());
-            }
+        if let Some(precheck) = &self.precheck
+            && (precheck.command.trim().is_empty() || precheck.timeout_secs == 0)
+        {
+            return Err("Automation precheck needs a command and positive timeout".into());
         }
         // DEFERRED (2026-10-09) — Step 2 validates cron and the IANA zone and
         // supplies the local-zone creation default before any scheduler exists.
