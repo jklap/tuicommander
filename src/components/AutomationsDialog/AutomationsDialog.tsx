@@ -135,7 +135,11 @@ export function AutomationsDialog(props: { onClose: () => void; adapter?: Automa
 										</small>
 									</span>
 									<span>{item.definition.repository}</span>
-									<code>{item.definition.cron}</code>
+									<code>
+										{item.definition.once_local != null
+											? `${t("automations.once", "Once")} ${item.definition.once_local}`
+											: item.definition.cron}
+									</code>
 									<span>{item.definition.timezone}</span>
 									<Show when={item.next_run_ms !== null}>
 										<time>{zonedTime(item.next_run_ms as number, item.definition.timezone)}</time>

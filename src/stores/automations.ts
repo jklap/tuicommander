@@ -4,6 +4,7 @@ import type {
 	AutomationDefinition,
 	AutomationListItem,
 	AutomationRun,
+	DefinitionSchedulePreview,
 	SchedulePreset,
 	SchedulePreview,
 } from "../components/AutomationsDialog/contract";
@@ -23,7 +24,7 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 	const [notice, setNotice] = createSignal("");
 	const [runs, setRuns] = createSignal<AutomationRun[]>([]);
 	const [historyLoading, setHistoryLoading] = createSignal(false);
-	const [schedulePreview, setSchedulePreview] = createSignal<SchedulePreview>();
+	const [schedulePreview, setSchedulePreview] = createSignal<SchedulePreview | DefinitionSchedulePreview>();
 	const [previewError, setPreviewError] = createSignal("");
 	const [previewLoading, setPreviewLoading] = createSignal(false);
 	let listEpoch = 0,
@@ -50,7 +51,7 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 	}
 	function edit(patch: Partial<AutomationDefinition>) {
 		setDraft((value) => (value ? { ...value, ...patch } : value));
-		if ("cron" in patch || "timezone" in patch) invalidatePreview();
+		if ("cron" in patch || "timezone" in patch || "once_local" in patch) invalidatePreview();
 	}
 	async function refresh() {
 		const epoch = ++listEpoch;
@@ -85,7 +86,10 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 		setPreviewLoading(true);
 		setPreviewError("");
 		try {
-			const reply = await adapter.preview(value.cron, value.timezone);
+			const reply =
+				value.once_local != null
+					? await adapter.previewDefinition(structuredClone(value))
+					: await adapter.preview(value.cron, value.timezone);
 			if (epoch !== previewEpoch) return;
 			setSchedulePreview(reply);
 			// Only fill an omitted creation zone with the backend's resolved local zone.
@@ -167,10 +171,8 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 			mutate(async () => {
 				const value = draft();
 				if (!value || isNew()) return;
-				const saved = items().find((item) => item.definition.id === value.id)?.definition;
-				if (!saved) throw new Error("Refresh before changing this automation");
 				const epoch = selectionEpoch;
-				await adapter.save({ ...structuredClone(saved), enabled }, false);
+				await adapter.setEnabled(value.id, enabled);
 				if (epoch === selectionEpoch) edit({ enabled });
 				await refresh();
 			}),
@@ -204,7 +206,7 @@ export function createAutomationsStore(adapter: AutomationAdapter) {
 				const previewAtStart = previewEpoch;
 				const reply = await adapter.preset(preset);
 				if (epoch !== selectionEpoch || previewAtStart !== previewEpoch) return;
-				edit({ cron: reply.cron });
+				edit({ cron: reply.cron, once_local: null });
 				await preview();
 			}),
 		dispose() {

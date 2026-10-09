@@ -9,6 +9,7 @@ export interface AutomationDefinition {
 	repository: string;
 	workspace: { mode: "existing" } | { mode: "new_per_run"; base_branch: string };
 	cron: string;
+	once_local?: string | null;
 	timezone: string;
 	enabled: boolean;
 	grace_secs: number;
@@ -60,6 +61,10 @@ export interface SchedulePreview {
 	timezone: string;
 	occurrences: string[];
 }
+export interface DefinitionSchedulePreview extends SchedulePreview {
+	once_local: string | null;
+	completed: boolean;
+}
 export type SchedulePreset =
 	| { kind: "hourly"; minute: number }
 	| { kind: "daily" | "weekdays"; hour: number; minute: number }
@@ -71,10 +76,12 @@ export interface RunReceipt {
 export interface AutomationAdapter {
 	list(): Promise<AutomationListItem[]>;
 	save(definition: AutomationDefinition, create: boolean): Promise<AutomationDefinition>;
+	setEnabled(id: string, enabled: boolean): Promise<void>;
 	remove(id: string): Promise<void>;
 	runNow(id: string): Promise<RunReceipt>;
 	history(id: string): Promise<AutomationRun[]>;
 	preview(cron: string, timezone: string): Promise<SchedulePreview>;
+	previewDefinition(definition: AutomationDefinition): Promise<DefinitionSchedulePreview>;
 	preset(preset: SchedulePreset): Promise<{ cron: string }>;
 }
 
@@ -82,7 +89,8 @@ export interface AutomationAdapter {
 export type AutomationAction =
 	| { action: "list" }
 	| { action: "create" | "update"; definition: AutomationDefinition }
-	| { action: "delete" | "run_now"; id: string }
+	| { action: "delete" | "run_now" | "pause" | "resume"; id: string }
 	| { action: "list_runs"; id: string; limit: number }
 	| { action: "preview"; cron: string; timezone: string | null; count: number }
+	| { action: "preview_definition"; definition: AutomationDefinition; count: number }
 	| { action: "preset"; preset: SchedulePreset };

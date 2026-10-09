@@ -1171,5 +1171,8 @@
 	"automations.enablePrecheck": "Run a shell precheck before scheduled runs",
 	"automations.precheckCommand": "Precheck command",
 	"automations.precheckTimeout": "Precheck timeout (seconds)",
-	"automations.precheckHint": "Exit 0 runs the agent; other exits skip quietly. Precheck output is saved in history."
+	"automations.precheckHint": "Exit 0 runs the agent; other exits skip quietly. Precheck output is saved in history.",
+	"automations.once": "Once",
+	"automations.onceTime": "Once local time",
+	"automations.onceCompleted": "This one-time occurrence has completed."
 }

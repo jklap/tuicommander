@@ -726,6 +726,8 @@ invalidate obsolete responses before removing their pending requests.
 `src/stores/automations.ts` exposes `automationsUi` for dialog visibility and
 `createAutomationsStore(adapter)` for dialog-scoped state. It keeps failed-write
 drafts, ignores obsolete previews and history replies, and reports Run now
-receipts without claiming that a skipped run started. Pause saves the stored
-definition rather than an unsaved prompt. The backend owns validation, cron,
+receipts without claiming that a skipped run started. Pause and Resume send only the definition id through atomic backend actions;
+they preserve both newer agent edits and an unsaved local prompt. Once stores
+a local wall-clock string and uses backend `preview_definition` for UTC
+occurrences and completion evidence. The backend owns validation, cron,
 capacity, execution and durable history; the adapter owns transport.
