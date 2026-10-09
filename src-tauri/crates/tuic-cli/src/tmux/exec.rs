@@ -1275,7 +1275,7 @@ mod ipc_backend_pane_id_url_encoding_tests {
     fn capture_request<T: Send + 'static>(
         call: impl FnOnce() -> T + Send + 'static,
     ) -> (String, T) {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = crate::short_socket_tempdir();
         let sock_path = dir.path().join("mcp.sock");
         let listener = UnixListener::bind(&sock_path).unwrap();
         unsafe {
