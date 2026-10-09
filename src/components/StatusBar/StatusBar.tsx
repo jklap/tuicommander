@@ -375,7 +375,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 					class={s.remoteOffline}
 					title={t(
 						"statusBar.remoteOfflineHint",
-						"Open Settings → Remote Machines to reconnect. Repositories on these machines cannot be read.",
+						"Open Settings → Remote Servers to reconnect. Repositories on these machines cannot be read.",
 					)}
 				>
 					{t("statusBar.remoteOffline", "Offline:")} {unreachableMachines().join(", ")}

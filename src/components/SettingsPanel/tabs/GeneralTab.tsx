@@ -793,10 +793,7 @@ export const GeneralTab: Component = () => {
 					<span>{t("general.toggle.experimentalFeatures", "Enable experimental features")}</span>
 				</div>
 				<p class={s.hint}>
-					{t(
-						"general.hint.experimentalFeatures",
-						"Opt in to features under active development: the AI Chat panel and SSH Tunnels.",
-					)}
+					{t("general.hint.experimentalFeatures", "Opt in to features under active development: the AI Chat panel.")}
 				</p>
 			</div>
 		</div>
