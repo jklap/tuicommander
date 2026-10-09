@@ -7,6 +7,7 @@
  */
 
 import { type Component, createEffect, createSignal, For, Show } from "solid-js";
+import mobileInput from "../../mobile/components/CommandInput.module.css";
 import { uploadAttachment } from "../../services/uploadAttachment";
 import s from "./AIChatPanel.module.css";
 import { aiChatDraft } from "./draft";
@@ -34,7 +35,7 @@ export const Composer: Component<{
 		!aiChatDraft.parked() ? "Park draft" : hasContent() ? "Swap parked draft" : "Restore parked draft";
 	createEffect(() => aiChatDraft.activate(props.chat.sessionId() ?? ""));
 	const resize = () => {
-		if (!textarea) return;
+		if (!textarea || props.mobileAttachments) return;
 		const previous = textarea.offsetHeight;
 		textarea.style.height = "auto";
 		const natural = textarea.scrollHeight;
@@ -135,8 +136,33 @@ export const Composer: Component<{
 		send();
 	};
 
+	const attachmentButton = () => (
+		<button
+			type="button"
+			class={props.mobileAttachments ? mobileInput.attach : s.attachBtn}
+			aria-label="Attach file"
+			disabled={uploading()}
+			onClick={() => fileInput?.click()}
+		>
+			<svg
+				width="18"
+				height="18"
+				viewBox="0 0 24 24"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="2"
+				aria-hidden="true"
+			>
+				<path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" />
+			</svg>
+		</button>
+	);
+
 	return (
-		<div ref={inputArea} class={s.inputArea}>
+		<div
+			ref={inputArea}
+			class={props.mobileAttachments ? `${s.inputArea} ${s.mobileComposer} ${mobileInput.form}` : s.inputArea}
+		>
 			<Show when={props.mobileAttachments}>
 				<input
 					ref={fileInput}
@@ -149,25 +175,6 @@ export const Composer: Component<{
 						if (file) void attachFile(file);
 					}}
 				/>
-				<button
-					type="button"
-					class={s.attachBtn}
-					aria-label="Attach file"
-					disabled={uploading()}
-					onClick={() => fileInput?.click()}
-				>
-					<svg
-						width="20"
-						height="20"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						aria-hidden="true"
-					>
-						<path d="M20 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1L13 4.3a3.5 3.5 0 0 1 5 5l-8.7 8.7a2 2 0 0 1-2.8-2.8l8-8" />
-					</svg>
-				</button>
 			</Show>
 			<Show when={props.chat.queuedPrompts().length > 0}>
 				<div class={s.queueList} aria-label="Queued prompts">
@@ -244,8 +251,8 @@ export const Composer: Component<{
 				</Show>
 				<textarea
 					ref={textarea}
-					class={s.textarea}
-					placeholder="Ask ego about this repository"
+					class={props.mobileAttachments ? mobileInput.input : s.textarea}
+					placeholder={props.mobileAttachments ? "Message ego..." : "Ask ego about this repository"}
 					value={aiChatDraft.text()}
 					onInput={(event) => {
 						aiChatDraft.set(event.currentTarget.value);
@@ -256,27 +263,63 @@ export const Composer: Component<{
 					rows={1}
 				/>
 			</div>
-			<Show when={props.chat.busy()}>
-				<button type="button" class={s.stopBtn} onClick={() => void props.chat.cancel()}>
-					Stop
+			<Show when={props.mobileAttachments}>{attachmentButton()}</Show>
+			<div class={props.mobileAttachments ? s.mobileComposerActions : s.composerActions}>
+				<Show when={props.chat.busy()}>
+					<button
+						type="button"
+						class={s.stopBtn}
+						aria-label={props.mobileAttachments ? "Stop" : undefined}
+						title="Stop"
+						onClick={() => void props.chat.cancel()}
+					>
+						{props.mobileAttachments ? (
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+								<path d="M6 6h12v12H6z" />
+							</svg>
+						) : (
+							"Stop"
+						)}
+					</button>
+				</Show>
+				<button
+					type="button"
+					class={s.parkBtn}
+					classList={{ [s.parkedDraft]: props.mobileAttachments && !!aiChatDraft.parked() }}
+					aria-label={parkLabel()}
+					title={parkLabel()}
+					aria-pressed={props.mobileAttachments ? !!aiChatDraft.parked() : undefined}
+					disabled={!aiChatDraft.parked() && !hasContent()}
+					onClick={() => aiChatDraft.parkOrSwap()}
+				>
+					{props.mobileAttachments ? (
+						<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+							<path d="M3 3h18v5H3zm2 7h14v11H5zm4 2v2h6v-2z" />
+						</svg>
+					) : aiChatDraft.parked() ? (
+						"Parked draft"
+					) : (
+						"Park"
+					)}
 				</button>
-			</Show>
+			</div>
 			<button
 				type="button"
-				class={s.parkBtn}
-				aria-label={parkLabel()}
-				disabled={!aiChatDraft.parked() && !hasContent()}
-				onClick={() => aiChatDraft.parkOrSwap()}
-			>
-				{aiChatDraft.parked() ? "Parked draft" : "Park"}
-			</button>
-			<button
-				type="button"
-				class={s.sendBtn}
+				aria-label={props.mobileAttachments ? (props.chat.busy() ? "Queue" : "Send") : undefined}
+				title={props.chat.busy() ? "Queue" : "Send"}
+				class={props.mobileAttachments ? mobileInput.send : s.sendBtn}
 				disabled={!aiChatDraft.text().trim() && aiChatDraft.images().length === 0 && aiChatDraft.files().length === 0}
 				onClick={send}
 			>
-				{props.chat.busy() ? "Queue" : "Send"}
+				{props.mobileAttachments ? (
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+						<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+					</svg>
+				) : props.chat.busy() ? (
+					"Queue"
+				) : (
+					"Send"
+				)}
 			</button>
 		</div>
 	);
