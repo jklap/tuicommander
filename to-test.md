@@ -4807,3 +4807,8 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] #1596-df57: In macOS desktop, focus a terminal on a branch with an automatically opened PR detail popover. Wheel over the sidebar without clicking; it must scroll, and typing must still reach the terminal. Click outside the popover: it closes and that first click activates the underlying control. Repeat with no popover, after a pane resize, and after a tab drag. Browser hit-testing reproduces the old full-window overlay; native wheel and visuals need Boss’s next-build check.
 
 - [ ] #1597-fab6: In macOS desktop, with each of the status-bar ticker popover (right-click a ticker), the status info balloon (click truncated status text), the sidebar GitHub panel (GitHub badge on a repo) and the Smart Prompts dropdown open, wheel over the sidebar without clicking; it must scroll. Click a sidebar control outside the popup: the popup closes and that first click activates the control. Clicking the GitHub badge or the info text again must close its popup (not re-open it). Browser hit-testing reproduces the old overlays; native wheel needs Boss’s next-build check.
+
+## Terminal Chat Compose input (#1599-db8a)
+
+- [x] Chat focuses docked Compose, preserves drafts and CLI open/pin state, and retains focus after send/queue. _(verified: `src/__tests__/components/Terminal/chatViewCompose.critic.test.tsx`, real CodeMirror integration cases; 32 targeted component tests passed.)_
+- [ ] Visually confirm Compose sits below the conversation without overlapping it in a running app, and answer a permission prompt in CLI. The worktree Vite/stealth-browser screenshot attempt timed out on the shared browser; native rendering remains unverified.
