@@ -55,7 +55,7 @@ function wtPaths(byBranch: Record<string, string>): Record<string, { branch: str
 
 /** Capture the handler registered for `eventName` via `listen()`, whatever else
  *  is also registered. Mirrors `useAppInit.test.ts`'s `captureListener` — used
- *  to unblock `waitForSetupScriptCompletion` (`createWorktreeCreationCoordinator.ts`),
+ *  to unblock `armSetupScriptWaiter`'s wait (`createWorktreeCreationCoordinator.ts`),
  *  which otherwise waits on `worktree-setup-script-completed` for real. */
 function captureListener<T>(eventName: string) {
 	const listenMock = vi.mocked(listen);

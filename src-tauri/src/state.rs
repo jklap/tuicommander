@@ -4979,8 +4979,8 @@ pub(crate) enum WorktreeSetupStatus {
 pub(crate) type WorktreeSetupStatusCache =
     moka::sync::Cache<(String, String), Arc<WorktreeSetupStatus>>;
 
-/// A worktree's setup chain is expected to finish within
-/// `setup_script_timeout_secs` (600s default) plus the file sync — 30 minutes
+/// A worktree's setup chain is expected to finish within tuic-git's fixed
+/// 900 s `SCRIPT_TIMEOUT` for the Setup Script plus the warm and file sync — 30 minutes
 /// gives real headroom over that without keeping a "Completed" entry around
 /// indefinitely. Capacity matches `GIT_CACHE_CAPACITY`: worktree creation is
 /// rare enough that this is a generous bound, not a tight one.
