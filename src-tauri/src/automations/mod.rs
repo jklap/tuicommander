@@ -3,6 +3,7 @@
 pub mod definitions;
 pub mod model;
 pub mod precheck;
+pub mod schedule;
 
 #[cfg(test)]
 mod tests;
