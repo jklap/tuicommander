@@ -31,6 +31,9 @@ pub struct AutomationDefinition {
     pub repository: String,
     pub workspace: Workspace,
     pub cron: String,
+    /// One wall-clock occurrence in `timezone`; cron must be empty when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub once_local: Option<chrono::NaiveDateTime>,
     #[serde(default)]
     pub timezone: String,
     pub enabled: bool,
@@ -95,7 +98,6 @@ impl AutomationDefinition {
             ("prompt", &self.prompt),
             ("run_config", &self.run_config),
             ("repository", &self.repository),
-            ("cron", &self.cron),
             ("timezone", &self.timezone),
         ] {
             if value.trim().is_empty() {
@@ -115,7 +117,17 @@ impl AutomationDefinition {
         {
             return Err("Automation precheck needs a command and positive timeout".into());
         }
-        super::schedule::Schedule::parse(&self.cron, &self.timezone)?;
+        self.schedule()?;
         Ok(())
+    }
+
+    /// Resolve either cron or Once using the stored timezone.
+    pub fn schedule(&self) -> Result<super::schedule::AutomationSchedule, String> {
+        super::schedule::AutomationSchedule::parse(&self.cron, &self.timezone, self.once_local)
+    }
+
+    /// Reject elapsed Once schedules only when creating or changing their occurrence.
+    pub fn validate_schedule_at(&self, now: chrono::DateTime<chrono::Utc>) -> Result<(), String> {
+        self.schedule()?.validate_creation(now)
     }
 }

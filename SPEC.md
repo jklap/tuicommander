@@ -814,3 +814,12 @@ Plans and Stories run history contains a read-only incident projection owned by 
 ### Conversation-specific AI Chat launch (implemented)
 
 Custom conversations snapshot executable/profile/workspace overrides in `ai_chat_launches`, keyed by ego session id, and retain a host-issued peer identity. Each has its own ACP connection; default chats continue on the shared default connection. The header shows saved launch values. `acp_chat_open` and `POST /acp/chat/open` create or reopen the same conversation. MCP inbox reads emit content-free INFO audit events with protocol caller, bound peer/owner and returned message ids.
+
+### Automation Once schedule foundation
+
+The Rust core supports one local date-time in a stored IANA timezone, alongside
+cron. Creation rejects elapsed instants and spring gaps; folds use the earlier
+instant. Once has one scheduled occurrence, a completed state after consumption,
+and a retained definition. The scheduler uses durable occurrence reservation to
+prevent restart/catch-up duplicates. Public API and UI integration follow the
+[Automations plan](plans/automations-scheduler.md).

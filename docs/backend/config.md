@@ -1179,7 +1179,8 @@ Each definition stores:
 | `id`, `name`, `prompt` | Stable id, display name and literal agent prompt |
 | `run_config`, `repository` | Agent run-config name and repository workspace |
 | `workspace` | `{ "mode": "existing" }` or `{ "mode": "new_per_run", "base_branch": "main" }` |
-| `cron`, `timezone` | Five-field schedule text and the per-automation IANA zone |
+| `cron`, `timezone` | Five-field schedule text (empty for Once) and the per-automation IANA zone |
+| `once_local` | Optional ISO local date-time, for example `2099-10-09T10:00:00`; mutually exclusive with nonempty cron |
 | `enabled` | Whether scheduled admission is enabled |
 | `grace_secs`, `max_duration_secs` | Positive grace and execution bounds in seconds |
 | `overlap` | `"skip"`; session reuse and queued overlap are unsupported |
@@ -1216,6 +1217,16 @@ Backend hourly, daily, weekday and weekly presets validate their controls and
 produce cron text; custom cron uses the same validator. Preview returns 1–20
 UTC occurrences with the cron and zone. These are Rust core functions; public
 HTTP/IPC commands arrive in plan Step 8. This core does not dispatch agents.
+
+Once resolves its stored local date-time in the stored zone. Creation rejects
+instants at or before now and nonexistent spring-gap times. An ambiguous fold
+resolves to the earlier UTC instant. Loads retain elapsed Once definitions.
+The Rust schedule wrapper returns the sole instant before consumption, then no
+next/latest-due occurrence after the scheduled cursor reaches it. Preview returns
+at most that one future instant. A consumed Once definition is completed, remains
+stored, and can still be inspected; manual runs do not consume its schedule.
+Ledger reservation and the scheduler's durable occurrence cursor prevent replay
+on restart and catch-up. Public views use this backend state in plan Step 8.
 
 ### Automation run ledger
 
