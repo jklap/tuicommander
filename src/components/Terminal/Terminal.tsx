@@ -316,11 +316,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
 	/** A backend-applied name from this session's remote/browser WebSocket
 	 *  (`renamed` frame). OSC title policy lives in the backend (`osc_title.rs`);
-	 *  the backend already holds this name, so it must not be echoed back. */
-	const handleBackendRename = (name: string, isCustom: boolean) => {
+	 *  the backend already holds this name, so it must not be echoed back.
+	 *  A `null` name is a cleared name: keep the label, apply `isCustom` only
+	 *  (same as `terminalsStore.applyBackendRename`). */
+	const handleBackendRename = (name: string | null, isCustom: boolean) => {
 		if (disposed) return;
 		if (!terminalsStore.get(props.id)) return;
-		terminalsStore.update(props.id, { name, nameIsCustom: isCustom }, { echo: false });
+		terminalsStore.update(props.id, { ...(name != null ? { name } : {}), nameIsCustom: isCustom }, { echo: false });
 	};
 
 	/** Set up event listeners for a known session ID */

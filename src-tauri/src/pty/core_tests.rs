@@ -16439,7 +16439,7 @@ fn remote_title_parser_publishes_title_and_reset() {
             } => {
                 assert_eq!(session_id, sid);
                 assert!(!is_custom, "an OSC title is never a custom rename");
-                Some(name)
+                name
             }
             _ => None,
         })

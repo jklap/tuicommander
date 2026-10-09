@@ -1263,7 +1263,8 @@ mod tests {
     /// is called every time an agent's OSC/tmux status ticker repaints, often
     /// with an unchanged title. `rename_pane` call-through to
     /// the backend rename must not re-emit `session-renamed` when the title
-    /// hasn't actually changed (see `session::set_session_name_never_emits_session_renamed`
+    /// hasn't actually changed (see
+    /// `session::set_session_name_emits_session_renamed_once_per_real_change`
     /// for the frontend-originated half of that loop).
     #[tokio::test]
     async fn rename_pane_is_idempotent_and_only_emits_on_real_change() {
@@ -1339,7 +1340,7 @@ mod tests {
             Some(crate::state::AppEvent::SessionRenamed {
                 name, is_custom, ..
             }) => {
-                assert_eq!(name, "build");
+                assert_eq!(name.as_deref(), Some("build"));
                 assert!(
                     is_custom,
                     "a tmux select-pane -T rename must mark the tab custom"
@@ -1390,7 +1391,7 @@ mod tests {
         }
         match found {
             Some(crate::state::AppEvent::SessionRenamed { name, .. }) => {
-                assert_eq!(name, "test");
+                assert_eq!(name.as_deref(), Some("test"));
             }
             other => panic!("expected SessionRenamed on a genuine tmux rename, got {other:?}"),
         }
@@ -1490,7 +1491,7 @@ mod tests {
                 is_custom,
             }) => {
                 assert_eq!(session_id, tuic_session_id);
-                assert_eq!(name, "src-lister");
+                assert_eq!(name.as_deref(), Some("src-lister"));
                 assert!(
                     is_custom,
                     "a deferred tmux select-pane -T rename must mark the tab custom"

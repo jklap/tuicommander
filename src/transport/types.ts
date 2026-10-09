@@ -152,8 +152,9 @@ export interface SubscribePtyOptions {
 	 * `osc_title.rs`, its exit-time restore, tmux/MCP renames), from the
 	 * per-session WebSocket's `renamed` frame. Desktop-local sessions hear the
 	 * same change through the global `session-renamed` listener instead.
+	 * `name` is `null` for a cleared name: keep the label, apply `isCustom`.
 	 */
-	onRenamed?: (name: string, isCustom: boolean) => void;
+	onRenamed?: (name: string | null, isCustom: boolean) => void;
 	onParsed?: (event: WsParsedEvent) => void;
 	/** Called when WebSocket drops and reconnect is attempted (browser mode only). */
 	onReconnecting?: (attempt: number, maxAttempts: number) => void;
