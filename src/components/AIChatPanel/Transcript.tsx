@@ -204,6 +204,8 @@ function activityRows(
 }
 
 export interface TranscriptProps {
+	/** Constrain intrinsic content to the phone viewport. */
+	mobile?: boolean;
 	entries: () => AcpTranscriptEntry[];
 	/** Shown while a turn is running and nothing has streamed back yet. */
 	busy: () => boolean;
@@ -445,7 +447,7 @@ export const Transcript: Component<TranscriptProps> = (props) => {
 	};
 	return (
 		<div
-			class={s.messageList}
+			class={cx(s.messageList, props.mobile && s.mobileTranscript)}
 			ref={container}
 			aria-label="Chat transcript"
 			tabIndex={0}
