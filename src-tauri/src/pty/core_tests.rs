@@ -7305,7 +7305,7 @@ fn captured_codex_stale_working_screen_does_not_confirm_queued_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -7383,7 +7383,7 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -7419,7 +7419,7 @@ fn queued_codex_stop_hook_accepts_working_screen_three_seconds_after_enter() {
 }
 
 /// Drive one queued Codex delivery whose first Enter draws `screen_after_enter`
-/// (Ctrl-U, text and Enter are consumed first) and report every write the PTY
+/// (text and Enter are consumed first) and report every write the PTY
 /// saw plus whether the delivery ended uncertain. `after_retry` runs once a
 /// second Enter arrives, to draw the agent's reaction.
 #[cfg(unix)]
@@ -7461,7 +7461,7 @@ fn run_codex_queued_delivery(
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -7583,7 +7583,7 @@ fn swallowed_enter_on_a_long_codex_brief_is_retried_from_the_paste_placeholder()
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, &brief, None).unwrap());
-        for expected in [b"\x15".as_slice(), framed_brief.as_bytes(), b"\r"] {
+        for expected in [framed_brief.as_bytes(), b"\r"] {
             let write = received
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .unwrap();
@@ -7759,7 +7759,7 @@ fn queued_claude_hook_busy_four_seconds_after_enter_confirms_submission() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(15))
@@ -7831,7 +7831,7 @@ fn queued_codex_accepts_ready_then_working_after_enter() {
 
     std::thread::scope(|scope| {
         scope.spawn(|| enqueue_user_command(&state, sid, "wake the agent", None).unwrap());
-        for expected in [b"\x15".as_slice(), b"wake the agent", b"\r"] {
+        for expected in [b"wake the agent".as_slice(), b"\r"] {
             assert_eq!(
                 received
                     .recv_timeout(std::time::Duration::from_secs(5))
@@ -8418,14 +8418,10 @@ fn agent_submission_with_unrecognized_type_keeps_the_unverified_gap_and_plain_pa
             .iter()
             .map(|(_, bytes)| bytes.as_slice())
             .collect::<Vec<_>>(),
-        vec![
-            b"\x15".as_slice(),
-            b"review this".as_slice(),
-            b"\r".as_slice()
-        ]
+        vec![b"review this".as_slice(), b"\r".as_slice()]
     );
     assert!(
-        writes[2].0 - writes[1].0 >= std::time::Duration::from_millis(195),
+        writes[1].0 - writes[0].0 >= std::time::Duration::from_millis(195),
         "an unverified agent keeps the long Enter gap"
     );
 }
@@ -11545,7 +11541,7 @@ async fn queued_command_drains_after_a_captured_opencode_mini_turn() {
     }
     assert_eq!(
         String::from_utf8(bytes.lock().unwrap()[replayed..].to_vec()).unwrap(),
-        "\u{15}resume queued work\r",
+        "resume queued work\r",
         "the Ready screen must release the queue into the composer"
     );
 }

@@ -24,21 +24,17 @@ describe("SuggestChips", () => {
 		expect(buttons[2].textContent).toBe("Deploy");
 	});
 
-	it("sends command via sendCommand (Ctrl-U+text then Enter) on click", async () => {
-		// agentType forces the Ctrl-U-prefix branch regardless of host platform
-		// detection in the test environment (sendCommand skips Ctrl-U on native
-		// Windows shells only when no agent is detected).
+	it("sends command via sendCommand (text then Enter, no Ctrl-U) on click", async () => {
 		const { container } = render(() => <SuggestChips sessionId="s1" items={["Run tests"]} agentType="claude" />);
 		const button = container.querySelector("button")!;
 		await fireEvent.click(button);
-		// Wait past two AGENT_ENTER_GAP_MS: with an agent attached sendCommand
-		// separates Ctrl-U from the text, and the text from the Enter, by a real
-		// elapsed gap each so the PTY cannot coalesce them into one read().
+		// Wait past AGENT_ENTER_GAP_MS: with an agent attached sendCommand
+		// separates the text from the Enter by a real elapsed gap so the PTY
+		// cannot coalesce them into one read(). No Ctrl-U: the text is appended.
 		await new Promise((r) => setTimeout(r, 2 * AGENT_ENTER_GAP_MS + 20));
-		expect(rpc).toHaveBeenCalledTimes(3);
-		expect(rpc).toHaveBeenNthCalledWith(1, "write_pty", { sessionId: "s1", data: "\x15" });
-		expect(rpc).toHaveBeenNthCalledWith(2, "write_pty", { sessionId: "s1", data: "Run tests" });
-		expect(rpc).toHaveBeenNthCalledWith(3, "write_pty", { sessionId: "s1", data: "\r" });
+		expect(rpc).toHaveBeenCalledTimes(2);
+		expect(rpc).toHaveBeenNthCalledWith(1, "write_pty", { sessionId: "s1", data: "Run tests" });
+		expect(rpc).toHaveBeenNthCalledWith(2, "write_pty", { sessionId: "s1", data: "\r" });
 	});
 
 	it("renders nothing when items is empty", () => {

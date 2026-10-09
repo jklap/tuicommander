@@ -696,7 +696,7 @@ async fn mobile_http_reply_answers_confident_question_with_automated_mail_queued
     let receipt: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(receipt["submitted"], true);
     assert_eq!(receipt["acknowledged"], true);
-    assert_eq!(bytes.lock().unwrap().as_slice(), b"\x15Boss answer\r");
+    assert_eq!(bytes.lock().unwrap().as_slice(), b"Boss answer\r");
     assert_eq!(state.pending_injections.get(session_id).unwrap().len(), 1);
 }
 
