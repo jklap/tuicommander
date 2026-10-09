@@ -1779,7 +1779,7 @@ may not be saved yet and persists nothing. Body:
 `{ "transport": {...}, "auth_username": "alice" | null, "password": "..." | null }`
 — the password is plaintext for this one call only: never stored, never logged,
 never echoed. Answers 200 with
-`{ "type": "Reachable" | "AuthFailed" | "NotConfigured" | "InstanceNotFound" }` or
+`{ "type": "Reachable" | "AuthFailed" | "NotConfigured" | "PasswordRequired" | "InstanceNotFound" }` or
 `{ "type": "Unreachable", "reason": "..." }` (the reason never contains the URL
 or the password). SSH runs a one-shot `ssh … -- user@host true` with the tunnel's
 options, `ConnectTimeout=5` and `ControlPath=none` (so it never rides a live
@@ -1790,8 +1790,13 @@ loopback relay, while an unpinned untrusted certificate (`certificate not truste
 … SHA-256 …`), a changed one (`certificate changed: …`) or a garbled pin is
 `Unreachable` before any request or credential is sent. Direct/Local send one
 `GET <base>/health` that follows no
-redirects, with Basic Auth when a username or password is given (a password with
-no username is sent as `:<password>` and refused, like Connect). `Local` resolves
+redirects, always with a Basic Auth header (a password with no username is sent
+as `:<password>` and refused, like Connect; with nothing typed an empty `:`
+header is sent). Because a header is always present, the daemon's "Scan the QR
+code" 401 body can only mean it has no credentials (`NotConfigured`); a
+protected daemon tested with nothing typed reports `PasswordRequired`, never
+`NotConfigured`. That probe counts as one failed attempt against the daemon's
+auth rate limit, like any wrong password. `Local` resolves
 `instance_id` from that instance's `config.json` first. Guarded by
 `require_local_or_auth` (403 from a public address without credentials) because
 it makes this machine dial an arbitrary host. Against a headless `tuic-remote`,

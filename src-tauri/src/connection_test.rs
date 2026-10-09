@@ -33,7 +33,10 @@
 //!
 //! A password with no username is sent as Basic `:<password>`, exactly like
 //! Connect's token exchange: a daemon refuses it (`AuthFailed`) rather than the
-//! check quietly testing without credentials.
+//! check quietly testing without credentials. With nothing typed at all an
+//! empty Basic header (`:`) is still sent, so a password-protected daemon
+//! reports `PasswordRequired` instead of being mistaken for an unconfigured one
+//! (the two share a 401 body only when no header arrives).
 //!
 //! **Known limitation, not fixed here:** a headless `tuic-remote` daemon's
 //! `/health` route (`mcp_http::build_remote_router`) is deliberately public —
@@ -64,11 +67,17 @@ pub(crate) enum ConnectionTestResult {
     /// Reached the target, but credentials were rejected (SSH: `Permission
     /// denied`; Direct/Local: a 401 whose body is "Invalid credentials").
     AuthFailed,
-    /// Direct/Local only: the daemon is reachable, but no credentials were
-    /// presented or it has none configured (`AuthResult::NotConfigured` /
-    /// `::MissingHeader` share one 401 body). Distinct from `AuthFailed` so the
-    /// UI can say "reachable, not configured" instead of "wrong password".
+    /// Direct/Local only: the daemon is reachable and has no credentials
+    /// configured (`AuthResult::NotConfigured`). A Basic header is always sent,
+    /// so the 401 body this shares with `::MissingHeader` can only mean this.
+    /// Distinct from `AuthFailed` so the UI can say "reachable, not
+    /// configured" instead of "wrong password".
     NotConfigured,
+    /// Direct/Local only: the daemon is reachable and protected, and the
+    /// request carried no username or password to test. Not "not configured":
+    /// a password-protected daemon was misreported that way when nothing was
+    /// typed (tunnel-session-review R2).
+    PasswordRequired,
     /// Local only, `instance_id` set: no on-disk instance config directory
     /// exists for that id.
     InstanceNotFound,
@@ -314,15 +323,24 @@ async fn test_http_health(
     };
 
     let url = format!("{}/health", base_url.trim_end_matches('/'));
-    let mut req = client.get(&url);
     let username = auth_username.unwrap_or_default();
     let password = password.filter(|p| !p.is_empty());
-    if !username.is_empty() || password.is_some() {
-        req = req.basic_auth(username, password);
-    }
+    let credentials_given = !username.is_empty() || password.is_some();
+    // ALWAYS a Basic header, even an empty `:` one when nothing was typed —
+    // the rule `remote_connection::request_session_token` follows. A daemon
+    // answers `MissingHeader` and `NotConfigured` with the same 401 body, so
+    // without a header a password-protected daemon would read as "not
+    // configured"; with one, that body can only mean NotConfigured and a
+    // protected daemon answers "Invalid credentials".
+    let req = client.get(&url).basic_auth(username, password);
 
     match req.send().await {
-        Ok(resp) => classify_http_response(resp).await,
+        Ok(resp) => match classify_http_response(resp).await {
+            ConnectionTestResult::AuthFailed if !credentials_given => {
+                ConnectionTestResult::PasswordRequired
+            }
+            result => result,
+        },
         Err(e) => ConnectionTestResult::Unreachable {
             reason: describe_reqwest_error(e),
         },
@@ -339,8 +357,8 @@ async fn classify_http_response(resp: reqwest::Response) -> ConnectionTestResult
         return if body.contains(AUTH_INVALID_BODY) {
             ConnectionTestResult::AuthFailed
         } else {
-            // `AuthResult::NotConfigured` or `::MissingHeader` — same body,
-            // same meaning from here: nothing to authenticate against yet.
+            // `AuthResult::NotConfigured` (a header was always sent, so not
+            // `::MissingHeader`): nothing to authenticate against yet.
             ConnectionTestResult::NotConfigured
         };
     }
@@ -542,13 +560,73 @@ mod tests {
         let mut server = mockito::Server::new_async().await;
         let _mock = server
             .mock("GET", "/health")
-            .match_header("authorization", mockito::Matcher::Missing)
+            .match_header("authorization", "Basic Og==") // ":" — empty, but present
             .with_status(200)
             .create_async()
             .await;
 
         let result = test_http_health(&server.url(), None, None).await;
         assert_eq!(result, ConnectionTestResult::Reachable);
+    }
+
+    /// The real auth middleware, not a mock: one daemon with credentials, one
+    /// without, both tested with nothing typed.
+    async fn auth_daemon(username: &str, password: &str) -> String {
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+        {
+            let mut config = state.config.write();
+            config.services.auth.username = username.to_string();
+            config.services.auth.password_hash = if password.is_empty() {
+                String::new()
+            } else {
+                bcrypt::hash(password, 4).unwrap()
+            };
+        }
+        let router = axum::Router::new()
+            .route("/health", axum::routing::get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                crate::mcp_http::auth::basic_auth_middleware,
+            ));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    /// Catches: a password-protected daemon tested with nothing typed being
+    /// reported "not configured yet" (no header => the MissingHeader body).
+    #[tokio::test]
+    async fn a_protected_daemon_tested_without_credentials_needs_a_password() {
+        let url = auth_daemon("boss", "hunter2").await;
+        assert_eq!(
+            test_http_health(&url, None, None).await,
+            ConnectionTestResult::PasswordRequired
+        );
+        assert_eq!(
+            test_http_health(&url, Some("boss"), Some("wrong")).await,
+            ConnectionTestResult::AuthFailed
+        );
+        assert_eq!(
+            test_http_health(&url, Some("boss"), Some("hunter2")).await,
+            ConnectionTestResult::Reachable
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_daemon_is_still_not_configured_without_credentials() {
+        let url = auth_daemon("", "").await;
+        assert_eq!(
+            test_http_health(&url, None, None).await,
+            ConnectionTestResult::NotConfigured
+        );
     }
 
     #[tokio::test]

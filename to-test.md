@@ -7,6 +7,10 @@ these are the end-to-end checks through the editor UI against real daemons.
   self-signed certificate: before pinning, Test Connection says "certificate not trusted
   (SHA-256 …)"; after Connect → Accept pins it, Test Connection says Reachable; after the
   remote certificate is regenerated, it says "certificate changed" (and Connect refuses).
+- [ ] **Blank-credential Test Connection against a protected daemon.** With a Direct or Local
+  connection to a daemon that has a username/password set, leave both credential fields
+  empty and press Test Connection: it says "requires a password", not "not configured
+  yet". Against a daemon with no credentials it still says "not configured yet".
 
 ## Post-rebase fixups B1/B2/C (2026-10-08) — Rust restart required
 
