@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Keep browser GitHub add-account polling separate from default login; emit declared plugin state changes, deliver SDK host messages, close panels on unload, and reject HTTP plugin manifests without allowed URLs.
+- Remove clean worktrees whose ignored directories lack owner search permission, without changing permissions on symlink targets (#1607-0733).
 
 - Preserve the next unsent Compose draft when a send or queue completes after leaving terminal Chat, including when the editor has already reopened (#1599-db8a).
 
@@ -32,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix missing older Claude prompts, image/PDF tool-output markers and model-change cards in Chat; validate the parser against sanitized records from real CLI transcripts.
 
 ### Changed
+- **Remote upload credentials** — `POST /remote/update` and `/fs/upload-copy` accept only the `tui-session` cookie; a `?token=` query answers 401 and the update client no longer puts the token in the URL. Older desktops cannot update a daemon of this release. QR pairing and WebSocket authentication are unchanged.
 - Make Compose the default input in terminal Chat: it opens focused and docked, stays open after send or queue, and preserves each tab's CLI Compose state and unsent draft when switching views (#1599-db8a).
 - Space automatic sidebar refresh starts at least five seconds apart per repository, retaining one trailing update during event bursts; explicit repository additions, checkouts and merge cleanup bypass the wait.
 - Resolve browser HTML and Markdown images through open repositories; show a clear placeholder for external images.

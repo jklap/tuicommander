@@ -2354,10 +2354,8 @@ mod tests {
             .await;
         let upload = server
             .mock("POST", "/remote/update")
-            .match_query(mockito::Matcher::UrlEncoded(
-                "token".into(),
-                "test-token".into(),
-            ))
+            .match_header("cookie", "tui-session=test-token")
+            .match_query(mockito::Matcher::Missing)
             .with_status(409)
             .with_body("old daemon still serving")
             .expect(1)

@@ -1748,8 +1748,8 @@ older than the check and still connects.
 The daemon hashes its running executable once at startup, so `build.sha256`
 identifies the process that answered even after an update stages a new file.
 `POST /remote/update` exists only on the daemon router. It needs the same
-session token as PTY access, supplied as a `tui-session` cookie or the legacy
-`?token=` query parameter, and the `x-tuic-target`, `x-tuic-sha256`, and
+session token as PTY access, supplied only as a `tui-session` cookie (a
+`?token=` query is rejected with 401 on this route and on `/fs/upload-copy`), and the `x-tuic-target`, `x-tuic-sha256`, and
 `x-tuic-confirmed-sessions` headers. It streams at most 512 MiB into the
 daemon executable's own directory, verifies the hash and current session
 count, and atomically promotes the file before restarting. Windows currently

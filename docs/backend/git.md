@@ -188,9 +188,11 @@ the setup script starts. If creation is cancelled during setup, the status
 becomes `failed` instead of remaining `pending`. Removing or archiving a
 worktree waits for an active copy, clears its warm state, and prevents a queued
 copy from recreating the old path. Before Git removes a worktree, the removal
-path restores owner write permission only inside that checkout so a sealed
-ignored build directory cannot leave a half-deleted, unregistered worktree.
-Symlinks are not followed. A leftover path without Git registration is
+path restores owner write permission only inside that checkout, plus owner
+search permission on directories before descending into them. This lets Git
+remove ignored directories with modes such as `0644` without leaving a
+half-deleted, unregistered worktree. Symlinks are not followed, and unreadable
+directories still stop preparation before Git unregisters the checkout. A leftover path without Git registration is
 reported with its path instead of being treated as a successful removal.
 
 If Git has already unregistered a checkout but its directory remains, removal

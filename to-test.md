@@ -4816,3 +4816,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [x] Chat focuses docked Compose, preserves drafts and CLI open/pin state, and retains focus after send/queue. _(verified: `src/__tests__/components/Terminal/chatViewCompose.critic.test.tsx`, real CodeMirror integration cases; 40 targeted component tests passed, including delayed send/queue across editor unmount/remount.)_
 - [ ] Visually confirm Compose sits below the conversation without overlapping it in a running app, and answer a permission prompt in CLI. The worktree Vite/stealth-browser screenshot attempt timed out on the shared browser; native rendering remains unverified.
+
+- [ ] After Boss restarts `make dev` (or rebuilds release), retry removal of the clean merged `feat/upload-cookie-1512` worktree. The Rust permission fix is not loaded by frontend HMR; the original worktree was left untouched during verification (#1607-0733).
