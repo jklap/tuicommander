@@ -38,7 +38,10 @@ while it loads.
 
 On the mobile PWA, **Chat** is the second tab, after the default **Sessions**
 tab, and opens without choosing a repository. It uses the same workspace root
-and saved sessions as desktop.
+and saved sessions as desktop. The composer shares the session input styling,
+auto-grow, right-side attachment icon and round Send button. Enter sends;
+Shift+Enter inserts a new line. Long transcript content wraps, while tables scroll
+inside their own block.
 A repository in a push link is sent with a message as context, not used as the
 chat root. The conversation picker shows the titles of saved sessions;
 choose one to load its history, or tap **New**. Messages, collapsed tool
@@ -117,10 +120,13 @@ in total. Text paste works as usual.
 Pastes longer than 200 words appear as a numbered `[Pasted text #… +N words]`
 marker while you compose; the full text is sent when you press Send. The
 composer grows with shorter text up to its height limit, then scrolls.
-Press `Ctrl+S` in the composer, or tap **Park** on a phone, to set aside the
-current text and image previews. The **Parked draft** control shows that a
+Press `Ctrl+S` in the composer, or tap the **Park draft** archive icon on a phone, to set aside the
+current text and image previews. The **Parked draft** control on desktop, or the
+**Restore parked draft** icon on mobile, shows that a
 draft is waiting. Press `Ctrl+S` or tap it again while the composer is empty to
 restore the draft; when the composer contains another draft, the two swap.
+On mobile, Park and Stop use labelled icons above the input row to preserve
+the input, attachment and Send positions.
 Sending the intervening prompt also restores the parked draft automatically.
 Parking survives closing and reopening the panel or reloading its window, and
 stays with its chat tab. If browser storage is unavailable, the composer warns
