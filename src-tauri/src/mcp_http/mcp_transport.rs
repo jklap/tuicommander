@@ -19470,6 +19470,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn mcp_run_history_matches_owner_event_cursor() {
         // Catches: MCP omitting read actions, losing the event cursor, or using a foreign project.
