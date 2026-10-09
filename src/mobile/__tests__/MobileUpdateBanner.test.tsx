@@ -78,6 +78,14 @@ afterEach(() => {
 });
 
 describe("mobile update banner", () => {
+	// Catches: the update strip touching the translucent iOS status edge above the header.
+	it("places the update strip after the app header", () => {
+		const view = render(() => <MobileApp />);
+		const header = view.getByText("TUICommander");
+		const banner = view.getByText("New version available");
+		expect(header.compareDocumentPosition(banner) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	// Catches: the "New version available" top bar showing on every tab instead of only Sessions.
 	it("shows on the Sessions screen and not on other screens", async () => {
 		const view = render(() => <MobileApp />);
