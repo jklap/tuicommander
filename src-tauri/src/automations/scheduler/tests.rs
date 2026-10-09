@@ -265,3 +265,58 @@ fn concurrent_ticks_dispatch_an_occurrence_only_once() {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].status, RunStatus::Reserved);
 }
+
+// Catches Once dispatching early, manual runs consuming the Once occurrence, or restart/retention replaying it.
+#[test]
+fn once_waits_for_due_time_and_remains_consumed_after_restart_and_retention() {
+    let (dir, owner) = owner();
+    let mut value = serde_json::to_value(definition("once")).unwrap();
+    value["cron"] = serde_json::json!("");
+    value["once_local"] = serde_json::json!("2026-10-09T12:00:00");
+    let cfg = AutomationsConfig {
+        definitions: vec![serde_json::from_value(value).unwrap()],
+        ..Default::default()
+    };
+    let before = now("2026-10-09T11:59:59Z");
+    assert!(tick(owner.store(), &cfg, before).unwrap().is_empty());
+    let manual = run_now(owner.store(), &cfg, "once", before).unwrap();
+    assert_eq!(owner.store().scheduled_cursor("once").unwrap(), None);
+    assert_eq!(manual.status, RunStatus::Reserved);
+    owner
+        .store()
+        .transition(
+            &manual.id,
+            RunStatus::Completed,
+            RunDetails::default(),
+            before.timestamp_millis(),
+        )
+        .unwrap();
+    let at = now("2026-10-09T12:00:00Z");
+    let runs = tick(owner.store(), &cfg, at).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, RunStatus::Reserved);
+    drop(owner);
+    let owner =
+        RunOwner::acquire_at(&dir.path().join("runs.sqlite3"), at.timestamp_millis() + 1).unwrap();
+    assert_eq!(
+        owner.store().get(&runs[0].id).unwrap().status,
+        RunStatus::Interrupted
+    );
+    let later = now("2027-10-09T12:00:00Z");
+    owner
+        .store()
+        .prune(later.timestamp_millis(), Some(1))
+        .unwrap();
+    assert!(tick(owner.store(), &cfg, later).unwrap().is_empty());
+    let cursor = owner.store().scheduled_cursor("once").unwrap();
+    assert_eq!(cursor, Some(at.timestamp_millis()));
+    let preview = crate::automations::schedule::preview_definition(
+        &cfg.definitions[0],
+        later,
+        5,
+        cursor.and_then(DateTime::from_timestamp_millis),
+    )
+    .unwrap();
+    assert!(preview.completed);
+    assert!(preview.occurrences.is_empty());
+}
