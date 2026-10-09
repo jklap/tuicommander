@@ -58,7 +58,7 @@ export const TerminalChatView: Component<{ terminalId: string; sessionId: string
 				observeToolDuration={false}
 				emptyMessage="No messages in this conversation yet."
 			/>
-			<div class={s.hint}>Read-only view. Switch to CLI to reply or answer prompts.</div>
+			<div class={s.hint}>Reply below with Compose. Switch to CLI to answer permission prompts.</div>
 		</div>
 	);
 };
