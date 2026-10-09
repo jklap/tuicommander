@@ -139,6 +139,7 @@ export function MobileChatScreen(props: { onOpenFile?: (candidate: string, cwd: 
 				</div>
 			</Show>
 			<Transcript
+				mobile
 				entries={chat.entries}
 				busy={chat.busy}
 				onOpenFile={openFile}

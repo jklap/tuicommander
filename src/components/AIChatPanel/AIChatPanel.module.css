@@ -1446,3 +1446,34 @@
   color: var(--fg-muted);
   font-size: var(--font-xs);
 }
+
+/* Mobile shares the session input contract, including native field sizing. */
+.inputArea.mobileComposer {
+  padding: 4px 12px;
+  flex-shrink: 0;
+}
+
+.mobileComposer .inputBody { flex: 1; min-width: 0; }
+.mobileComposer textarea { min-width: 0; width: 100%; }
+.composerActions { display: contents; }
+.mobileComposerActions {
+  display: flex;
+  flex-basis: 100%;
+  order: -1;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.mobileComposerActions button { width: 32px; min-width: 32px; padding: 0; }
+.mobileComposer .filePreview { max-width: 100%; overflow-wrap: anywhere; }
+
+/* A flex item's automatic minimum must never widen the phone transcript. */
+.mobileTranscript { min-width: 0; }
+.mobileTranscript > * { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.mobileTranscript .suggestedReplies button { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.mobileTranscript .toolActivitySummary,
+.mobileTranscript .toolActivityCallSummary { flex-wrap: wrap; }
+.mobileTranscript .toolCallName { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.mobileTranscript .toolCallDuration { white-space: normal; }
+.mobileTranscript :global(#markdown-content table) { display: block; max-width: 100%; overflow-x: auto; }
+
+.mobileComposerActions .parkedDraft { color: var(--accent); border-color: var(--accent); }

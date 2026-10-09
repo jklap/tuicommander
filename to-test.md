@@ -4826,3 +4826,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 ## Headless GitHub account login validation
 
 - [ ] After landing and rebuilding `tuic-remote`, verify browser add-account device-flow login resolves and stores the named account. The shared helper now compiles without desktop. Rust changes require a manual restart to load; no desktop instance was launched.
+
+- [ ] Mobile AI Chat on iPhone: confirm wrapped long suggestions/tool titles and table-local scrolling at 360–430px, session-style input auto-grow, attachment/Send icons and Park/Stop toolbar. Chromium component-layout evidence is recorded for #1625-c04f; phone touch and keyboard remain to check.
+- [ ] On iPhone PWA, check the update strip below the header in Commander and Paper; confirm that the native status-edge fade does not cover its text (#1626-9529). Chromium contrast is verified; iOS compositor behavior is not.
+## Mobile slash button parity (story 1609-9faa)
+
+- [ ] In a disposable agent session on the phone PWA, compare typing `/` and tapping the keybar `/`: both must show the same live agent commands and navigation. Insert `/` within an unsent draft and confirm surrounding text survives without submission.
