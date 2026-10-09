@@ -16,6 +16,7 @@ vi.mock("../../components/ui/DiffViewer", async (importOriginal) => {
 });
 
 import { DiffFileList, sectionToRawDiff } from "../../components/shared/DiffFileList";
+import type { DiffListNavHandle } from "../../components/shared/diffListNav";
 import { type DiffFileSection, parseDiffFiles } from "../../components/ui/DiffViewer";
 
 function section(path: string, marker: string): DiffFileSection {
@@ -105,5 +106,16 @@ describe("DiffFileList", () => {
 		const stubs = getAllByTestId("diff-stub").map((el) => el.textContent ?? "");
 		expect(stubs.some(hasMarker("STAGED_HALF"))).toBe(true);
 		expect(stubs.some(hasMarker("UNSTAGED_HALF"))).toBe(true);
+	});
+
+	it("exposes a nav handle whose currentIndex starts at the first row and scrollToIndex drives the container's scrollTo", () => {
+		let handle: DiffListNavHandle | undefined;
+		const scrollToSpy = vi.spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(() => {});
+		const files = [section("a.ts", "MARKER_A"), section("b.ts", "MARKER_B"), section("c.ts", "MARKER_C")];
+		render(() => <DiffFileList files={files} mode="unified" ref={(h) => (handle = h)} />);
+		expect(handle?.currentIndex()).toBe(0);
+		handle?.scrollToIndex(2);
+		expect(scrollToSpy).toHaveBeenCalled();
+		scrollToSpy.mockRestore();
 	});
 });

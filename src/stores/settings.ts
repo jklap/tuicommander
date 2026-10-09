@@ -159,6 +159,12 @@ interface RustAppConfig {
 	ai_chat_master_prompt?: string;
 	ai_chat_workspace?: string;
 	custom_pty_env?: CustomEnvVarEntry[];
+	diff_ignore_leading_whitespace?: boolean;
+	diff_ignore_trailing_whitespace?: boolean;
+	diff_ignore_whitespace_amount?: boolean;
+	diff_ignore_case?: boolean;
+	session_diff_auto_open?: string;
+	session_diff_truncate_lines?: number;
 	indicator_overrides?: IndicatorOverride[];
 	show_diff_stats?: boolean;
 	show_pr_badges?: boolean;
@@ -436,6 +442,12 @@ interface SettingsStoreState {
 	egoProfile: string;
 	aiChatMasterPrompt: string;
 	aiChatWorkspace: string;
+	diffIgnoreLeadingWhitespace: boolean;
+	diffIgnoreTrailingWhitespace: boolean;
+	diffIgnoreWhitespaceAmount: boolean;
+	diffIgnoreCase: boolean;
+	sessionDiffAutoOpen: "off" | "ask" | "auto";
+	sessionDiffTruncateLines: number;
 	indicatorOverrides: IndicatorOverride[];
 	showDiffStats: boolean;
 	showPrBadges: boolean;
@@ -519,6 +531,12 @@ function createSettingsStore() {
 		egoProfile: "",
 		aiChatMasterPrompt: "",
 		aiChatWorkspace: "",
+		diffIgnoreLeadingWhitespace: false,
+		diffIgnoreTrailingWhitespace: false,
+		diffIgnoreWhitespaceAmount: false,
+		diffIgnoreCase: false,
+		sessionDiffAutoOpen: "ask",
+		sessionDiffTruncateLines: 300,
 		indicatorOverrides: [],
 		showDiffStats: true,
 		showPrBadges: true,
@@ -621,6 +639,18 @@ function createSettingsStore() {
 		values.egoProfile = config.ego_profile ?? "";
 		values.aiChatMasterPrompt = config.ai_chat_master_prompt ?? "";
 		values.aiChatWorkspace = config.ai_chat_workspace ?? "";
+		values.diffIgnoreLeadingWhitespace = config.diff_ignore_leading_whitespace ?? false;
+		values.diffIgnoreTrailingWhitespace = config.diff_ignore_trailing_whitespace ?? false;
+		values.diffIgnoreWhitespaceAmount = config.diff_ignore_whitespace_amount ?? false;
+		values.diffIgnoreCase = config.diff_ignore_case ?? false;
+		// The Rust field is a plain unvalidated String (matches diff_view_mode's
+		// own convention) — an unrecognized value on disk falls back to "ask"
+		// here, at the frontend's rendering boundary, rather than at load time.
+		values.sessionDiffAutoOpen =
+			config.session_diff_auto_open === "off" || config.session_diff_auto_open === "auto"
+				? config.session_diff_auto_open
+				: "ask";
+		values.sessionDiffTruncateLines = config.session_diff_truncate_lines ?? 300;
 		// Revalidated here, not just on write — a hand-edited config.json is
 		// untrusted input reaching document.documentElement.style (apply.ts).
 		values.indicatorOverrides = sanitizeIndicatorOverrides(config.indicator_overrides ?? []);
@@ -708,6 +738,12 @@ function createSettingsStore() {
 			ego_profile: values.egoProfile,
 			ai_chat_master_prompt: values.aiChatMasterPrompt,
 			ai_chat_workspace: values.aiChatWorkspace,
+			diff_ignore_leading_whitespace: values.diffIgnoreLeadingWhitespace,
+			diff_ignore_trailing_whitespace: values.diffIgnoreTrailingWhitespace,
+			diff_ignore_whitespace_amount: values.diffIgnoreWhitespaceAmount,
+			diff_ignore_case: values.diffIgnoreCase,
+			session_diff_auto_open: values.sessionDiffAutoOpen,
+			session_diff_truncate_lines: values.sessionDiffTruncateLines,
 			indicator_overrides: values.indicatorOverrides.map((o) => ({ ...o })),
 			show_diff_stats: values.showDiffStats,
 			show_pr_badges: values.showPrBadges,
@@ -1250,6 +1286,36 @@ function createSettingsStore() {
 		/** Toggle GitLens-style inline git blame on the editor's active line */
 		setInlineBlameEnabled(enabled: boolean): void {
 			setState("inlineBlameEnabled", enabled);
+			save();
+		},
+
+		setDiffIgnoreLeadingWhitespace(enabled: boolean): void {
+			setState("diffIgnoreLeadingWhitespace", enabled);
+			save();
+		},
+
+		setDiffIgnoreTrailingWhitespace(enabled: boolean): void {
+			setState("diffIgnoreTrailingWhitespace", enabled);
+			save();
+		},
+
+		setDiffIgnoreWhitespaceAmount(enabled: boolean): void {
+			setState("diffIgnoreWhitespaceAmount", enabled);
+			save();
+		},
+
+		setDiffIgnoreCase(enabled: boolean): void {
+			setState("diffIgnoreCase", enabled);
+			save();
+		},
+
+		setSessionDiffAutoOpen(mode: "off" | "ask" | "auto"): void {
+			setState("sessionDiffAutoOpen", mode);
+			save();
+		},
+
+		setSessionDiffTruncateLines(lines: number): void {
+			setState("sessionDiffTruncateLines", Math.max(0, Math.trunc(lines)));
 			save();
 		},
 

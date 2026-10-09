@@ -4,6 +4,7 @@ import { type Component, createEffect, createMemo, createSignal, on, Show } from
 import "@git-diff-view/solid/styles/diff-view.css";
 import { appLogger } from "../../stores/appLogger";
 import type { DiffViewMode } from "../../stores/ui";
+import { truncatePatch } from "../../utils/truncatePatch";
 
 // ---------------------------------------------------------------------------
 // Legacy types & parsers (kept for backward compatibility with PrDiffTab, tests)
@@ -102,6 +103,16 @@ export interface DiffViewerProps {
 	/** Shows the "+" gutter button; `renderWidgetLine` renders what it opens. */
 	diffViewAddWidget?: boolean;
 	renderWidgetLine?: DiffViewProps<unknown>["renderWidgetLine"];
+	/** Soft-wrap long lines instead of horizontal scrolling. Default false
+	 *  (unchanged behavior) — @git-diff-view/solid's `diffViewWrap` is a single
+	 *  boolean with no split/unified distinction in its own types, so this
+	 *  applies uniformly in both modes. */
+	wrap?: boolean;
+	/** When set and the diff has more than this many lines, render only the
+	 *  first `maxLines` (cut at hunk boundaries via `truncatePatch`) with a
+	 *  "Show all" affordance instead of the full diff. 0/undefined = never
+	 *  truncate. */
+	maxLines?: number;
 }
 
 /** Convert our mode string to the library's enum */
@@ -111,6 +122,22 @@ function toModeEnum(mode: DiffViewMode | undefined): DiffModeEnum {
 
 export const DiffViewer: Component<DiffViewerProps> = (props) => {
 	const isEmpty = createMemo(() => props.diff.trim() === "");
+
+	// Whether the user has clicked "Show all" to bypass maxLines for this instance.
+	const [expandedTruncated, setExpandedTruncated] = createSignal(false);
+	const truncation = createMemo(() => truncatePatch(props.diff, props.maxLines ?? 0));
+	const effectiveDiff = createMemo(() => (expandedTruncated() ? props.diff : truncation().patch));
+
+	// A new diff (e.g. this instance's row moved to a different/updated file)
+	// should re-truncate rather than keep showing a stale "expanded" choice
+	// made about a previous diff.
+	createEffect(
+		on(
+			() => props.diff,
+			() => setExpandedTruncated(false),
+			{ defer: true },
+		),
+	);
 
 	// Build a DiffFile instance from the raw unified diff string.
 	// DiffFile.createInstance expects hunks as an array of diff strings.
@@ -126,43 +153,45 @@ export const DiffViewer: Component<DiffViewerProps> = (props) => {
 	const [parseError, setParseError] = createSignal(false);
 
 	createEffect(
-		on(
-			() => props.diff,
-			(diff) => {
-				if (!diff.trim()) {
-					setDiffFile(undefined);
-					setParseError(false);
-					return;
-				}
-				try {
-					const fileName = extractFileName(diff);
-					const df = DiffFile.createInstance({
-						oldFile: { fileName },
-						newFile: { fileName },
-						hunks: [diff],
-					});
-					df.init();
-					// Build BOTH modes up front — do not "optimize" this to the active mode
-					// only. DiffView merely branches on `diffViewMode` and reads pre-built
-					// line data; an unbuilt mode renders blank when the user toggles
-					// split↔unified. Both builders are idempotent and the build pass is the
-					// cheap half (init() does the parse+highlight). See @git-diff-view
-					// solid/dist/...mjs InternalDiffView. (perf pass 2026-06-07)
-					df.buildSplitDiffLines();
-					df.buildUnifiedDiffLines();
-					setDiffFile(df);
-					setParseError(false);
-				} catch (err) {
-					appLogger.error("git", "Failed to parse diff for rendering", err);
-					setDiffFile(undefined);
-					setParseError(true);
-				}
-			},
-		),
+		on(effectiveDiff, (diff) => {
+			if (!diff.trim()) {
+				setDiffFile(undefined);
+				setParseError(false);
+				return;
+			}
+			try {
+				const fileName = extractFileName(diff);
+				const df = DiffFile.createInstance({
+					oldFile: { fileName },
+					newFile: { fileName },
+					hunks: [diff],
+				});
+				df.init();
+				// Build BOTH modes up front — do not "optimize" this to the active mode
+				// only. DiffView merely branches on `diffViewMode` and reads pre-built
+				// line data; an unbuilt mode renders blank when the user toggles
+				// split↔unified. Both builders are idempotent and the build pass is the
+				// cheap half (init() does the parse+highlight). See @git-diff-view
+				// solid/dist/...mjs InternalDiffView. (perf pass 2026-06-07)
+				df.buildSplitDiffLines();
+				df.buildUnifiedDiffLines();
+				setDiffFile(df);
+				setParseError(false);
+			} catch (err) {
+				appLogger.error("git", "Failed to parse diff for rendering", err);
+				setDiffFile(undefined);
+				setParseError(true);
+			}
+		}),
 	);
 
 	return (
 		<div id="diff-content" ref={(el) => props.contentRef?.(el)}>
+			<Show when={!expandedTruncated() && truncation().hiddenLines > 0}>
+				<button type="button" class="diff-truncated-notice" onClick={() => setExpandedTruncated(true)}>
+					Show all {truncation().hiddenLines} more line{truncation().hiddenLines === 1 ? "" : "s"}
+				</button>
+			</Show>
 			<Show
 				when={!isEmpty() && !parseError() && diffFile()}
 				fallback={
@@ -175,7 +204,7 @@ export const DiffViewer: Component<DiffViewerProps> = (props) => {
 					diffFile={diffFile()}
 					diffViewMode={toModeEnum(props.mode)}
 					diffViewTheme="dark"
-					diffViewWrap={false}
+					diffViewWrap={props.wrap ?? false}
 					diffViewFontSize={13}
 					extendData={props.extendData}
 					renderExtendLine={props.renderExtendLine}
