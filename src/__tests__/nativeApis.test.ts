@@ -23,4 +23,11 @@ describe("ES2024 native API conventions", () => {
 		);
 		expect(redundant).toEqual([]);
 	});
+	it("prevents restoring hand-built prompt and activity buckets", () => {
+		expect(
+			matches(
+				/new Map<string, (?:SavedPrompt|VarDef)\[\]>|const (?:recent|earlier|today|older): ActivityItemData\[\]/g,
+			),
+		).toEqual([]);
+	});
 });
