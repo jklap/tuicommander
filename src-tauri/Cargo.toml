@@ -256,6 +256,7 @@ tauri-plugin-deep-link = { version = "2", optional = true }
 tauri-plugin-clipboard-manager = { version = "2", optional = true }
 tauri-plugin-global-shortcut = { version = "2", optional = true }
 drag = { version = "2.1", features = ["serde"], optional = true }
+# DEFERRED (2026-10-09) — trimming ZIP codecs would reject previously supported plugin archives.
 zip = "8"
 # Microsoft ships onnxruntime as a .tgz everywhere except Windows, and the
 # speech downloader takes one shared library out of it (`dictation::speech::
