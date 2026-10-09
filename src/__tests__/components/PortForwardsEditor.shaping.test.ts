@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { convertForwardType, normalizeForwardForType } from "../../components/TunnelsPanel/TunnelEditorModal";
+import { convertForwardType, normalizeForwardForType } from "../../components/TunnelsPanel/PortForwardsEditor";
 import type { ForwardSpec } from "../../stores/tunnels";
 
-describe("TunnelEditorModal forward shaping", () => {
+describe("PortForwardsEditor forward shaping", () => {
 	it("normalizes Remote forwards to the backend local_host/local_port shape", () => {
 		const staleRemoteForward: ForwardSpec = {
 			type: "Remote",

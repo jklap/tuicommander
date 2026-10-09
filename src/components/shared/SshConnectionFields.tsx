@@ -36,7 +36,7 @@ export interface SshConnectionFieldsProps {
  * tuning (ServerAliveInterval/ServerAliveCountMax), StrictHostKeyChecking and
  * channel compression (`ssh -C`).
  *
- * Extracted from `TunnelEditorModal.tsx` (story: SSH Tunnels + Remote Servers
+ * Extracted from the former `TunnelEditorModal.tsx` (story: SSH Tunnels + Remote Servers
  * consolidation, "Merged connection model") so identical SSH capability is
  * available everywhere SSH config is edited: both "SSH Tunnel" (port
  * forwarding profiles) and "Remote Server — SSH" kinds share this exact

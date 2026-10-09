@@ -11,7 +11,7 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 /** Fields are laid out as sibling <label>/<input> pairs, same convention as
- * TunnelEditorModal.test.ts's own `getFieldInput` helper. */
+ * the former TunnelEditorModal tests' `getFieldInput` helper. */
 function getFieldInput(container: HTMLElement, labelText: string): HTMLInputElement {
 	const label = Array.from(container.querySelectorAll("label")).find((el) => el.textContent === labelText);
 	if (!label?.parentElement) throw new Error(`Could not find a field group for label "${labelText}"`);

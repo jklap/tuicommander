@@ -61,7 +61,7 @@ export function convertForwardType(
 
 /**
  * Port-forward list editor — add/remove/edit `ForwardSpec` rows for an SSH
- * tunnel profile. Extracted from `TunnelEditorModal.tsx` (story: SSH Tunnels
+ * tunnel profile. Extracted from the former `TunnelEditorModal.tsx` (story: SSH Tunnels
  * + Remote Servers consolidation) so the merged Settings connection editor's
  * "SSH Tunnel" kind section reuses the exact same UI instead of a second copy.
  */
