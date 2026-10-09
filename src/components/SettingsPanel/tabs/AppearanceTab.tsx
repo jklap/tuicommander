@@ -237,9 +237,14 @@ export const AppearanceTab: Component = () => {
 						class={s.testBtn}
 						onClick={() => uiStore.resetLayout()}
 					>
-						{t("appearance.btn.resetLayout", "Reset Panel Sizes")}
+						{t("appearance.btn.resetLayout", "Reset Sidebar Widths")}
 					</button>
-					<p class={s.hint}>{t("appearance.hint.resetLayout", "Reset sidebar and panel widths to default values")}</p>
+					<p class={s.hint}>
+						{t(
+							"appearance.hint.resetLayout",
+							'Reset the sidebar and Settings navigation widths to their defaults (the Command Palette\'s "Reset Panel Sizes" resets the pane layout)',
+						)}
+					</p>
 				</div>
 			</SectionCard>
 			<SectionCard title={t("appearance.heading.bell", "Bell")}>

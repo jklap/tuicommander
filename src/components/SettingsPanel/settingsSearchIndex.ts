@@ -395,7 +395,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 		section: "Experimental Features",
 		label: "Enable experimental features",
 		labelKey: "general.toggle.experimentalFeatures",
-		hint: "Opt in to features under active development: the AI Chat panel and SSH Tunnels.",
+		hint: "Opt in to features under active development: the AI Chat panel.",
 		hintKey: "general.hint.experimentalFeatures",
 	},
 	// appearance
