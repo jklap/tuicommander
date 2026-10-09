@@ -15,4 +15,12 @@ describe("ES2024 native API conventions", () => {
 	it("prevents reintroducing global literal regex replacements", () => {
 		expect(matches(/\.replace\(\/(?:[^\\/.*+?^$()[\]{}|]|\\[\\/nrt])+\/g\s*,/g)).toEqual([]);
 	});
+	it("prevents redundant copies before sorting arrays", () => {
+		const redundant = Object.entries(sources).flatMap(([file, source]) =>
+			Array.from(source.matchAll(/\[\.\.\.([^\]\n]+)\]\.sort\(/g), (match) => ({ file, expression: match[1] })).filter(
+				({ expression }) => !/\.keys\(\)|\.entries\(\)|^(found|starts)$|,|\.\.\./.test(expression),
+			),
+		);
+		expect(redundant).toEqual([]);
+	});
 });

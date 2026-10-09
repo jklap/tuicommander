@@ -54,7 +54,7 @@ export function ActivityScreen(props: ActivityScreenProps) {
 	});
 	const activeItems = createMemo(() => {
 		const items = activityStore.getActive();
-		return [...items].sort((a, b) => b.createdAt - a.createdAt);
+		return items.toSorted((a, b) => b.createdAt - a.createdAt);
 	});
 
 	// Snapshot items every 10s so time-group buckets don't reshuffle
