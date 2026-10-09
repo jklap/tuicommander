@@ -112,7 +112,17 @@ fn manual_and_scheduled_share_capacity_without_sharing_cursor() {
         run_now(store, &cfg, "c", at).unwrap().status,
         RunStatus::SkippedConcurrency
     );
-    for run in store.open_runs().unwrap() {
+    let open = store.open_runs().unwrap();
+    assert_eq!(
+        open.len(),
+        2,
+        "lowering capacity must not cancel existing runs"
+    );
+    assert!(
+        open.iter()
+            .any(|run| run.id == first.id && run.status == RunStatus::NeedsYou)
+    );
+    for run in open {
         store
             .transition(
                 &run.id,
@@ -310,7 +320,7 @@ fn once_waits_for_due_time_and_remains_consumed_after_restart_and_retention() {
     assert!(tick(owner.store(), &cfg, later).unwrap().is_empty());
     let cursor = owner.store().scheduled_cursor("once").unwrap();
     assert_eq!(cursor, Some(at.timestamp_millis()));
-    let preview = crate::automations::schedule::preview_definition(
+    let preview = crate::automations::schedule::once::preview_definition(
         &cfg.definitions[0],
         later,
         5,
@@ -387,6 +397,12 @@ mod critic_failure {
                     None,
                     "an undispatched occurrence must remain eligible for the next tick"
                 );
+                assert_eq!(owner.store().scheduled_cursor("second").unwrap(), None);
+                conn.execute_batch("DROP TRIGGER fail_second").unwrap();
+                let retried = tick(owner.store(), &config, now).unwrap();
+                assert_eq!(retried.len(), 2);
+                assert!(retried.iter().all(|run| run.status == RunStatus::Reserved));
+                assert!(tick(owner.store(), &config, now).unwrap().is_empty());
             }
         }
     }
