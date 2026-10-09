@@ -4848,4 +4848,5 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] In a disposable agent session on the phone PWA, compare typing `/` and tapping the keybar `/`: both must show the same live agent commands and navigation. Insert `/` within an unsent draft and confirm surrounding text survives without submission.
 
+- [ ] After a manual `make dev` restart or `make build`, switch a busy Claude terminal to Chat and confirm mid-turn human follow-ups appear once between replies (#1632-ec84). Rust does not hot-reload.
 - [ ] Automations dialog: after story 1617 API integration, verify create/update/pause/Run now/delete and backend previews against the real scheduler. The current peer verifies the injectable frontend boundary only.
