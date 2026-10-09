@@ -46,13 +46,19 @@ impl Visibility {
     }
 
     fn refresh(&self, state: &AppState, id: &str) {
+        self.refresh_waking(state, id, true);
+    }
+
+    /// [`Self::refresh`]; `wake: false` records visibility without SIGCONT-ing a
+    /// session parked in standby (the frontend's periodic keep-alive).
+    fn refresh_waking(&self, state: &AppState, id: &str, wake: bool) {
         let desktop = self.saved.is_none() && self.desktop.get(id).copied().unwrap_or(false);
         let visible = desktop || self.watched(state, id);
         state
             .session_maps
             .session_visibility
             .insert(id.into(), visible);
-        wake_visible(state, id, visible);
+        wake_visible(state, id, visible && wake);
     }
 }
 
@@ -75,19 +81,50 @@ const MAX_VIEWER_ID_LEN: usize = 128;
 const MAX_VIEWERS_PER_SESSION: usize = 16;
 
 /// IPC visibility belongs to the desktop; HTTP visibility belongs to a remote client.
+/// Production callers pass `wake` through [`set_visible_waking`].
+#[cfg(test)]
 pub(crate) fn set_visible(state: &AppState, id: &str, visible: bool, desktop: bool) {
     set_visible_for_viewer(state, id, visible, desktop, LEGACY_VIEWER_ID);
 }
 
-/// [`set_visible`] for one remote viewer: a remote session stays visible while
-/// ANY remote viewer claims it. `viewer` is ignored for the desktop, which owns
-/// a single claim per session.
+/// IPC visibility with an explicit `wake`: `false` refreshes the claim
+/// without waking a session parked in standby (IPC `set_session_visible`'s
+/// keep-alive, same `wake` field as `POST /sessions/{id}/visible`).
+pub(crate) fn set_visible_waking(
+    state: &AppState,
+    id: &str,
+    visible: bool,
+    desktop: bool,
+    wake: bool,
+) {
+    set_visible_for_viewer_waking(state, id, visible, desktop, LEGACY_VIEWER_ID, wake);
+}
+
+/// [`set_visible_for_viewer_waking`] with `wake: true`.
+#[cfg(test)]
 pub(crate) fn set_visible_for_viewer(
     state: &AppState,
     id: &str,
     visible: bool,
     desktop: bool,
     viewer: &str,
+) {
+    set_visible_for_viewer_waking(state, id, visible, desktop, viewer, true);
+}
+
+/// [`set_visible_waking`] for one remote viewer: a remote session stays visible
+/// while ANY remote viewer claims it. `viewer` is ignored for the desktop, which
+/// owns a single claim per session. `wake: false` = the frontend's 30 s
+/// keep-alive: refresh the claim WITHOUT SIGCONT-ing a parked session, so a
+/// keep-alive never holds a hidden/minimised client's session awake. A real
+/// focus (`wake` absent/`true`) still wakes it.
+pub(crate) fn set_visible_for_viewer_waking(
+    state: &AppState,
+    id: &str,
+    visible: bool,
+    desktop: bool,
+    viewer: &str,
+    wake: bool,
 ) {
     if !desktop && viewer.len() > MAX_VIEWER_ID_LEN {
         return;
@@ -121,7 +158,7 @@ pub(crate) fn set_visible_for_viewer(
             .last_remote_activity
             .insert(id.into(), std::time::Instant::now());
     }
-    visibility.refresh(state, id);
+    visibility.refresh_waking(state, id, wake);
 }
 
 /// A remote read or input is activity even without a persistent stream. Serialize

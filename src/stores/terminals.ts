@@ -444,6 +444,11 @@ function createTerminalsStore() {
 	const idleToBusyCallbacks: Array<(id: string) => void> = [];
 	const onRemoveCallbacks: Array<(id: string) => void> = [];
 	const shellExitCallbacks: Array<(id: string) => void> = [];
+	/** Terminals whose mounted `Terminal` component currently holds a PTY exit
+	 *  subscription — i.e. will run the local exit teardown itself. A tab that is
+	 *  not in here (never rendered, or unmounted) has nobody watching its exit,
+	 *  so `session-closed` must clean it up instead. Not reactive on purpose. */
+	const ptyExitWatched = new Set<string>();
 	// Tracks which terminals have completed their initial shell startup (reached idle at least once).
 	// Used to distinguish "busy from .zshrc startup" from "busy from a user-launched process".
 	const reachedIdleSet = new Set<string>();
@@ -758,6 +763,7 @@ function createTerminalsStore() {
 			tabOrderingStore.remove(id);
 			cleanupBusyState(id);
 			lastDataAtMap.delete(id);
+			ptyExitWatched.delete(id);
 			// Cancel any pending OSC 133 flush so its rAF callback can't fire after
 			// removal and resurrect a ghost terminal entry via setState("terminals", id, ...).
 			const osc133Raf = _osc133FlushTimers.get(id);
@@ -898,10 +904,10 @@ function createTerminalsStore() {
 			// Echoing a backend-pushed accent color is a real ping-pong: two
 			// backend writes racing (A then B) each look like a genuine change
 			// to whichever side receives them next, and `set_session_accent_color`
-			// re-emits every change — forever. `set_session_name` never emits
-			// (backend renames go through `rename_session_from_backend`), so a
-			// name echo cannot loop, but it is still a redundant round trip that
-			// can briefly write a stale name back over a newer one.
+			// re-emits every change — forever. `set_session_name` emits
+			// `session-renamed` once per real change (so other windows see a
+			// rename live); echoing that back would be a redundant round trip
+			// that can briefly write a stale name back over a newer one.
 			// The unchanged-value check below (`prevName`/`prevIsCustom`) is a
 			// second, independent guard against re-echoing a genuine no-op call —
 			// it does not by itself stop the race above.
@@ -978,11 +984,16 @@ function createTerminalsStore() {
 		 *  back via `update()`'s `set_session_name` sync — a `session-renamed`
 		 *  payload IS the backend's authoritative state, so there's nothing to
 		 *  round-trip. See `update()`'s echo-guard comment for the ping-pong this
-		 *  prevents. */
-		applyBackendRename(sessionId: string, name: string, isCustom: boolean): void {
+		 *  prevents. This is also how a rename made in ANOTHER window/client
+		 *  arrives (IPC/HTTP `set_session_name` emits once per real change), and
+		 *  the originating window's own copy is a no-op here.
+		 *  A `null` name means the backend cleared its explicit name (e.g. an empty
+		 *  tmux `select-pane -T`): keep the tab's current label and apply only
+		 *  `isCustom`, so OSC titles may take the tab over again. */
+		applyBackendRename(sessionId: string, name: string | null, isCustom: boolean): void {
 			const termId = sessionToTerminal.get(sessionId);
 			if (!termId || !has(termId)) return;
-			actions.update(termId, { name, nameIsCustom: isCustom }, { echo: false });
+			actions.update(termId, { ...(name != null ? { name } : {}), nameIsCustom: isCustom }, { echo: false });
 		},
 
 		/** Apply a `session-accent-color-changed` event straight from the backend.
@@ -1424,6 +1435,18 @@ function createTerminalsStore() {
 				const idx = shellExitCallbacks.indexOf(callback);
 				if (idx >= 0) shellExitCallbacks.splice(idx, 1);
 			};
+		},
+
+		/** Record whether a mounted `Terminal` holds this tab's PTY exit
+		 *  subscription (see `ptyExitWatched`). */
+		setPtyExitWatched(id: string, watched: boolean): void {
+			if (watched) ptyExitWatched.add(id);
+			else ptyExitWatched.delete(id);
+		},
+
+		/** Whether a mounted `Terminal` will handle this tab's PTY exit itself. */
+		isPtyExitWatched(id: string): boolean {
+			return ptyExitWatched.has(id);
 		},
 
 		/** Fire the shell-exit callbacks for a terminal whose plain shell ended.

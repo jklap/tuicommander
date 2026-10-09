@@ -103,7 +103,9 @@ export async function subscribePty(
 						break;
 					case "renamed": {
 						const renamed = frame as Record<string, unknown>;
-						if (typeof renamed.name === "string") opts.onRenamed?.(renamed.name, renamed.is_custom === true);
+						// `name: null` is a cleared name: apply only `is_custom`.
+						if (typeof renamed.name === "string" || renamed.name === null)
+							opts.onRenamed?.(renamed.name, renamed.is_custom === true);
 						break;
 					}
 					case "activity":
