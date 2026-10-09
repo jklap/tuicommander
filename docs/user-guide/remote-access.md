@@ -338,8 +338,11 @@ certificate; if the certificate ever changes, Connect fails with
 certificate change, open the connection's editor and click **Forget pinned
 certificate** (changing the URL forgets it too); the next Connect asks again.
 Automatic reconnects never pin anything: an unpinned self-signed daemon stays in
-error until you confirm it. Test Connection does not use the pin and reports a
-self-signed target as unreachable.
+error until you confirm it. Test Connection judges the certificate the same way
+before it sends anything: a pinned certificate that still matches is tested
+through the same kind of relay; an unpinned self-signed certificate reports "not
+trusted" with its fingerprint, and a changed one reports "certificate changed"
+— in both cases nothing (no password either) is sent to the server.
 
 A URL that points back at the TUICommander you are configuring is refused with
 "this very TUICommander instance — a machine cannot mirror itself". The check

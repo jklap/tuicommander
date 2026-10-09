@@ -1783,7 +1783,13 @@ never echoed. Answers 200 with
 `{ "type": "Unreachable", "reason": "..." }` (the reason never contains the URL
 or the password). SSH runs a one-shot `ssh … -- user@host true` with the tunnel's
 options, `ConnectTimeout=5` and `ControlPath=none` (so it never rides a live
-multiplexed master); Direct/Local send one `GET <base>/health` that follows no
+multiplexed master); a Direct `https://` URL first has its certificate judged
+like Connect does (`direct_proxy::probe_direct_tls` with the request's
+`transport.tls_fingerprint`): a matching pin is tested through a one-shot pinned
+loopback relay, while an unpinned untrusted certificate (`certificate not trusted
+… SHA-256 …`), a changed one (`certificate changed: …`) or a garbled pin is
+`Unreachable` before any request or credential is sent. Direct/Local send one
+`GET <base>/health` that follows no
 redirects, with Basic Auth when a username or password is given (a password with
 no username is sent as `:<password>` and refused, like Connect). `Local` resolves
 `instance_id` from that instance's `config.json` first. Guarded by
