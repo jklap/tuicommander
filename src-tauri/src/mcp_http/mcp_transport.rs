@@ -22815,6 +22815,8 @@ mod tests {
     /// was missing "attention" entirely until a 2026-09-10 fix). The `match` below
     /// is exhaustive, so adding a `NotificationSound` variant without updating
     /// `TOAST_SOUNDS` fails to *compile*, not just fails this test at runtime.
+    // `notification_sound` is a desktop-only module (`lib.rs`).
+    #[cfg(feature = "desktop")]
     #[test]
     fn toast_sounds_stay_in_sync_with_notification_sound_variants() {
         use crate::notification_sound::NotificationSound;
