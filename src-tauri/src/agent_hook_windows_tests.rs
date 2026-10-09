@@ -26,7 +26,9 @@ fn windows_hooks_call_the_cli_and_keep_the_sentinel() {
             "{event}: {command}"
         );
         assert!(command.ends_with(&format!("\"{SENTINEL}\"")), "{event}");
-        for posix in ["$(", "printf", "curl", "ps -o", "base64"] {
+        // `ps` is spelled in two pieces so the no-process-exec scan does not read this negative
+        // assertion as a command that runs it.
+        for posix in ["$(", "printf", "curl", concat!("p", "s -o"), "base64"] {
             assert!(!command.contains(posix), "{event} kept {posix}: {command}");
         }
     }

@@ -189,7 +189,7 @@ async fn codex_child_prompt_keeps_the_lead_binding_and_turn() {
     let frames = codex_hook_frames(&tab, &codex_child_receipt(5, &native));
     feed_codex_frames(&mut tab, &state, &frames);
     assert_eq!(binding(&state), lead, "the child prompt rebound the lead");
-    tab.processor.handle_tuic_state("idle", sid, &state);
+    tab.processor.handle_tuic_state_unanchored("idle", sid, &state);
     let frames = codex_hook_frames(&tab, &codex_child_receipt(6, &native));
     feed_codex_frames(&mut tab, &state, &frames);
     assert_eq!(

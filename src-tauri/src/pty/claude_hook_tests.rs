@@ -291,7 +291,7 @@ fn run_claude_hook(event: &serde_json::Value) -> String {
     use std::process::{Command, Stdio};
     let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
     let output = scratch.path().join("tty");
-    let command = crate::agent_hook::claude_hook_map()
+    let command = crate::agent_hook::shell_claude_hook_map()
         .into_iter()
         .find(|(e, m, _)| *e == event["hook_event_name"].as_str().unwrap() && m.is_empty())
         .unwrap()
@@ -360,7 +360,7 @@ async fn claude_hook_frames_survive_tui_redraw_between_tty_writes() {
     large["tool_use_id"] = "toolu_large_write".into();
     large["tool_name"] = "Write".into();
     large["tool_input"] =
-        serde_json::json!({"file_path": "/tmp/large.txt", "content": "x".repeat(20 * 1024)});
+        serde_json::json!({"file_path": "/srv/large.txt", "content": "x".repeat(20 * 1024)});
     for event in [&events[1], &large, &pre, &ask] {
         let delivered = deliver_through_busy_tty(&run_claude_hook(event));
         processor.process_chunk(&delivered, &silence, sid, &state);
@@ -593,13 +593,23 @@ fn claude_native_stop_accepts_session_submit_without_screen_recovery() {
 fn claude_stop_hook_reopen_stays_busy_when_a_tool_continuation_follows() {
     let sid = "claude-stop-hook-reopen-tool";
     let (state, silence, bytes) = replay_claude_stop_hook_reopen_2837(sid);
+    // The replay never submitted a turn through TUIC (epoch 0), which `deliver_notice_to_pty`
+    // reads as "stuck on SessionStart's busy latch" and types into. This scenario is a
+    // Claude that already ran a turn, so give it one.
+    state
+        .session_maps
+        .session_states
+        .get_mut(sid)
+        .unwrap()
+        .turn_epoch = 1;
     let mut processor = ChunkProcessor::new(None, Some("claude-test-owner".into()));
     processor.process_chunk("\x1b]7770;state=busy\x07", &silence, sid, &state);
     let written_before = bytes.lock().unwrap().len();
-    assert!(matches!(
-        deliver_notice_to_pty(&state, sid, PEER_MAIL_WAKE),
-        PtyDelivery::Queued
-    ));
+    let delivery = deliver_notice_to_pty(&state, sid, PEER_MAIL_WAKE);
+    assert!(
+        matches!(delivery, PtyDelivery::Queued),
+        "a busy tool continuation must queue the notice, got {delivery:?}"
+    );
 
     let first = claude_timer_tick(&state, &silence, sid);
     reconcile_quiet_claude_process(&state, sid);

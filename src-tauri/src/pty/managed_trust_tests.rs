@@ -193,7 +193,8 @@ fn replay_managed_first_run(
         }
     }
     // Drop the emulator's own answers to the capture's terminal queries
-    // (`ESC[?6c` for `ESC[c`): they are not dialog answers.
+    // (`ESC[?6c` for `ESC[c`, `ESC P > | name version ESC \` for XTVERSION): they are not
+    // dialog answers.
     let written = written.lock().unwrap().clone();
     let mut answers = Vec::new();
     let mut rest = written.as_slice();
@@ -202,6 +203,12 @@ fn replay_managed_first_run(
             && let Some(end) = rest.iter().position(|byte| *byte == b'c')
         {
             rest = &rest[end + 1..];
+            continue;
+        }
+        if rest.starts_with(b"\x1bP>|")
+            && let Some(end) = rest.windows(2).position(|pair| pair == b"\x1b\\")
+        {
+            rest = &rest[end + 2..];
             continue;
         }
         answers.push(rest[0]);
