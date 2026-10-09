@@ -97,6 +97,27 @@ describe("TabBar tab-type classes", () => {
 		expect(container.textContent).not.toContain("(session)");
 	});
 
+	it("shows the unseen badge on an inactive Session Review tab, and clears it on activation", () => {
+		const activeId = diffTabsStore.add("/repo", "/repo/other.ts", "M");
+		const sessionId = diffTabsStore.addSessionReview("/repo", "sess-1");
+		diffTabsStore.setActive(activeId); // Session Review tab is now inactive.
+		diffTabsStore.markSessionReviewUnseen("/repo", "sess-1");
+
+		const { container } = renderBar();
+		expect(container.querySelector(`[data-tab-id="${sessionId}"] .diffUnseenBadge`)).toBeTruthy();
+
+		// Solid re-renders reactively off the store update — no manual rerender needed.
+		diffTabsStore.setActive(sessionId);
+		expect(container.querySelector(`[data-tab-id="${sessionId}"] .diffUnseenBadge`)).toBeFalsy();
+	});
+
+	it("markSessionReviewUnseen is a no-op for the currently active tab", () => {
+		const sessionId = diffTabsStore.addSessionReview("/repo", "sess-1"); // addSessionReview activates by default.
+		diffTabsStore.markSessionReviewUnseen("/repo", "sess-1");
+		const { container } = renderBar();
+		expect(container.querySelector(`[data-tab-id="${sessionId}"] .diffUnseenBadge`)).toBeFalsy();
+	});
+
 	it("still appends the scope suffix for a regular scoped diff tab (regression guard)", () => {
 		diffTabsStore.add("/repo", "/repo/change.ts", "M", "staged");
 		const { container } = renderBar();

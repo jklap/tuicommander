@@ -18,6 +18,7 @@ function fileGroup(overrides: Partial<FileReview> = {}): FileReview {
 		drifted_from_disk: false,
 		backup_available: true,
 		is_binary: false,
+		revision: "rev1",
 		...overrides,
 	};
 }
@@ -102,7 +103,13 @@ describe("SessionFileHeader", () => {
 	it("renders the outside-repo, drifted, and unknown-base badges, plus additions/deletions", () => {
 		const { getByText, getByTitle } = render(() => (
 			<SessionFileHeader
-				group={fileGroup({ in_repo: false, drifted_from_disk: true, base_source: "unknown", additions: 4, deletions: 1 })}
+				group={fileGroup({
+					in_repo: false,
+					drifted_from_disk: true,
+					base_source: "unknown",
+					additions: 4,
+					deletions: 1,
+				})}
 				stepCount={1}
 				expanded={true}
 				stepsOpen={false}

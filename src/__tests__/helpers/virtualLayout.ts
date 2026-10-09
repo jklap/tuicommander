@@ -28,9 +28,7 @@ const CONTAINER_HEIGHT = 20000;
 let originalDescriptor: PropertyDescriptor | undefined;
 let installed = false;
 
-export function installVirtualLayout(
-	options: { rowHeight?: number; containerHeight?: number } = {},
-): () => void {
+export function installVirtualLayout(options: { rowHeight?: number; containerHeight?: number } = {}): () => void {
 	const rowHeight = options.rowHeight ?? ROW_HEIGHT;
 	const containerHeight = options.containerHeight ?? CONTAINER_HEIGHT;
 

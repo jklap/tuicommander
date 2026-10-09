@@ -133,10 +133,8 @@ export const TerminalTabView: Component<TerminalTabViewProps> = (props) => {
 	// Includes declaredBackgroundWork (see terminalsStore.isWorking's doc comment) so a
 	// session Claude has declared background work for still shows the busy dot even
 	// while its shell itself is idle.
- terminalsStore.isWorking(props.id);
-=>	const isWorking = () => terminalsStore.isWorking(props.id);
+	const isWorking = () => terminalsStore.isWorking(props.id);
 	const isStalled = () => terminal()?.stalled === true;
-=> terminalsStore.isWorking(props.id);
 	const isIdle = () => !isWorking() && terminal()?.shellState === "idle";
 	const isExited = () => terminal()?.shellState === "exited";
 	const isUnseen = () => !isActive() && terminal()?.unseen;
@@ -352,6 +350,11 @@ interface FileTabViewProps extends SharedTabViewProps {
 
 export const DiffTabView: Component<FileTabViewProps> = (props) => {
 	const tab = () => diffTabsStore.get(props.id);
+	// Only Session Diff Review tabs get a live "content arrived remotely"
+	// signal (`session-review-changed`) — Branch Diff Scroll/per-file diff
+	// tabs have no such concept, so `unseen` is never set on them.
+	const isUnseen = () => diffTabsStore.state.activeId !== props.id && !!tab()?.unseen;
+	const unseenIconId = () => resolveIconId(settingsStore.state.indicatorOverrides, "diffTab.unseen");
 	return (
 		<Show when={tab()}>
 			<div
@@ -397,6 +400,9 @@ export const DiffTabView: Component<FileTabViewProps> = (props) => {
 					{tab()?.fileName}
 					{tab()?.scope && !isSessionReviewTab(tab()) ? ` (${tab()?.scope?.slice(0, 7)})` : ""}
 				</span>
+				<Show when={isUnseen()}>
+					<IndicatorIcon id={unseenIconId()} size={6} class={s.diffUnseenBadge} />
+				</Show>
 				<PanePositionIcon tabId={props.id} rects={props.paneRects} />
 				<Button
 					size="compact"

@@ -30,6 +30,7 @@
 //!   version. The cache still avoids re-parsing on every poll of a session
 //!   that hasn't changed.
 
+use crate::diff_options::DiffOptions;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,14 @@ pub(crate) struct SessionSummary {
     pub edit_count: Option<u32>,
     pub file_count: Option<u32>,
     pub has_subagents: bool,
+    /// The TUIC PTY session currently running this Claude session, if any —
+    /// resolved from `AppState::tuic_session_for_claude_session`, which this
+    /// disk-reading module has no access to. Always `None` from
+    /// `list_review_sessions_impl` itself; populated by each transport-layer
+    /// caller that does have `AppState` — the `list_review_sessions` Tauri
+    /// command and the `list_sessions_http` HTTP route both do this today, by
+    /// calling `*_impl` and then filling this field in per session.
+    pub tuic_session_id: Option<String>,
 }
 
 /// What one tool call did to a file.
@@ -88,6 +97,30 @@ pub(crate) struct EditStep {
     pub agent_name: Option<String>,
     pub user_modified: bool,
     pub replace_all: bool,
+    /// Which turn (one user prompt, or the equivalent for a subagent — see
+    /// `assign_turns`) this step belongs to. Turn indices increase
+    /// monotonically in chronological order across the whole session,
+    /// main and subagent steps interleaved.
+    pub turn_index: u32,
+    /// The turn's own start time, when known — either the real prompt
+    /// record's timestamp, or (fallback) this step's own timestamp.
+    pub turn_started_at: Option<String>,
+    /// First line of the turn's prompt text, truncated to 160 chars.
+    /// `None` for a turn whose prompt record couldn't be resolved (a
+    /// subagent's own turn, or a promptId-missing fallback bucket).
+    pub prompt_preview: Option<String>,
+    /// The raw hex subagent id (same value as `agent_name` above — kept as
+    /// a second, more clearly-named field for the frontend rather than
+    /// repurposing `agent_name`, which predates this and is read elsewhere
+    /// by that name already). `None` for a main-session step.
+    pub agent_id: Option<String>,
+    /// A human-readable name for whichever agent made this edit: the
+    /// subagent's own `meta.json` name/description/agentType (falling back
+    /// to its raw hex id) for a sidechain step, or the session's own title
+    /// (falling back to the literal `"main"`) for a main-session step —
+    /// either way, never the bare UUID a caller would otherwise have to
+    /// show.
+    pub agent_display_name: Option<String>,
 }
 
 /// Where the session-start content of a file came from.
@@ -137,6 +170,26 @@ pub(crate) struct FileReview {
     /// True when a `@v1` backup exists on disk right now.
     pub backup_available: bool,
     pub is_binary: bool,
+    /// A short, stable fingerprint of this file's current review state — a
+    /// hash of `cumulative_patch` plus the last touching step's
+    /// `tool_use_id`. Lets a caller detect "did this file's content
+    /// actually change" between two reviews without diffing the patch text
+    /// itself (used for the live-refresh flash/highlight feature).
+    pub revision: String,
+}
+
+/// One user prompt's worth of edits — see `assign_turns` for how a step is
+/// assigned to a turn.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct TurnSummary {
+    pub turn_index: u32,
+    pub started_at: Option<String>,
+    pub prompt_preview: Option<String>,
+    pub step_indices: Vec<u32>,
+    pub additions: u32,
+    pub deletions: u32,
+    /// Display/rel path of every file touched in this turn, first-touch order.
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,6 +205,12 @@ pub(crate) struct SessionReview {
     /// Non-fatal parse problems — render as a dismissible banner, never swallow.
     pub warnings: Vec<String>,
     pub included_subagents: bool,
+    /// See `SessionSummary::tuic_session_id` — same "populated by the
+    /// transport-layer caller, not by the `_impl` function" note.
+    pub tuic_session_id: Option<String>,
+    /// One entry per distinct turn, in the same order turns first appear in
+    /// `steps` (which is itself chronological, so this is turn_index order).
+    pub turns: Vec<TurnSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -176,7 +235,7 @@ pub(crate) struct RevertResult {
 /// the caller's own `repo_path`. Every command that accepts a `session_id`
 /// directly from the transport (not one this module derived itself by
 /// listing a directory) must call this before using it in any path join.
-fn validate_session_id(session_id: &str) -> Result<(), String> {
+pub(crate) fn validate_session_id(session_id: &str) -> Result<(), String> {
     let bytes = session_id.as_bytes();
     let valid = bytes.len() == 36
         && bytes[8] == b'-'
@@ -198,7 +257,7 @@ fn validate_session_id(session_id: &str) -> Result<(), String> {
 }
 
 /// `<projects>/<slug>/` for a repo path, honoring `CLAUDE_CONFIG_DIR`.
-fn project_dir_for(repo_path: &str, cfg: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn project_dir_for(repo_path: &str, cfg: Option<&str>) -> Option<PathBuf> {
     let path =
         crate::agent_session::claude_project_dir(repo_path.to_string(), cfg.map(String::from))
             .ok()?;
@@ -228,19 +287,170 @@ fn subagent_name_from_path(p: &Path) -> Option<String> {
     Some(stem.strip_prefix("agent-").unwrap_or(stem).to_string())
 }
 
-/// `~/.claude/file-history/<session_id>/<backup_file_name>` (or the
-/// `CLAUDE_CONFIG_DIR` equivalent).
-fn backup_path(session_id: &str, backup_file_name: &str, cfg: Option<&str>) -> Option<PathBuf> {
-    let base = if let Some(dir) = cfg {
-        PathBuf::from(dir)
-    } else {
-        dirs::home_dir()?.join(".claude")
+/// Fields read from a subagent's sibling `agent-<id>.meta.json`, when
+/// present. Both fields are independently optional: a meta.json can exist
+/// with no useful name (falls back to the hex id at the call site), and
+/// `tool_use_id` can be missing on an older format.
+#[derive(Debug, Clone, Default)]
+struct SubagentMetaInfo {
+    /// `name` -> `description` -> `agentType`, first one present.
+    display_name: Option<String>,
+    /// The id of the parent transcript's Agent/Task tool_use call that
+    /// spawned this subagent — used to look up that call's own `promptId`
+    /// in the parent's `TranscriptScan::tool_result_prompt_ids`.
+    tool_use_id: Option<String>,
+}
+
+/// `<subagent>.jsonl` -> its sibling `<subagent>.meta.json`, if present and
+/// parseable. Never fails loudly — a missing or malformed meta.json just
+/// means the caller falls back to the raw hex id and an unresolved turn.
+fn read_subagent_meta(transcript: &Path) -> SubagentMetaInfo {
+    let meta_path = transcript.with_extension("meta.json");
+    let Some(bytes) = read_file_capped(&meta_path, MAX_SUBAGENT_META_BYTES) else {
+        return SubagentMetaInfo::default();
     };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return SubagentMetaInfo::default();
+    };
+    let display_name = v
+        .get("name")
+        .and_then(|s| s.as_str())
+        .or_else(|| v.get("description").and_then(|s| s.as_str()))
+        .or_else(|| v.get("agentType").and_then(|s| s.as_str()))
+        .map(String::from);
+    let tool_use_id = v.get("toolUseId").and_then(|s| s.as_str()).map(String::from);
+    SubagentMetaInfo {
+        display_name,
+        tool_use_id,
+    }
+}
+
+/// Largest `agent-<id>.meta.json` read. A real one is a few hundred bytes;
+/// anything bigger is not a meta file and is ignored rather than loaded.
+const MAX_SUBAGENT_META_BYTES: u64 = 64 * 1024;
+
+/// Largest `@v1` session-start backup read. Claude Code backs up source files
+/// it is about to edit; one past this is treated as "no backup" (the base
+/// falls back to the next resolution tier) instead of being pulled into memory
+/// — the backup's name comes from transcript content, and the review is built
+/// on every open of the Session Diff tab.
+const MAX_BACKUP_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read a regular file of at most `cap` bytes: `None` for a missing file, a
+/// non-regular file, or one larger than `cap` (checked on the opened handle
+/// before reading, and the read itself is bounded by `take`, so a file that
+/// grows in between still can't exceed it).
+fn read_file_capped(path: &Path, cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > cap {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(cap).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
+/// A transcript-supplied `backupFileName` is only ever a bare file name
+/// inside `file-history/<session_id>/` (Claude Code writes `<hash>@v<n>`).
+/// Anything with a separator, a `.`/`..` component, a drive prefix, or a NUL
+/// is refused, so a crafted transcript can't make the review read (and a
+/// revert then write back) an arbitrary file's bytes.
+fn is_bare_backup_file_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0', ':'])
+}
+
+/// `~/.claude/file-history/<session_id>/<backup_file_name>` (or the
+/// `CLAUDE_CONFIG_DIR` equivalent). `None` for a `backup_file_name` that
+/// isn't a bare file name (see `is_bare_backup_file_name`).
+fn backup_path(session_id: &str, backup_file_name: &str, cfg: Option<&str>) -> Option<PathBuf> {
+    if !is_bare_backup_file_name(backup_file_name) {
+        return None;
+    }
+    let base = claude_config_base(cfg)?;
     Some(
         base.join("file-history")
             .join(session_id)
             .join(backup_file_name),
     )
+}
+
+/// `CLAUDE_CONFIG_DIR` when given, else `~/.claude`.
+fn claude_config_base(cfg: Option<&str>) -> Option<PathBuf> {
+    match cfg {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => Some(dirs::home_dir()?.join(".claude")),
+    }
+}
+
+/// The directories a revert may write into or delete from, canonicalized:
+/// the git repo/worktree containing `repo_path` (and, for a linked worktree,
+/// its main checkout), every registered repository, and Claude's own
+/// `plans/` directory (the out-of-repo file a session most often edits).
+fn revert_roots(repo_path: &str, cfg: Option<&str>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(repo) = Path::new(repo_path).canonicalize()
+        && let Some(git_root) = tuic_git::git::find_repo_root(&repo)
+    {
+        roots.push(tuic_git::git::canonical_repo_root(&git_root));
+        roots.push(git_root);
+    }
+    roots.extend(
+        crate::config::registered_repo_paths()
+            .into_iter()
+            .filter_map(|p| PathBuf::from(p).canonicalize().ok()),
+    );
+    if let Some(plans) = claude_config_base(cfg).and_then(|b| b.join("plans").canonicalize().ok()) {
+        roots.push(plans);
+    }
+    roots.retain(|r| r.parent().is_some()); // never `/` itself
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// Resolve the file a revert is about to write or delete, refusing anything
+/// outside `revert_roots` — the transcript names the path, so this is the
+/// line between "undo this session's edit" and "write/delete any file the
+/// user can". The caller has already checked that the path is one the
+/// transcript touched. Refuses a relative path, any `.`/`..` component, a
+/// symlink at the leaf (never written or deleted through), and a parent that
+/// resolves (through symlinks) outside every root. Returns the resolved
+/// `canonical_parent/name` the caller must operate on.
+pub(crate) fn resolve_revert_target(
+    repo_path: &str,
+    abs_path: &str,
+    cfg: Option<&str>,
+) -> Result<PathBuf, String> {
+    use std::path::Component;
+    let refused =
+        || format!("Refusing to modify {abs_path}: outside the repository and allowed directories");
+    let path = Path::new(abs_path);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
+    {
+        return Err(refused());
+    }
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(refused());
+    };
+    let canonical_parent = parent.canonicalize().map_err(|_| refused())?;
+    if !revert_roots(repo_path, cfg)
+        .iter()
+        .any(|root| canonical_parent.starts_with(root))
+    {
+        return Err(refused());
+    }
+    let target = canonical_parent.join(name);
+    if let Ok(meta) = std::fs::symlink_metadata(&target)
+        && !meta.file_type().is_file()
+    {
+        return Err(format!("Refusing to modify {abs_path}: not a regular file"));
+    }
+    Ok(target)
 }
 
 // ─────────────────────────── Parsing ────────────────────────────────────────
@@ -255,6 +465,20 @@ fn line_is_interesting(line: &str) -> bool {
         || line.contains("\"file-history-delta\"")
         || line.contains("\"custom-title\"")
         || line.contains("\"last-prompt\"")
+        // Real user-prompt records (no toolUseResult) — needed for turn
+        // start times/previews. Real Claude Code transcripts write compact
+        // JSON with no space after the colon, so this is exact, not a
+        // loose guess; it also matches most toolUseResult-bearing "user"
+        // records too (already let through above), so this only adds the
+        // ones that were previously rejected: real human prompts.
+        || line.contains("\"type\":\"user\"")
+        // An assistant record that issues a tool_use call — needed so a
+        // background-shaped Agent/Task call's spawning turn can be recovered
+        // from `tool_call_prompt_ids` instead of only the (possibly much
+        // later) turn its result happened to land in. Checking for both
+        // substrings keeps the cheap pre-filter from admitting every
+        // assistant text/thinking-only record too.
+        || (line.contains("\"type\":\"assistant\"") && line.contains("\"tool_use\""))
 }
 
 /// Raw per-step facts lifted straight out of one `toolUseResult`.
@@ -304,7 +528,9 @@ struct StructuredHunk {
 /// An absent or empty array (the normal case for Create/Overwrite, and for
 /// any Edit whose hunks were resolvable through the disk-fold-based patch)
 /// is treated as "no structured patch," not as a zero-hunk one.
-fn parse_structured_patch(tur: &serde_json::Map<String, serde_json::Value>) -> Option<Vec<StructuredHunk>> {
+fn parse_structured_patch(
+    tur: &serde_json::Map<String, serde_json::Value>,
+) -> Option<Vec<StructuredHunk>> {
     let arr = tur.get("structuredPatch")?.as_array()?;
     if arr.is_empty() {
         return None;
@@ -529,6 +755,41 @@ struct TranscriptScan {
     last_prompt: Option<String>,
     first_ts: Option<String>,
     last_ts: Option<String>,
+    /// `promptId -> (timestamp, first-line preview)` for every real
+    /// (non-meta) human prompt record seen — the turn-start info `EditStep`
+    /// and `TurnSummary` display. Keyed by promptId so a later tool-call
+    /// record sharing that same promptId can look its turn's start info up.
+    prompts: HashMap<String, (String, String)>,
+    /// `tool_use_id -> promptId` for every "user"+toolUseResult record seen
+    /// (main or subagent scan, not just ones that became a `RawEdit`) — a
+    /// subagent-spawning Agent/Task tool call has no file to edit, so it's
+    /// otherwise invisible to this scan, but its promptId is exactly what a
+    /// subagent's steps need to inherit (see `assign_turns`). Resolved via
+    /// each subagent's own `meta.json.toolUseId`, matched back against this
+    /// map — always built from the MAIN transcript's own scan (a subagent
+    /// spawning a further nested subagent is not resolved by this; it falls
+    /// through to `assign_turns`'s "attach to whichever turn is open"
+    /// fallback instead).
+    ///
+    /// This is a **fallback**, consulted only when `tool_call_prompt_ids` has
+    /// no entry for the tool_use_id — see that field's doc comment for why a
+    /// background-shaped Agent/Task call needs `tool_call_prompt_ids`
+    /// specifically, not this map, as the primary source.
+    tool_result_prompt_ids: HashMap<String, String>,
+    /// `tool_use_id -> promptId` captured from the **assistant** record that
+    /// *issues* a tool_use call — i.e. the turn the call was made in, not the
+    /// turn its result happened to land in. For an ordinary synchronous tool
+    /// call these are the same turn, so `tool_result_prompt_ids` would give
+    /// an identical answer — but a background-shaped Agent/Task call
+    /// (`meta.json`'s `requestShape: "background"`) can report its result
+    /// several turns later, after the conversation has moved on. Using the
+    /// result's own `promptId` in that case would misattribute the whole
+    /// subagent's edits (which actually happened during the ORIGINAL
+    /// spawning turn) to whatever later turn merely observed the result.
+    /// This map is checked first in `build_session_review_full`; falling
+    /// through to `tool_result_prompt_ids` only covers a transcript shape
+    /// where the spawning assistant record was, for some reason, never seen.
+    tool_call_prompt_ids: HashMap<String, String>,
 }
 
 /// One streaming pass over one transcript, appending into `out`.
@@ -600,11 +861,109 @@ fn scan_transcript(
             continue;
         }
 
+        capture_turn_info(&v, out);
+
         if let Some(edit) = raw_edit_from_record(&v, is_sidechain, agent_name) {
             out.edits.push(edit);
         }
     }
     Ok(())
+}
+
+/// Populates `TranscriptScan::prompts`, `::tool_result_prompt_ids`, and
+/// `::tool_call_prompt_ids` from one already-parsed transcript record. Runs
+/// for every "user" or "assistant" record (whether or not it also becomes a
+/// `RawEdit`) — see `assign_turns` for how the maps this builds are consumed.
+fn capture_turn_info(v: &serde_json::Value, out: &mut TranscriptScan) {
+    let record_type = v.get("type").and_then(|t| t.as_str());
+    if record_type == Some("assistant") {
+        capture_tool_call_prompt_ids(v, out);
+        return;
+    }
+    if record_type != Some("user") {
+        return;
+    }
+    let prompt_id = v.get("promptId").and_then(|p| p.as_str());
+    let content = v.get("message").and_then(|m| m.get("content"));
+
+    // Any tool_result record's own tool_use_id -> promptId, regardless of
+    // whether it's a file edit — this is what lets a subagent-spawning
+    // Agent/Task call's promptId be recovered later from just its
+    // tool_use_id (the id every subagent's meta.json names).
+    if let (Some(tool_use_id), Some(pid)) = (
+        content
+            .and_then(|c| c.get(0))
+            .and_then(|c0| c0.get("tool_use_id"))
+            .and_then(|t| t.as_str()),
+        prompt_id,
+    ) {
+        out.tool_result_prompt_ids
+            .entry(tool_use_id.to_string())
+            .or_insert_with(|| pid.to_string());
+    }
+
+    // A real human prompt: no toolUseResult, text-shaped content, not a
+    // system-injected `isMeta` re-injection (command output, caveats, etc).
+    if v.get("toolUseResult").is_some() {
+        return;
+    }
+    if v.get("isMeta").and_then(|m| m.as_bool()).unwrap_or(false) {
+        return;
+    }
+    let Some(pid) = prompt_id else { return };
+    let text = content.and_then(|c| {
+        if let Some(s) = c.as_str() {
+            Some(s.to_string())
+        } else {
+            c.as_array()?
+                .first()?
+                .get("text")?
+                .as_str()
+                .map(String::from)
+        }
+    });
+    let Some(text) = text else { return };
+    let ts = v
+        .get("timestamp")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let preview = first_line_truncated(&text, 160);
+    out.prompts.entry(pid.to_string()).or_insert((ts, preview));
+}
+
+/// Populates `TranscriptScan::tool_call_prompt_ids` from one already-parsed
+/// "assistant"-type record: every `tool_use` block in its content names the
+/// call's own `id` (a tool_use_id), which we pair with the record's own
+/// `promptId` — the turn the call was actually issued in.
+fn capture_tool_call_prompt_ids(v: &serde_json::Value, out: &mut TranscriptScan) {
+    let Some(pid) = v.get("promptId").and_then(|p| p.as_str()) else {
+        return;
+    };
+    let Some(content) = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    else {
+        return;
+    };
+    for block in content {
+        if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+            continue;
+        }
+        let Some(tool_use_id) = block.get("id").and_then(|i| i.as_str()) else {
+            continue;
+        };
+        out.tool_call_prompt_ids
+            .entry(tool_use_id.to_string())
+            .or_insert_with(|| pid.to_string());
+    }
+}
+
+/// First line of `s`, trimmed and truncated to `max_chars` (char-boundary
+/// safe — unlike a byte slice, this never panics on multi-byte UTF-8).
+fn first_line_truncated(s: &str, max_chars: usize) -> String {
+    s.lines().next().unwrap_or("").trim().chars().take(max_chars).collect()
 }
 
 // ─────────────────────────── Replay / diffing ───────────────────────────────
@@ -711,15 +1070,134 @@ fn is_binary_bytes(data: &[u8]) -> bool {
     data.iter().take(8000).any(|&b| b == 0)
 }
 
+/// A short, stable fingerprint of a file's current review state — lets a
+/// caller detect "did this file's content actually change" between two
+/// reviews (the live-refresh flash/highlight feature) without diffing the
+/// patch text itself. Not cryptographic; sha2 is already a dependency and
+/// this reuses it purely for a cheap, collision-resistant-enough digest.
+fn compute_file_revision(cumulative_patch: &str, last_tool_use_id: &str) -> String {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(cumulative_patch.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(last_tool_use_id.as_bytes());
+    hex::encode(hasher.finalize())[..16].to_string()
+}
+
+/// Per-edit turn assignment, aligned 1:1 with the globally time-sorted
+/// `edits` slice `assign_turns` is called with — `out[i]` describes
+/// `edits[i]`.
+struct TurnAssignment {
+    turn_index: u32,
+    started_at: Option<String>,
+    prompt_preview: Option<String>,
+}
+
+/// Assigns each edit (main-session or subagent, already globally
+/// chronologically sorted) to a turn.
+///
+/// A turn is one `promptId`. A main-session edit's own `promptId` (already
+/// parsed onto `RawEdit` from its `toolUseResult` record) identifies its
+/// turn directly. A subagent edit has no `promptId` of its own that means
+/// anything at the session level — every one of a given subagent
+/// invocation's edits instead inherits the turn of whichever prompt spawned
+/// that subagent, resolved via `subagent_parent_prompt_id` (built by the
+/// caller from each subagent's own `meta.json.toolUseId`, looked up against
+/// the main transcript's `tool_use_id -> promptId` map).
+///
+/// When neither source resolves to a promptId (an older transcript format,
+/// or a resolution miss — a missing/malformed meta.json, or a nested
+/// subagent this module doesn't chase), the edit attaches to whichever turn
+/// is currently open, i.e. the most recently assigned turn in this same
+/// chronological pass. This is a better guess than leaving it unassigned,
+/// and keeps `turn_index` monotonically non-decreasing across the pass
+/// exactly like every resolvable edit already is.
+fn assign_turns(
+    edits: &[RawEdit],
+    prompts: &HashMap<String, (String, String)>,
+    subagent_parent_prompt_id: &HashMap<String, Option<String>>,
+) -> Vec<TurnAssignment> {
+    let mut out = Vec::with_capacity(edits.len());
+    let mut turn_for_prompt: HashMap<String, u32> = HashMap::new();
+    let mut next_turn_index: u32 = 0;
+    let mut current = TurnAssignment {
+        turn_index: 0,
+        started_at: None,
+        prompt_preview: None,
+    };
+    let mut opened_any = false;
+
+    for e in edits {
+        let effective_prompt_id: Option<&str> = if e.is_sidechain {
+            e.agent_name
+                .as_deref()
+                .and_then(|hex_id| subagent_parent_prompt_id.get(hex_id))
+                .and_then(|opt| opt.as_deref())
+        } else {
+            e.prompt_id.as_deref()
+        };
+
+        if let Some(pid) = effective_prompt_id {
+            let is_new = !turn_for_prompt.contains_key(pid);
+            let turn_index = *turn_for_prompt.entry(pid.to_string()).or_insert_with(|| {
+                let idx = next_turn_index;
+                next_turn_index += 1;
+                idx
+            });
+            if is_new {
+                let (started_at, prompt_preview) = match prompts.get(pid) {
+                    Some((ts, preview)) => (Some(ts.clone()), Some(preview.clone())),
+                    None => (e.timestamp.clone(), None),
+                };
+                current = TurnAssignment {
+                    turn_index,
+                    started_at,
+                    prompt_preview,
+                };
+            } else {
+                current.turn_index = turn_index;
+            }
+            opened_any = true;
+        } else if !opened_any {
+            // The very first edit(s) in the session carry no resolvable
+            // promptId at all — open turn 0 with this edit's own timestamp
+            // as a best-effort start time.
+            current = TurnAssignment {
+                turn_index: 0,
+                started_at: e.timestamp.clone(),
+                prompt_preview: None,
+            };
+            next_turn_index = next_turn_index.max(1);
+            opened_any = true;
+        }
+        // else: no promptId resolved and a turn is already open — attach
+        // this edit to `current` unchanged.
+
+        out.push(TurnAssignment {
+            turn_index: current.turn_index,
+            started_at: current.started_at.clone(),
+            prompt_preview: current.prompt_preview.clone(),
+        });
+    }
+    out
+}
+
 /// Build a `git apply`-able unified diff between `old` and `new`, plus
 /// (additions, deletions). Returns an empty patch (and zero counts) when the
 /// two are identical.
+///
+/// `options` is threaded through as an internal building block — every
+/// current call site passes `DiffOptions::default()` (the ordinary
+/// byte-exact diff, unchanged behavior); a future caller that exposes the
+/// whitespace/case settings through `get_session_review` will pass real
+/// options through here without needing to touch this function again.
 fn unified_patch(
     old: &str,
     new: &str,
     old_exists: bool,
     new_exists: bool,
     display_path: &str,
+    options: crate::diff_options::DiffOptions,
 ) -> (String, u32, u32) {
     if old == new {
         return (String::new(), 0, 0);
@@ -732,24 +1210,10 @@ fn unified_patch(
         );
     }
 
-    use gix::diff::blob::{
-        Algorithm, BasicLineDiffPrinter, InternedInput, UnifiedDiffConfig,
-        diff_with_slider_heuristics,
-    };
-    let input = InternedInput::new(old, new);
-    let diff = diff_with_slider_heuristics(Algorithm::Histogram, &input);
-    let additions = diff.count_additions();
-    let deletions = diff.count_removals();
+    let (body, additions, deletions) = crate::diff_options::unified_diff(old, new, 3, options);
     if additions == 0 && deletions == 0 {
         return (String::new(), 0, 0);
     }
-    let body = diff
-        .unified_diff(
-            &BasicLineDiffPrinter(&input.interner),
-            UnifiedDiffConfig::default(),
-            &input,
-        )
-        .to_string();
 
     let mut patch = String::new();
     patch.push_str(&format!("diff --git a/{display_path} b/{display_path}\n"));
@@ -896,6 +1360,7 @@ fn build_session_review_full(
     subagents: &[PathBuf],
     session_id: &str,
     claude_config_dir: Option<&str>,
+    options: DiffOptions,
 ) -> Result<BuildResult, String> {
     let mut warnings = Vec::new();
     let mut scan = TranscriptScan::default();
@@ -903,6 +1368,12 @@ fn build_session_review_full(
         .map_err(|e| format!("Failed to read transcript: {e}"))?;
 
     let mut included_subagents = false;
+    // Resolved once per subagent, after all scanning (main transcript first,
+    // so `scan.tool_result_prompt_ids` already has every candidate
+    // tool_use_id -> promptId pair a meta.json could reference) — see
+    // `assign_turns`'s doc comment for how these two maps are consumed.
+    let mut subagent_parent_prompt_id: HashMap<String, Option<String>> = HashMap::new();
+    let mut subagent_display_names: HashMap<String, String> = HashMap::new();
     for sub in subagents {
         included_subagents = true;
         let agent_name = subagent_name_from_path(sub);
@@ -913,6 +1384,21 @@ fn build_session_review_full(
                 sub.display()
             ));
         }
+        let Some(hex_id) = agent_name else { continue };
+        let meta = read_subagent_meta(sub);
+        // Prefer the CALL-time promptId (the turn the Agent/Task call was
+        // actually issued in) over the result-time one — a background-shaped
+        // call's result can land several turns later, which would otherwise
+        // misattribute every one of this subagent's edits to that later
+        // turn. See `TranscriptScan::tool_call_prompt_ids`'s doc comment.
+        let parent_prompt_id = meta.tool_use_id.as_deref().and_then(|tuid| {
+            scan.tool_call_prompt_ids
+                .get(tuid)
+                .or_else(|| scan.tool_result_prompt_ids.get(tuid))
+                .cloned()
+        });
+        subagent_parent_prompt_id.insert(hex_id.clone(), parent_prompt_id);
+        subagent_display_names.insert(hex_id.clone(), meta.display_name.unwrap_or(hex_id));
     }
 
     // Stable chronological order: transcript append-order is already
@@ -922,6 +1408,9 @@ fn build_session_review_full(
     let mut indexed: Vec<(usize, RawEdit)> = scan.edits.into_iter().enumerate().collect();
     indexed.sort_by(|a, b| a.1.timestamp.cmp(&b.1.timestamp).then(a.0.cmp(&b.0)));
     let edits: Vec<RawEdit> = indexed.into_iter().map(|(_, e)| e).collect();
+
+    let turn_assignments = assign_turns(&edits, &scan.prompts, &subagent_parent_prompt_id);
+    let main_display_name = scan.title.clone().unwrap_or_else(|| "main".to_string());
 
     let canonical_repo = repo_path.canonicalize().ok();
 
@@ -956,7 +1445,7 @@ fn build_session_review_full(
             .get(&path)
             .and_then(|b| b.backup_file_name.as_ref())
             .and_then(|name| backup_path(session_id, name, claude_config_dir))
-            .and_then(|p| std::fs::read(&p).ok());
+            .and_then(|p| read_file_capped(&p, MAX_BACKUP_BYTES));
         let backup_available = raw_backup_bytes.is_some();
         let backup_content = raw_backup_bytes.as_ref().and_then(|bytes| {
             (!is_binary_bytes(bytes)).then(|| String::from_utf8_lossy(bytes).into_owned())
@@ -987,7 +1476,14 @@ fn build_session_review_full(
             let (patch, additions, deletions) = match (&sf.before, &sf.after) {
                 (Some(b), Some(a)) => {
                     let old_exists = !matches!(e.kind, StepKind::Create);
-                    unified_patch(b, a, old_exists, true, &display_path)
+                    unified_patch(
+                        b,
+                        a,
+                        old_exists,
+                        true,
+                        &display_path,
+                        options,
+                    )
                 }
                 _ => match e.kind {
                     StepKind::Edit => match e.structured_patch.as_ref() {
@@ -995,17 +1491,40 @@ fn build_session_review_full(
                         None => {
                             let old = e.old_string.as_deref().unwrap_or("");
                             let new = e.new_string.as_deref().unwrap_or("");
-                            unified_patch(old, new, true, true, &display_path)
+                            unified_patch(
+                                old,
+                                new,
+                                true,
+                                true,
+                                &display_path,
+                                options,
+                            )
                         }
                     },
                     StepKind::Create | StepKind::Overwrite => {
                         let content = e.content.as_deref().unwrap_or("");
-                        unified_patch("", content, false, true, &display_path)
+                        unified_patch(
+                            "",
+                            content,
+                            false,
+                            true,
+                            &display_path,
+                            options,
+                        )
                     }
                 },
             };
 
             let overall_index = idxs[local_i];
+            let ta = &turn_assignments[overall_index];
+            let agent_display_name = if e.is_sidechain {
+                e.agent_name
+                    .as_deref()
+                    .and_then(|hex_id| subagent_display_names.get(hex_id))
+                    .cloned()
+            } else {
+                Some(main_display_name.clone())
+            };
             wire_steps[overall_index] = Some(EditStep {
                 step_index: overall_index as u32,
                 tool_use_id: e.tool_use_id.clone(),
@@ -1021,6 +1540,11 @@ fn build_session_review_full(
                 agent_name: e.agent_name.clone(),
                 user_modified: e.user_modified,
                 replace_all: e.replace_all,
+                turn_index: ta.turn_index,
+                turn_started_at: ta.started_at.clone(),
+                prompt_preview: ta.prompt_preview.clone(),
+                agent_id: e.agent_name.clone(),
+                agent_display_name,
             });
         }
 
@@ -1032,7 +1556,14 @@ fn build_session_review_full(
         let (cumulative_patch, additions, deletions) = match (&fold.base, &final_content) {
             (Some(b), Some(f)) => {
                 let old_exists = fold.base_source != BaseSource::CreatedInSession;
-                unified_patch(b, f, old_exists, disk_exists, &display_path)
+                unified_patch(
+                    b,
+                    f,
+                    old_exists,
+                    disk_exists,
+                    &display_path,
+                    options,
+                )
             }
             _ => (String::new(), 0, 0),
         };
@@ -1042,6 +1573,13 @@ fn build_session_review_full(
         } else if fold.base_source == BaseSource::CreatedInSession {
             NetChange::Added
         } else if fold.base.as_deref() == final_content.as_deref() {
+            NetChange::Unchanged
+        } else if !options.is_noop() && additions == 0 && deletions == 0 {
+            // With non-default whitespace/case options, `additions`/
+            // `deletions` (computed above through the same options-aware
+            // `unified_patch`) is the more accurate signal than raw string
+            // equality — a change the active options ignore shouldn't show
+            // up as "Modified" with an empty diff.
             NetChange::Unchanged
         } else {
             NetChange::Modified
@@ -1055,6 +1593,11 @@ fn build_session_review_full(
             _ => false,
         };
 
+        let last_tool_use_id = edits_for_file
+            .last()
+            .map(|e| e.tool_use_id.as_str())
+            .unwrap_or("");
+        let revision = compute_file_revision(&cumulative_patch, last_tool_use_id);
         files.push(FileReview {
             abs_path: path.clone(),
             rel_path: rel_path.clone(),
@@ -1069,10 +1612,12 @@ fn build_session_review_full(
             drifted_from_disk,
             backup_available,
             is_binary: disk_is_binary,
+            revision,
         });
     }
 
     let steps: Vec<EditStep> = wire_steps.into_iter().flatten().collect();
+    let turns = build_turn_summaries(&steps);
 
     Ok(BuildResult {
         review: SessionReview {
@@ -1086,10 +1631,43 @@ fn build_session_review_full(
             files,
             warnings,
             included_subagents,
+            tuic_session_id: None,
+            turns,
         },
         file_bases,
         backup_bytes,
     })
+}
+
+/// Groups `steps` (already in chronological/step_index order, with
+/// `turn_index` monotonically non-decreasing — see `assign_turns`) into one
+/// `TurnSummary` per distinct turn, in the order each turn first appears.
+fn build_turn_summaries(steps: &[EditStep]) -> Vec<TurnSummary> {
+    let mut turns: Vec<TurnSummary> = Vec::new();
+    let mut turn_pos: HashMap<u32, usize> = HashMap::new();
+    for step in steps {
+        let file_entry = step.rel_path.clone().unwrap_or_else(|| step.abs_path.clone());
+        let pos = *turn_pos.entry(step.turn_index).or_insert_with(|| {
+            turns.push(TurnSummary {
+                turn_index: step.turn_index,
+                started_at: step.turn_started_at.clone(),
+                prompt_preview: step.prompt_preview.clone(),
+                step_indices: Vec::new(),
+                additions: 0,
+                deletions: 0,
+                files: Vec::new(),
+            });
+            turns.len() - 1
+        });
+        let t = &mut turns[pos];
+        t.step_indices.push(step.step_index);
+        t.additions += step.additions;
+        t.deletions += step.deletions;
+        if !t.files.contains(&file_entry) {
+            t.files.push(file_entry);
+        }
+    }
+    turns
 }
 
 /// The whole pipeline, with no Tauri/HTTP in sight — the unit-test entry
@@ -1101,12 +1679,37 @@ pub(crate) fn build_session_review(
     session_id: &str,
     claude_config_dir: Option<&str>,
 ) -> Result<SessionReview, String> {
+    build_session_review_with_options(
+        repo_path,
+        transcript,
+        subagents,
+        session_id,
+        claude_config_dir,
+        DiffOptions::default(),
+    )
+}
+
+/// Same as [`build_session_review`], with caller-supplied whitespace/case
+/// diff options threaded through every computed patch — what
+/// [`get_session_review`] actually calls. Kept as a separate function
+/// (rather than adding a 6th parameter to `build_session_review` itself) so
+/// every existing test call site of the no-options version keeps compiling
+/// unchanged.
+pub(crate) fn build_session_review_with_options(
+    repo_path: &Path,
+    transcript: &Path,
+    subagents: &[PathBuf],
+    session_id: &str,
+    claude_config_dir: Option<&str>,
+    options: DiffOptions,
+) -> Result<SessionReview, String> {
     build_session_review_full(
         repo_path,
         transcript,
         subagents,
         session_id,
         claude_config_dir,
+        options,
     )
     .map(|r| r.review)
 }
@@ -1273,10 +1876,29 @@ fn count_edits_and_files(transcript: &Path, subagents: &[PathBuf]) -> (u32, u32)
     (scan.edits.len() as u32, paths.len() as u32)
 }
 
+/// Desktop IPC wrapper: identical HTTP/IPC parity treatment as `list_sessions_http`
+/// (`mcp_http/session_review_routes.rs`) — `list_review_sessions_impl` is a pure
+/// disk reader with no `AppState` access (see `SessionSummary::tuic_session_id`'s
+/// doc comment), so each transport populates that one field itself afterward.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn list_review_sessions(
+    repo_path: String,
+    limit: Option<u32>,
+    include_counts: Option<bool>,
+    claude_config_dir: Option<String>,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<Vec<SessionSummary>, String> {
+    let mut sessions = list_review_sessions_impl(repo_path, limit, include_counts, claude_config_dir).await?;
+    for s in &mut sessions {
+        s.tuic_session_id = state.tuic_session_for_claude_session(&s.session_id);
+    }
+    Ok(sessions)
+}
+
 /// List recent Claude Code sessions whose transcripts live under the
 /// project slug for `repo_path`. Newest first.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn list_review_sessions(
+pub(crate) async fn list_review_sessions_impl(
     repo_path: String,
     limit: Option<u32>,
     include_counts: Option<bool>,
@@ -1364,6 +1986,7 @@ pub(crate) async fn list_review_sessions(
                     edit_count,
                     file_count,
                     has_subagents,
+                    tuic_session_id: None,
                 }
             })
             .collect()
@@ -1374,19 +1997,23 @@ pub(crate) async fn list_review_sessions(
 
 // ─────────────────────────── Cache ──────────────────────────────────────────
 
+/// `(transcript path, include_subagents, options)` — the full cache key.
+/// `include_subagents` and `options` are part of the MAP KEY, not just a
+/// freshness check on a single per-path slot: distinct combinations for the
+/// same session must be able to coexist in the cache (up to
+/// `MAX_CACHED_REVIEWS`), or toggling the "subagent edits" checkbox / a
+/// whitespace-diff option back and forth thrashes a single slot instead of
+/// caching each variant.
+type ReviewCacheKey = (PathBuf, bool, DiffOptions);
+
 struct CachedReview {
     len: u64,
     mtime: std::time::SystemTime,
-    /// Part of the cache key, not just informational: a cached review built
-    /// with one value of `include_subagents` must never be served back for a
-    /// request with the other value, or toggling the "subagent edits"
-    /// checkbox silently no-ops until the transcript's mtime happens to
-    /// change for an unrelated reason.
-    include_subagents: bool,
-    /// Also part of the cache key: a revert/growth of a *subagent*
-    /// transcript never touches the main transcript's own (len, mtime), so
-    /// without this a session with subagent edits could keep serving a
-    /// stale review indefinitely after a subagent transcript grew.
+    /// Also part of freshness, though not part of the map key: a
+    /// revert/growth of a *subagent* transcript never touches the main
+    /// transcript's own (len, mtime), so without this a session with
+    /// subagent edits could keep serving a stale review indefinitely after a
+    /// subagent transcript grew.
     subagent_fp: SubagentFingerprint,
     /// Monotonic use counter for LRU eviction — see `next_use_tick`. Not a
     /// wall-clock timestamp: two entries touched within the same instant
@@ -1448,22 +2075,23 @@ fn next_use_tick() -> u64 {
 
 const MAX_CACHED_REVIEWS: usize = 4;
 
-fn review_cache() -> &'static Mutex<HashMap<PathBuf, CachedReview>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedReview>>> = OnceLock::new();
+fn review_cache() -> &'static Mutex<HashMap<ReviewCacheKey, CachedReview>> {
+    static CACHE: OnceLock<Mutex<HashMap<ReviewCacheKey, CachedReview>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn get_cached_review(transcript: &Path, include_subagents: bool) -> Option<SessionReview> {
+fn get_cached_review(
+    transcript: &Path,
+    include_subagents: bool,
+    options: DiffOptions,
+) -> Option<SessionReview> {
     let meta = std::fs::metadata(transcript).ok()?;
     let mtime = meta.modified().ok()?;
     let subagent_fp = subagent_fingerprint_for_transcript(transcript);
+    let key = (transcript.to_path_buf(), include_subagents, options);
     let mut map = review_cache().lock().ok()?;
-    let entry = map.get_mut(transcript)?;
-    if entry.len == meta.len()
-        && entry.mtime == mtime
-        && entry.include_subagents == include_subagents
-        && entry.subagent_fp == subagent_fp
-    {
+    let entry = map.get_mut(&key)?;
+    if entry.len == meta.len() && entry.mtime == mtime && entry.subagent_fp == subagent_fp {
         entry.last_used = next_use_tick();
         Some(entry.review.clone())
     } else {
@@ -1471,7 +2099,12 @@ fn get_cached_review(transcript: &Path, include_subagents: bool) -> Option<Sessi
     }
 }
 
-fn put_cached_review(transcript: &Path, include_subagents: bool, review: &SessionReview) {
+fn put_cached_review(
+    transcript: &Path,
+    include_subagents: bool,
+    options: DiffOptions,
+    review: &SessionReview,
+) {
     let Ok(meta) = std::fs::metadata(transcript) else {
         return;
     };
@@ -1479,11 +2112,12 @@ fn put_cached_review(transcript: &Path, include_subagents: bool, review: &Sessio
         return;
     };
     let subagent_fp = subagent_fingerprint_for_transcript(transcript);
+    let key = (transcript.to_path_buf(), include_subagents, options);
     let Ok(mut map) = review_cache().lock() else {
         return;
     };
     if map.len() >= MAX_CACHED_REVIEWS
-        && !map.contains_key(transcript)
+        && !map.contains_key(&key)
         && let Some(k) = map
             .iter()
             .min_by_key(|(_, v)| v.last_used)
@@ -1492,11 +2126,10 @@ fn put_cached_review(transcript: &Path, include_subagents: bool, review: &Sessio
         map.remove(&k);
     }
     map.insert(
-        transcript.to_path_buf(),
+        key,
         CachedReview {
             len: meta.len(),
             mtime,
-            include_subagents,
             subagent_fp,
             last_used: next_use_tick(),
             review: review.clone(),
@@ -1504,28 +2137,48 @@ fn put_cached_review(transcript: &Path, include_subagents: bool, review: &Sessio
     );
 }
 
-/// Evict any cached review for `transcript`, regardless of the
-/// `include_subagents` it was cached under. Must be called after any revert
-/// mutates the working tree — a revert changes files on disk, not the
-/// transcript itself, so the `(len, mtime)` cache key would otherwise keep
-/// serving the stale pre-revert review indefinitely.
-fn invalidate_cached_review(transcript: &Path) {
+/// Evict every cached review for `transcript`, regardless of the
+/// `include_subagents`/`options` variant it was cached under. Must be called
+/// after any revert mutates the working tree — a revert changes files on
+/// disk, not the transcript itself, so the `(len, mtime)` cache key would
+/// otherwise keep serving the stale pre-revert review indefinitely.
+pub(crate) fn invalidate_cached_review(transcript: &Path) {
     if let Ok(mut map) = review_cache().lock() {
-        map.remove(transcript);
+        map.retain(|(path, _, _), _| path != transcript);
     }
 }
 
 // ─────────────────────────── Commands ───────────────────────────────────────
 
-/// Parse a session transcript into the full step timeline + per-file rollups.
-#[cfg_attr(feature = "desktop", tauri::command)]
+/// Desktop IPC wrapper — see `list_review_sessions`'s doc comment for why this
+/// override lives at the transport boundary rather than inside `_impl`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) async fn get_session_review(
     repo_path: String,
     session_id: String,
     include_subagents: Option<bool>,
     claude_config_dir: Option<String>,
+    options: Option<DiffOptions>,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<SessionReview, String> {
+    let claude_session_id = session_id.clone();
+    let mut review =
+        get_session_review_impl(repo_path, session_id, include_subagents, claude_config_dir, options).await?;
+    review.tuic_session_id = state.tuic_session_for_claude_session(&claude_session_id);
+    Ok(review)
+}
+
+/// Parse a session transcript into the full step timeline + per-file rollups.
+pub(crate) async fn get_session_review_impl(
+    repo_path: String,
+    session_id: String,
+    include_subagents: Option<bool>,
+    claude_config_dir: Option<String>,
+    options: Option<DiffOptions>,
 ) -> Result<SessionReview, String> {
     let include_subagents = include_subagents.unwrap_or(true);
+    let options = options.unwrap_or_default();
     tokio::task::spawn_blocking(move || {
         validate_session_id(&session_id)?;
         let project_dir = project_dir_for(&repo_path, claude_config_dir.as_deref())
@@ -1537,7 +2190,7 @@ pub(crate) async fn get_session_review(
                 transcript.display()
             ));
         }
-        if let Some(cached) = get_cached_review(&transcript, include_subagents) {
+        if let Some(cached) = get_cached_review(&transcript, include_subagents, options) {
             return Ok(cached);
         }
         let repo = PathBuf::from(&repo_path);
@@ -1546,14 +2199,15 @@ pub(crate) async fn get_session_review(
         } else {
             Vec::new()
         };
-        let review = build_session_review(
+        let review = build_session_review_with_options(
             &repo,
             &transcript,
             &subs,
             &session_id,
             claude_config_dir.as_deref(),
+            options,
         )?;
-        put_cached_review(&transcript, include_subagents, &review);
+        put_cached_review(&transcript, include_subagents, options, &review);
         Ok(review)
     })
     .await
@@ -1582,9 +2236,14 @@ fn drifted_result(abs_path: &str) -> RevertResult {
 /// substitution backwards against the file's *current* content, so a later,
 /// unrelated edit to the same file doesn't block this one — mirroring what
 /// `git apply --reverse`'s hunk-context matching gives the in-repo path.
-fn revert_step_via_substitution(edit: &RawEdit, dry_run: bool) -> Result<RevertResult, String> {
-    let path = PathBuf::from(&edit.file_path);
-    let current = std::fs::read_to_string(&path)
+///
+/// `path` is the already-authorized target (`resolve_revert_target`).
+fn revert_step_via_substitution(
+    edit: &RawEdit,
+    path: &Path,
+    dry_run: bool,
+) -> Result<RevertResult, String> {
+    let current = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
 
     match edit.kind {
@@ -1603,7 +2262,7 @@ fn revert_step_via_substitution(edit: &RawEdit, dry_run: bool) -> Result<RevertR
                 Err(_) => return Ok(no_match_result(&edit.file_path)),
             };
             if !dry_run {
-                std::fs::write(&path, &new_content)
+                std::fs::write(path, &new_content)
                     .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
             }
             Ok(RevertResult {
@@ -1619,7 +2278,7 @@ fn revert_step_via_substitution(edit: &RawEdit, dry_run: bool) -> Result<RevertR
                 return Ok(drifted_result(&edit.file_path));
             }
             if !dry_run {
-                std::fs::remove_file(&path)
+                std::fs::remove_file(path)
                     .map_err(|e| format!("Failed to delete {}: {e}", path.display()))?;
             }
             Ok(RevertResult {
@@ -1686,6 +2345,11 @@ pub(crate) async fn revert_session_step(
                 ));
             };
 
+            // Authorize the step's file before either revert mechanism runs —
+            // the path comes from the transcript.
+            let target =
+                resolve_revert_target(&repo_path, &step.abs_path, claude_config_dir.as_deref())?;
+
             let result = if step.in_repo {
                 if step.patch.trim().is_empty() {
                     RevertResult {
@@ -1722,7 +2386,7 @@ pub(crate) async fn revert_session_step(
                         "Could not re-locate step {tool_use_id} in the transcript"
                     ));
                 };
-                revert_step_via_substitution(&edit, dry_run)?
+                revert_step_via_substitution(&edit, &target, dry_run)?
             };
             Ok((result, transcript))
         })
@@ -1761,11 +2425,22 @@ pub(crate) async fn revert_file_to_session_start(
             }
             let repo = PathBuf::from(&repo_path);
             let subs = subagent_transcripts(&project_dir, &session_id);
-            let built = build_session_review_full(&repo, &transcript, &subs, &session_id, claude_config_dir.as_deref())?;
+            let built = build_session_review_full(
+                &repo,
+                &transcript,
+                &subs,
+                &session_id,
+                claude_config_dir.as_deref(),
+                DiffOptions::default(),
+            )?;
 
             let Some(file) = built.review.files.iter().find(|f| f.abs_path == abs_path) else {
                 return Err(format!("No file review entry for {abs_path} in this session"));
             };
+            // The transcript touched it; it must also be somewhere a revert
+            // may write. Every write/delete below goes to `target`.
+            let target =
+                resolve_revert_target(&repo_path, &abs_path, claude_config_dir.as_deref())?;
 
             if file.drifted_from_disk && !force {
                 return Ok((
@@ -1791,7 +2466,7 @@ pub(crate) async fn revert_file_to_session_start(
                 },
                 BaseSource::CreatedInSession => {
                     if !dry_run {
-                        let _ = std::fs::remove_file(&abs_path);
+                        let _ = std::fs::remove_file(&target);
                     }
                     RevertResult {
                         applied: !dry_run,
@@ -1803,7 +2478,7 @@ pub(crate) async fn revert_file_to_session_start(
                 BaseSource::Backup if built.backup_bytes.contains_key(&abs_path) => {
                     let bytes = &built.backup_bytes[&abs_path];
                     if !dry_run {
-                        std::fs::write(&abs_path, bytes).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
+                        std::fs::write(&target, bytes).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
                     }
                     RevertResult {
                         applied: !dry_run,
@@ -1815,7 +2490,7 @@ pub(crate) async fn revert_file_to_session_start(
                 _ => match built.file_bases.get(&abs_path) {
                     Some(base_text) => {
                         if !dry_run {
-                            std::fs::write(&abs_path, base_text).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
+                            std::fs::write(&target, base_text).map_err(|e| format!("Failed to write {abs_path}: {e}"))?;
                         }
                         RevertResult {
                             applied: !dry_run,
@@ -1866,6 +2541,14 @@ pub(crate) mod test_fixtures {
         /// can chain builder calls (which must return `Self`) and still get
         /// back the ids it needs for revert-style assertions.
         tool_use_ids: Vec<String>,
+        /// Set by `.prompt(...)`, applied to every subsequent tool-result
+        /// record's `promptId` field until the next `.prompt(...)` call —
+        /// mirrors a real transcript, where every tool call within one
+        /// turn shares that turn's promptId.
+        current_prompt_id: Option<String>,
+        /// agent hex id -> its `meta.json` contents, written by `build()`
+        /// next to that agent's own `subagents/agent-<id>.jsonl`.
+        subagent_meta: HashMap<String, serde_json::Value>,
     }
 
     fn ts(seq: u64) -> String {
@@ -1882,10 +2565,20 @@ pub(crate) mod test_fixtures {
                 subagent_lines: HashMap::new(),
                 seq: 0,
                 tool_use_ids: Vec::new(),
+                current_prompt_id: None,
+                subagent_meta: HashMap::new(),
             }
         }
 
         /// The `tool_use_id` generated by the Nth (0-based) edit/write call.
+        /// A file under this fixture's `CLAUDE_CONFIG_DIR/plans/` (created) —
+        /// the out-of-repo location a revert is allowed to write.
+        pub(crate) fn plans_file(&self, name: &str) -> String {
+            let dir = self.config_dir.path().join("plans");
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.join(name).to_string_lossy().to_string()
+        }
+
         pub(crate) fn tool_use_id(&self, n: usize) -> String {
             self.tool_use_ids[n].clone()
         }
@@ -1911,10 +2604,104 @@ pub(crate) mod test_fixtures {
                 "cwd": self.repo_cwd,
                 "gitBranch": "main",
                 "isSidechain": false,
+                "promptId": self.current_prompt_id,
                 "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use_id}]},
                 "toolUseResult": tur,
             });
             self.lines.push(record.to_string());
+        }
+
+        /// A real human prompt record: `promptId` on this record, and on
+        /// every tool-result record pushed after it up to the next
+        /// `.prompt(...)` call — matching a real transcript's shape (see
+        /// `capture_turn_info`/`assign_turns`).
+        pub(crate) fn prompt(mut self, prompt_id: &str, text: &str) -> Self {
+            let timestamp = self.next_ts();
+            let record = serde_json::json!({
+                "type": "user",
+                "timestamp": timestamp,
+                "promptId": prompt_id,
+                "isMeta": false,
+                "message": {"role": "user", "content": text},
+            });
+            self.lines.push(record.to_string());
+            self.current_prompt_id = Some(prompt_id.to_string());
+            self
+        }
+
+        /// Spawns a subagent from the MAIN transcript: pushes a generic
+        /// (non-file) tool-result record under the current prompt — giving
+        /// that call its own `promptId`, exactly like a real Agent/Task
+        /// tool call — and writes a sibling `agent-<agent>.meta.json`
+        /// naming this call's `tool_use_id`, so `read_subagent_meta` can
+        /// resolve the subagent's parent turn and display name.
+        pub(crate) fn spawn_subagent(
+            mut self,
+            agent: &str,
+            name: Option<&str>,
+            description: Option<&str>,
+            agent_type: Option<&str>,
+        ) -> Self {
+            let tool_use_id = format!("toolu_{}", uuid::Uuid::new_v4().simple());
+            self.push_tool_result(&tool_use_id, serde_json::json!({"content": []}));
+            let mut meta = serde_json::Map::new();
+            meta.insert("toolUseId".into(), tool_use_id.into());
+            if let Some(n) = name {
+                meta.insert("name".into(), n.into());
+            }
+            if let Some(d) = description {
+                meta.insert("description".into(), d.into());
+            }
+            if let Some(t) = agent_type {
+                meta.insert("agentType".into(), t.into());
+            }
+            self.subagent_meta
+                .insert(agent.to_string(), serde_json::Value::Object(meta));
+            self
+        }
+
+        /// Issues a background-shaped Agent/Task call: writes the assistant
+        /// record's own `tool_use` block under the CURRENT prompt id, and a
+        /// sibling `agent-<agent>.meta.json` naming its `tool_use_id` — but
+        /// does NOT push the tool_result yet. Pair with
+        /// `.report_background_result(agent)` once the test has advanced
+        /// past further `.prompt(...)` calls, to reproduce a background
+        /// call's result landing several turns after it was actually
+        /// spawned (unlike `spawn_subagent`, whose result is always pushed
+        /// immediately under the same prompt id as the call).
+        pub(crate) fn spawn_background_subagent(mut self, agent: &str) -> Self {
+            let tool_use_id = format!("toolu_{}", uuid::Uuid::new_v4().simple());
+            let timestamp = self.next_ts();
+            let record = serde_json::json!({
+                "type": "assistant",
+                "timestamp": timestamp,
+                "promptId": self.current_prompt_id,
+                "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": tool_use_id, "name": "Task", "input": {}}
+                ]},
+            });
+            self.lines.push(record.to_string());
+            let mut meta = serde_json::Map::new();
+            meta.insert("toolUseId".into(), tool_use_id.into());
+            meta.insert("requestShape".into(), "background".into());
+            self.subagent_meta
+                .insert(agent.to_string(), serde_json::Value::Object(meta));
+            self
+        }
+
+        /// Pushes the tool_result for `agent`'s background call under
+        /// whatever prompt id is current RIGHT NOW — see
+        /// `spawn_background_subagent`.
+        pub(crate) fn report_background_result(mut self, agent: &str) -> Self {
+            let tool_use_id = self
+                .subagent_meta
+                .get(agent)
+                .and_then(|m| m.get("toolUseId"))
+                .and_then(|t| t.as_str())
+                .expect("spawn_background_subagent must run first")
+                .to_string();
+            self.push_tool_result(&tool_use_id, serde_json::json!({"content": []}));
+            self
         }
 
         /// Register a `file-history-delta` naming a `@v1` backup, and write
@@ -2086,13 +2873,20 @@ pub(crate) mod test_fixtures {
             let transcript = project_dir.join(format!("{}.jsonl", self.session_id));
             std::fs::write(&transcript, self.lines.join("\n") + "\n").unwrap();
 
-            if !self.subagent_lines.is_empty() {
+            if !self.subagent_lines.is_empty() || !self.subagent_meta.is_empty() {
                 let sub_dir = project_dir.join(&self.session_id).join("subagents");
                 std::fs::create_dir_all(&sub_dir).unwrap();
                 for (agent, lines) in &self.subagent_lines {
                     std::fs::write(
                         sub_dir.join(format!("agent-{agent}.jsonl")),
                         lines.join("\n") + "\n",
+                    )
+                    .unwrap();
+                }
+                for (agent, meta) in &self.subagent_meta {
+                    std::fs::write(
+                        sub_dir.join(format!("agent-{agent}.meta.json")),
+                        meta.to_string(),
                     )
                     .unwrap();
                 }
@@ -2556,7 +3350,7 @@ mod tests {
         let (cfg1, _t1) = tb1.edit(&abs, "a1\n", "a1b\n", false).build();
         let cfg_path = cfg1.path().to_string_lossy().to_string();
 
-        let sessions = list_review_sessions(cwd, None, Some(true), Some(cfg_path))
+        let sessions = list_review_sessions_impl(cwd, None, Some(true), Some(cfg_path))
             .await
             .unwrap();
         assert_eq!(sessions.len(), 1);
@@ -2616,7 +3410,7 @@ mod tests {
             std::fs::copy(&transcript_path, &dest).unwrap();
         }
 
-        let sessions = list_review_sessions(cwd, None, Some(true), Some(cfg_path))
+        let sessions = list_review_sessions_impl(cwd, None, Some(true), Some(cfg_path))
             .await
             .unwrap();
         assert_eq!(sessions.len(), 3);
@@ -2642,7 +3436,7 @@ mod tests {
         std::fs::write(&abs, "a1\n").unwrap();
         let tb = TranscriptBuilder::new(&cwd);
         let (cfg, _t) = tb.edit(&abs, "a1\n", "a1b\n", false).build();
-        let sessions = list_review_sessions(
+        let sessions = list_review_sessions_impl(
             cwd,
             None,
             Some(false),
@@ -2659,7 +3453,7 @@ mod tests {
     async fn missing_project_dir_returns_empty_not_error() {
         let cwd = "/tmp/definitely-not-a-real-project-dir-for-this-test".to_string();
         let cfg = tempfile::tempdir().unwrap();
-        let sessions = list_review_sessions(
+        let sessions = list_review_sessions_impl(
             cwd,
             None,
             None,
@@ -2681,19 +3475,21 @@ mod tests {
         let (cfg, transcript) = tb.edit(&abs, "a1\n", "a1b\n", false).build();
         let session_id = transcript.file_stem().unwrap().to_str().unwrap();
 
-        let r1 = get_session_review(
+        let r1 = get_session_review_impl(
             repo.to_string_lossy().to_string(),
             session_id.to_string(),
             Some(false),
             Some(cfg.path().to_string_lossy().to_string()),
+            None,
         )
         .await
         .unwrap();
-        let r2 = get_session_review(
+        let r2 = get_session_review_impl(
             repo.to_string_lossy().to_string(),
             session_id.to_string(),
             Some(false),
             Some(cfg.path().to_string_lossy().to_string()),
+            None,
         )
         .await
         .unwrap();
@@ -2894,15 +3690,11 @@ mod tests {
     #[tokio::test]
     async fn revert_out_of_repo_step_uses_string_substitution() {
         let (_dir, repo) = fixture_repo();
-        let outside_dir = tempfile::tempdir().unwrap();
-        let abs = outside_dir
-            .path()
-            .join("plan.md")
-            .to_string_lossy()
-            .to_string();
-        std::fs::write(&abs, "line one\nline two changed\n").unwrap();
         let repo_str = repo.to_string_lossy().to_string();
         let tb = TranscriptBuilder::new(&repo_str);
+        // Out of the repo, in Claude's own plans dir (an allowed root).
+        let abs = tb.plans_file("plan.md");
+        std::fs::write(&abs, "line one\nline two changed\n").unwrap();
         let tb = tb.edit(&abs, "line two\n", "line two changed\n", false);
         let step_id = tb.last_tool_use_id();
         let (cfg, transcript) = tb.build();
@@ -2937,15 +3729,11 @@ mod tests {
         // logic) — this locks in that the replace_all branch still works
         // for the out-of-repo path after that refactor.
         let (_dir, repo) = fixture_repo();
-        let outside_dir = tempfile::tempdir().unwrap();
-        let abs = outside_dir
-            .path()
-            .join("notes.md")
-            .to_string_lossy()
-            .to_string();
-        std::fs::write(&abs, "NEW here, NEW there, NEW everywhere\n").unwrap();
         let repo_str = repo.to_string_lossy().to_string();
         let tb = TranscriptBuilder::new(&repo_str);
+        // Out of the repo, in Claude's own plans dir (an allowed root).
+        let abs = tb.plans_file("notes.md");
+        std::fs::write(&abs, "NEW here, NEW there, NEW everywhere\n").unwrap();
         let tb = tb.edit(&abs, "old", "NEW", true);
         let step_id = tb.last_tool_use_id();
         let (cfg, transcript) = tb.build();
@@ -2980,15 +3768,11 @@ mod tests {
         // of the file regardless of where the deletion actually happened.
         // This must report "not found" instead of silently corrupting.
         let (_dir, repo) = fixture_repo();
-        let outside_dir = tempfile::tempdir().unwrap();
-        let abs = outside_dir
-            .path()
-            .join("notes.md")
-            .to_string_lossy()
-            .to_string();
-        std::fs::write(&abs, "line one\nline three\n").unwrap();
         let repo_str = repo.to_string_lossy().to_string();
         let tb = TranscriptBuilder::new(&repo_str);
+        // Out of the repo, in Claude's own plans dir (an allowed root).
+        let abs = tb.plans_file("notes.md");
+        std::fs::write(&abs, "line one\nline three\n").unwrap();
         let tb = tb.edit(&abs, "line two\n", "", false);
         let step_id = tb.last_tool_use_id();
         let (cfg, transcript) = tb.build();
@@ -3050,11 +3834,12 @@ mod tests {
             .to_string();
         let cfg_str = cfg.path().to_string_lossy().to_string();
 
-        let before = get_session_review(
+        let before = get_session_review_impl(
             repo_str.clone(),
             session_id.clone(),
             Some(false),
             Some(cfg_str.clone()),
+            None,
         )
         .await
         .unwrap();
@@ -3073,7 +3858,7 @@ mod tests {
         assert!(result.applied, "revert failed: {:?}", result.message);
         assert_eq!(std::fs::read_to_string(&abs).unwrap(), "a1\na2\na3\n");
 
-        let after = get_session_review(repo_str, session_id, Some(false), Some(cfg_str))
+        let after = get_session_review_impl(repo_str, session_id, Some(false), Some(cfg_str), None)
             .await
             .unwrap();
         let file_after = after.files.iter().find(|f| f.abs_path == abs).unwrap();
@@ -3109,17 +3894,18 @@ mod tests {
         let repo_str = repo.to_string_lossy().to_string();
         let cfg_str = cfg.path().to_string_lossy().to_string();
 
-        let with_subs = get_session_review(
+        let with_subs = get_session_review_impl(
             repo_str.clone(),
             session_id.clone(),
             Some(true),
             Some(cfg_str.clone()),
+            None,
         )
         .await
         .unwrap();
         assert_eq!(with_subs.steps.len(), 1);
 
-        let without_subs = get_session_review(repo_str, session_id, Some(false), Some(cfg_str))
+        let without_subs = get_session_review_impl(repo_str, session_id, Some(false), Some(cfg_str), None)
             .await
             .unwrap();
         assert_eq!(
@@ -3191,15 +3977,280 @@ mod tests {
     async fn get_session_review_rejects_a_traversal_session_id_before_touching_disk() {
         let (_dir, repo) = fixture_repo();
         let cfg = tempfile::tempdir().unwrap();
-        let err = get_session_review(
+        let err = get_session_review_impl(
             repo.to_string_lossy().to_string(),
             "../../../../etc/passwd".to_string(),
             None,
             Some(cfg.path().to_string_lossy().to_string()),
+            None,
         )
         .await
         .unwrap_err();
         assert!(err.contains("Invalid session id"), "got: {err}");
+    }
+
+    // ── Revert target authorization (Batch 16 review) ─────────────────────
+
+    fn session_id_of(transcript: &Path) -> String {
+        transcript
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// A file the transcript touched but which lies outside the repo, every
+    /// registered repo and Claude's plans dir must not be overwritten.
+    #[tokio::test]
+    async fn revert_file_refuses_a_touched_file_outside_the_allowed_roots() {
+        let (_dir, repo) = fixture_repo();
+        let outside = tempfile::tempdir().unwrap();
+        let abs = outside
+            .path()
+            .join("victim.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&abs, "important\n").unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        let (cfg, transcript) = TranscriptBuilder::new(&repo_str)
+            .backup(&abs, "attacker chosen\n")
+            .edit(&abs, "x\n", "important\n", false)
+            .build();
+
+        let result = revert_file_to_session_start(
+            repo_str,
+            session_id_of(&transcript),
+            abs.clone(),
+            Some(true),
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await;
+        assert!(result.is_err(), "must refuse, got {result:?}");
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "important\n");
+    }
+
+    #[tokio::test]
+    async fn revert_step_refuses_an_out_of_repo_file_outside_the_allowed_roots() {
+        let (_dir, repo) = fixture_repo();
+        let outside = tempfile::tempdir().unwrap();
+        let abs = outside
+            .path()
+            .join("victim.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&abs, "line two changed\n").unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        let tb =
+            TranscriptBuilder::new(&repo_str).edit(&abs, "line two\n", "line two changed\n", false);
+        let step_id = tb.last_tool_use_id();
+        let (cfg, transcript) = tb.build();
+
+        let result = revert_session_step(
+            repo_str,
+            session_id_of(&transcript),
+            step_id,
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await;
+        assert!(result.is_err(), "must refuse, got {result:?}");
+        assert_eq!(std::fs::read_to_string(&abs).unwrap(), "line two changed\n");
+    }
+
+    /// A symlink inside the repo pointing outside it: restoring "the file"
+    /// must not write through the link to its target.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn revert_file_never_writes_through_a_symlink_in_the_repo() {
+        let (_dir, repo) = fixture_repo();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("target.txt");
+        std::fs::write(&target, "outside content\n").unwrap();
+        let link = repo.join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let abs = link.to_string_lossy().to_string();
+        let repo_str = repo.to_string_lossy().to_string();
+        let (cfg, transcript) = TranscriptBuilder::new(&repo_str)
+            .backup(&abs, "attacker chosen\n")
+            .edit(&abs, "x\n", "outside content\n", false)
+            .build();
+
+        let result = revert_file_to_session_start(
+            repo_str,
+            session_id_of(&transcript),
+            abs,
+            Some(true),
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await;
+        assert!(result.is_err(), "must refuse, got {result:?}");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "outside content\n"
+        );
+    }
+
+    /// `..` components in a transcript path must not walk out of the repo.
+    #[tokio::test]
+    async fn revert_file_refuses_a_dot_dot_path() {
+        let (_dir, repo) = fixture_repo();
+        let outside = tempfile::tempdir().unwrap();
+        let victim = outside.path().join("victim.txt");
+        std::fs::write(&victim, "important\n").unwrap();
+        let mut abs = repo.clone();
+        for _ in repo.components().skip(1) {
+            abs.push("..");
+        }
+        let abs = abs
+            .join(victim.strip_prefix("/").unwrap())
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(
+            std::fs::read_to_string(&abs).unwrap(),
+            "important\n",
+            "fixture resolves"
+        );
+        let repo_str = repo.to_string_lossy().to_string();
+        let (cfg, transcript) = TranscriptBuilder::new(&repo_str)
+            .backup(&abs, "attacker chosen\n")
+            .edit(&abs, "x\n", "important\n", false)
+            .build();
+
+        let result = revert_file_to_session_start(
+            repo_str,
+            session_id_of(&transcript),
+            abs,
+            Some(true),
+            Some(false),
+            Some(cfg.path().to_string_lossy().to_string()),
+        )
+        .await;
+        assert!(result.is_err(), "must refuse, got {result:?}");
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "important\n");
+    }
+
+    #[test]
+    fn resolve_revert_target_accepts_repo_and_plans_and_refuses_relative() {
+        let (_dir, repo) = fixture_repo();
+        let cfg = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(cfg.path().join("plans")).unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        let cfg_str = cfg.path().to_string_lossy().to_string();
+        let in_repo = repo.join("new-file.txt").to_string_lossy().to_string();
+        assert!(resolve_revert_target(&repo_str, &in_repo, Some(&cfg_str)).is_ok());
+        let plan = cfg.path().join("plans/p.md").to_string_lossy().to_string();
+        assert!(resolve_revert_target(&repo_str, &plan, Some(&cfg_str)).is_ok());
+        assert!(resolve_revert_target(&repo_str, "relative.txt", Some(&cfg_str)).is_err());
+    }
+
+    /// A transcript-supplied backup name must be a bare file name: a
+    /// traversal or absolute name must never resolve to a path (it would be
+    /// read as the file's "session-start content" and written back by a
+    /// revert).
+    #[test]
+    fn backup_path_refuses_anything_but_a_bare_file_name() {
+        let sid = "6d1d4349-dbe2-4a43-8f2e-9b1c3a4d5e6f";
+        assert!(backup_path(sid, "0123abcd@v1", Some("/cfg")).is_some());
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../../etc/passwd",
+            "/etc/passwd",
+            "a/b",
+            "a\\b",
+            "C:x",
+            "a\0b",
+        ] {
+            assert!(backup_path(sid, bad, Some("/cfg")).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_traversal_backup_name_in_the_transcript_is_not_read() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "a1\na2-changed\n").unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "SECRET\n").unwrap();
+        let repo_str = repo.to_string_lossy().to_string();
+        // A real backup for another file creates `file-history/<sid>/`, so
+        // the traversal below resolves on disk.
+        let tb = TranscriptBuilder::new(&repo_str)
+            .backup(&repo.join("other.txt").to_string_lossy(), "other\n");
+        // Enough `..` to climb out of any (deep, nextest-provided) TMPDIR.
+        let traversal = format!(
+            "{}{}",
+            "../".repeat(64).trim_end_matches('/'),
+            outside.path().join("secret").display()
+        );
+        let record = serde_json::json!({
+            "type": "file-history-delta",
+            "messageId": uuid::Uuid::new_v4().to_string(),
+            "snapshotMessageId": uuid::Uuid::new_v4().to_string(),
+            "trackingPath": abs,
+            "backup": {"backupFileName": traversal, "version": 1, "backupTime": "2026-09-14T21:00:00.000Z"},
+            "timestamp": "2026-09-14T21:00:00.000Z",
+        });
+        let (cfg, transcript) = tb
+            .raw_line(&record.to_string())
+            .edit(&abs, "a2\n", "a2-changed\n", false)
+            .build();
+        let built = build_session_review_full(
+            &repo,
+            &transcript,
+            &[],
+            &session_id_of(&transcript),
+            Some(&cfg.path().to_string_lossy()),
+            DiffOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            built.backup_bytes.is_empty(),
+            "the traversal target must not be read"
+        );
+        assert_ne!(built.review.files[0].base_source, BaseSource::Backup);
+    }
+
+    #[test]
+    fn read_file_capped_refuses_a_file_over_the_cap_without_reading_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = dir.path().join("big");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(MAX_BACKUP_BYTES + 1)
+            .unwrap();
+        assert!(read_file_capped(&big, MAX_BACKUP_BYTES).is_none());
+        let small = dir.path().join("small");
+        std::fs::write(&small, b"ok").unwrap();
+        assert_eq!(
+            read_file_capped(&small, MAX_BACKUP_BYTES).as_deref(),
+            Some(&b"ok"[..])
+        );
+    }
+
+    #[test]
+    fn subagent_meta_over_64_kib_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("agent-abc.jsonl");
+        let meta = serde_json::json!({
+            "name": "worker",
+            "pad": "x".repeat(MAX_SUBAGENT_META_BYTES as usize),
+        });
+        std::fs::write(transcript.with_extension("meta.json"), meta.to_string()).unwrap();
+        assert_eq!(read_subagent_meta(&transcript).display_name, None);
+        std::fs::write(
+            transcript.with_extension("meta.json"),
+            serde_json::json!({"name": "worker"}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            read_subagent_meta(&transcript).display_name.as_deref(),
+            Some("worker")
+        );
     }
 
     #[tokio::test]
@@ -3336,7 +4387,10 @@ mod tests {
         // content — never routed through the structuredPatch-aware fallback
         // meant for unresolvable Edits.
         let (_dir, repo) = fixture_repo();
-        let abs = repo.join("create_with_patch.txt").to_string_lossy().to_string();
+        let abs = repo
+            .join("create_with_patch.txt")
+            .to_string_lossy()
+            .to_string();
         let tb = TranscriptBuilder::new(&repo.to_string_lossy());
         let record = serde_json::json!({
             "type": "user",
@@ -3401,11 +4455,12 @@ mod tests {
         let repo_str = repo.to_string_lossy().to_string();
         let cfg_str = cfg.path().to_string_lossy().to_string();
 
-        let r1 = get_session_review(
+        let r1 = get_session_review_impl(
             repo_str.clone(),
             session_id.clone(),
             Some(true),
             Some(cfg_str.clone()),
+            None,
         )
         .await
         .unwrap();
@@ -3434,7 +4489,7 @@ mod tests {
         )
         .unwrap();
 
-        let r2 = get_session_review(repo_str, session_id, Some(true), Some(cfg_str))
+        let r2 = get_session_review_impl(repo_str, session_id, Some(true), Some(cfg_str), None)
             .await
             .unwrap();
         assert_eq!(
@@ -3471,29 +4526,100 @@ mod tests {
             files: Vec::new(),
             warnings: Vec::new(),
             included_subagents: false,
+            tuic_session_id: None,
+            turns: Vec::new(),
         };
 
         for (i, p) in paths.iter().take(4).enumerate() {
-            put_cached_review(p, false, &dummy_review(&format!("s{i}")));
+            put_cached_review(p, false, DiffOptions::default(), &dummy_review(&format!("s{i}")));
         }
         // Touch entry 0, making it the most-recently-used.
-        assert!(get_cached_review(&paths[0], false).is_some());
+        assert!(get_cached_review(&paths[0], false, DiffOptions::default()).is_some());
         // Insert a 5th entry, forcing an eviction.
-        put_cached_review(&paths[4], false, &dummy_review("s4"));
+        put_cached_review(&paths[4], false, DiffOptions::default(), &dummy_review("s4"));
 
         assert!(
-            get_cached_review(&paths[0], false).is_some(),
+            get_cached_review(&paths[0], false, DiffOptions::default()).is_some(),
             "the just-touched entry must survive eviction"
         );
         let still_present = paths[1..4]
             .iter()
-            .filter(|p| get_cached_review(p, false).is_some())
+            .filter(|p| get_cached_review(p, false, DiffOptions::default()).is_some())
             .count();
         assert_eq!(
             still_present, 2,
             "exactly one of the untouched entries (1,2,3) must have been \
              evicted to make room for entry 4 — LRU eviction must not touch \
              the just-accessed entry 0"
+        );
+    }
+
+    #[test]
+    fn distinct_include_subagents_and_options_for_the_same_transcript_coexist_in_the_cache() {
+        // Before ReviewCacheKey existed, the map was keyed only by transcript
+        // path, so a single path could hold at most one cached variant —
+        // toggling "include subagents" (or a whitespace-diff option) back
+        // and forth thrashed that one slot, recomputing on every switch
+        // instead of caching each variant.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        std::fs::write(&path, "dummy").unwrap();
+        let dummy_review = |id: &str| SessionReview {
+            session_id: id.to_string(),
+            transcript_path: String::new(),
+            repo_path: String::new(),
+            started_at: None,
+            ended_at: None,
+            title: None,
+            steps: Vec::new(),
+            files: Vec::new(),
+            warnings: Vec::new(),
+            included_subagents: false,
+            tuic_session_id: None,
+            turns: Vec::new(),
+        };
+        let ignore_case_options = DiffOptions {
+            ignore_case: true,
+            ..Default::default()
+        };
+
+        put_cached_review(
+            &path,
+            false,
+            DiffOptions::default(),
+            &dummy_review("no-subagents"),
+        );
+        put_cached_review(
+            &path,
+            true,
+            DiffOptions::default(),
+            &dummy_review("with-subagents"),
+        );
+        put_cached_review(
+            &path,
+            false,
+            ignore_case_options,
+            &dummy_review("ignore-case"),
+        );
+
+        assert_eq!(
+            get_cached_review(&path, false, DiffOptions::default())
+                .unwrap()
+                .session_id,
+            "no-subagents",
+            "all three combos must be independently cached, not overwriting one shared slot"
+        );
+        assert_eq!(
+            get_cached_review(&path, true, DiffOptions::default())
+                .unwrap()
+                .session_id,
+            "with-subagents"
+        );
+        assert_eq!(
+            get_cached_review(&path, false, ignore_case_options)
+                .unwrap()
+                .session_id,
+            "ignore-case"
         );
     }
 
@@ -3541,5 +4667,380 @@ mod tests {
             "steps from main and subagent transcripts must interleave in \
              real chronological order, not main-first-then-subagent"
         );
+    }
+
+    #[test]
+    fn turns_group_edits_by_prompt_id_across_main_and_subagent() {
+        let (_dir, repo) = fixture_repo();
+        let abs1 = repo.join("a.txt").to_string_lossy().to_string();
+        let abs_sub = repo.join("b.txt").to_string_lossy().to_string();
+        let abs2 = repo.join("c.txt").to_string_lossy().to_string();
+        std::fs::write(&abs1, "x\n").unwrap();
+        std::fs::write(&abs_sub, "y\n").unwrap();
+        std::fs::write(&abs2, "z\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .prompt("p1", "Fix the first two files")
+            .edit(&abs1, "x\n", "X\n", false)
+            .spawn_subagent("worker1", Some("fixer"), None, None)
+            .subagent_edit("worker1", &abs_sub, "y\n", "Y\n")
+            .prompt("p2", "Now fix the third file")
+            .edit(&abs2, "z\n", "Z\n", false);
+
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let project_dir = transcript.parent().unwrap();
+        let subs = subagent_transcripts(project_dir, session_id);
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &subs,
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(review.steps.len(), 3);
+        // The main edit and the subagent's edit both belong to turn 0 (p1) —
+        // the subagent was spawned under p1, so its edit inherits that turn
+        // even though it has no promptId of its own.
+        assert_eq!(review.steps[0].turn_index, 0);
+        assert_eq!(review.steps[1].turn_index, 0, "subagent edit must inherit the parent's turn");
+        assert_eq!(review.steps[2].turn_index, 1);
+
+        assert_eq!(review.turns.len(), 2);
+        assert_eq!(review.turns[0].prompt_preview.as_deref(), Some("Fix the first two files"));
+        assert_eq!(review.turns[0].step_indices, vec![0, 1]);
+        assert_eq!(review.turns[1].prompt_preview.as_deref(), Some("Now fix the third file"));
+        assert_eq!(review.turns[1].step_indices, vec![2]);
+    }
+
+    #[test]
+    fn background_subagent_inherits_the_spawning_turn_not_the_later_reporting_turn() {
+        // A background-shaped Agent/Task call's tool_result can land several
+        // turns after it was actually issued. Before tool_call_prompt_ids
+        // existed, the subagent's edits inherited whatever turn the RESULT
+        // happened to report under (p3 here) instead of the turn it was
+        // actually spawned in (p1) — this reproduces that exact shape.
+        let (_dir, repo) = fixture_repo();
+        let abs1 = repo.join("a.txt").to_string_lossy().to_string();
+        let abs_sub = repo.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&abs1, "x\n").unwrap();
+        std::fs::write(&abs_sub, "y\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .prompt("p1", "Kick off a background review")
+            .spawn_background_subagent("bg1")
+            .subagent_edit("bg1", &abs_sub, "y\n", "Y\n") // happens while p1 is current
+            .prompt("p2", "Meanwhile, fix a.txt")
+            .edit(&abs1, "x\n", "X\n", false)
+            .prompt("p3", "Check on the background review")
+            .report_background_result("bg1"); // result lands under p3, not p1
+
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let project_dir = transcript.parent().unwrap();
+        let subs = subagent_transcripts(project_dir, session_id);
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &subs,
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(review.steps.len(), 2);
+        let sub_step = review
+            .steps
+            .iter()
+            .find(|s| s.abs_path == abs_sub)
+            .expect("subagent step present");
+        assert_eq!(
+            sub_step.turn_index, 0,
+            "background subagent must inherit the SPAWNING turn (p1, index 0), \
+             not the turn its result happened to land in (p3, index 2)"
+        );
+    }
+
+    #[test]
+    fn turn_assignment_falls_back_to_open_turn_when_promptid_missing() {
+        // No `.prompt(...)` call at all — every tool-result record has
+        // `promptId: null`, matching an older transcript format. Every edit
+        // must still land in a single well-defined turn 0, not panic or
+        // silently drop steps.
+        let (_dir, repo) = fixture_repo();
+        let abs1 = repo.join("a.txt").to_string_lossy().to_string();
+        let abs2 = repo.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&abs1, "x\n").unwrap();
+        std::fs::write(&abs2, "y\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .edit(&abs1, "x\n", "X\n", false)
+            .edit(&abs2, "y\n", "Y\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &[],
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(review.steps.iter().map(|s| s.turn_index).collect::<Vec<_>>(), vec![0, 0]);
+        assert_eq!(review.turns.len(), 1);
+        assert_eq!(review.turns[0].prompt_preview, None);
+    }
+
+    #[test]
+    fn subagent_turn_resolves_via_meta_json_tool_use_id() {
+        let (_dir, repo) = fixture_repo();
+        let abs_sub = repo.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&abs_sub, "y\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .prompt("p1", "Delegate this")
+            .spawn_subagent("worker1", Some("named-worker"), None, None)
+            .subagent_edit("worker1", &abs_sub, "y\n", "Y\n");
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let project_dir = transcript.parent().unwrap();
+        let subs = subagent_transcripts(project_dir, session_id);
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &subs,
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        assert_eq!(review.steps.len(), 1);
+        let step = &review.steps[0];
+        assert_eq!(step.turn_index, 0);
+        assert_eq!(step.prompt_preview.as_deref(), Some("Delegate this"));
+        assert_eq!(step.agent_id.as_deref(), Some("worker1"));
+        assert_eq!(step.agent_display_name.as_deref(), Some("named-worker"));
+    }
+
+    #[test]
+    fn agent_display_name_falls_back_through_description_then_agent_type_then_hex_id() {
+        let (_dir, repo) = fixture_repo();
+        let abs_named = repo.join("named.txt").to_string_lossy().to_string();
+        let abs_desc = repo.join("desc.txt").to_string_lossy().to_string();
+        let abs_type = repo.join("typ.txt").to_string_lossy().to_string();
+        let abs_none = repo.join("none.txt").to_string_lossy().to_string();
+        for p in [&abs_named, &abs_desc, &abs_type, &abs_none] {
+            std::fs::write(p, "x\n").unwrap();
+        }
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .spawn_subagent("named", Some("real-name"), Some("a description"), Some("Explore"))
+            .subagent_edit("named", &abs_named, "x\n", "X\n")
+            .spawn_subagent("desconly", None, Some("a description"), Some("Explore"))
+            .subagent_edit("desconly", &abs_desc, "x\n", "X\n")
+            .spawn_subagent("typeonly", None, None, Some("Explore"))
+            .subagent_edit("typeonly", &abs_type, "x\n", "X\n")
+            .spawn_subagent("noneofit", None, None, None)
+            .subagent_edit("noneofit", &abs_none, "x\n", "X\n");
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let project_dir = transcript.parent().unwrap();
+        let subs = subagent_transcripts(project_dir, session_id);
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &subs,
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+
+        let names: HashMap<&str, &str> = review
+            .steps
+            .iter()
+            .map(|s| (s.agent_id.as_deref().unwrap(), s.agent_display_name.as_deref().unwrap()))
+            .collect();
+        assert_eq!(names["named"], "real-name");
+        assert_eq!(names["desconly"], "a description");
+        assert_eq!(names["typeonly"], "Explore");
+        assert_eq!(names["noneofit"], "noneofit", "falls back to the raw hex id");
+    }
+
+    #[test]
+    fn read_subagent_meta_defaults_when_the_meta_json_file_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("agent-nometa.jsonl");
+        std::fs::write(&transcript, "").unwrap();
+        // No sibling agent-nometa.meta.json written at all.
+        let meta = read_subagent_meta(&transcript);
+        assert_eq!(meta.display_name, None);
+        assert_eq!(meta.tool_use_id, None);
+    }
+
+    #[test]
+    fn read_subagent_meta_defaults_when_the_meta_json_file_is_malformed() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("agent-badmeta.jsonl");
+        std::fs::write(&transcript, "").unwrap();
+        std::fs::write(
+            transcript.with_extension("meta.json"),
+            "{ not valid json at all",
+        )
+        .unwrap();
+        let meta = read_subagent_meta(&transcript);
+        assert_eq!(meta.display_name, None);
+        assert_eq!(meta.tool_use_id, None);
+    }
+
+    #[test]
+    fn read_subagent_meta_defaults_when_the_meta_json_is_valid_json_but_not_an_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("agent-arraymeta.jsonl");
+        std::fs::write(&transcript, "").unwrap();
+        // Valid JSON, but not the expected shape — `.get("name")` etc. on a
+        // non-object Value must fail closed to the same defaults, not panic.
+        std::fs::write(transcript.with_extension("meta.json"), "[1, 2, 3]").unwrap();
+        let meta = read_subagent_meta(&transcript);
+        assert_eq!(meta.display_name, None);
+        assert_eq!(meta.tool_use_id, None);
+    }
+
+    #[test]
+    fn main_session_steps_get_title_or_literal_main_as_display_name() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "x\n").unwrap();
+
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy())
+            .custom_title("Fix the thing")
+            .edit(&abs, "x\n", "X\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+        let review = build_session_review(
+            &repo,
+            &transcript,
+            &[],
+            session_id,
+            Some(&cfg.path().to_string_lossy()),
+        )
+        .unwrap();
+        assert_eq!(review.steps[0].agent_display_name.as_deref(), Some("Fix the thing"));
+
+        // No title at all -> literal "main".
+        let abs2 = repo.join("b.txt").to_string_lossy().to_string();
+        std::fs::write(&abs2, "x\n").unwrap();
+        let tb2 = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs2, "x\n", "X\n", false);
+        let (cfg2, transcript2) = tb2.build();
+        let session_id2 = transcript2.file_stem().unwrap().to_str().unwrap();
+        let review2 = build_session_review(
+            &repo,
+            &transcript2,
+            &[],
+            session_id2,
+            Some(&cfg2.path().to_string_lossy()),
+        )
+        .unwrap();
+        assert_eq!(review2.steps[0].agent_display_name.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn file_revision_is_stable_across_rebuilds_and_changes_with_content() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "x\n").unwrap();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs, "x\n", "X\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+
+        let r1 = build_session_review(&repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy())).unwrap();
+        let r2 = build_session_review(&repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy())).unwrap();
+        assert_eq!(r1.files[0].revision, r2.files[0].revision, "unchanged content must produce the same revision");
+        assert!(!r1.files[0].revision.is_empty());
+
+        // A further edit to the same file must change the revision.
+        std::fs::write(&abs, "X\n").unwrap();
+        let tb3 = TranscriptBuilder::new(&repo.to_string_lossy())
+            .edit(&abs, "x\n", "X\n", false)
+            .edit(&abs, "X\n", "XX\n", false);
+        let (cfg3, transcript3) = tb3.build();
+        let session_id3 = transcript3.file_stem().unwrap().to_str().unwrap();
+        let r3 = build_session_review(&repo, &transcript3, &[], session_id3, Some(&cfg3.path().to_string_lossy())).unwrap();
+        assert_ne!(r1.files[0].revision, r3.files[0].revision);
+    }
+
+    #[test]
+    fn diff_options_ignore_leading_ws_suppresses_a_leading_whitespace_only_change() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "  hello\n").unwrap();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs, "  hello\n", "hello\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap();
+
+        let default_review = build_session_review_with_options(
+            &repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy()), DiffOptions::default(),
+        )
+        .unwrap();
+        assert!(default_review.files[0].additions > 0 || default_review.files[0].deletions > 0);
+
+        let ignoring = DiffOptions {
+            ignore_leading_ws: true,
+            ..DiffOptions::default()
+        };
+        let options_review = build_session_review_with_options(
+            &repo, &transcript, &[], session_id, Some(&cfg.path().to_string_lossy()), ignoring,
+        )
+        .unwrap();
+        assert_eq!(options_review.files[0].additions, 0);
+        assert_eq!(options_review.files[0].deletions, 0);
+        assert_eq!(
+            options_review.files[0].net_change,
+            NetChange::Unchanged,
+            "a leading-whitespace-only change must report as unchanged when ignore_leading_ws is on"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_session_review_cache_isolates_different_diff_options() {
+        let (_dir, repo) = fixture_repo();
+        let abs = repo.join("a.txt").to_string_lossy().to_string();
+        std::fs::write(&abs, "  hello\n").unwrap();
+        let tb = TranscriptBuilder::new(&repo.to_string_lossy()).edit(&abs, "  hello\n", "hello\n", false);
+        let (cfg, transcript) = tb.build();
+        let session_id = transcript.file_stem().unwrap().to_str().unwrap().to_string();
+        let repo_str = repo.to_string_lossy().to_string();
+        let cfg_str = cfg.path().to_string_lossy().to_string();
+
+        let default_review = get_session_review_impl(
+            repo_str.clone(),
+            session_id.clone(),
+            Some(false),
+            Some(cfg_str.clone()),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(default_review.files[0].additions > 0 || default_review.files[0].deletions > 0);
+
+        // A second call for the SAME session, differing only by options, must
+        // not be served the first call's cached (wrong) result.
+        let ignoring = DiffOptions {
+            ignore_leading_ws: true,
+            ..DiffOptions::default()
+        };
+        let options_review = get_session_review_impl(
+            repo_str,
+            session_id,
+            Some(false),
+            Some(cfg_str),
+            Some(ignoring),
+        )
+        .await
+        .unwrap();
+        assert_eq!(options_review.files[0].additions, 0);
+        assert_eq!(options_review.files[0].deletions, 0);
     }
 }
