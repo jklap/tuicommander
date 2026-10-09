@@ -334,6 +334,7 @@ describe("initApp", () => {
 	// Only a tab switch asserted visibility (B.8), so a remote tab the user kept
 	// looking at aged out of the remote-activity grace and could be parked.
 	it("re-asserts the active session's visibility on the 30 s snapshot timer", async () => {
+		vi.spyOn(document, "hasFocus").mockReturnValue(true);
 		await initApp(createMockDeps());
 		const id = terminalsStore.add(makeTerminal({ sessionId: "sess-visible" }));
 		terminalsStore.setActive(id);
@@ -341,10 +342,59 @@ describe("initApp", () => {
 
 		await vi.advanceTimersByTimeAsync(30_000);
 
+		// `wake: false`: the keep-alive must never SIGCONT a parked session.
 		expect(mockRpc).toHaveBeenCalledWith(
 			"set_session_visible",
-			expect.objectContaining({ sessionId: "sess-visible", visible: true, viewerId: expect.any(String) }),
+			expect.objectContaining({ sessionId: "sess-visible", visible: true, viewerId: expect.any(String), wake: false }),
 		);
+	});
+
+	// Batch 23 review: a minimised window / background tab must be allowed to
+	// reach standby, so the timer must not keep asserting visible:true.
+	it("skips the visibility re-assert while the document is hidden or the window unfocused", async () => {
+		const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+		await initApp(createMockDeps());
+		const id = terminalsStore.add(makeTerminal({ sessionId: "sess-hidden" }));
+		terminalsStore.setActive(id);
+		mockRpc.mockClear();
+
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(mockRpc).not.toHaveBeenCalledWith("set_session_visible", expect.anything());
+
+		hidden.mockReturnValue(false);
+		hasFocus.mockReturnValue(false);
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(mockRpc).not.toHaveBeenCalledWith("set_session_visible", expect.anything());
+	});
+
+	it("sends visible:false when the document hides and visible:true (waking) on focus", async () => {
+		vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+		await initApp(createMockDeps());
+		const id = terminalsStore.add(makeTerminal({ sessionId: "sess-follow" }));
+		terminalsStore.setActive(id);
+		mockRpc.mockClear();
+
+		hidden.mockReturnValue(true);
+		document.dispatchEvent(new Event("visibilitychange"));
+		expect(mockRpc).toHaveBeenCalledWith(
+			"set_session_visible",
+			expect.objectContaining({ sessionId: "sess-follow", visible: false }),
+		);
+
+		mockRpc.mockClear();
+		hidden.mockReturnValue(false);
+		window.dispatchEvent(new Event("focus"));
+		expect(mockRpc).toHaveBeenCalledWith(
+			"set_session_visible",
+			expect.objectContaining({ sessionId: "sess-follow", visible: true }),
+		);
+		// A real return wakes: no `wake: false` on this call.
+		const focusCall = mockRpc.mock.calls.find(([name]) => name === "set_session_visible");
+		const focusArgs = focusCall ? (focusCall[1] as { wake?: boolean }) : undefined;
+		expect(focusArgs).toBeDefined();
+		expect(focusArgs?.wake).toBeUndefined();
 	});
 
 	it("logs the navigation type and document start at each initialization", async () => {
@@ -1659,6 +1709,28 @@ describe("initApp", () => {
 			cb!({ payload: { session_id: "sess-renamed", name: "Foo", is_custom: true } });
 
 			expect(terminalsStore.get(id)).toMatchObject({ name: "Foo", nameIsCustom: true });
+		});
+
+		// IPC/HTTP set_session_name now emits, so a rename made in another window
+		// arrives here; a null name (cleared) must not blank the tab or echo back.
+		it("applies a cleared (null-name) session-renamed without blanking the tab or echoing", async () => {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { session_id: string; name: string | null; is_custom: boolean } }) => void) | null =
+				null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "session-renamed") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			await initApp(createMockDeps());
+			const id = terminalsStore.add(makeTerminal({ name: "Pinned" }));
+			terminalsStore.setSessionId(id, "sess-cleared");
+			terminalsStore.update(id, { nameIsCustom: true }, { echo: false });
+			mockRpc.mockClear();
+
+			cb!({ payload: { session_id: "sess-cleared", name: null, is_custom: false } });
+
+			expect(terminalsStore.get(id)).toMatchObject({ name: "Pinned", nameIsCustom: false });
+			expect(mockRpc.mock.calls.filter(([cmd]) => cmd === "set_session_name")).toHaveLength(0);
 		});
 
 		it("retains an alias event that arrives before the session is bound to a terminal", async () => {
@@ -3415,6 +3487,39 @@ describe("initApp", () => {
 
 			notificationsStore.setSilenceRemoteCompletions(false);
 			playCompletion.mockRestore();
+		});
+
+		// Batch 47 review: a human-created tab seen from another window/client is
+		// `isRemote: false`, and if it was never rendered there no Terminal
+		// component watches its exit — session-closed must clean it up.
+		it("cleans up a non-remote tab whose terminal never mounted, leaving a watched one to its Terminal", async () => {
+			const { getCallback } = captureSessionClosed();
+			await initApp(createMockDeps());
+			const shellExits: string[] = [];
+			const dispose = terminalsStore.onShellExit((id) => shellExits.push(id));
+
+			const unwatchedShell = terminalsStore.add({ ...makeTerminal({ sessionId: "shell-gone" }), isRemote: false });
+			const unwatchedAgent = terminalsStore.add({
+				...makeTerminal({ sessionId: "agent-gone" }),
+				isRemote: false,
+				agentType: "claude",
+			});
+			const watched = terminalsStore.add({ ...makeTerminal({ sessionId: "watched-gone" }), isRemote: false });
+			terminalsStore.setPtyExitWatched(watched, true);
+
+			getCallback()!({ payload: { session_id: "shell-gone", reason: "process_exit" } });
+			getCallback()!({ payload: { session_id: "agent-gone", reason: "process_exit", agent_type: "claude" } });
+			getCallback()!({ payload: { session_id: "watched-gone", reason: "process_exit" } });
+
+			// Plain shell: handed to the app's shell-exit close path.
+			expect(shellExits).toEqual([unwatchedShell]);
+			expect(terminalsStore.get(unwatchedShell)?.sessionId).toBeNull();
+			// Agent: kept with the grey exited dot, like a mounted tab.
+			expect(terminalsStore.get(unwatchedAgent)?.shellState).toBe("exited");
+			expect(terminalsStore.get(unwatchedAgent)?.agentType).toBeNull();
+			// Watched: its mounted Terminal owns the teardown — untouched here.
+			expect(terminalsStore.get(watched)?.sessionId).toBe("watched-gone");
+			dispose();
 		});
 
 		it("does not set shellState when session_id has no matching terminal", async () => {

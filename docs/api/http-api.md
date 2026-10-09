@@ -393,7 +393,13 @@ Content-Type: application/json
 }
 ```
 
-Returns `{ "session_id": "..." }`.
+Returns `{ "session_id": "..." }` — only once the new shell is ready: the response is held
+until the shell reaches `SHELL_IDLE` (OSC 133 prompt, or the ~500 ms silence fallback for a
+shell without integration), bounded at `SHELL_READINESS_TIMEOUT_MS` (5 s) and fail-open (after
+the bound the id is returned anyway and a warning is logged). A caller can therefore write to
+the session immediately without racing `.zshrc`/Powerlevel10k startup. Clients with a short
+socket timeout must allow for that bound (`tuic new` uses 8 s). `POST /sessions/agent` is not
+gated (it execs the agent binary directly; there is no shell startup to wait out).
 
 When `cwd` is missing or names a file, the server returns `400` with `{ "error": "Working directory ..." }` before registering a PTY session.
 
@@ -422,7 +428,8 @@ Content-Type: application/json
 { "pty_config": { ... }, "worktree_config": { ... } }
 ```
 
-Creates a git worktree and a PTY session in one call.
+Creates a git worktree and a PTY session in one call. Like `POST /sessions`, the response
+waits (bounded, fail-open) for the new shell to reach a ready prompt.
 
 ### Spawn Agent Session
 
@@ -654,7 +661,7 @@ GET  /sessions/:id/input-buffer                        -> { "content": string }
 GET  /sessions/:id/leaf-pid                            -> { "pid": number|null }
 GET  /sessions/:id/chat-view?from_seq=N&epoch=E        -> { epoch, nextSeq, reset, updates[], unknownRows, malformedRows }
 GET  /sessions/:id/has-foreground                      -> { "process": string|null }
-POST /sessions/:id/visible              { "visible": bool }   -> { "ok": true }
+POST /sessions/:id/visible              { "visible": bool, "viewer_id"?: string, "wake"?: bool }   -> { "ok": true }
 GET  /sessions/:id/terminal/selection-text?startRow=&startCol=&endRow=&endCol=&historyBase=  -> { "text": string }
 GET  /sessions/:id/terminal/logical-line?row=N         -> [logicalStartRow, text]
 GET  /sessions/:id/terminal/hyperlink-span?row=R&col=C -> [startCol, endCol, url] | null
@@ -663,6 +670,14 @@ GET  /process/stats                                    -> ProcessStats[]
 ```
 
 `chat-view` is the transcript of a Claude or Grok terminal as ACP `SessionUpdate`s, tailed from the agent's own session file (never the grid). `updates` are the entries from `from_seq` in the `epoch` the client last saw; `reset: true` means the client holds a different conversation (`/clear`, new session, file truncated) or fell behind the bounded log, and must drop what it has and apply `updates` from scratch. A Grok terminal is bound only through its pid's `~/.grok/active_sessions.json` entry (never the newest session). A terminal with no bound Claude or Grok agent answers 500 `{"error":"not_bound: <reason>"}`. A read keeps the tail alive for 20 s; the server wakes clients with the `chat-view-changed` event while one reads.
+
+`/sessions/:id/visible` records one viewer's assertion (`viewer_id`, the client's
+`CLIENT_INSTANCE_ID`; omitted = a shared legacy viewer; at most 16 viewers per session,
+the oldest evicted); `visible: false` drops it at once. `visible: true` also wakes (SIGCONT) a session parked in standby unless
+`wake: false` — the frontend's 30 s keep-alive sends `wake: false`, skips while its document
+is hidden or its window unfocused, sends `visible: false` when the document hides and a waking
+`visible: true` on focus, so a minimised client's session can still reach standby. The desktop
+`set_session_visible` command takes the same optional `wake`.
 
 The `/agents/map`, `/agents/map/data` and `/agents/map/prompt` routes were
 removed on 2026-09-23. The Progress Flow view (`/progress/flow`, see Project
@@ -720,10 +735,13 @@ Sets a display name and its origin. `isCustom: true` protects an explicit user
 rename from subsequent OSC/intent titles; spawn-assigned and dynamic titles use
 `false`. Omitting the field preserves the legacy custom-rename behavior.
 
-Does **not** emit `session-renamed`: this route is the frontend store's own echo of a rename it
-already applied, so emitting would loop. Backend-originated renames (MCP `session action=rename`,
-the tmux shim's `PUT /tmux/panes/:id`) emit `session-renamed` (`{session_id, name, is_custom}`)
-instead.
+Emits `session-renamed` (`{session_id, name, is_custom}`) once per **real** change (name or
+`isCustom` differs from what is stored), so every other window and browser client sees the rename
+live; a repeated identical call is a no-op. `name: null` clears the stored name and is announced
+with `name: null` (clients keep their current label and apply only `is_custom`). This cannot
+ping-pong: clients apply `session-renamed` through the non-echoing `applyBackendRename`, and the
+originating window's own copy is an unchanged-value no-op. The Tauri `set_session_name` command
+behaves identically (shared `AppState::rename_session_from_frontend`).
 
 ### Set Accent Color
 
@@ -1091,7 +1109,7 @@ the server is back to the filter the connection was opened with.
 | `session-created` | `{session_id, cwd, agent_type, display_name, parent_session, is_remote}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise); `is_remote` is "created by an agent", not network locality — see "List Sessions" above |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
 | `chat-view-changed` | `{session_id, seq}` | The chat view of a Claude, Grok, exactly bound Codex or exact PID-bound ego terminal has entries past `seq`; read them with `GET /sessions/:id/chat-view` |
-| `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
+| `session-renamed` | `{session_id, name, is_custom}` | A tab's display name changed: MCP `session action=rename`, the tmux shim's `select-pane -T`, an OSC 0/2 title, or another client's `PUT /sessions/{id}/name` / IPC `set_session_name`. `name` is `null` when the name was cleared |
 | `session-suspended` | `{record}` | Rust persisted a suspended tab before ending its PTY; record fields use snake_case |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
 | `session-closed` | `{session_id, reason, agent_type}` | Session ended. `reason` is informational (`"closed"`, `"killed"`, `"process_exit"`, `"explicit_close"`); `agent_type` is the session's agent type at close time (or `null`), read before the session-state accumulator removes the entry — used to pick the short vs. long auto-close timer |

@@ -407,6 +407,66 @@ pub(crate) async fn wait_for_shell_idle(
     .await
 }
 
+/// Shell-readiness gate for a freshly created PLAIN SHELL session, run by every
+/// create path whose caller is expected to type into the new shell right away:
+/// MCP `session action=create`, MCP `repo action=worktree_create
+/// spawn_session=true` (`create_session_in_dir`), HTTP `POST /sessions` and
+/// `POST /sessions/worktree`. Without it the caller's very first write races
+/// `.zshrc`/Oh My Zsh/Powerlevel10k startup exactly like the tmux shim did before
+/// `tmux_routes::materialize` got its gate (plans/p10k-wizard-hijack-agent-pane-spawn-race.md).
+///
+/// Agent spawns (`POST /sessions/agent`, MCP `agent action=spawn`, desktop
+/// `spawn_agent`) are deliberately NOT gated: they exec the agent binary
+/// directly, so there is no interactive shell startup to wait out.
+///
+/// Bounded and fail-open: returns `false` after `timeout_ms` with a log line,
+/// and the caller returns the session id anyway — nothing hangs.
+///
+/// Skips (returns `false` immediately, no wait) when the session can never
+/// produce a readiness signal: it is not a live session, or it has no shell
+/// state atom (no reader thread). A shell WITHOUT OSC 133 integration (bash/fish
+/// that never sourced `$TUIC_SHELL_INTEGRATION`, `sh`, any other shell) is NOT
+/// skipped: the silence-timer fallback moves it to `SHELL_IDLE` ~500 ms after
+/// its startup output goes quiet, so it does not wait out the timeout — see
+/// `http_create_session_without_shell_integration_is_ready_well_before_the_timeout`.
+/// (`ZDOTDIR` — the one setting that used to silently disable zsh's integration
+/// and make every gate wait the full bound — is rejected in `custom_pty_env`.)
+pub(crate) async fn gate_new_shell_session(
+    state: &Arc<AppState>,
+    session_id: &str,
+    timeout_ms: u64,
+    origin: &str,
+) -> bool {
+    if !state.session_maps.sessions.contains_key(session_id)
+        || !state.session_maps.shell_states.contains_key(session_id)
+    {
+        return false;
+    }
+    if wait_for_shell_idle(state, session_id, timeout_ms).await {
+        return true;
+    }
+    tracing::warn!(
+        session_id,
+        origin,
+        timeout_ms,
+        "new shell session never reached a ready prompt within the readiness bound — \
+         returning the session anyway (fail-open)"
+    );
+    false
+}
+
+/// Run [`gate_new_shell_session`] for a `session action=create` result that
+/// carries a `session_id` (an error result has nothing to gate).
+pub(super) async fn gate_created_session_response(
+    state: &Arc<AppState>,
+    result: &serde_json::Value,
+    origin: &str,
+) {
+    if let Some(session_id) = result.get("session_id").and_then(|v| v.as_str()) {
+        gate_new_shell_session(state, session_id, SHELL_READINESS_TIMEOUT_MS, origin).await;
+    }
+}
+
 /// Whether `agent action=spawn` should withhold the prompt from launch argv
 /// and deliver it later via the mailbox once this session's MCP identity has
 /// bound, instead of embedding it directly in the launch command. See

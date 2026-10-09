@@ -482,10 +482,11 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
     }
 }
 
-/// Storage, the unchanged-value no-op guard, and the dual emit all live in
-/// `AppState::set_session_display_name` — this handler (and its Tauri-command
-/// twin, `pty/commands.rs`'s `set_session_name`) is only the existence check
-/// plus argument extraction. The two used to independently hand-duplicate all
+/// Storage, the unchanged-value no-op guard, and the `session-renamed` dual emit
+/// (so other windows/clients see a frontend rename live) all live in
+/// `AppState::rename_session_from_frontend` — this handler (and its
+/// Tauri-command twin, `pty/commands.rs`'s `set_session_name`) is only the
+/// existence check plus argument extraction. The two used to independently hand-duplicate all
 /// of that (~55 lines each), which is the same shape `set_pty_accent_color`
 /// already fixed for accent color.
 pub(super) async fn set_session_name(
@@ -496,7 +497,7 @@ pub(super) async fn set_session_name(
     if !state.session_maps.sessions.contains_key(&session_id) {
         return session_not_found();
     }
-    state.set_session_display_name(&session_id, body.name, body.is_custom.unwrap_or(true));
+    state.rename_session_from_frontend(&session_id, body.name, body.is_custom.unwrap_or(true));
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
@@ -1143,6 +1144,7 @@ pub(super) async fn create_session(
     }
     let shell = resolve_shell(body.shell);
 
+    let gate_state = state.clone();
     let spawn = tokio::task::spawn_blocking(move || {
         spawn_pty_session(
             state,
@@ -1169,10 +1171,21 @@ pub(super) async fn create_session(
         ))
     });
     match spawn {
-        Ok(session_id) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({"session_id": session_id})),
-        ),
+        Ok(session_id) => {
+            // Readiness gate (bounded, fail-open): the caller's next write must
+            // not race the shell's startup. See `gate_new_shell_session`.
+            super::mcp_transport::gate_new_shell_session(
+                &gate_state,
+                &session_id,
+                super::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+                "POST /sessions",
+            )
+            .await;
+            (
+                StatusCode::CREATED,
+                Json(serde_json::json!({"session_id": session_id})),
+            )
+        }
         Err(err) => err,
     }
 }
@@ -1390,7 +1403,9 @@ pub(super) async fn set_session_visible(
     // Remote visibility is per viewer (decision 8 port of B.8): one remote
     // client blurring a tab must not clear another remote client's claim.
     let viewer_id = body.viewer_id.filter(|v| !v.is_empty());
-    crate::background_mode::hidden::set_visible_for_viewer(
+    // `wake: false` (the frontend keep-alive) refreshes the claim without
+    // SIGCONT-ing a parked session; absent/`true` keeps the wake-on-focus.
+    crate::background_mode::hidden::set_visible_for_viewer_waking(
         &state,
         &session_id,
         body.visible,
@@ -1398,6 +1413,7 @@ pub(super) async fn set_session_visible(
         viewer_id
             .as_deref()
             .unwrap_or(crate::background_mode::hidden::LEGACY_VIEWER_ID),
+        body.wake.unwrap_or(true),
     );
     (StatusCode::OK, Json(serde_json::json!({ "ok": true })))
 }
@@ -1583,6 +1599,7 @@ pub(super) async fn create_session_with_worktree(
     let shell = resolve_shell(body.config.shell);
 
     let spawn_cwd = worktree_path_str.clone();
+    let gate_state = state.clone();
     let spawn = tokio::task::spawn_blocking(move || {
         spawn_pty_session(
             state,
@@ -1610,6 +1627,13 @@ pub(super) async fn create_session_with_worktree(
     });
     match spawn {
         Ok(session_id) => {
+            super::mcp_transport::gate_new_shell_session(
+                &gate_state,
+                &session_id,
+                super::mcp_transport::SHELL_READINESS_TIMEOUT_MS,
+                "POST /sessions/worktree",
+            )
+            .await;
             // setup_script/setup_script_error are no longer part of this
             // response — the setup script now runs in the background chain
             // kicked off right after worktree creation, above.
@@ -4173,59 +4197,194 @@ mod tests {
         );
     }
 
+    /// Every VT screen size argument (`new_vt_log_buffer(rows, cols, …)` /
+    /// `VtLogBuffer::new(rows, cols, …)`) in a call site's production code.
+    /// Test modules are cut off at the file's top-level `#[cfg(test)] mod`.
+    fn vt_screen_size_args(source: &str) -> Vec<(String, String)> {
+        let production = source
+            .find("\n#[cfg(test)]\nmod tests")
+            .map_or(source, |end| &source[..end]);
+        let mut out = Vec::new();
+        for needle in ["new_vt_log_buffer(", "VtLogBuffer::new("] {
+            let mut rest = production;
+            while let Some(at) = rest.find(needle) {
+                rest = &rest[at + needle.len()..];
+                let mut depth = 1usize;
+                let mut end = 0usize;
+                for (i, c) in rest.char_indices() {
+                    match c {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = i;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let args: Vec<String> = rest[..end]
+                    .split(',')
+                    .map(|a| a.split_whitespace().collect())
+                    .collect();
+                if args.len() >= 2 {
+                    out.push((args[0].clone(), args[1].clone()));
+                }
+            }
+        }
+        out
+    }
+
     /// The desktop commands (`create_pty`, `create_pty_with_worktree`,
     /// `agent::spawn_agent`) build their own VT screen instead of going
     /// through `register_pty_session`, so they can drift from its
     /// real-geometry contract on their own — they did, all three were left at a
     /// hardcoded 24x220. Not callable without a Tauri `AppHandle`, so the
-    /// contract is pinned on their source.
+    /// contract is pinned on their source: NO production VT screen in these
+    /// files may be built at any literal size (Batch 45/46 review: the guard
+    /// used to match only the exact `24,220` spelling).
     #[test]
     fn desktop_spawn_commands_size_the_vt_screen_to_the_real_pty() {
+        let is_literal = |arg: &str| {
+            let digits = arg.trim_end_matches("u16").trim_end_matches("_u16");
+            !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit() || c == '_')
+        };
+        let mut sites = 0;
         for (file, source) in [
             ("pty/commands.rs", include_str!("../pty/commands.rs")),
             ("agent.rs", include_str!("../agent.rs")),
+            ("mcp_http/session.rs", include_str!("session.rs")),
         ] {
-            let compact: String = source.split_whitespace().collect();
-            assert!(
-                !compact.contains("new_vt_log_buffer(24,220"),
-                "{file} builds a VT screen at a hardcoded 24x220 instead of the PTY's size"
-            );
+            for (rows, cols) in vt_screen_size_args(source) {
+                sites += 1;
+                assert!(
+                    !is_literal(&rows) && !is_literal(&cols),
+                    "{file} builds a VT screen at a hardcoded size ({rows}x{cols}) instead of the PTY's"
+                );
+            }
         }
+        // commands.rs x2, agent.rs, session.rs: a guard that finds nothing proves nothing.
+        assert!(
+            sites >= 4,
+            "expected the four VT screen sites, found {sites}"
+        );
     }
 
-    /// `PUT /sessions/{id}/name` is a frontend-originated rename (the store's
-    /// `update()` echoes every `name` change here), so it must never emit
-    /// `session-renamed`: the frontend's listener feeds that event straight back
-    /// into `update()`, which would echo again — an unbounded ping-pong on every
-    /// OSC title repaint. Backend-originated renames (MCP `session action=rename`,
-    /// tmux `select-pane -T`) go through `AppState::rename_session_from_backend`.
+    #[test]
+    fn the_vt_size_guard_flags_any_literal_size() {
+        let flagged = vt_screen_size_args(
+            "fn a() { state.new_vt_log_buffer(40, 120, CAP); VtLogBuffer::new(rows, 80, 1); }",
+        );
+        assert_eq!(
+            flagged,
+            vec![
+                ("40".to_string(), "120".to_string()),
+                ("rows".to_string(), "80".to_string())
+            ]
+        );
+    }
+
+    /// The `session-renamed` events `PUT /sessions/{id}/name` produced, in order.
+    fn drain_renames(
+        rx: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
+    ) -> Vec<(Option<String>, bool)> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                crate::state::AppEvent::SessionRenamed {
+                    name, is_custom, ..
+                } => Some((name, is_custom)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    async fn put_name(
+        state: &Arc<AppState>,
+        session_id: &str,
+        name: Option<&str>,
+        is_custom: bool,
+    ) {
+        set_session_name(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetNameRequest {
+                name: name.map(str::to_string),
+                is_custom: Some(is_custom),
+            }),
+        )
+        .await;
+    }
+
+    /// `PUT /sessions/{id}/name` (and its IPC twin, which shares
+    /// `AppState::rename_session_from_frontend`) is a frontend-originated
+    /// rename. It used to never emit (main's rule), so another window or a
+    /// browser client never saw a tab renamed elsewhere until reload. It now
+    /// emits `session-renamed` once per REAL change so they see it live. The
+    /// echo ping-pong that rule guarded against cannot return: every client
+    /// applies `session-renamed` through the non-echoing `applyBackendRename`,
+    /// and the unchanged-value guard drops the originating window's repeat.
     #[cfg(unix)]
     #[tokio::test]
-    async fn set_session_name_never_emits_session_renamed() {
+    async fn set_session_name_emits_session_renamed_once_per_real_change() {
         let state = super::super::tests::test_state();
-        let session_id = "rename-no-echo";
+        let session_id = "rename-emits-live";
         crate::state::tests_support::insert_dummy_session(&state, session_id);
 
         let mut rx = state.event_bus.subscribe();
         for name in ["hello", "hello", "world"] {
-            set_session_name(
-                State(state.clone()),
-                Path(session_id.to_string()),
-                Json(SetNameRequest {
-                    name: Some(name.to_string()),
-                    is_custom: Some(false),
-                }),
-            )
-            .await;
+            put_name(&state, session_id, Some(name), false).await;
         }
-        while let Ok(event) = rx.try_recv() {
-            assert!(
-                !matches!(event, crate::state::AppEvent::SessionRenamed { .. }),
-                "a frontend-originated rename must not emit session-renamed: {event:?}"
-            );
-        }
+        assert_eq!(
+            drain_renames(&mut rx),
+            vec![
+                (Some("hello".to_string()), false),
+                (Some("world".to_string()), false)
+            ],
+            "one session-renamed per real change; the repeated name is a no-op"
+        );
         let entry = state.session_maps.sessions.get(session_id).unwrap();
         assert_eq!(entry.lock().display_name.as_deref(), Some("world"));
+    }
+
+    /// Restored from wip (653198992): flipping only `is_custom` is a real
+    /// change other clients must see (it decides whether OSC titles may
+    /// overwrite the name).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_emits_when_only_is_custom_flips() {
+        let state = super::super::tests::test_state();
+        let session_id = "rename-is-custom-flip";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        let mut rx = state.event_bus.subscribe();
+        put_name(&state, session_id, Some("same name"), false).await;
+        put_name(&state, session_id, Some("same name"), true).await;
+        assert_eq!(
+            drain_renames(&mut rx),
+            vec![
+                (Some("same name".to_string()), false),
+                (Some("same name".to_string()), true)
+            ],
+        );
+    }
+
+    /// A null name clears the stored name and is announced as `name: null`, so
+    /// other clients drop the custom flag instead of never hearing about it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_with_a_null_name_emits_a_cleared_rename() {
+        let state = super::super::tests::test_state();
+        let session_id = "rename-null-name";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        put_name(&state, session_id, Some("pinned"), true).await;
+        let mut rx = state.event_bus.subscribe();
+        put_name(&state, session_id, None, false).await;
+        put_name(&state, session_id, None, false).await;
+        assert_eq!(drain_renames(&mut rx), vec![(None, false)]);
+        let entry = state.session_maps.sessions.get(session_id).unwrap();
+        assert_eq!(entry.lock().display_name, None);
     }
 
     /// Same unchanged-value guard as `set_session_name` — required so a
@@ -4309,6 +4468,28 @@ mod tests {
         .await;
 
         assert!(!state.grid.pending_scroll.contains_key("does-not-exist"));
+    }
+
+    /// Mirrors `set_session_accent_color_404s_for_an_unknown_session` — the
+    /// existence check is a hand-copied guard in both handlers, so a change to
+    /// one can silently drop the other. `set_session_display_name` itself
+    /// (`state.rs`) also no-ops on an unknown session id, but that's covered
+    /// indirectly via this 404 rather than a bare `false` on the raw function.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_404s_for_an_unknown_session() {
+        let state = super::super::tests::test_state();
+        let resp = set_session_name(
+            State(state.clone()),
+            Path("does-not-exist".to_string()),
+            Json(SetNameRequest {
+                name: Some("hello".to_string()),
+                is_custom: Some(false),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -5801,7 +5982,7 @@ mod tests {
             for title in ["Claude Code", "shell"] {
                 state.emit_pty_event(crate::state::AppEvent::SessionRenamed {
                     session_id: sid.into(),
-                    name: title.into(),
+                    name: Some(title.into()),
                     is_custom: false,
                 });
                 let received = tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -5838,7 +6019,7 @@ mod tests {
                         tick.tick().await;
                         animated_state.emit_pty_event(crate::state::AppEvent::SessionRenamed {
                             session_id: sid.into(),
-                            name: "animated title".into(),
+                            name: Some("animated title".into()),
                             is_custom: false,
                         });
                     }
@@ -6816,5 +6997,167 @@ mod tests {
         let state = super::super::tests::test_state();
         crate::state::tests_support::insert_dummy_session(&state, "focus-me");
         focus_session_impl(&state, "focus-me").expect("a live session must be focusable");
+    }
+
+    // ── B2.1: shell-readiness gate on the plain-shell create routes ──────────
+
+    fn plain_create_request(shell: Option<String>) -> CreateSessionRequest {
+        CreateSessionRequest {
+            rows: None,
+            cols: None,
+            shell,
+            cwd: None,
+            session_id: None,
+            alias: None,
+            display_name: None,
+            display_name_is_custom: false,
+            user_initiated: false,
+        }
+    }
+
+    fn shell_state_of(state: &AppState, session_id: &str) -> Option<u8> {
+        state
+            .session_maps
+            .shell_states
+            .get(session_id)
+            .map(|v| v.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// `POST /sessions` must not return the id before the new shell reaches a
+    /// prompt — the caller's very next write (e.g. `tuic new` + `send`) would
+    /// otherwise race `.zshrc` startup. Without the gate the route returns the
+    /// instant the PTY is registered, with the shell still `SHELL_NULL`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_create_session_returns_only_after_the_shell_reaches_idle() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = create_session(State(state.clone()), Json(plain_create_request(None)))
+            .await
+            .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if status != StatusCode::CREATED {
+            eprintln!("Skipping: PTY not available in this environment ({body})");
+            return;
+        }
+        let session_id = body["session_id"].as_str().expect("session_id").to_string();
+        assert_eq!(
+            shell_state_of(&state, &session_id),
+            Some(crate::pty::SHELL_IDLE),
+            "POST /sessions must hold its response until the shell is idle"
+        );
+        close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// A shell TUIC injects no OSC 133 integration into (`/bin/sh`) still
+    /// becomes ready via the silence fallback — the gate must not wait out
+    /// its whole bound for it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn http_create_session_without_shell_integration_is_ready_well_before_the_timeout() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let started = std::time::Instant::now();
+        let response = create_session(
+            State(state.clone()),
+            Json(plain_create_request(Some("/bin/sh".to_string()))),
+        )
+        .await
+        .into_response();
+        let elapsed = started.elapsed();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if status != StatusCode::CREATED {
+            eprintln!("Skipping: PTY not available in this environment ({body})");
+            return;
+        }
+        let session_id = body["session_id"].as_str().expect("session_id").to_string();
+        assert_eq!(
+            shell_state_of(&state, &session_id),
+            Some(crate::pty::SHELL_IDLE),
+            "a shell without OSC 133 must still be gated (silence fallback)"
+        );
+        assert!(
+            elapsed
+                < std::time::Duration::from_millis(
+                    super::super::mcp_transport::SHELL_READINESS_TIMEOUT_MS
+                ),
+            "a no-integration shell waited out the whole readiness bound ({elapsed:?})"
+        );
+        close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// The worktree-creating twin route types into a shell the same way, so it
+    /// is gated too.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn http_create_session_with_worktree_returns_only_after_the_shell_reaches_idle() {
+        let repo = crate::state::tests_support::create_temp_git_repo();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = create_session_with_worktree(
+            State(state.clone()),
+            Json(CreateSessionWithWorktreeRequest {
+                config: plain_create_request(None),
+                base_repo: repo.path().to_string_lossy().to_string(),
+                branch_name: "readiness-gate-branch".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        if status != StatusCode::CREATED {
+            eprintln!("Skipping: PTY/worktree not available in this environment ({body})");
+            return;
+        }
+        let session_id = body["session_id"].as_str().expect("session_id").to_string();
+        assert_eq!(
+            shell_state_of(&state, &session_id),
+            Some(crate::pty::SHELL_IDLE),
+            "POST /sessions/worktree must hold its response until the shell is idle"
+        );
+        close_session(State(state), axum::extract::Path(session_id)).await;
+    }
+
+    /// B2.3: the frontend's periodic keep-alive sends `wake: false` — it must
+    /// refresh the assertion WITHOUT waking (SIGCONT-ing) a parked session; an
+    /// ordinary visible:true (a real focus) still wakes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_visible_with_wake_false_does_not_wake_a_parked_session() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state
+            .session_maps
+            .standby_sessions
+            .insert("parked".to_string(), 0);
+        let body: SessionVisibleRequest = serde_json::from_value(
+            serde_json::json!({"visible": true, "viewer_id": "v", "wake": false}),
+        )
+        .unwrap();
+        let _ = set_session_visible(State(state.clone()), Path("parked".to_string()), Json(body))
+            .await
+            .into_response();
+        assert!(
+            state.session_maps.standby_sessions.contains_key("parked"),
+            "a keep-alive must not wake a parked session"
+        );
+        let body: SessionVisibleRequest =
+            serde_json::from_value(serde_json::json!({"visible": true, "viewer_id": "v"})).unwrap();
+        let _ = set_session_visible(State(state.clone()), Path("parked".to_string()), Json(body))
+            .await
+            .into_response();
+        assert!(
+            !state.session_maps.standby_sessions.contains_key("parked"),
+            "a real focus (no `wake` field) still wakes"
+        );
     }
 }
