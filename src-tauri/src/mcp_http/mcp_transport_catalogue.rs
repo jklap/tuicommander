@@ -614,7 +614,6 @@ pub(super) const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 ];
 
 /// Full MCP tool definitions — the one native tool family.
-
 ///
 /// This returns the unfiltered schema list. Public listing/search paths MUST
 /// route through [`filtered_native_tools`] to honour `mcp_capabilities`
