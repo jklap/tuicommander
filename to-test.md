@@ -4818,3 +4818,7 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 - [ ] Visually confirm Compose sits below the conversation without overlapping it in a running app, and answer a permission prompt in CLI. The worktree Vite/stealth-browser screenshot attempt timed out on the shared browser; native rendering remains unverified.
 
 - [ ] After Boss restarts `make dev` (or rebuilds release), retry removal of the clean merged `feat/upload-cookie-1512` worktree. The Rust permission fix is not loaded by frontend HMR; the original worktree was left untouched during verification (#1607-0733).
+
+## Headless GitHub account login validation
+
+- [ ] After landing and rebuilding `tuic-remote`, verify browser add-account device-flow login resolves and stores the named account. The shared helper now compiles without desktop. Rust changes require a manual restart to load; no desktop instance was launched.
