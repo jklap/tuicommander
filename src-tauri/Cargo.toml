@@ -227,7 +227,7 @@ rodio = { version = "0.22.2", default-features = false, features = ["playback"],
 # mirrors from it — crosses the network uncompressed.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "charset", "http2", "system-proxy", "stream", "json", "form", "query", "gzip", "brotli"] }
 # The WebSocket half of the same problem. `CompressionLayer` is an HTTP layer and
-# never sees a WS frame, and tungstenite 0.30 — the implementation behind both
+# never sees a WS frame, and tungstenite 0.29 — the implementation behind both
 # `axum::extract::ws` and the tunnel's client — has no permessage-deflate at all,
 # so the terminal stream crossed a remote link uncompressed. Already in the tree
 # under `async-compression`; named here because `mcp_http::ws_compression` uses
@@ -274,7 +274,7 @@ chrono-tz = "=0.10.4"
 croner = { version = "=4.0.1", default-features = false, features = ["chrono"] }
 iana-time-zone = "=0.1.65"
 alacritty_terminal = "0.26.0"
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"] }
 aes-gcm = "0.11"
 sha2 = "0.11"
 hkdf = "0.13"
