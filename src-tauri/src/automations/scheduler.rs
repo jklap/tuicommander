@@ -3,7 +3,6 @@
 use super::{
     model::AutomationsConfig,
     run::{AutomationRun, RunTrigger},
-    schedule::Schedule,
     store::RunStore,
 };
 use chrono::{DateTime, Utc};
@@ -24,7 +23,7 @@ pub fn tick(
         .iter()
         .filter(|definition| definition.enabled)
     {
-        let schedule = Schedule::parse(&definition.cron, &definition.timezone)?;
+        let schedule = definition.schedule()?;
         if let Some(occurrence) = schedule.latest_due(now, None)?
             && let Some(run) = store.admit(
                 definition,

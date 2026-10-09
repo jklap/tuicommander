@@ -4,7 +4,7 @@
 once every 30 seconds; this module starts no thread and launches no agents.
 It returns newly recorded decisions. Only `Reserved` decisions are dispatchable.
 
-Each enabled definition evaluates its stored cron and zone once, selecting only
+Each enabled definition evaluates its stored cron or Once schedule and zone, selecting only
 the latest occurrence at or before `now`. Its age may equal `grace_secs` and
 still run. Older latest occurrences become `skipped_missed`; intervening
 occurrences are covered by the cursor rather than materialized as a backlog.
@@ -22,3 +22,11 @@ both. Refused occurrences never queue for later execution.
 not move the scheduled cursor. Dispatch must skip prechecks for `Manual`
 triggers. Boot recovery remains RunOwner's responsibility: every open run is
 interrupted and never automatically retried.
+
+Once schedules produce no due occurrence before the stored wall time. After
+admission, the same durable cursor consumes that occurrence even when its history
+row is pruned or interrupted at restart. Manual runs never consume a Once schedule.
+
+`RunStore::scheduled_cursor(id)` exposes the consumed scheduled UTC milliseconds
+for preview/completed-state consumers. Readers may inspect it without ownership;
+manual runs are excluded. Convert it to UTC DateTime for `preview_definition`.

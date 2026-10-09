@@ -2,6 +2,12 @@
 use super::*;
 
 impl RunStore {
+    /// Latest consumed scheduled occurrence in UTC milliseconds. Manual runs
+    /// never contribute; retention cannot erase the high-water cursor.
+    pub fn scheduled_cursor(&self, automation_id: &str) -> Result<Option<i64>, String> {
+        scheduled_cursor_in(&self.connect()?, automation_id)
+    }
+
     /// Reserve or durably refuse work. A scheduled occurrence is never queued.
     pub(in crate::automations) fn admit(
         &self,
@@ -27,11 +33,7 @@ impl RunStore {
             if occurrence_ms > now_ms {
                 return Err("Automation occurrence is in the future".into());
             }
-            // Include reservations predating the scheduler; manual history never moves this cursor.
-            let cursor: Option<i64> = tx.query_row(
-                "SELECT MAX(occurrence_ms) FROM (SELECT occurrence_ms FROM automation_cursors WHERE automation_id=?1 UNION ALL SELECT MAX(occurrence_ms) AS occurrence_ms FROM automation_runs WHERE automation_id=?1)",
-                [&definition.id], |r| r.get(0),
-            ).map_err(error)?;
+            let cursor = scheduled_cursor_in(&tx, &definition.id)?;
             if cursor.is_some_and(|cursor| occurrence_ms <= cursor) {
                 return Ok(None);
             }
@@ -67,4 +69,12 @@ impl RunStore {
         tx.commit().map_err(error)?;
         Ok(run)
     }
+}
+
+fn scheduled_cursor_in(conn: &Connection, automation_id: &str) -> Result<Option<i64>, String> {
+    // Include lower-level ledger reservations; never count manual history.
+    conn.query_row(
+        "SELECT MAX(occurrence_ms) FROM (SELECT occurrence_ms FROM automation_cursors WHERE automation_id=?1 UNION ALL SELECT MAX(occurrence_ms) AS occurrence_ms FROM automation_runs WHERE automation_id=?1)",
+        [automation_id], |r| r.get(0),
+    ).map_err(error)
 }
