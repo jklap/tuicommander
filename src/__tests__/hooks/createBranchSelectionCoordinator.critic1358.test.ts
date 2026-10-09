@@ -56,6 +56,9 @@ describe("branch restore with suspended tabs (critic 1358)", () => {
 		return terminalsStore.getIds().map((id) => terminalsStore.get(id)!);
 	}
 
+	// The plain-shell filter only runs with "Restore open terminals on launch" off; that setting
+	// defaults on (every saved tab restores, shells included), so the filter cases turn it off.
+
 	// Catches: a file saved before this feature (no `suspended` key) is read as suspended, or the
 	// plain-shell filter now keeps unsuspended shells.
 	// "Restore open terminals on launch" (restore_shell_terminals) defaults on; these
