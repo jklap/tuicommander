@@ -322,6 +322,51 @@ async fn mcp_branch_delete_refuses_unique_checked_out_current_and_missing_branch
     assert!(linked.exists(), "a checked-out worktree must remain");
 }
 
+/// Catches: MCP `worktree_remove` deleting a CLEAN worktree a live session
+/// still works in (wip 9586bf02c; Batch 8 review), and `override_busy`
+/// not reaching the removal.
+#[cfg(unix)]
+#[tokio::test]
+async fn mcp_worktree_remove_refuses_a_worktree_with_a_live_session() {
+    let config = tempfile::tempdir().unwrap();
+    let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+    let repo = tuic_git::test_fixtures::setup_test_repo();
+    let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "busy", false);
+    let state = test_state();
+    crate::state::tests_support::insert_dummy_session(&state, "pty-mcp");
+    crate::state::tests_support::set_session_cwd(
+        &state,
+        "pty-mcp",
+        &worktree.to_string_lossy(),
+    );
+    let repo_path = repo.path().to_string_lossy().into_owned();
+
+    let refused = handle_worktree(
+        &state,
+        &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "branch": "busy", "delete_branch": false}),
+        false,
+    )
+    .await;
+    assert!(
+        refused["error"]
+            .as_str()
+            .is_some_and(|error| error.starts_with(crate::worktree::BUSY_WORKTREE_PREFIX)),
+        "{refused}"
+    );
+    assert_eq!(refused["code"], "worktree_busy");
+    assert_eq!(refused["live_sessions"][0]["session_id"], "pty-mcp");
+    assert!(worktree.exists());
+
+    let removed = handle_worktree(
+        &state,
+        &serde_json::json!({"action": "worktree_remove", "path": &repo_path, "branch": "busy", "delete_branch": false, "override_busy": true}),
+        false,
+    )
+    .await;
+    assert_eq!(removed["ok"], true, "{removed}");
+    assert!(!worktree.exists());
+}
+
 #[tokio::test]
 async fn mcp_worktree_remove_defaults_to_non_force_and_keeps_dirty_work() {
     let config = tempfile::tempdir().unwrap();

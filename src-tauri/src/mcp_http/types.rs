@@ -389,6 +389,10 @@ pub(super) struct RemoveWorktreeQuery {
     /// Explicit safe deletion instead of retaining a reusable checkout.
     #[serde(rename = "permanentDelete", default)]
     pub permanent_delete: Option<bool>,
+    /// Explicit confirmation to remove a checkout live sessions still work in
+    /// (`worktree_busy:` refusal). Independent of `force` and `overrideLock`.
+    #[serde(rename = "overrideBusy", default)]
+    pub override_busy: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -1216,6 +1220,10 @@ pub(super) struct GitDeleteLocalBranchRequest {
     pub workspace_id: String,
     #[serde(rename = "keepWorktree")]
     pub keep_worktree: Option<bool>,
+    /// Lifts only the live-session refusal (`worktree_busy:`) when the checkout
+    /// is removed with the branch — same as `DELETE /worktrees/{id}`'s.
+    #[serde(rename = "overrideBusy", default)]
+    pub override_busy: Option<bool>,
 }
 
 #[derive(Deserialize)]
