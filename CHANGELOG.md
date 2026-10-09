@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Repair stale TUIC MCP bridge paths in Claude private and configured launch profiles, and warn when a missing configured bridge cannot be repaired (#1637-d6e1).
 - Keep mobile AI Chat within the phone width and use the session composer styles with labelled icon actions (#1625-c04f).
 - Give the mobile update banner AA text contrast in both themes and place it below the header, away from the status edge (#1626-9529).
 - Fix mobile session notification sounds playing outside the visible Sessions list, including delayed completion sounds and hidden PWA documents. Keep muted transitions from replaying on return.

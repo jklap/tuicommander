@@ -1,3 +1,7 @@
+## Claude MCP launch profiles (1637-d6e1) — Rust restart required
+
+- [ ] After landing and Boss's planned `make dev` restart or `make build`, confirm startup repairs a stale Claude private/run-profile TUIC bridge path and a fresh Claude session receives the TUIC MCP instructions. Targeted tests cover default/private/inherited/run-config roots, disabled integrations, custom transports and missing-path warnings. The backend change does not hot-reload; this lane does not restart desktop.
+
 ## Automation prechecks (1614-7e8f) — Rust restart required
 
 - [ ] After dispatcher/API integration and Boss's next planned `make dev` restart or `make build`, run an automation whose precheck exits 0, exits nonzero and times out; confirm dispatch only for exit 0 and saved `skipped_precheck` diagnostics otherwise. Confirm Run Now records a bypass and does not execute the precheck. The standalone helper has targeted shell/process tests; runtime persistence belongs to Step 6. Rust does not hot-reload; this lane does not launch desktop.
