@@ -1218,3 +1218,22 @@ Notification attempts are deduplicated by run, transition and channel and settle
 as confirmed or unknown independently of execution. Boot marks outstanding
 attempts unknown; it does not replay them. Saved output remains the canonical
 report. Scheduler boot and public transports are wired in later plan steps.
+
+### Precheck execution foundation
+
+`automations/precheck.rs` runs a configured precheck in the dispatcher's resolved
+workspace through the same clean, non-interactive shell/environment policy as
+Smart Prompts (`sh -c`, or `cmd /D /S /C` on Windows). Only exit code 0 admits
+agent dispatch; nonzero exits, signals, timeouts and execution errors require
+`skipped_precheck`. Spawn errors remain distinct from exit failures.
+
+Each stream is drained independently and retained up to 256 KiB, with truncation
+flags and elapsed milliseconds. The configured timeout starts after process
+setup. Teardown kills the owned process group (Unix) or job (Windows), including
+pipe-owning descendants; capture cleanup has a separate two-second bound and
+reports incomplete capture as an error. Manual Run Now returns a persistable
+`bypassed` outcome without spawning; no configured precheck returns
+`not_configured`. Precheck output does not modify the prompt.
+
+This helper is the Step 5 foundation; Step 6 owns run-ledger persistence and
+runtime dispatch integration. No scheduler is started by this module.
