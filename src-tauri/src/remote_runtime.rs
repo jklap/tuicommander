@@ -911,7 +911,14 @@ async fn parse_health_response(
         .json()
         .await
         .map_err(|e| format!("Malformed health response: {}", e.without_url()))?;
-    Ok(Health {
+    Ok(health_from_json(&body))
+}
+
+/// The fields Connect reads from a `/health` body. Shared with Test
+/// Connection's SSH daemon check, which reads the same body over a stdio
+/// forward instead of a tunnel.
+pub(crate) fn health_from_json(body: &serde_json::Value) -> Health {
+    Health {
         protocol_version: body
             .get("protocol_version")
             .and_then(serde_json::Value::as_u64),
@@ -930,7 +937,7 @@ async fn parse_health_response(
             .get("socket_path")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
-    })
+    }
 }
 
 async fn read_direct_health_with_lookup<F, Fut>(
