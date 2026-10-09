@@ -800,7 +800,7 @@ virtual) teammate learns its lead; a lead already recorded is never overwritten.
 PUT /tmux/panes/:id?label=<label>
 { "title": "teammate-1" }
 ```
-Records the pane's title and, if materialised and the title changed, renames its TUIC tab as a backend-originated rename (emits `session-renamed`, like MCP `session action=rename`). An empty or missing title only updates the pane record.
+Records the pane's title and, if materialised and the title changed, renames its TUIC tab as a backend-originated rename (emits `session-renamed`, like MCP `session action=rename`). An empty title (`select-pane -T ""`) clears the pane's title and, when the tab still shows the title this shim gave it, clears the tab's name too (not custom any more, so OSC titles may name it again; emits `session-renamed` with `name: null`) — a name the user gave the tab is never cleared. A missing title (plain `select-pane -t X`) changes nothing.
 
 ```
 DELETE /tmux/panes/:id?label=<label>

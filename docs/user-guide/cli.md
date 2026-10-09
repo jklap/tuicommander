@@ -339,7 +339,7 @@ panes.
 | `tmux list-windows [-t target] [-F fmt]` | List a session's windows |
 | `tmux list-panes [-t target] [-F fmt]` | List a window's panes |
 | `tmux display-message -p fmt` | Render a `#{...}` format string to stdout |
-| `tmux select-pane -t target -T title` | Rename a pane's tab |
+| `tmux select-pane -t target -T title` | Rename a pane's tab (`-T ""` clears the name it set) |
 | `tmux kill-pane -t target` | Close one pane |
 | `tmux kill-session -t target` | Kill session |
 | `tmux kill-server` | Kill all sessions (and all tracked tmux topology) |

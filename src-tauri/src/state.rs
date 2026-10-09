@@ -3083,6 +3083,22 @@ impl AppState {
         true
     }
 
+    /// Clear a tab's explicit name from the backend (tmux `select-pane -T ""`):
+    /// no stored name, not custom (so OSC titles may name it again), announced
+    /// as `session-renamed {name: null, is_custom: false}` only when something
+    /// changed. Returns whether it did.
+    pub(crate) fn clear_session_name_from_backend(&self, session_id: &str) -> bool {
+        if !self.set_session_display_name(session_id, None, false) {
+            return false;
+        }
+        self.emit_dual(AppEvent::SessionRenamed {
+            session_id: session_id.to_string(),
+            name: None,
+            is_custom: false,
+        });
+        true
+    }
+
     /// A rename that started in a frontend (IPC/HTTP `set_session_name`, the
     /// store's `update()` echo of a local rename): store it and, only when the
     /// name or `is_custom` actually changed, dual-emit `session-renamed` so every
