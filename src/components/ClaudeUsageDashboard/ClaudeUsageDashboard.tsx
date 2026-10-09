@@ -203,7 +203,7 @@ function svgPath(points: { x: number; y: number }[]): string {
 function svgAreaPath(points: { x: number; y: number }[]): string {
 	if (points.length === 0) return "";
 	const line = svgPath(points);
-	const lastX = points[points.length - 1].x;
+	const lastX = points.at(-1)!.x;
 	const firstX = points[0].x;
 	return `${line} L${lastX.toFixed(1)},${PLOT_H.toFixed(1)} L${firstX.toFixed(1)},${PLOT_H.toFixed(1)} Z`;
 }
