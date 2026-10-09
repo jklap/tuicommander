@@ -218,6 +218,8 @@ host.getTerminalState()    // { sessionId, shellState, agentType, agentActive, a
 host.onStateChange(cb)     // Disposable — agent-started/stopped, repo-changed, branch-changed, shell-state-changed, awaiting-input-changed
 ```
 
+Final shell/awaiting transitions emitted together with session teardown retain the old session ID. Replacement sessions establish a new baseline without replaying initial state.
+
 ### Tier 2b: Git Read (requires `git:read` capability)
 
 ```typescript
