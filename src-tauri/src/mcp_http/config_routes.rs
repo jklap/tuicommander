@@ -628,6 +628,7 @@ pub(super) async fn get_agent_wrap_user_function(Path(agent): Path<String>) -> i
 }
 
 pub(super) async fn put_agent_wrap_user_function(
+    State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
     Path(agent): Path<String>,
@@ -649,7 +650,7 @@ pub(super) async fn put_agent_wrap_user_function(
             );
         }
     };
-    match crate::agent_hook_commands::set_agent_wrap_user_function(agent, value) {
+    match crate::agent_hook_commands::apply_agent_wrap_user_function(&state, agent, value) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (
             StatusCode::BAD_REQUEST,
