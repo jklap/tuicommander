@@ -271,4 +271,17 @@ describe("RemoteConnectionEditor", () => {
 			password: "pw",
 		});
 	});
+
+	it("a protected daemon tested with no password says a password is required, not 'not configured'", async () => {
+		actions.testConnection.mockResolvedValueOnce({ type: "PasswordRequired" });
+		const { container, getByText, findByText, queryByText } = render(() => (
+			<RemoteConnectionEditor target={{ kind: "new" }} onClose={vi.fn()} />
+		));
+		fireEvent.change(field(container, "Kind"), { target: { value: "RemoteDirect" } });
+		fireEvent.input(field(container, "URL"), { target: { value: "http://h:9877" } });
+		fireEvent.click(getByText("Test Connection"));
+
+		expect(await findByText(/requires a password/)).toBeTruthy();
+		expect(queryByText(/not configured/)).toBeNull();
+	});
 });
