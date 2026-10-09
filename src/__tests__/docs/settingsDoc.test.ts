@@ -46,6 +46,9 @@ const TABS = [
 	{
 		name: "Terminal",
 		heading: "\n### Terminal\n",
+		// The Terminal tab's own "Custom Environment Variables" and "Session Restore" groups
+		// are documented under their own headings right after the Terminal table.
+		extraHeadings: ["\n### Custom Environment Variables\n", "\n### Session Restore\n"],
 		path: "src/components/SettingsPanel/tabs/TerminalTab.tsx",
 		minControls: 10,
 	},
@@ -66,7 +69,7 @@ const TABS = [
 	},
 ];
 
-describe.each(TABS)("settings.md $name section reference", ({ heading, path, minControls }) => {
+describe.each(TABS)("settings.md $name section reference", ({ heading, extraHeadings, path, minControls }) => {
 	const tabSource = readFileSync(join(process.cwd(), path), "utf8");
 
 	it("has at least the controls this test was written against (canary against the extraction regex going stale)", () => {
@@ -75,7 +78,7 @@ describe.each(TABS)("settings.md $name section reference", ({ heading, path, min
 	});
 
 	it("documents every control as a bold row in its settings.md section", () => {
-		const section = tabSection(heading).toLowerCase();
+		const section = [heading, ...(extraHeadings ?? [])].map(tabSection).join("\n").toLowerCase();
 		const undocumented = extractLabels(tabSource).filter((label) => !section.includes(`**${label.toLowerCase()}**`));
 		expect(undocumented).toEqual([]);
 	});
