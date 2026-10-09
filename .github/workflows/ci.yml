@@ -134,11 +134,13 @@ jobs:
         # of the plugins submodule's own tests below.
         run: bash scripts/with-test-tmp.sh pnpm test:plugins:test && bash scripts/with-test-tmp.sh pnpm test:plugins
 
+      # Wrapped like the Makefile's `check` target (with-test-tmp.sh), which
+      # runs the same two steps.
       - name: Architecture cycles
-        run: pnpm architecture:cycles && pnpm architecture:cycles:test
+        run: bash scripts/with-test-tmp.sh pnpm architecture:cycles && bash scripts/with-test-tmp.sh pnpm architecture:cycles:test
 
       - name: No literal NUL bytes in source
-        run: pnpm check:no-nul-bytes && pnpm check:no-nul-bytes:test
+        run: bash scripts/with-test-tmp.sh pnpm check:no-nul-bytes && bash scripts/with-test-tmp.sh pnpm check:no-nul-bytes:test
 
   # Always runs: clippy + tests on Linux (fastest, catches most issues)
   rust:
