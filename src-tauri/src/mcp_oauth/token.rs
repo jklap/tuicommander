@@ -8,7 +8,8 @@
 //! - Immediate keyring persistence after every token operation
 
 use anyhow::{Context, Result, bail};
-use oauth2::PkceCodeChallenge;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -47,6 +48,10 @@ pub(crate) struct PkceChallengePair {
     pub(crate) verifier: String,
 }
 
+fn pkce_s256(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
 impl TokenManager {
     pub(crate) fn new(
         upstream_name: String,
@@ -67,11 +72,11 @@ impl TokenManager {
 
     /// Generate a new PKCE S256 challenge pair for an authorization request.
     pub(crate) fn generate_pkce() -> PkceChallengePair {
-        let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+        let verifier = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
         PkceChallengePair {
-            challenge: challenge.as_str().to_string(),
+            challenge: pkce_s256(&verifier),
             method: "S256".to_string(),
-            verifier: verifier.secret().to_string(),
+            verifier,
         }
     }
 
@@ -278,6 +283,32 @@ struct TokenResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches wrong S256 encoding and generating a challenge for another verifier.
+    #[test]
+    fn pkce_s256_matches_rfc7636_appendix_b() {
+        assert_eq!(
+            pkce_s256("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+
+        use base64ct::{Base64UrlUnpadded, Encoding as _};
+
+        let pair = TokenManager::generate_pkce();
+        assert_eq!(pair.method, "S256");
+        assert!((43..=128).contains(&pair.verifier.len()));
+        assert!(
+            pair.verifier
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._~".contains(&b))
+        );
+        // Use independent primitives, not pkce_s256 or its SHA/base64 helpers.
+        let digest = ring::digest::digest(&ring::digest::SHA256, pair.verifier.as_bytes());
+        assert_eq!(
+            pair.challenge,
+            Base64UrlUnpadded::encode_string(digest.as_ref())
+        );
+    }
 
     #[test]
     fn pkce_generates_s256() {
