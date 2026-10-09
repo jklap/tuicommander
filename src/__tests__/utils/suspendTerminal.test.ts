@@ -89,6 +89,16 @@ describe("Rust-owned suspend and resume", () => {
 				expect.objectContaining({ request: expect.objectContaining({ action: "suspend", sessionId: "pty-1" }) }),
 			);
 		}));
+	// Batch 43 review: Suspend cleared the banner fields but not its dedupe key, so
+	// after resuming, an exit with the same agent session id was never re-offered.
+	it("clears the resume banner's dedupe key so a resumed tab can be offered again", () =>
+		testInScope(async () => {
+			const id = addAgentTab({ resumeOfferedFor: "agent-uuid", pendingResumeTitle: "Fix the build" });
+			expect(await suspendTerminal(id)).toEqual({ ok: true });
+			const term = terminalsStore.get(id)!;
+			expect(term.resumeOfferedFor).toBeNull();
+			expect(term.pendingResumeTitle).toBeNull();
+		}));
 	// Catches: a rejected backend suspend leaving the visible tab suspended.
 	it("keeps the live tab when Rust refuses", () =>
 		testInScope(async () => {
