@@ -773,11 +773,7 @@ impl VtLogBuffer {
 
     /// `(image_id, placement_id, tile_col, tile_row, z_index)` for the
     /// inline-image tile shown at a viewport position, if any.
-    pub fn grid_image_ref_at(
-        &self,
-        row: usize,
-        col: usize,
-    ) -> Option<(u32, u32, u16, u16, i32)> {
+    pub fn grid_image_ref_at(&self, row: usize, col: usize) -> Option<(u32, u32, u16, u16, i32)> {
         self.grid.image_ref_at(row, col)
     }
 
@@ -797,9 +793,7 @@ impl VtLogBuffer {
 
     /// Every current inline-image placement (color-tools plan, Phase 5) — the
     /// reconnect/new-client hydration query.
-    pub fn grid_image_placements(
-        &self,
-    ) -> Vec<alacritty_terminal::event::ImagePlacementInfo> {
+    pub fn grid_image_placements(&self) -> Vec<alacritty_terminal::event::ImagePlacementInfo> {
         self.grid.image_placements()
     }
 

@@ -271,7 +271,10 @@ mod tests {
         // The shared `tuic_ipc::http` decoder rejects a status line it cannot
         // parse instead of inventing a 500 (the old in-crate parser's default).
         let (resp, _dir) = round_trip_result("NOT A STATUS LINE\r\n\r\n");
-        assert!(resp.is_err(), "a malformed status line must not parse: {resp:?}");
+        assert!(
+            resp.is_err(),
+            "a malformed status line must not parse: {resp:?}"
+        );
     }
 
     #[test]
