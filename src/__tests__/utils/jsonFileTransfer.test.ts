@@ -67,14 +67,21 @@ describe("saveJsonFile — Tauri mode", () => {
 	});
 
 	it("opens the native Save dialog and writes through write_external_file", async () => {
-		const { save } = await import("@tauri-apps/plugin-dialog");
-		vi.mocked(save).mockResolvedValueOnce("/Users/x/Desktop/rules-all.json");
+		const { saveDialog } = await import("../../utils/nativeDialog");
+		vi.mocked(saveDialog).mockResolvedValueOnce("/Users/x/Desktop/rules-all.json");
 
 		const result = await saveJsonFile("rules-all.json", { a: 1 }, "Export Rules");
 
-		expect(save).toHaveBeenCalledWith(
-			expect.objectContaining({ title: "Export Rules", defaultPath: "rules-all.json" }),
+		expect(saveDialog).toHaveBeenCalledWith(
+			expect.objectContaining({
+				title: "Export Rules",
+				fileName: "rules-all.json",
+				filters: [{ name: "JSON", extensions: ["json"] }],
+			}),
 		);
+		// Never the crash-prone plugin-dialog save (utils/nativeDialog.ts header).
+		const { save } = await import("@tauri-apps/plugin-dialog");
+		expect(save).not.toHaveBeenCalled();
 		expect(mockInvoke).toHaveBeenCalledWith("write_external_file", {
 			path: "/Users/x/Desktop/rules-all.json",
 			content: JSON.stringify({ a: 1 }, null, 2),
@@ -83,8 +90,8 @@ describe("saveJsonFile — Tauri mode", () => {
 	});
 
 	it("reports a cancelled dialog without writing anything", async () => {
-		const { save } = await import("@tauri-apps/plugin-dialog");
-		vi.mocked(save).mockResolvedValueOnce(null);
+		const { saveDialog } = await import("../../utils/nativeDialog");
+		vi.mocked(saveDialog).mockResolvedValueOnce(null);
 
 		const result = await saveJsonFile("rules-all.json", { a: 1 }, "Export Rules");
 
@@ -93,8 +100,8 @@ describe("saveJsonFile — Tauri mode", () => {
 	});
 
 	it("propagates a write failure", async () => {
-		const { save } = await import("@tauri-apps/plugin-dialog");
-		vi.mocked(save).mockResolvedValueOnce("/Users/x/Desktop/rules-all.json");
+		const { saveDialog } = await import("../../utils/nativeDialog");
+		vi.mocked(saveDialog).mockResolvedValueOnce("/Users/x/Desktop/rules-all.json");
 		mockInvoke.mockRejectedValueOnce(new Error("Access denied"));
 
 		await expect(saveJsonFile("rules-all.json", { a: 1 }, "Export Rules")).rejects.toThrow("Access denied");
@@ -113,8 +120,8 @@ describe("exportJsonWithToast", () => {
 	});
 
 	it("toasts success with the written path", async () => {
-		const { save } = await import("@tauri-apps/plugin-dialog");
-		vi.mocked(save).mockResolvedValueOnce("/Users/x/Desktop/rules-all.json");
+		const { saveDialog } = await import("../../utils/nativeDialog");
+		vi.mocked(saveDialog).mockResolvedValueOnce("/Users/x/Desktop/rules-all.json");
 
 		await exportJsonWithToast("rules-all.json", { a: 1 }, "Export Rules", "Exported rules");
 
@@ -122,8 +129,8 @@ describe("exportJsonWithToast", () => {
 	});
 
 	it("does not toast when the dialog is cancelled", async () => {
-		const { save } = await import("@tauri-apps/plugin-dialog");
-		vi.mocked(save).mockResolvedValueOnce(null);
+		const { saveDialog } = await import("../../utils/nativeDialog");
+		vi.mocked(saveDialog).mockResolvedValueOnce(null);
 
 		await exportJsonWithToast("rules-all.json", { a: 1 }, "Export Rules", "Exported rules");
 
@@ -131,8 +138,8 @@ describe("exportJsonWithToast", () => {
 	});
 
 	it("toasts an error when the write fails", async () => {
-		const { save } = await import("@tauri-apps/plugin-dialog");
-		vi.mocked(save).mockResolvedValueOnce("/Users/x/Desktop/rules-all.json");
+		const { saveDialog } = await import("../../utils/nativeDialog");
+		vi.mocked(saveDialog).mockResolvedValueOnce("/Users/x/Desktop/rules-all.json");
 		mockInvoke.mockRejectedValueOnce(new Error("Access denied"));
 
 		await exportJsonWithToast("rules-all.json", { a: 1 }, "Export Rules", "Exported rules");

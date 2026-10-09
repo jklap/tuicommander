@@ -33,6 +33,7 @@ export interface SaveDialogOptions {
 	title?: string;
 	defaultPath?: string;
 	fileName?: string;
+	filters?: DialogFilter[];
 }
 
 type PickKind = "file" | "files" | "folder" | "save";

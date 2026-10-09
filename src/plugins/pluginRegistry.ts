@@ -809,8 +809,10 @@ function createPluginRegistry() {
 			}): Promise<string | null> {
 				requireCapability(pluginId, capabilities, "ui:file-picker");
 				if (!isTauri()) return null;
-				const { open } = await import("@tauri-apps/plugin-dialog");
-				const picked = await open({
+				// Never the plugin-dialog `open`: its NSOpenPanel can crash the whole
+				// app after standby (see utils/nativeDialog.ts).
+				const { openDialog } = await import("../utils/nativeDialog");
+				const picked = await openDialog({
 					multiple: false,
 					directory: false,
 					filters: options?.filters,

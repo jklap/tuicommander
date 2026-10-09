@@ -58,9 +58,10 @@ collection between machines: a scope dropdown (`all`/`modified`/`custom`), **Exp
 (keybindings, theme presets, etc.) should reuse this infrastructure rather than re-implementing it:
 
 - **`src/utils/jsonFileTransfer.ts`** — `saveJsonFile`/`exportJsonWithToast` open the native OS
-  Save dialog on desktop (`@tauri-apps/plugin-dialog`'s `save()`, imported *dynamically* so browser
-  mode never pulls the plugin in and so `vi.mock("@tauri-apps/plugin-dialog", ...)` is honored)
-  then write through the existing `write_external_file` command — already path-validated
+  Save dialog on desktop through `src/utils/nativeDialog.ts`'s `saveDialog()` (imported
+  *dynamically* so browser mode never pulls it in; the shared `mocks/tauri.ts` stubs it). NEVER
+  use `@tauri-apps/plugin-dialog`'s `open()`/`save()` for a file picker — its NSOpenPanel/NSSavePanel
+  can crash the whole app after standby (the 2026-09-18 crash; see that module's header). It then writes through the existing `write_external_file` command — already path-validated
   (`fs.rs`'s `validate_external_write_path`: absolute path, no `..` traversal, parent must
   already exist — NOT home-dir-restricted despite that function's own doc comment; see its
   `validate_external_write_accepts_path_outside_home` test) and already has full IPC/HTTP
