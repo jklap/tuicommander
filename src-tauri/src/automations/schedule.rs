@@ -8,6 +8,9 @@ use croner::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod once;
+pub use once::AutomationSchedule;
+
 /// Validated five-field Vixie cron evaluated in its stored IANA zone.
 pub struct Schedule {
     cron: Cron,
