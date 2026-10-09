@@ -19341,6 +19341,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "automations",
                 "secret",
                 "telegram",
                 "session",
