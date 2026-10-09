@@ -1324,16 +1324,17 @@ pub(crate) struct AppConfig {
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates smart selection rules for the current owner; rule actions can send text or run commands when chosen.","operations":["get","set"],"confirmationClass":"execution_authority"}, "x-collection-key" = "id"))]
     pub(crate) smart_selection_rules: Vec<SmartSelectionRule>,
     /// Deprecated (issue #5): superseded by `block_timestamp_mode` below. Kept only
-    /// so a config saved by an older build still deserializes;
-    /// `migrate_block_timestamp_mode` maps it once at load time (`false` -> "off",
-    /// otherwise the "modifier" default) and the frontend no longer writes it.
+    /// so a config saved by an older build still deserializes; a `false` here with
+    /// no `block_timestamp_mode` beside it is migrated to `"off"` at load
+    /// (`migrate_legacy_block_timestamps`). Nothing reads it any more.
     #[serde(default = "default_true")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates show block timestamps for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     pub(crate) show_block_timestamps: bool,
     /// Command-block timestamp overlay display mode: "off", "always", or "modifier"
     /// (hold Ctrl+Cmd to reveal — the only behavior before this field existed, hence
-    /// the default). The frontend owns migrating a pre-existing `show_block_timestamps`
-    /// bool into this field; Rust just persists whatever it's given.
+    /// the default). A config predating this field gets it from the legacy
+    /// `show_block_timestamps` bool at load (`migrate_legacy_block_timestamps`) —
+    /// the serde default alone would turn a user's "off" into "modifier".
     #[serde(default = "default_block_timestamp_mode")]
     #[schemars(extend("x-setting" = {"sensitivity":"public","apply":"live","effect":"Updates block timestamp mode for the current owner.","operations":["get","set"],"confirmationClass":"ordinary"}))]
     #[schemars(extend("enum" = ["off","modifier","always"]))]
@@ -2937,26 +2938,6 @@ const ACTIVITY_FILE: &str = "activity.json";
 
 // App config
 
-/// Derive `block_timestamp_mode` from the legacy `show_block_timestamps` bool
-/// for a config saved before the mode existed. Runs on the raw JSON because
-/// serde's default ("modifier") would otherwise hide whether the field was
-/// absent, so an explicit `false` could never become "off". `true` or no
-/// legacy value keeps the serde default.
-fn migrate_block_timestamp_mode(val: &mut serde_json::Value) {
-    let Some(obj) = val.as_object_mut() else {
-        return;
-    };
-    if obj.contains_key("block_timestamp_mode") {
-        return;
-    }
-    if obj.get("show_block_timestamps") == Some(&serde_json::Value::Bool(false)) {
-        obj.insert(
-            "block_timestamp_mode".into(),
-            serde_json::Value::String("off".into()),
-        );
-    }
-}
-
 /// Carry a retired `show_scrollbar_marks: false` into its two per-category
 /// replacements. The master toggle was retired in favour of `show_block_marks`
 /// and `show_prompt_marks`; serde ignores the old key, so without this a user who
@@ -2973,6 +2954,27 @@ fn migrate_retired_scrollbar_marks(val: &mut serde_json::Value) {
     for key in ["show_block_marks", "show_prompt_marks"] {
         obj.entry(key).or_insert(serde_json::Value::Bool(false));
     }
+}
+
+/// Carry a legacy `show_block_timestamps: false` into `block_timestamp_mode:
+/// "off"` for a config saved before the 3-way mode existed. Must run on the raw
+/// JSON: once deserialized, the field's serde default ("modifier") is
+/// indistinguishable from a real choice, so the frontend's own fallback
+/// (`resolveBlockTimestampMode`) never saw the legacy `false`. A present
+/// `block_timestamp_mode` always wins; `true`/absent keeps the "modifier" default.
+fn migrate_legacy_block_timestamps(val: &mut serde_json::Value) {
+    let Some(obj) = val.as_object_mut() else {
+        return;
+    };
+    if obj.contains_key("block_timestamp_mode")
+        || obj.get("show_block_timestamps") != Some(&serde_json::Value::Bool(false))
+    {
+        return;
+    }
+    obj.insert(
+        "block_timestamp_mode".to_string(),
+        serde_json::Value::String("off".to_string()),
+    );
 }
 
 /// Migrate flat service fields from pre-ServicesConfig format into nested `services` object.
@@ -3962,9 +3964,9 @@ fn read_app_config_unlocked_for_version(
         }
     };
     migrate_flat_services(&mut val);
-    migrate_block_timestamp_mode(&mut val);
     let migrated_capabilities = val.get("disabled_native_tools").is_some();
     migrate_retired_scrollbar_marks(&mut val);
+    migrate_legacy_block_timestamps(&mut val);
     match serde_json::from_value::<AppConfig>(val) {
         Ok(mut config) => {
             config.custom_pty_env =
@@ -7144,7 +7146,7 @@ mod tests {
     fn block_timestamp_mode_migrates_from_legacy_bool() {
         let migrate = |json: serde_json::Value| {
             let mut val = json;
-            migrate_block_timestamp_mode(&mut val);
+            migrate_legacy_block_timestamps(&mut val);
             val.get("block_timestamp_mode").cloned()
         };
         assert_eq!(
@@ -7170,7 +7172,7 @@ mod tests {
             .unwrap()
             .remove("block_timestamp_mode");
         legacy["show_block_timestamps"] = serde_json::json!(false);
-        migrate_block_timestamp_mode(&mut legacy);
+        migrate_legacy_block_timestamps(&mut legacy);
         let loaded: AppConfig = serde_json::from_value(legacy).unwrap();
         assert_eq!(loaded.block_timestamp_mode, "off");
     }
@@ -7213,6 +7215,44 @@ mod tests {
         migrate_retired_scrollbar_marks(&mut on);
         let config: AppConfig = serde_json::from_value(on).unwrap();
         assert!(config.show_block_marks && config.show_prompt_marks);
+    }
+
+    /// Catches: a pre-`block_timestamp_mode` config with timestamps turned off
+    /// loading as "modifier" (dropped-items-review #50) — serde's default for
+    /// the missing field hid the legacy `false` from every later migration.
+    #[test]
+    fn legacy_block_timestamps_off_loads_as_off_through_the_real_reader() {
+        let dir = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let path = dir.path().join("config.json");
+        let write = |extra: serde_json::Value, drop_mode: bool| {
+            let mut val = serde_json::to_value(AppConfig::default()).unwrap();
+            let obj = val.as_object_mut().unwrap();
+            if drop_mode {
+                obj.remove("block_timestamp_mode");
+            }
+            obj.extend(extra.as_object().unwrap().clone());
+            std::fs::write(&path, serde_json::to_vec(&val).unwrap()).unwrap();
+        };
+        let mode = || {
+            read_app_config_unlocked(&path)
+                .ok()
+                .expect("config reads")
+                .0
+                .block_timestamp_mode
+        };
+
+        write(serde_json::json!({ "show_block_timestamps": false }), true);
+        assert_eq!(mode(), "off");
+        write(serde_json::json!({ "show_block_timestamps": true }), true);
+        assert_eq!(mode(), "modifier");
+        write(serde_json::json!({}), true);
+        assert_eq!(mode(), "modifier");
+        // A config that already carries the new field always wins.
+        write(
+            serde_json::json!({ "show_block_timestamps": false, "block_timestamp_mode": "always" }),
+            false,
+        );
+        assert_eq!(mode(), "always");
     }
 
     #[test]

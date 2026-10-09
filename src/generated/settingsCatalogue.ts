@@ -1641,7 +1641,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.app.block_timestamp_mode.help",
       "label": "block timestamp mode",
       "schema": {
-        "description": "Command-block timestamp overlay display mode: \"off\", \"always\", or \"modifier\"\n(hold Ctrl+Cmd to reveal — the only behavior before this field existed, hence\nthe default). The frontend owns migrating a pre-existing `show_block_timestamps`\nbool into this field; Rust just persists whatever it's given.",
+        "description": "Command-block timestamp overlay display mode: \"off\", \"always\", or \"modifier\"\n(hold Ctrl+Cmd to reveal — the only behavior before this field existed, hence\nthe default). A config predating this field gets it from the legacy\n`show_block_timestamps` bool at load (`migrate_legacy_block_timestamps`) —\nthe serde default alone would turn a user's \"off\" into \"modifier\".",
         "type": "string",
         "default": "modifier",
         "enum": [
@@ -4505,7 +4505,7 @@ export const settingsCatalogue = {
       "helpKey": "settings.catalogue.app.show_block_timestamps.help",
       "label": "show block timestamps",
       "schema": {
-        "description": "Deprecated (issue #5): superseded by `block_timestamp_mode` below. Kept only\nso a config saved by an older build still deserializes;\n`migrate_block_timestamp_mode` maps it once at load time (`false` -> \"off\",\notherwise the \"modifier\" default) and the frontend no longer writes it.",
+        "description": "Deprecated (issue #5): superseded by `block_timestamp_mode` below. Kept only\nso a config saved by an older build still deserializes; a `false` here with\nno `block_timestamp_mode` beside it is migrated to `\"off\"` at load\n(`migrate_legacy_block_timestamps`). Nothing reads it any more.",
         "type": "boolean",
         "default": true
       },
