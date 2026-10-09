@@ -54,7 +54,9 @@ It runs in the background after the worktree exists, never before creation
 returns, and copies several ignored directories at once (bounded — four at a
 time — so it does not compete unboundedly with everything else on disk). While
 it runs, the branch row in the sidebar shows a **Warming…** badge whose tooltip
-names the live copied/total progress.
+names the live copied/total progress — also after a reload mid-warm, when the
+badge is seeded from the worktree list's warm status until the next progress
+update arrives.
 For desktop, HTTP, and MCP creation, wait until the workspace's warm status is
 `done` or `failed` before installing dependencies or building. On every
 creation path (desktop, HTTP, MCP) the order is fixed: the warm copy first, then

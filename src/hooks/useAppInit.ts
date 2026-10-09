@@ -44,6 +44,7 @@ import { isAbsolutePath, pathStripPrefix } from "../utils/pathUtils";
 import { ptyCaptureStore } from "../utils/ptyCapture";
 import { sameDir, unregisteredRepoRootFor } from "../utils/repoOwnership";
 import { isSuspendingOrSuspended, suspendTerminal } from "../utils/suspendTerminal";
+import { noteWarmEvent } from "./git/warmStateSeed";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** PTY sessions created by THIS client (desktop or browser). Since B.4 removed
@@ -787,6 +788,8 @@ export async function initApp(deps: AppInitDeps) {
 	// otherwise fabricate one if a warm event outran `worktree-created`, whose
 	// handler is the one that builds the row with real data.
 	const updateWarmState = (repoPath: string, worktreePath: string, warmState: WorkspaceState["warmState"]) => {
+		// From now on the events own this row's badge, not the (cached) worktree list.
+		noteWarmEvent(worktreePath);
 		const workspaces = repositoriesStore.get(repoPath)?.workspaces;
 		if (!workspaces) return;
 		const row = Object.values(workspaces).find((w) => w.worktreePath != null && sameDir(w.worktreePath, worktreePath));
