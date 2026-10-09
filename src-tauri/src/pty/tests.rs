@@ -25638,6 +25638,42 @@ fn cctitle_and_ccend_payloads_are_capped() {
     );
 }
 
+/// Batch 43 review: the resume banner renders `agent_session_title` as plain
+/// text, but terminal output is untrusted — a percent-encoded ESC, line break
+/// or BEL in a forged `cctitle` must not survive into the stored title (or the
+/// `session-state-changed` payload and banner tooltip built from it).
+#[test]
+fn cctitle_and_ccend_payloads_drop_control_characters() {
+    let state = crate::state::tests_support::make_test_app_state();
+    let session_id = "resume-banner-title-controls";
+    agent_session(&state, session_id, SHELL_IDLE);
+    state.grid.vt_log_buffers.insert(
+        session_id.to_string(),
+        Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+    );
+    let silence = state
+        .session_maps
+        .silence_states
+        .get(session_id)
+        .unwrap()
+        .clone();
+    let mut processor = ChunkProcessor::new(None, None);
+
+    processor.process_chunk(
+        "\x1b]7770;cctitle=Fix%1B%5B31m the%0D%0Abuild%07%C2%9B\x07\x1b]7770;ccend=logout%0A%7F\x07",
+        &silence,
+        session_id,
+        &state,
+    );
+    let entry = state.session_maps.session_states.get(session_id).unwrap();
+    assert_eq!(entry.agent_session_title.as_deref(), Some("Fix[31m thebuild"));
+    assert_eq!(entry.agent_session_end_reason.as_deref(), Some("logout"));
+    assert_eq!(
+        crate::pty::cap_agent_metadata_len("plain title".to_string()),
+        "plain title"
+    );
+}
+
 /// `inject_worktree_env` (:111) is meant to be called at every
 /// `bind_pty_identity` site — this observes the real child environment
 /// through a live pty, same rationale as the identity test above: a
