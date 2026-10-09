@@ -25,7 +25,13 @@ vi.mock("../../components/Terminal/canvasTerminalTransport", async (importOrigin
 	}),
 }));
 vi.mock("../../components/Terminal/gridRenderer", () => ({
-	createGridRenderer: () => ({ setTheme: vi.fn(), invalidateCaches: vi.fn(), paintGrid: vi.fn(), paintRow: vi.fn() }),
+	createGridRenderer: () => ({
+		setTheme: vi.fn(),
+		invalidateCaches: vi.fn(),
+		paintGrid: vi.fn(),
+		paintRow: vi.fn(),
+		buildFontStyle: () => "14px monospace",
+	}),
 }));
 
 import CanvasTerminal from "../../components/Terminal/CanvasTerminal";
