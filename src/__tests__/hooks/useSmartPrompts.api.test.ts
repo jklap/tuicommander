@@ -30,7 +30,7 @@ vi.mock("../../stores/terminals", () => ({
 }));
 
 vi.mock("../../stores/repositories", () => ({
-	repositoriesStore: { getActive: () => repositories.active, get: () => undefined },
+	repositoriesStore: { state: { repositories: {} }, getActive: () => repositories.active, get: () => undefined },
 }));
 
 vi.mock("../../stores/github", () => ({
