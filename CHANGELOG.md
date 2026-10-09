@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- **Injected text is appended, never cleared first.** TUICommander no longer sends a Ctrl-U before typing a suggestion, Smart Prompt, queued command, wake-up, dictation or MCP/`tuic agent type` submission into a terminal or agent composer: whatever you had half-typed stays and the text is added after it. Automated submits that must not merge into your draft are still refused instead (`partial_composer`). `tuic agent type --no-clear` is kept; it now means "skip the composer check and append". Native Windows shells no longer risk a literal `^U`.
+- **Tab renames show up live in every window and browser client** — renaming a tab (or an IPC/HTTP `set_session_name` call) now emits `session-renamed` once per real change; `name: null` announces a cleared name. The tmux shim's `select-pane -T ""` clears the name it gave a tab (a name you set yourself is kept), and a plain `select-pane` no longer erases the pane's recorded title. The unused per-session WebSocket `renamed` frames are gone (clients use `/events`).
+- **Session Diff "Ask" mode shows a toast again** ("Session made changes" with "Open Session Diff"), above the terminal input, plus its bell notice.
+- **Agent-spawned sessions start with a real pixel size** (default cell metrics) so inline-image tools work before the first resize.
+- Fix Smart Selection "Ask AI" doing nothing (and flipping the hidden panel's flag) while AI Chat is disabled — it now says so.
+- Fix Cmd+Shift+. folding an evicted (invisible) command block after scrollback eviction.
+- Fix plugin `pickFile` and Smart Prompts/Selection JSON export using the file dialog that can crash the app after standby; both use the crash-safe native dialog.
+- Fix choosing "Wrap my function" in Settings after dismissing the wrap prompt doing nothing until restart.
+
 - **Workflow daemon foundation** — Recover runs only after acquiring database ownership, retain durable root positions and story reservations, require explicit graph resume, and pause idle runs at their duration deadline. Executable Agent delivery remains disabled pending later slices.
 
 - **Workflow graph foundation** — Durable serial graph positions, bounded predecessor history, decision provenance and repair counters now replay from pinned definitions. Executable validation requires final checks and explicit pause targets. This slice does not enable autonomous scheduling; older pre-contract runs remain inspectable and cancellable.
