@@ -389,7 +389,7 @@ pub(super) fn has_partial_user_input(state: &AppState, session_id: &str) -> bool
 /// atomic compare-exchange. A lost race leaves the message queued instead of
 /// typing it into an active composer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct InjectionClaim {
+pub(super) struct InjectionClaim {
     pub(super) token: u64,
     /// The claim moved the atom IDLE→BUSY. A mid-turn voice claim
     /// (`claim_composer_for_voice`) did not, so its rollback must not hand a
@@ -912,7 +912,7 @@ const DELAYED_AGENT_QUEUED_SUBMISSION_CONFIRMATION: std::time::Duration =
 /// The frontend's `sendCommand.ts` keeps the same table for user-originated
 /// PTY writes.
 #[derive(Clone, Copy)]
-struct AgentSubmitProfile {
+pub(super) struct AgentSubmitProfile {
     pub(super) payload: fn(&str) -> String,
     pub(super) enter_gap: std::time::Duration,
     confirmation: SubmitConfirmation,

@@ -2219,18 +2219,18 @@ pub(super) fn try_shell_transition_with_hook<F: FnOnce()>(
 
 #[derive(Clone, Copy)]
 pub(super) struct ShellTransitionRequest<'a> {
-    state: &'a crate::state::AppState,
-    session_id: &'a str,
-    expected: u8,
-    new: u8,
-    notify_parent: bool,
-    observed_turn_epoch: Option<u64>,
+    pub(super) state: &'a crate::state::AppState,
+    pub(super) session_id: &'a str,
+    pub(super) expected: u8,
+    pub(super) new: u8,
+    pub(super) notify_parent: bool,
+    pub(super) observed_turn_epoch: Option<u64>,
 }
 
 pub(super) struct ShellTransitionHooks<B: FnOnce(), A: FnOnce(), D: FnOnce()> {
-    after_epoch_snapshot: B,
-    after_cas: A,
-    before_parent_dispatch: D,
+    pub(super) after_epoch_snapshot: B,
+    pub(super) after_cas: A,
+    pub(super) before_parent_dispatch: D,
 }
 
 pub(super) fn try_shell_transition_with_hooks<B: FnOnce(), A: FnOnce(), D: FnOnce()>(
