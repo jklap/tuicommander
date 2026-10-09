@@ -126,9 +126,13 @@ impl ClaudeAdapter {
         }
         let updates = if kind == "attachment" {
             row.pointer("/attachment/prompt")
-                .and_then(Value::as_str)
+                .and_then(|prompt| match prompt {
+                    Value::String(text) => Some(Cow::Borrowed(text.as_str())),
+                    Value::Array(blocks) => Some(Cow::Owned(blocks_text(blocks))),
+                    _ => None,
+                })
                 .filter(|text| !text.trim().is_empty())
-                .map(|text| prompt_update(&row, text))
+                .map(|text| prompt_update(&row, &text))
                 .into_iter()
                 .collect()
         } else if kind == "user" {

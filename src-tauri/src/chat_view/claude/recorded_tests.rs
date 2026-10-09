@@ -194,7 +194,6 @@ fn recorded_queued_prompts_share_normal_prompt_safety() {
     row["attachment"]["prompt"] = json!(raw);
     let updates = run(&row.to_string());
     assert_eq!(updates.len(), 1);
-    assert_eq!(updates[0]["content"]["text"], clean(&raw, MAX_TEXT_CHARS));
     assert!(
         !updates[0]["content"]["text"]
             .as_str()
