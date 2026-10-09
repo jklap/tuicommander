@@ -3468,15 +3468,7 @@ pub(super) fn transition_explicit_shell_state(
     label: &str,
     hook_state: bool,
 ) -> bool {
-    transition_explicit_shell_state_impl(
-        state,
-        session_id,
-        target,
-        label,
-        hook_state,
-        || {},
-        false,
-    )
+    transition_explicit_shell_state_impl(state, session_id, target, label, hook_state, || {}, false)
 }
 
 #[cfg(test)]
@@ -4058,29 +4050,33 @@ pub(super) fn record_inferred_outcome_if_no_osc133(state: &AppState, session_id:
 /// "not on screen right now" is not proof that it was answered. A live
 /// `choice_prompt` owns its own resolution and is left alone.
 pub(super) fn emit_question_cleared_if_stale(state: &Arc<AppState>, session_id: &str) {
-    let turn_epoch = state.session_maps.session_states.get(session_id).and_then(|s| {
-        // Research note (2026-09-01): this guard is BY DESIGN never allowed to
-        // retract a confident question or one with an open choice_prompt — see the
-        // module-level docs on why (a confident source can still repaint while
-        // genuinely waiting; screen absence alone isn't proof of an answer). If a
-        // session is stuck "awaiting" and this log line below never appears for
-        // it, that's the tell: the badge is confident/choice-prompt-owned, so this
-        // backstop was never going to be the thing that clears it — look at the
-        // hook busy re-affirmation path (`tuic_state_awaiting_event`) or
-        // `resolve_choice_prompt_input`/`choice-cleared` instead.
-        if s.awaiting_input && (s.question_confident || s.choice_prompt.is_some()) {
-            tracing::debug!(
-                session_id = %session_id,
-                confident = s.question_confident,
-                has_choice_prompt = s.choice_prompt.is_some(),
-                "silence_timer: awaiting_input is stale-eligible on screen but the \
-                 confident/choice_prompt guard blocks this backstop from clearing it \
-                 (research: unexpected state transitions)"
-            );
-        }
-        (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
-            .then_some(s.turn_epoch)
-    });
+    let turn_epoch = state
+        .session_maps
+        .session_states
+        .get(session_id)
+        .and_then(|s| {
+            // Research note (2026-09-01): this guard is BY DESIGN never allowed to
+            // retract a confident question or one with an open choice_prompt — see the
+            // module-level docs on why (a confident source can still repaint while
+            // genuinely waiting; screen absence alone isn't proof of an answer). If a
+            // session is stuck "awaiting" and this log line below never appears for
+            // it, that's the tell: the badge is confident/choice-prompt-owned, so this
+            // backstop was never going to be the thing that clears it — look at the
+            // hook busy re-affirmation path (`tuic_state_awaiting_event`) or
+            // `resolve_choice_prompt_input`/`choice-cleared` instead.
+            if s.awaiting_input && (s.question_confident || s.choice_prompt.is_some()) {
+                tracing::debug!(
+                    session_id = %session_id,
+                    confident = s.question_confident,
+                    has_choice_prompt = s.choice_prompt.is_some(),
+                    "silence_timer: awaiting_input is stale-eligible on screen but the \
+                     confident/choice_prompt guard blocks this backstop from clearing it \
+                     (research: unexpected state transitions)"
+                );
+            }
+            (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
+                .then_some(s.turn_epoch)
+        });
     let Some(turn_epoch) = turn_epoch else {
         return;
     };
@@ -4312,7 +4308,10 @@ pub(super) fn remove_live_session_state(session_id: &str, state: &AppState) {
     // UUID otherwise, on both this path and the explicit close/kill path
     // (`cleanup_session`, which composes this function).
     state.session_maps.has_osc133_integration.remove(session_id);
-    state.session_maps.has_tuic_state_integration.remove(session_id);
+    state
+        .session_maps
+        .has_tuic_state_integration
+        .remove(session_id);
     state.session_maps.turn_error_flags.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.session_maps.shell_state_since_ms.remove(session_id);
@@ -4745,7 +4744,11 @@ pub(crate) fn spawn_tombstone_sweeper(state: Arc<AppState>) {
 /// if the lookup semantics ever change (trimming, a different word-count
 /// threshold, etc.).
 pub(crate) fn last_prompt_text(state: &AppState, session_id: &str) -> Option<String> {
-    state.session_maps.last_prompts.get(session_id).map(|v| v.clone())
+    state
+        .session_maps
+        .last_prompts
+        .get(session_id)
+        .map(|v| v.clone())
 }
 
 /// Shared resize core for the Tauri command and the HTTP route (story 056-7545).
@@ -4947,12 +4950,18 @@ pub(super) fn background_activity_blocks_standby_with_silence(
     session_id: &str,
     locked_silence: Option<&SilenceState>,
 ) -> bool {
-    let Some((turn_epoch, base_activity)) = state.session_maps.session_states.get(session_id).map(|session| {
-        (
-            session.turn_epoch,
-            session.background_work || session.has_pending_background_probe(),
-        )
-    }) else {
+    let Some((turn_epoch, base_activity)) =
+        state
+            .session_maps
+            .session_states
+            .get(session_id)
+            .map(|session| {
+                (
+                    session.turn_epoch,
+                    session.background_work || session.has_pending_background_probe(),
+                )
+            })
+    else {
         return false;
     };
     let declared_background_work = match locked_silence {

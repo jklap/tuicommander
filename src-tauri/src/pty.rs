@@ -650,7 +650,10 @@ fn fire_tool_error_if_ready(silence: &Mutex<SilenceState>, session_id: &str, sta
     let Some(text) = silence.lock().check_tool_error() else {
         return;
     };
-    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+    state
+        .session_maps
+        .turn_error_flags
+        .insert(session_id.to_string(), ());
     let parsed = ParsedEvent::ToolError { matched_text: text };
     if let Ok(json) = serde_json::to_value(&parsed) {
         #[cfg(feature = "desktop")]
@@ -1812,7 +1815,11 @@ impl ChunkProcessor {
                 // PostToolUseFailure or StopFailure hook) or the ToolError/ApiError
                 // text-pattern fallback becomes this block's red-tick exit code.
                 // Cleared unconditionally so it never leaks into the next turn.
-                let flagged = state.session_maps.turn_error_flags.remove(session_id).is_some();
+                let flagged = state
+                    .session_maps
+                    .turn_error_flags
+                    .remove(session_id)
+                    .is_some();
                 Some(ParsedEvent::AgentBlock {
                     action: "end".into(),
                     line,
@@ -2814,7 +2821,11 @@ impl ChunkProcessor {
                             // session's life (UserPromptSubmit, every PreToolUse/
                             // PostToolUse, Stop...), so skip the allocation + DashMap
                             // write lock once it's already set.
-                            if !state.session_maps.has_tuic_state_integration.contains_key(session_id) {
+                            if !state
+                                .session_maps
+                                .has_tuic_state_integration
+                                .contains_key(session_id)
+                            {
                                 state
                                     .session_maps
                                     .has_tuic_state_integration
@@ -2965,7 +2976,10 @@ impl ChunkProcessor {
                             // cleared as an arbitrary non-zero sentinel exit code at the
                             // next busy→idle edge in `handle_tuic_state`; the actual
                             // payload value is intentionally never parsed here.
-                            state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+                            state
+                                .session_maps
+                                .turn_error_flags
+                                .insert(session_id.to_string(), ());
                         }
                         "bgtasks" => {
                             // From a Stop/StopFailure hook: `tuic-hook` scraped
@@ -2998,9 +3012,13 @@ impl ChunkProcessor {
                             let running = decoded.split(',').any(|status| {
                                 !status.is_empty() && !KNOWN_TERMINAL_BG_STATUSES.contains(&status)
                             });
-                            if let Some(turn_epoch) =
-                                state.session_maps.session_states.get(session_id).map(|s| s.turn_epoch)
-                                && let Some(silence) = state.session_maps.silence_states.get(session_id)
+                            if let Some(turn_epoch) = state
+                                .session_maps
+                                .session_states
+                                .get(session_id)
+                                .map(|s| s.turn_epoch)
+                                && let Some(silence) =
+                                    state.session_maps.silence_states.get(session_id)
                             {
                                 silence
                                     .lock()
@@ -3518,7 +3536,11 @@ impl ChunkProcessor {
         // idle↔busy-edge turn-level source (handle_tuic_state) is
         // authoritative and this is suppressed so the two can't produce
         // conflicting blocks.
-        if state.session_maps.has_tuic_state_integration.contains_key(session_id) {
+        if state
+            .session_maps
+            .has_tuic_state_integration
+            .contains_key(session_id)
+        {
             // Suppression can activate mid-turn (e.g. the hook installs a
             // beat after a `⏺` header already opened a heuristic block, since
             // UserPromptSubmit's busy event is the common but not only path
@@ -3751,7 +3773,10 @@ impl ChunkProcessor {
                 // still flags the block, a minor documented over-flagging risk.
                 // Already excluded above during startup grace via `suppress_this`.
                 ParsedEvent::ApiError { .. } => {
-                    state.session_maps.turn_error_flags.insert(session_id.to_string(), ());
+                    state
+                        .session_maps
+                        .turn_error_flags
+                        .insert(session_id.to_string(), ());
                 }
                 _ => {}
             }

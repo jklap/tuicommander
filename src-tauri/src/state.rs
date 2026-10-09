@@ -3247,9 +3247,11 @@ impl AppState {
     /// The event is dual-emitted for desktop Tauri listeners and browser/SSE
     /// clients, and is suppressed when the value did not change.
     pub(crate) fn set_pty_description(&self, session_id: &str, description: Option<String>) {
-        let MirrorUpdate::Changed(description) =
-            set_or_clear_string_mirror(&self.session_maps.pty_descriptions, session_id, description)
-        else {
+        let MirrorUpdate::Changed(description) = set_or_clear_string_mirror(
+            &self.session_maps.pty_descriptions,
+            session_id,
+            description,
+        ) else {
             return;
         };
         self.emit_pty_event(AppEvent::PtyDescriptionChanged {
@@ -8458,7 +8460,10 @@ mod tests {
         let mut bus = state.event_bus.subscribe();
         let before = state.session_maps.session_state_events.depth();
         state.emit_pty_event(event.clone());
-        assert!(matches!(bus.try_recv().unwrap(), AppEvent::SessionRenamed { .. }));
+        assert!(matches!(
+            bus.try_recv().unwrap(),
+            AppEvent::SessionRenamed { .. }
+        ));
         assert_eq!(state.session_maps.session_state_events.depth(), before);
         AppState::apply_event_to_session_state(&state, &event);
         let session = state

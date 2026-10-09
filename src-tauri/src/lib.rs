@@ -44,9 +44,9 @@ pub(crate) use tuic_git::cow;
 pub(crate) mod cpu_watchdog;
 pub(crate) use tuic_core::credentials;
 pub(crate) use tuic_git::diff_options;
-pub(crate) mod direct_proxy;
 #[cfg(feature = "desktop")]
 pub(crate) mod design_mode;
+pub(crate) mod direct_proxy;
 // Tests of the sidecar config override that build.rs also compiles; a build
 // script has no test harness.
 #[cfg(test)]
@@ -61,9 +61,9 @@ pub(crate) mod ego_cli;
 mod input_ownership;
 pub(crate) use tuic_core::error_classification;
 pub(crate) mod event_wire;
-pub(crate) mod frontend_liveness;
 #[cfg(feature = "desktop")]
 mod finder_service;
+pub(crate) mod frontend_liveness;
 pub(crate) mod fs;
 pub(crate) mod generators;
 pub(crate) mod git;
@@ -186,11 +186,11 @@ mod build_graph_tests;
 #[cfg(test)]
 pub(crate) mod replay_oracle;
 #[cfg(feature = "desktop")]
+mod streamdock;
+#[cfg(feature = "desktop")]
 pub(crate) mod terminal_grid_commands;
 #[cfg(test)]
 pub(crate) mod test_support;
-#[cfg(feature = "desktop")]
-mod streamdock;
 pub(crate) use tuic_core::text_rank;
 pub(crate) mod themes;
 pub(crate) mod tool_search;
@@ -3468,7 +3468,10 @@ fn set_password_from_stdin(only_if_unset: bool) -> anyhow::Result<()> {
     cfg.services.auth.password_hash = hash;
     config::save_app_config(cfg).map_err(|e| anyhow::anyhow!(e))?;
 
-    println!("Credentials saved for user \"{}\"", mask_username(&username));
+    println!(
+        "Credentials saved for user \"{}\"",
+        mask_username(&username)
+    );
     Ok(())
 }
 
