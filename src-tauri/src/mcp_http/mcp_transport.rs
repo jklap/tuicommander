@@ -1226,6 +1226,10 @@ const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
     ("repo", "Inspect repositories and manage their worktrees."),
     ("story", "Read project stories and update their progress."),
     (
+        "automations",
+        "Create and manage scheduled agent definitions.",
+    ),
+    (
         "workflow_story_create",
         "Create a story for a project workflow.",
     ),
@@ -1266,6 +1270,7 @@ const NATIVE_TOOL_SUMMARIES: &[(&str, &str)] = &[
 /// tool metadata for gated tools.
 fn native_tool_definitions() -> serde_json::Value {
     let defs = serde_json::json!([
+        crate::automations::mcp::tool_definition(),
         crate::secrets::tool_definition(),
         crate::telegram::tool_definition(),
         {
@@ -2161,6 +2166,10 @@ async fn dispatch_mcp_tool_call_with_context(
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
+        "automations" => {
+            crate::automations::mcp::handle(args, resolve_mcp_origin_session(state, mcp_session_id))
+                .await
+        }
         "secret" => crate::secrets::handle_secret(state, args).await,
         "telegram" => crate::telegram::handle_tool(state, args, mcp_session_id).await,
         "session" => {
