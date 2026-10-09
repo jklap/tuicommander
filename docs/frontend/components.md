@@ -134,7 +134,9 @@ turns appear in the transcript.
 connection acknowledgement, shows a declared intent as status, and offers
 bracketed `suggest:` items as prompt buttons. Markdown examples stay literal.
 Messages, tool output and code blocks have copy actions. The transcript has
-text selection, find/select-all/clear shortcuts, and local file paths use the
+text selection and find/select-all/clear shortcuts. Find selects phrases across
+inline Markdown within each block, skips collapsed disclosure bodies, and closes
+on Escape from the input or navigation buttons. Local file paths use the
 terminal's backend path resolver and file opener. Web links use the shared
 external URL opener. A detached AI Chat window sends resolved file links to
 the main window's same file opener, where the editor and viewer tabs live.

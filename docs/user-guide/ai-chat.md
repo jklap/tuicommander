@@ -114,7 +114,7 @@ Files open in TUICommander's viewer or editor, while directories open in the
 file browser, including when AI Chat is detached.
 With focus in the transcript, `Cmd/Ctrl+A` selects that transcript,
 `Cmd/Ctrl+F` opens its search, and `Cmd/Ctrl+K` clears the visible history of
-the current tab. Clearing the view does not delete ego's saved conversation.
+the current tab. Search matches displayed prose with collapsed whitespace; code blocks retain literal whitespace. Clearing the view does not delete ego's saved conversation.
 
 Paste a PNG, JPEG, GIF or WebP image into the composer to preview it before
 sending. Remove a preview with its close button if you change your mind. An
