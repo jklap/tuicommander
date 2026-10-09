@@ -8,7 +8,8 @@ use tokio::process::Command;
 use super::agent::discover_agent_socket;
 use super::classifier::{ExitReason, classify_exit};
 use super::command::{
-    build_ssh_base_args, build_ssh_env, build_ssh_test_args, ensure_ssh_control_dir,
+    build_ssh_base_args, build_ssh_daemon_probe_args, build_ssh_env, build_ssh_test_args,
+    ensure_ssh_control_dir,
 };
 use super::profile::TunnelProfile;
 
@@ -62,6 +63,31 @@ pub(crate) async fn ssh_check_with_binary(
     run_process(ssh_binary, &build_ssh_test_args(ssh), None, timeout)
         .await
         .map(|_| ())
+}
+
+/// Test Connection's daemon check over SSH: stdio-forward to the daemon's port
+/// on the remote host's loopback (`command::build_ssh_daemon_probe_args`) and
+/// send `request` through it, returning whatever the daemon answered.
+///
+/// stdin is held open until ssh exits instead of being closed after the
+/// request: closing it half-closes the forwarded TCP connection, which an HTTP
+/// server may treat as a client that went away before its response. ssh's
+/// stdio forwarding ends the channel by itself once the daemon closes its end.
+pub(crate) async fn ssh_daemon_request_with_binary(
+    ssh: &crate::ssh_connection::SshConnectionParams,
+    remote_port: u16,
+    request: &[u8],
+    timeout: Duration,
+    ssh_binary: &Path,
+) -> Result<ExecOutput, ExitReason> {
+    run_process_with(
+        ssh_binary,
+        &build_ssh_daemon_probe_args(ssh, remote_port),
+        Some(request),
+        StdinEnd::HoldOpen,
+        timeout,
+    )
+    .await
 }
 
 pub(crate) async fn scp_push(
@@ -195,10 +221,30 @@ async fn kill_one_shot(child: &mut tokio::process::Child, guard: &mut ProcessGro
     }
 }
 
+/// What happens to a one-shot's stdin once its payload is written.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StdinEnd {
+    /// Closed, so the child reads EOF (every remote command here).
+    Close,
+    /// Kept open until the child exits (stdio forwarding; see
+    /// [`ssh_daemon_request_with_binary`]).
+    HoldOpen,
+}
+
 async fn run_process(
     binary: &Path,
     args: &[String],
     stdin: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<ExecOutput, ExitReason> {
+    run_process_with(binary, args, stdin, StdinEnd::Close, timeout).await
+}
+
+async fn run_process_with(
+    binary: &Path,
+    args: &[String],
+    stdin: Option<&[u8]>,
+    stdin_end: StdinEnd,
     timeout: Duration,
 ) -> Result<ExecOutput, ExitReason> {
     ensure_ssh_control_dir().map_err(|error| {
@@ -241,6 +287,10 @@ async fn run_process(
         let payload = payload.to_vec();
         Some(tokio::spawn(async move {
             pipe.write_all(&payload).await?;
+            if stdin_end == StdinEnd::HoldOpen {
+                // Aborted (dropping the pipe) once the child has exited.
+                std::future::pending::<()>().await;
+            }
             pipe.shutdown().await
         }))
     } else {
@@ -291,10 +341,17 @@ async fn run_process(
     };
 
     if let Some(writer) = writer {
-        writer
-            .await
-            .map_err(|error| ExitReason::Unknown(format!("stdin writer failed: {error}")))?
-            .map_err(|error| ExitReason::Unknown(format!("failed to write ssh stdin: {error}")))?;
+        if stdin_end == StdinEnd::HoldOpen {
+            // The child is gone; the held pipe has nothing left to do.
+            writer.abort();
+        } else {
+            writer
+                .await
+                .map_err(|error| ExitReason::Unknown(format!("stdin writer failed: {error}")))?
+                .map_err(|error| {
+                    ExitReason::Unknown(format!("failed to write ssh stdin: {error}"))
+                })?;
+        }
     }
 
     let stdout = String::from_utf8_lossy(&stdout).into_owned();

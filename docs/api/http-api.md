@@ -1780,10 +1780,17 @@ may not be saved yet and persists nothing. Body:
 — the password is plaintext for this one call only: never stored, never logged,
 never echoed. Answers 200 with
 `{ "type": "Reachable" | "AuthFailed" | "NotConfigured" | "PasswordRequired" | "InstanceNotFound" }` or
-`{ "type": "Unreachable", "reason": "..." }` (the reason never contains the URL
+`{ "type": "Unreachable" | "DaemonUnreachable", "reason": "..." }` (the reason never contains the URL
 or the password). SSH runs a one-shot `ssh … -- user@host true` with the tunnel's
 options, `ConnectTimeout=5` and `ControlPath=none` (so it never rides a live
-multiplexed master); a Direct `https://` URL first has its certificate judged
+multiplexed master); for a Remote Server (`remote_daemon_port` non-zero — an SSH
+tunnel profile sends 0 and stops there) it then sends one raw HTTP/1.0
+`GET /health` with the same always-present Basic header through
+`ssh … -W 127.0.0.1:<remote_daemon_port> -- user@host` (stdio forwarding, stdin
+held open until the daemon closes the connection) and judges the answer like
+Connect does: a `/health` JSON with `protocol_version` is `Reachable`, a 401 is
+classified as below, and anything else — nothing listening, another server, a
+timeout — is `{ "type": "DaemonUnreachable", "reason": "SSH works, but …" }`; a Direct `https://` URL first has its certificate judged
 like Connect does (`direct_proxy::probe_direct_tls` with the request's
 `transport.tls_fingerprint`): a matching pin is tested through a one-shot pinned
 loopback relay, while an unpinned untrusted certificate (`certificate not trusted

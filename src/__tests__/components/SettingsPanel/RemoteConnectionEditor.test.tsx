@@ -7,7 +7,7 @@ const { actions, statuses } = vi.hoisted(() => ({
 		setPassword: vi.fn<(id: string, password: string) => Promise<void>>(() => Promise.resolve()),
 		hasPassword: vi.fn(() => Promise.resolve(false)),
 		disconnect: vi.fn(() => Promise.resolve()),
-		testConnection: vi.fn(() => Promise.resolve({ type: "Reachable" })),
+		testConnection: vi.fn((): Promise<{ type: string; reason?: string }> => Promise.resolve({ type: "Reachable" })),
 	},
 	statuses: {} as Record<string, { status: string }>,
 }));
@@ -283,5 +283,19 @@ describe("RemoteConnectionEditor", () => {
 
 		expect(await findByText(/requires a password/)).toBeTruthy();
 		expect(queryByText(/not configured/)).toBeNull();
+	});
+
+	it("SSH that works with no daemon behind it shows the daemon half, not a bare 'Unreachable'", async () => {
+		actions.testConnection.mockResolvedValueOnce({
+			type: "DaemonUnreachable",
+			reason: "SSH works, but nothing listens on the remote host's port 9877 — is the daemon running?",
+		});
+		const { getByText, findByText, queryByText } = render(() => (
+			<RemoteConnectionEditor target={{ kind: "edit-connection", connection: sshConnection }} onClose={vi.fn()} />
+		));
+		fireEvent.click(getByText("Test Connection"));
+
+		expect(await findByText(/SSH works, but nothing listens/)).toBeTruthy();
+		expect(queryByText(/^Unreachable/)).toBeNull();
 	});
 });

@@ -612,6 +612,8 @@ function describeTestResult(result: Awaited<ReturnType<typeof remoteConnectionsS
 			return { ok: false, text: "Reachable, but it requires a password — enter it above to test it" };
 		case "InstanceNotFound":
 			return { ok: false, text: "Instance not found" };
+		case "DaemonUnreachable":
+			return { ok: false, text: result.reason };
 		default:
 			return { ok: false, text: `Unreachable: ${result.reason}` };
 	}

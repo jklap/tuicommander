@@ -111,6 +111,7 @@ export type ConnectionTestResult =
 	| { type: "NotConfigured" }
 	| { type: "PasswordRequired" }
 	| { type: "InstanceNotFound" }
+	| { type: "DaemonUnreachable"; reason: string }
 	| { type: "Unreachable"; reason: string };
 
 /**
