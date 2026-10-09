@@ -1,3 +1,13 @@
+## Test Connection + one-shot ssh fixups (tunnel-session-review R1/R2/R3/R5, 2026-10-09) — Rust restart required
+
+Unit/integration tests cover the logic (real TLS server, real fake-ssh processes);
+these are the end-to-end checks through the editor UI against real daemons.
+
+- [ ] **Test Connection honours a Direct pin.** Against a remote daemon serving its
+  self-signed certificate: before pinning, Test Connection says "certificate not trusted
+  (SHA-256 …)"; after Connect → Accept pins it, Test Connection says Reachable; after the
+  remote certificate is regenerated, it says "certificate changed" (and Connect refuses).
+
 ## Post-rebase fixups B1/B2/C (2026-10-08) — Rust restart required
 
 Code-level tests exist for each item (see the fixup commits after `ece9b8314`);
