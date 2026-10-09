@@ -36,7 +36,7 @@ describe("useMobileNotifications", () => {
 		const dispose = createRoot((d) => {
 			const [sessions, setSessions] = createSignal([session()]);
 			set = setSessions;
-			useMobileNotifications(sessions);
+			useMobileNotifications(sessions, () => true);
 			return d;
 		});
 		set([session({ awaiting_input: true, rate_limited: true, last_error: "failed" })]);
@@ -54,7 +54,7 @@ describe("useMobileNotifications", () => {
 		const dispose = createRoot((d) => {
 			const [sessions, setSessions] = createSignal([session()]);
 			set = setSessions;
-			useMobileNotifications(sessions);
+			useMobileNotifications(sessions, () => true);
 			return d;
 		});
 		set([session({ awaiting_input: true, rate_limited: true, last_error: "failed" })]);
@@ -64,13 +64,110 @@ describe("useMobileNotifications", () => {
 		dispose();
 	});
 
+	it("mutes non-list transitions without replaying them when the list returns", () => {
+		let set!: (next: SessionInfo[]) => void;
+		let showList!: (next: boolean) => void;
+		const dispose = createRoot((d) => {
+			const [sessions, setSessions] = createSignal([session()]);
+			const [visible, setVisible] = createSignal(false);
+			set = setSessions;
+			showList = setVisible;
+			useMobileNotifications(sessions, visible);
+			return d;
+		});
+		const changed = session({ awaiting_input: true, rate_limited: true, last_error: "failed" });
+		set([changed]);
+		for (const sound of Object.values(sounds)) expect(sound).not.toHaveBeenCalled();
+		showList(true);
+		set([{ ...changed }]);
+		for (const sound of Object.values(sounds)) expect(sound).not.toHaveBeenCalled();
+		set([session()]);
+		set([changed]);
+		expect(playQuestion).toHaveBeenCalledOnce();
+		expect(playWarning).toHaveBeenCalledOnce();
+		expect(playError).toHaveBeenCalledOnce();
+		dispose();
+	});
+
+	it.each(["screen", "document", "preference"])("mutes deferred completion when %s changes before firing", (gate) => {
+		vi.setSystemTime(10_000);
+		let set!: (next: SessionInfo[]) => void;
+		let showList!: (next: boolean) => void;
+		const dispose = createRoot((d) => {
+			const [sessions, setSessions] = createSignal([session({ shell_state: "busy", agent_type: "codex" })]);
+			const [visible, setVisible] = createSignal(true);
+			set = setSessions;
+			showList = setVisible;
+			useMobileNotifications(sessions, visible);
+			return d;
+		});
+		vi.setSystemTime(20_000);
+		set([session({ agent_type: "codex" })]);
+		if (gate === "screen") showList(false);
+		if (gate === "document") vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		if (gate === "preference") localStorage.setItem("tuic-mobile-sounds", "false");
+		vi.advanceTimersByTime(10_000);
+		expect(playCompletion).not.toHaveBeenCalled();
+		dispose();
+		vi.restoreAllMocks();
+	});
+
+	it("does not replay transitions observed while the document is hidden or sounds disabled", () => {
+		let set!: (next: SessionInfo[]) => void;
+		const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		const dispose = createRoot((d) => {
+			const [sessions, setSessions] = createSignal([session()]);
+			set = setSessions;
+			useMobileNotifications(sessions, () => true);
+			return d;
+		});
+		set([session({ awaiting_input: true })]);
+		expect(playQuestion).not.toHaveBeenCalled();
+		visibility.mockReturnValue("visible");
+		set([session({ awaiting_input: true })]);
+		expect(playQuestion).not.toHaveBeenCalled();
+		localStorage.setItem("tuic-mobile-sounds", "false");
+		set([session({ rate_limited: true })]);
+		localStorage.removeItem("tuic-mobile-sounds");
+		set([session({ rate_limited: true })]);
+		expect(playWarning).not.toHaveBeenCalled();
+		dispose();
+		vi.restoreAllMocks();
+	});
+
+	it.each([undefined, "codex"])("does not queue muted %s completion for return to the list", (agent_type) => {
+		vi.setSystemTime(10_000);
+		let set!: (next: SessionInfo[]) => void;
+		let showList!: (next: boolean) => void;
+		const dispose = createRoot((d) => {
+			const [sessions, setSessions] = createSignal([session({ shell_state: "busy", agent_type })]);
+			const [visible, setVisible] = createSignal(false);
+			set = setSessions;
+			showList = setVisible;
+			useMobileNotifications(sessions, visible);
+			return d;
+		});
+		vi.setSystemTime(20_000);
+		set([session({ agent_type })]);
+		expect(playCompletion).not.toHaveBeenCalled();
+		showList(true);
+		vi.advanceTimersByTime(10_000);
+		expect(playCompletion).not.toHaveBeenCalled();
+		set([session({ shell_state: "busy", agent_type })]);
+		vi.advanceTimersByTime(6_000);
+		set([session({ agent_type })]);
+		vi.advanceTimersByTime(10_000);
+		expect(playCompletion).toHaveBeenCalledOnce();
+		dispose();
+	});
+
 	it("defers an agent completion and cancels it when the session disappears", () => {
 		vi.setSystemTime(10_000);
 		let set!: (next: SessionInfo[]) => void;
 		const dispose = createRoot((d) => {
 			const [sessions, setSessions] = createSignal([session({ shell_state: "busy", agent_type: "codex" })]);
 			set = setSessions;
-			useMobileNotifications(sessions);
+			useMobileNotifications(sessions, () => true);
 			return d;
 		});
 		vi.setSystemTime(20_000);
@@ -87,7 +184,7 @@ describe("useMobileNotifications", () => {
 		const dispose = createRoot((d) => {
 			const [sessions, setSessions] = createSignal([session({ shell_state: "busy", agent_type: "codex" })]);
 			set = setSessions;
-			useMobileNotifications(sessions);
+			useMobileNotifications(sessions, () => true);
 			return d;
 		});
 		vi.setSystemTime(20_000);
@@ -103,7 +200,7 @@ describe("useMobileNotifications", () => {
 		const dispose = createRoot((d) => {
 			const [sessions, setSessions] = createSignal([session({ shell_state: "busy", agent_type: "codex" })]);
 			set = setSessions;
-			useMobileNotifications(sessions);
+			useMobileNotifications(sessions, () => true);
 			return d;
 		});
 		vi.setSystemTime(20_000);

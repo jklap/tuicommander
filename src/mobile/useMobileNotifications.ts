@@ -14,13 +14,15 @@ interface PrevState {
 }
 
 /**
- * Watches session state changes and plays notification sounds.
+ * Watches session state changes and plays sounds only on the visible Sessions list.
  * Reads the sound-enabled preference from localStorage (shared with SettingsScreen).
  *
  * Completion notifications mirror the desktop logic: require >=5s busy duration,
  * suppress when sub-tasks are active, and defer 10s for agent sessions.
  */
-export function useMobileNotifications(sessions: Accessor<SessionInfo[]>) {
+export function useMobileNotifications(sessions: Accessor<SessionInfo[]>, isSessionsListVisible: Accessor<boolean>) {
+	const canPlaySound = () =>
+		isSessionsListVisible() && document.visibilityState === "visible" && localStorage.getItem(SOUND_KEY) !== "false";
 	const prevStates = new Map<string, PrevState>();
 	const deferredTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -31,7 +33,8 @@ export function useMobileNotifications(sessions: Accessor<SessionInfo[]>) {
 
 	createEffect(
 		on(sessions, (current) => {
-			if (localStorage.getItem(SOUND_KEY) === "false") return;
+			// Track every transition, including those observed while playback is muted.
+			const audible = canPlaySound();
 
 			for (const s of current) {
 				const state = s.state;
@@ -47,7 +50,7 @@ export function useMobileNotifications(sessions: Accessor<SessionInfo[]>) {
 					busySince: nowBusy ? (prev?.busySince ?? Date.now()) : null,
 				};
 
-				if (prev) {
+				if (prev && audible) {
 					// Question: wasn't awaiting, now is
 					if (!prev.awaiting && now.awaiting) {
 						notificationManager.playQuestion();
@@ -86,7 +89,7 @@ export function useMobileNotifications(sessions: Accessor<SessionInfo[]>) {
 								s.session_id,
 								setTimeout(() => {
 									deferredTimers.delete(s.session_id);
-									notificationManager.playCompletion();
+									if (canPlaySound()) notificationManager.playCompletion();
 								}, decision.delayMs),
 							);
 						}
