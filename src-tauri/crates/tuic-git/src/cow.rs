@@ -335,24 +335,22 @@ fn warm_candidates(
 
 /// A clonefile preserves mode bits. Sealed build evidence is useful in the
 /// new checkout, but its copied directories must remain removable by Git.
+/// Repair directory write/search access before descending, without following symlinks.
 pub(crate) fn restore_owner_write(path: &Path) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if metadata.file_type().is_symlink() {
         return Ok(());
     }
-    if metadata.is_dir() {
-        for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            restore_owner_write(&entry.path())?;
-        }
-    }
     let mut permissions = metadata.permissions();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let needs_write = permissions.mode() & 0o200 == 0;
-        permissions.set_mode(permissions.mode() | 0o200);
-        if needs_write {
+        // Directories need owner search before child metadata can be read.
+        // Do not grant read: an unreadable tree must still fail before Git removes it.
+        let required = if metadata.is_dir() { 0o300 } else { 0o200 };
+        let needs_access = permissions.mode() & required != required;
+        permissions.set_mode(permissions.mode() | required);
+        if needs_access {
             std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
         }
     }
@@ -363,6 +361,12 @@ pub(crate) fn restore_owner_write(path: &Path) -> Result<(), String> {
             #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             std::fs::set_permissions(path, permissions).map_err(|error| error.to_string())?;
+        }
+    }
+    if metadata.is_dir() {
+        for entry in std::fs::read_dir(path).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            restore_owner_write(&entry.path())?;
         }
     }
     Ok(())
