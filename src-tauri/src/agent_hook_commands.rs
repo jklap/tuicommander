@@ -213,19 +213,43 @@ pub(crate) fn get_agent_wrap_user_function(agent_type: String) -> Option<bool> {
 /// "wrap" with no fingerprint — which the shell treats as "ask", so the user
 /// still sees the prompt for the actual function before anything is wrapped.
 /// `Some(false)` (leave alone) and `None` (ask) clear the fingerprint.
-#[cfg_attr(feature = "desktop", tauri::command)]
+///
+/// A successful save also lifts this app run's snooze for the agent (set when
+/// the user dismissed the prompt). Otherwise choosing "Wrap" (or "Ask") here
+/// after a dismissal silently did nothing until restart: the shell asks, but
+/// `agent_wrap_prompt::request` dropped every request for a snoozed agent, so
+/// Settings showed "Wrap" while nothing was ever wrapped (item #21 check).
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) fn set_agent_wrap_user_function(
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
     agent_type: String,
     value: Option<bool>,
 ) -> Result<(), String> {
-    if !crate::agent_wrap_prompt::is_wrappable_agent(&agent_type) {
+    apply_agent_wrap_user_function(&state, agent_type, value)
+}
+
+/// Transport-neutral core of `set_agent_wrap_user_function` (IPC) and
+/// `PUT /config/agents/{agent}/wrap-user-function` (HTTP).
+pub(crate) fn apply_agent_wrap_user_function(
+    state: &crate::AppState,
+    agent_type: String,
+    value: Option<bool>,
+) -> Result<(), String> {
+    store_agent_wrap_user_function(&agent_type, value)?;
+    state.agent_wrap_snoozed.remove(&agent_type);
+    Ok(())
+}
+
+fn store_agent_wrap_user_function(agent_type: &str, value: Option<bool>) -> Result<(), String> {
+    if !crate::agent_wrap_prompt::is_wrappable_agent(agent_type) {
         return Err(format!(
             "wrapping a user-defined shell function is unsupported for '{agent_type}'"
         ));
     }
     let mut config = crate::config::load_agents_config();
     let base = config.clone();
-    let settings = config.agents.entry(agent_type).or_default();
+    let settings = config.agents.entry(agent_type.to_string()).or_default();
     let keep_hash = value == Some(true) && settings.wrap_user_function == Some(true);
     settings.wrap_user_function = value;
     if !keep_hash {
