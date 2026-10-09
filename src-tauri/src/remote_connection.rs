@@ -1341,6 +1341,29 @@ mod tests {
         assert_ne!(err, REMOTE_PASSWORD_NOT_CONFIGURED);
     }
 
+    /// Catches: the auth middleware's "no credentials configured" 401 wording
+    /// changing while `request_session_token` still matches the old prefix —
+    /// the "set a password on this daemon" offer would silently stop showing
+    /// (its other test uses a mocked body). Sibling of `connection_test`'s
+    /// `the_auth_bodies_match_what_the_middleware_sends`.
+    #[test]
+    fn the_unconfigured_body_prefix_matches_what_the_middleware_sends() {
+        let consumer = include_str!("remote_connection.rs");
+        let marker = "if body.contains(\"";
+        let start = consumer
+            .find(marker)
+            .expect("request_session_token's body match")
+            + marker.len();
+        let prefix = &consumer[start..start + consumer[start..].find('"').unwrap()];
+        assert!(!prefix.is_empty());
+        let middleware = include_str!("mcp_http/auth.rs");
+        assert!(
+            middleware.contains(&format!("unauthorized_response(\"{prefix}")),
+            "auth.rs no longer answers a body starting {prefix:?}"
+        );
+        assert!(!"Invalid credentials".contains(prefix));
+    }
+
     /// A daemon with no password at all answers a Basic header with the
     /// "Scan the QR code" body. That — and only that — is reported as
     /// unconfigured, which is the one case `ssh_provision` may offer to set a
