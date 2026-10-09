@@ -1,7 +1,5 @@
-import { createSignal } from "solid-js";
 import en from "./en.json";
-
-const [locale, setLocale] = createSignal("en");
+import { locale, setLocale } from "./locale";
 
 /**
  * Message catalogs by locale code. `en.json` is generated from the call sites,
