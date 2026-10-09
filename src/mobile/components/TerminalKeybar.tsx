@@ -14,7 +14,7 @@ interface TerminalKeybarProps {
 	questionConfident?: boolean;
 	sessionExists?: boolean;
 	onCommandWidgetOpen?: () => void;
-	/** Request to prefill "/" in CommandInput and focus it. */
+	/** Insert "/" at the composer selection through its normal input path. */
 	onSlashRequest?: () => void;
 }
 
