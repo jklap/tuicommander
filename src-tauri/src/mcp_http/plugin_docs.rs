@@ -34,7 +34,7 @@ Constraints:
 - `main` must be a filename only (no path separators or `..`)
 - `minAppVersion` must be <= current app version (current: 0.3.x)
 - `capabilities`: subset of `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `ui:file-preview`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
-- `allowedUrls`: URL patterns for `net:http` (supports `*` wildcard for path prefix matching)
+- `allowedUrls`: non-empty URL patterns required for `net:http` (supports `*` wildcard for path prefix matching); manifests with an empty or omitted list are rejected
 - `agentTypes`: optional array of agent type strings. When set, output watchers and structured event handlers only fire for terminals running a matching agent. Omit or use `[]` for universal plugins. Valid terminal values: `claude`, `gemini`, `opencode`, `aider`, `codex`, `amp`, `cursor`, `goose`, `grok`, `droid`, `pi`, `ego`, `git`.
 - `binaries`: optional array of CLI binary names this plugin may execute via `exec:cli` (e.g. `["rtk", "mdkb"]`). The on-disk manifest is the source of truth — binaries not declared here are rejected.
 - Module default export must have `id`, `onload(host)`, `onunload()`
@@ -115,7 +115,7 @@ Every `ui:panel` iframe gets two automatic injections: (1) a **base stylesheet**
 
 ## MANDATORY — Dashboard Style Guide
 
-**If your plugin renders a dashboard (analytics, status, reports, summaries) you MUST use the shared `.dashboard`/`.dash-*` classes from the base stylesheet.** Hand-rolling layout/card/stat CSS is forbidden — dashboards must look like a native part of TUICommander, not a third-party widget. The built-in Claude Usage dashboard is the reference.
+**If your plugin renders a dashboard (analytics, status, reports, summaries) you MUST use the shared `.dashboard`/`.dash-*` classes from the base stylesheet.** Hand-rolling layout/card/stat CSS is forbidden — dashboards must look like a native part of TUICommander, not a third-party widget. The native Claude Usage dashboard is the reference.
 
 Rules:
 1. Wrap the entire dashboard in `<div class="dashboard">`.
@@ -146,6 +146,8 @@ Minimum dashboard skeleton:
 ```
 
 Full reference, checklist, and do/don'ts: `docs/plugins-style.md` in the TUICommander repo. Treat that file as authoritative — if it conflicts with this reference, it wins.
+
+Plugin packages are external desktop ES modules; browser/PWA clients do not import them. Desktop hot reload watches `.js`, `.mjs` and `.json` code outside `data/` and new top-level directories/symlinks. The watcher does not follow symlink targets. There is no `BUILTIN_PLUGINS` registration list.
 
 ## PluginHost API
 
@@ -213,8 +215,10 @@ host.getClaudeProjectDir(repoPath: string)     // Promise<string | null> — req
 host.getPrNotifications()  // [{ id, repoPath, branch, prNumber, title, type }]
 host.getSettings(repoPath: string) // { path, displayName, baseBranch, color } | null
 host.getTerminalState()    // { sessionId, shellState, agentType, agentActive, awaitingInput, repoPath } | null
-host.onStateChange(cb)     // Disposable — fires on agent start/stop, branch/state change
+host.onStateChange(cb)     // Disposable — agent-started/stopped, repo-changed, branch-changed, shell-state-changed, awaiting-input-changed
 ```
+
+Final shell/awaiting transitions emitted together with session teardown retain the old session ID. Replacement sessions establish a new baseline without replaying initial state.
 
 ### Tier 2b: Git Read (requires `git:read` capability)
 
@@ -258,16 +262,16 @@ ContextMenuAction targets: `"terminal"`, `"branch"`, `"repo"`, `"tab"`. ContextM
 
 SidebarPanelHandle: `{ setItems(items), setBadge(text), dispose() }`. SidebarItem: `{ id, label, subtitle?, icon?, iconColor?, onClick?, contextMenu?: [{ label, action, disabled? }] }`. Panels appear below branches in the sidebar, scoped per-repo. Badge shows a counter pill on the header.
 
-PanelHandle: `{ tabId, update(html), close(), send(data, transfer?) }` — HTML rendered in sandboxed iframe with automatic base stylesheet + CSS theme variable injection. Write minimal plugin-specific CSS only (see Panel CSS Design Strategy above). Use `onMessage` callback to receive messages from iframe, `send()` to post messages back. Pass an optional `Transferable[]` to transfer ownership of large buffers instead of copying them. Every iframe also receives the TUIC SDK (`window.tuic`) — use `tuic.open(path, {pinned?})` to open markdown files, `tuic.edit(path, {line?})` to open files in the code editor, `tuic.terminal(repoPath)` to open terminals, `tuic.openUrl(url)` to open http/https/mailto URLs externally, or `<a href="tuic://open/path">` / `<a href="tuic://edit/path?line=10">` links for automatic interception. Absolute http/https/mailto links in inline panels also open externally when clicked. Paths must be within a known repo; cross-origin URL panels cannot expose their clicks, so use the tab menu's Open in Browser action.
+PanelHandle: `{ tabId, update(html), close(), send(data, transfer?) }` — HTML rendered in an iframe with `sandbox="allow-scripts allow-same-origin"` (not host-DOM isolation), automatic base stylesheet + CSS theme variable injection. Write minimal plugin-specific CSS only (see Panel CSS Design Strategy above). Use `onMessage` callback to receive messages from iframe, `send()` to post messages back. `send(data)` delivers data to the iframe SDK `tuic.onMessage` through a `tuic:host-message` envelope. Panels and bridges close on plugin unload; clean up your own timers/listeners in `onunload`. Pass an optional `Transferable[]` to transfer ownership of large buffers instead of copying them. Every iframe also receives the TUIC SDK (`window.tuic`) — use `tuic.open(path, {pinned?})` to open markdown files, `tuic.edit(path, {line?})` to open files in the code editor, `tuic.terminal(repoPath)` to open terminals, `tuic.openUrl(url)` to open http/https/mailto URLs externally, or `<a href="tuic://open/path">` / `<a href="tuic://edit/path?line=10">` links for automatic interception. Absolute http/https/mailto links in inline panels also open externally when clicked. Paths must be within a known repo; cross-origin URL panels cannot expose their clicks, so use the tab menu's Open in Browser action.
 
 `registerDashboard({ label?, icon?, open })`: Register a one-click entry point shown as a **Dashboard** button in *Settings → Plugins*. The host closes the Settings panel automatically before calling `open()`. A plugin may only register one dashboard; second calls replace the first. Pair this with the `.dashboard` style guide above.
 
 `registerCommand({ id, title, defaultShortcut?, run })`: Register a user-rebindable command. Appears in *Settings → Keyboard Shortcuts* under "Plugin Commands". Action name is auto-namespaced as `plugin:<pluginId>:<id>`. `defaultShortcut` is optional ("Cmd+Shift+K" etc.); on conflict the command is registered but left unbound with a warning.
 HttpResponse: `{ status: number, headers: Record<string, string>, body: string }` — non-2xx is NOT an error.
 
-**setTicker notes:** Shared ticker area rotates messages from all plugins. Priority tiers: <10 = popover only, 10-99 = auto-rotate (5s), >=100 = urgent pin. `label` is shown as source prefix (e.g. "Usage · 5h: 42%"). Counter badge (1/3 ▸) shown when multiple tickers active. Click badge to cycle, right-click for popover. Legacy aliases: `postTickerMessage`/`removeTickerMessage`.
+**setTicker notes:** Shared ticker area rotates messages from all plugins. Priority tiers: <10 = popover only, 10-99 = auto-rotate (5s), >=100 = urgent pin. `label` is shown as source prefix (e.g. "Usage · 5h: 42%"). Counter badge (1/3 ▸) shown when multiple tickers active. Click badge to cycle, right-click for popover. Removed aliases `postTickerMessage`/`removeTickerMessage` are not supported.
 
-**httpFetch notes:** Localhost blocked unless declared in `allowedUrls`. Max 5 redirects. 30s timeout, 10 MB limit. Built-in plugins have no URL restrictions.
+**httpFetch notes:** Localhost blocked unless declared in `allowedUrls`. Max 5 redirects. 30s timeout, 10 MB limit. An empty `allowedUrls` list grants no HTTP access.
 
 ### Tier 3b: Filesystem Operations (capability-gated)
 
@@ -545,7 +549,7 @@ esbuild src/main.ts --bundle --format=esm --outfile=main.js --external:nothing
 5. Register: pluginRegistry.register() calls plugin.onload(host)
 6. Active: plugin receives PTY lines, structured events, uses PluginHost API
 7. Hot reload: file changes trigger unregister + re-import (cache-busted); a newly added plugin directory/symlink is discovered and loaded live
-8. Unload: plugin.onunload() called, all registrations auto-disposed
+8. Unload: plugin.onunload() called, tracked registrations disposed, openPanel tabs and bridges closed; plugin-owned timers/listeners need explicit cleanup
 
 Crash safety: all boundaries are try/catch wrapped. A broken plugin produces a console error and is skipped. The app always continues.
 

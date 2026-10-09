@@ -216,6 +216,13 @@ pub(crate) async fn github_poll_add_account(
     state: State<'_, Arc<AppState>>,
     device_code: String,
 ) -> Result<PollResult, String> {
+    github_poll_add_account_impl(state.inner(), device_code).await
+}
+
+pub(crate) async fn github_poll_add_account_impl(
+    state: &Arc<AppState>,
+    device_code: String,
+) -> Result<PollResult, String> {
     let result = poll_device_flow(&state.http_client, &device_code).await?;
 
     if let PollResult::Success {
