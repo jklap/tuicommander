@@ -30,6 +30,7 @@ import { GeneralTab } from "../../../components/SettingsPanel/tabs/GeneralTab";
 import { TerminalTab } from "../../../components/SettingsPanel/tabs/TerminalTab";
 import { settingsStore } from "../../../stores/settings";
 import { settingsExpertStore } from "../../../stores/settingsExpert";
+import { loadThemes } from "../../../themes";
 
 function invokeImpl(config: Record<string, unknown> = {}) {
 	return (cmd: string) => {
@@ -305,6 +306,34 @@ describe("TerminalTab placement", () => {
 
 		expect(settingsStore.state.osc52Clipboard).toBe(true);
 		expect(savedConfigs().at(-1)?.osc52_clipboard).toBe(true);
+	});
+
+	// Dropped-items-review #53: wip's AppearanceTab "calls setTheme when the
+	// theme select changes", re-pointed at the tab the select moved to (Story 858).
+	it("persists the Terminal Theme select under theme", async () => {
+		vi.useFakeTimers();
+		const theme = (key: string) => ({
+			key,
+			name: key,
+			terminal: { background: "#000000", foreground: "#ffffff", cursor: "#ffffff", ansi: [] },
+			app_chrome: {},
+		});
+		mockInvoke.mockImplementation((cmd: string) =>
+			cmd === "list_themes" ? Promise.resolve([theme("commander"), theme("nord")]) : invokeImpl()(cmd),
+		);
+		await loadThemes();
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const select = selectByLabel(container, "Terminal Theme");
+		const other = Array.from(select.options).find((o) => o.value !== select.value)?.value;
+		if (!other) throw new Error("Terminal Theme select offers a single theme");
+		mockInvoke.mockClear();
+
+		fireEvent.change(select, { target: { value: other } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.theme).toBe(other);
+		expect(savedConfigs().at(-1)?.theme).toBe(other);
 	});
 
 	it("persists the Cursor Style select under cursor_style", async () => {
