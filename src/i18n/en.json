@@ -595,6 +595,8 @@
 	"ideasPanel.placeholder": "Type an idea and press Enter... (Ctrl+V to paste image)",
 	"ideasPanel.queue": "Queue for the agent's next idle moment",
 	"ideasPanel.send": "Send to terminal",
+	"ideasPanel.showAllRepos": "Show ideas from all repositories",
+	"ideasPanel.showThisRepo": "Show this repository only",
 	"ideasPanel.submit": "Add idea (Enter)",
 	"ideasPanel.title": "Ideas",
 	"notifications.btn.chooseDevice": "Choose output device…",

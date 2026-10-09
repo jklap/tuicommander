@@ -761,3 +761,33 @@ Recorded sanitized cases and the last-30-days schema counts are in
 The opt-in `view_real_transcript_throughput` measurement reads an authorized local
 file at runtime through the same path, reporting both the 2 MiB attach and full
 parse times plus process peak RSS. Raw transcripts are never committed.
+
+The recorded chunk-path parity gate covers all `.tcap` captures under `src-tauri/`,
+including captures in terminal crates. See [Recorded replay oracle](output-parser.md#recorded-replay-oracle)
+for scope, first-difference diagnostics and the explicit regeneration command.
+
+### Bound Telegram interruption
+
+The Telegram daemon arms a draft ownership token in `SessionState` under the
+session writer mutex. Raw desktop/HTTP input, atomic input pairs, managed agent
+submissions, trust answers and retained-composer Enter retries retire that token
+before writing bytes. Retirement records the current epoch, so a delayed draft
+cannot rearm it before native submission bookkeeping establishes a new turn.
+Terminal protocol replies leave it intact. Stop consumes
+the current draft, then checks the token, peer mapping and turn epoch under the
+same writer mutex. It writes one Escape without feeding the input line editor.
+`SilenceState` is released before the native write; synchronous captured output
+can therefore traverse the normal chunk processor. Input bookkeeping remains
+post-write and keeps its existing per-request boundaries.
+
+## Remote terminal metadata
+
+Desktop terminals owned by a remote connection subscribe to that daemon's
+`/sessions/{id}/stream` WebSocket for parsed events, activity, title and exit.
+Local desktop terminals retain IPC subscriptions. OSC 0/2 titles and resets
+are dual-emitted: `pty-title-{id}` carries the text on IPC, while `PtyTitle`
+reaches the per-session socket and `/events` (`pty-title`, `{session_id,title}`).
+A reset carries an empty string. Titles do not change semantic session activity
+and bypass the lossless state queue. Authoritative lifecycle snapshots and pushes
+apply `agent_type` immediately, including removal when the shell returns; the
+30-second foreground probe remains a recovery/discovery path.

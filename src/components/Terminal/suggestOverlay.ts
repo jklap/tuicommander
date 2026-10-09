@@ -65,6 +65,44 @@ export function answerExtent(start: number, totalRows: number, getRow: (i: numbe
 	return last;
 }
 
+/** A rendered top-level block of a chat message, reduced to what the answer rule reads. */
+export interface ChatBlock {
+	kind: "paragraph" | "code" | "other";
+	text: string;
+	/** The block opens a 💬 answer. Only a paragraph can. */
+	marker: boolean;
+}
+
+/**
+ * Block ranges `[first, last]` of the answers in a rendered chat message, by the
+ * same rule as the grid: the blocks are laid out as the grid rows of an agent
+ * reply (indented under the bullet, a blank row between blocks) and `answerExtent`
+ * decides where each answer ends.
+ */
+export function answerBlockRanges(blocks: readonly ChatBlock[]): [number, number][] {
+	const rows: RowSnapshot[] = [];
+	const owner: number[] = [];
+	const push = (text: string, block: number) => {
+		rows.push({ text, isWrapped: false });
+		owner.push(block);
+	};
+	const firstRow: number[] = [];
+	blocks.forEach((block, index) => {
+		if (index > 0) push("", index);
+		firstRow.push(rows.length);
+		if (block.kind === "code") for (const line of ["```", ...block.text.split("\n"), "```"]) push(`  ${line}`, index);
+		else push(block.kind === "paragraph" ? `  ${block.marker ? "💬 " : ""}${block.text}` : `  - ${block.text}`, index);
+	});
+	const ranges: [number, number][] = [];
+	for (let index = 0; index < blocks.length; index++) {
+		if (!blocks[index].marker) continue;
+		const last = owner[answerExtent(firstRow[index], rows.length, (r) => rows[r] ?? null)];
+		ranges.push([index, last]);
+		index = last;
+	}
+	return ranges;
+}
+
 /** Match a NEW `suggest:` anchor for stop-detection during a continuation
  *  walk. Does NOT require `|` on the same row — the Rust parser allows the
  *  first `|` to arrive on a wrapped continuation line, so a row like

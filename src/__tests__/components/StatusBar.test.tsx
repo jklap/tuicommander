@@ -246,6 +246,77 @@ describe("StatusBar", () => {
 		expect(statusInfo!.textContent).toBe("Ready");
 	});
 
+	describe("non-modal popups dismiss on an outside press without a backdrop", () => {
+		const outsidePress = (onSidebarPress: () => void) => {
+			const sidebar = document.createElement("aside");
+			sidebar.addEventListener("pointerdown", onSidebarPress);
+			document.body.appendChild(sidebar);
+			const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
+			sidebar.dispatchEvent(event);
+			sidebar.remove();
+			return event;
+		};
+
+		// Catches: an invisible fixed inset:0 backdrop swallows the press (and wheel) meant for the sidebar.
+		it("ticker popover closes on an outside pointer press and leaves the event alone", () => {
+			statusBarTicker.addMessage({ id: "t:1", pluginId: "t", label: "T", text: "hello", priority: 10, ttlMs: 0 });
+			const { container } = render(() => <StatusBar {...defaultProps} />);
+			fireEvent.contextMenu(container.querySelector(".tickerMessage")!);
+			expect(container.querySelector(".tickerPopover")).not.toBeNull();
+			expect(container.querySelector(".tickerOverlay")).toBeNull();
+
+			const onSidebarPress = vi.fn();
+			const event = outsidePress(onSidebarPress);
+
+			expect(container.querySelector(".tickerPopover")).toBeNull();
+			expect(onSidebarPress).toHaveBeenCalledOnce();
+			expect(event.defaultPrevented).toBe(false);
+		});
+
+		// Catches: pressing inside the open ticker popover dismisses it before its row handler runs.
+		it("ticker popover stays open for a press inside it", () => {
+			statusBarTicker.addMessage({ id: "t:1", pluginId: "t", label: "T", text: "hello", priority: 10, ttlMs: 0 });
+			const { container } = render(() => <StatusBar {...defaultProps} />);
+			fireEvent.contextMenu(container.querySelector(".tickerMessage")!);
+			fireEvent.pointerDown(container.querySelector(".tickerPopover")!);
+			expect(container.querySelector(".tickerPopover")).not.toBeNull();
+		});
+
+		// Catches: an invisible fixed inset:0 backdrop swallows the press (and wheel) meant for the sidebar.
+		it("info balloon closes on an outside pointer press and leaves the event alone", () => {
+			vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(500);
+			vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
+			const { container } = render(() => <StatusBar {...defaultProps} statusInfo="A very long status message" />);
+			vi.advanceTimersByTime(50);
+			fireEvent.click(container.querySelector(".info")!);
+			expect(container.querySelector(".infoBalloon")).not.toBeNull();
+			expect(container.querySelector(".infoBalloonOverlay")).toBeNull();
+
+			const onSidebarPress = vi.fn();
+			const event = outsidePress(onSidebarPress);
+
+			expect(container.querySelector(".infoBalloon")).toBeNull();
+			expect(onSidebarPress).toHaveBeenCalledOnce();
+			expect(event.defaultPrevented).toBe(false);
+			vi.restoreAllMocks();
+		});
+
+		// Catches: the toggle trigger counts as an outside press, so closing it by click re-opens it.
+		it("info balloon still toggles closed from its own trigger", () => {
+			vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(500);
+			vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(100);
+			const { container } = render(() => <StatusBar {...defaultProps} statusInfo="A very long status message" />);
+			vi.advanceTimersByTime(50);
+			const trigger = container.querySelector(".info")!;
+			fireEvent.click(trigger);
+			expect(container.querySelector(".infoBalloon")).not.toBeNull();
+			fireEvent.pointerDown(trigger);
+			fireEvent.click(trigger);
+			expect(container.querySelector(".infoBalloon")).toBeNull();
+			vi.restoreAllMocks();
+		});
+	});
+
 	it("absorbs matching Codex usage into the active agent badge", () => {
 		const openDashboard = vi.fn();
 		mockTerminalGetActive.mockReturnValue({ agentType: "codex", usageLimit: null });

@@ -84,6 +84,49 @@ pub(crate) fn chrome_candidates() -> Vec<PathBuf> {
     paths
 }
 
+/// chromey's `DEFAULT_ARGS` (chromey-2.58.2 browser.rs:1578) minus `--enable-automation`
+/// (automation infobar) and `--disable-extensions` (blocks the Design Mode extension),
+/// plus the Design Mode additions. chromey cannot drop single defaults, so all are restated.
+const BROWSER_ARGS: [&str; 25] = [
+    "--disable-background-networking",
+    "--enable-features=NetworkService,NetworkServiceInProcess",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-breakpad",
+    "--disable-client-side-phishing-detection",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-default-apps",
+    "--disable-dev-shm-usage",
+    "--disable-features=TranslateUI",
+    "--disable-hang-monitor",
+    "--disable-ipc-flooding-protection",
+    "--disable-popup-blocking",
+    "--disable-prompt-on-repost",
+    "--disable-renderer-backgrounding",
+    "--disable-sync",
+    "--force-color-profile=srgb",
+    "--metrics-recording-only",
+    "--no-first-run",
+    "--password-store=basic",
+    "--use-mock-keychain",
+    "--enable-blink-features=IdleDetection",
+    "--lang=en_US",
+    "--disable-blink-features=AutomationControlled",
+    "--no-default-browser-check",
+];
+
+fn browser_config(chrome: PathBuf, profile: PathBuf) -> Result<BrowserConfig, String> {
+    BrowserConfig::builder()
+        .with_head()
+        .chrome_executable(chrome)
+        .user_data_dir(profile)
+        .port(0)
+        .disable_default_args()
+        .args(BROWSER_ARGS)
+        .build()
+        .map_err(|error| error.to_string())
+}
+
 pub(crate) async fn launch_or_attach(repo_root: &Path) -> Result<(Browser, Handler), String> {
     let profile = profile_dir(repo_root);
     if let Ok(port) = read_active_port(&profile)
@@ -96,19 +139,7 @@ pub(crate) async fn launch_or_attach(repo_root: &Path) -> Result<(Browser, Handl
         .find(|path| path.is_file())
         .ok_or_else(|| "No Chrome or Chromium executable found".to_string())?;
     std::fs::create_dir_all(&profile).map_err(|error| error.to_string())?;
-    let config = BrowserConfig::builder()
-        .with_head()
-        .chrome_executable(chrome)
-        .user_data_dir(profile)
-        .port(0)
-        .args([
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--no-first-run",
-            "--no-default-browser-check",
-        ])
-        .build()
-        .map_err(|error| error.to_string())?;
+    let config = browser_config(chrome, profile)?;
     Browser::launch(config)
         .await
         .map_err(|error| error.to_string())
@@ -120,6 +151,34 @@ mod tests {
     use chromiumoxide::cdp::browser_protocol::{dom, input, overlay};
     use chromiumoxide::{Browser, BrowserConfig};
     use futures_util::StreamExt;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn launch_args_do_not_reenable_automation_or_disable_extensions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("tuic-design-args-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("argv");
+        let script = dir.join("fake-chrome");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n", out.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let config = browser_config(script, dir.join("profile")).unwrap();
+        config.launch().unwrap().wait().await.unwrap();
+        let argv = std::fs::read_to_string(&out).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let args: Vec<&str> = argv.lines().collect();
+        assert!(!args.contains(&"--enable-automation"), "{args:?}");
+        assert!(!args.contains(&"--disable-extensions"), "{args:?}");
+        assert!(args.contains(&"--no-first-run"), "{args:?}");
+        assert!(
+            args.iter().any(|a| a.starts_with("--user-data-dir=")),
+            "{args:?}"
+        );
+    }
 
     #[test]
     fn profile_directory_is_stable_and_repo_scoped() {

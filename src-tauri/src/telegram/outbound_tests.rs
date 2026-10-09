@@ -56,8 +56,8 @@ async fn final_chunks_preserve_exact_unicode_and_whitespace() {
 }
 
 // Catches: activity replaces the draft id, finalization leaves refresh running,
-// a revoked destination is sent after the outbound wait, or removed phone Stop
-// is accidentally advertised again.
+// a revoked destination is sent after the outbound wait, or refreshed drafts
+// lose the phone Stop control.
 #[tokio::test]
 async fn draft_refresh_and_final_retire_one_request_and_recheck_revocation() {
     let (_dir, paths) = setup();
@@ -87,7 +87,8 @@ async fn draft_refresh_and_final_retire_one_request_and_recheck_revocation() {
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[0].1["text"], "");
     for (_, body) in &requests[..2] {
-        assert!(body.get("can_stop").is_none());
+        assert_eq!(body["can_stop"], true);
+        assert_eq!(body["keep_on_stop"], false);
     }
     assert_eq!(requests[1].1["draft_id"], draft);
     assert!(

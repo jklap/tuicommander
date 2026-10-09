@@ -6,13 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve the next unsent Compose draft when a send or queue completes after leaving terminal Chat, including when the editor has already reopened (#1599-db8a).
+
+- Launch the Design Mode browser without chromey's `--enable-automation` and `--disable-extensions`, so it shows no automation infobar and can load extensions (#1593-987f).
+
+- Keep sidebar wheel and clicks working while the status-bar ticker popover and info balloon, the GitHub panel and the Smart Prompts dropdown are open; their invisible full-window backdrops are replaced by one shared outside-press dismissal that does not consume the press (#1597-fab6).
+- Keep sidebar wheel scrolling available while the PR detail popover is open; outside presses dismiss the popover without blocking the underlying control (#1596-df57).
+- Remove terminal-grid prompt tint because recorded cursor rows can identify the composer or tool output; keep prompt colours in Chat (#1595-22b1).
+
+- Reject HTML responses to remote JSON RPCs with the endpoint and content type, so Add Repository shows the error instead of an HTML home path (#1594-f297).
+
+- Remote desktop terminal tabs now receive daemon agent identity, parsed state and OSC title/reset notifications through the owning connection (#1581-8fd0).
+
+
 ### Added
+- Add an all-repositories toggle to the Ideas panel header: it lists every repository's ideas for cross-repo work (in memory, resets on reload). The badge and "clear completed" follow the visible list, so clearing in a single-repository view no longer deletes other repositories' completed ideas; ideas added in all-mode stay tagged with the active repository (#1598-c0a0).
+- Add a headless agent capture scenario driver with explicit fixture promotion and ordered replay expectations; record real Codex and pi turns; Claude (expired login) and goose (its banner prints the home directory) stay unverified, and a test rejects fixtures that embed `/Users/` or `/home/` paths.
+
+- Telegram draft Stop interrupts only its bound agent turn; replacement input retires stale Stop requests before writing.
 - **Mobile Markdown review** — In the mobile Files view, tapping a task-list checkbox toggles it in the file, and a block comment can be added to a paragraph, heading or list item in the desktop's `<!--tweak:...-->` format. Saves refuse to overwrite a file that changed on disk meanwhile (new `write_file_if_unchanged` command, `POST /fs/write-if-unchanged`).
-- Add a CLI | Chat switch to Claude terminals: a read-only conversation view built from the agent's session file, with prompts apart from replies and tool calls folded into compact cards. The grid is hidden while Chat is open and never unmounted.
+- Add a CLI | Chat switch to Claude terminals: a conversation view built from the agent's session file, with prompts apart from replies and tool calls folded into compact cards. The grid is hidden while Chat is open and never unmounted.
 - Fix missing older Claude prompts, image/PDF tool-output markers and model-change cards in Chat; validate the parser against sanitized records from real CLI transcripts.
 
 ### Changed
 - **Remote upload credentials** — `POST /remote/update` and `/fs/upload-copy` accept only the `tui-session` cookie; a `?token=` query answers 401 and the update client no longer puts the token in the URL. Older desktops cannot update a daemon of this release. QR pairing and WebSocket authentication are unchanged.
+- Make Compose the default input in terminal Chat: it opens focused and docked, stays open after send or queue, and preserves each tab's CLI Compose state and unsent draft when switching views (#1599-db8a).
 - Space automatic sidebar refresh starts at least five seconds apart per repository, retaining one trailing update during event bursts; explicit repository additions, checkouts and merge cleanup bypass the wait.
 - Resolve browser HTML and Markdown images through open repositories; show a clear placeholder for external images.
 - Show the existing ACP refusal text once in a plain-text AI Chat card.

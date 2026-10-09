@@ -9273,6 +9273,111 @@ pub(crate) fn test_validate_mcp_repo_path(path: &str) -> Result<(), serde_json::
 mod tests {
     use super::*;
 
+    /// Catches: delivery changes, inbox paging loses mail, or one wake per message
+    /// replaces the bounded wake shared until the read cursor catches up.
+    #[test]
+    fn replay_oracle_mail_send_inbox_and_wake_decisions() {
+        use serde_json::json;
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        let mut trace = Vec::new();
+        let mut wake_attempts = 0;
+        for (index, allowed) in [true, false, true].into_iter().enumerate() {
+            let sent = handle_messaging(
+                &state,
+                &json!({"action":"send", "to":TEST_UUID_B,
+                "message":format!("recorded mail {index}")}),
+                Some("mcp-sender"),
+            );
+            assert!(sent.get("error").is_none(), "{sent}");
+            // The production gate owns the wake decision; the callback only
+            // represents transport acceptance, without a real process or sleeps.
+            let message = state
+                .agent_inbox
+                .get(TEST_UUID_B)
+                .unwrap()
+                .back()
+                .unwrap()
+                .clone();
+            let decision = state.assign_orchestrator_delivery_with_wake_attempt(
+                TEST_UUID_B,
+                &message.id,
+                message.timestamp,
+                allowed,
+                || {
+                    wake_attempts += 1;
+                    true
+                },
+            );
+            trace.push(json!({"step":format!("send {index}"),"delivered":sent["delivered"],
+                "path":sent["delivery_path"],"wake":format!("{decision:?}"),"attempts":wake_attempts}));
+        }
+        for index in 0..3 {
+            let read = handle_messaging(
+                &state,
+                &json!({"action":"inbox","limit":1}),
+                Some("mcp-recipient"),
+            );
+            let messages: Vec<_> = read["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| json!({"from":m["from_tuic_session"],"content":m["content"]}))
+                .collect();
+            let cursor = state
+                .agent_read_cursor
+                .get(TEST_UUID_B)
+                .map(|c| *c)
+                .unwrap_or(0);
+            let observed = state
+                .agent_inbox
+                .get(TEST_UUID_B)
+                .unwrap()
+                .iter()
+                .position(|m| m.timestamp == cursor)
+                .expect("cursor names the consumed message");
+            trace.push(json!({"step":format!("inbox {index}"),"messages":messages,
+                "has_more":read["has_more"],"count":read["count"],"cursor_message":observed,
+                "wake_needed":state.orchestrator_wake_needed_through(TEST_UUID_B).is_some()}));
+        }
+        let empty = handle_messaging(&state, &json!({"action":"inbox"}), Some("mcp-recipient"));
+        trace.push(
+            json!({"step":"empty inbox","count":empty["count"],"has_more":empty["has_more"]}),
+        );
+        let sent = handle_messaging(
+            &state,
+            &json!({"action":"send","to":TEST_UUID_B,"message":"after read"}),
+            Some("mcp-sender"),
+        );
+        let message = state
+            .agent_inbox
+            .get(TEST_UUID_B)
+            .unwrap()
+            .back()
+            .unwrap()
+            .clone();
+        let decision = state.assign_orchestrator_delivery_with_wake_attempt(
+            TEST_UUID_B,
+            &message.id,
+            message.timestamp,
+            true,
+            || {
+                wake_attempts += 1;
+                true
+            },
+        );
+        trace.push(
+            json!({"step":"send after read","path":sent["delivery_path"],
+            "wake":format!("{decision:?}"),"attempts":wake_attempts}),
+        );
+        assert_eq!(
+            wake_attempts, 2,
+            "one wake per unread group, rearmed after inbox catches up"
+        );
+        crate::replay_oracle::assert_golden(std::path::Path::new("mail.jsonl"), &trace);
+    }
+
     // Catches: Codex option values named like subcommands turn submitted tasks into unsent prefill.
     #[cfg(unix)]
     #[tokio::test]

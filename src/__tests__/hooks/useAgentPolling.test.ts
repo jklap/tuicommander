@@ -24,6 +24,69 @@ describe("useAgentPolling", () => {
 		vi.useRealTimers();
 	});
 
+	// Catches: remote agent_type is dropped until the 30s process-discovery poll.
+	it("applies backend identity immediately and retires it when the shell returns", async () => {
+		const id = store.add(makeTerminal({ name: "shell 1", sessionId: "remote-1" }));
+		mockInvoke.mockResolvedValueOnce([
+			{
+				session_id: "remote-1",
+				connection_id: "mint",
+				state: {
+					agent_type: "codex",
+					agent_state: "idle",
+					shell_state: "idle",
+				},
+			},
+		]);
+		const { syncAgentLifecycleStates, applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		const { pluginRegistry } = await import("../../plugins/pluginRegistry");
+		const transitions: Array<{ type: string; identity: string | null }> = [];
+		const notify = vi.spyOn(pluginRegistry, "notifyStateChange").mockImplementation((event) => {
+			transitions.push({ type: event.type, identity: store.get(id)?.agentType ?? null });
+		});
+		try {
+			await syncAgentLifecycleStates();
+			expect(store.get(id)?.agentType).toBe("codex");
+			expect(store.get(id)?.agentState).toBe("idle");
+			expect(store.isBusy(id)).toBe(false);
+			store.update(id, { agentSessionId: "old-conversation" });
+			applySessionStateEvent({
+				session_id: "remote-1",
+				state: { agent_type: "claude", agent_state: "idle", shell_state: "idle" },
+			});
+			expect(store.get(id)?.agentType).toBe("claude");
+			expect(store.get(id)?.agentSessionId).toBeNull();
+			applySessionStateEvent({ session_id: "remote-1", state: { shell_state: "idle" } });
+			expect(store.get(id)?.agentType).toBeNull();
+			expect(transitions).toEqual([
+				{ type: "agent-started", identity: "codex" },
+				{ type: "agent-stopped", identity: "codex" },
+				{ type: "agent-started", identity: "claude" },
+				{ type: "agent-stopped", identity: "claude" },
+			]);
+		} finally {
+			notify.mockRestore();
+		}
+	});
+
+	// Catches: an older catch-up undoes an identity push that arrived while the snapshot was in flight.
+	it("does not let a stale snapshot replace a newer pushed identity", async () => {
+		const id = store.add(makeTerminal({ sessionId: "identity-race", agentType: "claude" }));
+		let resolve!: (rows: unknown[]) => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise((done) => {
+					resolve = done;
+				}),
+		);
+		const { syncAgentLifecycleStates, applySessionStateEvent } = await import("../../hooks/useAgentPolling");
+		const pending = syncAgentLifecycleStates();
+		applySessionStateEvent({ session_id: "identity-race", state: { agent_type: "codex" } });
+		resolve([{ session_id: "identity-race", state: { agent_type: "claude" } }]);
+		await pending;
+		expect(store.get(id)?.agentType).toBe("codex");
+	});
+
 	it("applies authoritative lifecycle transitions without retaining stale working state", async () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 		mockInvoke.mockResolvedValueOnce([
