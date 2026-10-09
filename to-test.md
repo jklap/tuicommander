@@ -4848,6 +4848,9 @@ Needs an iPhone (iOS 16.4+, 18.4+ preferred), the desktop TUICommander running a
 
 - [ ] In a disposable agent session on the phone PWA, compare typing `/` and tapping the keybar `/`: both must show the same live agent commands and navigation. Insert `/` within an unsent draft and confirm surrounding text survives without submission.
 
+- [x] Desktop AI Chat: pin/play icon controls match terminal Compose in light/dark themes, with Send/Queue tooltips and highlighted parked drafts (#1636-0d08). _(verified: shared ComposeActionIcons/ComposeActions, 158 targeted tests, and inspected headless idle/busy/parked screenshots in both themes.)_
+
+- [x] AI Chat: paste a PNG before the first connection and a Finder image copy; preview and send the image, while ordinary text still pastes as text (#1639-f474). _(verified: Composer.stageImage and pastedImageFiles, recorded RED/GREEN with 160 targeted tests, and inspected headless pasted-image preview.)_
 - [ ] Automations admission (#1613-67f3): after scheduler runtime is wired and Boss restarts `make dev`, verify a missed wake reserves only the latest in-grace occurrence; Run Now while paused respects overlap/cap. The Rust admission change requires a restart to load.
 
 - [ ] After the next manual `make dev` restart, verify scheduler integration dispatches every Reserved decision returned by a tick; a failed batch must leave no reservation or consumed cursor. Admission rollback is covered by the targeted scheduler regression (#1613-67f3). Rust changes require a restart to load.
