@@ -98,6 +98,25 @@ is not there to bound how long a build may take — 900s sits above any plausibl
 cold-cache install-and-build — but to end the script that will never finish. Killing
 work that would have succeeded is a worse outcome than waiting for it.
 
+### Script and terminal environment (`TUIC_*`)
+
+`script_env::ScriptContext::derive(kind, cwd)` is a pure function of the cwd (never
+caller-supplied facts — see the module doc for why) and yields these pairs for the
+Setup, Archive and Run scripts, Smart Prompt shell/headless children, and every PTY
+(`pty::inject_worktree_env`): `TUIC_SCRIPT_KIND` (`setup`/`archive`/`run`/`prompt`),
+`TUIC_APP_VERSION`, `TUIC_CONFIG_DIR`, `TUIC_WORKTREE_PATH`, `TUIC_WORKTREE_NAME`,
+`TUIC_WORKTREES_DIR`, `TUIC_MAIN_REPO_PATH`, `TUIC_REPO_NAME`, `TUIC_IS_WORKTREE`,
+`TUIC_BRANCH`, `TUIC_BASE_REF`, `TUIC_BASE_BRANCH`. A value that does not resolve is
+omitted, never empty. `run_shell_script` sets these before `PATH`, so a pair can never
+replace the enriched `PATH`; a PTY spawn with a cwd also clears every `TUIC_*` key
+its own context does not set, so an outer session's values cannot leak into a nested
+one (a spawn with no cwd sets and clears nothing — `inject_worktree_env` returns early;
+known gap from the Batch 17 review).
+The names are fixed literals; the values (paths, branch names) are not sanitised, so
+a script must quote them — a branch may contain `&`, `;` or `$`, and Windows `cmd /C`
+expands `%TUIC_BRANCH%` before it parses the line. User-facing table and quoting
+guidance: `docs/user-guide/ai-agents.md` "Worktree Context (TUIC_*)".
+
 ### Stale `index.lock` reclaim
 
 `git_cmd()` reclaims a `.git/index.lock` left by a crashed process, gated by **two**

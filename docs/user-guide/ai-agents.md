@@ -318,6 +318,8 @@ Per-agent environment variables can be injected into every new terminal session.
 
 This is useful for enabling feature flags (e.g., `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`) without manually running `export` commands. Flags are organized by category with toggle, enum, and number types.
 
+**`TUIC_NONINTERACTIVE_HINT=1`** is set in a pane the `tuic`-as-`tmux` shim creates for an automated Claude Code Agent Teams swarm (tmux label `claude-swarm-*`), whose launch command TUICommander types into it — no human is at that prompt. Nothing inside TUICommander reads it; it is for your shell startup files, e.g. to skip an interactive first-run wizard: `[[ -n "$TUIC_NONINTERACTIVE_HINT" ]] && return`. A human's own `tuic`-as-`tmux` session (the default label) never gets it.
+
 ## Worktree Context (TUIC_*)
 
 Every terminal spawned in a worktree (and every Setup/Archive/Run script — see the Settings guide's Scripts Tab, and Smart Prompt shell/headless scripts) gets a `TUIC_*` context describing the repo/branch it's in, in addition to `TUIC_SESSION` above:
@@ -338,6 +340,8 @@ Every terminal spawned in a worktree (and every Setup/Archive/Run script — see
 | `TUIC_BASE_BRANCH` | The repo's configured/detected base branch |
 
 A value that can't be resolved is **omitted from the environment entirely**, never set to an empty string — a `set -u` script fails loudly rather than silently running against an empty branch name.
+
+**Always quote these values.** A branch name may legally contain `&`, `;`, `$`, `(` or backticks: write `"$TUIC_BRANCH"`, never a bare `$TUIC_BRANCH`, and never pass one through `eval`. On Windows the scripts run under `cmd /C`, which expands `%TUIC_BRANCH%` *before* parsing the line, so a bare `%TUIC_BRANCH%` in a branch named `x&calc` runs a second command; quote it (`"%TUIC_BRANCH%"`) or read it from PowerShell as `$env:TUIC_BRANCH`.
 
 **A PTY's env is fixed at spawn time.** If you `cd` to a different worktree in the same tab, these vars keep describing the tab's original spawn directory, not wherever the shell currently is — the same property `TUIC_SESSION` already has. There is no way to keep them live off `cd`; a running process's environment can't be mutated from outside it.
 

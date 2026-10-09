@@ -190,7 +190,7 @@ A per-repo lifecycle hook that runs **before** a worktree is archived or deleted
 - The script runs in the worktree directory that is about to be removed
 - If the script exits with a non-zero code — or times out (after 15 minutes) — the archive/delete operation is **blocked** and an error is shown
 - Use cases: backing up local data, cleaning up resources, notifying external systems
-- The script is invoked via the platform shell (`sh -c` on macOS/Linux, `cmd /C` on Windows), with a `TUIC_*` environment describing the worktree (main checkout path, branch, base ref, etc. — see the AI Agents guide's "Worktree Context" section) and a 15-minute timeout (only the shell itself is killed; its child processes are not)
+- The script is invoked via the platform shell (`sh -c` on macOS/Linux, `cmd /C` on Windows), with a `TUIC_*` environment describing the worktree (main checkout path, branch, base ref, etc. — see the AI Agents guide's "Worktree Context" section) and a 15-minute timeout (on timeout the script is stopped together with everything it started — its process group on macOS/Linux, its process tree on Windows). Always quote the `TUIC_*` values (`"$TUIC_BRANCH"`; on Windows `"%TUIC_BRANCH%"`) — a branch name can contain `&` or `;`
 
 ## Moving Terminals Between Worktrees
 

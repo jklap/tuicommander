@@ -162,6 +162,8 @@ interface WorkspaceState {
   savedTerminalsByClient?: Record<string, { savedAt: number; terminals: SavedTerminal[] }>;
   // Per-client-instance snapshot (keyed by CLIENT_INSTANCE_ID), merged across clients rather
   // than last-writer-wins. Read via savedTerminalsFor(workspace), never this field directly.
+  // On load a pre-B.5 record's flat `savedTerminals` array is folded into a `"legacy"` key
+  // (never dropped), and any client's entry older than SAVED_TERMINALS_TTL_MS is pruned.
   ciAutoHeal?: { enabled: boolean; attempts: number; lastRunId?: number; healing?: boolean };
   layout?: TabLayout;              // Split layout persisted per-branch
 }
