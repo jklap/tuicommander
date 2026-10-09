@@ -49,14 +49,14 @@ impl RunStore {
             if overlap {
                 RunStatus::SkippedOverlap
             } else {
-                let open: u64 = tx
+                let open: i64 = tx
                     .query_row(
                         &format!("SELECT COUNT(*) FROM automation_runs WHERE status IN {OPEN}"),
                         [],
                         |r| r.get(0),
                     )
                     .map_err(error)?;
-                if open >= u64::from(max_concurrent_runs) {
+                if open >= i64::from(max_concurrent_runs) {
                     RunStatus::SkippedConcurrency
                 } else {
                     RunStatus::Reserved
