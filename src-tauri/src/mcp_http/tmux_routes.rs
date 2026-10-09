@@ -270,6 +270,12 @@ pub(crate) struct CreateTmuxSessionRequest {
     window_name: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
+    /// See [`resolve_pane_cwd`]: sent (with `fallback_cwd`) only when the
+    /// shim had no explicit/inherited cwd.
+    #[serde(default)]
+    cwd_session_id: Option<String>,
+    #[serde(default)]
+    fallback_cwd: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -280,6 +286,12 @@ pub(crate) struct CreateTmuxWindowRequest {
     name: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
+    /// See [`resolve_pane_cwd`]: sent (with `fallback_cwd`) only when the
+    /// shim had no explicit/inherited cwd.
+    #[serde(default)]
+    cwd_session_id: Option<String>,
+    #[serde(default)]
+    fallback_cwd: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -288,6 +300,12 @@ pub(crate) struct CreateTmuxPaneRequest {
     window_id: String,
     #[serde(default)]
     cwd: Option<String>,
+    /// See [`resolve_pane_cwd`]: sent (with `fallback_cwd`) only when the
+    /// shim had no explicit/inherited cwd.
+    #[serde(default)]
+    cwd_session_id: Option<String>,
+    #[serde(default)]
+    fallback_cwd: Option<String>,
     /// The calling shim's own `TUIC_SESSION` (the lead). See
     /// [`TmuxPane::lead_session_id`]; ignored unless it names a live session.
     #[serde(default)]
@@ -332,6 +350,34 @@ fn validated_origin(live: &HashSet<String>, origin: Option<&str>) -> Option<Stri
     origin
         .filter(|id| !id.is_empty() && live.contains(*id))
         .map(str::to_string)
+}
+
+/// The cwd a new pane is recorded (and later materialised) with, when the shim
+/// had no explicit `-c` and no pane to inherit from (Batch 34 review; the
+/// shim's half is `resolve_cwd` in `tuic-cli/src/tmux/exec.rs`):
+/// 1. `explicit` — what the shim resolved itself (an explicit `-c` or an
+///    inherited pane cwd; also every pre-change shim, which always sent one);
+/// 2. the LIVE cwd of the calling session (`cwd_session_id`, the lead's own
+///    `TUIC_SESSION`): its PTY's OSC 7 cwd, so a `cd` typed at that terminal's
+///    prompt counts, while the transient `cd` of a command the agent runs
+///    underneath does not;
+/// 3. `fallback` — the shim's spawn-time env repo root, else its own cwd.
+///
+/// Called before any topology guard is taken (it locks a `PtySession`).
+fn resolve_pane_cwd(
+    state: &AppState,
+    explicit: Option<String>,
+    cwd_session_id: Option<&str>,
+    fallback: Option<String>,
+) -> Option<String> {
+    explicit
+        .or_else(|| {
+            let id = cwd_session_id.filter(|id| !id.is_empty())?;
+            let entry = state.session_maps.sessions.get(id)?;
+            let cwd = entry.lock().cwd.clone();
+            cwd.filter(|c| !c.is_empty())
+        })
+        .or(fallback)
 }
 
 /// TUIC session ids of the live teammate terminals whose pane names `lead_session_id`
@@ -454,6 +500,12 @@ pub(crate) async fn create_tmux_session(
     Json(body): Json<CreateTmuxSessionRequest>,
 ) -> impl IntoResponse {
     let label = resolve_label(body.label);
+    let cwd = resolve_pane_cwd(
+        &state,
+        body.cwd,
+        body.cwd_session_id.as_deref(),
+        body.fallback_cwd,
+    );
     let live = live_session_ids(&state);
     let mut topology = state.tmux_servers.entry(label).or_default();
     reconcile(&mut topology, &live);
@@ -474,7 +526,7 @@ pub(crate) async fn create_tmux_session(
                 id: pane_id.clone(),
                 index: 0,
                 title: None,
-                cwd: body.cwd,
+                cwd,
                 tuic_session_id: None, // virtual until first use
                 lead_session_id: None,
                 accent_color: None,
@@ -526,6 +578,12 @@ pub(crate) async fn create_tmux_window(
     Json(body): Json<CreateTmuxWindowRequest>,
 ) -> impl IntoResponse {
     let label = resolve_label(body.label);
+    let cwd = resolve_pane_cwd(
+        &state,
+        body.cwd,
+        body.cwd_session_id.as_deref(),
+        body.fallback_cwd,
+    );
     let live = live_session_ids(&state);
     let Some(mut topology) = state.tmux_servers.get_mut(&label) else {
         return not_found("session").into_response();
@@ -547,7 +605,7 @@ pub(crate) async fn create_tmux_window(
                 id: pane_id.clone(),
                 index: 0,
                 title: None,
-                cwd: body.cwd,
+                cwd,
                 tuic_session_id: None, // virtual until first use
                 lead_session_id: None,
                 accent_color: None,
@@ -575,6 +633,12 @@ pub(crate) async fn create_tmux_pane(
     // rolls the insertion back explicitly, below — unlike the plain
     // session-create path, this one is not atomic for free.
     let label = resolve_label(body.label);
+    let cwd = resolve_pane_cwd(
+        &state,
+        body.cwd,
+        body.cwd_session_id.as_deref(),
+        body.fallback_cwd,
+    );
     let live = live_session_ids(&state);
 
     let (pane_id, previous_active_pane) = {
@@ -592,7 +656,7 @@ pub(crate) async fn create_tmux_pane(
             id: pane_id.clone(),
             index,
             title: None,
-            cwd: body.cwd.clone(),
+            cwd: cwd.clone(),
             tuic_session_id: None,
             lead_session_id: validated_origin(&live, body.origin_session_id.as_deref()),
             accent_color: None,
@@ -604,7 +668,7 @@ pub(crate) async fn create_tmux_pane(
     // split-window materialises immediately, unlike new-session/new-window's
     // implicit initial pane (which stays virtual until first use) — this
     // pane is the one Claude Code's respawn-pane will actually target.
-    match materialize(&state, &label, &pane_id, body.cwd).await {
+    match materialize(&state, &label, &pane_id, cwd).await {
         Ok(tuic_session_id) => {
             // If this window has already been arranged into a split at least
             // once, re-derive and re-emit that arrangement now that this new
@@ -1145,6 +1209,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -1163,6 +1229,8 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
                 origin_session_id: None,
             }),
         )
@@ -1209,6 +1277,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -1348,6 +1418,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -1456,6 +1528,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: Some(real_repo.clone()),
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -1538,6 +1612,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: Some(session_repo.clone()),
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -1555,6 +1631,8 @@ mod tests {
                 session_id,
                 name: None,
                 cwd: Some(window_repo.clone()),
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -1634,6 +1712,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: Some(topology_repo.clone()),
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -1693,6 +1773,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -1742,6 +1824,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -1834,6 +1918,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -2056,6 +2142,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -2160,6 +2248,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -2237,6 +2327,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -2276,6 +2368,8 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id: window_id.clone(),
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
                 origin_session_id: None,
             }),
         )
@@ -2355,6 +2449,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -2406,6 +2502,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -2424,6 +2522,8 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id: window_id.clone(),
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
                 origin_session_id: None,
             }),
         )
@@ -2458,6 +2558,8 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id: window_id.clone(),
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
                 origin_session_id: None,
             }),
         )
@@ -2513,6 +2615,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -2530,6 +2634,8 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
                 origin_session_id: None,
             }),
         )
@@ -2575,6 +2681,8 @@ mod tests {
                 name: "s".to_string(),
                 window_name: None,
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
             }),
         )
         .await
@@ -2584,6 +2692,75 @@ mod tests {
             created["window_id"].as_str().unwrap().to_string(),
             created["pane_id"].as_str().unwrap().to_string(),
         )
+    }
+
+    /// Batch 34 review: with no explicit/inherited cwd, a new pane goes where
+    /// the calling session's terminal LIVE is (its OSC 7 cwd: a `cd` typed at
+    /// the lead's prompt, a lead in a subdirectory), and the shim's env-root
+    /// fallback applies only when that is unknown. An explicit cwd still wins.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_new_pane_prefers_explicit_then_the_callers_live_cwd_then_the_fallback() {
+        use crate::state::tests_support::{insert_dummy_session, set_session_cwd};
+        let state = super::super::tests::test_state();
+        let label = "test-live-cwd";
+        insert_dummy_session(&state, "lead-live");
+        set_session_cwd(&state, "lead-live", "/repo/after-a-cd");
+
+        let pane_cwd = |explicit: Option<&str>, caller: Option<&str>, fallback: Option<&str>| {
+            let state = state.clone();
+            let (explicit, caller, fallback) = (
+                explicit.map(String::from),
+                caller.map(String::from),
+                fallback.map(String::from),
+            );
+            async move {
+                let created = create_tmux_session(
+                    State(state.clone()),
+                    Json(CreateTmuxSessionRequest {
+                        label: Some(label.to_string()),
+                        name: "s".to_string(),
+                        window_name: None,
+                        cwd: explicit,
+                        cwd_session_id: caller,
+                        fallback_cwd: fallback,
+                    }),
+                )
+                .await
+                .into_response();
+                let created = body_json(created).await;
+                let pane_id = created["pane_id"].as_str().unwrap().to_string();
+                let topo = state.tmux_servers.get(label).unwrap();
+                topo.find_pane(&pane_id).unwrap().cwd.clone()
+            }
+        };
+
+        assert_eq!(
+            pane_cwd(None, Some("lead-live"), Some("/env/root"))
+                .await
+                .as_deref(),
+            Some("/repo/after-a-cd"),
+            "the caller's live cwd beats the env-root fallback"
+        );
+        assert_eq!(
+            pane_cwd(Some("/explicit"), Some("lead-live"), Some("/env/root"))
+                .await
+                .as_deref(),
+            Some("/explicit"),
+            "an explicit -c (or inherited) cwd beats the live cwd"
+        );
+        assert_eq!(
+            pane_cwd(None, Some("no-such-session"), Some("/env/root"))
+                .await
+                .as_deref(),
+            Some("/env/root"),
+            "an unknown caller falls back"
+        );
+        assert_eq!(
+            pane_cwd(None, None, Some("/env/root")).await.as_deref(),
+            Some("/env/root")
+        );
+        state.session_maps.sessions.remove("lead-live");
     }
 
     #[test]
@@ -2865,6 +3042,8 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id: "@99".to_string(),
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
                 origin_session_id: None,
             }),
         )
@@ -2878,6 +3057,8 @@ mod tests {
                 label: Some("test-create-pane-404-no-such-label".to_string()),
                 window_id: "@0".to_string(),
                 cwd: None,
+                cwd_session_id: None,
+                fallback_cwd: None,
                 origin_session_id: None,
             }),
         )
@@ -2907,6 +3088,8 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id: window_id.clone(),
                 cwd: Some("/tmp".to_string()),
+                cwd_session_id: None,
+                fallback_cwd: None,
                 origin_session_id: None,
             }),
         )
@@ -3014,6 +3197,8 @@ mod tests {
                         label: Some(label.to_string()),
                         window_id,
                         cwd: Some("/tmp".to_string()),
+                        cwd_session_id: None,
+                        fallback_cwd: None,
                         origin_session_id: origin,
                     }),
                 )
@@ -3073,6 +3258,8 @@ mod tests {
                 label: Some(label.to_string()),
                 window_id,
                 cwd: Some("/tmp".to_string()),
+                cwd_session_id: None,
+                fallback_cwd: None,
                 origin_session_id: None,
             }),
         )
@@ -3125,6 +3312,8 @@ mod tests {
                     label: Some(label.to_string()),
                     window_id,
                     cwd: None,
+                    cwd_session_id: None,
+                    fallback_cwd: None,
                     origin_session_id: None,
                 }),
             )
