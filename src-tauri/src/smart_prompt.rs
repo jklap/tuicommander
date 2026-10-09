@@ -48,6 +48,10 @@ const ENV_ALLOWLIST: &[&str] = &[
 /// current process, then overlay caller-supplied vars. Centralises the policy
 /// so headless and shell paths can't drift out of sync.
 fn apply_clean_env(cmd: &mut Command, extra: Option<&HashMap<String, String>>) {
+    apply_clean_std_env(cmd.as_std_mut(), extra);
+}
+
+fn apply_clean_std_env(cmd: &mut std::process::Command, extra: Option<&HashMap<String, String>>) {
     cmd.env_clear();
     for key in ENV_ALLOWLIST {
         if let Ok(value) = std::env::var(key) {
@@ -58,6 +62,27 @@ fn apply_clean_env(cmd: &mut Command, extra: Option<&HashMap<String, String>>) {
         for (k, v) in vars {
             cmd.env(k, v);
         }
+    }
+}
+
+/// Shell scripts and scheduler prechecks share the same non-interactive shell
+/// and environment policy. Windows disables cmd AutoRun configuration.
+pub(crate) fn clean_shell_command(script: &str) -> std::process::Command {
+    #[cfg(windows)]
+    let program = crate::fs::system32_exe("cmd.exe");
+    #[cfg(not(windows))]
+    let program = "sh";
+    let mut command = std::process::Command::new(program);
+    command.args(shell_flags(cfg!(windows))).arg(script);
+    apply_clean_std_env(&mut command, None);
+    command
+}
+
+fn shell_flags(windows: bool) -> &'static [&'static str] {
+    if windows {
+        &["/D", "/S", "/C"]
+    } else {
+        &["-c"]
     }
 }
 
@@ -159,31 +184,13 @@ pub(crate) async fn execute_shell_script(
 ) -> Result<String, String> {
     let duration = Duration::from_millis(timeout_ms.min(60_000)); // Cap at 60 seconds
 
-    let shell = if cfg!(target_os = "windows") {
-        "cmd"
-    } else {
-        "sh"
-    };
-    let shell_flag = if cfg!(target_os = "windows") {
-        "/C"
-    } else {
-        "-c"
-    };
-
     let repo_path = crate::cli::expand_tilde(&repo_path);
-    let mut cmd = Command::new(shell);
-    cmd.arg(shell_flag)
-        .arg(&script_content)
-        .current_dir(&repo_path)
+    let mut cmd = Command::from(clean_shell_command(&script_content));
+    cmd.current_dir(&repo_path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-
-    // Shell scripts never receive caller-supplied env vars today — strip the
-    // inherited parent env to the allowlist so repo-controlled script_content
-    // cannot read ANTHROPIC_API_KEY / GITHUB_TOKEN / etc. from the Tauri process.
-    apply_clean_env(&mut cmd, None);
 
     let child = cmd
         .spawn()
@@ -205,6 +212,14 @@ pub(crate) async fn execute_shell_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Catches: selecting POSIX flags on Windows or permitting cmd AutoRun hooks.
+    #[test]
+    fn shell_families_keep_noninteractive_flags() {
+        assert_eq!(shell_flags(false), &["-c"]);
+        assert_eq!(shell_flags(true), &["/D", "/S", "/C"]);
+    }
+
     use crate::test_support::{
         host_shell, normalize_newlines, print_var_script, sleep_script, system32_exe,
     };
