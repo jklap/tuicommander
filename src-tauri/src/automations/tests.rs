@@ -36,14 +36,33 @@ fn once_occurrence_is_persisted_and_cannot_dispatch_twice_after_restart() {
     assert_eq!(definitions.load().unwrap().definitions, vec![once.clone()]);
     let path = dir.path().join("runs.sqlite3");
     let occurrence_ms = chrono::DateTime::parse_from_rfc3339("2099-10-09T10:00:00Z")
-        .unwrap().timestamp_millis();
+        .unwrap()
+        .timestamp_millis();
     let owner = RunOwner::acquire_at(&path, occurrence_ms).unwrap();
-    assert!(owner.store().reserve(&once, RunTrigger::Scheduled { occurrence_ms }, occurrence_ms)
-        .unwrap().is_some());
+    assert!(
+        owner
+            .store()
+            .reserve(
+                &once,
+                RunTrigger::Scheduled { occurrence_ms },
+                occurrence_ms
+            )
+            .unwrap()
+            .is_some()
+    );
     drop(owner);
     let owner = RunOwner::acquire_at(&path, occurrence_ms + 1).unwrap();
-    assert!(owner.store().reserve(&once, RunTrigger::Scheduled { occurrence_ms }, occurrence_ms + 1)
-        .unwrap().is_none());
+    assert!(
+        owner
+            .store()
+            .reserve(
+                &once,
+                RunTrigger::Scheduled { occurrence_ms },
+                occurrence_ms + 1
+            )
+            .unwrap()
+            .is_none()
+    );
 }
 
 // Catches: deriving an unbounded/zero concurrency default or writing on read.
