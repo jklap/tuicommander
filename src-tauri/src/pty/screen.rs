@@ -28,7 +28,7 @@ struct ProcessSnapshotState {
 
 #[derive(Default)]
 pub(crate) struct ProcessSnapshotCache {
-    pub(super) state: parking_lot::RwLock<ProcessSnapshotState>,
+    state: parking_lot::RwLock<ProcessSnapshotState>,
 }
 
 impl ProcessSnapshotCache {
