@@ -11,6 +11,7 @@ import {
 } from "../../stores/terminalOwnership";
 import { terminalsStore } from "../../stores/terminals";
 import { timeBatch } from "../../utils/perfTrace";
+import { warmStateFromList } from "./warmStateSeed";
 
 /** The backend's removal verdict for one detached checkout. `live_sessions` lists the sessions
  *  still working inside it; a checkout with any is never `safe`. */
@@ -475,6 +476,10 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 							// `?? null`, not undefined: setWorkspace drops undefined fields.
 							gitOp: inProgressOps.get(wt.path) ?? null,
 						};
+						// The sidebar's warm badge after a reload: the backend's own warm
+						// status seeds it until a worktree-warm-* event takes over.
+						const warmState = warmStateFromList(wt.path, wt.warm_artifacts);
+						if (warmState !== undefined) update.warmState = warmState;
 						repositoriesStore.setWorkspace(repoPath, workspaceId, update);
 					}
 					for (const [source, target] of replacements) {
