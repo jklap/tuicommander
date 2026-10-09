@@ -633,3 +633,10 @@ reduced motion is requested. Mouse hover controls retain their existing layout.
 Rich working agent rows reserve two clamped intent lines. Idle, awaiting-input and error rows stay on one line with status dots; their full intent, task or prompt remains in the tooltip. Compact rows keep their one-line layout.
 
 Rich navigation keeps compact typography and padding. Branch identity and facts share one line, with names truncated and full PR/lifecycle facts in tooltips. Repository metadata disappears when PR and worktree counts are both zero. Header controls use compact sizing to protect repo names. Returned subagents fold into an expandable count independently of running work.
+
+The mobile update banner sits below the app header to keep its small text away
+from the translucent iOS status edge. It uses `--mobile-update-foreground`:
+black on Commander's blue accent and white on Paper's darker blue. The pressed
+state changes the background to `--accent-hover` instead of fading the whole
+strip. Do not reuse Commander's shared white accent foreground here: at 13px,
+its 3.36:1 contrast does not meet WCAG AA.
