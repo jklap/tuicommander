@@ -14,11 +14,79 @@ def read_git(ref):
 def lexical_code(source):
     """Hide comments and literals, retaining offsets for balanced Rust item bodies."""
     chars = list(source)
+    for start, end, _kind in lexical_spans(source):
+        for i in range(start, min(end, len(chars))):
+            if chars[i] != "\n":
+                chars[i] = " "
+    return "".join(chars)
+
+
+def normalized(source):
+    """The code with formatting removed: what rustfmt may change, and nothing else.
+
+    Comments are dropped (the gate ignores them anyway). String and char literals
+    are kept byte for byte, whitespace included. Outside literals, whitespace is
+    dropped except one space between two identifier characters, so `pub fn` never
+    reads as `pubfn`. A trailing comma is dropped before `]` or `}`, and before
+    `)` only when that group has another top-level comma, so `(x,)` (a 1-tuple)
+    and `(x)` stay different while `f(a, b,)` equals `f(a, b)`.
+    """
+    items = []  # single code characters, or ("lit", text) for a literal
+    pos = 0
+
+    def code(chunk):
+        for ch in chunk:
+            if ch.isspace():
+                if items and items[-1] != " ":
+                    items.append(" ")
+            else:
+                items.append(ch)
+
+    for start, end, kind in lexical_spans(source):
+        code(source[pos:start])
+        if kind == "literal":
+            items.append(("lit", source[start:end]))
+        else:
+            code(" ")
+        pos = end
+    code(source[pos:])
+
+    def word(item):
+        return isinstance(item, str) and (item.isalnum() or item == "_")
+
+    squeezed = []
+    for i, item in enumerate(items):
+        if item == " ":
+            if squeezed and i + 1 < len(items) and word(squeezed[-1]) and word(items[i + 1]):
+                squeezed.append(" ")
+            continue
+        squeezed.append(item)
+
+    out, groups = [], []  # groups: [opener, top-level commas, index of a trailing comma]
+    for item in squeezed:
+        if item in ("(", "[", "{"):
+            groups.append([item, 0, None])
+        elif item in (")", "]", "}"):
+            if groups:
+                _opener, commas, trailing = groups.pop()
+                if trailing is not None and trailing == len(out) - 1 and (item != ")" or commas >= 2):
+                    out.pop()
+        out.append(item)
+        if groups:
+            if item == ",":
+                groups[-1][1] += 1
+                groups[-1][2] = len(out) - 1
+    return out
+
+
+def lexical_spans(source):
+    """Yield (start, end, kind) for every comment ("comment") and literal ("literal")."""
     pattern = re.compile(r'//[^\n]*|/\*|(?:br|r)\#*"|b?"|(?:b)?\'(?:\\.|[^\'\\\n])\'')
     pos = 0
     while match := pattern.search(source, pos):
         start, end = match.span()
         token = match.group()
+        kind = "comment" if token.startswith(("//", "/*")) else "literal"
         if token.startswith("//"):
             pass
         elif token == "/*":
@@ -46,11 +114,9 @@ def lexical_code(source):
                         break
                     else:
                         end += 1
-        for i in range(start, min(end, len(chars))):
-            if chars[i] != "\n":
-                chars[i] = " "
+        end = min(end, len(source))
+        yield start, end, kind
         pos = end
-    return "".join(chars)
 
 
 TEST_ATTR = re.compile(r'#\s*\[\s*(?:cfg\s*\(\s*test\s*\)|(?:\w+::)?test(?:\s*\([^]]*\))?)\s*\]')
@@ -191,6 +257,11 @@ if __name__ == "__main__":
         sys.exit(0)
     before = production(old.decode(), became_tests(old.decode(), new.decode()))
     after = production(new.decode())
+    # A formatting-only change (rustfmt: whitespace, line breaks, trailing commas) to
+    # production code is not a detection change. Any other byte of code or of a
+    # literal still differs here and falls through to the line diff below.
+    if normalized("".join(before)) == normalized("".join(after)):
+        sys.exit(0)
     # Give each production hunk its enclosing function, matching git's Rust hunk context.
     for group in difflib.SequenceMatcher(None, before, after).get_grouped_opcodes(0):
         first = group[0]
