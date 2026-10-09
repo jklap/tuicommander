@@ -8,18 +8,20 @@ import { describe, expect, it, vi } from "vitest";
 // @git-diff-view/core), so these tests exercise DiffViewer's OWN
 // `toModeEnum` mapping against a non-empty diff without needing Canvas.
 const diffViewCalls = vi.hoisted(() => [] as unknown[]);
+const diffViewWrapCalls = vi.hoisted(() => [] as unknown[]);
 vi.mock("@git-diff-view/solid", async (importOriginal) => {
 	const { createEffect } = await import("solid-js");
 	const actual = await importOriginal<typeof import("@git-diff-view/solid")>();
 	return {
 		...actual,
-		DiffView: (props: { diffViewMode: number }) => {
+		DiffView: (props: { diffViewMode: number; diffViewWrap?: boolean }) => {
 			// A Solid component function body runs once at mount — reading
 			// `props.diffViewMode` there would only ever capture the FIRST
 			// value. Wrap the read in an effect so it re-runs on every mode
 			// change, the same way the real DiffView's JSX binding would.
 			createEffect(() => {
 				diffViewCalls.push(props.diffViewMode);
+				diffViewWrapCalls.push(props.diffViewWrap);
 			});
 			return null;
 		},
@@ -205,5 +207,70 @@ describe("DiffViewer mode mapping", () => {
 		setMode("unified");
 		await Promise.resolve();
 		expect(diffViewCalls.at(-1)).toBe(DiffModeEnum.Unified);
+	});
+});
+
+describe("DiffViewer wrap prop", () => {
+	const DIFF = "diff --git a/f b/f\n@@ -1 +1 @@\n-old\n+new";
+
+	it("defaults diffViewWrap to false when wrap is omitted", async () => {
+		diffViewWrapCalls.length = 0;
+		render(() => <DiffViewer diff={DIFF} />);
+		await Promise.resolve();
+		expect(diffViewWrapCalls.at(-1)).toBe(false);
+	});
+
+	it("forwards wrap={true} to the library's diffViewWrap prop, in both modes", async () => {
+		diffViewWrapCalls.length = 0;
+		render(() => <DiffViewer diff={DIFF} mode="split" wrap={true} />);
+		await Promise.resolve();
+		expect(diffViewWrapCalls.at(-1)).toBe(true);
+
+		diffViewWrapCalls.length = 0;
+		render(() => <DiffViewer diff={DIFF} mode="unified" wrap={true} />);
+		await Promise.resolve();
+		expect(diffViewWrapCalls.at(-1)).toBe(true);
+	});
+});
+
+describe("DiffViewer maxLines truncation", () => {
+	const bigDiff = [
+		"diff --git a/f b/f",
+		"index abc..def 100644",
+		"--- a/f",
+		"+++ b/f",
+		"@@ -1,5 +1,5 @@",
+		...Array.from({ length: 20 }, (_, i) => ` line ${i}`),
+	].join("\n");
+
+	it("does not truncate when maxLines is unset or 0", () => {
+		const { container: unset } = render(() => <DiffViewer diff={bigDiff} />);
+		expect(unset.querySelector(".diff-truncated-notice")).toBeNull();
+
+		const { container: zero } = render(() => <DiffViewer diff={bigDiff} maxLines={0} />);
+		expect(zero.querySelector(".diff-truncated-notice")).toBeNull();
+	});
+
+	it("shows a truncation notice with the hidden-line count above the budget", () => {
+		const { container } = render(() => <DiffViewer diff={bigDiff} maxLines={5} />);
+		const notice = container.querySelector(".diff-truncated-notice");
+		expect(notice).not.toBeNull();
+		expect(notice!.textContent).toContain("15");
+	});
+
+	it("clicking the notice reveals the full diff and removes the notice", async () => {
+		const { container, getByText } = render(() => <DiffViewer diff={bigDiff} maxLines={5} />);
+		expect(container.querySelector(".diff-truncated-notice")).not.toBeNull();
+
+		getByText(/Show all 15 more lines/).click();
+		await Promise.resolve();
+
+		expect(container.querySelector(".diff-truncated-notice")).toBeNull();
+	});
+
+	it("a diff at or under maxLines never shows the notice", () => {
+		const small = "diff --git a/f b/f\n@@ -1,1 +1,1 @@\n-a\n+b";
+		const { container } = render(() => <DiffViewer diff={small} maxLines={1000} />);
+		expect(container.querySelector(".diff-truncated-notice")).toBeNull();
 	});
 });

@@ -1,0 +1,65 @@
+.root {
+	position: relative;
+	display: inline-flex;
+}
+
+.trigger {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	border: none;
+	border-radius: 4px;
+	background: transparent;
+	color: var(--text-secondary, currentColor);
+	cursor: pointer;
+}
+
+.trigger:hover {
+	background: var(--hover-bg, rgba(128, 128, 128, 0.15));
+	color: var(--text-primary, currentColor);
+}
+
+.triggerActive {
+	color: var(--accent, currentColor);
+}
+
+.panel {
+	position: absolute;
+	top: calc(100% + 4px);
+	right: 0;
+	z-index: 20;
+	min-width: 220px;
+	padding: 6px;
+	border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
+	border-radius: 6px;
+	background: var(--panel-bg, #1e1e1e);
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 6px;
+	border-radius: 4px;
+	font-size: 12px;
+	cursor: pointer;
+	user-select: none;
+}
+
+.row:hover {
+	background: var(--hover-bg, rgba(128, 128, 128, 0.15));
+}
+
+.row input {
+	margin: 0;
+}
+
+.divider {
+	height: 1px;
+	margin: 4px 2px;
+	background: var(--border-color, rgba(128, 128, 128, 0.3));
+}

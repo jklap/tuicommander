@@ -7,13 +7,17 @@ import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { type DiffViewMode, uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
+import { diffOptionsFromSettings } from "../../utils/diffOptionsFromSettings";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { DiffOptionsMenu } from "../shared/DiffOptionsMenu";
 import type { SearchOptions } from "../shared/DomSearchEngine";
 import { DomSearchEngine } from "../shared/DomSearchEngine";
 import { DomSearchOverview } from "../shared/DomSearchOverview";
+import type { DiffListNavHandle } from "../shared/diffListNav";
 import { createSearchVisibility, SearchBar } from "../shared/SearchBar";
 import { Button } from "../ui/Button";
 import { DiffViewer } from "../ui/DiffViewer";
@@ -111,12 +115,14 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		onCleanup(() => diffTabsStore.clearHandle(props.tabId));
 	});
 
-	// Load file diff when props change or the repo revision bumps (git index/HEAD changed)
+	// Load file diff when props change, the repo revision bumps (git index/HEAD
+	// changed), or a whitespace/case diff option changes.
 	let diffGen = 0;
 	createEffect(() => {
 		const repoPath = props.repoPath;
 		const filePath = props.filePath;
 		const scope = props.scope;
+		const options = diffOptionsFromSettings();
 		void (repoPath ? repositoriesStore.getRevision(repoPath) : 0);
 
 		if (!repoPath || !filePath) {
@@ -132,7 +138,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		const gen = ++diffGen;
 		(async () => {
 			try {
-				const diffContent = await repo.getFileDiff(repoPath, filePath, scope, props.untracked);
+				const diffContent = await repo.getFileDiff(repoPath, filePath, scope, props.untracked, options);
 				if (gen !== diffGen) return;
 				setDiff(diffContent);
 			} catch (err) {
@@ -207,6 +213,12 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	 *  all-files call site), not by a shared global view mode, so opening it
 	 *  can never hijack any other open per-file DiffTab. */
 	const isScrollTab = () => props.filePath === "";
+	const [scrollListHandle, setScrollListHandle] = createSignal<DiffListNavHandle | null>(null);
+	function goToAdjacentScrollFile(delta: number) {
+		const handle = scrollListHandle();
+		if (!handle) return;
+		handle.scrollToIndex(Math.max(handle.currentIndex() + delta, 0), { align: "center" });
+	}
 
 	/** One-sided diffs (new/deleted files) only support unified view */
 	const isOneSided = (): boolean => {
@@ -384,7 +396,37 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 						<path d="M2 2h12v1H2zm0 3h12v1H2zm0 3h10v1H2zm0 3h8v1H2z" />
 					</svg>
 				</Button>
-				<div style={{ "margin-left": "auto" }}>
+				<Show when={isScrollTab()}>
+					<Button
+						shape="icon"
+						aria-label="Previous file"
+						variant="ghost"
+						onClick={() => goToAdjacentScrollFile(-1)}
+						disabled={!scrollListHandle() || (scrollListHandle()?.currentIndex() ?? 0) <= 0}
+						title={t("diffScroll.prevFile", "Previous file")}
+					>
+						<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M10 3l-5 5 5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+						</svg>
+					</Button>
+					<Button
+						shape="icon"
+						aria-label="Next file"
+						variant="ghost"
+						onClick={() => goToAdjacentScrollFile(1)}
+						disabled={
+							!scrollListHandle() ||
+							(scrollListHandle()?.currentIndex() ?? 0) >= (scrollListHandle()?.rowCount() ?? 1) - 1
+						}
+						title={t("diffScroll.nextFile", "Next file")}
+					>
+						<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+						</svg>
+					</Button>
+				</Show>
+				<div style={{ "margin-left": "auto", display: "flex", "align-items": "center", gap: "4px" }}>
+					<DiffOptionsMenu />
 					<Button
 						shape="icon"
 						aria-label="Edit file"
@@ -416,6 +458,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 					contentRef={(el) => {
 						contentRef = el;
 					}}
+					ref={setScrollListHandle}
 				/>
 			</Show>
 			<Show when={!isScrollTab()}>
@@ -456,6 +499,8 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 						<DiffViewer
 							diff={diff()}
 							mode={mode()}
+							wrap={uiStore.state.diffSoftWrap}
+							maxLines={settingsStore.state.sessionDiffTruncateLines}
 							contentRef={(el: HTMLElement) => {
 								contentRef = el;
 								lineSelection.setContentRef(el);
