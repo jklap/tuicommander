@@ -43,7 +43,7 @@
   justify-content: space-between;
   padding: 10px 16px;
   background: var(--accent, #3b82f6);
-  color: var(--text-on-accent);
+  color: var(--mobile-update-foreground);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
@@ -51,5 +51,5 @@
 }
 
 .updateBanner:active {
-  opacity: 0.85;
+  background: var(--accent-hover);
 }

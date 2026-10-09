@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- Give the mobile update banner AA text contrast in both themes and place it below the header, away from the status edge (#1626-9529).
 - Fix mobile session notification sounds playing outside the visible Sessions list, including delayed completion sounds and hidden PWA documents. Keep muted transitions from replaying on return.
 - Mobile slash keybar now inserts `/` like typing and uses the agent’s detected command menu, preserving surrounding draft text.
 - Restore headless builds by sharing GitHub account login validation with browser device-flow polling.
