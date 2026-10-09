@@ -153,12 +153,22 @@ ITEM = re.compile(r'(?P<attrs>(?:#\s*\[[^\]]*\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?(?
                   r'(?P<kw>(?:mod|fn)\s+\w+)')
 
 
-BODY_START = re.compile(r"[{;]")
+BODY_START = re.compile(r"[{;\[\]()]")
 
 
 def item_end(code, match):
     """Offset just past the item's `;` or balanced `{...}` body, or None if unclosed."""
-    body = BODY_START.search(code, match.end())
+    body = None
+    nesting = 0  # a `;` inside `[u8; 4]` or `(..)` does not end the item
+    for found in BODY_START.finditer(code, match.end()):
+        token = found.group()
+        if token in "[(":
+            nesting += 1
+        elif token in "])":
+            nesting = max(0, nesting - 1)
+        elif not nesting:
+            body = found
+            break
     if body is None:
         return None
     end = body.end()

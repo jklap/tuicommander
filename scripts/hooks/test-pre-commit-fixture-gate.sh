@@ -320,4 +320,48 @@ if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/con
   echo 'changing string content after an escaped backslash unexpectedly passed' >&2
   exit 1
 fi
+# A `;` inside a test fn's signature (`[u8; 4]`) must not end the item early:
+# that left the body counted as production (false positive) and made the
+# classifier refuse the diff, which the chrome.rs check used to read as "no change".
+chrome_dir="$repo/src-tauri/crates/tuic-terminal/src"
+mkdir -p "$chrome_dir"
+cat > "$chrome_dir/chrome.rs" <<'RS'
+pub fn find_chrome_cutoff() -> usize {
+    1
+}
+RS
+git -C "$repo" add src-tauri/crates/tuic-terminal/src/chrome.rs
+git -C "$repo" -c user.name=Test -c user.email=test@example.com commit -qm chrome-baseline
+cat >> "$chrome_dir/chrome.rs" <<'RS'
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn array_signature(x: [u8; 4]) {
+        let _ = x;
+    }
+}
+RS
+git -C "$repo" add src-tauri/crates/tuic-terminal/src/chrome.rs
+if ! (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/chrome-array-test" 2>&1; then
+  cat "$scratch/chrome-array-test" >&2
+  echo 'adding a test with an array-typed signature was blocked' >&2
+  exit 1
+fi
+# ...and the same test added next to a real production edit must still block.
+sed -i.bak 's/^    1$/    2/' "$chrome_dir/chrome.rs" && rm -f "$chrome_dir/chrome.rs.bak"
+git -C "$repo" add src-tauri/crates/tuic-terminal/src/chrome.rs
+if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/chrome-prod-edit" 2>&1; then
+  echo 'a chrome.rs production edit beside an array-signature test unexpectedly passed' >&2
+  exit 1
+fi
+grep -Fq 'bottom-zone cutoff' "$scratch/chrome-prod-edit"
+# A classifier refusal (ValueError, nonzero exit) on chrome.rs must block, not read as "no change".
+git -C "$repo" checkout -q HEAD -- src-tauri/crates/tuic-terminal/src/chrome.rs
+printf '\n#[test] fn t() {} fn production_on_the_same_line() {}\n' >> "$chrome_dir/chrome.rs"
+git -C "$repo" add src-tauri/crates/tuic-terminal/src/chrome.rs
+if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/chrome-refusal" 2>&1; then
+  echo 'a classifier refusal on chrome.rs unexpectedly passed (fail-open)' >&2
+  exit 1
+fi
 echo 'fixture gate regressions passed'
