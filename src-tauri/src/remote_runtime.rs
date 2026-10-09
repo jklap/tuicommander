@@ -1553,11 +1553,9 @@ async fn resolve_base_url(
                 remote_host: "127.0.0.1".to_string(),
                 remote_port: *remote_daemon_port,
             }];
-            // Only the host-key policy differs from a hand-made profile: this
-            // tunnel is created on the user's behalf, so a first connection
-            // cannot stop to ask about a fingerprint. Everything else —
-            // including `Compression=yes`, which is what keeps the terminal
-            // stream small on this exact link — stays at the default.
+            // The connection's own SSH settings, unchanged — host-key policy
+            // and `Compression` (what keeps the terminal stream small on this
+            // exact link) included; only the forward is added here.
             let tunnel_id = state.tunnel_manager.start(profile).await?;
             update(state, &connection.id, |e| {
                 e.tunnel_id = Some(tunnel_id.clone())
