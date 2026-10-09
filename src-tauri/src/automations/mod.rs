@@ -10,3 +10,11 @@ mod tests;
 
 pub mod run;
 pub mod store;
+
+pub mod scheduler;
+
+#[cfg(test)]
+mod mcp_tests;
+
+pub mod actions;
+pub mod mcp;
