@@ -43,21 +43,22 @@ done
 # --------------------------------------------------------------------------
 # Gate 1 — Makefile TUIC_APP_INSTANCE scope.
 #
-# A bare `TUIC_APP_INSTANCE?=tuic-test` is a *global* make variable, so `make
-# dev` launches the daily driver against an empty config instance and every
-# repository looks gone. It reads identically to the correct target-specific
-# form, and it has shipped twice. `make check` runs the same script, but that
-# is the once-per-batch heavyweight target and this repo pushes straight to
-# main — the bad edit lands first. Here it is a `make -n` dry run: seconds.
+# `make dev` and `make test` must each run on their own per-checkout config
+# instance, and only an explicit empty `TUIC_APP_INSTANCE=` may reach the shared
+# default config directory (with a loud warning). A Makefile edit can break that
+# without looking different (a global vs target-specific `?=` reads the same,
+# and has shipped wrong twice). `make check` runs the same script, but that is
+# the once-per-batch heavyweight target and this repo pushes straight to main —
+# the bad edit lands first. Here it is a `make -n` dry run: seconds.
 #
 # It reads the working tree, not the index, so a partially staged Makefile is
 # judged by what is on disk. Cheap and right in every case but that one.
 if git diff --cached --name-only --diff-filter=ACMR | grep -qx 'Makefile'; then
   if ! bash scripts/check-make-instance-scope.sh; then
     printf '\n\033[1;31m✗ pre-commit blocked:\033[0m Makefile TUIC_APP_INSTANCE scope\n\n' >&2
-    printf '  Only `make test` may default to an isolated config instance, and only\n' >&2
-    printf '  as `test: TUIC_APP_INSTANCE?=…`. A column-0 assignment is global and\n' >&2
-    printf '  sends `make dev` to an empty `instances/<id>/`.\n' >&2
+    printf '  `make dev` and `make test` must both default to the per-checkout\n' >&2
+    printf '  `tuic-<checkout dir>` instance, and only an empty `TUIC_APP_INSTANCE=`\n' >&2
+    printf '  may reach the shared config (with its warning). See the script output.\n' >&2
     exit 1
   fi
   if ! bash scripts/check-make-dev-builds-sibling.sh; then
