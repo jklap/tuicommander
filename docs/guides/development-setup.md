@@ -17,6 +17,13 @@ The macOS desktop app supports macOS 12 Monterey or later and requires system We
 pnpm install
 ```
 
+### TypeScript target
+
+The app uses `ES2024` for the TypeScript target and standard library, with
+`DOM` and `DOM.Iterable` types. Vite keeps its existing `esnext` build target;
+it does not lower ES2024 syntax to ES2021. This configuration does not add
+runtime polyfills.
+
 ### Paired Tauri dependencies
 
 Update each Tauri Rust plugin and its npm counterpart together. Notification stays
