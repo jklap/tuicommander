@@ -572,7 +572,16 @@ user, identity file, keepalive, host-key policy, compression) in the same nested
 `ssh` block a tunnel profile uses. A `connections.json` or tunnel profile written
 by an older build is upgraded once at startup; the original is kept beside it as
 `<file>.pre-nested-ssh-<timestamp>.bak` (restore it if you go back to an older
-build, which cannot read the new shape). **Local** — another TUICommander
+build, which cannot read the new shape).
+
+> **Downgrading:** an older build cannot read the new `connections.json`. The
+> first time it saves a connection (add, edit or delete) it moves the file aside
+> as `connections.corrupt-<uuid>` and starts an empty one, so your connections
+> seem to vanish in that build — nothing is lost: the pre-migration backup
+> `connections.json.pre-nested-ssh-<timestamp>.bak` is next to it. Before
+> running the older build, copy that backup back over `connections.json`. A
+> tunnel profile fails loudly in an older build instead and is not overwritten
+> (restore its `.bak` the same way). **Local** — another TUICommander
 instance on this same machine, by port or by instance id — connects over
 loopback HTTP with the usual authentication.
 

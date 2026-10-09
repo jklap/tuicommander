@@ -21,9 +21,14 @@ keywords:
 
 # Check Gate
 
-TUICommander's `make check` is the authoritative "is this actually done" gate: tsc, biome,
-architecture-cycle check, plugin-docs-sync, `cargo fmt --check`, `cargo clippy --release -D
-warnings`, `cargo nextest run --workspace` + doctests, the full `vitest run`, plugin tests, and
+TUICommander's `make check` is the authoritative "is this actually done" gate, in this order:
+every repository shell test (`make test-shell`, `scripts/**/test-*.sh`), tsc, biome,
+architecture-cycle check, plugin-docs-sync, the Makefile guards
+(`check-make-instance-scope.sh`, `check-make-dev-builds-sibling.sh`), a production `vite build`
+followed by the frontend bundle-size budget check (`scripts/report-frontend-bundles.mjs --check`:
+fails over an entry's gzip cap — `mobile.html` is the tight one — and warns at 98% of it),
+`cargo fmt --check`, `cargo clippy --workspace --exclude bm25 --release -D warnings`,
+`cargo nextest run --workspace` + doctests, the full `vitest run`, plugin tests, and
 `pnpm audit` / `cargo audit`.
 
 **Do not declare a feature complete, or tell the user "all tests pass," based only on a
