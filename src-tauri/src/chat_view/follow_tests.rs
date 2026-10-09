@@ -5,6 +5,141 @@ use crate::state::AppEvent;
 
 const ROW: &str = include_str!("../fixtures/chat_view/recorded/shape-012.jsonl");
 
+/// Real foreground PID/env and disk discovery, isolated from the user's Claude store.
+#[cfg(unix)]
+struct DiscoveredTerminal {
+    state: Arc<crate::state::AppState>,
+    _scratch: tempfile::TempDir,
+    project: PathBuf,
+}
+
+#[cfg(unix)]
+impl DiscoveredTerminal {
+    fn new() -> Self {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        let scratch = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let cwd = scratch.path().to_str().unwrap();
+        let config = scratch.path().join("claude");
+        let project = crate::agent_session::claude_project_dir_path(cwd, config.to_str()).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let pair = native_pty_system().openpty(PtySize::default()).unwrap();
+        let executable = scratch.path().join("cat-probe");
+        std::fs::copy("/bin/cat", &executable).unwrap();
+        // Apple's protected binaries do not expose their environment to sysctl.
+        #[cfg(target_os = "macos")]
+        assert!(
+            std::process::Command::new("/usr/bin/codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&executable)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let mut command = CommandBuilder::new(&executable);
+        command.env("CLAUDE_CONFIG_DIR", &config);
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        let pid = child.process_id().unwrap();
+        // Setup has no behavioral deadline; nextest bounds a genuine hang.
+        while pair.master.process_group_leader() != Some(pid as libc::pid_t)
+            || crate::agent_session::read_agent_env_overrides("claude", pid)
+                .get("CLAUDE_CONFIG_DIR")
+                != config.to_str().map(str::to_owned).as_ref()
+        {
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "probe exited during setup"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.session_maps.sessions.insert(
+            "discovered".into(),
+            Mutex::new(crate::state::PtySession {
+                launch_receipt: None,
+                writer: Arc::new(Mutex::new(pair.master.take_writer().unwrap())),
+                master: pair.master,
+                _child: child,
+                paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                worktree: None,
+                initial_cwd: Some(cwd.into()),
+                cwd: Some(cwd.into()),
+                display_name: None,
+                display_name_is_custom: false,
+                display_name_from_spawn: false,
+                is_remote: false,
+                shell: "/bin/cat".into(),
+            }),
+        );
+        crate::test_support::agent_session(&state, "discovered", crate::pty::SHELL_IDLE);
+        state
+            .session_maps
+            .session_states
+            .get_mut("discovered")
+            .unwrap()
+            .agent_type = Some("claude".into());
+        Self {
+            state,
+            _scratch: scratch,
+            project,
+        }
+    }
+
+    fn transcript(&self, uuid: &str, text: &str) -> PathBuf {
+        let path = self.project.join(format!("{uuid}.jsonl"));
+        std::fs::write(&path, fixture_row(uuid, text)).unwrap();
+        path
+    }
+
+    fn snapshot(&self, cursor: Option<&ChatViewSnapshot>) -> Result<ChatViewSnapshot, String> {
+        chat_view_snapshot(
+            &self.state,
+            "discovered",
+            cursor.map(|c| c.epoch),
+            cursor.map_or(0, |c| c.next_seq),
+        )
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DiscoveredTerminal {
+    fn drop(&mut self) {
+        if let Some((_, session)) = self.state.session_maps.sessions.remove("discovered") {
+            let mut session = session.lock();
+            session._child.kill().unwrap();
+            session._child.wait().unwrap();
+        }
+    }
+}
+
+// Catches: a live parent JSONL losing its binding at recheck solely because it has no subagents.
+#[cfg(unix)]
+#[test]
+fn discovered_transcript_keeps_following_without_subagents_at_recheck() {
+    let terminal = DiscoveredTerminal::new();
+    let uuid = "11111111-1111-4111-8111-111111111111";
+    let path = terminal.transcript(uuid, "before");
+    let subagents = terminal.project.join(uuid).join("subagents");
+    std::fs::create_dir_all(&subagents).unwrap();
+    let first = terminal.snapshot(None).expect("initial discovery");
+    assert_eq!(first.updates[0]["content"]["text"], "before");
+    std::fs::remove_dir(&subagents).unwrap();
+    terminal
+        .state
+        .chat_views
+        .views
+        .lock()
+        .get("discovered")
+        .unwrap()
+        .lock()
+        .bound_at = Instant::now() - REBIND_EVERY;
+    append(&path, &fixture_row("append", "after recheck"));
+    let next = terminal
+        .snapshot(Some(&first))
+        .expect("parent transcript must survive recheck without subagents");
+    assert!(!next.reset);
+    assert_eq!(next.updates[0]["content"]["text"], "after recheck");
+}
+
 fn fixture_row(id: &str, text: &str) -> String {
     let mut row: Value = serde_json::from_str(ROW).expect("recorded row");
     row["uuid"] = Value::String(id.into());
@@ -100,49 +235,70 @@ async fn ticker_follows_appends_and_equal_size_transcript_replacement() {
     assert_eq!(replaced.updates[1]["content"]["text"], "newtwo");
 }
 
-// Catches: a new JSONL binding retaining the old file identity or conversation.
+// Catches: discovery switching JSONL files while a client retains the old cursor.
+#[cfg(unix)]
 #[test]
 fn replacement_binding_then_appends_do_not_replay_the_old_file() {
-    let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
-    let first = tmp.path().join("first.jsonl");
-    let second = tmp.path().join("second.jsonl");
-    std::fs::write(&first, fixture_row("a", "old")).expect("first");
-    std::fs::write(&second, fixture_row("b", "new")).expect("second");
-    let mut view = View::new(first, MAX_LOG_ENTRIES, MAX_LOG_BYTES);
-    view.advance(TAIL_WINDOW_BYTES).expect("initial");
-    let epoch = view.log.epoch;
-    let seq = view.log.next_seq;
-    view.rebind(second.clone());
-    view.advance(TAIL_WINDOW_BYTES).expect("rebound");
-    append(&second, &fixture_row("c", "later"));
-    view.advance(TAIL_WINDOW_BYTES).expect("append");
-    let (reset, updates) = view.log.since(Some(epoch), seq);
-    assert!(reset);
-    assert_eq!(
-        updates
-            .iter()
-            .map(|u| u["content"]["text"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["new", "later"]
-    );
-}
-
-// Catches: ticker cleanup losing the reason a watched chat stopped following.
-#[test]
-fn unreadable_transcript_stops_with_a_reason_and_releases_registration() {
-    let tmp = tempfile::tempdir_in(crate::test_support::test_temp_root()).expect("tempdir");
-    let path = tmp.path().join("missing.jsonl");
-    let state = crate::state::tests_support::make_test_app_state();
-    let view = Arc::new(Mutex::new(View::new(path, MAX_LOG_ENTRIES, MAX_LOG_BYTES)));
-    view.lock().ticking = true;
-    state
+    let terminal = DiscoveredTerminal::new();
+    let old = terminal.transcript("11111111-1111-4111-8111-111111111111", "old");
+    let first = terminal
+        .snapshot(None)
+        .expect("initial discovery without subagents");
+    assert_eq!(first.updates[0]["content"]["text"], "old");
+    std::fs::remove_file(old).unwrap();
+    let new = terminal.transcript("22222222-2222-4222-8222-222222222222", "new");
+    terminal
+        .state
         .chat_views
         .views
         .lock()
-        .insert("one".into(), view.clone());
+        .get("discovered")
+        .unwrap()
+        .lock()
+        .bound_at = Instant::now() - REBIND_EVERY;
+    let rebound = terminal
+        .snapshot(Some(&first))
+        .expect("discover replacement");
+    assert!(rebound.reset);
+    assert_eq!(rebound.updates.len(), 1);
+    assert_eq!(rebound.updates[0]["content"]["text"], "new");
+    append(&new, &fixture_row("later", "later"));
+    let appended = terminal
+        .snapshot(Some(&rebound))
+        .expect("append after rebind");
+    assert!(!appended.reset);
+    assert_eq!(appended.updates.len(), 1);
+    assert_eq!(appended.updates[0]["content"]["text"], "later");
+}
+
+// Catches: a failed ticker read poisoning subsequent consumer snapshots after recovery.
+#[cfg(unix)]
+#[test]
+fn unreadable_transcript_recovers_for_the_snapshot_consumer() {
+    let terminal = DiscoveredTerminal::new();
+    let uuid = "11111111-1111-4111-8111-111111111111";
+    let path = terminal.transcript(uuid, "before");
+    let first = terminal.snapshot(None).expect("initial");
+    let view = terminal
+        .state
+        .chat_views
+        .views
+        .lock()
+        .get("discovered")
+        .unwrap()
+        .clone();
+    std::fs::remove_file(&path).unwrap();
+    // Exercise ticker cleanup; assertions stay at the consumer boundary.
+    tick(&terminal.state, "discovered", &view);
     assert!(
-        matches!(tick(&state, "one", &view), Tick::Stop(reason) if reason.contains("transcript unreadable"))
+        terminal
+            .snapshot(Some(&first))
+            .unwrap_err()
+            .contains("not_bound")
     );
-    assert!(!view.lock().ticking);
-    assert!(!state.chat_views.views.lock().contains_key("one"));
+    terminal.transcript(uuid, "recovered");
+    let recovered = terminal.snapshot(Some(&first)).expect("recovered snapshot");
+    assert!(recovered.reset);
+    assert_eq!(recovered.updates.len(), 1);
+    assert_eq!(recovered.updates[0]["content"]["text"], "recovered");
 }
