@@ -68,10 +68,6 @@ describe("CommandWidget", () => {
 		await waitFor(() => {
 			expect(rpc).toHaveBeenCalledWith("write_pty", {
 				sessionId: "s1",
-				data: "\x15",
-			});
-			expect(rpc).toHaveBeenCalledWith("write_pty", {
-				sessionId: "s1",
 				data: "/compact",
 			});
 			expect(rpc).toHaveBeenCalledWith("write_pty", {
@@ -89,10 +85,6 @@ describe("CommandWidget", () => {
 		const opusBtn = Array.from(buttons).find((b) => b.textContent === "opus")!;
 		fireEvent.click(opusBtn);
 		await waitFor(() => {
-			expect(rpc).toHaveBeenCalledWith("write_pty", {
-				sessionId: "s1",
-				data: "\x15",
-			});
 			expect(rpc).toHaveBeenCalledWith("write_pty", {
 				sessionId: "s1",
 				data: "/model opus",

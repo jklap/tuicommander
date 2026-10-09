@@ -1120,10 +1120,10 @@ registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 
 `session action=submit session_id=<id> input=<command>` is the managed-agent
 command surface. It accepts only a confirmed-idle agent with an empty composer,
-never queues, and keeps the PTY writer locked across Ctrl-U, a 50 ms gap, the
-text (bracketed paste for multiline input), a second 50 ms raw-mode scheduling
-gap, and Enter. Ctrl-U travels alone because Claude Code strips it from a long
-text it treats as a paste and then refuses the Enter. The existing
+never queues, and keeps the PTY writer locked across the text (bracketed paste
+for multiline input), a 50 ms raw-mode scheduling gap, and Enter. No Ctrl-U is
+sent (the composer is empty by construction; injected text is never allowed to
+replace user input). The existing
 `InputLineBuffer`, slash-mode tracking, submitted-input lifecycle, and
 `turn_epoch` advance exactly once after the full write.
 
@@ -1202,8 +1202,8 @@ marker and reserves `idle` for an unclassified ready state.
 bookkeeping: each write stamps `last_input_ms` and feeds the `InputLineBuffer`
 so slash-mode tracking stays identical for MCP and remote web clients. When a
 combined text + Enter request targets a prefill-only agent such as Codex or
-OpenCode, MCP uses the legacy framed injection sequence (Ctrl-U, bracketed paste
-for multiline text, a flushed scheduling gap, then CR). Other text/key pairs,
+OpenCode, MCP uses the legacy framed injection sequence (bracketed paste for
+multiline text, a flushed scheduling gap, then CR; no Ctrl-U). Other text/key pairs,
 including Claude's established input path, retain raw pair semantics. This
 legacy combined form remains write-only; new managed automation uses
 `action=submit` for the bounded receipt.

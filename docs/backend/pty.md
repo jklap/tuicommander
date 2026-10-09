@@ -757,12 +757,12 @@ This replaced the previous `maybe_reset_tuic_session` approach, which wrote `exp
 
 A debounce (`last_session_conflict_mark`) prevents creating multiple flag files within a short window for the same session.
 
-## Ctrl-U Prefix Handling
+## No Ctrl-U Prefix (Injected Text Is Appended)
 
-Single-key PTY writes that should clear the current input line prepend `\x15` (Ctrl-U) on POSIX shells. The selection is **shell-family aware**, not host-platform aware: the detected shell (`bash`/`zsh`/`fish` → POSIX, `powershell`/`cmd` → Windows) drives the choice. Mixing PowerShell on macOS or a POSIX shell via WSL/MSYS now behaves correctly. Native Windows shells skip the prefix entirely to avoid inserting a literal `^U`.
+TUICommander never sends a Ctrl-U (`\x15`) before injected text — not from the frontend helpers, not from the backend's `write_agent_command_with_boundary` (MCP/HTTP `session submit`, inbox wakes, deferred prompts, queued commands, dictation). Injected text is **appended** to whatever the input line already holds; it never replaces it (user decision, dropped-items #16). Automated submits that must not merge into a half-typed line are refused up front instead (`partial_composer` in `agent_composer_rejection`; dictation's `Draft` hold; the deferred-prompt watchdog's half-typed-line refusal). Main used to clear the line with a Ctrl-U in its own write; never reintroduce one bundled into the text — Claude Code strips a Ctrl-U inside a long chunk as an invisible character and then refuses the Enter. `ShellFamily`/`get_session_shell_family` remain as an informational classification (it only ever decided whether to skip that prefix on cmd/PowerShell).
 
 Frontend input helpers route through `src/utils/sendCommand.ts`:
-- `sendCommand(fn, text)` — full command: `Ctrl-U` (family-gated) + text + `\r`. With an agent attached, Ctrl-U precedes text by 50 ms. Enter follows text by 200 ms for Codex and 50 ms for other known agents. If the type is unknown but a non-shell process owns the foreground, the frontend uses agent framing and the 200 ms gap; a failed foreground probe keeps shell framing and delays Enter. Claude Code strips a Ctrl-U inside a long pasted text; Codex suppresses Enter for 120 ms after a paste burst.
+- `sendCommand(fn, text)` — full command: text + `\r` (the `shellFamily` argument is accepted but no longer changes the bytes). Enter follows text by 200 ms for Codex and 50 ms for other known agents. If the type is unknown but a non-shell process owns the foreground, the frontend uses agent framing and the 200 ms gap; a failed foreground probe keeps shell framing and delays Enter. Codex suppresses Enter for 120 ms after a paste burst.
 - `sendPtyKey(fn, key)` — pass-through single key/escape sequence. No prefix, no trailing CR. Use for `ChoicePrompt` option keys, TUI app navigation, and any raw-stdin interaction.
 
 Never write `text + "\r"` directly to a PTY — see `src/AGENTS.md`.
@@ -799,7 +799,6 @@ enum TerminalMode {
 - The session knowledge store — `tui_apps_seen` accumulates from it. Its two
   former readers, the ReAct loop's `get_context` tool and the
   `SessionKnowledgeBar` footer, went with the embedded AI engine (#784-0aec).
-- The agent safety layer — blocks Ctrl-U prefix injection while a TUI app is in the foreground.
 
 ## Silence-Based Question Detection
 
@@ -1054,7 +1053,7 @@ Queued confirmation waits run per session so a silent agent does not block other
 requires a confirmed-idle managed agent, empty `InputLineBuffer`, no confident
 dialog, and an empty shared injection FIFO. It never adds itself to that FIFO.
 The claim marks the session BUSY before any bytes; one PTY writer guard then
-spans Ctrl-U, a 50 ms gap, the text in optional bracketed paste, a second
+spans the text in optional bracketed paste (no Ctrl-U: it is appended), a
 gap (200 ms for Codex or an undetected agent type, 50 ms for known other agents), and CR, so
 neither raw input nor a peer can splice the command. A peer arriving after the
 claim queues; a peer that claims first makes submission reject.

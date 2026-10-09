@@ -20,9 +20,8 @@ export function CommandWidget(props: CommandWidgetProps) {
 	async function send(text: string) {
 		try {
 			// Route through the canonical sendCommand helper: it handles the
-			// agent-specific Ctrl-U prefix, the split Enter (Ink raw mode), and
-			// bracketed-paste for multi-line input — and skips Ctrl-U on native
-			// Windows shells where it would echo literally.
+			// split Enter (Ink raw mode) and bracketed-paste for multi-line input
+			// (no Ctrl-U: the text is appended to what the input already holds).
 			await sendCommand(
 				(data) => retryWrite(() => rpc("write_pty", { sessionId: props.sessionId, data })),
 				text,

@@ -1,4 +1,3 @@
-import { isWindows } from "../platform";
 import { appLogger } from "../stores/appLogger";
 import { rpc } from "../transport";
 
@@ -10,8 +9,7 @@ export type ShellFamily = "posix" | "windows-native" | "unknown";
  *  use and reused afterwards — the shell doesn't change mid-session. */
 const shellFamilyCache = new Map<string, ShellFamily>();
 
-/** Real-time gap between Ctrl-U and payload, and between payload and Enter
- *  for every verified agent. Mirrors `INJECT_ENTER_GAP` in `pty.rs`.
+/** Real-time gap between payload and Enter for every verified agent. Mirrors `INJECT_ENTER_GAP` in `pty.rs`.
  *
  *  That constant's comment used to claim the frontend "gets this gap for free —
  *  its two `writeFn` calls are separate IPC round-trips". It does not: a Tauri
@@ -57,8 +55,8 @@ export function waitForAgentEnterGap(agentType?: string | null): Promise<void> {
 }
 
 /** Fetch (and cache) the shell family for a PTY session. Returns "unknown"
- *  if the backend can't tell us — `sendCommand` then falls back to the
- *  platform heuristic. */
+ *  if the backend can't tell us. Informational since `sendCommand` stopped
+ *  sending a Ctrl-U (it only decided whether to skip that prefix). */
 export async function getShellFamily(sessionId: string): Promise<ShellFamily> {
 	const cached = shellFamilyCache.get(sessionId);
 	if (cached) return cached;
@@ -82,27 +80,18 @@ export function clearShellFamilyCache(sessionId: string): void {
 /** Send a command to a PTY session with split writes.
  *
  *  Splits into separate writes:
- *  1. Ctrl-U + text (clears any existing input, then types the command) — with
- *     an agent attached, Ctrl-U and text are two writes a real gap apart
- *  2. \r (Enter — sent separately)
+ *  1. the text (multiline, or a long Codex payload, as a bracketed paste)
+ *  2. \r (Enter — sent separately, a real gap later for raw-mode agents)
  *
- *  The Ctrl-U prefix is required for Ink-based agents (Claude Code, Codex, etc.)
- *  which ignore Ctrl-U when bundled with text in raw mode, and is desirable for
- *  POSIX shells with readline (bash/zsh/fish) where it cancels any pending input.
- *
- *  On native Windows shells (cmd.exe, PowerShell) without a detected agent,
- *  Ctrl-U is not a line-kill control code and is echoed literally (e.g. "§cmd"
- *  or "^Ucmd"), breaking the command. We skip the prefix in that case.
- *
- *  Critical: git-bash on Windows runs bash/readline — same needs as a POSIX
- *  shell on Linux. The `shellFamily` argument resolves the ambiguity; when
- *  omitted we fall back to `isWindows()` (safe for cmd/PowerShell, wrong for
- *  git-bash — callers should provide shellFamily whenever possible).
+ *  No Ctrl-U is sent: the text is APPENDED to whatever the input line already
+ *  holds, never replaces it (user decision, dropped-items #16). That also
+ *  removes the old native-Windows special case (cmd/PowerShell echo a Ctrl-U
+ *  literally), so `shellFamily` no longer changes the bytes written.
  *
  *  @param writeFn      Function that writes raw data to the PTY.
  *  @param text         Command text to inject (without trailing newline).
  *  @param agentType    Detected agent in the PTY (null = plain shell).
- *  @param shellFamily  Classification of the session's underlying shell.
+ *  @param _shellFamily Kept for call-site compatibility; no longer used.
  *  @param submit       When false, the text is typed but the trailing Enter is
  *                      withheld so the user reviews and executes it manually.
  *                      Used by reviewable Smart Prompts and by suggestion chips
@@ -114,7 +103,7 @@ export async function sendCommand(
 	writeFn: (data: string) => Promise<void>,
 	text: string,
 	agentType?: string | null,
-	shellFamily?: ShellFamily,
+	_shellFamily?: ShellFamily,
 	submit = true,
 	sessionId?: string,
 ): Promise<void> {
@@ -129,21 +118,9 @@ export async function sendCommand(
 		}
 	}
 	const agentInput = Boolean(agentType) || unknownForeground;
-	const skipPrefix = !agentInput && isWindowsNative(shellFamily);
-	const prefix = skipPrefix ? "" : "\x15";
 	const bracketed = text.includes("\n") || (agentType === "codex" && text.length > CODEX_PASTE_FRAME_MIN_CHARS);
 	const payload = bracketed ? `\x1b[200~${text}\x1b[201~` : text;
-	if (agentInput) {
-		// Ctrl-U must reach an agent in its own read. Claude Code treats a long
-		// input chunk as a paste: a Ctrl-U inside it is stripped as an invisible
-		// character, and Claude then refuses the Enter that follows ("review and
-		// press Enter to send") — dictated text sat unsent even with a 500ms gap.
-		await writeFn(prefix);
-		await delay(AGENT_ENTER_GAP_MS);
-		await writeFn(payload);
-	} else {
-		await writeFn(prefix + payload);
-	}
+	await writeFn(payload);
 	if (!submit) return;
 	// Two writes are not two reads. Keep a scheduling gap for raw-mode agents.
 	if (agentInput || foregroundProbeFailed) await waitForAgentEnterGap(agentType);
@@ -181,8 +158,8 @@ export function shouldAutoSubmitSuggestion(agentType: string | null | undefined,
 /** Send a single raw character/escape sequence to a PTY running a TUI dialog
  *  in raw stdin mode (Claude Code edit-confirm, bash-confirm, apply-patch, ...).
  *
- *  Unlike `sendCommand`, this writes EXACTLY the bytes provided — no Ctrl-U
- *  prefix, no trailing `\r`. Adding either breaks raw-mode dialog parsers:
+ *  Unlike `sendCommand`, this writes EXACTLY the bytes provided — no trailing
+ *  `\r`. Adding one breaks raw-mode dialog parsers:
  *  Claude Code reads one key and interprets trailing bytes as the next prompt,
  *  Codex aborts on unexpected input. This is the intended counterpart to
  *  `sendCommand` for the ChoicePrompt / numbered-option path.
@@ -193,14 +170,4 @@ export function shouldAutoSubmitSuggestion(agentType: string | null | undefined,
  */
 export async function sendPtyKey(writeFn: (data: string) => Promise<void>, key: string): Promise<void> {
 	await writeFn(key);
-}
-
-/** True when the session runs a native Windows shell (cmd / PowerShell).
- *  POSIX shells (incl. git-bash on Windows) return false so they still
- *  receive the Ctrl-U prefix.
- *  When shellFamily is omitted/unknown, fall back to the platform heuristic. */
-function isWindowsNative(shellFamily: ShellFamily | undefined): boolean {
-	if (shellFamily === "windows-native") return true;
-	if (shellFamily === "posix") return false;
-	return isWindows();
 }
