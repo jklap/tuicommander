@@ -1348,7 +1348,10 @@ Touching `pty.rs` is not the trigger; touching `awaiting_input`, or any line
 inside `suppress_heuristic_question`, is. Replayed over the last 120 commits
 that touch a gated file it fired on 24 — every `fix(agent-state):` among them.
 
-For a rename or a refactor that genuinely needs no capture, say so and move on:
+A formatting-only change (`cargo fmt`: whitespace, line breaks, trailing commas)
+no longer trips it, and neither does adding a missing `#[test]` to an otherwise
+unchanged function. For a rename or a refactor that genuinely needs no capture,
+say so and move on:
 
 ```
 TUIC_SKIP_FIXTURE_GATE=1 git commit ...     # or: git commit --no-verify

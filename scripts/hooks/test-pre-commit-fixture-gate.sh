@@ -218,4 +218,68 @@ if ! (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/a
   echo 'adding a test copy next to an unchanged function was blocked' >&2
   exit 1
 fi
+
+# Formatting-only production changes (what `cargo fmt` does) are not detection changes.
+git -C "$repo" checkout -q HEAD -- src-tauri/src/pty/tests.rs
+cat >> "$repo/src-tauri/src/pty/tests.rs" <<'RS'
+
+fn awaiting_input_osc_prefix(session: &str, verbose: bool) -> String {
+    format!("\x1b]7770;{}", if verbose { session } else { "" })
+}
+
+fn rearm_awaiting_for_open_dialog(a: u8, b: u8) -> u8 {
+    awaiting_osc(
+        a,
+        b,
+    )
+}
+RS
+git -C "$repo" add src-tauri/src/pty/tests.rs
+git -C "$repo" -c user.name=Test -c user.email=test@example.com commit -qm format-baseline
+python3 - "$repo/src-tauri/src/pty/tests.rs" <<'PYTEST'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+source = path.read_text()
+source = source.replace("fn awaiting_input() -> bool {\n    false\n}", "fn awaiting_input() -> bool { false }")
+source = source.replace(
+    'format!("\\x1b]7770;{}", if verbose { session } else { "" })',
+    'format!(\n        "\\x1b]7770;{}",\n        if verbose { session } else { "" },\n    )',
+)
+source = source.replace("    awaiting_osc(\n        a,\n        b,\n    )", "    awaiting_osc(a, b)")
+path.write_text(source)
+PYTEST
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if ! (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/format" 2>&1; then
+  cat "$scratch/format" >&2
+  echo 'a formatting-only production change was blocked as a detection change' >&2
+  exit 1
+fi
+
+# Catches an overbroad formatting exemption: whitespace INSIDE a literal is content.
+git -C "$repo" checkout -q HEAD -- src-tauri/src/pty/tests.rs
+sed 's/"\\x1b\]7770;{}"/"\\x1b] 7770;{}"/' "$repo/src-tauri/src/pty/tests.rs" > "$scratch/pty-tests"
+cp "$scratch/pty-tests" "$repo/src-tauri/src/pty/tests.rs"
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if git -C "$repo" diff --cached --quiet; then
+  echo 'test setup: the literal edit did not apply' >&2
+  exit 1
+fi
+if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/format-literal" 2>&1; then
+  echo 'a whitespace edit inside a detection literal unexpectedly passed' >&2
+  exit 1
+fi
+
+# Catches an overbroad formatting exemption: a 1-tuple losing its comma is not formatting.
+git -C "$repo" checkout -q HEAD -- src-tauri/src/pty/tests.rs
+sed 's/^    awaiting_osc($/    awaiting_osc((/; s/^        b,$/        b,),/' "$repo/src-tauri/src/pty/tests.rs" > "$scratch/pty-tests"
+cp "$scratch/pty-tests" "$repo/src-tauri/src/pty/tests.rs"
+git -C "$repo" add src-tauri/src/pty/tests.rs
+git -C "$repo" -c user.name=Test -c user.email=test@example.com commit -qm tuple-baseline
+sed 's/^        b,),$/        b)/' "$repo/src-tauri/src/pty/tests.rs" > "$scratch/pty-tests"
+cp "$scratch/pty-tests" "$repo/src-tauri/src/pty/tests.rs"
+git -C "$repo" add src-tauri/src/pty/tests.rs
+if (cd "$repo" && bash "$project_root/scripts/hooks/pre-commit") > "$scratch/format-tuple" 2>&1; then
+  echo 'dropping a meaningful comma in detection code unexpectedly passed' >&2
+  exit 1
+fi
 echo 'fixture gate regressions passed'

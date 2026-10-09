@@ -225,7 +225,10 @@ The fixture gate compares the indexed and committed production scopes, excluding
 module that is a test item in the index and appears attribute-less but otherwise
 byte-identical in HEAD (a test that was missing its `#[test]`) is excluded from
 both views, so adding the attribute is test-only; editing its body in the same
-commit, or keeping the attribute-less copy, exempts nothing. Test-only
+commit, or keeping the attribute-less copy, exempts nothing. A formatting-only
+change to production code (whitespace, line breaks, a trailing comma rustfmt adds
+or removes; never a 1-tuple's comma, never whitespace inside a literal) is not a
+detection change. Test-only
 changes may reuse existing captures. Production detection changes require a staged,
 framed TCAP v2 capture with nonzero geometry, complete records and a matching
 provenance Markdown file (capture source and SHA-256). New raw/text external
