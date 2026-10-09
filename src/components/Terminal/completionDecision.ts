@@ -4,6 +4,9 @@ import type { AwaitingInputType } from "../../stores/terminals";
 export interface CompletionContext {
 	isActiveTerminal: boolean;
 	isDebouncedBusy: boolean;
+	/** Claude's hook-declared background work is still outstanding: the agent is
+	 *  not done even though its shell went idle (silence-timeout idle). */
+	declaredBackgroundWork: boolean;
 	activeSubTasks: number;
 	awaitingInput: AwaitingInputType;
 	durationMs: number;
@@ -28,6 +31,7 @@ export type CompletionSuppressionReason =
 	| "below-threshold"
 	| "active-terminal"
 	| "still-busy"
+	| "declared-background-work"
 	| "active-sub-tasks"
 	| "awaiting-input"
 	| "no-command-ran"
@@ -45,6 +49,7 @@ export function getCompletionSuppression(ctx: CompletionContext): CompletionSupp
 	if (ctx.durationMs < ctx.thresholdMs) return "below-threshold";
 	if (ctx.isActiveTerminal) return "active-terminal";
 	if (ctx.isDebouncedBusy) return "still-busy";
+	if (ctx.declaredBackgroundWork) return "declared-background-work";
 	if (ctx.activeSubTasks > 0) return "active-sub-tasks";
 	if (ctx.awaitingInput) return "awaiting-input";
 	// Shell-integrated terminal that went busy without running a command — this is
