@@ -474,7 +474,10 @@ real cell pixel size before they'll attempt to display anything:
   `pixel_height` (`rows`/`cols` × cell size) on the next `TIOCSWINSZ`, so
   `TIOCGWINSZ`'s `ws_xpixel`/`ws_ypixel` are never zero once a frontend has
   attached. A non-zero spawn-time default (`DEFAULT_CELL_{WIDTH,HEIGHT}_PX`,
-  `terminal_grid.rs`) covers the brief window before the first resize.
+  `terminal_grid.rs`) covers the brief window before the first resize — on
+  every spawn path (desktop `create_pty`/`create_pty_with_worktree`,
+  `agent::spawn_agent`, HTTP `POST /sessions` and `POST /sessions/agent`),
+  all through `pty::initial_pty_size`.
 - **`CSI 14 t`** (`text_area_size_pixels`) and **`CSI 16 t`** (cell size in
   pixels, new) both reply from the same shared `WindowSize` the resize above
   updates — `terminal_grid.rs`'s `TerminalGrid::set_cell_pixel_size`/

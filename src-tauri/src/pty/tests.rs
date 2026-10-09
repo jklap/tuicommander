@@ -28129,3 +28129,21 @@ fn explain_a_closed_teammate_is_not_listed_and_does_not_account_for_a_declared_o
     assert!(flag.counts_now);
     assert!(flag.consistent_with_visible);
 }
+
+/// Dropped-items #31: the shared spawn-time `PtySize` (used by desktop
+/// `create_pty*`, `agent::spawn_agent` and both HTTP spawns) carries the
+/// default-cell pixel size, saturating instead of overflowing.
+#[test]
+fn initial_pty_size_derives_pixels_from_default_cell_metrics() {
+    let size = crate::pty::initial_pty_size(24, 80);
+    assert_eq!((size.rows, size.cols), (24, 80));
+    assert_eq!(
+        (size.pixel_width, size.pixel_height),
+        (
+            80 * crate::terminal_grid::DEFAULT_CELL_WIDTH_PX,
+            24 * crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX
+        )
+    );
+    let huge = crate::pty::initial_pty_size(u16::MAX, u16::MAX);
+    assert_eq!((huge.pixel_width, huge.pixel_height), (u16::MAX, u16::MAX));
+}

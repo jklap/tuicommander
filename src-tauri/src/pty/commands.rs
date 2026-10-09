@@ -37,14 +37,8 @@ pub(crate) async fn create_pty(
     let data_dir = state.data_dir.clone();
     let state_for_env = state.inner().clone();
     let session_id_for_env = session_id.clone();
-    let (pair, child) = spawn_pty_pair_with_retry_async(
-        PtySize {
-            rows,
-            cols,
-            pixel_width: cols.saturating_mul(crate::terminal_grid::DEFAULT_CELL_WIDTH_PX),
-            pixel_height: rows.saturating_mul(crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX),
-        },
-        move || {
+    let (pair, child) =
+        spawn_pty_pair_with_retry_async(crate::pty::initial_pty_size(rows, cols), move || {
             let mut cmd = build_shell_command(&spawn_shell);
 
             if let Some(ref cwd) = spawn_config.cwd {
@@ -76,9 +70,8 @@ pub(crate) async fn create_pty(
             }
 
             cmd
-        },
-    )
-    .await?;
+        })
+        .await?;
     lower_pty_child_priority(child.process_id());
 
     let tuic_session = config.tuic_session.clone();
@@ -261,14 +254,8 @@ pub(crate) async fn create_pty_with_worktree(
     let state_for_env = state.inner().clone();
     let session_id_for_env = session_id.clone();
     let spawn_tuic_session = pty_config.tuic_session.clone();
-    let pty_result = spawn_pty_pair_with_retry_async(
-        PtySize {
-            rows,
-            cols,
-            pixel_width: cols.saturating_mul(crate::terminal_grid::DEFAULT_CELL_WIDTH_PX),
-            pixel_height: rows.saturating_mul(crate::terminal_grid::DEFAULT_CELL_HEIGHT_PX),
-        },
-        move || {
+    let pty_result =
+        spawn_pty_pair_with_retry_async(crate::pty::initial_pty_size(rows, cols), move || {
             let mut cmd = build_shell_command(&spawn_shell);
             cmd.cwd(&spawn_worktree_path);
             crate::shell_integration::inject(&data_dir, &spawn_shell, &mut cmd);
@@ -284,24 +271,23 @@ pub(crate) async fn create_pty_with_worktree(
                 cmd.env(key, value);
             }
             cmd
-        },
-    )
-    .await
-    .and_then(|(pair, child)| {
-        lower_pty_child_priority(child.process_id());
+        })
+        .await
+        .and_then(|(pair, child)| {
+            lower_pty_child_priority(child.process_id());
 
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| format!("Failed to get PTY writer: {e}"))?;
+            let writer = pair
+                .master
+                .take_writer()
+                .map_err(|e| format!("Failed to get PTY writer: {e}"))?;
 
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
+            let reader = pair
+                .master
+                .try_clone_reader()
+                .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
 
-        Ok((session_id, pair.master, child, writer, reader, shell))
-    });
+            Ok((session_id, pair.master, child, writer, reader, shell))
+        });
 
     let (session_id, master, child, writer, reader, shell) = match pty_result {
         Ok(result) => result,
