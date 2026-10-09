@@ -143,7 +143,7 @@ fn unsupported_or_invalid_documents_abort_without_replacing_disk_state() {
 // Catches: existing workspace or optional precheck definitions not surviving persistence.
 #[test]
 fn existing_workspace_and_optional_fields_round_trip() {
-    let (_, store) = store();
+    let (_dir, store) = store();
     let mut value = serde_json::to_value(definition("existing")).unwrap();
     value["workspace"] = json!({"mode": "existing"});
     value.as_object_mut().unwrap().remove("precheck");
