@@ -13,7 +13,7 @@ use bitflags::bitflags;
 use log::{debug, trace};
 use unicode_width::UnicodeWidthChar;
 
-use crate::event::{Event, EventListener};
+use crate::event::{Event, EventListener, ImagePlacementInfo};
 use crate::grid::{Dimensions, Grid, GridIterator, Scroll, ScrollSource};
 use crate::index::{self, Boundary, Column, Direction, Line, Point, Side};
 use crate::selection::{Selection, SelectionRange, SelectionType};
@@ -29,6 +29,7 @@ use crate::vte::ansi::{
 pub mod cell;
 pub mod color;
 pub mod iterm2;
+pub mod kitty;
 pub mod search;
 
 /// Minimum number of columns.
@@ -410,6 +411,22 @@ pub struct Term<T> {
     /// any (color-tools plan, Phase 2). At most one at a time — iTerm2
     /// doesn't define concurrent multipart transfers.
     pending_multipart: Option<iterm2::PendingMultipart>,
+
+    /// In-progress Kitty graphics chunked transmission (`m=1` on one or more
+    /// sequences), if any (color-tools plan, Phase 3). At most one at a
+    /// time; a new chunked transfer starting while one is already open
+    /// silently replaces it.
+    pending_kitty_transmission: Option<kitty::PendingTransmission>,
+
+    /// `z=` registered by an `a=p,U=1`/`a=T,U=1` virtual-placement command,
+    /// keyed by `(image_id, placement_id)` (color-tools plan, Phase 7's
+    /// z-order compositing follow-up). A `U=1` registration never touches
+    /// any cell itself — the app prints the placeholder characters
+    /// separately — so this is the only place the requested z-index exists
+    /// between registration and whenever `try_resolve_unicode_placeholder`
+    /// later needs it. Cleared by `a=d` (see `kitty_process`'s `Delete` arm)
+    /// so it can't grow unbounded over a long session.
+    unicode_placeholder_z: std::collections::HashMap<(u32, u32), i32>,
 }
 
 /// Configuration options for the [`Term`].
@@ -589,6 +606,8 @@ impl<T> Term<T> {
             mode: Default::default(),
             clipboard_capture: None,
             pending_multipart: None,
+            pending_kitty_transmission: None,
+            unicode_placeholder_z: std::collections::HashMap::new(),
         }
     }
 
@@ -1457,17 +1476,22 @@ impl<T: EventListener> Term<T> {
             self.screen_lines() as u32,
         );
 
-        let Some(image) =
-            self.event_proxy
-                .store_image(Arc::from(bytes), mime, intrinsic_width, intrinsic_height)
-        else {
+        // iTerm2 has no client-chosen image identity.
+        let Some(image) = self.event_proxy.store_image(
+            None,
+            Arc::from(bytes),
+            mime,
+            intrinsic_width,
+            intrinsic_height,
+        ) else {
             return;
         };
         // iTerm2 has no explicit placement-id concept (unlike Kitty) — an
         // image is only ever displayed once, so its own id doubles as the
-        // placement id.
+        // placement id. iTerm2 also has no z-index concept: it always paints
+        // above everything else, z=0, same as Kitty's default.
         let placement_id = image.image_id;
-        self.reserve_image_footprint(image, placement_id, cols, rows);
+        self.reserve_image_footprint(image, placement_id, cols, rows, 0);
     }
 
     /// Reserve `cols x rows` cells starting at the current cursor position
@@ -1486,11 +1510,36 @@ impl<T: EventListener> Term<T> {
         placement_id: u32,
         cols: u32,
         rows: u32,
+        z_index: i32,
     ) {
+        // Hard cap on reserved rows, independent of `available_cols`'s
+        // viewport-width clamp above: `rows` comes straight from
+        // attacker-controlled wire data (Kitty `r=`, or iTerm2's resolved
+        // `height=`/`%`/`px`/`auto` footprint) with no upper bound of its
+        // own, and the loop below runs once per reserved row *inside*
+        // `Term::process`, under the session's `vt_log` lock. Without this
+        // clamp a single crafted sequence (e.g. Kitty `r=4000000000` or
+        // iTerm2 `height=4000000000`) would attempt up to `u32::MAX`
+        // `linefeed()` calls, hanging the session (and every other consumer
+        // of its grid — the frame ticker, HTTP reads) for as long as that
+        // takes. No real image needs anywhere near this many rows; this is
+        // generous headroom, not a meaningful functional limit.
+        const MAX_FOOTPRINT_ROWS: u32 = 10_000;
+
         let start_col = self.grid.cursor.point.column.0;
         let available_cols = self.columns().saturating_sub(start_col).max(1);
         let footprint_cols = (cols as usize).min(available_cols);
-        let footprint_rows = rows.max(1);
+        let footprint_rows = rows.clamp(1, MAX_FOOTPRINT_ROWS);
+
+        // Eviction-stable absolute row of the placement's top-left corner —
+        // same `history_base + grid_relative` addressing `terminal_grid.rs`'s
+        // `hyperlink_span` already uses, simplified: `history_base +
+        // (line.0 + history_size) == total_scrolled() + line.0` (since
+        // `history_base == total_scrolled() - history_size`). Captured before
+        // this reservation's own `linefeed()` calls move both the cursor and
+        // `total_scrolled()`.
+        let abs_row = (self.grid.total_scrolled() as i64 + self.grid.cursor.point.line.0 as i64)
+            .max(0) as u32;
 
         for row in 0..footprint_rows {
             if row > 0 {
@@ -1504,12 +1553,455 @@ impl<T: EventListener> Term<T> {
                     placement_id,
                     col as u16,
                     row as u16,
+                    z_index,
                 );
                 self.grid[line][column].set_image_ref(Some(cell_ref));
             }
         }
         self.linefeed();
         self.carriage_return();
+
+        self.event_proxy
+            .send_event(Event::ImagePlacement(ImagePlacementInfo {
+                placement_id,
+                image_id: image.image_id,
+                abs_row,
+                col: start_col as u16,
+                rows: footprint_rows as u16,
+                cols: footprint_cols as u16,
+                z_index,
+            }));
+    }
+
+    /// Kitty graphics protocol entry point (color-tools plan, Phase 3). See
+    /// `term::kitty`'s module doc comment for exactly what's implemented.
+    fn kitty_graphics_dispatch(&mut self, data: &[u8]) {
+        let Some((control_text, payload_chunk)) = kitty::split_payload(data) else {
+            return; // Not a Kitty graphics APC sequence (missing 'G' marker).
+        };
+        let control = kitty::parse_control_data(control_text);
+
+        if let Some(pending) = self.pending_kitty_transmission.as_mut() {
+            // Continuation chunk: per spec it carries only m=/q=, so the
+            // ORIGINAL (first chunk's) control data is what's authoritative,
+            // not this chunk's mostly-default one.
+            if pending.payload_b64.len() + payload_chunk.len() > kitty::MAX_CHUNKED_B64_BYTES {
+                // Fail closed: abort the whole transfer rather than let a
+                // client stream an unbounded number of `m=1` chunks and grow
+                // this buffer without limit.
+                self.pending_kitty_transmission = None;
+                return;
+            }
+            pending.payload_b64.extend_from_slice(payload_chunk);
+            if control.more_chunks {
+                return;
+            }
+            let pending = self.pending_kitty_transmission.take().unwrap();
+            let payload = pending.payload_b64;
+            self.kitty_process(pending.control, &payload);
+            return;
+        }
+
+        if control.more_chunks {
+            self.pending_kitty_transmission = Some(kitty::PendingTransmission {
+                control,
+                payload_b64: payload_chunk.to_vec(),
+            });
+            return;
+        }
+
+        self.kitty_process(control, payload_chunk);
+    }
+
+    fn kitty_respond_ok(&mut self, control: &kitty::ControlData) {
+        if control.quiet >= 1 {
+            return;
+        }
+        let text = kitty::ok_response(control.image_id, control.placement_id);
+        self.event_proxy.send_event(Event::PtyWrite(text));
+    }
+
+    fn kitty_respond_error(&mut self, control: &kitty::ControlData, code: &str, message: &str) {
+        if control.quiet >= 2 {
+            return;
+        }
+        let text = kitty::error_response(control.image_id, code, message);
+        self.event_proxy.send_event(Event::PtyWrite(text));
+    }
+
+    fn kitty_process(&mut self, control: kitty::ControlData, payload_b64: &[u8]) {
+        match control.action {
+            kitty::Action::Query => {
+                // Capability probe: must not store or display anything.
+                self.kitty_respond_ok(&control);
+            }
+            kitty::Action::Unsupported => {
+                // Animation frames/composition etc. — no well-defined
+                // response of their own; silently no-op.
+            }
+            kitty::Action::Delete => {
+                match control.delete_target {
+                    Some('a') | Some('A') => {
+                        self.event_proxy.forget_all_images();
+                        self.event_proxy.send_event(Event::ImagePlacementsCleared);
+                        self.unicode_placeholder_z.clear();
+                    }
+                    Some('i') | Some('I') => {
+                        self.event_proxy.forget_image(control.image_id);
+                        // `d=i`/`d=I` deletes an *image* by id, not a specific
+                        // placement — but with only one placement id known
+                        // here (none; the wire form doesn't carry `p=` for
+                        // this variant), the renderer can't be told which
+                        // placement(s) to drop by id alone. Signal a full
+                        // resync instead of guessing; the placement list is
+                        // cheap enough to re-fetch (a full grid scan) on the
+                        // rare `a=d` case.
+                        self.event_proxy.send_event(Event::ImagePlacementsCleared);
+                        self.unicode_placeholder_z
+                            .retain(|&(image_id, _), _| image_id != control.image_id);
+                    }
+                    _ => {} // other d= variants not implemented
+                }
+                self.kitty_respond_ok(&control);
+            }
+            kitty::Action::Place => {
+                let Some(image) = self.event_proxy.image_by_id(control.image_id) else {
+                    self.kitty_respond_error(&control, "ENOENT", "no image with that id");
+                    return;
+                };
+                self.kitty_display(&control, image);
+                self.kitty_respond_ok(&control);
+            }
+            kitty::Action::Transmit | kitty::Action::TransmitAndDisplay => {
+                // PNG without an explicit placement size is the one case
+                // that genuinely needs decoded bytes before it can even
+                // compute a footprint (auto-sizing sniffs the PNG header for
+                // intrinsic dimensions) — keep that path fully synchronous,
+                // exactly as before this deferred-decode split existed.
+                // Every real target tool (mpv, timg, blackcat: raw `f=24`/
+                // `f=32` with explicit `c=`/`r=`/`s=`/`v=`) takes the
+                // deferred path below instead, which is the one that matters
+                // for a sustained video stream never holding `vt_log` for the
+                // decode itself (color-tools plan; a security review found
+                // this running fully synchronously under that lock).
+                let has_explicit_cells = control.cols > 0 && control.rows > 0;
+                if control.format != kitty::Format::Png || has_explicit_cells {
+                    let (mime, intrinsic_width, intrinsic_height) = match control.format {
+                        kitty::Format::Rgb => {
+                            ("raw-rgb".to_string(), control.width_px, control.height_px)
+                        }
+                        kitty::Format::Rgba => {
+                            ("raw-rgba".to_string(), control.width_px, control.height_px)
+                        }
+                        // Explicit c=/r= means kitty_display never needs
+                        // intrinsic dims to size the footprint, so 0 here is
+                        // never read for that. But it IS a real, disclosed
+                        // gap for anyone else querying this image's size
+                        // (e.g. `terminal_image_meta`) before decode
+                        // completes: real PNG dimensions only come from
+                        // sniffing the decoded header, and `intrinsic_width`/
+                        // `intrinsic_height` are plain eager fields on
+                        // `ImageData` (not `OnceLock`-backed like `bytes`),
+                        // so there is no way to fill in the real values once
+                        // decode finishes without a further refactor. No
+                        // current caller is affected — the frontend only
+                        // reads these fields for raw `f=24`/`f=32` (always
+                        // known synchronously here), never for PNG, which
+                        // decodes its own dimensions via the browser's
+                        // `createImageBitmap` instead — but a future PNG-
+                        // dimension consumer querying mid-decode would see a
+                        // silently wrong `0x0` rather than "not ready yet".
+                        kitty::Format::Png => ("image/png".to_string(), 0, 0),
+                    };
+                    let client_id = (control.image_id != 0).then_some(control.image_id);
+                    let Some(placeholder) = self.event_proxy.store_pending_image(
+                        client_id,
+                        mime,
+                        intrinsic_width,
+                        intrinsic_height,
+                    ) else {
+                        self.kitty_respond_error(
+                            &control,
+                            "ENOSPC",
+                            "over the per-session image byte cap",
+                        );
+                        return;
+                    };
+
+                    if control.action == kitty::Action::TransmitAndDisplay {
+                        self.kitty_display(&control, Arc::clone(&placeholder));
+                    }
+
+                    self.event_proxy
+                        .queue_kitty_decode_job(kitty::PendingKittyDecodeJob {
+                            placeholder,
+                            format: control.format,
+                            compressed: control.compressed,
+                            medium: control.medium,
+                            width_px: control.width_px,
+                            height_px: control.height_px,
+                            payload_b64: payload_b64.to_vec(),
+                            reply_image_id: control.image_id,
+                            reply_placement_id: control.placement_id,
+                            quiet: control.quiet,
+                        });
+                    // No immediate OK/error reply — the deferred job writes
+                    // it once decode actually finishes.
+                    return;
+                }
+
+                // --- PNG auto-sizing: unchanged, fully synchronous path ---
+                let Ok(decoded) = Base64.decode(payload_b64) else {
+                    self.kitty_respond_error(&control, "EINVAL", "payload is not valid base64");
+                    return;
+                };
+                if decoded.is_empty() {
+                    self.kitty_respond_error(&control, "EINVAL", "empty payload");
+                    return;
+                }
+
+                // For `t=d` the (base64-)decoded payload IS the pixel/PNG
+                // bytes. For every other medium it's instead a path/name the
+                // *embedding application* resolves — see `read_file_medium`/
+                // `read_shm_medium`'s doc comments for why this crate
+                // delegates rather than touching the filesystem/OS shared-
+                // memory APIs itself.
+                let bytes = match control.medium {
+                    kitty::Medium::Direct => decoded,
+                    kitty::Medium::File | kitty::Medium::TempFile => {
+                        let delete_after = control.medium == kitty::Medium::TempFile;
+                        let Some(bytes) = self.event_proxy.read_file_medium(&decoded, delete_after)
+                        else {
+                            let (code, message) = kitty::MEDIUM_ERROR;
+                            self.kitty_respond_error(&control, code, message);
+                            return;
+                        };
+                        bytes
+                    }
+                    kitty::Medium::SharedMemory => {
+                        let Some(bytes) = self.event_proxy.read_shm_medium(&decoded) else {
+                            let (code, message) = kitty::MEDIUM_ERROR;
+                            self.kitty_respond_error(&control, code, message);
+                            return;
+                        };
+                        bytes
+                    }
+                };
+
+                // Every failure after a local medium was read replies with
+                // the same generic error (`Medium::reply_error`): a specific
+                // decode error would tell the sender the path exists.
+                let payload = match kitty::finish_decode(
+                    control.format,
+                    control.compressed,
+                    control.width_px,
+                    control.height_px,
+                    bytes,
+                ) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        let (code, message) = control.medium.reply_error(err.code, err.message);
+                        self.kitty_respond_error(&control, code, message);
+                        return;
+                    }
+                };
+                if let Err(err) = control.medium.check_decoded(control.format, &payload) {
+                    self.kitty_respond_error(&control, err.code, err.message);
+                    return;
+                }
+
+                let client_id = (control.image_id != 0).then_some(control.image_id);
+                let Some(image) = self.event_proxy.store_image(
+                    client_id,
+                    Arc::from(payload.bytes),
+                    payload.mime,
+                    payload.intrinsic_width,
+                    payload.intrinsic_height,
+                ) else {
+                    let (code, message) = control
+                        .medium
+                        .reply_error("ENOSPC", "over the per-session image byte cap");
+                    self.kitty_respond_error(&control, code, message);
+                    return;
+                };
+
+                if control.action == kitty::Action::TransmitAndDisplay {
+                    self.kitty_display(&control, image);
+                }
+                self.kitty_respond_ok(&control);
+            }
+        }
+    }
+
+    /// Display a (transmitted-or-looked-up) image per its placement's
+    /// control data. `U=1` (Unicode virtual placeholders) is a pure
+    /// registration no-op here: per spec, a virtual placement has no
+    /// physical location on screen at all — the app itself prints the
+    /// `U+10EEEE` placeholder characters through the ordinary `input()` path
+    /// (color-tools plan, Phase 7), where `try_resolve_unicode_placeholder`
+    /// does the actual tile attachment.
+    fn kitty_display(&mut self, control: &kitty::ControlData, image: Arc<cell::ImageData>) {
+        let placement_id = if control.placement_id != 0 {
+            control.placement_id
+        } else {
+            image.image_id
+        };
+
+        if control.unicode_placeholder {
+            // No cell is touched here — the app prints the placeholder
+            // characters itself, separately, through the ordinary `input()`
+            // path. But `z=` is only ever carried on THIS registration
+            // command, never on the placeholder text itself, so it has to
+            // be remembered here for `try_resolve_unicode_placeholder` to
+            // find later (color-tools plan, Phase 7's z-order follow-up).
+            //
+            // Unlike `CellExtra.image`, this map has no cell to piggyback
+            // its lifetime on — it's only ever cleared by an explicit
+            // `a=d,d=a`/`d=i` (above) or session end, so a client that keeps
+            // registering new (image_id, placement_id) pairs without ever
+            // deleting them grows it for the session's lifetime. Cap it as
+            // a refusal, same pattern as the byte caps elsewhere in this
+            // feature: past the cap, a registration's `z=` simply isn't
+            // remembered and resolution falls back to the default z-index
+            // (0, "above text") — a benign degradation, not a correctness
+            // bug, and far better than unbounded growth.
+            const MAX_UNICODE_PLACEHOLDER_ENTRIES: usize = 100_000;
+            if self.unicode_placeholder_z.len() < MAX_UNICODE_PLACEHOLDER_ENTRIES {
+                self.unicode_placeholder_z
+                    .insert((image.image_id, placement_id), control.z_index);
+            }
+            return;
+        }
+        let (cols, rows) = if control.cols > 0 && control.rows > 0 {
+            (control.cols, control.rows)
+        } else {
+            let window_size = self.event_proxy.window_size();
+            let cell_w = (window_size.cell_width as u32).max(1);
+            let cell_h = (window_size.cell_height as u32).max(1);
+            let w = if image.intrinsic_width > 0 {
+                image.intrinsic_width.div_ceil(cell_w)
+            } else {
+                1
+            };
+            let h = if image.intrinsic_height > 0 {
+                image.intrinsic_height.div_ceil(cell_h)
+            } else {
+                1
+            };
+            (w.max(1), h.max(1))
+        };
+
+        if control.no_move_cursor {
+            // Reserve without moving the cursor. Note: if the reservation
+            // itself scrolls the screen (a tall image reserved near the
+            // bottom), restoring the saved absolute position can now point
+            // at different content than before — a known, documented
+            // simplification rather than reimplementing full
+            // reserve-without-scroll-disturbance semantics.
+            let saved = self.grid.cursor.point;
+            self.reserve_image_footprint(image, placement_id, cols, rows, control.z_index);
+            self.grid.cursor.point = saved;
+        } else {
+            self.reserve_image_footprint(image, placement_id, cols, rows, control.z_index);
+        }
+    }
+
+    /// If the cell at `(line, column)` is a Kitty Unicode placeholder
+    /// (`U+10EEEE`), (re-)resolve which image tile it refers to from its
+    /// current foreground color (image id), underline color (placement id),
+    /// and zero-width diacritics (row/column/most-significant-byte),
+    /// applying the spec's left-neighbor inheritance for any that are
+    /// missing (color-tools plan, Phase 7). Called after every cell write
+    /// that could affect this cell's diacritics, so it may run more than
+    /// once per cell as diacritics arrive one at a time — each call fully
+    /// re-derives the result from the cell's current state rather than
+    /// patching incrementally, so there is nothing to get out of sync.
+    ///
+    /// A cell that can't be resolved (no image with that id, or no row/
+    /// column available from either an explicit diacritic or a matching
+    /// left neighbor) is left exactly as ordinary printed text — this is
+    /// deliberately lossless: nothing here can make a real character
+    /// disappear, only add an image tile on top of a placeholder that
+    /// already carries no visible glyph of its own (`U+10EEEE` renders as
+    /// nothing in every real font).
+    fn try_resolve_unicode_placeholder(&mut self, line: Line, column: Column) {
+        if self.grid[line][column].c != kitty::UNICODE_PLACEHOLDER {
+            return;
+        }
+        let cell = &self.grid[line][column];
+        let fg = cell.fg;
+        let underline = cell.underline_color();
+        let Some(id_low) = color_to_placeholder_id_part(fg) else {
+            return;
+        };
+        let placement_low = underline
+            .and_then(color_to_placeholder_id_part)
+            .unwrap_or(0);
+        let zerowidth = cell.zerowidth().unwrap_or(&[]);
+        let diacritics = kitty::parse_placeholder_diacritics(zerowidth);
+
+        let left = (column.0 > 0)
+            .then(|| {
+                let left_cell = &self.grid[line][Column(column.0 - 1)];
+                (left_cell.c == kitty::UNICODE_PLACEHOLDER
+                    && left_cell.fg == fg
+                    && left_cell.underline_color() == underline)
+                    .then(|| left_cell.image_ref())
+                    .flatten()
+            })
+            .flatten()
+            .map(|r| kitty::ResolvedPlaceholder {
+                row: r.tile_row as u32,
+                col: r.tile_col as u32,
+                // The most-significant byte is never stored separately —
+                // it's always folded into the already-resolved image id's
+                // top byte (see the `image_id` computation below), so it
+                // can be recovered exactly from there.
+                msb: (r.image.image_id >> 24) & 0xff,
+            });
+
+        let (row, col, msb) = kitty::resolve_placeholder_tile(diacritics, left);
+        let (Some(row), Some(col)) = (row, col) else {
+            return;
+        };
+
+        let image_id = id_low | (msb << 24);
+        let Some(image) = self.event_proxy.image_by_id(image_id) else {
+            return;
+        };
+        let placement_id = if placement_low != 0 {
+            placement_low
+        } else {
+            image_id
+        };
+        // The z-index was only ever carried on the `a=p,U=1`/`a=T,U=1`
+        // registration command, never on the placeholder text itself —
+        // recovered here from what `kitty_display` stashed at registration
+        // time. `0` (Kitty's own default) if this placement was somehow
+        // never registered, rather than treating it as an error: the cell
+        // is still worth displaying.
+        let z_index = self
+            .unicode_placeholder_z
+            .get(&(image_id, placement_id))
+            .copied()
+            .unwrap_or(0);
+
+        let cell_ref =
+            cell::ImageCellRef::new(image, placement_id, col as u16, row as u16, z_index);
+        self.grid[line][column].set_image_ref(Some(cell_ref));
+    }
+}
+
+/// The numeric value a Kitty Unicode-placeholder cell's foreground (image
+/// id) or underline (placement id) color encodes: the low byte(s) of an
+/// indexed (256-color) color, or the packed 24 bits of a true-color RGB
+/// value. `Color::Named` has no defined mapping — a real client always sets
+/// an explicit indexed/true-color pen before printing a placeholder.
+fn color_to_placeholder_id_part(color: Color) -> Option<u32> {
+    match color {
+        Color::Indexed(n) => Some(n as u32),
+        Color::Spec(rgb) => Some(((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | rgb.b as u32),
+        Color::Named(_) => None,
     }
 }
 
@@ -1553,6 +2045,11 @@ impl<T: EventListener> Handler for Term<T> {
 
             self.grid[line][column].push_zerowidth(c);
             self.damage.damage_line(line.0 as usize, column.0, column.0);
+            // Kitty Unicode placeholder diacritics (color-tools plan, Phase
+            // 7) ride in on zero-width characters exactly like this —
+            // re-resolve the tile every time one lands on a placeholder
+            // cell, since row/col/msb may arrive one diacritic at a time.
+            self.try_resolve_unicode_placeholder(line, column);
             return;
         }
 
@@ -1591,6 +2088,16 @@ impl<T: EventListener> Handler for Term<T> {
 
         if width == 1 {
             self.write_at_cursor(c);
+            if c == kitty::UNICODE_PLACEHOLDER {
+                let line = self.grid.cursor.point.line;
+                let column = self.grid.cursor.point.column;
+                // No diacritics have arrived yet — this resolves purely via
+                // left-neighbor inheritance (correct if the app relies on
+                // the spec's "omit repeated diacritics" optimization) and
+                // gets re-resolved above as soon as a real diacritic lands,
+                // if any does.
+                self.try_resolve_unicode_placeholder(line, column);
+            }
         } else {
             if self.grid.cursor.point.column + 1 >= columns {
                 if self.mode.contains(TermMode::LINE_WRAP) {
@@ -2552,6 +3059,13 @@ impl<T: EventListener> Handler for Term<T> {
             NamedPrivateMode::SwapScreenAndSetRestoreCursor => {
                 if !self.mode.contains(TermMode::ALT_SCREEN) {
                     self.swap_alt();
+                    // Image placements are primary-screen-only (color-tools
+                    // plan, Architecture) — entering the alt screen hides
+                    // them all; a renderer re-hydrates once the primary
+                    // screen is visible again rather than tracking which
+                    // placements survive across the swap (none do, by
+                    // design).
+                    self.event_proxy.send_event(Event::ImagePlacementsCleared);
                 }
             }
             NamedPrivateMode::ShowCursor => self.mode.insert(TermMode::SHOW_CURSOR),
@@ -2617,6 +3131,12 @@ impl<T: EventListener> Handler for Term<T> {
             NamedPrivateMode::SwapScreenAndSetRestoreCursor => {
                 if self.mode.contains(TermMode::ALT_SCREEN) {
                     self.swap_alt();
+                    // Returning to the primary screen: any placements
+                    // reserved there before the alt-screen visit are still
+                    // physically on their cells (never touched), but the
+                    // renderer dropped them all on the way in, so it needs a
+                    // fresh hydration query rather than an incremental event.
+                    self.event_proxy.send_event(Event::ImagePlacementsCleared);
                 }
             }
             NamedPrivateMode::ShowCursor => self.mode.remove(TermMode::SHOW_CURSOR),
@@ -2942,6 +3462,14 @@ impl<T: EventListener> Handler for Term<T> {
         if let Some(pending) = self.pending_multipart.take() {
             self.osc_1337_display(pending.args, &pending.payload_b64);
         }
+    }
+
+    /// Kitty graphics protocol (color-tools plan, Phase 3): one raw,
+    /// unparsed APC payload. See `term::kitty`'s module doc comment for
+    /// scope; the real logic lives in the inherent `kitty_graphics_dispatch`
+    /// (a trait impl can't hold non-trait helper methods).
+    fn kitty_graphics(&mut self, data: &[u8]) {
+        self.kitty_graphics_dispatch(data);
     }
 
     #[inline]

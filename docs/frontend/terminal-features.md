@@ -189,6 +189,115 @@ Clickable file paths in terminal output resolve against the terminal working dir
 - Flexible ratios preserved across layout changes
 - Modes: "separate" (independent tab bars) or "unified" (shared tab bar)
 
+## Inline Images (color-tools plan, Phase 5)
+
+iTerm2's OSC 1337 inline-image protocol and the Kitty graphics protocol are
+both parsed and rendered end to end — see `docs/backend/pty.md`'s "iTerm2
+Inline Images" and "Kitty Graphics Protocol" sections for the wire-protocol
+scope. This section covers the frontend half: how a reserved placement
+actually gets pixels on screen.
+
+- **A dedicated canvas layer** (`imageCanvasRef`/`ictx` in `CanvasTerminal.tsx`)
+  sits between the glyph/background canvas and the cursor/selection overlay —
+  an image occludes text underneath it, but never the cursor or a selection
+  highlight drawn on top. Sized and dpr-scaled identically to the overlay
+  canvas, repainted from `repaintOverlay` (so every existing overlay-repaint
+  trigger — resize, scroll, frame update, hover — refreshes images too, with
+  no new call sites to remember).
+- **`imageLayer.ts`** (`ImageLayer` class) owns two pieces of per-terminal
+  state: the current placement set (`Map<placementId, ImagePlacement>`) and a
+  decoded-bitmap cache keyed by image id, so multiple placements of the same
+  image share one decode.
+  - **Coordinate math**: a placement's `absRow` (eviction-stable — see
+    `alacritty_terminal::event::ImagePlacementInfo`'s doc comment) converts to
+    an on-screen row via `absRow - frame.historyBase - frame.historySize +
+    frame.displayOffset` — the exact formula `DecodedFrame.historyBase`'s own
+    doc comment already documents for the scroll row cache. A placement whose
+    row range is entirely outside `[0, frame.screenRows)` is skipped without
+    even starting a bitmap fetch.
+  - **Decode**: bytes come from the existing `terminal_image_bytes` command,
+    wrapped in a `Blob` and handed to `createImageBitmap` — which only decodes
+    a real image container (PNG/GIF/JPEG). Kitty's raw `f=24`/`f=32` formats
+    (no container; mpv/blackcat) have no container for `createImageBitmap` to
+    sniff, so `imageLayer.ts`'s `decode()` first calls the `terminal_image_meta`
+    command (mime + intrinsic width/height); when the mime is `"raw-rgb"` or
+    `"raw-rgba"` it manually expands the bytes into an RGBA `Uint8ClampedArray`
+    (RGB gets alpha=255 synthesized) and builds an `ImageData` for
+    `createImageBitmap` instead of going through `Blob`. A size mismatch
+    between the declared dimensions and the byte count is treated as a decode
+    error (`decodeRawPixels` returns `null`) rather than corrupting the canvas.
+- **Transport — a new event pair, not a new binary-frame bit.** The existing
+  grid-frame binary header has zero free bits (`canvasTerminalUtils.ts`'s
+  per-cell attrs byte and header flag bytes are fully packed), so placements
+  ride the same JSON-event mechanism as `cwd`/`osc133`: `image-placement`
+  (one new/updated placement) and `image-placements-cleared` (alt-screen
+  switch, Kitty `a=d,d=A`/`a=d,d=I` — see `mcp_http/session.rs`'s
+  `grid_ws_frame` for the WS JSON shape and the desktop `pty-image-placement-*`
+  Tauri event for the IPC twin; both carry identical field names).
+- **Reconnect/new-client hydration**: the live event stream only carries
+  placements created *after* a listener attaches, so `ImageLayer.hydrate()`
+  calls the `terminal_image_placements` command (Tauri + HTTP, identical
+  `[placementId, imageId, absRow, col, rows, cols, zIndex]` tuple-array
+  shape) once after the initial grid subscribe and again on every
+  `resubscribe()` — verified against a live `make dev` instance: a full page
+  reload still shows a previously-displayed image with no live event
+  involved.
+- **Unicode virtual placeholders** (`U=1`; color-tools plan, Phase 7 —
+  image.nvim, snacks.nvim, yazi's modern driver) need no frontend changes at
+  all: `image_placements()` groups cells by `placement_id` regardless of
+  which backend path attached them (terminal-reserved-footprint or a
+  placeholder character's own resolved id), so this renderer already covers
+  them once the backend attaches the `CellExtra.image` ref.
+- **Z-index: full compositing, split-mode-on-demand.** A session paints
+  through the single fused `canvasRef` (`gridRenderer.paintGrid`) exactly as
+  before, until the first `z<0` placement arrives — `ImageLayer.hasNegativeZ()`
+  becomes true and `CanvasTerminal.tsx`'s `switchToSplitCompositingIfNeeded`
+  flips a one-way `usesSplitCompositing` flag, lazily builds a second
+  `GridRenderer` bound to the new `glyphCanvasRef`, and from then on paints the
+  5-layer stack every frame: `canvasRef` (background-only, opaque default fill
+  + explicit per-cell bg via `gridRenderer.paintGridBackground`) →
+  `belowTextImageCanvasRef` (`ImageLayer.paintBelowText`, `z<0`) →
+  `glyphCanvasRef` (transparent, text+decorations only, via
+  `glyphRenderer.paintGridGlyphs`) → `imageCanvasRef`
+  (`ImageLayer.paintAboveText`, `z>=0`) → `overlayCanvasRef` (cursor/
+  selection/search, unchanged). The switch never reverts for the life of the
+  session. Kitty's extreme `z < INT32_MIN/2` sub-band (below a *non-default*
+  background) is folded into the same "below text" band as ordinary `z<0`
+  rather than getting a sixth canvas — no target tool in the coverage table
+  relies on that sub-band being visually distinct from ordinary `z<0`.
+  `gridRenderer.ts`'s `paintGridBackground`/`paintGridGlyphs` are an exact
+  decomposition of `paintGrid` (see `gridRenderer.test.ts`'s split-compositing
+  regression guard), so the fused fast path's output is provably unchanged.
+- **Raw pixel formats**: see the Decode bullet above — now handled.
+- **Overwrite detection**: a placement's cells being overwritten by ordinary
+  text (rather than an explicit Kitty `a=d` or an alt-screen switch, both of
+  which do notify the renderer) has no spare wire bit to signal "this cell's
+  image ref was just dropped." `ImageLayer.verifyOverlapping()` closes most of
+  this gap heuristically: whenever an ordinary dirty-row update touches a row
+  a live placement occupies, it re-checks that placement's *top-left cell
+  only* via the existing single-cell `terminal_image_ref_at` lookup, and drops
+  the placement if the ref no longer matches. This is deliberately narrower
+  than perfect — a partial overwrite within a placement's rectangle that
+  leaves the top-left cell untouched is not caught — but covers the common
+  case (a shell prompt or new text overwriting the placement's origin) without
+  a per-cell wire-format change. Fails open (keeps the placement) if the
+  verify call itself errors.
+- **Retrying a fetch that raced deferred backend decode** (2026-09-11): Kitty
+  image decode now runs off the backend's `vt_log` lock (see
+  `docs/backend/pty.md`'s Kitty Graphics Protocol section), which means a
+  placement's geometry can be known — and a placement event fired — slightly
+  before its bytes are actually fetchable via `terminal_image_bytes`.
+  `ImageLayer`'s `bitmaps` cache never retries a `"loading"`/`"error"` entry
+  on its own (a single failed/empty fetch is permanent — locked in by an
+  existing test), so a first paint attempt that raced the still-in-flight
+  decode would otherwise mark a real image permanently failed. Fixed with
+  `ImageLayer.invalidateImage(imageId)`, wired to a new `image-decoded` event
+  (`CanvasTerminal.tsx`, same `transport.onEvent` pattern as
+  `image-placement`) the backend fires once decode actually completes — this
+  clears the cache entry so the next paint attempt tries again. Never fired
+  for a decode that ultimately fails; the existing "no bytes, don't retry"
+  default already matches that outcome.
+
 ## Configurable Settings
 
 | Setting | Default | Description |

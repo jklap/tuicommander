@@ -58,6 +58,9 @@ features = ["serde"]
 [dependencies.base64]
 version = "0.22.0"
 
+[dependencies.flate2]
+version = "1.0"
+
 [dependencies.bitflags]
 version = "2.4.1"
 
