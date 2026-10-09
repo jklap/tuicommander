@@ -7,7 +7,7 @@ import { makeTerminal, testInScope } from "../helpers/store";
 // one). The backend's `session-renamed` event — fired for tmux
 // `select-pane -T` calls and for OSC title repaints — feeds straight back
 // into this same `update()`, so an unguarded echo bounces forever. See
-// src-tauri/src/mcp_http/session.rs's `set_session_name_skips_emit_when_unchanged`
+// src-tauri/src/mcp_http/session.rs's `set_session_name_emits_session_renamed_once_per_real_change`
 // and src-tauri/src/mcp_http/tmux_routes.rs's
 // `rename_pane_is_idempotent_and_only_emits_on_real_change` for the backend
 // half of this same invariant.
@@ -214,6 +214,20 @@ describe("terminalsStore.applyBackendRename / applyBackendAccentColor", () => {
 			store.applyBackendRename("sess-1", "claude · resume", false);
 			expect(rpc).not.toHaveBeenCalled();
 			expect(store.get(id)?.name).toBe("claude · resume");
+			expect(store.get(id)?.nameIsCustom).toBe(false);
+		});
+	});
+
+	// A cleared name (`name: null` — IPC/HTTP null-name rename or an empty tmux
+	// `select-pane -T`) keeps the tab's label and only drops the custom flag.
+	it("applyBackendRename with a null name keeps the label and applies isCustom only", () => {
+		testInScope(() => {
+			const id = store.add(makeTerminal({ sessionId: "sess-1" }));
+			store.update(id, { name: "pinned", nameIsCustom: true });
+			rpc.mockClear();
+			store.applyBackendRename("sess-1", null, false);
+			expect(rpc).not.toHaveBeenCalled();
+			expect(store.get(id)?.name).toBe("pinned");
 			expect(store.get(id)?.nameIsCustom).toBe(false);
 		});
 	});

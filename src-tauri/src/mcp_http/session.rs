@@ -417,10 +417,11 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
     }
 }
 
-/// Storage, the unchanged-value no-op guard, and the dual emit all live in
-/// `AppState::set_session_display_name` — this handler (and its Tauri-command
-/// twin, `pty/commands.rs`'s `set_session_name`) is only the existence check
-/// plus argument extraction. The two used to independently hand-duplicate all
+/// Storage, the unchanged-value no-op guard, and the `session-renamed` dual emit
+/// (so other windows/clients see a frontend rename live) all live in
+/// `AppState::rename_session_from_frontend` — this handler (and its
+/// Tauri-command twin, `pty/commands.rs`'s `set_session_name`) is only the
+/// existence check plus argument extraction. The two used to independently hand-duplicate all
 /// of that (~55 lines each), which is the same shape `set_pty_accent_color`
 /// already fixed for accent color.
 pub(super) async fn set_session_name(
@@ -431,7 +432,7 @@ pub(super) async fn set_session_name(
     if !state.session_maps.sessions.contains_key(&session_id) {
         return session_not_found();
     }
-    state.set_session_display_name(&session_id, body.name, body.is_custom.unwrap_or(true));
+    state.rename_session_from_frontend(&session_id, body.name, body.is_custom.unwrap_or(true));
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
@@ -3706,39 +3707,106 @@ mod tests {
         );
     }
 
-    /// `PUT /sessions/{id}/name` is a frontend-originated rename (the store's
-    /// `update()` echoes every `name` change here), so it must never emit
-    /// `session-renamed`: the frontend's listener feeds that event straight back
-    /// into `update()`, which would echo again — an unbounded ping-pong on every
-    /// OSC title repaint. Backend-originated renames (MCP `session action=rename`,
-    /// tmux `select-pane -T`) go through `AppState::rename_session_from_backend`.
+    /// The `session-renamed` events `PUT /sessions/{id}/name` produced, in order.
+    fn drain_renames(
+        rx: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>,
+    ) -> Vec<(Option<String>, bool)> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                crate::state::AppEvent::SessionRenamed {
+                    name, is_custom, ..
+                } => Some((name, is_custom)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    async fn put_name(
+        state: &Arc<AppState>,
+        session_id: &str,
+        name: Option<&str>,
+        is_custom: bool,
+    ) {
+        set_session_name(
+            State(state.clone()),
+            Path(session_id.to_string()),
+            Json(SetNameRequest {
+                name: name.map(str::to_string),
+                is_custom: Some(is_custom),
+            }),
+        )
+        .await;
+    }
+
+    /// `PUT /sessions/{id}/name` (and its IPC twin, which shares
+    /// `AppState::rename_session_from_frontend`) is a frontend-originated
+    /// rename. It used to never emit (main's rule), so another window or a
+    /// browser client never saw a tab renamed elsewhere until reload. It now
+    /// emits `session-renamed` once per REAL change so they see it live. The
+    /// echo ping-pong that rule guarded against cannot return: every client
+    /// applies `session-renamed` through the non-echoing `applyBackendRename`,
+    /// and the unchanged-value guard drops the originating window's repeat.
     #[cfg(unix)]
     #[tokio::test]
-    async fn set_session_name_never_emits_session_renamed() {
+    async fn set_session_name_emits_session_renamed_once_per_real_change() {
         let state = super::super::tests::test_state();
-        let session_id = "rename-no-echo";
+        let session_id = "rename-emits-live";
         crate::state::tests_support::insert_dummy_session(&state, session_id);
 
         let mut rx = state.event_bus.subscribe();
         for name in ["hello", "hello", "world"] {
-            set_session_name(
-                State(state.clone()),
-                Path(session_id.to_string()),
-                Json(SetNameRequest {
-                    name: Some(name.to_string()),
-                    is_custom: Some(false),
-                }),
-            )
-            .await;
+            put_name(&state, session_id, Some(name), false).await;
         }
-        while let Ok(event) = rx.try_recv() {
-            assert!(
-                !matches!(event, crate::state::AppEvent::SessionRenamed { .. }),
-                "a frontend-originated rename must not emit session-renamed: {event:?}"
-            );
-        }
+        assert_eq!(
+            drain_renames(&mut rx),
+            vec![
+                (Some("hello".to_string()), false),
+                (Some("world".to_string()), false)
+            ],
+            "one session-renamed per real change; the repeated name is a no-op"
+        );
         let entry = state.session_maps.sessions.get(session_id).unwrap();
         assert_eq!(entry.lock().display_name.as_deref(), Some("world"));
+    }
+
+    /// Restored from wip (653198992): flipping only `is_custom` is a real
+    /// change other clients must see (it decides whether OSC titles may
+    /// overwrite the name).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_emits_when_only_is_custom_flips() {
+        let state = super::super::tests::test_state();
+        let session_id = "rename-is-custom-flip";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        let mut rx = state.event_bus.subscribe();
+        put_name(&state, session_id, Some("same name"), false).await;
+        put_name(&state, session_id, Some("same name"), true).await;
+        assert_eq!(
+            drain_renames(&mut rx),
+            vec![
+                (Some("same name".to_string()), false),
+                (Some("same name".to_string()), true)
+            ],
+        );
+    }
+
+    /// A null name clears the stored name and is announced as `name: null`, so
+    /// other clients drop the custom flag instead of never hearing about it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_with_a_null_name_emits_a_cleared_rename() {
+        let state = super::super::tests::test_state();
+        let session_id = "rename-null-name";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+
+        put_name(&state, session_id, Some("pinned"), true).await;
+        let mut rx = state.event_bus.subscribe();
+        put_name(&state, session_id, None, false).await;
+        put_name(&state, session_id, None, false).await;
+        assert_eq!(drain_renames(&mut rx), vec![(None, false)]);
+        let entry = state.session_maps.sessions.get(session_id).unwrap();
+        assert_eq!(entry.lock().display_name, None);
     }
 
     /// Same unchanged-value guard as `set_session_name` — required so a

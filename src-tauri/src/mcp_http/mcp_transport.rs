@@ -12385,7 +12385,7 @@ mod tests {
         });
         assert_eq!(
             renamed,
-            Some((sid.to_string(), "Story 857".to_string(), true))
+            Some((sid.to_string(), Some("Story 857".to_string()), true))
         );
         assert!(
             state

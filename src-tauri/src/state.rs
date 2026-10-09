@@ -312,12 +312,16 @@ pub enum AppEvent {
         session_id: String,
         lines: Vec<crate::output_watchers::WatcherLine>,
     },
-    /// A tab's display name changed from the backend (MCP `session action=rename`).
-    /// IPC/HTTP renames start in the frontend and do not emit it.
+    /// A tab's display name changed: MCP `session action=rename`, the tmux shim's
+    /// `select-pane -T`, an OSC 0/2 title, or a frontend rename through IPC/HTTP
+    /// `set_session_name` (so every OTHER window/client sees it live). `name` is
+    /// `None` when the name was cleared (back to "no explicit name"); a client
+    /// then keeps its current label and applies only `is_custom`. Clients must
+    /// apply it without echoing it back (`terminalsStore.applyBackendRename`).
     #[serde(rename = "session-renamed")]
     SessionRenamed {
         session_id: String,
-        name: String,
+        name: Option<String>,
         is_custom: bool,
     },
     /// An MCP client asked for a tab to be suspended (`session action=suspend`).
@@ -3056,10 +3060,10 @@ impl AppState {
         }
         let _ = self.event_bus.send(event);
     }
-    /// Rename a tab from the backend and tell every UI. Only for renames that
-    /// start here (MCP `session action=rename`): IPC/HTTP renames come from the
-    /// frontend, and emitting for them would echo every OSC title back. Returns
-    /// false when the session does not exist.
+    /// Rename a tab from the backend and tell every UI. For renames that start
+    /// here (MCP `session action=rename`, tmux `select-pane -T`); always emits.
+    /// IPC/HTTP renames go through `rename_session_from_frontend`, which emits
+    /// only on a real change. Returns false when the session does not exist.
     pub(crate) fn rename_session_from_backend(
         &self,
         session_id: &str,
@@ -3071,6 +3075,31 @@ impl AppState {
         };
         entry.lock().set_display_name(Some(name.clone()), is_custom);
         drop(entry);
+        self.emit_dual(AppEvent::SessionRenamed {
+            session_id: session_id.to_string(),
+            name: Some(name),
+            is_custom,
+        });
+        true
+    }
+
+    /// A rename that started in a frontend (IPC/HTTP `set_session_name`, the
+    /// store's `update()` echo of a local rename): store it and, only when the
+    /// name or `is_custom` actually changed, dual-emit `session-renamed` so every
+    /// other window/client shows it live. Cannot ping-pong: every client applies
+    /// `session-renamed` through the non-echoing `applyBackendRename`, and the
+    /// originating window's own copy is an unchanged-value no-op there. `None`
+    /// clears the name (the event then carries `name: null`). Returns whether
+    /// anything changed (false also for an unknown session).
+    pub(crate) fn rename_session_from_frontend(
+        &self,
+        session_id: &str,
+        name: Option<String>,
+        is_custom: bool,
+    ) -> bool {
+        if !self.set_session_display_name(session_id, name.clone(), is_custom) {
+            return false;
+        }
         self.emit_dual(AppEvent::SessionRenamed {
             session_id: session_id.to_string(),
             name,

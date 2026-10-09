@@ -659,10 +659,13 @@ Sets a display name and its origin. `isCustom: true` protects an explicit user
 rename from subsequent OSC/intent titles; spawn-assigned and dynamic titles use
 `false`. Omitting the field preserves the legacy custom-rename behavior.
 
-Does **not** emit `session-renamed`: this route is the frontend store's own echo of a rename it
-already applied, so emitting would loop. Backend-originated renames (MCP `session action=rename`,
-the tmux shim's `PUT /tmux/panes/:id`) emit `session-renamed` (`{session_id, name, is_custom}`)
-instead.
+Emits `session-renamed` (`{session_id, name, is_custom}`) once per **real** change (name or
+`isCustom` differs from what is stored), so every other window and browser client sees the rename
+live; a repeated identical call is a no-op. `name: null` clears the stored name and is announced
+with `name: null` (clients keep their current label and apply only `is_custom`). This cannot
+ping-pong: clients apply `session-renamed` through the non-echoing `applyBackendRename`, and the
+originating window's own copy is an unchanged-value no-op. The Tauri `set_session_name` command
+behaves identically (shared `AppState::rename_session_from_frontend`).
 
 ### Set Accent Color
 
@@ -1021,7 +1024,7 @@ the server is back to the filter the connection was opened with.
 |-------|---------|-------------|
 | `session-created` | `{session_id, cwd, agent_type, display_name, parent_session, is_remote}` | New session started; `display_name` is the optional stable assigned name; `parent_session` is the `$TUIC_SESSION` of the agent that spawned it (null otherwise); `is_remote` is "created by an agent", not network locality — see "List Sessions" above |
 | `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
-| `session-renamed` | `{session_id, name, is_custom}` | An MCP `session action=rename` changed a tab's display name |
+| `session-renamed` | `{session_id, name, is_custom}` | A tab's display name changed: MCP `session action=rename`, the tmux shim's `select-pane -T`, an OSC 0/2 title, or another client's `PUT /sessions/{id}/name` / IPC `set_session_name`. `name` is `null` when the name was cleared |
 | `session-suspend-requested` | `{session_id, request_id}` | An MCP `session action=suspend` asked the UI to suspend that tab |
 | `term-alias-assigned` | `{session_id, alias}` | A session received its terminal alias (e.g. `tu-3`); published once, after `session-created` |
 | `session-closed` | `{session_id, reason, agent_type}` | Session ended. `reason` is informational (`"closed"`, `"killed"`, `"process_exit"`, `"explicit_close"`); `agent_type` is the session's agent type at close time (or `null`), read before the session-state accumulator removes the entry — used to pick the short vs. long auto-close timer |
