@@ -120,7 +120,9 @@ describe("useGitOperations", () => {
 		getRepoSummary: vi
 			.fn()
 			.mockResolvedValue({ worktree_paths: wtPaths({}), merged_branches: [], diff_stats: {}, last_commit_ts: {} }),
-		getRepoStructure: vi.fn().mockResolvedValue({ worktree_paths: wtPaths({}), merged_branches: [], in_progress_ops: [] }),
+		getRepoStructure: vi
+			.fn()
+			.mockResolvedValue({ worktree_paths: wtPaths({}), merged_branches: [], in_progress_ops: [] }),
 		getRepoDiffStats: vi.fn().mockResolvedValue({ diff_stats: {}, last_commit_ts: {} }),
 		removeWorktree: vi.fn().mockResolvedValue(undefined),
 		createWorktree: vi.fn(),
