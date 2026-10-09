@@ -3818,11 +3818,36 @@ mod tests {
         );
     }
 
+    /// Whether replaying `capture`'s output alone leaves the grid on the
+    /// alternate screen.
+    fn capture_ends_on_alt_screen(capture: &crate::pty_capture::DecodedCapture) -> bool {
+        let (rows, cols) = capture.geometry.unwrap_or((50, 200));
+        let mut grid = TerminalGrid::new(rows, cols, 10_000);
+        for rec in capture
+            .records
+            .iter()
+            .filter(|r| r.direction == crate::pty_capture::CaptureDirection::Output)
+        {
+            grid.process(&rec.data);
+        }
+        grid.is_alternate_screen()
+    }
+
     /// The cap evicts the oldest rows; the survivors stay contiguous and unchanged.
     #[test]
     fn history_rows_survive_the_scrollback_cap_over_real_captures() {
-        // One long session: every fixture back to back on the same grid.
-        let mut all = fixture_captures();
+        // One long session: every fixture back to back on the same grid — except
+        // a capture cut off while its agent was still on the alternate screen
+        // (`claude-hook-osc7770-basic-turn.tcap` and
+        // `claude_double_askuserquestion_second_missed.tcap` enter fullscreen
+        // Claude and never leave). Spliced in, it would leave every capture after
+        // it on the alternate screen too, where nothing ever reaches history, so
+        // the cap is never reached and the test checks nothing. Each still runs
+        // on its own in the per-fixture tests above.
+        let mut all: Vec<_> = fixture_captures()
+            .into_iter()
+            .filter(|(_, capture)| !capture_ends_on_alt_screen(capture))
+            .collect();
         all.sort_by(|a, b| a.0.cmp(&b.0));
         let geometry = all[0].1.geometry;
         let records: Vec<_> = all.into_iter().flat_map(|(_, c)| c.records).collect();
