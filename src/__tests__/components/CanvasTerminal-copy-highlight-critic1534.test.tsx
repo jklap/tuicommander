@@ -36,6 +36,7 @@ vi.mock("../../components/Terminal/gridRenderer", () => ({
 		invalidateCaches: vi.fn(),
 		paintGrid: vi.fn(),
 		paintRow: vi.fn(),
+		buildFontStyle: () => "14px monospace",
 	}),
 }));
 vi.mock("../../utils/clipboard", async (importOriginal) => {
