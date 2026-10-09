@@ -193,7 +193,7 @@ mod tests {
 
     const CWD_ENV_VARS: [&str; 2] = ["TUIC_WORKTREE_PATH", "TUIC_MAIN_REPO_PATH"];
 
-    /// `resolve_cwd()` (exec.rs) now prefers `TUIC_WORKTREE_PATH`/
+    /// `fallback_cwd()` (exec.rs) prefers `TUIC_WORKTREE_PATH`/
     /// `TUIC_MAIN_REPO_PATH` over `std::env::current_dir()` — this repo's own
     /// dev/agent shells are routinely launched FROM a real TUIC-spawned
     /// terminal that sets these exact vars ambiently, which would otherwise
@@ -299,6 +299,9 @@ mod tests {
             window_name: Option<&str>,
             cwd: Option<&str>,
         ) -> Result<Value, String> {
+            // Mirrors the server: no explicit/inherited cwd => the caller's
+            // live session cwd (unknown here) => `fallback_cwd`.
+            let cwd = cwd.map(String::from).or_else(super::exec::fallback_cwd);
             let mut topo = self.topology_for(label);
             let sid = format!(
                 "${}",
@@ -353,6 +356,7 @@ mod tests {
             name: Option<&str>,
             cwd: Option<&str>,
         ) -> Result<Value, String> {
+            let cwd = cwd.map(String::from).or_else(super::exec::fallback_cwd);
             let mut topo = self.topology_for(label);
             let arr = topo["sessions"].as_array_mut().unwrap();
             let session = arr
@@ -376,6 +380,7 @@ mod tests {
             window_id: &str,
             cwd: Option<&str>,
         ) -> Result<Value, String> {
+            let cwd = cwd.map(String::from).or_else(super::exec::fallback_cwd);
             let mut topo = self.topology_for(label);
             let mut found = false;
             let mut pane_id = String::new();
@@ -1616,10 +1621,12 @@ mod tests {
         // agent-teams internals fired `tmux new-session`, so
         // `std::env::current_dir()`'s snapshot was wrong for the entire
         // swarm — every `split-window` teammate faithfully inherited that
-        // one bad reading via topology inheritance. `resolve_cwd()` now
-        // prefers the lead agent's own stable `TUIC_MAIN_REPO_PATH`/
-        // `TUIC_WORKTREE_PATH` env var over both the topology-inherited
-        // value and `current_dir()`, so this must resolve correctly
+        // one bad reading via topology inheritance. With no `-c` and no
+        // pane to inherit from, the server now uses the calling session's
+        // live (OSC 7) cwd — unknown to this fake — and then the shim's
+        // `fallback_cwd()`, which prefers the stable `TUIC_WORKTREE_PATH`/
+        // `TUIC_MAIN_REPO_PATH` over `current_dir()`; the split then
+        // inherits the first pane's cwd. So this must resolve correctly
         // regardless of where the test process's own live cwd happens to
         // be sitting.
         let _guard = EnvVarGuard::scrub();
