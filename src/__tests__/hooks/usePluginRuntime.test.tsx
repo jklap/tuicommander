@@ -68,3 +68,33 @@ it("runtime delivers branch shell and awaiting transitions", () => {
 	terminalsStore.remove(terminalId);
 	repositoriesStore.remove(path);
 });
+
+it("session teardown does not swallow the exited shell-state transition", () => {
+	const terminalId = terminalsStore.add({
+		sessionId: "exiting-session",
+		name: "Exiting",
+		cwd: "/plugin-runtime-exit",
+		fontSize: 14,
+		awaitingInput: null,
+	});
+	terminalsStore.update(terminalId, { shellState: "busy" });
+	const events: StateChangeEvent[] = [];
+	pluginRegistry.register({
+		id: "exit-observer",
+		onload(host) {
+			host.onStateChange((event) => events.push(event));
+		},
+		onunload() {},
+	});
+	const { unmount } = render(() => {
+		usePluginRuntime();
+		return null;
+	});
+	// Terminal.tsx clears the session and marks an agent terminal exited together.
+	terminalsStore.update(terminalId, { sessionId: null, shellState: "exited" });
+	expect(events.filter((event) => event.type === "shell-state-changed")).toEqual([
+		expect.objectContaining({ terminalId, detail: "exited" }),
+	]);
+	unmount();
+	terminalsStore.remove(terminalId);
+});
