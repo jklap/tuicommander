@@ -1514,6 +1514,17 @@ fn alias_at(tmux_path: &str, remove: bool) -> Result<(), String> {
         return Ok(());
     }
 
+    // Already our symlink: idempotent, whether or not a real tmux exists.
+    // (Falling through would fail `symlink` with EEXIST and prompt for
+    // elevation.)
+    #[cfg(unix)]
+    if let Ok(target) = std::fs::read_link(tmux_path)
+        && target == self_exe
+    {
+        println!("tmux alias already installed at {tmux_path}");
+        return Ok(());
+    }
+
     // Check if real tmux exists
     let has_real_tmux = std::process::Command::new("which")
         .arg("tmux")
@@ -1522,15 +1533,6 @@ fn alias_at(tmux_path: &str, remove: bool) -> Result<(), String> {
         .unwrap_or(false);
 
     if has_real_tmux {
-        // Check if it's already our symlink
-        #[cfg(unix)]
-        if let Ok(target) = std::fs::read_link(tmux_path)
-            && target == self_exe
-        {
-            println!("tmux alias already installed at {tmux_path}");
-            return Ok(());
-        }
-
         eprintln!("Warning: real tmux is installed. The alias will shadow it.");
         eprintln!("Use `tuic alias --remove` to restore the original tmux.");
     }
