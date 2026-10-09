@@ -1194,7 +1194,9 @@ place. No independent unattended-permission flag exists: the run config owns
 permissions.
 
 `automations/schedule.rs` validates exactly five Vixie fields, with day-of-month
-and day-of-week OR semantics. Seconds, years, shorthand macros and Quartz
+and day-of-week OR semantics when both day fields are restricted. If either day
+field starts with `*` (including `*/2`), both day fields must match. An explicit
+range such as `1-31/2` remains restricted. Seconds, years, shorthand macros and Quartz
 extensions are rejected. Named months/weekdays, ranges, lists and steps are
 supported. Patterns with no possible calendar occurrence return a bounded error;
 croner 4.0.1 limits its search iterations and years (through year 5000).

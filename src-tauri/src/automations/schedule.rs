@@ -52,10 +52,16 @@ impl Schedule {
                 return Err("Automation cron only supports five-field Vixie syntax".into());
             }
         }
+        // Vixie intersects day fields when either starts with '*', including
+        // steps. Croner only marks a literal '*' as a wildcard by itself.
+        let intersect_days = expression
+            .split_whitespace()
+            .enumerate()
+            .any(|(index, field)| matches!(index, 2 | 4) && field.starts_with('*'));
         let cron = CronParser::builder()
             .seconds(Seconds::Disallowed)
             .year(Year::Disallowed)
-            .dom_and_dow(false)
+            .dom_and_dow(intersect_days)
             .build()
             .parse(expression)
             .map_err(|e| format!("Invalid automation cron: {e}"))?;
