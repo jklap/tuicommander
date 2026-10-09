@@ -162,6 +162,7 @@
 /fs/write-if-unchanged
 /generators/generate
 /github/accounts
+/github/accounts/poll
 /github/accounts/remove
 /github/auth/disconnect
 /github/auth/logout
