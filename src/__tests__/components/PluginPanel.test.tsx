@@ -187,17 +187,22 @@ describe("PluginPanel", () => {
 		const { container } = render(() => <PluginPanel tab={tab} />);
 		const iframe = container.querySelector("iframe");
 		expect(iframe?.contentWindow).toBeTruthy();
-		const postMessage = vi.spyOn(iframe!.contentWindow!, "postMessage").mockImplementation(() => undefined);
+		let received: { type: string; payload: { type: string; buffer: ArrayBuffer } } | undefined;
+		// happy-dom does not transfer ownership; use the native clone operation
+		// at the iframe boundary so dropping the transfer list fails this test.
+		vi.spyOn(iframe!.contentWindow!, "postMessage").mockImplementation((data, _target, transfer) => {
+			received = structuredClone(data, { transfer });
+		});
 		const send = vi.mocked(pluginRegistry.registerPanelSendChannel).mock.calls.at(-1)?.[1];
 		const buffer = new ArrayBuffer(4);
+		new Uint8Array(buffer).set([1, 2, 3, 4]);
 
 		send?.({ type: "database", buffer }, [buffer]);
 
-		expect(postMessage).toHaveBeenCalledWith(
-			{ type: "tuic:host-message", payload: { type: "database", buffer } },
-			"*",
-			[buffer],
-		);
+		expect(buffer.byteLength).toBe(0);
+		expect(received?.type).toBe("tuic:host-message");
+		expect(received?.payload.type).toBe("database");
+		expect(Array.from(new Uint8Array(received!.payload.buffer))).toEqual([1, 2, 3, 4]);
 	});
 
 	it("unregisters send channel via pluginRegistry on unmount", () => {

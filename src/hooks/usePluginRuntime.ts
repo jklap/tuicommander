@@ -67,11 +67,13 @@ export function usePluginRuntime(): void {
 		untrack(() => {
 			for (const [terminalId, state] of current) {
 				const old = before.get(terminalId);
-				if (!old || old.sessionId !== state.sessionId) continue;
+				if (!old || (state.sessionId !== null && old.sessionId !== state.sessionId)) continue;
+				// Teardown clears the session together with its final state transition.
+				const sessionId = state.sessionId ?? old.sessionId;
 				if (old.shellState !== state.shellState) {
 					pluginRegistry.notifyStateChange({
 						type: "shell-state-changed",
-						sessionId: state.sessionId,
+						sessionId,
 						terminalId,
 						detail: state.shellState ?? undefined,
 					});
@@ -79,7 +81,7 @@ export function usePluginRuntime(): void {
 				if (old.awaitingInput !== state.awaitingInput) {
 					pluginRegistry.notifyStateChange({
 						type: "awaiting-input-changed",
-						sessionId: state.sessionId,
+						sessionId,
 						terminalId,
 						detail: state.awaitingInput ?? undefined,
 					});

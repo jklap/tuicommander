@@ -93,8 +93,29 @@ it("session teardown does not swallow the exited shell-state transition", () => 
 	// Terminal.tsx clears the session and marks an agent terminal exited together.
 	terminalsStore.update(terminalId, { sessionId: null, shellState: "exited" });
 	expect(events.filter((event) => event.type === "shell-state-changed")).toEqual([
-		expect.objectContaining({ terminalId, detail: "exited" }),
+		{ type: "shell-state-changed", sessionId: "exiting-session", terminalId, detail: "exited" },
 	]);
+	events.length = 0;
+	terminalsStore.update(terminalId, { sessionId: null, shellState: "exited" });
+	expect(events).toEqual([]);
+	// A new session is an initial snapshot, not a change in the exited session.
+	terminalsStore.update(terminalId, { sessionId: "replacement-session", shellState: "idle" });
+	expect(events).toEqual([]);
+	terminalsStore.update(terminalId, { shellState: "busy", awaitingInput: "question" });
+	expect(events).toEqual([
+		{ type: "shell-state-changed", sessionId: "replacement-session", terminalId, detail: "busy" },
+		{ type: "awaiting-input-changed", sessionId: "replacement-session", terminalId, detail: "question" },
+	]);
+	events.length = 0;
+	terminalsStore.update(terminalId, { sessionId: null, shellState: "exited", awaitingInput: null });
+	expect(events).toEqual([
+		{ type: "shell-state-changed", sessionId: "replacement-session", terminalId, detail: "exited" },
+		{ type: "awaiting-input-changed", sessionId: "replacement-session", terminalId, detail: undefined },
+	]);
+	events.length = 0;
+	terminalsStore.update(terminalId, { sessionId: "second-session", shellState: "idle" });
+	terminalsStore.update(terminalId, { sessionId: "third-session", shellState: "busy", awaitingInput: "question" });
+	expect(events).toEqual([]);
 	unmount();
 	terminalsStore.remove(terminalId);
 });

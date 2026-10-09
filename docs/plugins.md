@@ -401,6 +401,8 @@ const sub = host.onStateChange((event) => {
 
 State events report changes after the runtime starts; use snapshot getters for initial values. Terminal events observe existing terminal sessions, including remote updates. Branch events describe the active workspace's branch, not every repository HEAD in the background.
 
+When teardown clears a session and changes its final shell or awaiting-input state together, those events retain the old session ID. A replacement session establishes a new baseline without replaying its initial state.
+
 ### Tier 2b: Git Read (capability-gated)
 
 These methods require declaring `"git:read"` in `manifest.json`. They provide read-only access to git repository state.
