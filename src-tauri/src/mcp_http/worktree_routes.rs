@@ -1461,6 +1461,104 @@ mod survivor_tests {
         assert!(!worktree.exists());
     }
 
+    fn plain_removal(repo: &std::path::Path) -> Query<RemoveWorktreeQuery> {
+        Query(RemoveWorktreeQuery {
+            repo_path: repo.to_string_lossy().into_owned(),
+            force: None,
+            delete_branch: Some(true),
+            override_lock: None,
+            expected_fingerprint: None,
+            confirm_missing_checkout: None,
+            override_busy: None,
+        })
+    }
+
+    /// Catches: a plain `DELETE /worktrees/{id}` (no session, no override)
+    /// not removing the checkout, or not announcing it — the
+    /// `worktree-removed` bus event is what every HTTP/SSE client (and the
+    /// desktop sidebar) drops the row on. Re-pointed from wip 9586bf02c
+    /// `remove_worktree_http_removes_a_real_worktree_and_notifies`
+    /// (dropped-items-review #6).
+    #[tokio::test]
+    async fn removal_of_an_idle_worktree_removes_it_and_notifies() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tuic_git::test_fixtures::setup_test_repo();
+        let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "http-remove", false);
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut events = state.event_bus.subscribe();
+
+        let response = remove_worktree_http(
+            State(state.clone()),
+            Path("http-remove".into()),
+            plain_removal(repo.path()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!worktree.exists(), "the worktree directory must be gone");
+        let mut removed = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            if let crate::state::AppEvent::WorktreeRemoved(payload) = event {
+                removed.push(payload);
+            }
+        }
+        assert_eq!(removed.len(), 1, "exactly one worktree-removed event");
+        assert_eq!(removed[0].workspace_id, "http-remove");
+        assert_eq!(removed[0].branch, "http-remove");
+        assert_eq!(removed[0].repo_path, repo.path().to_string_lossy());
+    }
+
+    /// Catches: the HTTP removal skipping the repo's Archive Script (wip
+    /// 9586bf02c: the route once passed `archive_script: None` while the Tauri
+    /// command and MCP resolved it). Re-pointed from wip's
+    /// `remove_worktree_http_runs_the_archive_script` (dropped-items-review #6).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn removal_runs_the_repos_archive_script() {
+        let config = tempfile::tempdir_in(crate::test_support::test_temp_root()).unwrap();
+        let _guard = crate::config::set_config_dir_override(config.path().to_path_buf());
+        let repo = tuic_git::test_fixtures::setup_test_repo();
+        let worktree = tuic_git::test_fixtures::worktree_with(repo.path(), "http-archive", false);
+        let marker = config.path().join("archive-ran.txt");
+        let key = repo.path().to_string_lossy().into_owned();
+        crate::config::save_repo_settings(
+            crate::config::RepoSettingsMap::default(),
+            crate::config::RepoSettingsMap {
+                repos: [(
+                    key.clone(),
+                    crate::config::RepoSettingsEntry {
+                        path: key,
+                        archive_script: Some(format!("pwd > '{}'", marker.display())),
+                        ..Default::default()
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            },
+        )
+        .unwrap();
+        // Resolved now: the checkout (and with it any symlinked prefix) is gone after.
+        let expected_cwd = std::fs::canonicalize(&worktree).unwrap();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let response = remove_worktree_http(
+            State(state),
+            Path("http-archive".into()),
+            plain_removal(repo.path()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!worktree.exists());
+        let ran_in = std::fs::read_to_string(&marker).expect("the archive script must have run");
+        assert_eq!(
+            std::path::Path::new(ran_in.trim()),
+            expected_cwd,
+            "the archive script runs inside the worktree being removed"
+        );
+    }
+
     /// Catches: empty repoPath falling through to generic path validation instead of the required-field error.
     #[tokio::test]
     async fn orphan_assessment_empty_repo_reports_required_field() {
