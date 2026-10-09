@@ -3832,6 +3832,28 @@ mod tests {
         assert!(!state.grid.pending_scroll.contains_key("does-not-exist"));
     }
 
+    /// Mirrors `set_session_accent_color_404s_for_an_unknown_session` — the
+    /// existence check is a hand-copied guard in both handlers, so a change to
+    /// one can silently drop the other. `set_session_display_name` itself
+    /// (`state.rs`) also no-ops on an unknown session id, but that's covered
+    /// indirectly via this 404 rather than a bare `false` on the raw function.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn set_session_name_404s_for_an_unknown_session() {
+        let state = super::super::tests::test_state();
+        let resp = set_session_name(
+            State(state.clone()),
+            Path("does-not-exist".to_string()),
+            Json(SetNameRequest {
+                name: Some("hello".to_string()),
+                is_custom: Some(false),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
     #[tokio::test]
     async fn set_session_accent_color_404s_for_an_unknown_session() {
         let state = super::super::tests::test_state();
