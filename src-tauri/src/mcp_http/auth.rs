@@ -188,15 +188,16 @@ fn has_valid_url_token(req: &Request<axum::body::Body>, session_token: &str) -> 
     has_valid_token_query(req.uri(), session_token)
 }
 
-/// Accept cookie and legacy query credentials during the remote-update migration.
-pub(crate) fn has_valid_session_token(
-    uri: &axum::http::Uri,
-    headers: &HeaderMap,
-    session_token: &str,
-) -> bool {
-    !session_token.is_empty()
-        && (has_valid_session_cookie_header(headers, session_token)
-            || has_valid_token_query(uri, session_token))
+/// Cookie-only credential check for binary upload endpoints. An empty token
+/// never authorizes.
+pub(crate) fn has_valid_session_token(headers: &HeaderMap, session_token: &str) -> bool {
+    !session_token.is_empty() && has_valid_session_cookie_header(headers, session_token)
+}
+
+/// Upload endpoints authenticate with the session cookie only: a `?token=` URL
+/// is logged by proxies. QR pairing and WebSocket routes keep the query form.
+fn is_cookie_only_route(path: &str) -> bool {
+    matches!(path, "/fs/upload-copy" | "/remote/update")
 }
 
 pub(crate) fn has_valid_token_query(uri: &axum::http::Uri, session_token: &str) -> bool {
@@ -359,7 +360,7 @@ pub async fn basic_auth_middleware(
     // Primary remote auth: valid ?token=<session_token> in URL.
     // The QR code embeds this token, so scanning it authenticates the device.
     // We set a session cookie so the SPA's subsequent fetch() calls are also authenticated.
-    if has_valid_url_token(&req, &session_token) {
+    if !is_cookie_only_route(req.uri().path()) && has_valid_url_token(&req, &session_token) {
         req.extensions_mut()
             .insert(super::guards::UserAuthenticated);
         state.auth_rate_limits.remove(&addr.ip());
