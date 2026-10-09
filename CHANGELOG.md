@@ -50,6 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fix missing older Claude prompts, image/PDF tool-output markers and model-change cards in Chat; validate the parser against sanitized records from real CLI transcripts.
 
 ### Changed
+- Require macOS 12 Monterey or later for the desktop bundle, with Safari 17.4 or later for Mermaid diagrams (#1590-7c6b).
 - **Remote upload credentials** — `POST /remote/update` and `/fs/upload-copy` accept only the `tui-session` cookie; a `?token=` query answers 401 and the update client no longer puts the token in the URL. Older desktops cannot update a daemon of this release. QR pairing and WebSocket authentication are unchanged.
 - Make Compose the default input in terminal Chat: it opens focused and docked, stays open after send or queue, and preserves each tab's CLI Compose state and unsent draft when switching views (#1599-db8a).
 - Space automatic sidebar refresh starts at least five seconds apart per repository, retaining one trailing update during event bursts; explicit repository additions, checkouts and merge cleanup bypass the wait.
