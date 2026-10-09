@@ -12,9 +12,12 @@ import type { PendingCreation } from "./createRepositoryRefreshCoordinator";
 
 /** How long to wait for the backend's post-create chain (CoW warm, then the
  * file sync, then the Setup Script) before giving up and letting the Run
- * Script proceed anyway. Must exceed the backend's own fixed 900 s script
+ * Script proceed anyway. Must exceed the backend's default 900 s script
  * deadline (tuic-git `SCRIPT_TIMEOUT`) with real headroom, since the wait also
- * covers the warm and the sync that precede the script. */
+ * covers the warm and the sync that precede the script. A config-file-only
+ * `setup_script_timeout_secs` above ~18 minutes outlasts this wait (documented
+ * in docs/backend/config.md): the Run Script then starts before the Setup
+ * Script ends. */
 export const SETUP_SCRIPT_WAIT_TIMEOUT_MS = 1_200_000;
 
 /** A subscription to `worktree-setup-script-completed` for one repo, opened

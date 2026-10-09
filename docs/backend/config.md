@@ -739,6 +739,8 @@ Default values applied to new repositories when no per-repo override exists.
 | `setup_script` | `String` | `""` | Default setup script |
 | `run_script` | `String` | `""` | Default run command |
 | `archive_script` | `String` | `""` | Default archive script |
+| `setup_script_timeout_secs` | `Option<u64>` | absent (900 s) | **Expert, config-file-only (no Settings UI).** Seconds after which a Setup Script is killed with everything it started; absent or `0` keeps the built-in 15 minutes, values above 86400 are clamped to one day. Global only. The Settings store carries it through saves unchanged. Caveat: a new worktree's Run Script waits at most 20 minutes for the post-create chain, and `GET /worktrees/setup-status` keeps a result for 30 minutes — a value near or above those lets the Run Script start before the Setup Script ends |
+| `archive_script_timeout_secs` | `Option<u64>` | absent (900 s) | **Expert, config-file-only.** The same for an Archive Script; a timeout aborts the archive/remove, like a non-zero exit |
 | `orphan_cleanup_countdown_seconds` | `u32` | `10` | Ask-dialog countdown for safe orphan worktrees; Expert Mode offers 5, 10, 20, or 30 seconds |
 
 **Commands:** `load_repo_defaults()`, `save_repo_defaults(base, config)`
