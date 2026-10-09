@@ -32,7 +32,7 @@ function findNodes<T extends ts.Node>(root: ts.Node, guard: (node: ts.Node) => n
 	return found;
 }
 
-function extractCommandTableCommands(transportSource = readRepoFile("src/transport.ts")): Set<string> {
+function extractCommandTableCommands(transportSource = readRepoFile("src/transport/commandTable.ts")): Set<string> {
 	const sourceFile = ts.createSourceFile("transport.ts", transportSource, ts.ScriptTarget.Latest, true);
 	const declaration = sourceFile.statements
 		.filter(ts.isVariableStatement)
@@ -3109,7 +3109,7 @@ describe("transport", () => {
 	 * source instead — same rationale as `canvasTerminalMountGuards.test.ts`.
 	 */
 	describe("rpc() desktop short-circuit", () => {
-		const source = ts.createSourceFile("transport.ts", readRepoFile("src/transport.ts"), ts.ScriptTarget.Latest, true);
+		const source = ts.createSourceFile("http.ts", readRepoFile("src/transport/http.ts"), ts.ScriptTarget.Latest, true);
 		const functionNamed = (name: string) =>
 			findNodes(source, ts.isFunctionDeclaration).find((node) => node.name?.text === name);
 		const callNamed = (node: ts.Node, name: string) =>
