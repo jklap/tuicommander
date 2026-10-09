@@ -90,6 +90,20 @@ pub enum Event {
 
     /// OSC 1337 `OpenURL=:<base64>` — the decoded URL.
     OpenUrl(String),
+
+    /// An inline-image placement was just created or moved into place
+    /// (color-tools plan, Phase 5 — frontend renderer). Emitted once by
+    /// `reserve_image_footprint` right after it attaches `ImageCellRef`s to
+    /// the grid, carrying everything a renderer needs to paint it without a
+    /// separate lookup: which image, where, how big, and at what z-band.
+    ImagePlacement(ImagePlacementInfo),
+
+    /// Every previously-announced placement should be treated as gone (e.g.
+    /// an alt-screen switch, which by design never scrolls or reserves
+    /// image footprint on the alt screen, or `a=d,d=A/a`). A renderer
+    /// re-hydrates its placement set via a fresh query rather than trying to
+    /// diff against whatever it had before.
+    ImagePlacementsCleared,
 }
 
 impl Debug for Event {
@@ -123,8 +137,33 @@ impl Debug for Event {
             Event::RequestFocus => write!(f, "RequestFocus"),
             Event::RequestAttention(value) => write!(f, "RequestAttention({value})"),
             Event::OpenUrl(url) => write!(f, "OpenUrl({url})"),
+            Event::ImagePlacement(info) => write!(f, "ImagePlacement({info:?})"),
+            Event::ImagePlacementsCleared => write!(f, "ImagePlacementsCleared"),
         }
     }
+}
+
+/// Everything a renderer needs to paint one inline-image placement, carried
+/// on [`Event::ImagePlacement`] (color-tools plan, Phase 5).
+///
+/// `abs_row` is the *eviction-stable* absolute row — `history_base +
+/// grid_relative` at the moment of reservation, the same addressing
+/// convention `terminal_grid.rs`'s `hyperlink_span` already uses for the
+/// identical reason: it only ever grows, so a placement scrolled deep into
+/// history is still identified consistently even after older lines are
+/// evicted from the live `Grid`'s bounded history buffer. Converting it back
+/// to an on-screen row is the transport layer's job (it already tracks
+/// `history_base`/`history_size`/`display_offset` for the binary grid frame),
+/// not this crate's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImagePlacementInfo {
+    pub placement_id: u32,
+    pub image_id: u32,
+    pub abs_row: u32,
+    pub col: u16,
+    pub rows: u16,
+    pub cols: u16,
+    pub z_index: i32,
 }
 
 /// Byte sequences are sent to a `Notify` in response to some events.
@@ -171,8 +210,14 @@ pub trait EventListener {
     /// return a handle to it, or `None` if refused (e.g. over a per-session
     /// byte cap). Default refuses everything — only a listener that actually
     /// owns image storage (the app's `TermEventCollector`) can accept one.
+    ///
+    /// `client_id`: iTerm2 has no client-chosen image identity, so its
+    /// caller passes `None` and gets an auto-allocated id back. Kitty's `i=`
+    /// is client-chosen and later referenced by `a=p`/`a=d`, so its caller
+    /// passes `Some(id)`.
     fn store_image(
         &self,
+        _client_id: Option<u32>,
         _bytes: Arc<[u8]>,
         _mime: String,
         _intrinsic_width: u32,
@@ -180,6 +225,75 @@ pub trait EventListener {
     ) -> Option<Arc<crate::term::cell::ImageData>> {
         None
     }
+
+    /// Look up a previously stored image by id (Kitty `a=p`: place an
+    /// already-transmitted image). `None` if unknown or evicted. Default
+    /// matches `store_image`'s default of "no storage backing this
+    /// listener."
+    fn image_by_id(&self, _image_id: u32) -> Option<Arc<crate::term::cell::ImageData>> {
+        None
+    }
+
+    /// Forget an image id (Kitty `a=d`) so `image_by_id`/`store_image`'s
+    /// underlying lookup no longer finds it. Does not affect any cell
+    /// already showing it — see `terminal_images::ImageStore::forget`.
+    fn forget_image(&self, _image_id: u32) {}
+
+    /// Forget every image (Kitty `a=d,d=a`/`d=A`).
+    fn forget_all_images(&self) {}
+
+    /// Read the payload bytes for Kitty's `t=f` (plain file) or `t=t`
+    /// (temp file, delete after read) transmission mediums (color-tools
+    /// plan, Phase 6). `path` is the already-base64-decoded byte string the
+    /// wire format carries in the payload position for these mediums
+    /// (a filesystem path, not pixel data). `delete_after` is `true` only
+    /// for `t=t`.
+    ///
+    /// Deliberately not implemented in this crate: reading a client-chosen
+    /// path (and, for `t=t`, conditionally deleting it) is exactly the kind
+    /// of OS/filesystem-specific, security-sensitive operation the
+    /// embedding application owns (same reasoning as `store_image` above) —
+    /// see `terminal_images::read_file_medium` in the app crate for the
+    /// actual implementation and its safety guards. Default refuses
+    /// everything, matching every other storage-backed method here.
+    fn read_file_medium(&self, _path: &[u8], _delete_after: bool) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Read the payload bytes for Kitty's `t=s` (POSIX/Windows shared
+    /// memory) transmission medium (color-tools plan, Phase 6). `name` is
+    /// the already-base64-decoded shared-memory segment name. Same
+    /// delegation reasoning as `read_file_medium`.
+    fn read_shm_medium(&self, _name: &[u8]) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Register a not-yet-decoded inline image and return a placeholder
+    /// handle to it immediately (color-tools plan: Kitty decode deferred off
+    /// the `vt_log` lock) — or `None` if refused. Unlike `store_image`, this
+    /// never fails on a byte cap (no bytes exist yet to check); a listener
+    /// would only refuse if it has no image storage at all, matching
+    /// `store_image`'s default. `mime`/`intrinsic_width`/`intrinsic_height`
+    /// are already fully known at this point (derived from the wire format
+    /// alone, or `s=`/`v=` for raw formats) — only the pixel bytes remain
+    /// pending.
+    fn store_pending_image(
+        &self,
+        _client_id: Option<u32>,
+        _mime: String,
+        _intrinsic_width: u32,
+        _intrinsic_height: u32,
+    ) -> Option<Arc<crate::term::cell::ImageData>> {
+        None
+    }
+
+    /// Queue a `store_pending_image`-created placeholder's actual decode
+    /// work (base64, medium read, zlib inflate, format trim) to run once the
+    /// caller's lock is dropped. Default no-op, matching every other
+    /// storage-backed method here — a listener that accepts this without
+    /// ever draining it would just leave the placeholder pending forever,
+    /// which is a safe (if useless) degradation, not a crash.
+    fn queue_kitty_decode_job(&self, _job: crate::term::kitty::PendingKittyDecodeJob) {}
 }
 
 /// Null sink for events.
