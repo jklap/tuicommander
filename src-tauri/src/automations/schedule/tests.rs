@@ -293,3 +293,6 @@ fn creation_persists_the_local_zone_but_disk_and_edits_require_a_zone() {
     assert!(store.load().is_err());
     assert_eq!(std::fs::read(&path).unwrap(), unresolved);
 }
+
+#[path = "critic_tests.rs"]
+mod critic_tests;
