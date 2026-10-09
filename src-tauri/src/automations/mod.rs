@@ -2,6 +2,7 @@
 
 pub mod definitions;
 pub mod model;
+pub mod precheck;
 
 #[cfg(test)]
 mod tests;
