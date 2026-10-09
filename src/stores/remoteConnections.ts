@@ -109,6 +109,7 @@ export type ConnectionTestResult =
 	| { type: "Reachable" }
 	| { type: "AuthFailed" }
 	| { type: "NotConfigured" }
+	| { type: "PasswordRequired" }
 	| { type: "InstanceNotFound" }
 	| { type: "Unreachable"; reason: string };
 
