@@ -422,7 +422,6 @@ pub(crate) fn unbind_repo(repo_path: &std::path::Path) -> Result<bool, String> {
 ///
 /// Shared by GHE PAT add and the additional-github.com device-flow add so the
 /// token-validation + login-resolution is written once.
-#[cfg(feature = "desktop")]
 pub(crate) async fn fetch_account_login(
     client: &reqwest::Client,
     host: &GitHubHost,
