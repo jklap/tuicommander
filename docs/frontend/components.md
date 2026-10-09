@@ -201,10 +201,11 @@ or Light choice using the desktop theme tokens. Its server-side `mobile_theme`
 preference is independent of the desktop terminal theme.
 
 The detail keybar and composer each keep their previous total height while their
-controls use 44 px touch targets. The keybar slash button opens a local
-agent-specific command menu without writing to the PTY; picking a command
-updates the input, while the close button restores the prior draft. A vanished
-session keeps its output visible but disables both input controls.
+controls use 44 px touch targets. The keybar slash button inserts `/` at the
+composer selection through the same input path as typing. It preserves the surrounding draft, syncs the same
+PTY delta, and shows the agent parser menu with navigation. Picking a command
+updates the input; closing the menu clears the input through the same sync path.
+A vanished session keeps its output visible but disables both input controls.
 
 ## Core Components
 

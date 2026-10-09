@@ -107,7 +107,6 @@ export default function MobileApp() {
 	const [sessionFilesOpen, setSessionFilesOpen] = createSignal(false);
 	const [sessionFileLink, setSessionFileLink] = createSignal<{ candidate: string; line?: number } | null>(null);
 	const { sessions, loading, refreshing, error, authError, refresh, questionCount, markSeen } = useSessions();
-	useMobileNotifications(sessions);
 	const { updateAvailable, serverDown, applyUpdate } = useVersionCheck();
 	ideasStore.hydrate();
 
@@ -152,6 +151,7 @@ export default function MobileApp() {
 	}
 
 	const showDetail = () => selectedSessionId() !== null && lastKnownSession() !== null;
+	useMobileNotifications(sessions, () => activeTab() === "sessions" && !showDetail());
 
 	const updateBanner = () => (
 		<Show when={updateAvailable() && !showDetail() && activeTab() === "sessions"}>
