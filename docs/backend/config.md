@@ -407,7 +407,7 @@ cleartext copy does not survive on disk.
 | `diff_ignore_trailing_whitespace` | `bool` | `false` | Diff comparison: ignore trailing whitespace on each line |
 | `diff_ignore_whitespace_amount` | `bool` | `false` | Diff comparison: collapse runs of whitespace to a single space before comparing |
 | `diff_ignore_case` | `bool` | `false` | Diff comparison: case-insensitive line comparison |
-| `session_diff_auto_open` | `String` | `"ask"` | When an agent edit is detected: `off` (never auto-open Session Diff Review), `ask` (a bell notice — never a transient toast — with an "Open Session Diff" action), or `auto` (open the tab in the background) |
+| `session_diff_auto_open` | `String` | `"ask"` | When an agent edit is detected: `off` (never auto-open Session Diff Review), `ask` (a transient toast plus a bell notice that outlives it, both with an "Open Session Diff" action), or `auto` (open the tab in the background) |
 | `session_diff_truncate_lines` | `u32` | `300` | Truncate a single change's displayed diff above this many lines, with a "Show all N lines" expander. `0` disables truncation |
 | `terminal_link_activation` | `String` | `"click"` | How terminal links activate: `"click"` (opens on plain click), `"modifier"` (Cmd/Ctrl+click opens; underline only while held), or `"never"` (right-click Open/Copy-link menu only) |
 | `double_click_action` | `String` | `"smart"` | What a plain double-click selects: `"word"` (character-class expansion) or `"smart"` (try the rule engine first, fall back to word). There is no master on/off switch for the rule engine — quad-click and the right-click smart-selection menu always run it, regardless of this setting |
