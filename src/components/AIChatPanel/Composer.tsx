@@ -9,6 +9,8 @@
 import { type Component, createEffect, createSignal, For, Show } from "solid-js";
 import mobileInput from "../../mobile/components/CommandInput.module.css";
 import { uploadAttachment } from "../../services/uploadAttachment";
+import { ComposePinIcon, ComposeSendIcon } from "../shared/ComposeActionIcons";
+import actions from "../shared/ComposeActions.module.css";
 import s from "./AIChatPanel.module.css";
 import { aiChatDraft } from "./draft";
 import type { AcpChat } from "./useAcpChat";
@@ -284,11 +286,14 @@ export const Composer: Component<{
 				</Show>
 				<button
 					type="button"
-					class={s.parkBtn}
-					classList={{ [s.parkedDraft]: props.mobileAttachments && !!aiChatDraft.parked() }}
+					class={props.mobileAttachments ? s.parkBtn : actions.pinButton}
+					classList={{
+						[s.parkedDraft]: !!props.mobileAttachments && !!aiChatDraft.parked(),
+						[actions.pinButtonActive]: !props.mobileAttachments && !!aiChatDraft.parked(),
+					}}
 					aria-label={parkLabel()}
 					title={parkLabel()}
-					aria-pressed={props.mobileAttachments ? !!aiChatDraft.parked() : undefined}
+					aria-pressed={!!aiChatDraft.parked()}
 					disabled={!aiChatDraft.parked() && !hasContent()}
 					onClick={() => aiChatDraft.parkOrSwap()}
 				>
@@ -296,18 +301,16 @@ export const Composer: Component<{
 						<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
 							<path d="M3 3h18v5H3zm2 7h14v11H5zm4 2v2h6v-2z" />
 						</svg>
-					) : aiChatDraft.parked() ? (
-						"Parked draft"
 					) : (
-						"Park"
+						<ComposePinIcon />
 					)}
 				</button>
 			</div>
 			<button
 				type="button"
-				aria-label={props.mobileAttachments ? (props.chat.busy() ? "Queue" : "Send") : undefined}
+				aria-label={props.chat.busy() ? "Queue" : "Send"}
 				title={props.chat.busy() ? "Queue" : "Send"}
-				class={props.mobileAttachments ? mobileInput.send : s.sendBtn}
+				class={props.mobileAttachments ? mobileInput.send : actions.sendButton}
 				disabled={!aiChatDraft.text().trim() && aiChatDraft.images().length === 0 && aiChatDraft.files().length === 0}
 				onClick={send}
 			>
@@ -315,10 +318,8 @@ export const Composer: Component<{
 					<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
 						<path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
 					</svg>
-				) : props.chat.busy() ? (
-					"Queue"
 				) : (
-					"Send"
+					<ComposeSendIcon />
 				)}
 			</button>
 		</div>

@@ -645,22 +645,6 @@
   opacity: 0.5;
 }
 
-.sendBtn {
-  min-width: 44px;
-  padding: 0 8px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent);
-  color: var(--text-on-accent);
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: opacity 0.15s ease;
-}
-
 .parkBtn {
   height: 32px;
   padding: 0 8px;
@@ -680,15 +664,6 @@
 
 .parkBtn:disabled {
   opacity: 0.5;
-  cursor: default;
-}
-
-.sendBtn:hover:not(:disabled) {
-  opacity: 0.85;
-}
-
-.sendBtn:disabled {
-  opacity: 0.3;
   cursor: default;
 }
 

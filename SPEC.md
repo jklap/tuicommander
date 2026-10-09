@@ -690,6 +690,8 @@ Some frontend-only stores persist to localStorage:
 - [x] AI Chat session details — ACP title updates rename the header and picker; context-window use and reported cost appear in the footer; a session settings dialog labels every select option and the one-row control bar summarizes the model's short name and mode beside named icon actions
 - [x] AI Chat transcript and tabs — selectable messages, with message Copy on hover or keyboard focus; sent prompts reconciled with ego's chunked echo; copyable code and tool output; trailing `suggest:` tokens rendered as reply buttons; terminal-shared web and file link handlers; parallel ACP sessions with independent drafts and transcripts; only running tool calls pulse
 - [x] AI Chat transcript polish — collapsed tool rows show short names, message Copy keeps its own space, and streaming follows the bottom until the reader scrolls up
+- [x] Desktop AI Chat composer actions reuse the terminal composer pin/play icons and button sizes; tooltips and accessible names distinguish Send, Queue and parked drafts.
+
 - [x] AI Chat composer polish — text grows to a bounded height and pastes over 200 words stay compact until the full text is sent
 - [x] AI Chat prompt parking — Ctrl+S or the composer control parks text and images per chat tab, swaps or restores them, and returns the parked draft after the next Send
 - [~] AI Agent loop (ReAct) — shipped, then deleted in #784-0aec with no TUICommander-side successor. ego runs its own tool loop and reaches terminals from outside, through the `session` MCP tool family, exactly as Claude Code does
