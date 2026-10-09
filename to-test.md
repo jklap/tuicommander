@@ -1,3 +1,49 @@
+## Post-rebase fixups B1/B2/C (2026-10-08) — Rust restart required
+
+Code-level tests exist for each item (see the fixup commits after `ece9b8314`);
+these are the end-to-end checks only a running app can answer. Use an isolated
+`make dev` (per-checkout `TUIC_APP_INSTANCE`) and throwaway repos.
+
+- [ ] **Shell readiness gate.** MCP `session action=create`, `repo action=worktree_create
+  spawn_session=true`, `POST :9877/sessions` and `POST :9877/sessions/worktree` return
+  only once the new shell shows its prompt (at most ~5 s, then the id comes back anyway
+  with a warning log): a command sent right after create runs in a ready shell (no
+  swallowed keystrokes, no p10k wizard answered by it). `tuic new` still succeeds.
+  Agent spawns are not gated.
+- [ ] **`userwrap` consent prompt is bound to its terminal.** In zsh with your own
+  `claude` function and the wrap setting on "ask", the "wrap your claude function?"
+  question still appears once for the real shell. Output that forges the request raises
+  nothing: `printf '\e]7770;userwrap=claude:1-2:%s\a' "$TUIC_SESSION"` run as a command
+  (ignored while a command runs), and the same with another terminal's session id or the
+  old two-part `claude:1-2` form even when emitted from the prompt (e.g. put into
+  `PROMPT`).
+- [ ] **Standby again for hidden clients.** Minimise the window (or background the browser
+  tab) for over 30 s: the session can go to standby; bringing it back to the front wakes
+  it. A visible, focused tab keeps refreshing as before.
+- [ ] **Add Terminal from the Global Workspace keeps the other branch's split.** With a
+  split on branch A, activate the Global Workspace, use Add Terminal for branch B, then
+  go back to A: A's split is intact.
+- [ ] **Double-click a Smart Prompt into a busy agent** (and Execute in its variables
+  dialog): it is held back like a single click, not submitted.
+- [ ] **Six key-bound actions run from their key:** bind keys to Explain session state,
+  Toggle diagnostics capture, SSH Tunnels, Process Manager, Generators and Show remote QR;
+  each key opens/does its action.
+- [ ] **Timed-out Setup/Archive/Run Script stops everything it started.** A Setup Script
+  `sleep 1000 & sleep 1000` hit by the timeout leaves no `sleep` behind (`pgrep sleep`);
+  a script that backgrounds a child holding stdout returns within ~2 s of its own exit.
+- [ ] **SSH provisioning hardening** (disposable SSH host): deleting a connection stops
+  only that connection's own daemon instance; a provisioned daemon with live sessions is
+  left running on disconnect (warning in the log); clicking Start/Stop/Update quickly
+  serialises (no interleaved runs); the stop route refuses a daemon this app did not
+  start in this run.
+- [ ] **Mobile still switches language** after the `i18n/locale.ts` split: on the phone
+  PWA change the language in Settings; strings update without a reload error.
+- [ ] [HUMAN] **UX decision: right-click on ANY word opens the Smart Selection menu.**
+  wip's default "Word bounded by whitespace" rule has a Copy action, so right-clicking any
+  plain word in a terminal now shows the smart menu instead of the app's terminal context
+  menu (same on the wip tip; test c8e7d4fc7). Decide whether that is wanted, or the word
+  rule should lose its default action so the normal context menu shows for plain words.
+
 ## Security hardening batch A (post-rebase fixups) — Rust restart required
 
 - [ ] After Boss's next planned backend restart: `kitty +kitten icat --transfer-mode=file` and `--transfer-mode=memory` (or `timg -pk`) still display and leave no `tty-graphics-protocol*` temp file or shm segment behind; a `t=t` file without that name is not deleted. A Remote Server — Local Connect/Test Connection to a real second instance (isolated `TUIC_APP_INSTANCE`) still succeeds, and fails "could not be verified" when the port is held by something else. Settings → Terminal → Custom Environment Variables is hidden in basic mode while empty and refuses `TUIC_*`/`ZDOTDIR`/`LD_*`/`DYLD_*`. `tuic agent type <agent> "x"` submits, and is refused (exit 1) while the agent's input box holds text. Session Diff revert of a repo file and of a `~/.claude/plans/` file still works. Rust does not hot-reload; this lane launched no desktop instance.
@@ -1561,13 +1607,6 @@ than a missed check.
 >
 > **Everything else labelled "needs a restart" is already live** — including the
 > whole 09-04/09-05 wave. Test it now; do not wait for a rebuild.
-> **Gate status as of the `wip`→`main` rebase (2026-09-04).** This branch was
-> just rebased onto `origin/main`'s `1.7.6` tip, so every prior "gate satisfied"
-> or "stale as of" note above is talking about a running binary that no longer
-> corresponds to what's on disk. Re-verify anything Rust-touching against a
-> fresh `make dev` restart before trusting a prior `[x]` — don't assume an
-> older gate note still holds.
->
 > **The frontend has no such gate.** In a debug build the HTTP server reads
 > `dist/` from disk on every request (`static_files.rs:65-90`), not the
 > `include_dir!` copy, so a browser client at `:9876` picks up any frontend change
@@ -1895,96 +1934,29 @@ a plain browser reload once `pnpm build` (or `make dev`) rebuilds `dist/`.
   branch that has never been selected this session (freshly restored, before
   any click) to hit the specific auto-spawn-on-first-select path.
 
-## LastPromptBar / agent idle-threshold lingers after an agent exits back to a plain shell (2026-09-10, backend — needs `make dev` restart)
+## LastPromptBar / agent idle-threshold after an agent exits back to a plain shell (refreshed 2026-10-08 for the rebased tree — Rust, needs a `make dev` restart)
 
-Bug: after exiting an agent (e.g. `claude` → `/exit` or Ctrl+D) back to a plain
-shell in the same tab, the "Context" bar (`LastPromptBar`, showing
-`Intent: … · Assignment: … · Prompt: …`) stayed visible for a few extra
-seconds instead of disappearing immediately. Root cause:
-`session_states.agent_type` (`get_session_foreground_process`, `pty.rs`) was
-sticky *forever* once any agent had run in a session — by design, to survive
-transient unrecognized grandchildren (`git`/`sed`/`rg`) spawned by a live
-agent — but nothing ever cleared it back to `None` when the foreground
-process was *confirmably* a plain shell again. That kept
-`should_transition_idle_with_hook` selecting the longer `AGENT_IDLE_MS`
-(2500ms) threshold instead of `SHELL_IDLE_MS` (500ms) for a tab that no longer
-had an agent running, delaying the backend's `shell-state: idle` emission —
-the only signal `useAgentPolling.ts`'s `detectAgentForTerminal` accepts to
-clear the frontend's `agentType` (and therefore the `LastPromptBar`/gate in
-`Terminal.tsx`).
+Bug (wip, 2026-09-10): after exiting an agent (`claude` → `/exit` or Ctrl+D) back to
+the shell in the same tab, the "Context" bar (`LastPromptBar`) and the agent idle
+threshold lingered because `session_states.agent_type` never cleared. On the rebased
+tree wip's fix (`clear_agent_type_on_confirmed_shell`, `agent_seen_running`, the
+OSC 133 fast path) is gone: main's `refresh_session_agent` (`pty.rs`) records the
+foreground agent per PTY chunk, on a timer and from both the IPC and HTTP
+foreground calls, and clears it when the foreground is a shell again. There is no
+OSC 133 fast path, so the bar goes away on the next foreground observation, not
+instantly.
 
-Fix, in four parts (`clear_agent_type_on_confirmed_shell` in `pty.rs` is the
-single shared clearing routine all of them funnel through):
-
-1. **Confirmed-shell clear.** `get_session_foreground_process_impl` clears the
-   sticky mirror when the foreground is a *confirmed* shell match (`fg_is_shell`)
-   rather than merely "unrecognized" — this is not the flaky case the
-   stickiness was meant to protect. A first version had a real regression,
-   caught by code review: clearing unconditionally on any confirmed-shell
-   foreground could race `Terminal.tsx`'s pending-init-command flow and
-   permanently wipe a run-config preset for a custom/unrecognized agent
-   launcher (`PtyConfig::agent_type`), since the tab's very first
-   `shell-state: idle` event fires before the init command has even executed.
-   Fixed by adding `SessionState.agent_seen_running` (`state.rs`): the clear
-   now only fires once the session has actually observed a real (recognized
-   or not) non-shell foreground at least once, not merely on a preset that
-   hasn't launched yet.
-2. **HTTP/remote parity.** `mcp_http/session.rs`'s `get_foreground_process`
-   previously re-derived the detected name independently and never touched
-   `session_states` at all — a browser/PWA/remote client's idle-threshold
-   selection never reflected reality. It now calls the same
-   `get_session_foreground_process_impl` the desktop IPC command uses.
-3. **Non-exhaustive shell list.** The static `SHELLS` list can never cover
-   every login shell (xonsh, elvish, ion, murex, …). The confirmed-shell match
-   now *also* checks the session's own recorded `PtySession.shell` basename
-   (set from `resolve_shell()` at PTY creation) — any shell TUIC actually
-   launched clears correctly, not just ones on the static list.
-4. **Multi-hop launcher false positive.** The ambiguous fallback path
-   (unrecognized non-shell, resolved only via the preset) couldn't distinguish
-   "the preset's own launcher" from "an intermediate wrapper hop" (`direnv
-   exec`, a non-`exec`'d wrapper script) — a wrapper failing before the real
-   target ran could still confirm-then-strand the preset. Now requires the
-   ambiguous foreground to persist across `AGENT_SEEN_RUNNING_CONFIRM_MS`
-   (1000ms) before confirming; a direct `classify_agent` match has no such
-   ambiguity and still confirms immediately.
-5. **Fast, event-driven path.** All of the above only clear on the *next*
-   `get_session_foreground_process` poll (busy-debounce or the 30s fallback).
-   `transition_explicit_shell_state_with_hook` now also calls
-   `clear_agent_type_on_confirmed_shell` directly on OSC 133's own prompt
-   marker (`'A'`, `hook_state = false`) — it can only fire once the real shell
-   redraws its prompt, so it's an immediate, reliable "agent has genuinely
-   exited" signal. Deliberately **not** extended to the OSC 7770
-   (`hook_state = true`) path: a hook-instrumented agent's own `state=idle`
-   means it finished this turn and is waiting for the next prompt while the
-   SAME process stays alive — clearing there would wipe `agent_type` on every
-   ordinary turn boundary, not just on exit. See `agent-signal-architecture.html`'s
-   2026-09-10 Incident Log entry (main checkout `plans/`) for the full writeup.
-
-Covered by 8 Rust unit tests across `pty.rs` and `mcp_http/session.rs`, each
-spawning real PTY child processes or driving the shell-state machinery
-directly — no manual repro needed to prove the backend logic, but the
-end-to-end UI timing still needs a human check:
-
-- [ ] Restart `make dev` to pick up the Rust change. Open a terminal tab, run
-  `claude`, let it start, then exit it (`/exit` or Ctrl+D) back to the shell
-  prompt. The "Context" bar at the top of the pane should disappear
-  essentially instantly (OSC 133 path) rather than after any visible delay.
-- [ ] Re-run the same check for another supported agent (e.g. `codex` or
-  `gemini`) to confirm this isn't claude-specific.
-- [ ] Start an agent, let it spawn a real subprocess momentarily (e.g. ask it
-  to run `git status`), and confirm the Context bar does NOT flicker off
-  during that subprocess call — only a genuine exit back to the shell should
-  clear it (this is what one of the unit tests guards at the code level, but
-  a live screen check is cheap insurance).
-- [ ] Launch a session from a run config using a custom/unrecognized launcher
-  alias (a wrapper script or symlink `classify_agent` won't name-match) and
-  confirm the Context bar/intent-parsing still activates normally on first
-  launch — this is the exact scenario the regression above would have broken
-  (the preset getting wiped before the launcher even ran).
-- [ ] Hit `GET http://127.0.0.1:9877/sessions/{id}/foreground` (the `:9877`
-  test instance's HTTP API) on a session before and after exiting an agent in
-  it, confirming the returned `agent` name — and, indirectly via the
-  idle-threshold behavior, the mirror — updates over HTTP too, not just IPC.
+- [ ] Restart `make dev`. Open a terminal tab, run `claude`, let it start, then exit
+  back to the shell prompt. The "Context" bar disappears within about a second (the
+  next foreground observation), not after several seconds.
+- [ ] Same with another agent (e.g. `codex` or `gemini`).
+- [ ] With an agent running, let it run a short subprocess (e.g. `git status`); the
+  Context bar does NOT flicker off during the subprocess.
+- [ ] A run config using a custom/unrecognized launcher alias still activates the
+  Context bar/intent parsing on first launch (the preset is not wiped before the
+  launcher runs).
+- [ ] `GET http://127.0.0.1:9877/sessions/{id}/foreground` on the test instance
+  before and after exiting an agent returns the agent name, then none.
 
 ## Worktree file sync: copy/symlink ignored/untracked/explicit files into new worktrees (2026-09-10, backend — needs `make dev` restart)
 
@@ -7684,6 +7656,11 @@ stale-lock-sweep checks are gone.
   `worktree_busy:`; `override_busy=true` removes it.
 - [ ] After the session's process exits (`exit` in the shell, tab still lingering),
   the removal is no longer refused.
+- [ ] Deleting a merged branch together with its worktree (branch context menu /
+  `POST :9877/repo/delete-local-branch` with `keepWorktree: false`) while a live
+  session works in the worktree is refused the same way (`worktree_busy:`, HTTP 409);
+  `overrideBusy` lifts it. Known gap: post-merge cleanup only logs the refusal — the
+  UI does not offer the "in use" override on that path.
 - [ ] Leave an uncommitted file in a worktree with no terminal attached, click
   Delete. Expect the destructive "Destroy workspace state?" confirmation (not a
   silent removal). Confirm and verify it's actually gone.
