@@ -207,6 +207,8 @@ describe("TerminalTab placement", () => {
 		"Restore open terminals on launch": "app.restore_shell_terminals",
 		"Save terminal scrollback": "app.restore_scrollback",
 		"Allow terminal focus/attention requests": "app.osc1337_focus_attention",
+		"Copy on select": "app.copy_on_select",
+		"Allow OSC 52 clipboard writes": "app.osc52_clipboard",
 	};
 	function toggleByLabel(container: HTMLElement, label: string): HTMLInputElement {
 		const bound = container.querySelector(`[data-setting-id="${TOGGLE_IDS[label]}"]`);
@@ -269,6 +271,66 @@ describe("TerminalTab placement", () => {
 
 		expect(settingsStore.state.osc1337FocusAttention).toBe(true);
 		expect(savedConfigs().at(-1)?.osc1337_focus_attention).toBe(true);
+	});
+
+	// Like the toggles: main's SettingSelect is found by its catalogue id.
+	const SELECT_IDS: Record<string, string> = { "Cursor Style": "app.cursor_style" };
+	function selectByLabel(container: HTMLElement, label: string): HTMLSelectElement {
+		const bound = container.querySelector(`[data-setting-id="${SELECT_IDS[label]}"]`);
+		const select = bound?.matches("select") ? bound : bound?.querySelector("select");
+		if (!select || !container.textContent?.includes(label)) throw new Error(`select "${label}" not found`);
+		return select as HTMLSelectElement;
+	}
+
+	// Dropped-items-review #51: wip's mock-based "calls setX when its control
+	// changes" tests, re-done in this file's real-store style — change the
+	// control, then assert the persisted config key.
+	it("persists the Copy on select toggle under copy_on_select", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ copy_on_select: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const toggle = toggleByLabel(container, "Copy on select");
+		expect(toggle.checked).toBe(false);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggle, { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.copyOnSelect).toBe(true);
+		expect(savedConfigs().at(-1)?.copy_on_select).toBe(true);
+	});
+
+	it("persists the OSC 52 clipboard toggle under osc52_clipboard", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ osc52_clipboard: false }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const toggle = toggleByLabel(container, "Allow OSC 52 clipboard writes");
+		expect(toggle.checked).toBe(false);
+		mockInvoke.mockClear();
+
+		fireEvent.change(toggle, { target: { checked: true } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.osc52Clipboard).toBe(true);
+		expect(savedConfigs().at(-1)?.osc52_clipboard).toBe(true);
+	});
+
+	it("persists the Cursor Style select under cursor_style", async () => {
+		vi.useFakeTimers();
+		mockInvoke.mockImplementation(invokeImpl({ cursor_style: "bar" }));
+		await settingsStore.hydrate();
+		const { container } = render(() => <TerminalTab />);
+		const select = selectByLabel(container, "Cursor Style");
+		expect(select.value).toBe("bar");
+		mockInvoke.mockClear();
+
+		fireEvent.change(select, { target: { value: "underline" } });
+		await vi.advanceTimersByTimeAsync(600);
+
+		expect(settingsStore.state.cursorStyle).toBe("underline");
+		expect(savedConfigs().at(-1)?.cursor_style).toBe("underline");
 	});
 
 	describe("modifier-symbol-dependent label/hint text", () => {
