@@ -1097,7 +1097,8 @@ POST /circleci/token       { token }           -> null (store read-only token)
 DELETE /circleci/token                         -> null
 POST /github/pr-hide-drafts   { hide }          -> null
 POST /github/auth/start                         -> DeviceCodeResponse
-POST /github/auth/poll        { deviceCode }    -> PollResult
+POST /github/auth/poll        { deviceCode }    -> PollResult (default login)
+POST /github/accounts/poll    { deviceCode }    -> PollResult (named account; preserves default login)
 POST /github/auth/logout                        -> null
 POST /github/auth/disconnect                    -> null
 GET  /github/auth/status                        -> AuthStatus

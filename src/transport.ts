@@ -1229,7 +1229,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	github_poll_add_account: {
 		map: (args) => ({
 			method: "POST",
-			path: "/github/auth/poll",
+			path: "/github/accounts/poll",
 			body: { deviceCode: args.deviceCode },
 		}),
 	},

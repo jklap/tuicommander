@@ -212,7 +212,7 @@ export interface StateChangeEvent {
 		| "awaiting-input-changed";
 	sessionId: string | null;
 	terminalId: string;
-	/** For branch-changed: the new branch name. For repo-changed: the new repo path (or null). */
+	/** New branch, repo path, shell state or awaiting-input kind; undefined when cleared. */
 	detail?: string;
 }
 

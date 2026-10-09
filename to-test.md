@@ -1,3 +1,7 @@
+## Plugin host phase 0 — backend restart required
+
+- [ ] After Boss's planned `make dev` restart or `make build`, verify browser Add account creates a named GitHub account while the default login stays unchanged. Also verify a plugin declaring `net:http` with no `allowedUrls` is rejected. The Rust HTTP handler and manifest validator are not hot-reloaded. No desktop instance was launched by the peer.
+
 ## Dependency lane (1584–1589, 1587) — backend rebuild required
 
 - [ ] Load the updated Rust dependencies with Boss's next planned `make dev` restart or `make build`; Rust does not hot-reload. After loading, check native folder dialogs, notifications and updater availability. Targeted git/OAuth2/push/relay tests, the desktop library check and frontend build passed in the worktree; no desktop instance was launched. WebRTC still needs coordinator-owned rb cross-platform verification, and crypto needs critic review before landing.

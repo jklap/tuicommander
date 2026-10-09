@@ -754,6 +754,7 @@ function createPluginRegistry() {
 			openPanel(options: OpenPanelOptions): PanelHandle {
 				requireCapability(pluginId, capabilities, "ui:panel");
 				const tabId = mdTabsStore.addPluginPanel(pluginId, options.id, options.title, options.html);
+				track({ dispose: () => mdTabsStore.remove(tabId) });
 				// Register message handler for this panel
 				if (options.onMessage) {
 					panelMessageHandlers.set(tabId, options.onMessage);

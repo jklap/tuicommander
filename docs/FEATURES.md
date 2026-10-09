@@ -1943,7 +1943,9 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - **Repository:** `tuic.activeRepo()` returns active repo path; `tuic.onRepoChange(cb)` / `tuic.offRepoChange(cb)` for live updates
 - **Terminal:** `tuic.terminal(repoPath)` — open terminal in repository
 - **UI feedback:** `tuic.toast(title, {message?, level?, sound?})` — native toast notifications with optional sound (info blip, warn double-beep, error descending sweep); `tuic.clipboard(text)` — copy to clipboard from sandboxed iframe
-- **Messaging:** `tuic.send(data)` / `tuic.onMessage(cb)` — bidirectional host↔plugin communication
+- **Messaging:** `tuic.send(data)` / `tuic.onMessage(cb)` — bidirectional host↔plugin communication; `PanelHandle.send` reaches SDK listeners through the host-message envelope
+- **Plugin lifecycle:** panel tabs and bridges close on plugin unload; state observers receive active branch, shell state and awaiting-input transitions
+- **HTTP scope:** `net:http` requires a non-empty `allowedUrls` manifest declaration
 - **Theme:** `tuic.theme` — current theme as JS object (camelCase CSS vars); `tuic.onThemeChange(cb)` for live updates
 - `<a href="tuic://open/...">` and `<a href="tuic://terminal?repo=...">` links intercepted automatically
 - `data-pinned` attribute on links sets pinned flag
