@@ -3955,28 +3955,81 @@ fn no_extra_env(_: &Path) -> Vec<(String, String)> {
     Vec::new()
 }
 
+/// cmd.exe silently drops an inherited environment value longer than this many
+/// UTF-16 units, which would leave a Setup/Archive Script with no PATH at all.
+#[cfg(any(windows, test))]
+const CMD_ENV_VALUE_LIMIT: usize = 8191;
+
+/// The PATH handed to a Windows hook script, plus every directory that did not
+/// fit (see [`windows_hook_path`]).
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+struct HookPath {
+    path: String,
+    dropped: Vec<String>,
+}
+
+/// Split a Windows PATH on `;`, except inside double quotes: Windows accepts a
+/// quoted entry (`"C:\a;b\bin"`) for a directory whose name contains `;`.
+/// Empty entries (`;;`, a trailing `;`) are skipped — an empty PATH entry means
+/// "the current directory", which no hook script should search implicitly.
+#[cfg(any(windows, test))]
+fn split_windows_path(path: &str) -> Vec<&str> {
+    let mut entries = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    for (i, c) in path.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            ';' if !quoted => {
+                entries.push(&path[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    entries.push(&path[start..]);
+    entries.retain(|e| !e.trim().is_empty() && e.trim() != "\"\"");
+    entries
+}
+
 /// Keep cmd.exe's PATH below its environment-value limit, with the first
 /// spelling of each directory retained. Callers put the resolved Git dir first.
+///
+/// Whole directories are kept in precedence order (never a partial last path);
+/// a quoted entry stays one directory. Deduplication and dropping empty
+/// entries usually bring a long PATH under the limit. When it still does not
+/// fit, the directories that are left out are returned in `dropped` so the
+/// caller can say so (`run_shell_script` logs a warning naming them) — they
+/// are never dropped silently (git/ci review of wip bde9396bc).
 #[cfg(any(windows, test))]
-fn windows_hook_path(path: &str) -> String {
+fn windows_hook_path(path: &str) -> HookPath {
     let normalized = path.replace('/', "\\");
     let mut seen = std::collections::HashSet::new();
     let mut dirs = Vec::new();
+    let mut dropped = Vec::new();
     let mut length = 0;
-    for dir in normalized.split(';') {
-        if !seen.insert(dir.trim_end_matches('\\').to_lowercase()) {
+    for dir in split_windows_path(&normalized) {
+        let key = dir
+            .trim()
+            .trim_matches('"')
+            .trim_end_matches('\\')
+            .to_lowercase();
+        if !seen.insert(key) {
             continue;
         }
         let added = dir.encode_utf16().count() + usize::from(!dirs.is_empty());
-        // cmd silently drops an inherited environment value over 8191 units.
-        // Keep whole directories in precedence order, never a partial last path.
-        if length + added > 8191 {
-            break;
+        if length + added > CMD_ENV_VALUE_LIMIT {
+            dropped.push(dir.to_string());
+            continue;
         }
         length += added;
         dirs.push(dir);
     }
-    dirs.join(";")
+    HookPath {
+        path: dirs.join(";"),
+        dropped,
+    }
 }
 
 /// Run `script` through the platform shell in `cwd`, killing it at `timeout`.
@@ -4026,7 +4079,18 @@ fn run_shell_script(
         })
         .unwrap_or(path);
     #[cfg(windows)]
-    let path = windows_hook_path(&path);
+    let path = {
+        let hook_path = windows_hook_path(&path);
+        if !hook_path.dropped.is_empty() {
+            tracing::warn!(
+                source = "worktree",
+                dropped = ?hook_path.dropped,
+                "script PATH exceeds cmd.exe's {CMD_ENV_VALUE_LIMIT}-unit limit even after \
+                 removing duplicates; these directories are not on the script's PATH"
+            );
+        }
+        hook_path.path
+    };
     cmd.env("PATH", path);
     tuic_core::cli::apply_no_window(&mut cmd);
     crate::git_cli::output_with_deadline_tree(&mut cmd, timeout).map_err(|e| match e {
@@ -4105,7 +4169,10 @@ mod tests {
         assert!(path.encode_utf16().count() > 8191);
         assert_eq!(
             windows_hook_path(&path),
-            format!(r"{git};C:\Windows\System32")
+            HookPath {
+                path: format!(r"{git};C:\Windows\System32"),
+                dropped: vec![],
+            }
         );
     }
 
@@ -4113,7 +4180,7 @@ mod tests {
     #[test]
     fn windows_hook_path_preserves_unique_directory_order() {
         assert_eq!(
-            windows_hook_path(r"C:/Git/cmd;C:/Tools;D:\Tools;c:\TOOLS\"),
+            windows_hook_path(r"C:/Git/cmd;C:/Tools;D:\Tools;c:\TOOLS\").path,
             r"C:\Git\cmd;C:\Tools;D:\Tools"
         );
     }
@@ -4123,8 +4190,39 @@ mod tests {
     fn windows_hook_path_bounds_unique_entries_without_splitting_directories() {
         let first = format!(r"C:\{}", "界".repeat(8187));
         let path = format!(r"{first};D:\🦀;E:\Tools");
-        assert_eq!(windows_hook_path(&path), first);
-        assert!(windows_hook_path(&path).encode_utf16().count() <= 8191);
+        let hook = windows_hook_path(&path);
+        assert_eq!(hook.path, first);
+        assert!(hook.path.encode_utf16().count() <= 8191);
+        // Not silent: what did not fit is reported, in order.
+        assert_eq!(
+            hook.dropped,
+            vec![r"D:\🦀".to_string(), r"E:\Tools".to_string()]
+        );
+    }
+
+    // Catches (git/ci review of wip bde9396bc): an entry later in PATH that still
+    // fits after a too-long one was dropped with everything after the cutoff.
+    #[test]
+    fn windows_hook_path_keeps_later_entries_that_still_fit() {
+        let huge = format!(r"C:\{}", "x".repeat(8180));
+        let path = format!(r"C:\Git\cmd;{huge};E:\Tools");
+        let hook = windows_hook_path(&path);
+        assert_eq!(hook.path, r"C:\Git\cmd;E:\Tools");
+        assert_eq!(hook.dropped, vec![huge]);
+    }
+
+    // Catches: a quoted PATH entry containing `;` mis-split into two bogus
+    // directories, and empty entries (an implicit current directory) kept.
+    #[test]
+    fn windows_hook_path_keeps_quoted_entries_whole_and_drops_empty_ones() {
+        let hook = windows_hook_path(r#"C:\Git\cmd;;"C:\My;Tools\bin";C:\Other;"#);
+        assert_eq!(hook.path, r#"C:\Git\cmd;"C:\My;Tools\bin";C:\Other"#);
+        assert!(hook.dropped.is_empty());
+        // A quoted and an unquoted spelling of one directory are one entry.
+        assert_eq!(
+            windows_hook_path(r#""C:\Tools";C:\tools\"#).path,
+            r#""C:\Tools""#
+        );
     }
 
     // Catches: lossy-name recovery deleting another branch's dirty or clean registered checkout.
