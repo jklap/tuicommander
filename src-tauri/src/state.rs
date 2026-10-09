@@ -10917,11 +10917,10 @@ mod tests {
 
     /// `SessionCreated` for an existing entry must reset every field the
     /// exit-resume-banner feature added — a fresh agent launch in this pane
-    /// means whatever was previously exiting/exited is stale. Mirrors the
-    /// pre-existing `agent_seen_running`/`agent_seen_running_pending_since_ms`
-    /// reset this same `.and_modify` branch already does, for the same reason
-    /// (a session-id reuse or an out-of-order bus replay must not leak a
-    /// prior session's resumable snapshot into a brand-new one).
+    /// means whatever was previously exiting/exited is stale. Same reason the
+    /// branch re-seeds the configured agent only when no agent was observed
+    /// yet: a session-id reuse or an out-of-order bus replay must not leak a
+    /// prior session's resumable snapshot into a brand-new one.
     #[test]
     fn session_created_resets_resume_banner_fields_on_an_existing_entry() {
         let state = fresh_state();
