@@ -31,6 +31,7 @@ pub(crate) use tuic_core::cli;
 pub(crate) mod cli_usage_rpc;
 pub(crate) mod codex_usage;
 pub(crate) mod config;
+pub(crate) mod automations;
 pub(crate) mod conflict_assist;
 pub(crate) mod content_index;
 pub(crate) use tuic_git::cow;
