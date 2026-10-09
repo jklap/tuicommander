@@ -142,6 +142,13 @@ tuic.getFile("package.json")
   .catch(err => console.error("Cannot read:", err.message));
 ```
 
+### Host messaging
+
+`tuic.send(data)` sends plugin data to the host's `openPanel({ onMessage })` callback.
+`tuic.onMessage(callback)` receives the original data passed to `PanelHandle.send(data, transfer?)`.
+The host wraps it as `{ type: "tuic:host-message", payload: data }`; transfer lists preserve buffer ownership semantics.
+`tuic.offMessage(callback)` removes the listener. Closing or unloading the panel removes its host bridges.
+
 ### Path Resolution
 
 All file methods (`open`, `edit`, `getFile`) accept both relative and absolute paths:

@@ -51,6 +51,7 @@ vi.mock("solid-js", async (importOriginal) => {
 
 import { createSignal, For } from "solid-js";
 import { injectThemeVars, PluginPanel } from "../../components/PluginPanel/PluginPanel";
+import { TUIC_SDK_SCRIPT } from "../../components/PluginPanel/tuicSdk";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
@@ -163,6 +164,24 @@ describe("PluginPanel", () => {
 		expect(pluginRegistry.registerPanelSendChannel).toHaveBeenCalledWith("tab-1", expect.any(Function));
 	});
 
+	it.each([{ answer: 42 }, "hello", null])("host send reaches tuic.onMessage for %j", (payload) => {
+		const { container } = render(() => <PluginPanel tab={makeTab()} />);
+		const frame = container.querySelector("iframe")!.contentWindow!;
+		// Execute the shipped SDK in its real receiving window, then deliver the
+		// mounted host channel's postMessage output across that window boundary.
+		frame.eval(TUIC_SDK_SCRIPT.replace(/^<script[^>]*>/, "").replace(/<\/script>$/, ""));
+		const received: unknown[] = [];
+		(frame as unknown as { tuic: { onMessage: (cb: (data: unknown) => void) => void } }).tuic.onMessage((data) =>
+			received.push(data),
+		);
+		vi.spyOn(frame, "postMessage").mockImplementation((data) => {
+			frame.dispatchEvent(new MessageEvent("message", { data, source: window }));
+		});
+		const send = vi.mocked(pluginRegistry.registerPanelSendChannel).mock.calls.at(-1)![1];
+		send(payload);
+		expect(received).toEqual([payload]);
+	});
+
 	it("forwards transferable ownership through iframe postMessage", () => {
 		const tab = makeTab();
 		const { container } = render(() => <PluginPanel tab={tab} />);
@@ -174,7 +193,11 @@ describe("PluginPanel", () => {
 
 		send?.({ type: "database", buffer }, [buffer]);
 
-		expect(postMessage).toHaveBeenCalledWith({ type: "database", buffer }, "*", [buffer]);
+		expect(postMessage).toHaveBeenCalledWith(
+			{ type: "tuic:host-message", payload: { type: "database", buffer } },
+			"*",
+			[buffer],
+		);
 	});
 
 	it("unregisters send channel via pluginRegistry on unmount", () => {
