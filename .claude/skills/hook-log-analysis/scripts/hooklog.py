@@ -2,8 +2,8 @@
 """Read TUICommander's Claude Code hook debug log without ever loading it whole.
 
 `.claude/hooks/debug-log.sh` appends one entry per hook fire to
-`.claude/hook-debug.log` in the MAIN checkout (a fixed absolute path, so every
-worktree writes to the same file). The log grows without bound (1.6 GB observed),
+`.claude/hook-debug.log` in the MAIN checkout (resolved from the git common dir,
+or `$HOOK_DEBUG_LOG`, so every worktree writes to the same file). The log grows without bound (1.6 GB observed),
 so every command here seeks to a byte offset and streams forward.
 
 Entry format::
