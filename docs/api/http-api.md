@@ -747,10 +747,18 @@ Full graph for one label: `{"sessions":[{"id":"$0","name":"...","active_window":
 
 ```
 POST /tmux/sessions
-{ "label": "...", "name": "claude-swarm", "window_name": "swarm-view" }
+{ "label": "...", "name": "claude-swarm", "window_name": "swarm-view",
+  "cwd": "/optional/path", "cwd_session_id": "<uuid, optional>", "fallback_cwd": "/optional/path" }
 → 201 { "session_id": "$0", "window_id": "@0", "pane_id": "%0" }
 ```
 Creates a session with one window and one virtual initial pane.
+
+**Pane cwd (sessions, windows and panes alike).** The new pane's recorded cwd is `cwd` when
+given (the shim sends an explicit `-c`, or the cwd of the pane it splits/extends); otherwise the
+LIVE cwd (the PTY's OSC 7 directory) of `cwd_session_id` — the calling shim's own `TUIC_SESSION`
+— when that names a live session; otherwise `fallback_cwd` (the shim's spawn-time
+`TUIC_WORKTREE_PATH`/`TUIC_MAIN_REPO_PATH`, else its own current directory). The shim sends
+`cwd_session_id`/`fallback_cwd` only when it has no `cwd`; an older shim always sends `cwd`.
 
 ```
 DELETE /tmux/sessions/:id?label=<label>
@@ -759,14 +767,15 @@ Removes the session and closes every one of its materialised panes' PTYs.
 
 ```
 POST /tmux/windows
-{ "label": "...", "session_id": "$0", "name": "..." }
+{ "label": "...", "session_id": "$0", "name": "...", "cwd": "/optional/path", "cwd_session_id": "...", "fallback_cwd": "..." }
 → 201 { "window_id": "@1", "pane_id": "%1" }
 ```
 Adds a window (with one virtual initial pane) to an existing session.
 
 ```
 POST /tmux/panes
-{ "label": "...", "window_id": "@0", "cwd": "/optional/path", "origin_session_id": "<uuid, optional>" }
+{ "label": "...", "window_id": "@0", "cwd": "/optional/path", "origin_session_id": "<uuid, optional>",
+  "cwd_session_id": "<uuid, optional>", "fallback_cwd": "/optional/path" }
 → 201 { "pane_id": "%2", "tuic_session_id": "<uuid>" }
 ```
 Adds a pane to an existing window — unlike the initial panes above, this one **materialises

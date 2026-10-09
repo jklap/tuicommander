@@ -102,6 +102,17 @@ cwd). Any new tmux subcommand that creates a pane must go through this same fall
 `exec.rs`'s three existing call sites (`NewSession`, `NewWindow`, `SplitWindow`) for the
 pattern before adding a fourth.
 
+**Current order (2026-10-08, Batch 34 review), superseding the two rungs above:** explicit
+`-c` → inherited pane cwd → the calling session's LIVE cwd, resolved SERVER-side from the lead
+PTY's OSC 7 directory (`cwd_session_id` = the shim's `TUIC_SESSION`, `resolve_pane_cwd` in
+`mcp_http/tmux_routes.rs`) → `fallback_cwd()` (`TUIC_WORKTREE_PATH`, `TUIC_MAIN_REPO_PATH`,
+then `current_dir()`). `resolve_cwd()` resolves only the first two; when both are absent the
+IPC backend sends `cwd: null` + `cwd_session_id` + `fallback_cwd` (`cwd_fields`). Why not
+env-first (the 2026-09-23 order): a `cd` typed at the lead's prompt, a lead started in a
+subdirectory, and a split from an explicit `-c` pane all resolved to the stale spawn-time
+root. Why not `current_dir()` before env: that read is what a command's transient `cd`
+corrupted on 2026-09-23 — the PTY's OSC 7 cwd only moves at a prompt, so it is immune.
+
 **Two related findings from that same review, accepted as-is rather than fixed:**
 - `std::env::current_dir()` resolves symlinks (`getcwd(3)` semantics); if a registered repo's
   path was typed through a symlinked ancestor, the frontend's exact-prefix repo-owner matching
