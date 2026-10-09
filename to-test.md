@@ -1,3 +1,23 @@
+## Dropped-items actions batch 1 (dropped-items-review D1/#2/#4, 2026-10-09) — Rust restart required
+
+Unit/integration tests cover the logic; these need a running app (isolated `make dev`).
+
+- [ ] **Remote Server honours StrictHostKeyChecking=Yes (D1).** Edit a Remote Server — SSH
+  connection: the StrictHostKeyChecking select is enabled and offers AcceptNew and Yes (a new
+  server starts at AcceptNew). Save `Yes` for a host already in `~/.ssh/known_hosts`: Connect
+  works. Point it at a host NOT in known_hosts (or temporarily move the entry): Connect fails
+  with ssh's host-key error instead of silently pinning the key; switching back to AcceptNew
+  connects and adds the entry. Reopening the editor still shows the saved value.
+- [ ] **Warm badge after a reload (#2).** Create a worktree in a repo with large git-ignored
+  build dirs (warm enabled); while the sidebar shows "Warming x/y", reload the window: the
+  badge is back on the next refresh and keeps updating; after the copy finishes it clears. A
+  reload after the warm finished shows no badge (allow up to ~60 s of git-cache staleness).
+- [ ] **Configured script timeouts (#4).** In the instance's `repo-defaults.json` set
+  `"setup_script_timeout_secs": 5` and `"archive_script_timeout_secs": 5`, use `sleep 30` as
+  Setup and Archive Script: the setup fails after ~5 s ("Script timed out after 5s"), and
+  removing/archiving the worktree is refused after ~5 s. Change any Settings › Worktrees
+  default and confirm both keys are still in `repo-defaults.json`.
+
 ## Test Connection + one-shot ssh fixups (tunnel-session-review R1/R2/R3/R5, 2026-10-09) — Rust restart required
 
 Unit/integration tests cover the logic (real TLS server, real fake-ssh processes);
