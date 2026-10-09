@@ -48,6 +48,12 @@ review semantic changes separately from that reflow.
 | `src/term/mod.rs` | `fn request_focus`/`request_attention`/`start_clipboard_capture`/`end_clipboard_capture`/`open_url` | OSC 1337 handlers — see the dedicated section below. `CursorShape`/`ClearScrollback`/`Copy` reuse the existing `set_cursor_shape`/`clear_screen`/`clipboard_store` handlers instead of adding new ones. |
 | `src/term/mod.rs` | `clipboard_capture: Option<String>` field + interception in `input()`/`linefeed()`, cleared in `reset_state()` | Backing state for OSC 1337 `CopyToClipboard`/`EndCopy`: mirrors printed characters and linefeeds into a buffer while capturing, flushed as `Event::ClipboardStore` on `EndCopy`. Gated by the same `Config.osc52` permission as OSC 52's `clipboard_store` — it is the same clipboard-write privilege via a different escape code. |
 | `src/event.rs` | `Event::RequestFocus`, `Event::RequestAttention(String)`, `Event::OpenUrl(String)` variants | Carry OSC 1337 `StealFocus`/`RequestAttention`/`OpenURL` from VTE to the application layer. |
+| `src/term/iterm2.rs` (new) | Pure parsing and cell-footprint geometry for iTerm2 inline images: `parse_file_args`, `resolve_footprint`, `sniff_image_dimensions` | Backs OSC 1337 `File=`/`MultipartFile=`/`FilePart=`/`FileEnd`. Grid mutation stays in `term/mod.rs`, so this module is unit-testable without a `Term`. See [pty.md, iTerm2 Inline Images](pty.md#iterm2-inline-images-osc-1337). |
+| `src/term/kitty.rs` (new) | Kitty graphics protocol parser (`ESC _ G ... ST`): actions `t/T/p/d/q`, formats 24/32/100, the four transmission mediums, `o=z` zlib, `m=` chunking, placement keys, the capability-probe reply and `U=1` Unicode placeholders (`ROWCOL_DIACRITICS`) | Pure parsing, same split as `iterm2.rs`. See [pty.md, Kitty Graphics Protocol](pty.md#kitty-graphics-protocol). |
+| `src/term/mod.rs` | `osc_1337_file`/`osc_1337_multipart_file`/`osc_1337_file_part`/`osc_1337_file_end`, `kitty_graphics` (+ `kitty_graphics_dispatch`), `report_xtversion`, `cell_size_pixels` | Grid side of both image protocols: reserves blank cells and attaches `ImageCellRef`s. XTVERSION (`CSI > q`) answers `ghostty`, matching the `TERM_PROGRAM`/`KITTY_WINDOW_ID` TUIC already advertises, so image-preview tools pick Kitty graphics. `CSI 16 t` reports the cell size in pixels. |
+| `src/term/cell.rs` | `ImageData` (shared, `Arc`-held image bytes) and `ImageCellRef` on `CellExtra.image`, `Cell::set_image_ref` | Each cell showing an image tile holds a strong reference to its image, so the image bytes are freed once no cell on screen or in scrollback references it. `CellExtra.image` is `serde(skip)`, keeping payloads out of serialized cell dumps. |
+| `src/event.rs` | `Event::ImagePlacement(ImagePlacementInfo)`, `Event::ImagePlacementsCleared`, `Event::CellSizeRequest`; `EventListener::read_file_medium`/`read_shm_medium` | Carry image placements and the `CSI 16 t` reply to the app. Kitty's file and shared-memory transmission I/O is delegated to the embedder, which applies its own safety guards (`terminal_images.rs`). |
+| `Cargo.toml` | `flate2` and `base64` dependencies | zlib inflate for Kitty `o=z`, and base64 decoding of image payloads. |
 
 ### The pending wrap and the edit operations
 
@@ -81,6 +87,14 @@ We also patch the `vte` crate (0.15.0) to extend the `Handler` trait:
 | `fn request_attention(&mut self, value: &str)` | OSC 1337 `RequestAttention=<value>`. Routes OSC `1337;RequestAttention=value` from `osc_dispatch`. |
 | `fn start_clipboard_capture(&mut self, name: &str)` / `fn end_clipboard_capture(&mut self)` | OSC 1337 `CopyToClipboard=<name>` … `EndCopy`. Route OSC `1337;CopyToClipboard=name` and `1337;EndCopy` from `osc_dispatch`. |
 | `fn open_url(&mut self, base64: &[u8])` | OSC 1337 `OpenURL=:<base64>`. Routes OSC `1337;OpenURL=:base64` from `osc_dispatch`. |
+| `fn osc_1337_file(&mut self, args: &str, payload: &[u8])` | iTerm2 inline image, single shot. `osc_dispatch` rejoins vte's `;`-split params and routes `1337;File=<args>:<base64>`. |
+| `fn osc_1337_multipart_file(&mut self, args: &str)` | iTerm2 inline image, multipart start (`1337;MultipartFile=<args>`). |
+| `fn osc_1337_file_part(&mut self, payload: &[u8])` | iTerm2 inline image, multipart chunk (`1337;FilePart=<base64>`). |
+| `fn osc_1337_file_end(&mut self)` | iTerm2 inline image, multipart end (`1337;FileEnd`). |
+| `fn kitty_graphics(&mut self, data: &[u8])` | Kitty graphics. Receives one raw, unparsed APC payload from `Perform::apc_dispatch`. |
+| `fn report_xtversion(&mut self)` | XTVERSION, `CSI > q`. |
+| `fn cell_size_pixels(&mut self)` | Cell size in pixels, `CSI 16 t`. |
+| `Perform::apc_dispatch(&mut self, data: &[u8])` (`lib.rs`) | New `State::ApcString` collects an APC (`ESC _ ... ST`) into the capped `osc_raw` buffer and hands it over whole. SOS and PM still go to `SosPmApcString` and stay fully swallowed, never reaching `kitty_graphics`. |
 
 ## OSC 1337 — Proprietary Commands
 
@@ -97,7 +111,7 @@ We also patch the `vte` crate (0.15.0) to extend the `Handler` trait:
 | `RequestAttention` | `yes`/`once`/`no`/`fireworks` | `Event::RequestAttention(String)` → `pty.rs` maps to a Tauri `UserAttentionType` (`attention_level_for_value`) and calls `request_user_attention`, gated by `osc1337_focus_attention`. `fireworks` has no direct Tauri equivalent (macOS-only cursor animation) and is mapped to the same continuous bounce as `yes`. |
 | `OpenURL` | `:<base64>` | `Event::OpenUrl(String)` (base64-decoded in `Term::open_url`) → `pty.rs` raises a human confirmation over the same `mcp-confirm`/`mcp-confirm-resolved` wire `ui(action=confirm)` uses (`confirm_open_url`, `mcp_http/mod.rs`), then — only if confirmed — dual-emits `pty-open-url`, which the frontend's `handleOpenUrl` opens (allowlisted to http/https/mailto). |
 
-Unimplemented OSC 1337 commands (`File=`, `SetMark`, `CurrentDir=`, `SetKeyLabel=`, `SetUserVar=`, `HighlightCursorLine=`, `ReportCellSize`, `UnicodeVersion=`, `ShellIntegrationVersion=`, …) fall through to `osc_dispatch`'s default `unhandled` branch — parsed enough to avoid corrupting the stream, but produce no effect.
+Inline images (`File=`, `MultipartFile=`, `FilePart=`, `FileEnd`) are covered in [pty.md](pty.md#iterm2-inline-images-osc-1337). Unimplemented OSC 1337 commands (`SetMark`, `CurrentDir=`, `SetKeyLabel=`, `SetUserVar=`, `HighlightCursorLine=`, `ReportCellSize`, `UnicodeVersion=`, `ShellIntegrationVersion=`, …) fall through to `osc_dispatch`'s default `unhandled` branch — parsed enough to avoid corrupting the stream, but produce no effect.
 
 ## OSC 7770 — TUIC Protocol
 

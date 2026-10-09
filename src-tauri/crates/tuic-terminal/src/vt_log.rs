@@ -345,6 +345,15 @@ impl VtLogBuffer {
     /// deliberately excluded from the durable log. The same exclusion applies
     /// while mouse reporting is on the primary screen (`grok --no-alt-screen`):
     /// the app owns the viewport and its SU/line dumps are not shell output.
+    ///
+    /// Feeds `data` through the grid but deliberately does **not** resolve
+    /// any Kitty image decode job queued along the way (color-tools plan) —
+    /// this method runs while the caller (`pty.rs::process_chunk`) holds
+    /// `vt_log`, and decode can be slow (base64, zlib, file/shared-memory
+    /// I/O). The caller is responsible for draining those jobs itself,
+    /// after dropping that lock, via `kitty_decode_handles` +
+    /// `terminal_image_transmission::drain_and_run_pending_kitty_decode_jobs`.
+    /// See `TerminalGrid::process`'s own doc comment for the full rationale.
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         self.process_inner(data, true)
     }
@@ -372,7 +381,7 @@ impl VtLogBuffer {
             self.grid.clear_prev_rows();
         }
 
-        let changed = self.grid.process(data);
+        let changed = self.grid.process_without_kitty_decode_drain(data);
         if !child_output {
             if !changed.is_empty() {
                 self.last_composer_paint_at = None;
@@ -811,9 +820,13 @@ impl VtLogBuffer {
         self.grid.hyperlink_span(row, col)
     }
 
-    /// `(image_id, placement_id, tile_col, tile_row)` for the inline-image
-    /// tile shown at a viewport position, if any.
-    pub fn grid_image_ref_at(&self, row: usize, col: usize) -> Option<(u32, u32, u16, u16)> {
+    /// `(image_id, placement_id, tile_col, tile_row, z_index)` for the
+    /// inline-image tile shown at a viewport position, if any.
+    pub fn grid_image_ref_at(
+        &self,
+        row: usize,
+        col: usize,
+    ) -> Option<(u32, u32, u16, u16, i32)> {
         self.grid.image_ref_at(row, col)
     }
 
@@ -821,6 +834,34 @@ impl VtLogBuffer {
     /// already evicted (no cell references it any more).
     pub fn grid_image_bytes(&self, image_id: u32) -> Option<std::sync::Arc<[u8]>> {
         self.grid.image_bytes(image_id)
+    }
+
+    /// `(mime, intrinsic_width, intrinsic_height)` for a previously
+    /// transmitted image, by id (color-tools plan) — lets the frontend
+    /// interpret Kitty's raw `f=24`/`f=32` payloads, which carry no
+    /// container/dimensions of their own.
+    pub fn grid_image_meta(&self, image_id: u32) -> Option<(String, u32, u32)> {
+        self.grid.image_meta(image_id)
+    }
+
+    /// Every current inline-image placement (color-tools plan, Phase 5) — the
+    /// reconnect/new-client hydration query.
+    pub fn grid_image_placements(
+        &self,
+    ) -> Vec<alacritty_terminal::event::ImagePlacementInfo> {
+        self.grid.image_placements()
+    }
+
+    /// Cloned handles for `pty.rs::process_chunk` to resolve pending Kitty
+    /// decode jobs *after* dropping `vt_log` — see `TerminalGrid::kitty_decode_handles`'s
+    /// doc comment for why this must never be called while still holding it.
+    pub fn grid_kitty_decode_handles(
+        &self,
+    ) -> (
+        crate::terminal_image_transmission::KittyImageStoreHandle,
+        crate::terminal_image_transmission::KittyPendingJobsHandle,
+    ) {
+        self.grid.kitty_decode_handles()
     }
 
     // --- private helpers ---

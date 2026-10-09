@@ -203,6 +203,7 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
             State::EscapeIntermediate => self.advance_esc_intermediate(performer, byte),
             State::OscString => self.advance_osc_string(performer, byte),
             State::SosPmApcString => self.anywhere(performer, byte),
+            State::ApcString => self.advance_apc_string(performer, byte),
             State::Ground => unreachable!(),
         }
     }
@@ -397,7 +398,11 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                 self.osc_num_params = 0;
                 self.state = State::OscString
             },
-            0x5E..=0x5F => self.state = State::SosPmApcString,
+            0x5E => self.state = State::SosPmApcString,
+            0x5F => {
+                self.osc_raw.clear();
+                self.state = State::ApcString
+            },
             0x60..=0x7E => {
                 performer.esc_dispatch(self.intermediates(), self.ignoring, byte);
                 self.state = State::Ground
@@ -452,6 +457,39 @@ impl<const OSC_RAW_BUF_SIZE: usize> Parser<OSC_RAW_BUF_SIZE> {
                     }
                 }
                 self.action_osc_put_param()
+            },
+            _ => self.action_osc_put(byte),
+        }
+    }
+
+    /// Accumulate and dispatch an APC (`ESC _ ... ST`) string — Kitty's
+    /// graphics protocol (color-tools plan, Phase 3). Mirrors
+    /// `advance_osc_string`'s structure, reusing `osc_raw` as scratch storage
+    /// (APC and OSC are never in flight at the same time, so this adds no
+    /// new field, and gets the same `MAX_OSC_RAW`/`MAX_OSC_RAW_STD` cap for
+    /// free) — but with no OSC-style `;`-parameter splitting (Kitty's own
+    /// `key=value,...` control-data syntax is entirely the dispatch
+    /// handler's job to parse), and deliberately **no BEL-terminates
+    /// shortcut**: unlike OSC, real APC/Kitty sequences are always
+    /// ST-terminated, never BEL-terminated, so BEL is just an ordinary
+    /// (ignored) C0 control here. Treating it as a terminator — as a first
+    /// version of this did — broke containment: an adversarial/malformed
+    /// sequence with an embedded BEL byte would end the APC early and let
+    /// its remaining bytes leak into Ground-state `print()`.
+    #[inline(always)]
+    fn advance_apc_string<P: Perform>(&mut self, performer: &mut P, byte: u8) {
+        match byte {
+            0x00..=0x17 | 0x19 | 0x1C..=0x1F => (),
+            0x18 | 0x1A => {
+                performer.apc_dispatch(&self.osc_raw);
+                self.osc_raw.clear();
+                performer.execute(byte);
+                self.state = State::Ground
+            },
+            0x1B => {
+                performer.apc_dispatch(&self.osc_raw);
+                self.osc_raw.clear();
+                self.state = State::Escape
             },
             _ => self.action_osc_put(byte),
         }
@@ -773,6 +811,12 @@ enum State {
     EscapeIntermediate,
     OscString,
     SosPmApcString,
+    /// APC (`ESC _ ... ST`) specifically, split out from the shared
+    /// `SosPmApcString` state (color-tools plan, Phase 3) so its payload can
+    /// be accumulated and dispatched — Kitty's graphics protocol is an APC
+    /// sequence. SOS/PM still route to `SosPmApcString` and are still fully
+    /// discarded; only APC gets this treatment.
+    ApcString,
     #[default]
     Ground,
 }
@@ -819,6 +863,13 @@ pub trait Perform {
 
     /// Dispatch an operating system command.
     fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
+
+    /// Dispatch an Application Program Command (`ESC _ ... ST`) — Kitty's
+    /// graphics protocol (color-tools plan, Phase 3). `data` is the raw APC
+    /// payload with no parsing of any kind applied (unlike `osc_dispatch`,
+    /// which splits on `;`): Kitty's own `key=value,...;<base64>` control-data
+    /// syntax is entirely the implementor's job to parse.
+    fn apc_dispatch(&mut self, _data: &[u8]) {}
 
     /// A final character has arrived for a CSI sequence
     ///
