@@ -58,7 +58,7 @@ This replaces the previous 370-line switch statement with a flat lookup table fo
 
 `mobile.html` (phone/PWA clients — always browser mode, no Tauri IPC bridge) has a
 hard 100KB-gzip bundle-size budget (`scripts/report-frontend-bundles.mjs`, run by
-`pnpm build`). `COMMAND_TABLE` is one flat object literal a bundler can't
+`pnpm build` and `make check`; it warns from 98% of the cap). `COMMAND_TABLE` is one flat object literal a bundler can't
 tree-shake per entry, so every mapping shipped to every bundle that imports
 `mapCommandToHttp`/`rpc` — including mobile, which never calls most of the
 desktop-only Settings/GitHub/ACP/Remote-access surface — until that surface's
