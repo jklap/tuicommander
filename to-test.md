@@ -11,6 +11,15 @@ these are the end-to-end checks through the editor UI against real daemons.
   connection to a daemon that has a username/password set, leave both credential fields
   empty and press Test Connection: it says "requires a password", not "not configured
   yet". Against a daemon with no credentials it still says "not configured yet".
+- [ ] **SSH Test Connection checks the daemon (real sshd).** For a Remote Server — SSH
+  connection to a real host: with the daemon running, Test Connection says Reachable and
+  returns within a second or two (proves ssh's `-W` forward ends by itself when the daemon
+  closes the connection, with stdin held open); with the daemon stopped it says "SSH works,
+  but nothing listens on the remote host's port …"; with a wrong SSH key it still says
+  authentication failed. An SSH Tunnel profile's Test Connection is unchanged (SSH only).
+- [ ] **No leftover ssh after a timed-out Test Connection.** Point a Remote Server at a host
+  whose `ProxyCommand` hangs (e.g. `ProxyCommand sleep 60`), press Test Connection, wait
+  for the timeout: `pgrep -fl 'sleep 60'` shows nothing left behind.
 
 ## Post-rebase fixups B1/B2/C (2026-10-08) — Rust restart required
 

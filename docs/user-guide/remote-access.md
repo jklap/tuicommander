@@ -314,7 +314,15 @@ They live on **Settings → Remote Servers** (the separate Remote Machines page 
    it is not running**, and then **Leave it running on disconnect** if a daemon
    TUICommander starts should outlive the connection
 8. Set the auth username and password the daemon was configured with
-9. Optionally click **Test Connection**, then Save, then click **Connect**
+9. Optionally click **Test Connection**, then Save, then click **Connect**.
+   Test Connection checks SSH first and then the daemon itself: it asks the
+   daemon's `/health` on the remote host's own `127.0.0.1:<daemon port>` through
+   SSH stdio forwarding (`ssh -W`, so nothing needs to be installed on the remote
+   host, but the SSH server must allow TCP forwarding — Connect needs that too).
+   "SSH works, but nothing listens on the remote host's port …" means SSH is fine
+   and the daemon is not running (start it, or use the row's **Start** button).
+   The typed username/password go with that request, so a protected daemon with
+   nothing typed reports that it requires a password
 
 For an installed service, Connect waits for the SSH forwarding port and retries the daemon health check during startup before reporting it unavailable.
 
