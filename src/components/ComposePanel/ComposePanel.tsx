@@ -208,14 +208,14 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	createEffect(
 		on(props.isOpen, (open) => {
 			if (!open) return;
-			// Read initialText outside reactive tracking — we only want the value
-			// at open time, not to subscribe to further changes while typing.
-			const initial = props.initialText();
 			let inner = 0;
 			const outer = requestAnimationFrame(() => {
 				inner = requestAnimationFrame(() => {
 					const view = editorView();
 					if (!view) return;
+					// Read the shared draft when initialization runs: a pending submit
+					// may have cleaned it since opening. RAF reads are not tracked.
+					const initial = props.initialText();
 					const current = view.state.doc.toString();
 					if (current !== initial) {
 						view.dispatch({
